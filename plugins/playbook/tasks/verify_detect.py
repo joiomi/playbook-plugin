@@ -13,8 +13,10 @@ step catches); it is never silently authoritative. Stdlib only; reads small
 config files and never executes the command it composes. Its only execution is
 a `python3 -m pytest --version` probe (owner decisions, task 098, 2026-09-25/26)
 — at most one per inspected root, run IN that root, for a Python `tests/` tree —
-and that probe ALONE decides between pytest and unittest: no pytest config file
-(pyproject.toml, setup.cfg, tox.ini, pytest.ini) and no `import pytest` is read.
+and that probe ALONE decides between pytest and unittest: pyproject.toml,
+setup.cfg, tox.ini and pytest.ini are not read for that decision (pyproject.toml
+and setup.cfg are still read for mypy, pyright, ruff and flake8), and no
+`import pytest` is searched.
 """
 from __future__ import annotations
 
@@ -69,6 +71,10 @@ def _module_names(tree) -> "list[tuple[str, str]]":
         elif isinstance(node, ast.ClassDef):
             out.append(("class", node.name))
         elif isinstance(node, ast.Assign):
+            # owner 2026-09-26: `x = None` binds nothing discover (or pytest)
+            # acts on — discover checks `getattr(pkg, "load_tests", None) is not None`
+            if isinstance(node.value, ast.Constant) and node.value.value is None:
+                continue
             # owner 2026-09-26: an Assign whose target is a Name binds it; an
             # annotation (`x: int`), an attribute, an index, an augmented or a
             # tuple-unpacking target does not count
@@ -156,7 +162,8 @@ def _discover_observations(root: Path) -> "list[str]":
                 continue
             names = _module_names(tree)
             if any(k in ("def", "assign", "import") and n == "load_tests" for k, n in names):
-                seen.append(f"`{rel}` binds load_tests (discover stops recursing there)")
+                seen.append(f"`{rel}` binds load_tests — discover stops recursing there "
+                            "if the value is not None")
             elif any(k == "star" for k, _n in names):
                 seen.append(f"`{rel}` has an `import *` (it may bind load_tests)")
         for f in sorted(tests.rglob("conftest.py")):

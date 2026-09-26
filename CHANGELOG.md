@@ -55,7 +55,8 @@ Each fix was written against a test that failed first.
 - **`tasks detect-verify` finds a `scripts/verify` entrypoint, a bare unittest suite, and `code_roots`**
   (tasks 096, 098). A `scripts/verify` file is suggested alone for its root. For Python tests it suggests pytest
   only when `python3 -m pytest --version` succeeds in that root — its only execution, and the only signal (no
-  config file and no `import pytest` is read); pytest
+  config file is read for the pytest decision, no `import pytest` is searched; pyproject.toml and setup.cfg are
+  still read for mypy, pyright, ruff and flake8); pytest
   runs unittest TestCases too), otherwise `python3 -m unittest discover -s tests` with a note stating what
   discover can skip without failing (`load_tests` hooks, module-level aliases, test files outside `tests/`,
   indirect-base classes, bare functions, non-package test dirs) and which of those a scan of the parsed code saw — an

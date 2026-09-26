@@ -283,7 +283,10 @@ class DetectsThisProjectsShape(_NoPytest):
                      "load_tests: int\n",
                      "load_tests.x = 1\n",
                      "data = {}\ndata[load_tests] = 1\n",
-                     "load_tests += 1\n"):
+                     "load_tests += 1\n",
+                     # owner 2026-09-26: discover treats a None value as absent
+                     # (`getattr(package, "load_tests", None) is not None`)
+                     "load_tests = None\n"):
             with self.subTest(init=init.splitlines()[0]):
                 d = _mk({"tests/test_a.py": self.TC, "tests/pkg/__init__.py": init,
                          "tests/pkg/test_b.py": self.TC})
@@ -303,6 +306,12 @@ class DetectsThisProjectsShape(_NoPytest):
         note = self._note(detect_verify(_mk({"tests/test_a.py": self.TC,
                                              "tests/test_bad.py": "def (:\n"})))
         self.assertIn("`tests/test_bad.py` could not be parsed", note)
+
+    def test_the_load_tests_note_is_conditional_on_the_value(self):
+        d = _mk({"tests/test_a.py": self.TC, "tests/pkg/__init__.py": "load_tests = _load\n",
+                 "tests/pkg/test_b.py": self.TC})
+        self.assertIn("`tests/pkg/__init__.py` binds load_tests — discover stops recursing there "
+                      "if the value is not None", self._note(detect_verify(d)))
 
     def test_real_load_tests_imports_still_count(self):
         for init in ("from .support import load_tests\n", "import helpers as load_tests\n",
