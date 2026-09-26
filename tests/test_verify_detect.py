@@ -496,6 +496,39 @@ class ConfigFileToToolMapping(_NoPytest):
             files[f"tests/p{n}/__init__.py"] = "from .s import load_tests\n"
             files[f"tests/p{n}/test_b.py"] = self.TC
         self.assertIn("… and 1 more", detect_verify(_mk(files))["notes"][0])
+        bad = {"tests/test_a.py": self.TC}
+        for n in range(9):
+            bad[f"tests/p{n}/__init__.py"] = "def (:\n"
+            bad[f"tests/p{n}/test_b.py"] = self.TC
+        note = detect_verify(_mk(bad))["notes"][0]
+        self.assertIn("`tests/p7/__init__.py` could not be parsed", note)
+        self.assertNotIn("`tests/p8/__init__.py`", note)                    # counted, not named
+        self.assertIn("… and ", note)
+
+    def test_the_files_are_never_opened_or_parsed(self):
+        opened, parsed = [], []
+        real_read, real_parse = vd._read, vd._parse
+
+        def spy_read(path):
+            opened.append(Path(path).name)
+            return real_read(path)
+
+        def spy_parse(text):
+            parsed.append(text)
+            return real_parse(text)
+
+        # pyproject names mypy (not ruff), so the flake8 branch — which reads setup.cfg
+        # only when no ruff is configured — runs too
+        files = {"tox.ini": "[flake8]\n", "pytest.ini": "[pytest]\n", "pyproject.toml": "[tool.mypy]\n",
+                 "setup.cfg": "[flake8]\n", "tests/test_a.py": self.TC, "tests/test.py": "MARK_NOT_PARSED = 1\n"}
+        with mock.patch.object(vd, "_read", side_effect=spy_read), \
+                mock.patch.object(vd, "_parse", side_effect=spy_parse):
+            detect_verify(_mk(files))
+        self.assertNotIn("tox.ini", opened)
+        self.assertNotIn("pytest.ini", opened)
+        self.assertIn("pyproject.toml", opened)
+        self.assertIn("setup.cfg", opened)
+        self.assertFalse(any("MARK_NOT_PARSED" in t for t in parsed))
 
     def test_init_md_states_the_mapping(self):
         text = (_HERE.parent / "plugins/playbook/commands/init.md").read_text(encoding="utf-8")
@@ -511,8 +544,8 @@ class ConfigFileToToolMapping(_NoPytest):
     def test_cli_md_names_only_the_two_parsed_globs(self):
         text = (_HERE.parent / "docs/cli.md").read_text(encoding="utf-8")
         self.assertIn("a `tests/**/__init__.py` or `tests/**/test_*.py` file that does not parse "
-                      "is named as not scanned (no other file is parsed); the note lists at most "
-                      "eight observations", text)
+                      "becomes a \"could not be parsed\" observation (no other file is parsed); the "
+                      "note names at most eight observations and only counts the rest", text)
         self.assertNotIn("a file that does not parse is named as not scanned.", text)
 
 

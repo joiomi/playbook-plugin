@@ -9783,7 +9783,7 @@
             "reference": "ConfigFileToToolMapping.test_pyproject_feeds_mypy_pyright_ruff"
           },
           "limitations": [
-            "Task 099: pins which config file feeds which tool (pyproject.toml → mypy/pyright/ruff, setup.cfg → flake8, tox.ini and pytest.ini never read), that only tests/**/__init__.py and tests/**/test_*.py are parsed, and the two sentences in commands/init.md and docs/cli.md that state it (the doc pins are text checks). It resolves the two wording limitations task 098 left on this row, which are removed from missing_evidence_or_limitation."
+            "Task 099: this test pins that tox.ini and pytest.ini contents never change the suggestion; its negative control pins pyproject.toml → mypy/pyright/ruff. Sibling tests in ConfigFileToToolMapping pin the rest: setup.cfg → flake8 (test_setup_cfg_feeds_flake8), that tox.ini/pytest.ini are never opened and tests/test.py never parsed (test_the_files_are_never_opened_or_parsed, a spy on _read/_parse), that only the two globs are parsed (test_only_the_two_globs_are_parsed), the eight-observation cap (test_the_note_caps_observations_at_eight), and the init.md / cli.md sentences (text pins). It resolves the two wording limitations task 098 left on this row, which are removed from missing_evidence_or_limitation."
           ]
         },
         {
