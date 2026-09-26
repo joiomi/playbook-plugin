@@ -520,7 +520,10 @@ class ConfigFileToToolMapping(_NoPytest):
         # pyproject names mypy (not ruff), so the flake8 branch — which reads setup.cfg
         # only when no ruff is configured — runs too
         files = {"tox.ini": "[flake8]\n", "pytest.ini": "[pytest]\n", "pyproject.toml": "[tool.mypy]\n",
-                 "setup.cfg": "[flake8]\n", "tests/test_a.py": self.TC, "tests/test.py": "MARK_NOT_PARSED = 1\n"}
+                 "setup.cfg": "[flake8]\n", "tests/test_a.py": self.TC + "MARK_PARSED_TEST = 1\n",
+                 "tests/test.py": "MARK_NOT_PARSED = 1\n", "tests/conftest.py": "MARK_NOT_PARSED = 2\n",
+                 "tests/widget_test.py": "MARK_NOT_PARSED = 3\n",
+                 "tests/pkg/__init__.py": "MARK_PARSED_INIT = 1\n", "tests/pkg/test_b.py": self.TC}
         with mock.patch.object(vd, "_read", side_effect=spy_read), \
                 mock.patch.object(vd, "_parse", side_effect=spy_parse):
             detect_verify(_mk(files))
@@ -528,7 +531,10 @@ class ConfigFileToToolMapping(_NoPytest):
         self.assertNotIn("pytest.ini", opened)
         self.assertIn("pyproject.toml", opened)
         self.assertIn("setup.cfg", opened)
+        # only the two globs reach the parser: tests/**/test_*.py and tests/**/__init__.py
         self.assertFalse(any("MARK_NOT_PARSED" in t for t in parsed))
+        self.assertTrue(any("MARK_PARSED_TEST" in t for t in parsed))
+        self.assertTrue(any("MARK_PARSED_INIT" in t for t in parsed))
 
     def test_init_md_states_the_mapping(self):
         text = (_HERE.parent / "plugins/playbook/commands/init.md").read_text(encoding="utf-8")
