@@ -11,11 +11,10 @@ The goal is "everything runs" — the assembled command is a STARTING POINT the
 user confirms/corrects at init time (a missed tool is exactly what the confirm
 step catches); it is never silently authoritative. Stdlib only; reads small
 config files and never executes the command it composes. Its only execution is
-a `python3 -m pytest --version` probe (owner decision, task 098) — at most one
-per inspected root, run IN that root, and only for a Python `tests/` tree with
-no pytest config — to decide between pytest and unittest: pytest is suggested
-where the project CONFIGURES it (no probe) or where the probe finds it
-installed, never otherwise.
+a `python3 -m pytest --version` probe (owner decisions, task 098, 2026-09-25/26)
+— at most one per inspected root, run IN that root, for a Python `tests/` tree —
+and that probe ALONE decides between pytest and unittest: no pytest config file
+(pyproject.toml, setup.cfg, tox.ini, pytest.ini) and no `import pytest` is read.
 """
 from __future__ import annotations
 
@@ -53,8 +52,6 @@ def _component(tool: str, cmd: str, reason: str) -> dict:
 # the base names that make a class a TestCase, compared exactly (task 098)
 _TESTCASE_BASES = frozenset({"TestCase", "unittest.TestCase",
                              "IsolatedAsyncioTestCase", "unittest.IsolatedAsyncioTestCase"})
-# triple-quoted strings, removed from pyproject.toml before the header match
-_TRIPLE_STR = re.compile(r'(?s)(\"\"\"|\'\'\').*?\1')
 
 
 def _module_names(tree) -> "list[tuple[str, str]]":
@@ -65,16 +62,19 @@ def _module_names(tree) -> "list[tuple[str, str]]":
     judge's second pass — the text scan read them as code)."""
     out: "list[tuple[str, str]]" = []
     for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        if isinstance(node, ast.FunctionDef):
             out.append(("def", node.name))
+        elif isinstance(node, ast.AsyncFunctionDef):
+            out.append(("asyncdef", node.name))
         elif isinstance(node, ast.ClassDef):
             out.append(("class", node.name))
-        elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            for t in targets:
-                for n in ast.walk(t):
-                    if isinstance(n, ast.Name):
-                        out.append(("assign", n.id))
+        elif isinstance(node, ast.Assign):
+            # owner 2026-09-26: an Assign whose target is a Name binds it; an
+            # annotation (`x: int`), an attribute, an index, an augmented or a
+            # tuple-unpacking target does not count
+            for t in node.targets:
+                if isinstance(t, ast.Name):
+                    out.append(("assign", t.id))
         elif isinstance(node, ast.Import):
             for a in node.names:
                 out.append(("import", a.asname or a.name.split(".")[0]))
@@ -91,14 +91,6 @@ def _parse(text: str):
         return None
 
 
-# pytest configuration, recognised only as a REAL section header — a comment or
-# a value naming it is not config (impl panel r2: sonnet, codex ×2, grok); a
-# `tox.ini` counts only with `[pytest]` (pytest does not read `[tool:pytest]` there)
-# INI sections start at column 0 (an indented `[x]` is a continuation line); a
-# TOML table may be indented, but not inside a string (D6-amended single judge)
-_PYPROJECT_PYTEST = re.compile(r"^[ \t]*\[tool\.pytest\.ini_options\][ \t]*(?:#.*)?$", re.M)
-_TOX_PYTEST = re.compile(r"^\[pytest\][ \t]*$", re.M)
-_SETUPCFG_PYTEST = re.compile(r"^\[tool:pytest\][ \t]*$", re.M)
 # Directories the outside-`tests/` walk never enters: hidden (.git, .venv, …)
 # and vendored/installed trees whose tests are not the project's.
 _SKIP_DIRS = frozenset({"node_modules", "venv", "env", "site-packages", "__pycache__",
@@ -163,7 +155,7 @@ def _discover_observations(root: Path) -> "list[str]":
                 seen.append(f"`{rel}` could not be parsed (not scanned)")
                 continue
             names = _module_names(tree)
-            if any(n == "load_tests" for _k, n in names):
+            if any(k in ("def", "assign", "import") and n == "load_tests" for k, n in names):
                 seen.append(f"`{rel}` binds load_tests (discover stops recursing there)")
             elif any(k == "star" for k, _n in names):
                 seen.append(f"`{rel}` has an `import *` (it may bind load_tests)")
@@ -187,11 +179,7 @@ def _discover_observations(root: Path) -> "list[str]":
                 seen.append(f"`{rel}` could not be parsed (not scanned)")
                 continue
             names = _module_names(tree)
-            if any(k == "import" and n == "pytest" for k, n in names) or any(
-                    isinstance(x, ast.ImportFrom) and (x.module or "").split(".")[0] == "pytest"
-                    for x in tree.body):
-                seen.append(f"`{rel}` imports pytest")
-            if any(k == "def" and n.startswith("test") for k, n in names):
+            if any(k in ("def", "asyncdef") and n.startswith("test") for k, n in names):
                 seen.append(f"`{rel}` has a module-level `def test…`")
             if any(k == "assign" and (n.startswith("test") or n.startswith("Test")) for k, n in names):
                 seen.append(f"`{rel}` has a module-level test alias (`test… =` / `Test… =`)")
@@ -228,18 +216,11 @@ def _unittest_note(root: Path) -> str:
 
 def _python_components(root: Path, notes: "Optional[list[str]]" = None) -> list[dict]:
     out: list[dict] = []
-    # tests — pytest where the project has it (config, or it is installed); it
-    # runs unittest TestCases too. Otherwise unittest discover, with its limits
-    # stated (owner decision, task 098). Never a pytest that is not installed.
-    # `tox.ini` counts only with a pytest section — a bare `[tox]` made an
-    # uninstalled pytest the suggestion (impl panel r1, codex ×2 + grok)
-    pytest_cfg = (_has(root, "pytest.ini")
-                  or bool(_PYPROJECT_PYTEST.search(_TRIPLE_STR.sub("", _read(root / "pyproject.toml"))))
-                  or bool(_TOX_PYTEST.search(_read(root / "tox.ini")))
-                  or bool(_SETUPCFG_PYTEST.search(_read(root / "setup.cfg"))))
-    if pytest_cfg:
-        out.append(_component("pytest", "python3 -m pytest", "pytest config"))
-    elif (root / "tests").is_dir():
+    # tests — pytest ONLY when the executable probe finds it in this root (it runs
+    # unittest TestCases too); otherwise unittest discover with its limits stated.
+    # No config file is read (owner decisions, task 098, 2026-09-25/26): reading
+    # them kept producing false "pytest is configured" answers.
+    if (root / "tests").is_dir():
         if _pytest_available(root):
             out.append(_component("pytest", "python3 -m pytest",
                                   "pytest is installed; it runs unittest TestCases too"))

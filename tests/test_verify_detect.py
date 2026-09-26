@@ -45,13 +45,15 @@ def _mk(files: dict) -> Path:
 
 class DetectVerify(_NoPytest):
     def test_python_full_stack(self):
+        self.probe.return_value = True        # task 098: the probe, not the config, decides
         d = _mk({"pyproject.toml": "[tool.pytest.ini_options]\n[tool.mypy]\n[tool.ruff]\n",
                  "tests/test_x.py": ""})
         self.assertEqual(detect_verify(d)["command"],
                          "python3 -m pytest && mypy . && ruff check .")
 
     def test_python_pyright_and_flake8_variants(self):
-        d = _mk({"pyproject.toml": "[tool.pyright]\n", "pytest.ini": "",
+        self.probe.return_value = True
+        d = _mk({"pyproject.toml": "[tool.pyright]\n", "tests/test_x.py": "",
                  "setup.cfg": "[flake8]\n"})
         cmd = detect_verify(d)["command"]
         self.assertIn("python3 -m pytest", cmd)
@@ -99,6 +101,7 @@ class DetectVerify(_NoPytest):
         # `make test` never doubles up a detected pytest.
         d = _mk({"Makefile": "check:\n\tpytest\n",
                  "pyproject.toml": "[tool.pytest.ini_options]\n", "tests/t.py": ""})
+        self.probe.return_value = True
         cmd = detect_verify(d)["command"]
         self.assertIn("python3 -m pytest", cmd)
         self.assertNotIn("make", cmd)
@@ -163,10 +166,27 @@ class DetectsThisProjectsShape(_NoPytest):
         return notes[0]
 
     # ── task 098 (owner): pytest where the project has it, else unittest + its limits ──
-    def test_pytest_config_suggests_pytest_without_probing(self):
-        r = detect_verify(_mk({"pytest.ini": "", "tests/test_a.py": self.TC}))
-        self.assertEqual(r["command"], "python3 -m pytest")
-        self.probe.assert_not_called()
+    def test_only_the_probe_decides_pytest_config_files_are_not_read(self):
+        # owner 2026-09-26: "the project has pytest" = the executable probe, nothing else
+        configs = ({"pytest.ini": ""}, {"tox.ini": "[pytest]\n"},
+                   {"pyproject.toml": "[tool.pytest.ini_options]\naddopts = '-q'\n"},
+                   {"setup.cfg": "[tool:pytest]\n"},
+                   {"tests/test_b.py": "import pytest\n\n\ndef test_x():\n    pass\n"})
+        for extra in configs:
+            with self.subTest(extra=sorted(extra)):
+                self.probe.reset_mock()
+                self.probe.return_value = False
+                r = detect_verify(_mk({"tests/test_a.py": self.TC, **extra}))
+                self.assertEqual(r["command"], self.UD)
+                self.probe.assert_called_once()
+                self.probe.return_value = True
+                self.assertEqual(detect_verify(_mk({"tests/test_a.py": self.TC, **extra}))["command"],
+                                 "python3 -m pytest")
+
+    def test_a_pytest_import_is_not_reported(self):
+        # owner 2026-09-26: no search for `import pytest`
+        note = self._note(detect_verify(_mk({"tests/test_a.py": "import pytest\n" + self.TC})))
+        self.assertNotIn("imports pytest", note)
 
     def test_installed_pytest_is_suggested_it_runs_testcases_too(self):
         self.probe.return_value = True
@@ -227,13 +247,6 @@ class DetectsThisProjectsShape(_NoPytest):
         detect_verify(d)
         self.assertEqual(sorted(Path(c.args[0]).name for c in self.probe.call_args_list), ["a", "b"])
 
-    def test_a_tox_ini_without_pytest_is_not_pytest_config(self):
-        # codex ×2, grok: a bare [tox] made an uninstalled pytest the suggestion
-        r = detect_verify(_mk({"tox.ini": "[tox]\nenvlist = py310\n", "tests/test_a.py": self.TC}))
-        self.assertEqual(r["command"], self.UD)
-        r = detect_verify(_mk({"tox.ini": "[pytest]\naddopts = -q\n", "tests/test_a.py": self.TC}))
-        self.assertEqual(r["command"], "python3 -m pytest")
-
     def test_a_comment_or_string_naming_load_tests_is_not_a_binding(self):
         # grok: `# do not define load_tests` was reported as a hook
         d = _mk({"tests/test_a.py": self.TC,
@@ -254,34 +267,6 @@ class DetectsThisProjectsShape(_NoPytest):
         self.assertIn("Ran 0 tests", r.stderr)                    # the skip is real
 
     # ── task 098 impl panel round 2 (the last D6 round) ──
-    def test_config_markers_count_only_as_real_section_headers(self):
-        # sonnet, codex ×2, grok: a comment or value naming the section made an
-        # uninstalled pytest the suggestion, with no probe
-        not_config = [
-            {"tox.ini": "[tox]\n# [pytest] is not used here\ndescription = no [pytest] here\n"},
-            {"tox.ini": "[tool:pytest]\naddopts = -q\n"},      # pytest does not read this in tox.ini
-            {"pyproject.toml": "[project]\nname = 'x'\n# see [tool.pytest.ini_options] upstream\n"},
-            {"setup.cfg": "[metadata]\ndescription = mentions [tool:pytest]\n"},
-            # D6-amended single judge, pass 1: an indented header is an ini
-            # continuation line, and a header-shaped line inside a string is not a table
-            {"tox.ini": "[tox]\nenvlist = py310\n  [pytest]\n"},
-            {"setup.cfg": "[metadata]\n  [tool:pytest]\n"},
-            {"pyproject.toml": '[project]\ndescription = """\n[tool.pytest.ini_options]\n"""\n'},
-            # single judge, pass 2: an empty `[tool.pytest]` table is no pytest config
-            {"pyproject.toml": "[tool.pytest]\n# nothing here\n"},
-        ]
-        for files in not_config:
-            with self.subTest(files=sorted(files)):
-                r = detect_verify(_mk({**files, "tests/test_a.py": self.TC}))
-                self.assertEqual(r["command"], self.UD)
-        for files in ({"tox.ini": "[tox]\n\n[pytest]\naddopts = -q\n"},
-                      {"pyproject.toml": "[tool.pytest.ini_options]\naddopts = '-q'\n"},
-                      {"setup.cfg": "[tool:pytest]\naddopts = -q\n"},
-                      {"pytest.ini": ""}):
-            with self.subTest(files=sorted(files)):
-                r = detect_verify(_mk({**files, "tests/test_a.py": self.TC}))
-                self.assertEqual(r["command"], "python3 -m pytest")
-
     def test_load_tests_false_bindings_are_not_reported(self):
         # grok: an indented def, a line inside a string, an `import … as other`
         for init in ("class X:\n    def load_tests(self):\n        pass\n",
@@ -291,7 +276,14 @@ class DetectsThisProjectsShape(_NoPytest):
                      "import tests.pkg.sub.load_tests\n",
                      "import os, sys.load_tests\n",
                      # single judge, pass 2: a backslash-continued string literal
-                     'x = "\\\nload_tests = 1"\n'):
+                     'x = "\\\nload_tests = 1"\n',
+                     # owner 2026-09-26: only FunctionDef, Assign to a Name, Import/ImportFrom
+                     # bind it — an annotation, an attribute, an index or an augmented
+                     # assignment does not
+                     "load_tests: int\n",
+                     "load_tests.x = 1\n",
+                     "data = {}\ndata[load_tests] = 1\n",
+                     "load_tests += 1\n"):
             with self.subTest(init=init.splitlines()[0]):
                 d = _mk({"tests/test_a.py": self.TC, "tests/pkg/__init__.py": init,
                          "tests/pkg/test_b.py": self.TC})
