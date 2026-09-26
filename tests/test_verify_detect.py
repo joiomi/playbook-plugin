@@ -455,6 +455,44 @@ class DetectsThisProjectsShape(_NoPytest):
         self.assertEqual(detect_verify(d)["command"], "")
 
 
+
+class ConfigFileToToolMapping(_NoPytest):
+    """Task 099: which config file feeds which tool, as verify_detect.py really
+    reads them — and the two docs that describe it. Of pyproject.toml /
+    setup.cfg / tox.ini / pytest.ini only the first two are read (mypy, pyright,
+    ruff; flake8); tox.ini and pytest.ini are never read. 098 closed with
+    init.md and docs/cli.md stating it wrongly (dated ledger limitations)."""
+
+    def _cmd(self, files):
+        return detect_verify(_mk(files))["command"]
+
+    def test_pyproject_feeds_mypy_pyright_ruff(self):
+        self.assertEqual(self._cmd({"pyproject.toml": "[tool.mypy]\n[tool.ruff]\n"}), "mypy . && ruff check .")
+        self.assertEqual(self._cmd({"pyproject.toml": "[tool.pyright]\n"}), "pyright")
+
+    def test_setup_cfg_feeds_flake8(self):
+        self.assertEqual(self._cmd({"setup.cfg": "[flake8]\nmax-line-length = 100\n"}), "flake8")
+
+    def test_tox_ini_and_pytest_ini_are_never_read(self):
+        for files in ({"tox.ini": "[flake8]\n[mypy]\n[tool.ruff]\n[pytest]\n"},
+                      {"pytest.ini": "[pytest]\n[flake8]\n[mypy]\n"}):
+            with self.subTest(files=sorted(files)):
+                self.assertEqual(self._cmd(files), "")
+
+    def test_init_md_states_the_mapping(self):
+        text = (_HERE.parent / "plugins/playbook/commands/init.md").read_text(encoding="utf-8")
+        self.assertIn("of `pyproject.toml`, `setup.cfg`, `tox.ini` and `pytest.ini`, only "
+                      "`pyproject.toml` and `setup.cfg` are read — for mypy, pyright, ruff and "
+                      "flake8 — and `tox.ini` and `pytest.ini` are not read at all", text)
+        self.assertNotIn("they are still read for mypy, pyright, ruff and flake8", text)
+
+    def test_cli_md_names_only_the_two_parsed_globs(self):
+        text = (_HERE.parent / "docs/cli.md").read_text(encoding="utf-8")
+        self.assertIn("a `tests/**/__init__.py` or `tests/**/test_*.py` file that does not parse "
+                      "is named as not scanned (no other file is parsed)", text)
+        self.assertNotIn("a file that does not parse is named as not scanned.", text)
+
+
 _REAL_PROBE = vd._pytest_available   # captured at import, before any test patches it
 
 

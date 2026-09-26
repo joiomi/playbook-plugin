@@ -8,6 +8,7 @@ Branch `fix/1.5.46-batch`. Task 085: the six defects parked by the 1.5.45 releas
 plus the tool defect found at its close. Task 086: PLAN S3. Task 087: PLAN S4. Task 088: PLAN S5. Task 093: PLAN S7b. Task 094: the `opus` alias moves to Opus 5.5.
 Task 095: owner decision H2 (any project-root `*.md` is a doc for tail certification).
 Task 096: PLAN S10 (CI + docs correspondence).
+Task 099: two detect-verify doc sentences left wrong at 098's close corrected.
 Each fix was written against a test that failed first.
 
 ### Added
