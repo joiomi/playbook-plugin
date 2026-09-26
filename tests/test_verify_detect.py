@@ -463,6 +463,8 @@ class ConfigFileToToolMapping(_NoPytest):
     ruff; flake8); tox.ini and pytest.ini are never read. 098 closed with
     init.md and docs/cli.md stating it wrongly (dated ledger limitations)."""
 
+    TC = DetectsThisProjectsShape.TC
+
     def _cmd(self, files):
         return detect_verify(_mk(files))["command"]
 
@@ -479,17 +481,38 @@ class ConfigFileToToolMapping(_NoPytest):
             with self.subTest(files=sorted(files)):
                 self.assertEqual(self._cmd(files), "")
 
+    def test_only_the_two_globs_are_parsed(self):
+        # impl panel r1, grok: pin the behaviour the cli.md sentence states
+        note = lambda files: detect_verify(_mk(files))["notes"][0]
+        self.assertIn("`tests/pkg/__init__.py` could not be parsed",
+                      note({"tests/test_a.py": self.TC, "tests/pkg/__init__.py": "def (:\n",
+                            "tests/pkg/test_b.py": self.TC}))
+        self.assertNotIn("`tests/test.py` could not be parsed",
+                         note({"tests/test_a.py": self.TC, "tests/test.py": "def (:\n"}))
+
+    def test_the_note_caps_observations_at_eight(self):
+        files = {"tests/test_a.py": self.TC}
+        for n in range(9):
+            files[f"tests/p{n}/__init__.py"] = "from .s import load_tests\n"
+            files[f"tests/p{n}/test_b.py"] = self.TC
+        self.assertIn("… and 1 more", detect_verify(_mk(files))["notes"][0])
+
     def test_init_md_states_the_mapping(self):
         text = (_HERE.parent / "plugins/playbook/commands/init.md").read_text(encoding="utf-8")
-        self.assertIn("of `pyproject.toml`, `setup.cfg`, `tox.ini` and `pytest.ini`, only "
-                      "`pyproject.toml` and `setup.cfg` are read — for mypy, pyright, ruff and "
-                      "flake8 — and `tox.ini` and `pytest.ini` are not read at all", text)
+        # two separate sentences: the probe is the only signal for the PYTEST decision,
+        # and the file→tool mapping stands on its own (impl panel r1, grok)
+        self.assertIn("`python3 -m pytest --version` succeeds (the only signal for the pytest "
+                      "decision)", text)
+        self.assertIn("Of `pyproject.toml`, `setup.cfg`, `tox.ini` and `pytest.ini`, only "
+                      "`pyproject.toml` (for mypy, pyright and ruff) and `setup.cfg` (for flake8) "
+                      "are read; `tox.ini` and `pytest.ini` are not read at all.", text)
         self.assertNotIn("they are still read for mypy, pyright, ruff and flake8", text)
 
     def test_cli_md_names_only_the_two_parsed_globs(self):
         text = (_HERE.parent / "docs/cli.md").read_text(encoding="utf-8")
         self.assertIn("a `tests/**/__init__.py` or `tests/**/test_*.py` file that does not parse "
-                      "is named as not scanned (no other file is parsed)", text)
+                      "is named as not scanned (no other file is parsed); the note lists at most "
+                      "eight observations", text)
         self.assertNotIn("a file that does not parse is named as not scanned.", text)
 
 
