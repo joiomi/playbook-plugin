@@ -8,7 +8,15 @@
 # registers command_guard.py directly (its exec_command shape is native).
 # `exec` hands stdin straight through: no cat, no second process.
 if [ "${PLAYBOOK_ROLE:-}" = "monitor" ]; then exit 0; fi
-command -v python3 >/dev/null 2>&1 || exit 0          # no python → fail open
+# No python3 at all → the guard cannot run → fail OPEN, loudly (the same uniform
+# policy as the < 3.10 and missing-helper arms below; task 100 found this arm
+# silent — a partial host was allowing every shell call with no trace).
+command -v python3 >/dev/null 2>&1 || {
+    echo "[command-guard-hook] WARNING: python3 not found on PATH — the" \
+         "destructive-command guard is DISABLED for this call (failing open)." \
+         "Install python3 >= 3.10 to restore it." >&2
+    exit 0
+}
 # python3 < 3.10 cannot even parse command_guard.py's dependencies (3.10-only
 # `match` syntax) → the guard could not run. Same owner policy as a missing
 # helper below: fail OPEN, loudly, and BEFORE the exec that would otherwise

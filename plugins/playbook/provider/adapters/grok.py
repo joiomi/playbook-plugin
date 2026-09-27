@@ -336,10 +336,11 @@ class GrokAdapter(ProviderAdapter):
 
     def install_bootstrap(self, project_root: Path) -> None:
         """Write AGENTS.md (shared with codex/pi) if not present."""
+        from tasks.atomic import atomic_write
         from tasks.template import agents_md_template
         target = project_root / "AGENTS.md"
         if not target.exists():
-            target.write_text(agents_md_template(), encoding="utf-8")
+            atomic_write(target, agents_md_template())
 
     # ── Hooks ─────────────────────────────────────────────────────────────────
     # Discovery channels (task 014–020):

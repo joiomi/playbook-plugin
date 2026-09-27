@@ -128,6 +128,106 @@ class CommandGuardMissingHelper(unittest.TestCase):
                          f"real dangerous command must still block: {r.stdout.decode('utf-8', 'replace')} {r.stderr.decode('utf-8', 'replace')}")
 
 
+class CommandGuardCannotRun(unittest.TestCase):
+    """PB-COMMAND-FAILURE-POLICY (PLAN S8c, task 100): the two `guard could not
+    run` arms the row disclosed as source-read only — no python3 on PATH, and a
+    hook the host kills at its timeout (hooks.json: 5 s per hook).
+
+    The host reads exit 2 as BLOCK and any other code as a non-blocking error, so
+    the fail-open direction of a killed hook is `exit code != 2`; the polarity of
+    a missing interpreter is `exit 0` — and, by the uniform policy every other
+    cannot-run arm follows, a line on stderr saying so."""
+
+    def setUp(self):
+        self.p = _Project()
+        self.addCleanup(self.p.cleanup)
+
+    def _payload(self, command):
+        return {"hook_event_name": "PreToolUse", "tool_name": "Bash",
+                "tool_input": {"command": command}}
+
+    def test_no_python3_fails_open_loudly_even_on_a_dangerous_command(self):
+        path = make_nopython_path(self.p.tmp / "nopybin")
+        r = _run(SCRIPTS / "command-guard-hook", self._payload("rm -rf /"), self.p.proj,
+                 env_extra={"PATH": path})
+        err = r.stderr.decode("utf-8", "replace")
+        self.assertEqual(r.returncode, 0,
+                         f"no python3: the guard cannot run and must fail OPEN (never wedge): {err!r}")
+        self.assertIn("python3", err,
+                      f"fail-open was SILENT — the uniform policy is loud on stderr: {err!r}")
+        self.assertIn("command-guard", err, err)
+
+    def test_killed_at_the_host_timeout_exits_non_two(self):
+        # A python3 shim that answers the version probe but hangs on the guard.
+        if os.name == "nt":
+            self.skipTest("signal delivery through MSYS `timeout` is not the host's semantics")
+        timeout_bin = shutil.which("timeout")
+        if not timeout_bin:
+            self.skipTest("coreutils `timeout` not on PATH")
+        probe = subprocess.run([timeout_bin, "--help"], capture_output=True, text=True)
+        if "--preserve-status" not in probe.stdout + probe.stderr:
+            self.skipTest("`timeout` lacks --preserve-status (the child's own exit code is what the host reads)")
+        real = shutil.which("python3")
+        if not real:
+            self.skipTest("no python3 on PATH to delegate the version probe to")
+        shim = self.p.tmp / "shim"
+        shim.mkdir()
+        # The shim runs the REAL guard module (so any TERM handler it installs is
+        # live — impl panel r2, grok) with only the classifier replaced by a hang.
+        hang = ("import importlib.util, sys, time; "
+                "spec = importlib.util.spec_from_file_location('cg', sys.argv[1]); "
+                "cg = importlib.util.module_from_spec(spec); spec.loader.exec_module(cg); "
+                "cg.classify_command = lambda *a, **k: time.sleep(30); sys.exit(cg.main())")
+        (shim / "python3").write_text(
+            "#!/bin/sh\n"
+            'case "$1" in *command_guard.py) exec "' + real + '" -c "' + hang.replace('"', '\\"') + '" "$1" ;; '
+            '*) exec "' + real + '" "$@" ;; esac\n',
+            encoding="utf-8")
+        (shim / "python3").chmod(0o755)
+        env = dict(os.environ, PLAYBOOK_SESSION_ID=SESSION,
+                   PATH=f"{shim}{os.pathsep}{os.environ.get('PATH', '')}")
+        env.pop("PLAYBOOK_ROLE", None)
+        import time
+
+        def killed(script: Path):
+            # --preserve-status: the exit code is the CHILD's (128+TERM, or whatever
+            # a trap exits with), not timeout's own 124 — the host reads the child.
+            t0 = time.monotonic()
+            r = subprocess.run([timeout_bin, "--preserve-status", "-s", "TERM", "1",
+                                bash_or_skip(), str(script)],
+                               input=json.dumps(self._payload("rm -rf /")).encode(),
+                               cwd=str(self.p.proj), env=env, capture_output=True, timeout=60)
+            return r, time.monotonic() - t0
+
+        # Control (impl panel r1, opus): the harness must SEE a child that traps TERM
+        # and exits 2 — otherwise the assertion below cannot fail.
+        trapper = self.p.tmp / "trap-two"
+        trapper.write_text("#!/bin/bash\ntrap 'exit 2' TERM\nsleep 30 & wait\n", encoding="utf-8")
+        trapper.chmod(0o755)
+        rc_ctl, _ = killed(trapper)
+        self.assertEqual(rc_ctl.returncode, 2, "control: the harness does not report the child's own exit code")
+
+        r, elapsed = killed(SCRIPTS / "command-guard-hook")
+        self.assertNotEqual(r.returncode, 0, "the kill must have happened (rc 0 means the guard ran)")
+        self.assertNotEqual(r.returncode, 2,
+                            "a hook killed at the host's timeout must not read as BLOCK (exit 2)")
+        self.assertLess(elapsed, 20, f"the killed hook did not return promptly ({elapsed:.1f}s)")
+
+    def test_a_benign_call_completes_well_under_the_host_timeout(self):
+        # hooks.json gives each hook 5 s; a guard that routinely needed more would
+        # be killed in the field — and a killed hook is an allow. Best of three so
+        # a loaded runner cannot fake a slow guard.
+        import time
+        best = float("inf")
+        for _ in range(3):
+            t0 = time.monotonic()
+            r = _run(SCRIPTS / "command-guard-hook", self._payload("ls -la"), self.p.proj)
+            elapsed = time.monotonic() - t0
+            self.assertEqual(r.returncode, 0, r.stderr.decode("utf-8", "replace"))
+            best = min(best, elapsed)
+        self.assertLess(best, 5.0, f"best of 3 benign calls took {best:.2f}s — over the host's 5 s hook budget")
+
+
 # --------------------------------------------------------------------------- #
 # Defect 2 — task-gate-hook: missing gate-batch-check.py must fail OPEN, loudly,
 # WITHOUT suppressing a genuine batch block.

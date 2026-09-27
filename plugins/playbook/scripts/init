@@ -265,9 +265,16 @@ to_native_path() {
 SETTINGS_FILE="$PROJECT_DIR/.claude/settings.json"
 mkdir -p "$PROJECT_DIR/.claude"
 SETTINGS_FILE_PY="$(to_native_path "$SETTINGS_FILE")"
+# Task 100 (PLAN S8c): the embedded python below writes settings.json through the
+# same atomic primitive the CLI uses (temp + fsync + os.replace), never a plain
+# truncating write — a crash mid-write must not empty a settings file.
+ATOMIC_PY="$(to_native_path "$SCRIPT_DIR/../tasks/atomic.py")"
 
-SETTINGS_RESULT=$(PB_SETTINGS_PATH="$SETTINGS_FILE_PY" python3 -c "
+SETTINGS_RESULT=$(PB_SETTINGS_PATH="$SETTINGS_FILE_PY" PB_ATOMIC_PY="$ATOMIC_PY" python3 -c "
 import json, sys, os
+import importlib.util as _ilu
+_s = _ilu.spec_from_file_location('_pb_atomic_write', os.environ['PB_ATOMIC_PY'])
+_m = _ilu.module_from_spec(_s); _s.loader.exec_module(_m); atomic_write = _m.atomic_write
 
 # I4: read the path from the environment, never interpolate it into the source
 # — a project path with a single quote otherwise breaks python's string literal
@@ -294,9 +301,7 @@ try:
             added.append(item)
 
     if added:
-        with open(path, 'w') as f:
-            json.dump(data, f, indent=2)
-            f.write('\n')
+        atomic_write(path, json.dumps(data, indent=2) + '\n')
         print('CREATED:' + ','.join(added))
     else:
         print('SKIPPED')
@@ -420,8 +425,11 @@ if [ -f "$BASH_LOG_SRC" ]; then
     # This is the reliable path — CC reads settings.json env key and injects vars before tool calls.
     CC_SETTINGS="$HOME/.claude/settings.json"
     CC_SETTINGS_PY="$(to_native_path "$CC_SETTINGS")"
-    BASH_ENV_RESULT=$(PB_CC_SETTINGS_PATH="$CC_SETTINGS_PY" python3 -c "
+    BASH_ENV_RESULT=$(PB_CC_SETTINGS_PATH="$CC_SETTINGS_PY" PB_ATOMIC_PY="$ATOMIC_PY" python3 -c "
 import json, os, tempfile
+import importlib.util as _ilu
+_s = _ilu.spec_from_file_location('_pb_atomic_write', os.environ['PB_ATOMIC_PY'])
+_m = _ilu.module_from_spec(_s); _s.loader.exec_module(_m); atomic_write = _m.atomic_write
 # I4: path via env, not interpolated (single-quote paths would SyntaxError).
 path = os.environ['PB_CC_SETTINGS_PATH']
 # Always bash-log.sh — CC's Bash tool is /bin/bash regardless of user's login shell.
@@ -442,9 +450,7 @@ try:
         print('SKIPPED')
     else:
         env['BASH_ENV'] = dest
-        tmp = path + '.tmp'
-        open(tmp, 'w').write(json.dumps(data, indent=2) + '\n')
-        os.replace(tmp, path)
+        atomic_write(path, json.dumps(data, indent=2) + '\n')
         print('CREATED')
 except Exception as e:
     print('ERROR:' + str(e))
@@ -527,8 +533,11 @@ if [ -n "$MONITOR_LIB_DIR" ] && [ -d "$MONITOR_LIB_DIR" ]; then
 
     # Register PostToolUse hook for monitor-nudge in .claude/settings.json
     NUDGE_HOOK_CMD='bash "$CLAUDE_PROJECT_DIR/.claude/hooks/monitor-nudge.sh"'
-    HOOK_RESULT=$(PB_SETTINGS_PATH="$SETTINGS_FILE_PY" PB_NUDGE_CMD="$NUDGE_HOOK_CMD" python3 -c "
+    HOOK_RESULT=$(PB_SETTINGS_PATH="$SETTINGS_FILE_PY" PB_NUDGE_CMD="$NUDGE_HOOK_CMD" PB_ATOMIC_PY="$ATOMIC_PY" python3 -c "
 import json, os
+import importlib.util as _ilu
+_s = _ilu.spec_from_file_location('_pb_atomic_write', os.environ['PB_ATOMIC_PY'])
+_m = _ilu.module_from_spec(_s); _s.loader.exec_module(_m); atomic_write = _m.atomic_write
 # I4: path AND command via env, never interpolated — a single quote in either
 # broke the python literal (SyntaxError → set -e abort mid-install).
 path = os.environ['PB_SETTINGS_PATH']
@@ -545,7 +554,7 @@ try:
         print('SKIPPED')
     else:
         posthook.append({'matcher': '', 'hooks': [{'type': 'command', 'command': target_cmd}]})
-        open(path, 'w').write(json.dumps(data, indent=2) + '\n')
+        atomic_write(path, json.dumps(data, indent=2) + '\n')
         print('CREATED')
 except Exception as e:
     print('ERROR:' + str(e))

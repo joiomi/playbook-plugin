@@ -171,10 +171,11 @@ class AntigravityAdapter(ProviderAdapter):
         GEMINI.md is read by agy when run from project cwd. Does not
         overwrite an existing GEMINI.md.
         """
+        from tasks.atomic import atomic_write
         from tasks.template import antigravity_md_template
         target = project_root / "GEMINI.md"
         if not target.exists():
-            target.write_text(antigravity_md_template(), encoding="utf-8")
+            atomic_write(target, antigravity_md_template())
 
     # ── Hooks ─────────────────────────────────────────────────────────────────
 

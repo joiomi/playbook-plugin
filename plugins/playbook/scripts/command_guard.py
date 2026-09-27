@@ -1340,19 +1340,43 @@ def _active_task_is_irreversible(root):
 
 def main() -> int:
     # FAIL-OPEN: any failure to read/parse must allow (never wedge a session).
-    try:
-        payload = json.loads(sys.stdin.read() or "{}")
-    except ValueError:
+    def _open_loudly(what: str) -> int:
+        # Task 100 (PLAN S8c, impl panel r1+r2): every cannot-run arm is LOUD —
+        # a malformed, empty or mis-shaped payload allows the call, and says so.
+        print("[command-guard] WARNING: %s — failing OPEN (guard disabled for "
+              "this call)" % what, file=sys.stderr)
         return 0
+
+    # Read BYTES: a payload that is not valid UTF-8 (a truncated multibyte
+    # sequence, a stray 0xFF) must be a loud fail-open, not a UnicodeDecodeError
+    # traceback (D6-amended single judge, pass 1).
+    try:
+        raw_bytes = sys.stdin.buffer.read() if hasattr(sys.stdin, "buffer") else sys.stdin.read().encode("utf-8", "replace")
+    except (OSError, ValueError) as exc:
+        return _open_loudly("could not read the hook payload from stdin: %s" % exc)
+    try:
+        raw = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        return _open_loudly("hook payload is not valid UTF-8: %s" % exc)
+    if not raw.strip():
+        return _open_loudly("empty hook payload (no JSON on stdin)")
+    try:
+        payload = json.loads(raw)
+    except ValueError as exc:
+        return _open_loudly("could not parse the hook payload as JSON: %s" % exc)
+    if not isinstance(payload, dict):
+        return _open_loudly("hook payload is not a JSON object (%s)" % type(payload).__name__)
     payload = _normalize_payload(payload)
     # Bash/Shell/run_terminal_command = Claude + grok (post-normalize);
     # exec_command = Codex's shell tool.
     if payload.get("tool_name") not in ("Bash", "Shell", "run_terminal_command", "exec_command"):
         return 0
     ti = payload.get("tool_input") or {}
+    if not isinstance(ti, dict):
+        return _open_loudly("tool_input is not an object (%s)" % type(ti).__name__)
     command = ti.get("command", ti.get("cmd", ""))     # codex exec may use either
     if not isinstance(command, (str, list)):
-        return 0
+        return _open_loudly("tool_input.command is neither text nor argv (%s)" % type(command).__name__)
 
     root = _find_root()
     cfg = _load_cfg(root)

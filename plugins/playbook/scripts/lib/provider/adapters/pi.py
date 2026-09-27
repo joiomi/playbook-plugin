@@ -185,10 +185,11 @@ class PiAdapter(ProviderAdapter):
 
     def install_bootstrap(self, project_root: Path) -> None:
         """Write AGENTS.md (shared with codex) if not present."""
+        from tasks.atomic import atomic_write
         from tasks.template import agents_md_template
         target = project_root / "AGENTS.md"
         if not target.exists():
-            target.write_text(agents_md_template(), encoding="utf-8")
+            atomic_write(target, agents_md_template())
 
     # ── Hooks ─────────────────────────────────────────────────────────────────
     # pi (0.73+) HAS an extension system (`pi -e <adapter.ts>`). The Playbook
@@ -224,14 +225,16 @@ class PiAdapter(ProviderAdapter):
         wrapper's `-e` flag, so there is no global hook state to mutate. Honors
         `.agent/current_user` (multi-user) via `resolve_agent_dir`.
         """
-        import shutil
         pi_dir = self._pi_config_dir(project_root)
         config_dir = pi_dir / "config"
         config_dir.mkdir(parents=True, exist_ok=True)
         (pi_dir / "sessions").mkdir(parents=True, exist_ok=True)
         src = self._shipped_models_json()
         if src is not None:
-            shutil.copyfile(src, config_dir / "models.json")
+            # Installed metadata goes through the atomic primitive (task 100,
+            # impl panel r2): a plain copyfile truncates the target first.
+            from tasks.atomic import atomic_write
+            atomic_write(config_dir / "models.json", src.read_bytes())
 
     def uninstall_hooks(self, project_root: Path) -> None:
         """Remove only the provisioned per-project pi config."""

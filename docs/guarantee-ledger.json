@@ -1,7 +1,7 @@
 {
   "$schema": "guarantee-ledger.schema.json",
   "schema_version": 1,
-  "ledger_version": "2026-09-24",
+  "ledger_version": "2026-09-27",
   "guarantees": [
     {
       "id": "PB-TASK-ACTIVATE",
@@ -1192,6 +1192,46 @@
           "limitations": [
             "Pins that compact's protected span and the drift sweep's receipt window end at the same live H2 (computed with the sweep's own rule on identical lines) — a plain decoy heading cannot make compact protect less than the sweep counts."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_verify_contract_guard.py",
+          "reference": "VerifyContractJournalAtClose.test_close_journals_full_multiline_verify_command",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task 100 (PLAN S8 binding audit, 2026-09-27): a multi-line verify command is journalled newline-escaped, not cut at its first newline — a statement clause cited by no proof until this audit."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_verify_contract_guard.py",
+          "reference": "VerifyContractJournalAtClose.test_close_journal_command_field_is_bounded",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task 100 (PLAN S8 binding audit, 2026-09-27): the journal `command` field is bounded by pb_journal's head cap — a statement clause cited by no proof until this audit."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_verify_contract_guard.py",
+          "reference": "VerifyContractSweep.test_baseline_spans_all_lanes",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 100 (PLAN S8 binding audit, 2026-09-27): the drift baseline is the union of receipts across every lane — a statement clause cited by no proof until this audit."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_verify_contract_guard.py",
+          "reference": "VerifyContractSweep.test_no_baseline_is_clean",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 100 (PLAN S8 binding audit, 2026-09-27): the first close has no baseline and is clean — a statement clause cited by no proof until this audit."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -1562,6 +1602,7 @@
       ],
       "status": "unverified",
       "missing_evidence_or_limitation": [
+        "PROPOSED WAIVER (task 100, PLAN S8 → the owner ratifies in S9 as the first limitation entry, in the exact form `WAIVER <YYYY-MM-DD> <id>: …`, or narrows/deletes the row): an agent-behaviour claim no test can establish; keep it as an aspiration measured only by its semantic protocol (frozen corpus, 10 samples), with the mechanical half — the risk field's wording asks the world question — pinned by tests/test_risk_wording.py.",
         "No repeated controlled agent trial establishes classification accuracy.",
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
         "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21)."
@@ -1888,6 +1929,16 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_gate_path_traversal.py",
+          "reference": "CodexManagementPathTraversal.test_genuine_management_paths_still_true",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 100 (PLAN S8 binding audit, 2026-09-27): the `.claude` half of the genuine-path exemption (`.claude/settings.json` is management) was asserted only here; the subprocess negative control covers a genuine `.agent` path."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -1999,9 +2050,136 @@
       "violation_reproduction": null
     },
     {
+      "id": "PB-TASK-DIR-GUARD",
+      "category": "hook-payload-and-paths",
+      "statement": "task-gate-hook refuses a Bash command that creates a task directory by hand inside the project — a `mkdir` naming `.agent[/<lane>]/tasks/…` in any shell spelling the decoder can resolve from the text (quoted, backslash-escaped, `$'…'`, brace-expanded, a glob in the PATH), judged by scripts/task-dir-target.py after the shell's own decoding — allows the same command when every named target is a literal absolute path OUTSIDE the project (a temp fixture), and, once the trigger fires (a `mkdir` word after quote/backslash stripping, a `$'`, or a `{` anywhere in the text), refuses to judge anything but one simple mkdir: a compound command, a pipe, a subshell, a background job, a prefix assignment or an expansion that could repoint the path is blocked, never narrowed. A command NAME that exists only after the shell evaluates it — assembled in a variable (`D=mk; D+=dir; \"$D\" -p …`) or a glob on the binary itself (`/bin/mk?ir`) — is outside the guard, the same architectural bound as PB-COMMAND-DANGEROUS.",
+      "owner": [
+        {
+          "path": "plugins/playbook/scripts/task-gate-hook",
+          "reference": "whole-file"
+        },
+        {
+          "path": "plugins/playbook/scripts/task-dir-target.py",
+          "reference": "symbol:main"
+        }
+      ],
+      "failure_consequence": "High",
+      "claim_kind": "mechanical",
+      "proofs": [
+        {
+          "type": "executable integration",
+          "path": "tests/test_gate_path_traversal.py",
+          "reference": "ManualTaskDirGuard.test_temp_dir_agent_tasks_is_not_a_task_dir",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_gate_path_traversal.py",
+            "reference": "ManualTaskDirGuard.test_quoted_escaped_and_globbed_spellings_are_still_blocked"
+          },
+          "limitations": [
+            "Six temp-fixture spellings (absolute, quoted, with -m, /bin/mkdir) are allowed — S1d (task 080, flag C15)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_gate_path_traversal.py",
+          "reference": "ManualTaskDirGuard.test_only_a_simple_mkdir_is_ever_allowed",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Eight non-simple shapes (a symlink planted earlier in the same command, `cd &&`, a pipe, `&`, a subshell, `$(…)`, a second line, a prefix assignment) are refused, never narrowed."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_gate_path_traversal.py",
+          "reference": "ManualTaskDirGuard.test_quoted_escaped_and_globbed_spellings_are_still_blocked",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task 085 G2: `.ag'ent/tasks'`, `.ag\\ent`, `\".agent\"`, `$'e'`, `?` glob — the helper judges the decoded path."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_gate_path_traversal.py",
+          "reference": "ManualTaskDirGuard.test_expanded_and_respelled_forms_are_blocked",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_gate_path_traversal.py",
+            "reference": "ManualTaskDirGuard.test_expansions_that_name_no_task_dir_stay_allowed"
+          },
+          "limitations": [
+            "Task 085 T2: `m\\kdir`, `m'kdir'`, `$'\\x6d'kdir` and expanded spellings still trigger the helper."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_gate_path_traversal.py",
+          "reference": "ManualTaskDirGuard.test_round3_spellings_are_blocked",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_gate_path_traversal.py",
+            "reference": "ManualTaskDirGuard.test_round3_lookalikes_are_allowed"
+          },
+          "limitations": [
+            "Task 085 U3: brace spellings of the command word (`mk{d,z}ir`) are decoded by the helper's brace expansion."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_gate_path_traversal.py",
+          "reference": "ManualTaskDirGuard.test_a_large_unrelated_brace_expansion_is_allowed",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "A large brace expansion that names no task dir is allowed (no over-block)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_gate_path_traversal.py",
+          "reference": "ManualTaskDirGuard.test_the_bound_a_globbed_command_name",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The documented bound, pinned as ALLOWED: `/bin/mk?ir -p .agent/tasks/999-x` resolves against the filesystem only at run time (task 085 U8)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_gate_path_traversal.py",
+          "reference": "ManualTaskDirGuard.test_the_bound_a_variable_assembled_command_name",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task 100 impl panel round 1 (2026-09-27) (codex-high, measured live): `D=mk; D+=dir; \"$D\" -p .agent/tasks/999-x` passes the hook and creates the directory — pinned as the bound, not fixed: blocking every command whose name is a variable would refuse ordinary shell."
+          ]
+        }
+      ],
+      "applicable_platforms": [
+        "linux",
+        "macos",
+        "windows-git-bash"
+      ],
+      "applicable_providers": [
+        "claude"
+      ],
+      "status": "verified_by_current_executable_evidence",
+      "missing_evidence_or_limitation": [
+        "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
+        "Row added by Task 100 (PLAN S8 binding audit, 2026-09-27) for the parked item task 087 → PLAN S8 (task 080 built the S1d narrowing helper; task 085 G2/T2/U3 extended the trigger to shell spellings). Bound: the helper judges the command TEXT before the shell runs it — a mkdir whose target only exists after an earlier step (a symlink planted in the same command) is refused as non-simple rather than resolved; a genuinely new spelling the decoder does not know is refused too (the trigger is loose on purpose: any `mkdir` word, `$'`, or `{` runs the helper, which can only narrow). Hermetic bash subprocess on the CI lanes, not a live provider hook invocation; the ack-free judge-session block (`tasks new|work` from a judge) is PB-JUDGE-READONLY's neighbour, not this row.",
+        "Task 100 impl panel round 1 (2026-09-27) NARROWED `in any shell spelling` to `any spelling the decoder can resolve from the text`: two seats showed a computed command NAME (a variable-assembled `\"$D\"`, a glob on the binary `/bin/mk?ir`) is not seen — task-dir-target.py decodes quoting, escapes, `$'…'`, braces and PATH globs, but a name that exists only after evaluation needs the shell's variable environment or filesystem, which a static judge does not have (the same class command_guard pins in TheArchitecturalBound). Both shapes are pinned as ALLOWED so the bound is visible; the OS sandbox is the layer for them.",
+        "Task 100 impl panel round 2 (2026-09-27) (grok): the compound-command clause holds only for text the trigger can see — `D=mk; D+=dir; \"$D\" -p …` contains no `mkdir`, `$'` or `{` after stripping, so the helper never runs and the `;` compound is not judged at all; that is the computed-name bound stated in the statement's last sentence, now made explicit for the compound clause too."
+      ],
+      "follow_up_phases": [],
+      "required_live_evidence": [],
+      "semantic_protocol": null,
+      "violation_reproduction": null
+    },
+    {
       "id": "PB-COMMAND-DANGEROUS",
       "category": "command-safety",
-      "statement": "The command interlock blocks its enumerated high-blast command forms at command position — a position it finds THROUGH delegating wrappers and their options, so `sudo -u root rm -rf /`, `timeout 5 rm -rf /`, `chrt -f 99 rm -rf /`, `stdbuf -o0 git push --force`, `env -S '<command line>'`, a nest of them, and the same wrappers on the right of a pipe (`curl … | nice -n 19 bash`) all reach the same rules as their bare forms, while a wrapper's terminal/query mode (`sudo --version …`, `command -v …`) runs nothing and is allowed — and through a command named by PATH or escaped past an alias, `/bin/rm -rf /` and `\\\\rm -rf /`, whose normalised head is checked in addition to the raw text (task 077) — and, for the two whole-command rules (a downloader piped into a shell, a DB drop/truncate/delete issued to a client), anywhere in what could RUN, with only these inert DATA regions masked first — a `cat`/`tee` heredoc body written to a PLAIN file whose tag is quoted or whose body carries no `$(`/backtick/`${`/process-substitution expansion, and an echo/printf LINE redirected to a plain file with no pipe or expansion anywhere on it — so a `cat` fixture or note ABOUT such a command is data, not a command, while a heredoc fed to an interpreter or DB client, `tee >(sh)`, `echo … | sh`, an expansion, an unterminated heredoc, a `<<` inside a string, or a quoted pipe inside an echo argument are all still seen (task 073; the command-position rules are line-split and never masked) — allows the documented benign look-alikes, and lets an explicitly acknowledged command through, where acknowledgement means either an ACTIVE task whose live `## Status` is `in_progress` and whose live `## Risk` reads `irreversible` (resolved through this session's `current_state` and the CLI's fence-aware `extract_risk`; logged as an `allow` with reason `ack-irreversible-task:<rule>`) or PLAYBOOK_ALLOW_DANGEROUS set to 1/true/yes/on in the HOOK'S OWN environment by the operator (a command-line prefix typed by the agent cannot set it — the block message says so).",
+      "statement": "The command interlock blocks its enumerated high-blast command forms at command position — a position it finds THROUGH delegating wrappers and their options, so `sudo -u root rm -rf /`, `timeout 5 rm -rf /`, `chrt -f 99 rm -rf /`, `stdbuf -o0 git push --force`, `env -S '<command line>'`, a nest of them, and the same wrappers on the right of a pipe (`curl … | nice -n 19 bash`) all reach the same rules as their bare forms, while a wrapper's terminal/query mode (`sudo --version …`, `command -v …`) runs nothing and is allowed — and through a command named by PATH or escaped past an alias, `/bin/rm -rf /` and `\\\\rm -rf /`, whose normalised head is checked in addition to the raw text (task 077) — and, for the two whole-command rules (a downloader piped into a shell, a DB drop/truncate/delete issued to a client), anywhere in what could RUN, with only these inert DATA regions masked first — a `cat`/`tee` heredoc body written to a PLAIN file whose tag is quoted or whose body carries no `$(`/backtick/`${`/process-substitution expansion, and an echo/printf LINE redirected to a plain file with no pipe or expansion anywhere on it — so a `cat` fixture or note ABOUT such a command is data, not a command, while a heredoc fed to an interpreter or DB client, `tee >(sh)`, `echo … | sh`, an expansion, an unterminated heredoc, a `<<` inside a string, or a quoted pipe inside an echo argument are all still seen (task 073; the command-position rules are line-split and never masked) — allows the documented benign look-alikes, and lets an explicitly acknowledged command through, where acknowledgement means either an ACTIVE task whose live `## Status` is `in_progress` and whose live `## Risk` reads `irreversible` (resolved through this session's `current_state` and the CLI's fence-aware `extract_risk`) or PLAYBOOK_ALLOW_DANGEROUS set to 1/true/yes in the HOOK'S OWN environment by the operator (a command-line prefix typed by the agent cannot set it — the block message says so).",
       "owner": [
         {
           "path": "plugins/playbook/scripts/command_guard.py",
@@ -2686,6 +2864,16 @@
           "limitations": [
             "Task 085 round 3 (U5): bash's eight-digit `\\U` ANSI-C escape; the fix preceded this test, red proven by reversal."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_command_guard.py",
+          "reference": "GuardIrreversibleTaskAck.test_fenced_irreversible_decoy_does_not_acknowledge",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task 100 (PLAN S8 binding audit, 2026-09-27): the FENCED `## Risk` irreversible decoy the acknowledgement must ignore was described in a limitation but cited by no proof; bound here."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -2715,7 +2903,8 @@
         "Task 077 SCOPE BOUND, pinned by `TheArchitecturalBound.test_a_different_RULE_FAMILY_is_out_of_scope_not_covered`: the interlock answers 'where is the command and is it one of the enumerated dangerous forms', not 'is this act destructive'. Measured as ALLOWED and disclosed rather than implied: an interpreter running a destructive command inside its own language (`perl -e 'system(…)'`, `python3 -c 'os.system(…)'`), a remote command (`ssh host …`), a container bind mount, and other deletion tools (`find -delete`, `rsync --delete`, `shred`). Each would be a NEW rule family with its own false-positive profile, and adding one is a scope decision for the owner, not a bug fix.",
         "Task 077 impl panel round 5 produced 14 defects, all confirmed and fixed. The signal CHANGED in this round and that is what ended the task: rounds 1-3 each showed the DESIGN was wrong; rounds 4 and 5 found regressions introduced by my own earlier fixes (the argv early-return, the echo mask, the computed-target rule) plus instances. That is an argument for fewer edits to this module, not for more review rounds — each further round of edits to the masking engine and the target rule has itself produced a regression. The residual surface is disclosed in the bounds above rather than implied to be empty.",
         "Task 085 (measured): a target that only arrives at run time is not seen — on stdin to `xargs` (`echo / | xargs rm -rf`) or through `:::` into a quoted `parallel` template (`parallel 'rm -rf {}' ::: /`). The classifier judges the command, not the data it will be fed; the OS sandbox is the layer for that.",
-        "Task 085 round 3 (U8): a globbed command name that matches a binary on disk is resolved only at run time, like the computed names already pinned in TheArchitecturalBound — added there."
+        "Task 085 round 3 (U8): a globbed command name that matches a binary on disk is resolved only at run time, like the computed names already pinned in TheArchitecturalBound — added there.",
+        "Task 100 (PLAN S8 binding audit, 2026-09-27) NARROWED two clauses no test asserts: the journal reason `ack-irreversible-task:<rule>` written on the acknowledged allow (command_guard.py emits it; no test reads it back) and the `on` spelling of PLAYBOOK_ALLOW_DANGEROUS (accepted by `main`; GuardAckHygiene.test_falsey_env_values_do_not_acknowledge exercises 1/true/yes only). Both are S11 gauntlet items, not defects."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],
@@ -2748,7 +2937,9 @@
             "path": "tests/test_command_guard.py",
             "reference": "HookBehavior.test_blocks_dangerous_bash_payload"
           },
-          "limitations": []
+          "limitations": [
+            "Task 100 impl panel round 1 (2026-09-27) (opus): the malformed-JSON arm of command_guard.py returned 0 in SILENCE while the row said every cannot-run arm is loud; the proof asserted only the exit code. The arm now prints a `[command-guard] WARNING … failing OPEN` line and the proof asserts it."
+          ]
         },
         {
           "type": "executable integration",
@@ -2799,6 +2990,69 @@
           "limitations": [
             "Task 077: the classifier-exception arm used to `return 0` SILENTLY, so this clause of the statement was false. The test drives the real module in a subprocess with the exception injected at the classifier boundary; measured pre-fix `rc=0 stderr=''`, post-fix `rc=0` with the diagnostic on stderr."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_hook_failure_semantics.py",
+          "reference": "CommandGuardMissingHelper.test_missing_helper_warns_loudly_naming_path",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task 100 (PLAN S8 binding audit, 2026-09-27): the `loudly on stderr` half of the missing-helper clause — named in a sibling proof's limitation, cited nowhere; bound here."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_hook_failure_semantics.py",
+          "reference": "CommandGuardCannotRun.test_no_python3_fails_open_loudly_even_on_a_dangerous_command",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_hook_failure_semantics.py",
+            "reference": "CommandGuardMissingHelper.test_genuine_dangerous_command_still_blocks_with_helper_present"
+          },
+          "limitations": [
+            "Task 100 (PLAN S8c, 2026-09-27): PATH built by tests/_nopython.py (coreutils, no python3), payload `rm -rf /` → rc 0 AND a stderr line naming python3 and the guard. Watched RED first: the arm was `command -v python3 || exit 0` — fail-open but SILENT, contradicting the row's `loudly` clause; fixed in this task (one warning line, same wording as the < 3.10 and missing-helper arms)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_hook_failure_semantics.py",
+          "reference": "CommandGuardCannotRun.test_killed_at_the_host_timeout_exits_non_two",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task 100 (PLAN S8c, 2026-09-27): a python3 shim that answers the version probe and hangs on the guard, the hook run under coreutils `timeout -s TERM 1`: exit code is neither 0 (the kill happened) nor 2 (the host would read BLOCK) and the hook returns promptly. The host's `non-2 = allow` reading is Claude Code's documented hook contract, not something the suite can execute; POSIX only (MSYS signal delivery differs)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_hook_failure_semantics.py",
+          "reference": "CommandGuardCannotRun.test_a_benign_call_completes_well_under_the_host_timeout",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Best of three benign calls completes under the 5 s per-hook budget hooks.json declares — the guard is not routinely killed in the field."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_command_guard.py",
+          "reference": "HookBehavior.test_empty_and_misshaped_payloads_fail_open_loudly",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task 100 impl panel round 2 (2026-09-27) (codex-high, codex-medium): empty/blank stdin became `{}` and allowed in silence; a JSON list, a string `tool_input` or a non-text command raised a traceback (exit 1). All five shapes now exit 0 with the `failing OPEN` warning; pinned."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_command_guard.py",
+          "reference": "HookBehavior.test_non_utf8_payload_fails_open_loudly",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task 100 D6-amended single judge, pass 1 (grok, measured rc 1): stdin was read as text, so a payload that is not valid UTF-8 (a stray 0xff, a truncated multibyte sequence) raised UnicodeDecodeError — a traceback, not the loud fail-open. main() now reads bytes and decodes explicitly; both shapes exit 0 with the warning. Watched red on the pre-fix guard."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -2809,15 +3063,15 @@
       "applicable_providers": [
         "claude"
       ],
-      "status": "partially_evidenced",
+      "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "Hook timeout behaviour is source-read only: a PreToolUse hook killed at the host's timeout exits non-2 and is treated as allow, but no test exercises a killed hook (the fused-field work exists to stay under the limit). The now-uniform 'guard could not run => fail open, loudly' policy and the malformed-project-regex safety are both bound by executable evidence above; the OS sandbox, not this pattern hook, is the security boundary.",
+        "Task 100 (PLAN S8c, 2026-09-27): verified. The host-timeout arm is pinned as `killed → exit code != 2` (the fail-open direction under Claude Code's hook contract: 2 = block, anything else = non-blocking); a real host kill at exactly 5 s is not executed by the suite. The no-python3 arm was found SILENT by the new red-first test and made loud (the row said `uniformly and loudly`; it was not, for that one arm). The OS sandbox, not this pattern hook, remains the security boundary.",
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
-        "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21)."
+        "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21).",
+        "Task 100 impl panel round 1 (2026-09-27): a second silent fail-open arm (malformed payload JSON in command_guard.py main) found by the panel and made loud; the no-python arm was the first (S8c). With the classifier-exception, missing-helper, `< 3.10` and no-python arms all asserting stderr, `uniformly and loudly` is now measured on every cannot-run arm the row names.",
+        "Task 100 impl panel round 2 (2026-09-27): two more arms brought under the uniform policy — an EMPTY payload (was a silent allow) and a mis-shaped one (a non-object payload, a string tool_input, a non-text command: were tracebacks with exit 1, which the host also reads as allow but with no diagnosis). The killed-at-timeout proof now runs the REAL guard module with only its classifier replaced by a hang (grok: a TERM handler inside the guard would otherwise be invisible to the shim)."
       ],
-      "follow_up_phases": [
-        2
-      ],
+      "follow_up_phases": [],
       "required_live_evidence": [],
       "semantic_protocol": null,
       "violation_reproduction": null
@@ -3112,6 +3366,19 @@
           "limitations": [
             "Runs one nine-shape table through the bundled bash logger and the three reference implementations and asserts the DIRECTION of the difference: the logger may never write the root on a shape where a reference reports that a per-user lane exists. It does not claim parity, which the logger no longer has. Executes the Bash logger only; bash-log.zsh is source-compared, never executed (zsh absent on this host).",
             "Linux only; macOS/zsh and Windows/Git Bash remain unexercised (Phase 8)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_provider_multiuser.py",
+          "reference": "TestCodexHookFailurePolicy.test_fresh_clone_writes_no_root_state_from_either_hook",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_provider_multiuser.py",
+            "reference": "TestCodexHookFailurePolicy.test_healthy_repo_still_logs_the_prompt"
+          },
+          "limitations": [
+            "Task 100 (PLAN S8 binding audit, 2026-09-27): the provider-hook surface on a fresh multi-user clone (lanes present, marker absent) — neither hook mints a root lane or a root chat log. These are the codex hooks (experimental foreign surface); the Claude bash hooks resolve through gate-echo-lib.sh, whose marker-absent answer is pinned by the parity proofs above."
           ]
         }
       ],
@@ -3731,6 +3998,7 @@
       ],
       "status": "unverified",
       "missing_evidence_or_limitation": [
+        "PROPOSED WAIVER (task 100, PLAN S8 → the owner ratifies in S9 as the first limitation entry, in the exact form `WAIVER <YYYY-MM-DD> <id>: …`, or narrows/deletes the row): the usefulness of a nudge is a human judgement; keep it as an aspiration under its 20-transcript protocol; the delivery and transcript-binding mechanics are PB-MONITOR-NUDGE-DELIVERY and PB-MONITOR-TRANSCRIPT-BINDING (verified).",
         "No repeated outcome corpus compares monitored and unmonitored trajectories.",
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
         "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21)."
@@ -3749,7 +4017,7 @@
     {
       "id": "PB-JUDGE-BLIND-CONTEXT",
       "category": "judges-and-reviews",
-      "statement": "Review prompts are constructed from repository/task context without the front-agent conversation unless explicitly supplied as review steering.",
+      "statement": "Review prompts for a TASK (plan-review, impl-review, panel-review <N>) are constructed from repository/task context without the front-agent conversation unless explicitly supplied as review steering; the task-less `panel-review --prompt` question deliberately includes the recent chat log as its project context (review.py `_build_payload`, taskless arm; `--bare` strips all context).",
       "owner": [
         {
           "path": "plugins/playbook/tasks/review.py",
@@ -3776,6 +4044,16 @@
           "limitations": [
             "Prompt construction only; no observation of what a live judge process can read."
           ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_review_context_and_rounds.py",
+          "reference": "PinnedSections.test_pinned_old_section_survives_trim",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 100 (PLAN S8 binding audit, 2026-09-27): the review payload is selected from task.md sections (pinned/trimmed by `select_task_context`) — the prompt's task context has no conversation input by construction."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -3790,9 +4068,11 @@
       ],
       "status": "partially_evidenced",
       "missing_evidence_or_limitation": [
+        "Task 100 impl panel round 2 (2026-09-27) (codex-high): `panel-review --prompt` with no task number includes `.agent/chat_log.md` in the judge's context (review.py, the taskless arm of `_build_payload`) — by design, since a free question has no task to anchor on. The statement now names that arm as the exception; the blind-context claim is scoped to task reviews.",
         "Live provider isolation from ambient conversation is not observed.",
         "Owner decision 2026-08-21: judge-seat is supported on claude, grok, and codex; antigravity and pi are experimental and removed from applicable_providers.",
-        "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending."
+        "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending.",
+        "Task 100 (PLAN S8 binding audit, 2026-09-27): the only cited proof asserted the CONTEXT NOTE / trim notice, not the absence of conversation; rebound to the payload-construction proof. Bound worth stating: the judge process runs with the repository READABLE, and `.agent/chat_log.md` is a file in that tree — the PROMPT carries no conversation, but a judge that reads the chat log on its own is not prevented by construction; the canary test in required_live_evidence is what would measure it (S11)."
       ],
       "follow_up_phases": [
         8
@@ -3899,7 +4179,7 @@
     {
       "id": "PB-JUDGE-TIMEOUT-SALVAGE",
       "category": "judges-and-reviews",
-      "statement": "A judge that exceeds its hard timeout has its whole process tree killed promptly, its partial stdout/stderr preserved for salvage, and its seat marked failed rather than passed on partial text.",
+      "statement": "A judge that exceeds its hard timeout has its whole process tree killed promptly, its partial stdout/stderr preserved for salvage, and a salvage prefixed with the timeout marker reads as a FAILED seat (`judge_failed`), never as a pass on partial text.",
       "owner": [
         {
           "path": "plugins/playbook/provider/sandbox.py",
@@ -3964,7 +4244,8 @@
       "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
         "Owner decision 2026-08-21: judge-seat is supported on claude, grok, and codex; antigravity and pi are experimental and removed from applicable_providers.",
-        "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending."
+        "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending.",
+        "Task 100 (PLAN S8 binding audit, 2026-09-27) NARROWED: the panel's own prepend of the `(timed out after hard …)` marker to the salvaged text (review.py, cmd_panel_review) is source-read — no test drives a panel seat through the hard timeout and reads the recorded seat verdict; the unit proofs pin the marker→failed rule and the process-tree kill. (PB-REVIEW-SPEND-JOURNAL's timeout proofs drive the same path for the spend record, not for the verdict.)"
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],
@@ -4002,6 +4283,46 @@
             "reference": "ParseQuorum.test_rejects_garbage"
           },
           "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_panel_quorum.py",
+          "reference": "ParseQuorum.test_majority",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 100 (PLAN S8 binding audit, 2026-09-27): the `majority` semantic — cited by no proof until this audit (only the fractional case was)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_panel_quorum.py",
+          "reference": "ParseQuorum.test_all",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 100 (PLAN S8 binding audit, 2026-09-27): the `all` semantic — cited by no proof until this audit (only the fractional case was)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_panel_quorum.py",
+          "reference": "ParseQuorum.test_absolute_int_not_clamped_up",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 100 (PLAN S8 binding audit, 2026-09-27): an absolute integer quorum — cited by no proof until this audit (only the fractional case was)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_panel_quorum.py",
+          "reference": "ResolveQuorum.test_bad_config_falls_back_to_majority",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 100 (PLAN S8 binding audit, 2026-09-27): an invalid configured value falls back to majority, visibly — cited by no proof until this audit (only the fractional case was)."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -4551,6 +4872,56 @@
           "limitations": [
             "Task 085 round 3 (U4): a committed verify-contract change in `.agent/config.json` stays STALE."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_panel_freshness_gate.py",
+          "reference": "ClosePathMatrix.test_reversible_stale_closes_with_stale_clause",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task 100 (PLAN S8 binding audit, 2026-09-27): a reversible close on stale evidence stays advisory (closes, records the stale clause) — a statement clause cited by no proof until this audit."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_panel_freshness_gate.py",
+          "reference": "ClosePathMatrix.test_assertive_stale_panel_ok_closes_with_recorded_reason",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task 100 (PLAN S8 binding audit, 2026-09-27): the override records the reason when given — a statement clause cited by no proof until this audit."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_tail_certification.py",
+          "reference": "Round4Coverage.test_cas_blocks_when_judge_mutates_tree",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 100 (PLAN S8 binding audit, 2026-09-27): the TOCTOU compare-and-swap: a tree that mutates during the tail-cert judge call blocks — a statement clause cited by no proof until this audit."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_tail_certification.py",
+          "reference": "TailCertDelta.test_missing_descriptor_fails_closed",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 100 (PLAN S8 binding audit, 2026-09-27): a missing descriptor fails closed — a statement clause cited by no proof until this audit."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_panel_freshness_gate.py",
+          "reference": "FingerprintRobustness060.test_tail_cert_refuses_when_exclude_covers_source",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 100 (PLAN S8 binding audit, 2026-09-27): tail certification refuses when an owner exclude covers source — a statement clause cited by no proof until this audit."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -5053,6 +5424,36 @@
             "reference": "CloseGitProbeHonoursCeilings.test_core_exports_the_shared_probe"
           },
           "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_tamper_scope.py",
+          "reference": "TailCertFailsClosed.test_degraded_guard_returns_none",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 100 (PLAN S8 binding audit, 2026-09-27): `tail certification refuses outright` on a degraded guard — a statement clause cited by no proof until this audit."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_tamper_scope.py",
+          "reference": "SubdirProject.test_unresolvable_toplevel_is_a_caution_not_a_project_path_join",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 100 (PLAN S8 binding audit, 2026-09-27): `rev-parse --show-toplevel` failing is a caution, never a path join — a statement clause cited by no proof until this audit."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_tamper_scope.py",
+          "reference": "CodeRoots.test_head_read_error_is_a_caution",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 100 (PLAN S8 binding audit, 2026-09-27): an unreadable HEAD is a caution — a statement clause cited by no proof until this audit."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -5137,6 +5538,7 @@
       ],
       "status": "unverified",
       "missing_evidence_or_limitation": [
+        "PROPOSED WAIVER (task 100, PLAN S8 → the owner ratifies in S9 as the first limitation entry, in the exact form `WAIVER <YYYY-MM-DD> <id>: …`, or narrows/deletes the row): a product-outcome claim; judgebench (tasks 046-050) measured judge seats on a 19-case corpus, never single-vs-panel; keep it as an aspiration under its 30-defect protocol, or narrow it to the mechanical `a panel resolves a quorum verdict` (already PB-PANEL-QUORUM).",
         "No repeated blinded defect corpus compares single and panel discovery rates.",
         "Owner decision 2026-08-21: judge-seat is supported on claude, grok, and codex; antigravity and pi are experimental and removed from applicable_providers.",
         "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending."
@@ -5252,7 +5654,7 @@
     {
       "id": "PB-PROVIDER-HOOK-INSTALL",
       "category": "providers-and-hooks",
-      "statement": "tasks init --provider writes the provider bootstrap file and installs supported hook integrations; Grok's required global enforcement copy is installed for spaced paths.",
+      "statement": "GrokAdapter.install_hooks writes Grok's global always-trusted enforcement file (and uninstall_hooks removes it, idempotently) with the destructive-command interlock wired on the shell-tool matcher, resolving the plugin root identically from the canonical and mirror trees; `tasks init --provider`'s bootstrap-file write, Codex's project hook install (`install_project_hooks`) and the spaced-path global copy are asserted by no test.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/project_setup.py",
@@ -5323,7 +5725,8 @@
       "missing_evidence_or_limitation": [
         "No packaged-install or live-provider proof that installed hooks are trusted, scheduled, and enforcing.",
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is supported on Claude ONLY; this foreign-provider launcher/bootstrap path is EXPERIMENTAL — adapter code retained, no support claim, no live evidence.",
-        "antigravity and pi removed as experimental (owner decision 2026-08-21); codex and grok are retained here only as the experimental foreign-agent surface."
+        "antigravity and pi removed as experimental (owner decision 2026-08-21); codex and grok are retained here only as the experimental foreign-agent surface.",
+        "Task 100 (PLAN S8 binding audit, 2026-09-27) NARROWED the statement to what the three cited proofs establish. The earlier wording (`tasks init --provider writes the provider bootstrap file and installs supported hook integrations; Grok's required global enforcement copy is installed for spaced paths`) had no test for cmd_init's provider arm, for codex_hooks.install_project_hooks, or for a spaced install path. Experimental foreign-agent surface; the live install is already in required_live_evidence (S11)."
       ],
       "follow_up_phases": [
         8,
@@ -5432,7 +5835,7 @@
     {
       "id": "PB-PROVIDER-CAPABILITY-DEGRADE",
       "category": "providers-and-hooks",
-      "statement": "When a provider lacks a capability, Playbook exposes the limitation instead of silently implying equivalence; Codex plain-shell writes and Antigravity model pinning remain documented caveats.",
+      "statement": "The model-detection report names Antigravity's model-pinning limitation explicitly (`NOT selectable`) instead of implying parity; the capability matrix (`ProviderCapabilities` / `detect_capabilities`) and the documented Codex plain-shell caveat are asserted by no test.",
       "owner": [
         {
           "path": "plugins/playbook/provider/capabilities.py",
@@ -5474,7 +5877,8 @@
       "missing_evidence_or_limitation": [
         "Provider capability matrix has not been live-certified against current CLI versions.",
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
-        "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21)."
+        "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21).",
+        "Task 100 (PLAN S8 binding audit, 2026-09-27) NARROWED: the single proof covers only the Antigravity pin note in `detect_providers`; no test references `ProviderCapabilities` or `detect_capabilities`, and docs/providers.md's Codex plain-shell caveat is prose. Experimental foreign-provider surface (owner 2026-08-21); S11."
       ],
       "follow_up_phases": [
         2,
@@ -5496,7 +5900,7 @@
     {
       "id": "PB-INIT-SCAFFOLD",
       "category": "installation-and-upgrade",
-      "statement": "/playbook:init creates the project task structure, wrappers, settings, config, CLAUDE.md, MIND_MAP.md, logger wiring, and gitignore runtime block.",
+      "statement": "/playbook:init creates the project task structure, settings, config, CLAUDE.md, MIND_MAP.md, logger wiring, and gitignore runtime block.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/init",
@@ -5544,6 +5948,49 @@
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/wrapper-multiuser-fixture.sh",
+          "reference": "scenario:S14",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task structure: `.agent/{tasks,playbooks,monitor}` + `config.json` on a new project, in the LANE on a multi-user layout, refused loudly on a fresh clone with no marker, idempotent on re-run."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/init-bash-log-fixture.sh",
+          "reference": "scenario:I2",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/init-bash-log-fixture.sh",
+            "reference": "scenario:I5"
+          },
+          "limitations": [
+            "Logger wiring on a bash host: `~/.claude/bash-log.sh` deployed and `settings.json`'s BASH_ENV names that file; the rc line is written once."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/init-bash-log-fixture.sh",
+          "reference": "scenario:I1",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Logger wiring on a zsh host: both variants deployed, BASH_ENV points at a file that exists."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_init_robustness.py",
+          "reference": "InitRobustness.test_a_leading_dash_free_name_is_still_a_name",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "MIND_MAP.md is written with the project name."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -5560,7 +6007,8 @@
       "missing_evidence_or_limitation": [
         "No packaged-install test and no live macOS/Windows initialization.",
         "Logger wiring is deployed as a per-machine copy outside the plugin (~/.claude/bash-log.{sh,zsh}); the copy on this host is measurably older than the bundled script (sha256 7488c02c... on this host, against plugins/playbook/scripts/bash-log.sh), so no test establishes that an initialized machine runs the shipped logger.",
-        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
+        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
+        "Task 100 (PLAN S8 binding audit, 2026-09-27) NARROWED: `wrappers` (`.claude/bin/tasks`, `.claude/bin/monitor`) removed from the statement — no test asserts their creation on a clean init (the rollback proofs assert their REMOVAL after a failed one). S11 gauntlet item. The task structure, config, logger wiring and MIND_MAP.md clauses were cited by no proof until this audit and are bound below; the project `.claude/settings.json` deny list is PB-INIT-DENY-LIST."
       ],
       "follow_up_phases": [
         8,
@@ -5705,7 +6153,7 @@
     {
       "id": "PB-UPGRADE-INSTALLED-COPY",
       "category": "installation-and-upgrade",
-      "statement": "Upgrade resolves the active installed plugin copy from the manifest before fallback discovery, updates the plugin, and reruns initialization against that copy.",
+      "statement": "Upgrade resolves the installed plugin copy from the manifest (`installed_plugins.json` installPath) rather than by globbing for a plugin tree, updates the plugin, and reruns initialization against that copy.",
       "owner": [
         {
           "path": "plugins/playbook/commands/upgrade.md",
@@ -5746,7 +6194,8 @@
       "status": "partially_evidenced",
       "missing_evidence_or_limitation": [
         "Packaged upgrade, stale-cache selection, and post-upgrade provider behavior are untested.",
-        "Upgrade is snapshot-less: unlike scripts/init (now transactional — see PB-INSTALL-ROLLBACK), this is a Claude skill whose remove-old-plugin / re-add / reinstall steps have no rollback wrapper. The reinit it triggers rolls itself back, but a failure between removing the old copy and completing the new install can still leave a mixed or absent installation; a transactional upgrade is not claimed."
+        "Upgrade is snapshot-less: unlike scripts/init (now transactional — see PB-INSTALL-ROLLBACK), this is a Claude skill whose remove-old-plugin / re-add / reinstall steps have no rollback wrapper. The reinit it triggers rolls itself back, but a failure between removing the old copy and completing the new install can still leave a mixed or absent installation; a transactional upgrade is not claimed.",
+        "Task 100 (PLAN S8 binding audit, 2026-09-27) NARROWED `before fallback discovery` to `rather than by globbing`: the cited proof asserts the manifest installPath is read and a foreign plugin's path is not; no test asserts the ORDER of candidate_hooks_paths' sources. The update + re-init steps are the skill's prose (commands/upgrade.md), untested — see the snapshot-less bound above."
       ],
       "follow_up_phases": [
         8,
@@ -6061,14 +6510,26 @@
       "proofs": [
         {
           "type": "executable unit",
-          "path": "tests/test_environment.py",
-          "reference": "SandboxItemTest.test_unknown_os_has_no_primitive",
+          "path": "tests/test_windows_uncontained_path.py",
+          "reference": "WindowsTakesUncontainedPath.test_windows_reports_no_containment",
           "boundary": "unit",
           "negative_control": {
-            "path": "tests/test_environment.py",
-            "reference": "SandboxItemTest.test_linux_with_bwrap_is_ok"
+            "path": "tests/test_windows_uncontained_path.py",
+            "reference": "WindowsTakesUncontainedPath.test_negative_control_bwrap_would_contain"
           },
-          "limitations": []
+          "limitations": [
+            "Windows with neither sandbox-exec nor bwrap: containment_available() is False — the switch review.py's UNCONTAINED warning keys on."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_windows_uncontained_path.py",
+          "reference": "WindowsTakesUncontainedPath.test_windows_argv_is_unwrapped_direct_exec",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "The fallback IS the uncontained direct exec: `_wrapped_argv` returns the bare agent argv with no bwrap/sandbox-exec wrapper."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -6084,7 +6545,8 @@
       "status": "partially_evidenced",
       "missing_evidence_or_limitation": [
         "Nested sandbox, no-bwrap, and Windows fallback paths lack integration negative controls; high-consequence uncontained policy is undecided.",
-        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
+        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
+        "Task 100 (PLAN S8 binding audit, 2026-09-27): this row cited only `test_environment.SandboxItemTest.test_unknown_os_has_no_primitive` — an advisory-text test of environment.py, not of the owner (sandbox.py). Rebound to tests/test_windows_uncontained_path.py (3 tests, cited nowhere before). Still asserted by NO test: nested-containment detection (`is_sandboxed`) and the operator-visible UNCONTAINED warning text (review.py gates it on containment_available(); source-read) — both stay in required_live_evidence."
       ],
       "follow_up_phases": [
         2,
@@ -6490,6 +6952,7 @@
       ],
       "status": "unverified",
       "missing_evidence_or_limitation": [
+        "PROPOSED WAIVER (task 100, PLAN S8 → the owner ratifies in S9 as the first limitation entry, in the exact form `WAIVER <YYYY-MM-DD> <id>: …`, or narrows/deletes the row): an agent-driven act with no deterministic contract; keep it as an aspiration under its 10-repository protocol; the map's downstream mechanics are PB-MINDMAP-LOAD/RECALL/SYNC/REF-INTEGRITY (verified).",
         "Generation is an agent-driven semantic act with no deterministic contract: no executable test drives /playbook:mindmap or scores the map it produces.",
         "Slash-command dispatch exists only inside a provider harness, so even the invocation is unexercised offline; PB-SLASH-COMMANDS covers only that the command file ships and points at the right entry point."
       ],
@@ -6544,6 +7007,7 @@
       ],
       "status": "unverified",
       "missing_evidence_or_limitation": [
+        "PROPOSED WAIVER (task 100, PLAN S8 → the owner ratifies in S9 as the first limitation entry, in the exact form `WAIVER <YYYY-MM-DD> <id>: …`, or narrows/deletes the row): an outcome claim; keep it as an aspiration under its 20-session protocol; loading and recall are verified rows.",
         "No controlled repeated cross-session outcome measurement exists.",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
       ],
@@ -6561,7 +7025,7 @@
     {
       "id": "PB-MERGE-PREP",
       "category": "merge",
-      "statement": "tasks prepare-merge computes collision-free, pad-preserving task renumbers and rewrites task, session-pointer, and chat references so the renumbered tasks stay glob-reachable.",
+      "statement": "tasks prepare-merge computes collision-free, pad-preserving task renumbers and rewrites task and session-pointer references so the renumbered tasks stay glob-reachable.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/merge_prep.py",
@@ -6629,7 +7093,8 @@
       ],
       "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
+        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
+        "Task 100 (PLAN S8 binding audit, 2026-09-27) NARROWED: chat_log.md reference rewriting (merge_prep.py `_prepare_merge_chatlog`, the `Rewrite chat_log.md` step) is asserted by no test; removed from the statement. S12 cli-contracts candidate."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],
@@ -6797,6 +7262,46 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_config_resolve.py",
+          "reference": "ConfigResolveTest.test_nonfinite_budget_falls_back",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 100 (PLAN S8 binding audit, 2026-09-27): a non-finite budget falls through — the `invalid/nonfinite values fall through safely` clause was cited only through malformed JSON until this audit."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_config_resolve.py",
+          "reference": "ConfigResolveTest.test_env_overrides_file",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 100 (PLAN S8 binding audit, 2026-09-27): env over config — the `invalid/nonfinite values fall through safely` clause was cited only through malformed JSON until this audit."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_config_resolve.py",
+          "reference": "ConfigResolveTest.test_bad_flag_falls_through_to_env",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 100 (PLAN S8 binding audit, 2026-09-27): an invalid flag falls through to the next tier — the `invalid/nonfinite values fall through safely` clause was cited only through malformed JSON until this audit."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_config_resolve.py",
+          "reference": "ParseTimeoutTest.test_bool_is_not_a_timeout",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 100 (PLAN S8 binding audit, 2026-09-27): a boolean is not a timeout — the `invalid/nonfinite values fall through safely` clause was cited only through malformed JSON until this audit."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -6920,7 +7425,7 @@
     {
       "id": "PB-CONFIG-ATOMIC-DURABILITY",
       "category": "configuration",
-      "statement": "Consequence-relevant task-state, config/scaffolding, model, review, and provider hook/installed-metadata writes route through one tested atomic primitive (same-directory temp, flush+fsync, os.replace, permission-preserving) so an interrupted or concurrent write cannot expose a torn or truncated file; append-only logs, the flock-protocol counter files, and hook-time writers outside the tasks import domain are documented exceptions to this bound.",
+      "statement": "Every consequence-relevant PYTHON writer — task-state, config/scaffolding, model, review, and provider hook/installed-metadata writes in tasks/, provider/, scripts/ and skills/, including the python embedded in scripts/init — routes through one tested atomic primitive (same-directory temp, flush+fsync, os.replace, permission-preserving) so an interrupted or concurrent write cannot expose a torn or truncated file; append-only logs, the flock-protocol counter files, hook-time advisory counters and offsets, and the codex-hook runtime writers outside the tasks import domain are documented exceptions, and so are the BASH-side install copies in scripts/init (`cp` of the monitor CLAUDE.md/stubs/nudge hook, `cat >`/`echo >` creation of a config.json or MIND_MAP.md stub that does not yet exist, the `tr > tmp && mv` deploy of the shell logger) and gate-echo-lib's session counters reset — bounded by init's transaction and by their advisory role, not by the primitive.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/atomic.py",
@@ -6983,6 +7488,72 @@
             "reference": "AtomicWritePrimitive.test_new_file_is_not_private_0600"
           },
           "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_atomic_routing_sweep.py",
+          "reference": "EveryTruncatingWriterIsRoutedOrDocumented.test_no_undocumented_direct_writer",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_atomic_routing_sweep.py",
+            "reference": "EveryTruncatingWriterIsRoutedOrDocumented.test_control_a_planted_writer_is_detected"
+          },
+          "limitations": [
+            "Task 100 (PLAN S8c): an AST sweep over every shipped Python module under tasks/, provider/ and scripts/ (RECURSIVE — monitor-lib, adapters; the scripts/lib/provider mirror is skipped, test_mirror_sync.py keeps it byte-identical) plus a regex pass over the extensionless bash scripts in scripts/ for the same shapes inside embedded `python3 -c` snippets; each site must be the primitive itself or a documented exception with its reason. Watched RED first twice: the four foreign-provider `install_bootstrap` writes (AGENTS.md / GEMINI.md) were plain `write_text` — routed through `atomic_write`; then (Task 100 impl panel round 1 (2026-09-27): opus, codex-high, codex-medium, grok) `scripts/init`'s three embedded-python settings.json writers (project deny list, user BASH_ENV, PostToolUse hook) were a truncating `open(path, 'w')` and a temp+os.replace without fsync — all three now load `tasks/atomic.py` by path (the `_pb_atomic_write` pattern init_txn.py uses) and call `atomic_write`."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_atomic_routing_sweep.py",
+          "reference": "EveryTruncatingWriterIsRoutedOrDocumented.test_the_sweep_sees_the_primitive_and_is_not_vacuous",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "The sweep finds the primitive's own temp-file write and at least five sites — a scanner that matched nothing would pass vacuously."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_atomic_routing_sweep.py",
+          "reference": "EveryTruncatingWriterIsRoutedOrDocumented.test_the_consequence_relevant_writers_import_the_primitive",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Each module the row names as routed imports tasks.atomic (and, by the sweep, owns no undocumented direct write)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_lock.py",
+          "reference": "LostUpdateRegression.test_two_writers_keep_every_entry",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_task_lock.py",
+            "reference": "LostUpdateRegression.test_a_crash_between_transform_and_write_leaves_the_file_intact"
+          },
+          "limitations": [
+            "Task 100 (PLAN S8c): the primitive across PROCESSES — two subprocess writers through `atomic.rewrite` (via upsert_task_section) lose no entry and never duplicate the section; cited on PB-TASK-TXN for the lock, cited here for the cross-process durability of the write itself."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_atomic_routing_sweep.py",
+          "reference": "EveryTruncatingWriterIsRoutedOrDocumented.test_control_a_planted_writer_is_detected",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "The detector caught in the act: a planted module with eight write shapes (write_text, open 'w', open mode='wb', fdopen 'w', Path.open 'x', write_bytes, shutil.copyfile, os.open with O_TRUNC) and four non-writes (read, append, rb, os.open with O_APPEND) — exactly the eight are flagged; the embedded-python detector flags `open(path, 'w')` and not a read or an append."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_init_deny_list.py",
+          "reference": "InitDenyList.test_malformed_json_is_refused_not_clobbered",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task 100 impl panel round 1 (2026-09-27): init's settings.json path now goes through the primitive; this proof runs the real init and pins that a refused write leaves the file byte-identical (the transaction + the atomic write together)."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -6995,14 +7566,13 @@
         "codex",
         "grok"
       ],
-      "status": "partially_evidenced",
+      "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "The primitive's torn-read, concurrent-writer, interruption-cleanup, and permission-preservation properties are proven on the current platform (Windows os.replace semantics via the CI windows lane). Two bounds remain: routing completeness — that every consequence-relevant writer calls the primitive — is enforced by code review and the documented exceptions (append-only chat_log/bash_history, the chat-log-hook flock-protocol counter data files, and hook-time writers such as codex_hooks/adapter offset that cannot import the tasks package), not by an automated all-writers-route-through-primitive check; and real cross-platform interrupt/power-loss durability is not exercised as a live matrix. Both are live-platform follow-ups.",
+        "Task 100 impl panel round 2 (2026-09-27) NARROWED the statement to the Python writers and NAMED the bash-side exceptions (codex-high: init:495 `cp` overwrites an existing monitor file on re-run; codex-medium: `cat >` config.json / `echo >` MIND_MAP.md; grok: gate-echo-lib.sh `reset_counters` truncates the session counters in place, init's bash-log deploy is `tr > tmp && mv` with no fsync). None of these goes through the primitive: bash has no fsync, and a rename-atomic `mv` is the most it can do. Their bounds: the init copies run inside init_txn's transaction (a failed run restores the pre-init copy; a SIGKILL mid-`cp` is the transaction's own disclosed bound, PB-INSTALL-ROLLBACK); the counters file is advisory hook state whose loss only perturbs the stop-hook's low-activity bypass counts; the logger deploy is rename-atomic. The sweep (tests/test_atomic_routing_sweep.py) now also matches `shutil.copy*` and `os.open(… O_TRUNC …)` and scans skills/ (opus: pi.py copied the installed models.json with a plain copyfile — routed through `atomic_write`); a `.sh` truncating redirect is NOT matched — the bash surface above is enumerated here by hand and is an S11 gauntlet item (any new bash writer in scripts/ must be added to this list by review).",
+        "Task 100 (PLAN S8c, 2026-09-27; corrected after impl panel round 1): verified — the primitive's torn-read, concurrent-writer, interruption-cleanup and permission-preservation properties are proven on the current platform (Windows os.replace semantics via the CI windows lane), and routing completeness is an executable sweep (tests/test_atomic_routing_sweep.py: AST over every .py under tasks/, provider/, scripts/ recursively, plus the embedded python of the extensionless scripts in scripts/) instead of code review. The documented exceptions — append-only chat_log/bash_history/journal appends (never truncating, not matched), the chat-log-hook flock-protocol counter file, hook-time advisory counters/offsets (gate-batch marker, adapter chat_log_offset, the monitor sensor's temp+replace poll offset), the codex-*-hook runtime writers that cannot import tasks.* (experimental provider), and two ephemeral temp-dir writes — are listed in the sweep's APPROVED table with their reasons, and a stale approval fails the build. Bash-side creation writes in scripts/init (`cat >` for a `.agent/config.json` and `echo >` for a MIND_MAP.md stub that do NOT yet exist) are not matched by the sweep: they run only when the file is absent, so a crash leaves a new truncated file, which init's transaction (init_txn.py, PB-INSTALL-ROLLBACK) removes on the failed run. Remaining bound, disclosed: real power-loss durability is not exercised as a live matrix (flush+fsync is the mechanism; the kill-between-write-and-replace proof is the executable stand-in).",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
       ],
-      "follow_up_phases": [
-        8
-      ],
+      "follow_up_phases": [],
       "required_live_evidence": [],
       "semantic_protocol": null,
       "violation_reproduction": null
@@ -7350,7 +7920,7 @@
       ],
       "status": "partially_evidenced",
       "missing_evidence_or_limitation": [
-        "Mandatory macOS and Windows/Git Bash lanes are absent; zsh was unavailable.",
+        "CI runs the full suite on four lanes on every push — Linux py3.10/3.12, macOS (zsh + bash 3.2) and Windows/Git Bash (`.github/workflows/verify.yml`; owner D1 (b); task 096) — so the platform-specific tests and skips in the suite, run on those lanes, are the executable evidence today. Still missing: a live capability matrix (spaces/Unicode/wrappers/sessions/containment driven on a real macOS/Windows host outside CI), which stays Phase-8 work. (Task 100 (PLAN S8 binding audit, 2026-09-27) corrected the stale `lanes are absent` wording.)",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
       ],
       "follow_up_phases": [
@@ -7725,7 +8295,7 @@
     {
       "id": "PB-CLI-HELP-INIT",
       "category": "cli-contracts",
-      "statement": "scripts/init -h and --help print usage and exit without project or user-home provisioning, and an unknown leading flag is rejected instead of being adopted as the project name.",
+      "statement": "scripts/init -h and --help print usage and exit without project provisioning, and an unknown leading flag is rejected instead of being adopted as the project name.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/init",
@@ -7772,7 +8342,9 @@
         "claude"
       ],
       "status": "verified_by_current_executable_evidence",
-      "missing_evidence_or_limitation": [],
+      "missing_evidence_or_limitation": [
+        "Task 100 (PLAN S8 binding audit, 2026-09-27) NARROWED `without project or user-home provisioning` to the project half: the proofs redirect HOME to a temp dir but inspect only the project (`InitRobustness._provisioned(project)`); nothing asserts that `~/.claude` stays untouched on `--help`/`-h`. S11 gauntlet item."
+      ],
       "follow_up_phases": [],
       "required_live_evidence": [],
       "semantic_protocol": null,
@@ -7854,13 +8426,29 @@
       "claim_kind": "mechanical",
       "proofs": [
         {
-          "type": "missing",
-          "path": null,
-          "reference": "No targeted side-effect negative control covers both help surfaces",
-          "boundary": "none",
-          "negative_control": null,
+          "type": "executable integration",
+          "path": "tests/test_inspection_flags_are_dry.py",
+          "reference": "MonitorAndSandboxHelpAreDry.test_monitor_help_forms_print_usage_and_start_nothing",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_inspection_flags_are_dry.py",
+            "reference": "MonitorAndSandboxHelpAreDry.test_control_monitor_start_does_reach_the_launcher"
+          },
           "limitations": [
-            "Source branches are visible, but source inspection is not executable evidence."
+            "Task 100 (PLAN S8b, 2026-09-27): `monitor -h/--help/help` from a COPY of scripts/ whose monitor-lib/launch-monitor is a sentinel stub — usage printed, rc 0, the stub never fires, `.agent/` unchanged. Watched red against a monitor with the help arm renamed (fell to the unknown-subcommand branch)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_inspection_flags_are_dry.py",
+          "reference": "MonitorAndSandboxHelpAreDry.test_sandbox_help_forms_print_usage_and_execute_nothing",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_inspection_flags_are_dry.py",
+            "reference": "MonitorAndSandboxHelpAreDry.test_control_sandbox_prompt_does_execute_the_agent"
+          },
+          "limitations": [
+            "`sandbox -h/--help` (python -m provider.sandbox) with a fake `claude` first on PATH: usage printed, rc 0, the fake never runs, `.agent/` unchanged. Watched red with argparse `add_help` disabled."
           ]
         }
       ],
@@ -7874,14 +8462,12 @@
         "codex",
         "grok"
       ],
-      "status": "missing_evidence",
+      "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "No hermetic provider/monitor execution sentinel test for these help flags.",
+        "Task 100 (PLAN S8b, 2026-09-27): verified by the two sentinel proofs above (each with an execute control). Bound: the monitor is driven through `scripts/monitor` directly, not through a project's `.claude/bin/monitor` wrapper.",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
       ],
-      "follow_up_phases": [
-        3
-      ],
+      "follow_up_phases": [],
       "required_live_evidence": [],
       "semantic_protocol": null,
       "violation_reproduction": null
@@ -8579,6 +9165,7 @@
       ],
       "status": "unverified",
       "missing_evidence_or_limitation": [
+        "PROPOSED WAIVER (task 100, PLAN S8 → the owner ratifies in S9 as the first limitation entry, in the exact form `WAIVER <YYYY-MM-DD> <id>: …`, or narrows/deletes the row): an outcome claim; keep it as an aspiration under its 5-run protocol; the file-backed mechanics (PB-TASK-TXN, PB-TASK-ACTIVATE, PB-TASK-BLOCKED) are verified rows.",
         "No repeated 500-step cross-session outcome trial with a failure-rate definition exists.",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
       ],
@@ -8892,6 +9479,26 @@
           "limitations": [
             "Transcript binding is tested; complete current-gate rendering across all task states/providers is not one frozen matrix."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_state_echo_switch.py",
+          "reference": "StateEchoTaskSwitch.test_switching_tasks_does_not_log_the_open_gate_as_done",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task 100 (PLAN S8 binding audit, 2026-09-27): the current-gate echo after real tool calls across a task switch (the open gate of the abandoned task is not echoed as done) — the `reports the current active gate` clause was cited by no proof until this audit."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_monitor_transcript_binding.py",
+          "reference": "HookRecordsTranscript.test_newline_injection_refused",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task 100 (PLAN S8 binding audit, 2026-09-27): a transcript_path carrying a newline is refused, no pointer written — the `malformed payloads cannot corrupt session state` clause."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -9176,6 +9783,26 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_model_availability.py",
+          "reference": "ClassifyFailureTest.test_timeout_and_effort_error_are_other",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 100 (PLAN S8 binding audit, 2026-09-27): timeout / effort-error text is OTHER, never model removal — the `never misclassify timeout/budget text` clause was cited only through a quoted-pattern review until this audit."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_model_availability.py",
+          "reference": "ClassifyFailureTest.test_budget_is_other_but_failed",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 100 (PLAN S8 binding audit, 2026-09-27): budget text is OTHER (a failed seat), never model removal — the `never misclassify timeout/budget text` clause was cited only through a quoted-pattern review until this audit."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -9543,11 +10170,23 @@
     {
       "id": "PB-MERGE-PUSH-GATE",
       "category": "merge",
-      "statement": "The merge skill offers push only after reference integrity, contamination, code identity, and the declared verify command have all been run and reported green.",
+      "statement": "merge-verify.py — the last of the five conditions the merge skill's push gate lists (SKILL.md, `Continuation policy & the push gate`) — reports one exit code per outcome, and only a declared soundness command that actually ran and exited 0 yields the code the gate accepts (GREEN); a failing command (FAILED, its own rc reported, an early failing step never masked), an unusable declaration (BLOCKED, never mistaken for SKIPPED), no declaration (SKIPPED, `NOT checked`), `--plan` (CONFIGURED, nothing ran) and a host with no usable bash (FAILED) all refuse it. Conditions 1-4 (reference integrity, contamination, code identity, the merge itself) and the decision to run `git push` are carried out by the agent from the skill's prose, not by this code.",
       "owner": [
         {
           "path": "plugins/playbook/skills/merge/SKILL.md",
           "reference": "section:Continuation policy & the push gate"
+        },
+        {
+          "path": "plugins/playbook/skills/merge/merge-verify.py",
+          "reference": "symbol:main"
+        },
+        {
+          "path": "plugins/playbook/skills/merge/merge-verify.py",
+          "reference": "symbol:resolve_command"
+        },
+        {
+          "path": "plugins/playbook/skills/merge/merge-verify.py",
+          "reference": "symbol:run_command_capture"
         }
       ],
       "failure_consequence": "Critical",
@@ -9575,6 +10214,69 @@
           "limitations": [
             "Covers only the verifier's own push-gate exit code, not the skill's decision to offer push."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_merge_config.py",
+          "reference": "TestExitCodes.test_green_command_exits_zero",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_merge_config.py",
+            "reference": "TestExitCodes.test_a_command_exiting_2_or_3_cannot_masquerade_as_blocked_or_skipped"
+          },
+          "limitations": [
+            "GREEN only from a command that ran and exited 0."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_merge_config.py",
+          "reference": "TestExitCodes.test_early_failing_step_does_not_report_green",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "An early failing step (no `set -e` in the declared text) cannot report GREEN."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_merge_config.py",
+          "reference": "TestExitCodes.test_unusable_exits_blocked",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "A broken declaration is BLOCKED, never SKIPPED."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_merge_config.py",
+          "reference": "TestExitCodes.test_unconfigured_exits_skipped",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "No declaration is SKIPPED and says `NOT checked`."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_merge_config.py",
+          "reference": "TestNoUsableBashFailsClosed.test_a_would_be_green_command_does_not_report_green",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "No usable bash: FAILED, never GREEN."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/merge-verify-fixture.sh",
+          "reference": "scenario:S10",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Fixture: an early failing step cannot report GREEN (real repo)."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -9587,16 +10289,27 @@
         "codex",
         "grok"
       ],
-      "status": "unverified",
+      "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "No executable evidence binds the documented pre-push ordering to the skill's actual push offer; the checks are proved individually but their sequencing before push is not.",
+        "Task 100 impl panel round 2 (2026-09-27) (opus, codex-high): `the push gate is mechanical in merge-verify.py` still overstated — the skill's gate is five conditions the agent follows as prose, and merge-verify.py supplies only the fifth. The statement now says exactly that: the classifier's exit-code contract is what is verified; the agent's ordering and its push decision remain the human-judgment proof plus the S11 live item.",
+        "Task 100 impl panel round 1 (2026-09-27) (codex-high, grok): the statement's second sentence — the skill text sequencing the push offer after ref-integrity, contamination, code identity and this verdict — was still inside a verified row; per docs/guarantee-ledger.md a clause the evidence does not reach is split out or left non-green, so it is REMOVED from the statement and lives only here and in required_live_evidence (S11: run /playbook:merge on a disposable repo and watch where the push offer appears). The owners now name the code that implements the gate (merge-verify.py main/resolve_command/run_command_capture) beside the skill section that consumes it.",
+        "Task 100 (PLAN S8c, 2026-09-27) NARROWED the statement to what the proofs establish: the earlier `the merge skill offers push only after reference integrity, contamination, code identity and the declared verify command have all been run and reported green` is a sequencing instruction in skills/merge/SKILL.md that Claude executes — it cannot be driven under test (there is no push-offer function; the skill is markdown). What IS mechanical — merge-verify.py's one-code-per-outcome push gate — is now the statement and is verified; the prose ordering stays as the human-judgment proof and as an S11 gauntlet item (run the skill on a disposable repo and watch where the push offer appears).",
         "No hosted remote push is exercised anywhere in the suite.",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
       ],
       "follow_up_phases": [
-        9
+        8
       ],
-      "required_live_evidence": [],
+      "required_live_evidence": [
+        {
+          "type": "live-provider test",
+          "targets": [
+            "claude"
+          ],
+          "phase": 8,
+          "reason": "Run /playbook:merge on a disposable two-branch repo with a declared soundness command and observe that the push offer appears only after ref-integrity, contamination, code identity and the GREEN verdict (the prose sequencing the mechanical gate cannot prove)."
+        }
+      ],
       "semantic_protocol": null,
       "violation_reproduction": null
     },
@@ -10113,6 +10826,10 @@
         {
           "path": "plugins/playbook/tasks/template.py",
           "reference": "symbol:risk"
+        },
+        {
+          "path": "plugins/playbook/tasks/retro.py",
+          "reference": "symbol:_parse_task"
         }
       ],
       "failure_consequence": "Medium",
@@ -10153,7 +10870,8 @@
       "status": "partially_evidenced",
       "missing_evidence_or_limitation": [
         "Proved: the gate-counting helper the retro reads, and the scaffold's Risk field (one end-to-end `tasks retro` run). No test asserts its --since window or the rest of the rendered report.",
-        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
+        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
+        "Task 100 (PLAN S8 binding audit, 2026-09-27): the proofs test `retro._parse_task` (gate counting) and the scaffold through `tasks retro`; the owner set named only `history.py::cmd_retro` (the CLI arm) and `retro.generate_retro_task` — `_parse_task` added so the owner names the code the first proof exercises."
       ],
       "follow_up_phases": [
         3
@@ -10773,7 +11491,7 @@
     {
       "id": "PB-AUDIT-MERGE-ARTIFACTS",
       "category": "cli-contracts",
-      "statement": "The default conflict-marker and merge-artifact sweeps find real artifacts, exclude the .agent directory, do not mistake a markdown underline for a conflict marker, and report an incomplete scan as an error rather than clean.",
+      "statement": "The default conflict-marker and merge-artifact sweeps find real artifacts; the grep-based sweeps (conflict-markers, stale-markers) exclude the .agent directory while the merge-artifacts `find` prunes only `.git`; a markdown underline is not mistaken for a conflict marker; and an incomplete scan is reported as an error rather than clean.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/audit.py",
@@ -10851,7 +11569,8 @@
       ],
       "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
+        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
+        "Task 100 (PLAN S8 binding audit, 2026-09-27) CORRECTED: the statement said both sweeps exclude `.agent`. Measured in audit.py DEFAULT_SWEEPS: `_EXCLUDES` (`--exclude-dir=.agent`) applies to the grep sweeps only; the merge-artifacts command is `find . -path ./.git -prune -o \\( -name '*.orig' -o -name '*.rej' \\) -print`, so a `*.orig`/`*.rej` under `.agent/` IS a finding. Corrected, not changed: whether merge-artifacts should prune `.agent` is an owner call (parked in task 100). The cited `.agent` exclusion proof exercises stale-markers, which shares `_EXCLUDES` with conflict-markers."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],
@@ -10872,12 +11591,60 @@
       "claim_kind": "mechanical",
       "proofs": [
         {
-          "type": "missing",
-          "path": null,
-          "reference": "No test covers the settings.json permissions.deny merge",
-          "boundary": "none",
+          "type": "executable integration",
+          "path": "tests/test_init_deny_list.py",
+          "reference": "InitDenyList.test_fresh_project_gets_the_three_denies",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_init_deny_list.py",
+            "reference": "InitDenyList.test_malformed_json_is_refused_not_clobbered"
+          },
+          "limitations": [
+            "Task 100 (PLAN S8b, 2026-09-27): a hermetic init (temp HOME) creates `.claude/settings.json` with exactly the three denies and reports `settings.json deny: TodoWrite,Task,EnterPlanMode`. Watched red against an init whose `required` list was emptied."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_init_deny_list.py",
+          "reference": "InitDenyList.test_existing_entries_and_keys_are_preserved_and_only_missing_ones_added",
+          "boundary": "subprocess",
           "negative_control": null,
-          "limitations": []
+          "limitations": [
+            "Unrelated top-level keys, permissions.allow and existing denies survive in order; only the missing entries are appended and named."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_init_deny_list.py",
+          "reference": "InitDenyList.test_second_run_is_skipped_and_byte_identical",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The idempotent SKIPPED path: byte-identical file, `already has deny list` in the summary."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_init_deny_list.py",
+          "reference": "InitDenyList.test_malformed_json_is_refused_not_clobbered",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_init_deny_list.py",
+            "reference": "InitDenyList.test_fresh_project_gets_the_three_denies"
+          },
+          "limitations": [
+            "Malformed JSON: init exits non-zero naming `malformed JSON`, the file is byte-identical (the transactional init restores it)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_init_deny_list.py",
+          "reference": "InitDenyList.test_non_object_root_is_refused_not_clobbered",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "A non-object root (`[]`) is refused the same way."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -10890,15 +11657,11 @@
         "codex",
         "grok"
       ],
-      "status": "missing_evidence",
+      "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "No executable test asserts the deny-list merge, its idempotent SKIPPED path, or its malformed-JSON refusal, even though the merge is unconditional on every init run.",
-        "A regression here silently re-enables the three tools the workflow deliberately denies.",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
       ],
-      "follow_up_phases": [
-        3
-      ],
+      "follow_up_phases": [],
       "required_live_evidence": [],
       "semantic_protocol": null,
       "violation_reproduction": null
@@ -11346,12 +12109,47 @@
       "claim_kind": "mechanical",
       "proofs": [
         {
-          "type": "missing",
-          "path": null,
-          "reference": "No test enumerates every top-level command's help forms",
-          "boundary": "none",
+          "type": "executable integration",
+          "path": "tests/test_cli_help_exhaustive.py",
+          "reference": "EveryCommandHelpIsDry.test_every_command_help_prints_usage_and_writes_nothing",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_cli_help_exhaustive.py",
+            "reference": "EveryCommandHelpIsDry.test_control_the_same_fixture_does_mutate_without_the_flag"
+          },
+          "limitations": [
+            "Task 100 (PLAN S8b; snapshot widened after impl panel round 1, opus): iterates `cli.COMMANDS` × (-h, --help) with an ACTIVE fully-gated task, a seeded chat_log.md, an archive block and a seeded MIND_MAP.md + MIND_MAP_OVERFLOW.md (so the mind-map writers have something to change); asserts rc 0, a `Usage: tasks` text (the general usage, or merge-doctor's own), and a byte snapshot of the WHOLE project tree (minus .git) plus an isolated temp HOME (init's `~/.claude` target) plus mtime_ns of task.md/chat_log.md unchanged after every call. Watched red against cli.py with the help intercept disabled."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_cli_help_exhaustive.py",
+          "reference": "EveryCommandHelpIsDry.test_bare_help_forms_print_usage_and_write_nothing",
+          "boundary": "subprocess",
           "negative_control": null,
-          "limitations": []
+          "limitations": [
+            "`tasks -h`, `--help`, `help` and no argument at all."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_cli_help_exhaustive.py",
+          "reference": "EveryCommandHelpIsDry.test_control_the_sweep_is_not_trivially_small",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "COMMANDS has ≥ 20 entries and names the mutating arms the sweep must cover."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_cli_help_exhaustive.py",
+          "reference": "EveryCommandHelpIsDry.test_control_the_snapshot_sees_writes_outside_agent_and_in_home",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "The snapshot notices a MIND_MAP.md rewrite and a `~/.claude/settings.json` write — the two places a fallen-through help arm (mindmap-sync/prepare-merge, init) would land."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -11364,15 +12162,12 @@
         "codex",
         "grok"
       ],
-      "status": "missing_evidence",
+      "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "The suite covers four representative mutating arms (PB-CLI-HELP-TASKS); no test iterates the COMMANDS tuple asserting each command's -h/--help exit code, usage output, and absence of side effects.",
-        "The exhaustive sweep has only ever been run by hand during review.",
+        "Task 100 (PLAN S8b, 2026-09-27; widened after impl panel round 1): verified by the sweep above. `mutates nothing` is measured on the whole project tree (minus .git), an isolated HOME and the two probed files' mtimes; a write to any other absolute path by a help arm would not be seen — no arm writes elsewhere today.",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
       ],
-      "follow_up_phases": [
-        3
-      ],
+      "follow_up_phases": [],
       "required_live_evidence": [],
       "semantic_protocol": null,
       "violation_reproduction": null

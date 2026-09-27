@@ -287,6 +287,40 @@ class HookBehavior(unittest.TestCase):
     def test_fails_open_on_garbage_stdin(self):
         r = self._run("not json at all")
         self.assertEqual(r.returncode, 0, "guard must fail OPEN, never wedge a session")
+        # Task 100 (impl panel r1, opus): fail-open is LOUD on every cannot-run arm;
+        # this one returned 0 in silence.
+        self.assertIn("command-guard", r.stderr, "a malformed payload must be reported on stderr")
+        self.assertIn("failing OPEN", r.stderr)
+
+    def test_empty_and_misshaped_payloads_fail_open_loudly(self):
+        # Task 100 impl panel r2 (codex-high, codex-medium): empty stdin became `{}`
+        # and allowed in silence; a string tool_input raised a traceback (exit 1).
+        for label, raw in (("empty", ""), ("blank", "  \n"),
+                           ("json list", "[1, 2]"),
+                           ("string tool_input", '{"tool_name":"Bash","tool_input":"rm -rf /"}'),
+                           ("list command", '{"tool_name":"Bash","tool_input":{"command":42}}')):
+            with self.subTest(label):
+                r = self._run(raw)
+                self.assertEqual(r.returncode, 0, f"{label}: {r.stderr}")
+                self.assertNotIn("Traceback", r.stderr, label)
+                self.assertIn("failing OPEN", r.stderr, f"{label}: fail-open was silent")
+
+    def test_non_utf8_payload_fails_open_loudly(self):
+        # D6-amended single judge, pass 1: stdin was read as TEXT, so a payload
+        # that is not valid UTF-8 raised UnicodeDecodeError — rc 1, a traceback,
+        # no `failing OPEN` line. Measured rc 1 before the fix.
+        import os
+        e = dict(os.environ)
+        e.pop("PLAYBOOK_ALLOW_DANGEROUS", None)
+        for label, raw in (("stray 0xff", b"\xff"),
+                           ("truncated multibyte", b'{"tool_name":"Bash","tool_input":{"command":"rm -rf /\xe2\x82')):
+            with self.subTest(label):
+                r = subprocess.run(["python3", str(self.HOOK)], input=raw,
+                                   capture_output=True, env=e, cwd=self._iso.name)
+                err = r.stderr.decode("utf-8", "replace")
+                self.assertEqual(r.returncode, 0, f"{label}: {err}")
+                self.assertNotIn("Traceback", err, label)
+                self.assertIn("failing OPEN", err, f"{label}: fail-open was silent")
 
     def _run_hook(self, payload_json, env=None):
         """Run via the bash wrapper (which normalizes grok dialects first)."""

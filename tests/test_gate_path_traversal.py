@@ -299,6 +299,15 @@ class ManualTaskDirGuard(unittest.TestCase):
             r = self._run(cmd)
             self.assertEqual(r.returncode, 0, f"ordinary command refused: {cmd!r}: {r.stderr}")
 
+    def test_the_bound_a_variable_assembled_command_name(self):
+        # Task 100 impl panel r1 (codex-high, measured): a command NAME assembled
+        # in a variable exists only after the shell evaluates it — the same
+        # architectural bound as the glob below and as command_guard's
+        # TheArchitecturalBound. Documented on PB-TASK-DIR-GUARD; if this starts
+        # blocking, the bound moved — update the ledger row, do not delete this.
+        r = self._run('D=mk; D+=dir; "$D" -p .agent/tasks/999-x')
+        self.assertEqual(r.returncode, 0, r.stderr)
+
     def test_the_bound_a_globbed_command_name(self):
         # U8, a documented bound (same class as command_guard's
         # TheArchitecturalBound): a glob in the command NAME only resolves

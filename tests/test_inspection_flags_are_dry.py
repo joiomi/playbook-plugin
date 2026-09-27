@@ -137,5 +137,102 @@ class BashLogSkipsHookInternals(unittest.TestCase):
         self.assertIn("echo agent-ran", self.history.read_text(encoding="utf-8"))
 
 
+class MonitorAndSandboxHelpAreDry(unittest.TestCase):
+    """PB-CLI-HELP-MONITOR-SANDBOX (PLAN S8b, task 100): `monitor -h/--help/help` and
+    `sandbox -h/--help` return usage without starting an agent or a monitor and
+    without provisioning state.
+
+    Sentinels, not assumptions: the monitor is run from a COPY of scripts/ whose
+    `monitor-lib/launch-monitor` is replaced by a file-writing stub, so a help
+    arm that fell through to `start` would leave a marker (the `start` control
+    proves the stub fires); the sandbox runs with a fake `claude` on PATH that
+    announces itself if anything launches it."""
+
+    START_MARKER = "MONITOR_START_WAS_EXECUTED"
+    AGENT_MARKER = "FAKE_AGENT_WAS_EXECUTED"
+
+    def setUp(self):
+        import shutil
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.project = Path(self.tmp.name) / "project"
+        subprocess.run(["git", "init", "-q", str(self.project)], check=True)
+        (self.project / ".agent/tasks").mkdir(parents=True)
+        # A copy of scripts/ with a stub launcher that records every start.
+        self.scripts = Path(self.tmp.name) / "scripts"
+        shutil.copytree(SCRIPTS, self.scripts)
+        self.started = Path(self.tmp.name) / "started"
+        stub = self.scripts / "monitor-lib" / "launch-monitor"
+        stub.write_text(f"#!/bin/bash\necho {self.START_MARKER}\ntouch \"{self.started}\"\n",
+                        encoding="utf-8")
+        stub.chmod(0o755)
+        # A fake `claude` first on PATH for the sandbox path.
+        self.bindir = Path(self.tmp.name) / "bin"
+        self.bindir.mkdir()
+        fake = self.bindir / "claude"
+        fake.write_text(f"#!/bin/sh\necho {self.AGENT_MARKER}\n", encoding="utf-8")
+        fake.chmod(0o755)
+        self.env = {k: v for k, v in os.environ.items() if k != "PLAYBOOK_SANDBOXED"}
+        self.env["PYTHONPATH"] = str(PLUGIN)
+        self.env["PATH"] = f"{self.bindir}{os.pathsep}{self.env.get('PATH', '')}"
+        self.env.pop("BASH_ENV", None)
+
+    def _skip_sandbox_on_windows(self):
+        # The fake `claude` is a `#!/bin/sh` script launched by a NATIVE python on
+        # the Windows lane, where no containment backend wraps it in bash — the
+        # sandbox pair is measured on the POSIX lanes (impl panel r2, opus).
+        if os.name == "nt":
+            self.skipTest("fake sh agent is not executable by native Windows python")
+
+    def _agent_tree(self):
+        return sorted(str(p.relative_to(self.project)) for p in (self.project / ".agent").rglob("*"))
+
+    def _monitor(self, *argv):
+        return subprocess.run([bash_or_skip(), str(self.scripts / "monitor"), *argv],
+                              cwd=self.project, env=self.env, capture_output=True, text=True,
+                              timeout=60)
+
+    def _sandbox(self, *argv):
+        return subprocess.run([sys.executable, "-m", "provider.sandbox",
+                               "--project-root", str(self.project), *argv],
+                              cwd=self.project, env=self.env, capture_output=True, text=True,
+                              timeout=120)
+
+    def test_monitor_help_forms_print_usage_and_start_nothing(self):
+        before = self._agent_tree()
+        for flag in ("-h", "--help", "help"):
+            with self.subTest(flag=flag):
+                r = self._monitor(flag)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertIn("Usage: monitor", r.stdout)
+                self.assertNotIn(self.START_MARKER, r.stdout + r.stderr, "help started the monitor")
+                self.assertFalse(self.started.exists(), "help reached the launcher")
+                self.assertEqual(self._agent_tree(), before, "help provisioned state under .agent/")
+
+    def test_control_monitor_start_does_reach_the_launcher(self):
+        # The sentinel must be able to fire, or the assertions above are vacuous.
+        r = self._monitor("start")
+        self.assertIn(self.START_MARKER, r.stdout, r.stderr)
+        self.assertTrue(self.started.exists())
+
+    def test_sandbox_help_forms_print_usage_and_execute_nothing(self):
+        self._skip_sandbox_on_windows()
+        before = self._agent_tree()
+        for flag in ("-h", "--help"):
+            with self.subTest(flag=flag):
+                r = self._sandbox(flag)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertIn("usage:", r.stdout.lower())
+                self.assertNotIn(self.AGENT_MARKER, r.stdout + r.stderr, "help executed the agent")
+                self.assertEqual(self._agent_tree(), before, "help provisioned state under .agent/")
+
+    def test_control_sandbox_prompt_does_execute_the_agent(self):
+        # `--print-argv`/help are dry because they short-circuit; a real --prompt
+        # run reaches the (fake) agent, which is what the marker detects.
+        self._skip_sandbox_on_windows()
+        r = self._sandbox("--agent", "claude", "--prompt", "hello")
+        self.assertIn(self.AGENT_MARKER, r.stdout + r.stderr, r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

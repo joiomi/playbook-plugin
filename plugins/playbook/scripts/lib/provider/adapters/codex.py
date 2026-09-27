@@ -185,10 +185,11 @@ class CodexAdapter(ProviderAdapter):
         Does not overwrite an existing AGENTS.md.  To refresh after a Playbook
         upgrade, delete AGENTS.md first, then re-run `tasks init --provider codex`.
         """
+        from tasks.atomic import atomic_write
         from tasks.template import agents_md_template
         target = project_root / "AGENTS.md"
         if not target.exists():
-            target.write_text(agents_md_template(), encoding="utf-8")
+            atomic_write(target, agents_md_template())
 
     # ── Hooks ─────────────────────────────────────────────────────────────────
 

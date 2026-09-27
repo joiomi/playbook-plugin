@@ -9,6 +9,7 @@ plus the tool defect found at its close. Task 086: PLAN S3. Task 087: PLAN S4. T
 Task 095: owner decision H2 (any project-root `*.md` is a doc for tail certification).
 Task 096: PLAN S10 (CI + docs correspondence).
 Task 099: two detect-verify doc sentences left wrong at 098's close corrected.
+Task 100: PLAN S8 — the guarantee ledger's binding audit (every cited proof read against its statement) plus the two defects it surfaced.
 Each fix was written against a test that failed first.
 
 ### Added
@@ -31,6 +32,19 @@ Each fix was written against a test that failed first.
 
 ### Changed
 
+- **Guarantee ledger: every cited proof was read against its statement** (task 100, PLAN S8a). 122 rows now
+  (`PB-TASK-DIR-GUARD` added for the manual task-directory guard, the item parked by tasks 080/087): 17 rows rebound
+  (32 proofs that carried a clause were cited nowhere — e.g. `PB-SANDBOX-DETECTION-FALLBACK` cited an advisory-text
+  test of `environment.py` instead of `tests/test_windows_uncontained_path.py`; `PB-CLI-RETRO` named an owner its proofs
+  never touched), 11 rows narrowed to what a test asserts — two of them were false as written (`PB-AUDIT-MERGE-ARTIFACTS`
+  said the merge-artifacts sweep excludes `.agent`; its `find` prunes only `.git`. `PB-PLATFORM-COMPATIBILITY` said the
+  macOS/Windows CI lanes were absent) — and the six semantic rows carry a `PROPOSED WAIVER` text for the owner (S9).
+  Five rows move to verified on new red-first tests: the exhaustive `--help` sweep over `cli.COMMANDS`
+  (`PB-CLI-HELP-EXHAUSTIVE`), the init deny-list merge (`PB-INIT-DENY-LIST`), `monitor`/`sandbox` help
+  (`PB-CLI-HELP-MONITOR-SANDBOX`), the guard-cannot-run arms (`PB-COMMAND-FAILURE-POLICY`) and the atomic routing sweep
+  (`PB-CONFIG-ATOMIC-DURABILITY`); `PB-MERGE-PUSH-GATE` is re-scoped to merge-verify.py's mechanical gate (the skill's
+  push offer is prose an agent follows, not a function a test can drive). Every change is named in the row under
+  `Task 100 (PLAN S8…)`; `ledger_version` 2026-09-27.
 - **The shipped `opus` alias names Opus 5.5 (1M context)** (task 094). `provider/models.json` maps `opus` to
   `claude-opus-5-5[1m]` (was `claude-opus-4-8[1m]`), so every panel or default judge that says `opus` now runs
   Opus 5.5, unless a project's `.agent/models.json` shadows the alias. Opus 4.8 stays reachable by an explicit
@@ -76,6 +90,27 @@ Each fix was written against a test that failed first.
 
 ### Fixed
 
+- **`command-guard-hook` with no `python3` on PATH now says so** (task 100, PLAN S8c). The arm was `command -v python3 || exit 0`:
+  fail-open, as the policy says, but silent — a host without python3 allowed every shell call with no trace, while the
+  ledger row (`PB-COMMAND-FAILURE-POLICY`) promised `uniformly and loudly`. Found by the new red-first test
+  `CommandGuardCannotRun.test_no_python3_fails_open_loudly_even_on_a_dangerous_command`; the hook now prints the same
+  one-line warning its `< 3.10` and missing-helper arms print. Two sibling tests pin that a hook killed at the host's
+  timeout exits with a code other than 2 (never read as BLOCK) and that a benign call stays under the 5 s budget.
+  The impl panel then found the malformed-payload arm of `command_guard.py` equally silent, and an empty payload or a
+  mis-shaped one (a string `tool_input`, a non-text command) crashing with a traceback — all warn and exit 0 now, pinned.
+  The single-judge pass after the panel added the last shape: a payload that is not valid UTF-8 was a `UnicodeDecodeError`
+  traceback; stdin is read as bytes and decoded explicitly now.
+- **The foreign-provider bootstrap files are written atomically** (task 100, PLAN S8c). `install_bootstrap` in the codex,
+  grok, pi (AGENTS.md) and antigravity (GEMINI.md) adapters used a plain `write_text` while the same modules already
+  routed their hook files through `tasks.atomic.atomic_write`; found by the new AST sweep
+  `tests/test_atomic_routing_sweep.py`, which now fails on any truncating write outside the primitive that has no
+  documented reason (`PB-CONFIG-ATOMIC-DURABILITY`'s routing-completeness clause, executable instead of code review).
+  The panel's review widened the sweep (recursive; the embedded python of `scripts/init` too) and it caught three more:
+  init's settings.json writers (project deny list, user `BASH_ENV`, PostToolUse hook) were a truncating `open(path, 'w')`
+  and a temp+replace without fsync — they now load `tasks/atomic.py` by path, as `init_txn.py` does, and call `atomic_write`.
+  Round 2 widened it again (`shutil.copy*`, `os.open(… O_TRUNC)`, `skills/`): pi's installed `models.json` was a plain
+  `copyfile`, now `atomic_write`. The ledger row now claims the PYTHON writers and names the bash-side init copies and the
+  session-counters reset as exceptions bounded by init's transaction and their advisory role — bash has no fsync.
 - **`scripts/verify` no longer crashes on a cp1252 Windows console** (task 096, parked by 086): a failure line
   holding U+2260 raised `UnicodeEncodeError` and cut the failure list short (CI 35970907673). stdout and stderr
   are re-encoded as UTF-8 with replacement.
