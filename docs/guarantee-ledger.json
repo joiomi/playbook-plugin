@@ -1602,7 +1602,7 @@
       ],
       "status": "unverified",
       "missing_evidence_or_limitation": [
-        "PROPOSED WAIVER (task 100, PLAN S8 → the owner ratifies in S9 as the first limitation entry, in the exact form `WAIVER <YYYY-MM-DD> <id>: …`, or narrows/deletes the row): an agent-behaviour claim no test can establish; keep it as an aspiration measured only by its semantic protocol (frozen corpus, 10 samples), with the mechanical half — the risk field's wording asks the world question — pinned by tests/test_risk_wording.py.",
+        "WAIVER 2026-09-27 PB-RISK-SEMANTIC-CHOICE: The owner accepts that classifying a change as assertive/irreversible is agent judgment guided by CLAUDE.md's risk-first triggers; the mechanical half (a missing or unset ## Risk closes to the strict bar) is tested. Not to be proven by a test.",
         "No repeated controlled agent trial establishes classification accuracy.",
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
         "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21)."
@@ -3998,7 +3998,7 @@
       ],
       "status": "unverified",
       "missing_evidence_or_limitation": [
-        "PROPOSED WAIVER (task 100, PLAN S8 → the owner ratifies in S9 as the first limitation entry, in the exact form `WAIVER <YYYY-MM-DD> <id>: …`, or narrows/deletes the row): the usefulness of a nudge is a human judgement; keep it as an aspiration under its 20-transcript protocol; the delivery and transcript-binding mechanics are PB-MONITOR-NUDGE-DELIVERY and PB-MONITOR-TRANSCRIPT-BINDING (verified).",
+        "WAIVER 2026-09-27 PB-MONITOR-DETECTS-DRIFT: Whether a nudge is useful is a human judgment; the delivery mechanics are tested. Kept as the monitor's purpose statement, not a measured claim.",
         "No repeated outcome corpus compares monitored and unmonitored trajectories.",
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
         "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21)."
@@ -5538,7 +5538,7 @@
       ],
       "status": "unverified",
       "missing_evidence_or_limitation": [
-        "PROPOSED WAIVER (task 100, PLAN S8 → the owner ratifies in S9 as the first limitation entry, in the exact form `WAIVER <YYYY-MM-DD> <id>: …`, or narrows/deletes the row): a product-outcome claim; judgebench (tasks 046-050) measured judge seats on a 19-case corpus, never single-vs-panel; keep it as an aspiration under its 30-defect protocol, or narrow it to the mechanical `a panel resolves a quorum verdict` (already PB-PANEL-QUORUM).",
+        "WAIVER 2026-09-27 PB-JUDGE-CATCH-RATE: judgebench measured seat-vs-seat, never single-vs-panel; the owner keeps the panel on the recorded evidence that every round in tasks 077-100 produced real defects, and accepts this as an observed pattern, not a proven rate.",
         "No repeated blinded defect corpus compares single and panel discovery rates.",
         "Owner decision 2026-08-21: judge-seat is supported on claude, grok, and codex; antigravity and pi are experimental and removed from applicable_providers.",
         "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending."
@@ -6952,7 +6952,7 @@
       ],
       "status": "unverified",
       "missing_evidence_or_limitation": [
-        "PROPOSED WAIVER (task 100, PLAN S8 → the owner ratifies in S9 as the first limitation entry, in the exact form `WAIVER <YYYY-MM-DD> <id>: …`, or narrows/deletes the row): an agent-driven act with no deterministic contract; keep it as an aspiration under its 10-repository protocol; the map's downstream mechanics are PB-MINDMAP-LOAD/RECALL/SYNC/REF-INTEGRITY (verified).",
+        "WAIVER 2026-09-27 PB-MINDMAP-GENERATION: /playbook:mindmap is an agent-written artifact; its structure is validated by the audit sweeps (wellformed, dangling links, stale refs), its content quality is not a testable claim.",
         "Generation is an agent-driven semantic act with no deterministic contract: no executable test drives /playbook:mindmap or scores the map it produces.",
         "Slash-command dispatch exists only inside a provider harness, so even the invocation is unexercised offline; PB-SLASH-COMMANDS covers only that the command file ships and points at the right entry point."
       ],
@@ -7007,7 +7007,7 @@
       ],
       "status": "unverified",
       "missing_evidence_or_limitation": [
-        "PROPOSED WAIVER (task 100, PLAN S8 → the owner ratifies in S9 as the first limitation entry, in the exact form `WAIVER <YYYY-MM-DD> <id>: …`, or narrows/deletes the row): an outcome claim; keep it as an aspiration under its 20-session protocol; loading and recall are verified rows.",
+        "WAIVER 2026-09-27 PB-MINDMAP-MEMORY-OUTCOME: \"orients a new agent in seconds\" is an outcome claim; loading, indexing and recall are tested, the outcome is the owner's experience across 100 dogfooded tasks, accepted as such.",
         "No controlled repeated cross-session outcome measurement exists.",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
       ],
@@ -9165,7 +9165,7 @@
       ],
       "status": "unverified",
       "missing_evidence_or_limitation": [
-        "PROPOSED WAIVER (task 100, PLAN S8 → the owner ratifies in S9 as the first limitation entry, in the exact form `WAIVER <YYYY-MM-DD> <id>: …`, or narrows/deletes the row): an outcome claim; keep it as an aspiration under its 5-run protocol; the file-backed mechanics (PB-TASK-TXN, PB-TASK-ACTIVATE, PB-TASK-BLOCKED) are verified rows.",
+        "WAIVER 2026-09-27 PB-OUTCOME-LONG-TASKS: file-backed state surviving compaction is tested; \"enables 500-plus-step tasks\" is an outcome the owner has observed (tasks 036, 077, 100) and accepts without a controlled measurement.",
         "No repeated 500-step cross-session outcome trial with a failure-rate definition exists.",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
       ],
@@ -11570,7 +11570,8 @@
       "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
-        "Task 100 (PLAN S8 binding audit, 2026-09-27) CORRECTED: the statement said both sweeps exclude `.agent`. Measured in audit.py DEFAULT_SWEEPS: `_EXCLUDES` (`--exclude-dir=.agent`) applies to the grep sweeps only; the merge-artifacts command is `find . -path ./.git -prune -o \\( -name '*.orig' -o -name '*.rej' \\) -print`, so a `*.orig`/`*.rej` under `.agent/` IS a finding. Corrected, not changed: whether merge-artifacts should prune `.agent` is an owner call (parked in task 100). The cited `.agent` exclusion proof exercises stale-markers, which shares `_EXCLUDES` with conflict-markers."
+        "Task 100 (PLAN S8 binding audit, 2026-09-27) CORRECTED: the statement said both sweeps exclude `.agent`. Measured in audit.py DEFAULT_SWEEPS: `_EXCLUDES` (`--exclude-dir=.agent`) applies to the grep sweeps only; the merge-artifacts command is `find . -path ./.git -prune -o \\( -name '*.orig' -o -name '*.rej' \\) -print`, so a `*.orig`/`*.rej` under `.agent/` IS a finding. Corrected, not changed: whether merge-artifacts should prune `.agent` is an owner call (parked in task 100). The cited `.agent` exclusion proof exercises stale-markers, which shares `_EXCLUDES` with conflict-markers.",
+        "Owner decision 2026-09-27 (task 102, PLAN S9): the merge-artifacts sweep stays as it is — it scans `.agent` too (a stray `*.orig`/`*.rej` inside a task record is a finding); only the ledger text had been corrected in task 100."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],
