@@ -316,9 +316,15 @@ class DaemonArgvDetectorParity(unittest.TestCase):
             sys.path.remove(str(PLUGIN))
         for argv, want in DAEMON_ARGV:
             with self.subTest(argv=argv):
+                # argv travels NUL-separated on stdin, not on the command line:
+                # on Windows the MSYS runtime rebuilds argv from the Windows
+                # command line and drops a trailing \r (CI run 36401496454).
                 r = subprocess.run([bash_or_skip(), "-c",
-                                    f"source '{GATE_LIB.as_posix()}' && _is_daemon_argv \"$@\"",
-                                    "_", *argv], capture_output=True, text=True, timeout=30)
+                                    f"source '{GATE_LIB.as_posix()}' && A=(); "
+                                    "while IFS= read -r -d '' a; do A[${#A[@]}]=\"$a\"; done; "
+                                    "_is_daemon_argv \"${A[@]}\""],
+                                   input=b"".join(a.encode("utf-8") + b"\0" for a in argv),
+                                   capture_output=True, timeout=30)
                 self.assertEqual(r.returncode == 0, want, f"bash on {argv!r}: rc={r.returncode}")
                 self.assertEqual(core._is_daemon_argv(argv), want, f"python on {argv!r}")
 
@@ -336,9 +342,12 @@ class DaemonDetectorParity(unittest.TestCase):
             sys.path.remove(str(PLUGIN))
         for args, want in DAEMON_ARGS.items():
             with self.subTest(args=args):
+                # stdin, not argv (MSYS drops a trailing \r from Windows argv)
                 r = subprocess.run([bash_or_skip(), "-c",
-                                    f"source '{GATE_LIB.as_posix()}' && _is_daemon_args \"$1\"",
-                                    "_", args], capture_output=True, text=True, timeout=30)
+                                    f"source '{GATE_LIB.as_posix()}' && IFS= read -r -d '' a; "
+                                    "_is_daemon_args \"$a\""],
+                                   input=args.encode("utf-8") + b"\0",
+                                   capture_output=True, timeout=30)
                 self.assertEqual(r.returncode == 0, want, f"bash on {args!r}: rc={r.returncode}")
                 self.assertEqual(core._is_daemon_args(args), want, f"python on {args!r}")
 
