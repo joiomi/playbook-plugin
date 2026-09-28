@@ -3079,7 +3079,7 @@
     {
       "id": "PB-SESSION-ID",
       "category": "sessions-and-attribution",
-      "statement": "Session identifiers are sanitized so a traversal identifier cannot escape the sessions directory, while valid provider PID and judge identifiers pass through unchanged. The Claude ancestor walk that derives the id when PLAYBOOK_SESSION_ID is unset recognizes `claude`, `claude.exe` and any `claude*` process identically in bash and Python, never takes a Claude Code background-daemon process (the shared `bg-pty-host` pty host or `daemon run`) — nor a `claude*` ancestor whose argv cannot be read — as the session root, and never climbs past one. On Linux both resolvers read the tree from `/proc/<pid>/status` (Name, PPid) and `/proc/<pid>/cmdline` (the exact argv), and the daemon is recognized from that argv: the words of basename(argv[0]) followed by argv[1:] must be `claude`/`claude.exe` then `bg-pty-host`/`--bg-pty-host` or `daemon run` (the pty host rewrites its title into argv[0], measured live 2026-09-28); only where `/proc` is missing (macOS) do they fall back to `ps`, whose flattened argv line is split on whitespace and fed to the same detector; when it reaches the daemon with no agent process below it, the id is unresolved — no hook or CLI command creates a session directory or touches any session's pointer, and each prints one stderr line. The walk also stops at an ancestor it cannot read (an unreadable `/proc` status or an empty cmdline; on the `ps` path a `ps` error or a miss of the Python probe's 10 s deadline), keeping an agent already found below it and leaving the id unresolved when none was found — never a made-up `pid-<ppid>`; only a missing `ps` binary on the `ps` path keeps the legacy `pid-<ppid>` fallback. With an unresolved id the stop hook blocks once instead of releasing (the `stop_hook_active` valve ends a re-issued stop). Dead `pid-*` session directories are reclaimed by the session GC, and `tasks doctor` names the ones its own CLI-entry sweep reclaimed in that run (the SessionStart sweep is not recorded).",
+      "statement": "Session identifiers are sanitized so a traversal identifier cannot escape the sessions directory, while valid provider PID and judge identifiers pass through unchanged. A PLAYBOOK_SESSION_ID is no longer honored unconditionally: a value of the form `pid-<digits>` is used only while process N is alive (not a zombie), its comm is an agent (claude*, codex, agy, grok, pi), it is not a Claude Code daemon process, and either the ancestor walk finds no agent at all (the daemon-only and plain-terminal cases — N need not be an ancestor there) or N is one of the agents it found (so `pid-<codex>` from `playbook-codex` run inside a claude stays codex's); an id naming a live agent outside the walked chain (a sibling) is refused — and otherwise it is ignored in favor of the ancestor walk, identically in bash and Python, with the CLI printing one stderr line that names the stale id and the id used; ids of any other form (`judge`, `pid-win-fallback`, non-numeric names) and Windows are unaffected. SessionStart exports the id this session's hooks will use (they see the inherited value, not the env file): the same rule decides, and an inherited `pid-<digits>` is dropped outright when the walk finds no agent at all (non-pid ids such as `judge` or a subagent's id are exported as before). When PLAYBOOK_SESSION_ID is set in its environment, the destructive-command guard follows the id the resolver reaches (a normal session's hooks carry no such variable, so there the guard's irreversible-task acknowledgement does not fire at all — parked, task 106 P1) before letting a session's irreversible task acknowledge a dangerous command. The Claude ancestor walk that derives the id when PLAYBOOK_SESSION_ID is unset recognizes `claude`, `claude.exe` and any `claude*` process identically in bash and Python, never takes a Claude Code background-daemon process (the shared `bg-pty-host` pty host or `daemon run`) — nor a `claude*` ancestor whose argv cannot be read — as the session root, and never climbs past one. On Linux both resolvers read the tree from `/proc/<pid>/status` (Name, PPid) and `/proc/<pid>/cmdline` (the exact argv), and the daemon is recognized from that argv: the words of basename(argv[0]) followed by argv[1:] must be `claude`/`claude.exe` then `bg-pty-host`/`--bg-pty-host` or `daemon run` (the pty host rewrites its title into argv[0], measured live 2026-09-28); only where `/proc` is missing (macOS) do they fall back to `ps`, whose flattened argv line is split on whitespace and fed to the same detector; when it reaches the daemon with no agent process below it, the id is unresolved — no hook or CLI command creates a session directory or touches any session's pointer, and each prints one stderr line. The walk also stops at an ancestor it cannot read (an unreadable `/proc` status or an empty cmdline; on the `ps` path a `ps` error or a miss of the Python probe's 10 s deadline), keeping an agent already found below it and leaving the id unresolved when none was found — never a made-up `pid-<ppid>`; only a missing `ps` binary on the `ps` path keeps the legacy `pid-<ppid>` fallback. With an unresolved id the stop hook blocks once instead of releasing (the `stop_hook_active` valve ends a re-issued stop). Dead `pid-*` session directories are reclaimed by the session GC, and `tasks doctor` names the ones its own CLI-entry sweep reclaimed in that run (the SessionStart sweep is not recorded).",
       "owner": [
         {
           "path": "plugins/playbook/scripts/gate-echo-lib.sh",
@@ -3395,6 +3395,227 @@
           "limitations": [
             "The /proc tree is a fixture under PLAYBOOK_PROC_ROOT whose argv shapes are the live measurement of 2026-09-28 (task 105 record, `## Live re-measure`); the live five-case table was taken by hand, not in CI."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_stale_env_id.py",
+          "reference": "StaleEnvIdProc.test_dead_env_pid_falls_back_to_the_walk",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_session_stale_env_id.py",
+            "reference": "StaleEnvIdPs.test_live_agent_env_pid_wins_even_if_not_an_ancestor"
+          },
+          "limitations": [
+            "The /proc tree and the fake `ps` are task 105's harness; the stale-id shapes are the 2026-09-28 measurement (task 106 record)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_stale_env_id.py",
+          "reference": "StaleEnvIdProc.test_live_non_agent_env_pid_falls_back_to_the_walk",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The /proc tree and the fake `ps` are task 105's harness; the stale-id shapes are the 2026-09-28 measurement (task 106 record)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_stale_env_id.py",
+          "reference": "StaleEnvIdPs.test_dead_env_pid_falls_back_to_the_walk",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The /proc tree and the fake `ps` are task 105's harness; the stale-id shapes are the 2026-09-28 measurement (task 106 record)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_stale_env_id.py",
+          "reference": "StaleEnvIdPs.test_non_pid_ids_are_untouched",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The /proc tree and the fake `ps` are task 105's harness; the stale-id shapes are the 2026-09-28 measurement (task 106 record)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_stale_env_id.py",
+          "reference": "StaleEnvIdPs.test_cli_names_the_stale_id_and_the_id_used_once",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The /proc tree and the fake `ps` are task 105's harness; the stale-id shapes are the 2026-09-28 measurement (task 106 record)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_stale_env_id.py",
+          "reference": "StaleEnvIdRealProcesses.test_real_dead_and_real_non_agent",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_stale_env_id.py",
+          "reference": "StaleEnvBlockedFindsTheActiveTask.test_blocked_with_a_dead_env_blocks_the_active_task",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The /proc tree and the fake `ps` are task 105's harness; the stale-id shapes are the 2026-09-28 measurement (task 106 record)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_stale_env_id.py",
+          "reference": "StaleEnvIdPs.test_live_daemon_pid_in_env_is_not_a_session",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_stale_env_id.py",
+          "reference": "StaleEnvIdPs.test_zombie_agent_in_env_is_dead",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_stale_env_id.py",
+          "reference": "StaleEnvIdRealZombie.test_real_zombie_claude_is_dead",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_session_stale_env_id.py",
+          "reference": "PsTimeoutKeepsTheEnvId.test_timeout_is_not_stale",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_stale_env_id.py",
+          "reference": "CommandGuardIgnoresAStaleId.test_dead_id_does_not_acknowledge",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_stale_env_id.py",
+          "reference": "StaleEnvIdPs.test_inherited_live_agent_id_loses_to_the_walked_session",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_stale_env_id.py",
+          "reference": "SessionStartIgnoresAnInheritedPidId.test_inherited_live_agent_id_is_not_exported",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_session_stale_env_id.py",
+            "reference": "SessionStartIgnoresAnInheritedPidId.test_without_env_the_export_is_unchanged"
+          },
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_stale_env_id.py",
+          "reference": "SessionStartIgnoresAnInheritedPidId.test_daemon_only_with_an_inherited_id_exports_nothing",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_stale_env_id.py",
+          "reference": "StaleEnvIdPs.test_codex_launched_from_a_claude_keeps_its_own_id",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The trees are fixtures (a /proc fixture and a fake `ps`)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_stale_env_id.py",
+          "reference": "StaleEnvIdPs.test_nested_claude_inheriting_the_outer_id_keeps_it",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The trees are fixtures (a /proc fixture and a fake `ps`)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_stale_env_id.py",
+          "reference": "Round2Findings.test_guard_follows_a_dead_env_id_to_the_walked_session",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_stale_env_id.py",
+          "reference": "Round2Findings.test_guard_follows_a_sibling_env_id_to_the_walked_session",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_stale_env_id.py",
+          "reference": "Round2Findings.test_session_start_exports_the_id_its_hooks_will_use",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_session_stale_env_id.py",
+          "reference": "PsArgsTimeoutOnAClaudeIsNotASession.test_args_timeout_is_stale",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_session_stale_env_id.py",
+          "reference": "PsTimeoutThenCompletedMissIsStale.test_timeout_then_miss",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_session_stale_env_id.py",
+            "reference": "PsTimeoutKeepsTheEnvId.test_timeout_is_not_stale"
+          },
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_stale_env_id.py",
+          "reference": "RealPsLivenessProbe.test_python_probe_reads_a_live_process",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Runs the SYSTEM ps: on Linux procps, on the macOS CI lane BSD ps — the platform whose fallback path uses it."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_stale_env_id.py",
+          "reference": "RealPsLivenessProbe.test_bash_probe_reads_a_live_process",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Runs the SYSTEM ps: on Linux procps, on the macOS CI lane BSD ps — the platform whose fallback path uses it."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -3412,7 +3633,11 @@
         "Task 105 (owner decision 2026-09-28): daemon detection depends on the daemon's argv as measured on Claude Code 2.1.283 — pty host `claude bg-pty-host|--bg-pty-host|…` (title rewritten into argv[0]), daemon `…/claude|claude.exe daemon run`, spare `claude bg-spare|…`, comm `claude.exe` (or `claude` when started through the wrapper). A renamed subcommand would be walked as an ordinary agent again — re-measure after a Claude Code upgrade. On LINUX the argv is exact (/proc cmdline). On macOS (no /proc) it is HEURISTIC: the `ps -ww -o args=` line is split on whitespace, so an argv[0] containing spaces (an install path with a space) cannot be told from argument boundaries — a declared limitation of the macOS fallback, not a defect; no parsing rules are added for it (owner rule 2026-09-28).",
         "Task 105: hooks never receive PLAYBOOK_SESSION_ID (CLAUDE_ENV_FILE reaches Bash-tool commands only; the claude process's own environment has no such variable, measured 2026-09-27), so a daemon-hosted session's hooks are identified by the hosted `claude.exe` process below the daemon; the env var is the only identity only for a process with no agent between it and the daemon.",
         "Task 105: the ancestor walk is skipped on Windows (unchanged), so the daemon rules are POSIX-only; the new tests skip there.",
-        "Task 105: the 10 s Python `ps` deadline applies only to the macOS `ps` fallback (the Linux /proc reads have no subprocess). There bash `ps` has no deadline; the Python probe waits up to 10 s (retried once) and treats a miss like a failed read, so only a `ps` slower than that can make the CLI stop a hop earlier than the hooks — pinned for a 2.5 s probe by ProbeFailuresFailClosed.test_slow_ps_does_not_split_python_from_bash."
+        "Task 105: the 10 s Python `ps` deadline applies only to the macOS `ps` fallback (the Linux /proc reads have no subprocess). There bash `ps` has no deadline; the Python probe waits up to 10 s (retried once) and treats a miss like a failed read, so only a `ps` slower than that can make the CLI stop a hop earlier than the hooks — pinned for a 2.5 s probe by ProbeFailuresFailClosed.test_slow_ps_does_not_split_python_from_bash.",
+        "Task 106 (owner decision 2026-09-28), as shipped: RESUME (the conversation re-sources its old env file) — a dead `pid-N` is ignored; INHERITANCE (a child claude inherits its launcher's `pid-N`) — an id naming a live agent OUTSIDE the walked chain (a sibling) loses to the walk in hooks, CLI and guard and is not re-exported by session-start, while an id naming an agent IN the chain is kept and re-exported (e.g. a claude started from a codex started from a claude keeps pid-<codex>). Still honored: a live agent's id when the walk finds no agent at all (daemon-only, a plain terminal — there the env is the only identity; session-start alone drops an inherited pid id in that case, per the owner's daemon-only rule, which is unreachable in practice because session-start's parent is the session's own claude), and a pid REUSED by an unrelated agent in those same no-agent cases. The polluted files under ~/.claude/session-env/ are Claude Code data and are not touched; their dead ids are ignored by the rule.",
+        "Task 106: the agent check reads comm. Every `playbook-<provider>` launcher exports `pid-$$` and then `exec`s the provider, so N is the provider process; on the measured machine codex is an ELF named `codex` and grok a symlink named `grok` (comm follows the executed name). A provider installed as an interpreter shim (`#!/usr/bin/env node`) would have comm `node`, and its env id would be ignored in favor of the walk.",
+        "Task 106: the task-gate-hook `export PLAYBOOK_SESSION_ID=$SESSION_ID` injection for `tasks (work|status|bootstrap|freehand|retro|new)` is left in place (owner decision); with the stale-id rule it is redundant for a stale env, not removed.",
+        "Task 106 (owner-ACCEPTED deviation 2026-09-28): the owner asked for no ancestry test; the rule judges an env `pid-N` against the walked chain (honored when the walk finds no agent or N is one of its agents). A first version compared N with the chain's ROOT and split the CLI from the codex hooks for codex run inside a claude; corrected before the round-2 panel (task 106 record)."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],

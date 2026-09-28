@@ -643,10 +643,10 @@ class GuardReadsOnceAndRechecksThePointer(unittest.TestCase):
     def _project(self, risk="irreversible", status="in_progress", num="001"):
         d = _tmp()
         agent = d / ".agent"
-        (agent / "sessions" / "pid-1").mkdir(parents=True)
+        (agent / "sessions" / "pid-lock-test").mkdir(parents=True)
         # The real pointer is the ZERO-PADDED number (checked against this
         # workspace's own `.agent/sessions/<sid>/current_state`).
-        (agent / "sessions" / "pid-1" / "current_state").write_text(num, encoding="utf-8")
+        (agent / "sessions" / "pid-lock-test" / "current_state").write_text(num, encoding="utf-8")
         td = agent / "tasks" / f"{num}-t"
         td.mkdir(parents=True)
         (td / "task.md").write_text(
@@ -664,13 +664,13 @@ class GuardReadsOnceAndRechecksThePointer(unittest.TestCase):
     def test_an_irreversible_active_task_acknowledges(self):
         d = self._project()
         g = self._guard()
-        with mock.patch.dict(os.environ, {"PLAYBOOK_SESSION_ID": "pid-1"}):
+        with mock.patch.dict(os.environ, {"PLAYBOOK_SESSION_ID": "pid-lock-test"}):
             self.assertTrue(g._active_task_is_irreversible(str(d)))
 
     def test_a_reversible_one_does_not(self):
         d = self._project(risk="reversible")
         g = self._guard()
-        with mock.patch.dict(os.environ, {"PLAYBOOK_SESSION_ID": "pid-1"}):
+        with mock.patch.dict(os.environ, {"PLAYBOOK_SESSION_ID": "pid-lock-test"}):
             self.assertFalse(g._active_task_is_irreversible(str(d)))
 
     def test_a_task_switch_mid_check_refuses(self):
@@ -678,7 +678,7 @@ class GuardReadsOnceAndRechecksThePointer(unittest.TestCase):
         # irreversible task must not acknowledge for the new one.
         d = self._project()
         g = self._guard()
-        pointer = d / ".agent" / "sessions" / "pid-1" / "current_state"
+        pointer = d / ".agent" / "sessions" / "pid-lock-test" / "current_state"
         real_read = Path.read_text
         state = {"n": 0}
 
@@ -688,14 +688,14 @@ class GuardReadsOnceAndRechecksThePointer(unittest.TestCase):
                 state["n"] = 1
                 pointer.write_text("002", encoding="utf-8")   # another session switched
             return out
-        with mock.patch.dict(os.environ, {"PLAYBOOK_SESSION_ID": "pid-1"}), \
+        with mock.patch.dict(os.environ, {"PLAYBOOK_SESSION_ID": "pid-lock-test"}), \
              mock.patch.object(Path, "read_text", _switch_once):
             self.assertFalse(g._active_task_is_irreversible(str(d)),
                              "a stale pointer acknowledged after a task switch")
 
     def test_every_error_keeps_the_command_blocked(self):
         g = self._guard()
-        with mock.patch.dict(os.environ, {"PLAYBOOK_SESSION_ID": "pid-1"}):
+        with mock.patch.dict(os.environ, {"PLAYBOOK_SESSION_ID": "pid-lock-test"}):
             self.assertFalse(g._active_task_is_irreversible("/nonexistent/root"))
             self.assertFalse(g._active_task_is_irreversible(""))
 

@@ -1288,6 +1288,23 @@ def _normalize_payload(payload):
         return payload
 
 
+def _journal_session_id():
+    """The session id the enforcement journal attributes a decision to: the id
+    the guard used (task 106 single judge) — on POSIX the resolved one, so a
+    stale or sibling env value is not what the log names; "" when unset."""
+    sid = os.environ.get("PLAYBOOK_SESSION_ID", "").strip()
+    if not sid or os.name == "nt":
+        return sid
+    try:
+        plugin_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if plugin_dir not in sys.path:
+            sys.path.insert(0, plugin_dir)
+        from tasks.core import resolve_session_id
+        return resolve_session_id(quiet=True)
+    except Exception:
+        return sid
+
+
 def _active_task_is_irreversible(root):
     """True iff this session's ACTIVE task (lane/sessions/<sid>/current_state →
     lane/tasks/<N>-*/task.md) carries a live `## Risk` of `irreversible`, read
@@ -1298,6 +1315,21 @@ def _active_task_is_irreversible(root):
         sid = os.environ.get("PLAYBOOK_SESSION_ID", "").strip()
         if not sid or "/" in sid or "\\" in sid or ".." in sid:
             return False
+        plugin_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if plugin_dir not in sys.path:
+            sys.path.insert(0, plugin_dir)
+        # Task 106 (round 1 R1-3): the SAME stale-id rule as the resolvers — a
+        # `pid-N` that is not a live agent (e.g. inherited from a parent that
+        # has exited) must not let that session's irreversible task acknowledge.
+        # Round 2 (task 106): follow the id the CLI and the hooks resolve — a
+        # rejected env id (dead, or a live sibling's) must neither acknowledge
+        # through ITS session nor block the session the shell really is in.
+        # Windows is untouched (the raw env id, as before).
+        if os.name != "nt":
+            from tasks.core import resolve_session_id
+            sid = resolve_session_id(quiet=True)
+            if not sid:
+                return False
         j = _load_journal()
         lane = j.resolve_lane_dir(root) if j is not None else None
         lane = str(lane) if lane else os.path.join(root, ".agent")
@@ -1410,7 +1442,7 @@ def main() -> int:
             if j is not None:
                 j.append(j.resolve_lane_dir(root), "command-guard", "allow",
                          f"ack-irreversible-task:{name or 'dangerous-command'}",
-                         session_id=os.environ.get("PLAYBOOK_SESSION_ID", ""),
+                         session_id=_journal_session_id(),
                          tool=payload.get("tool_name", ""), command=shown)
         except Exception:
             pass
@@ -1423,7 +1455,7 @@ def main() -> int:
         if j is not None:
             j.append(j.resolve_lane_dir(root), "command-guard", "block",
                      name or "dangerous-command",
-                     session_id=os.environ.get("PLAYBOOK_SESSION_ID", ""),
+                     session_id=_journal_session_id(),
                      tool=payload.get("tool_name", ""), command=shown)
     except Exception:
         pass

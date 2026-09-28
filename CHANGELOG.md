@@ -11,6 +11,7 @@ Task 096: PLAN S10 (CI + docs correspondence).
 Task 099: two detect-verify doc sentences left wrong at 098's close corrected.
 Task 100: PLAN S8 — the guarantee ledger's binding audit (every cited proof read against its statement) plus the two defects it surfaced.
 Task 105: session identity under Claude Code's background daemon.
+Task 106: a stale `PLAYBOOK_SESSION_ID` (a resumed conversation's dead `pid-N`) is ignored.
 Each fix was written against a test that failed first.
 
 ### Added
@@ -90,6 +91,30 @@ Each fix was written against a test that failed first.
   the same CI-wait pattern.
 
 ### Fixed
+
+- **A stale `PLAYBOOK_SESSION_ID` no longer splits the CLI from the hooks** (task 106). A resumed Claude Code
+  conversation re-sources its OLD session-start env file, and a child `claude` inherits its parent's environment,
+  so Bash commands could carry `PLAYBOOK_SESSION_ID=pid-N` for a process that is gone (measured: `pid-187021`
+  while the live claude was 5459) — the hooks walked to the live claude while the CLI used the dead id, and
+  `tasks blocked` answered "No active task to block" with a task active. Both resolvers now honor a `pid-<digits>`
+  env id only while process N is alive (not a zombie), its comm is an agent (claude*, codex, agy, grok, pi) and
+  it is not one of the daemon's processes, and either the process-tree walk finds no agent (daemon-only, a plain
+  terminal — N need not be an ancestor) or N is one of the agents it found (so `pid-<codex>` from `playbook-codex`
+  run inside a claude stays codex's). An id naming a live agent outside the walked chain — inherited from a live
+  sibling — loses to the child's own session, so its hooks and its CLI agree. SessionStart exports the id its
+  hooks will use: a dead or sibling id inherited from the launcher is no longer re-exported (the second
+  propagation path measured: a `claude --bg` had re-exported its launcher's dead id), and an inherited
+  `pid-<digits>` is dropped outright when the walk finds no agent; non-pid ids (`judge`, a subagent's id) are
+  exported as before. When `PLAYBOOK_SESSION_ID` is set in its environment, the destructive-command guard
+  follows the id the resolver reaches before an irreversible task can acknowledge a dangerous command (a normal
+  session's hooks carry no such variable, so there the acknowledgement does not fire — a pre-existing limit). Otherwise the id is ignored in favor of the process-tree walk and
+  the CLI prints one line: `playbook: ignoring stale PLAYBOOK_SESSION_ID=pid-N (…); using pid-M`. Other ids
+  (`judge`, `pid-win-fallback`, non-numeric names) and Windows are unchanged; the task-gate-hook injection of the
+  id into `tasks` commands stays, now redundant for this case. Limits (ledger `PB-SESSION-ID`): a live agent's id
+  is still honored when the walk finds no agent at all (daemon-only, a plain terminal), and so is a pid reused by
+  an unrelated agent there; a provider installed as an interpreter shim would have comm `node`.
+  Red-first tests in `tests/test_session_stale_env_id.py`; tests that pinned a session with a made-up numeric pid
+  now use a live fake agent (`tests/_fake_agent.py`) or a non-numeric id.
 
 - **Sessions hosted by Claude Code's background daemon get one stable identity, and nothing is invented when there is none** (task 105).
   Claude Code runs background sessions under a daemon shared by every session it hosts (the hosted

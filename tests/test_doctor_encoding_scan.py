@@ -31,7 +31,7 @@ def _run_doctor(pythonpath: Path) -> str:
         (proj / ".agent" / "tasks").mkdir(parents=True)
         env = os.environ.copy()
         env["PYTHONPATH"] = str(pythonpath)
-        env["PLAYBOOK_SESSION_ID"] = "pid-999999997"
+        env["PLAYBOOK_SESSION_ID"] = "pid-encoding-test"
         r = subprocess.run(
             [sys.executable, "-m", "tasks.cli", "doctor"],
             cwd=proj, env=env, capture_output=True, text=True, timeout=120,

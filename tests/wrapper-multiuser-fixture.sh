@@ -957,10 +957,33 @@ echo "=== S18: SessionStart GC must not delete a live session (field report 2026
     # the dirs they needed, and the mutant hooks were simply gone. A killed
     # background job is a booby trap in any fixture that cleans up via EXIT.
     #
-    # Instead: our own pid, our PARENT's pid (alive for the whole run, foreign
-    # to the sweep, nothing to clean up), and a pid harvested from a process
-    # that has already exited and been reaped by the command substitution.
-    OWN="pid-$$"                       # numeric and demonstrably alive
+    # Instead: our PARENT's pid (alive for the whole run, foreign to the
+    # sweep, nothing to clean up) and a pid harvested from a process that has
+    # already exited and been reaped by the command substitution. (Since task
+    # 106 OWN is the one exception — see below.)
+    # Task 106: a `pid-<digits>` session id is honored only while it names a
+    # LIVE AGENT (comm claude*/codex/agy/grok/pi). Our own shell ($$) is alive
+    # but its comm is bash, so the resolvers would now ignore `pid-$$` and the
+    # own-session exclusion would miss. OWN is therefore a copy of `sleep`
+    # named `claude`. It IS a background job — so it drops the EXIT trap in its
+    # subshell FIRST and then execs (the exec'd binary runs no bash trap); it is
+    # killed at the end of S18.
+    S18_AGENT_DIR="$WORK/s18-agent"
+    mkdir -p "$S18_AGENT_DIR"
+    cp "$(command -v sleep)" "$S18_AGENT_DIR/claude"
+    ( trap - EXIT; exec "$S18_AGENT_DIR/claude" 600 ) &
+    S18_AGENT_PID=$!
+    OWN="pid-$S18_AGENT_PID"           # numeric, alive, and an agent
+    # Hermetic judgement (owner decision 2026-09-28): an env `pid-N` is refused
+    # when the walk finds a DIFFERENT agent root, and a run inside a real Claude
+    # Code session always walks up to that claude (CI has none). A /proc
+    # fixture listing only our agent makes the walk see no agent of its own —
+    # the same answer locally and in CI. GC liveness still uses real kill -0.
+    S18_PROC="$WORK/s18-proc"
+    mkdir -p "$S18_PROC/self" "$S18_PROC/$S18_AGENT_PID"
+    printf 'Name:\tclaude\nState:\tS (sleeping)\nPPid:\t1\n' > "$S18_PROC/$S18_AGENT_PID/status"
+    printf 'claude\0600\0' > "$S18_PROC/$S18_AGENT_PID/cmdline"
+    export PLAYBOOK_PROC_ROOT="$S18_PROC"
     OTHER="$PPID"                      # live, foreign, not a job we manage
     DEAD="$(bash -c 'echo $$')"        # exited + reaped before we look at it
     # Guard the pid-reuse window rather than trusting it: a recycled pid would
@@ -1260,7 +1283,14 @@ _gc_dead_sessions(Path(sys.argv[1]))' "$d2" 2>&1)"; pyrc=$?
     assert_eq "$(grep -c 'SESSION_ID="${PLAYBOOK_SESSION_ID:-pid-\$PPID}"' "$END_HOOK")" "0" \
         "S18/A2end no ad-hoc pid-\$PPID fallback remains in code"
 
-    # Nothing to tear down: S18 spawned no background jobs (see the note above).
+    # Tear down the one background job S18 spawns (the `claude` agent, task
+    # 106); its subshell dropped the EXIT trap before exec, so killing it cannot
+    # remove $WORK.
+    kill "$S18_AGENT_PID" 2>/dev/null || true
+    wait "$S18_AGENT_PID" 2>/dev/null || true
+    unset PLAYBOOK_PROC_ROOT
+    [ -d "$WORK" ] && pass "S18 teardown: killing the agent left \$WORK intact" \
+        || fail "S18 teardown: \$WORK vanished (EXIT trap fired in the agent job)"
 }
 
 echo

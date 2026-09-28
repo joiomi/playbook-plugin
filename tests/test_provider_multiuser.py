@@ -938,15 +938,25 @@ class TestSplitBrainEndToEnd(TempProjectCase):
         # 1. A PATH-shimmed codex, so the wrapper reaches its exec and stops.
         bin_dir = self.tmp / "bin"
         bin_dir.mkdir()
-        (bin_dir / "codex").write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+        # Task 106: the wrapper `exec`s codex, so `pid-$$` names the running
+        # codex process — and the CLI honors a `pid-<digits>` only while that
+        # agent is alive. The shim therefore STAYS alive (comm `codex`, the
+        # script's name) for the whole test, as a real codex session would.
+        (bin_dir / "codex").write_text("#!/bin/bash\nsleep 120\n", encoding="utf-8")
         (bin_dir / "codex").chmod(0o755)
         env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
 
-        wrapper = subprocess.run(
+        wrapper = subprocess.Popen(
             [str(SCRIPTS / "playbook-codex")],
-            cwd=str(project), env=env, capture_output=True, text=True,
+            cwd=str(project), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
         )
-        self.assertEqual(wrapper.returncode, 0, wrapper.stderr)
+        self.addCleanup(wrapper.wait)
+        self.addCleanup(wrapper.kill)
+        import time
+        deadline = time.time() + 30
+        while time.time() < deadline and not list((lane / "sessions").glob("pid-*")):
+            time.sleep(0.1)
+        self.assertIsNone(wrapper.poll(), "the wrapper exited before its codex ran")
 
         provisioned = sorted((lane / "sessions").glob("pid-*"))
         self.assertEqual(len(provisioned), 1, "wrapper did not provision in the lane")
@@ -957,7 +967,14 @@ class TestSplitBrainEndToEnd(TempProjectCase):
         session_id = provisioned[0].name
 
         # 2. The real tasks CLI creates and activates a task in that session.
-        cli_env = {**os.environ, "PLAYBOOK_SESSION_ID": session_id, "PYTHONPATH": str(PLUGIN)}
+        # Hermetic (tests/_fake_agent.py agent_proc_root): a /proc fixture that
+        # lists only the running codex, so the CLI judges `pid-<codex>` the same
+        # way inside a real Claude Code session and in CI.
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from tests._fake_agent import agent_proc_root
+        proc_root = agent_proc_root(self.tmp, wrapper.pid, name="codex")
+        cli_env = {**os.environ, "PLAYBOOK_SESSION_ID": session_id, "PYTHONPATH": str(PLUGIN),
+                   "PLAYBOOK_PROC_ROOT": proc_root}
         new = subprocess.run(
             [str(SCRIPTS / "tasks"), "new", "bugfix", "e2e-demo", "demo"],
             cwd=str(project), env=cli_env, capture_output=True, text=True,

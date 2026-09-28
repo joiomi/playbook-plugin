@@ -20,8 +20,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from tests._bashcheck import bash_or_skip
+from tests._fake_agent import agent_proc_root, spawn_fake_agent, stop
 import sys
 import tempfile
 import unittest
@@ -50,8 +52,19 @@ def _event_line(text="hi", typ="user") -> str:
 
 
 class HookRecordsTranscript(unittest.TestCase):
+    # Task 106: the hook honors a `pid-<digits>` only for a LIVE agent, so this
+    # class pins its session to a real process named `claude`.
+    def setUp(self):
+        self._agent_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self._agent_dir, True)
+        self._agent = spawn_fake_agent(self._agent_dir)
+        self.addCleanup(stop, self._agent)
+        self.sid = f"pid-{self._agent.pid}"
+        self._proc_root = agent_proc_root(self._agent_dir, self._agent.pid)
+
     def _run_hook(self, proj: Path, payload: dict):
-        env = dict(os.environ, PLAYBOOK_SESSION_ID=SESSION)
+        # hermetic: see tests/_fake_agent.py agent_proc_root
+        env = dict(os.environ, PLAYBOOK_SESSION_ID=self.sid, PLAYBOOK_PROC_ROOT=self._proc_root)
         return subprocess.run([bash_or_skip(), str(STATE_ECHO)],
                               input=json.dumps(payload), cwd=proj, env=env,
                               capture_output=True, text=True, timeout=60)
@@ -62,7 +75,7 @@ class HookRecordsTranscript(unittest.TestCase):
         self._run_hook(proj, {"tool_name": "Bash", "session_id": "x",
                               "transcript_path": str(tp),
                               "tool_input": {"command": "true"}})
-        ptr = proj / ".agent" / "sessions" / SESSION / "transcript_path"
+        ptr = proj / ".agent" / "sessions" / self.sid / "transcript_path"
         self.assertTrue(ptr.exists(), "hook did not record transcript_path")
         self.assertEqual(ptr.read_text(encoding="utf-8").strip(), str(tp))
 
@@ -70,7 +83,7 @@ class HookRecordsTranscript(unittest.TestCase):
         proj = _project()
         self._run_hook(proj, {"tool_name": "Bash",
                               "tool_input": {"command": "true"}})
-        ptr = proj / ".agent" / "sessions" / SESSION / "transcript_path"
+        ptr = proj / ".agent" / "sessions" / self.sid / "transcript_path"
         self.assertFalse(ptr.exists(),
                          "no transcript_path in payload must write no pointer")
 
@@ -79,7 +92,7 @@ class HookRecordsTranscript(unittest.TestCase):
         self._run_hook(proj, {"tool_name": "Bash",
                               "transcript_path": "/tmp/a\n/tmp/b",
                               "tool_input": {"command": "true"}})
-        ptr = proj / ".agent" / "sessions" / SESSION / "transcript_path"
+        ptr = proj / ".agent" / "sessions" / self.sid / "transcript_path"
         self.assertFalse(ptr.exists(), "a path with a newline must be refused")
 
 

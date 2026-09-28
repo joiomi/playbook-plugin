@@ -29,7 +29,7 @@ _TASK = "# 001 - Seed\n\n## Status\nin_progress\n\n## Intent\nx\n"
 def _run(proj: Path, *args) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(_PLAYBOOK)
-    env["PLAYBOOK_SESSION_ID"] = "pid-999999995"
+    env["PLAYBOOK_SESSION_ID"] = "pid-hints-test"
     return subprocess.run(
         [sys.executable, "-m", "tasks.cli", *args],
         cwd=proj, env=env, capture_output=True, text=True,

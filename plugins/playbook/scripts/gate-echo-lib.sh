@@ -130,6 +130,7 @@ _proc_status() {
     local f="${PLAYBOOK_PROC_ROOT:-/proc}/$1/status" line
     _PB_PPID=""
     _PB_NAME=""
+    _PB_STATE=""
     [ -r "$f" ] || return 1
     while IFS= read -r line || [ -n "$line" ]; do
         case "$line" in
@@ -138,6 +139,9 @@ _proc_status() {
                     _PB_NAME="${_PB_NAME%"${_PB_NAME##*[![:space:]]}"}" ;;
             PPid:*) _PB_PPID="${line#PPid:}"
                     _PB_PPID="${_PB_PPID//[[:space:]]/}" ;;
+            State:*) _PB_STATE="${line#State:}"
+                     _PB_STATE="${_PB_STATE#"${_PB_STATE%%[![:space:]]*}"}"
+                     _PB_STATE="${_PB_STATE:0:1}" ;;
         esac
     done < "$f" 2>/dev/null
     case "$_PB_PPID" in
@@ -196,6 +200,10 @@ _agent_walk() {
     case "$(uname -s 2>/dev/null)" in
         MINGW*|MSYS*|CYGWIN*) echo ""; return 0 ;;
     esac
+    # `_agent_walk all` prints EVERY agent pid below any daemon (bottom-up,
+    # space-separated; empty when none) instead of the root — for the env-id
+    # check (task 106), mirroring core.py _walk_agent_chain.
+    local mode="${1:-}" agents=""
     local use_proc=""
     [ -d "${PLAYBOOK_PROC_ROOT:-/proc}/self" ] && use_proc=1
     local pid=$PPID
@@ -225,7 +233,7 @@ _agent_walk() {
         if [ -z "$ppid" ] || [ -z "$comm" ]; then
             # An ancestor we cannot read, on any hop: it could be the shared
             # daemon — never fall back to a made-up pid. Mirrors core.py.
-            if [ -n "$last_agent" ]; then echo "$last_agent"; else echo "daemon"; fi
+            if [ "$mode" = all ]; then echo "${agents# }"; elif [ -n "$last_agent" ]; then echo "$last_agent"; else echo "daemon"; fi
             return 0
         fi
         comm="${comm##*/}"  # parameter expansion: strip path; safe for "-zsh" (basename would error)
@@ -236,24 +244,24 @@ _agent_walk() {
                 # An unreadable argv counts as the boundary (round-1 R1-1).
                 if [ -n "$use_proc" ]; then
                     if ! _proc_argv "$pid" || _is_daemon_argv "${_PB_ARGV[@]}"; then
-                        if [ -n "$last_agent" ]; then echo "$last_agent"; else echo "daemon"; fi
+                        if [ "$mode" = all ]; then echo "${agents# }"; elif [ -n "$last_agent" ]; then echo "$last_agent"; else echo "daemon"; fi
                         return 0
                     fi
                 else
                     args=$(_ps_field "$pid" args=)
                     if [ -z "$args" ] || _is_daemon_args "$args"; then
-                        if [ -n "$last_agent" ]; then echo "$last_agent"; else echo "daemon"; fi
+                        if [ "$mode" = all ]; then echo "${agents# }"; elif [ -n "$last_agent" ]; then echo "$last_agent"; else echo "daemon"; fi
                         return 0
                     fi
                 fi
-                last_agent=$pid ;;
-            codex|agy|grok|pi) last_agent=$pid ;;
+                last_agent=$pid; agents="$agents $pid" ;;
+            codex|agy|grok|pi) last_agent=$pid; agents="$agents $pid" ;;
         esac
         [ "$ppid" = "$pid" ] && break
         pid=$ppid
         count=$((count + 1))
     done
-    echo "$last_agent"
+    if [ "$mode" = all ]; then echo "${agents# }"; else echo "$last_agent"; fi
 }
 
 # find_agent_root_pid
@@ -268,9 +276,71 @@ find_agent_root_pid() {
     echo "$r"
 }
 
+# _env_pid_is_stale ID
+# Task 106: true when an env id `pid-<digits>` does NOT name a live agent (dead,
+# or alive with a non-agent comm) — a resumed conversation re-sources its OLD
+# env file and a child claude inherits the parent's env, so `pid-N` can name a
+# dead process. N need NOT be an ancestor. Other ids are never stale. /proc
+# status on Linux, `ps -o comm=` without /proc; no ps binary → cannot judge →
+# keep. Mirrors tasks/core.py _env_pid_is_stale (leading zeros and >10 digits
+# treated the same way).
+_env_pid_is_stale() {
+    case "$1" in
+        pid-*) ;;
+        *) return 1 ;;
+    esac
+    local n="${1#pid-}" comm
+    case "$n" in
+        ""|*[!0-9]*) return 1 ;;
+    esac
+    [ "${#n}" -le 10 ] || return 0
+    n=$((10#$n))
+    [ "$n" -gt 0 ] || return 0
+    local out stat args
+    if [ -d "${PLAYBOOK_PROC_ROOT:-/proc}/self" ]; then
+        _proc_status "$n" || return 0
+        case "$_PB_STATE" in
+            Z|X) return 0 ;;                 # zombie (round 1 R1-2)
+        esac
+        comm="${_PB_NAME##*/}"
+        case "$comm" in
+            claude*)
+                # R1-1: the daemon's processes are claude.exe too, but never a
+                # session; an unreadable argv counts as not-a-session
+                _proc_argv "$n" || return 0
+                _is_daemon_argv "${_PB_ARGV[@]}" && return 0
+                return 1 ;;
+            codex|agy|grok|pi) return 1 ;;
+        esac
+        return 0
+    fi
+    command -v ps >/dev/null 2>&1 || return 1
+    out=$(_ps_field "$n" state=,comm=)   # `state`: BSD ps + procps (task 106)
+    out="${out#"${out%%[![:space:]]*}"}"
+    stat="${out%%[[:space:]]*}"
+    comm="${out#"$stat"}"
+    comm="${comm#"${comm%%[![:space:]]*}"}"
+    comm="${comm%"${comm##*[![:space:]]}"}"
+    [ -n "$stat" ] && [ -n "$comm" ] || return 0
+    case "$stat" in
+        Z*|X*) return 0 ;;
+    esac
+    comm="${comm##*/}"
+    case "$comm" in
+        claude*)
+            args=$(_ps_field "$n" args=)
+            [ -n "$args" ] || return 0
+            _is_daemon_args "$args" && return 0
+            return 1 ;;
+        codex|agy|grok|pi) return 1 ;;
+    esac
+    return 0
+}
+
 # resolve_session_id
 # Returns the session_id used to namespace .agent/sessions/<id>/.
-# Order: PLAYBOOK_SESSION_ID env → ancestor scan (root agent PID, never a
+# Order: PLAYBOOK_SESSION_ID env (a `pid-<digits>` only if it names a live
+# agent, task 106) → ancestor scan (root agent PID, never a
 # daemon process) → "" when the scan hit the Claude Code background daemon with
 # no agent below it (task 105: unresolved — every writer must check for "" and
 # write nothing, see session_unresolved_notice) → immediate-parent PID. Mirrors
@@ -288,7 +358,40 @@ resolve_session_id() {
         case "$PLAYBOOK_SESSION_ID" in
             .|..) : ;;                       # traversal → neutralize
             *[!A-Za-z0-9._-]*) : ;;          # slash / space / control char → neutralize
-            *) echo "$PLAYBOOK_SESSION_ID"; return 0 ;;
+            *)
+                # Task 106: a `pid-<digits>` that is not a live agent is stale —
+                # fall through to the walk (silently here; the Python CLI prints
+                # the one line). Windows is untouched (MSYS pids are not probed).
+                case "${OSTYPE:-}$(uname -s 2>/dev/null)" in
+                    msys*|cygwin*|*MINGW*|*MSYS*|*CYGWIN*)
+                        echo "$PLAYBOOK_SESSION_ID"; return 0 ;;
+                esac
+                if ! _env_pid_is_stale "$PLAYBOOK_SESSION_ID"; then
+                    # Owner-accepted deviation 2026-09-28: a live agent's
+                    # `pid-N` is refused when the walk finds agents and N is
+                    # not one of them (an id inherited from a live sibling);
+                    # honored when N is any agent in the chain (codex run from
+                    # a claude's Bash) or there is none. Mirrors core.py
+                    # _env_pid_rejection.
+                    local _pb_w _pb_n="${PLAYBOOK_SESSION_ID#pid-}"
+                    case "$PLAYBOOK_SESSION_ID" in
+                        pid-*) ;;
+                        *) echo "$PLAYBOOK_SESSION_ID"; return 0 ;;      # not a pid id
+                    esac
+                    case "$_pb_n" in
+                        ""|*[!0-9]*) echo "$PLAYBOOK_SESSION_ID"; return 0 ;;
+                    esac
+                    _pb_w=$(_agent_walk all)
+                    if [ -z "$_pb_w" ]; then
+                        echo "$PLAYBOOK_SESSION_ID"; return 0
+                    fi
+                    if [ "${#_pb_n}" -le 10 ]; then
+                        _pb_n=$((10#$_pb_n))
+                        case " $_pb_w " in
+                            *" $_pb_n "*) echo "$PLAYBOOK_SESSION_ID"; return 0 ;;
+                        esac
+                    fi
+                fi ;;
         esac
     fi
     # Windows/MSYS: a PID fallback split-brains — this shell sees MSYS PIDs

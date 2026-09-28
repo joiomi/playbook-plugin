@@ -19,6 +19,7 @@ import json
 import os
 import subprocess
 from tests._bashcheck import bash_or_skip
+from tests._fake_agent import agent_proc_root, spawn_fake_agent, stop
 import sys
 import tempfile
 import unittest
@@ -63,7 +64,23 @@ class SessionIdResolverUnit(unittest.TestCase):
         self.assertNotIn("/", sid)
 
     def test_valid_pid_id_passes(self):
-        self.assertEqual(self._resolve("pid-12345"), "pid-12345")
+        # Task 106: a `pid-<digits>` passes only when it names a live agent, so
+        # the id is a real process named `claude` (a made-up pid is now stale).
+        # Hermetic (see tests/_fake_agent.py agent_proc_root): the walk sees no
+        # agent of its own, locally and in CI alike.
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            agent = spawn_fake_agent(d)
+            try:
+                sid = f"pid-{agent.pid}"
+                with mock.patch.dict(os.environ, {"PLAYBOOK_PROC_ROOT": agent_proc_root(d, agent.pid)}):
+                    core._walk_agent_ancestry.cache_clear()
+                    try:
+                        self.assertEqual(self._resolve(sid), sid)
+                    finally:
+                        core._walk_agent_ancestry.cache_clear()
+            finally:
+                stop(agent)
 
     def test_judge_session_id_passes(self):
         # Sanctioned special value — review.py sets it, task-gate keys on it.
@@ -84,9 +101,10 @@ class SessionEndHookIntegration(unittest.TestCase):
         # exactly the shape the report's repro had.
         (self.project / ".agent" / "sessions").mkdir(parents=True)
 
-    def _run_hook(self, session_id, reason="logout"):
+    def _run_hook(self, session_id, reason="logout", **extra):
         env = dict(os.environ)
         env["PLAYBOOK_SESSION_ID"] = session_id
+        env.update(extra)
         env["PATH"] = os.environ.get("PATH", "")
         return subprocess.run(
             [bash_or_skip(), str(SCRIPTS / "session-end-hook")],
@@ -106,10 +124,16 @@ class SessionEndHookIntegration(unittest.TestCase):
     def test_valid_session_dir_still_cleaned_on_logout(self):
         # Negative control: a legitimate session dir IS removed on a terminal
         # reason — the sanitization must not break normal cleanup.
-        sess = self.project / ".agent" / "sessions" / "pid-99999"
+        # Task 106: the id must name a live agent to be honored (see
+        # tests/_fake_agent.py); a made-up pid would now be ignored as stale.
+        agent = spawn_fake_agent(self._tmp.name)
+        self.addCleanup(stop, agent)
+        sid = f"pid-{agent.pid}"
+        sess = self.project / ".agent" / "sessions" / sid
         sess.mkdir(parents=True)
         (sess / "current_state").write_text("001\n", encoding="utf-8")
-        self._run_hook("pid-99999", reason="logout")
+        self._run_hook(sid, reason="logout",
+                       PLAYBOOK_PROC_ROOT=agent_proc_root(self._tmp.name, agent.pid))
         self.assertFalse(sess.exists(),
                          "valid session dir was not cleaned up on logout")
 

@@ -109,6 +109,11 @@ def _proc_argv(root: str, pid: int) -> list[str]:
     return [x.decode("utf-8", errors="replace") for x in parts]
 
 
+# `state` (not procps' `stat`): the keyword BSD ps (macOS, the only platform
+# that takes the ps fallback) and procps both accept; first char Z/X = zombie
+# (task 106 single judge run 4). gate-echo-lib.sh uses the same keywords.
+_PS_LIVENESS_FIELDS = "state=,comm="
+
 # Generous on purpose: bash `ps` has no deadline and waits, so any SHORT python
 # deadline made the two resolvers stop on different hops and name different
 # sessions (post-D6 single judge, runs 2 and 3). A probe that misses even this
@@ -141,6 +146,16 @@ def _ps_field(pid: int, fields: str) -> str | None:
 
 
 @functools.lru_cache(maxsize=1)
+def _walk_agent_chain() -> tuple[tuple[int, ...], bool]:
+    """Walk the parent tree once: (every agent pid BELOW any daemon, bottom-up;
+    stopped). The single cached walk; _walk_agent_ancestry derives the root."""
+    if sys.platform == "win32" or os.name == "nt":
+        return (), False
+    agents: list[int] = []
+    _, stopped = _walk_from(os.getppid(), agents)
+    return tuple(agents), stopped
+
+
 def _walk_agent_ancestry() -> tuple[int | None, bool]:
     """Walk the parent tree once: (highest agent pid BELOW any daemon, stopped).
 
@@ -156,10 +171,15 @@ def _walk_agent_ancestry() -> tuple[int | None, bool]:
     # resolve_session_id() lean on PLAYBOOK_SESSION_ID. POSIX is untouched.
     if sys.platform == "win32" or os.name == "nt":
         return None, False
-    return _walk_from(os.getppid())
+    chain, stopped = _walk_agent_chain()
+    return (chain[-1] if chain else None), stopped
 
 
-def _walk_from(pid: int) -> tuple[int | None, bool]:
+# One cache for both views of the walk (tests and doctor clear it by this name).
+_walk_agent_ancestry.cache_clear = _walk_agent_chain.cache_clear  # type: ignore[attr-defined]
+
+
+def _walk_from(pid: int, agents: "list[int] | None" = None) -> tuple[int | None, bool]:
     """The walk behind _walk_agent_ancestry, from `pid` upward.
 
     Linux (owner decision 2026-09-28): `/proc/<pid>/status` (Name:, PPid:) and
@@ -208,6 +228,8 @@ def _walk_from(pid: int) -> tuple[int | None, bool]:
                     return last_agent_pid, True
         if _is_agent_comm(comm):
             last_agent_pid = pid
+            if agents is not None:
+                agents.append(pid)
         if ppid == pid:
             break
         pid = ppid
@@ -250,10 +272,141 @@ def _sanitize_session_id(sid: str) -> str:
     return sid if _SESSION_ID_RE.fullmatch(sid) else ""
 
 
-def resolve_session_id() -> str:
+_PID_ID_RE = re.compile(r"pid-([0-9]+)")
+
+
+def _env_pid_is_stale(sid: str) -> bool:
+    """Task 106: True when an env id `pid-<digits>` does NOT name a live agent.
+
+    A resumed conversation re-sources its OLD session-start env file, and a
+    child `claude` inherits the parent's environment, so the env can carry
+    `pid-N` for a process that is dead (measured 2026-09-28: pid-187021 while
+    the live claude was 5459). The id is honored only if N is alive and its
+    comm is an agent (_is_agent_comm). N need NOT be an ancestor (owner rule:
+    under the daemon the hosted session is not one). Other ids are never
+    stale. Reads /proc/<N>/status on Linux, `ps -o comm=` without /proc; with
+    no `ps` binary at all it cannot judge and keeps the id. Windows never
+    reaches here. Mirrors gate-echo-lib.sh `_env_pid_is_stale`.
+    """
+    m = _PID_ID_RE.fullmatch(sid)
+    if not m:
+        return False
+    if len(m.group(1)) > 10:
+        return True                      # no such pid (bash parity: no overflow)
+    pid = int(m.group(1))
+    if pid <= 0:
+        return True
+    root = _proc_root()
+    if os.path.isdir(os.path.join(root, "self")):
+        st = _proc_status(root, pid)
+        if st is None or _proc_state(root, pid) in ("Z", "X"):
+            return True                  # no such process, or a zombie (R1-2)
+        comm = os.path.basename(st[1])
+        if not _is_agent_comm(comm):
+            return True
+        if comm.startswith("claude"):
+            # R1-1: the daemon's processes are claude.exe too, but never a
+            # session; an unreadable argv counts as not-a-session (as in the walk)
+            argv = _proc_argv(root, pid)
+            return not argv or _is_daemon_argv(argv)
+        return False
+    out = _ps_probe(pid, _PS_LIVENESS_FIELDS)
+    if out is None:
+        return False                     # no ps binary, or a timeout: cannot judge (R1-4)
+    parts = out.split(None, 1)
+    if len(parts) < 2:
+        return True                      # no such process
+    if parts[0].startswith(("Z", "X")):
+        return True                      # zombie (R1-2)
+    comm = os.path.basename(parts[1].strip())
+    if not _is_agent_comm(comm):
+        return True
+    if comm.startswith("claude"):
+        # Round 2: an argv we cannot read — even by a deadline miss — counts as
+        # not-a-session for a `claude*` N (the daemon's processes are claude.exe
+        # too), exactly as the walk treats it; "cannot judge, keep" here let a
+        # daemon pid through.
+        args = _ps_probe(pid, "args=")
+        return not args or _is_daemon_args(args)
+    return False
+
+
+def _proc_state(root: str, pid: int) -> str:
+    """The one-letter `State:` of `<root>/<pid>/status` ("" if unreadable)."""
+    try:
+        with open(os.path.join(root, str(pid), "status"), encoding="utf-8",
+                  errors="replace") as fh:
+            for line in fh:
+                if line.startswith("State:"):
+                    return line[6:].strip()[:1]
+    except OSError:
+        pass
+    return ""
+
+
+def _ps_probe(pid: int, fields: str) -> str | None:
+    """Like _ps_field for the env-id check, but None when it CANNOT JUDGE — no
+    `ps` binary, or a deadline miss (bash `ps` has no deadline and would still
+    answer: treating a timeout as "dead" split the two resolvers, round 1
+    R1-4). "" only for a successful empty read (no such process)."""
+    completed = False
+    for _ in range(2):
+        try:
+            r = subprocess.run(["ps", "-ww", "-p", str(pid), "-o", fields],
+                               capture_output=True, text=True, errors="replace",
+                               timeout=_PS_DEADLINE_S)
+        except FileNotFoundError:
+            return None
+        except subprocess.TimeoutExpired:
+            continue
+        except OSError:
+            continue
+        completed = True
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    # A COMPLETED empty read (ps answered: no such process) is "" even if an
+    # earlier attempt timed out — bash reads the same answer as stale (single
+    # judge run 3). None only when no attempt completed.
+    return "" if completed else None
+
+
+def _env_pid_rejection(sid: str) -> str | None:
+    """Why an env `pid-<digits>` must NOT be used as this process's session,
+    or None when it may be. Other ids are never rejected here.
+
+    Rejected when N is not a live agent (_env_pid_is_stale), or when the walk
+    finds agents and N is NOT one of them (owner-accepted deviation 2026-09-28:
+    a child claude that inherited a live SIBLING's id resolves to its own
+    session, so its hooks and its CLI agree). Honored when N is any agent in
+    the walked chain — e.g. `playbook-codex` run from a claude's Bash exports
+    pid-<codex>, and the higher claude must not override it (that split the
+    CLI from the codex hooks) — or when the walk finds no agent at all
+    (daemon-only, a plain terminal). Mirrors gate-echo-lib.sh's env arm.
+    """
+    m = _PID_ID_RE.fullmatch(sid)
+    if not m:
+        return None
+    if _env_pid_is_stale(sid):
+        return f"process {m.group(1)} is not a live agent"
+    chain, _ = _walk_agent_chain()
+    if chain and int(m.group(1)) not in chain:
+        return f"not this session: the process tree's agent is pid-{chain[-1]}"
+    return None
+
+
+@functools.lru_cache(maxsize=None)
+def _warn_stale_env_id_once(stale: str, used: str, reason: str) -> None:
+    """The one stderr line the CLI prints when it ignores an env id."""
+    shown = used or "no session identity (see the next line)"
+    print(f"playbook: ignoring stale PLAYBOOK_SESSION_ID={stale} ({reason}); "
+          f"using {shown}", file=sys.stderr)
+
+
+def resolve_session_id(quiet: bool = False) -> str:
     """Resolve session_id used to namespace .agent/sessions/<id>/.
 
-    Order: PLAYBOOK_SESSION_ID env (sanitized) → ancestor scan (root agent PID,
+    Order: PLAYBOOK_SESSION_ID env (sanitized; a `pid-<digits>` value only if
+    it names a live agent — task 106) → ancestor scan (root agent PID,
     never a daemon process) → "" when the scan hit the Claude Code background
     daemon with no agent below it (task 105: unresolved — writers refuse) →
     immediate-parent PID. The ancestor scan is the robust path: it survives
@@ -262,27 +415,34 @@ def resolve_session_id() -> str:
     sanitization — in gate-echo-lib.sh.
     """
     sid = _sanitize_session_id(os.environ.get("PLAYBOOK_SESSION_ID", ""))
-    if sid:
+    windows = sys.platform == "win32" or os.name == "nt"
+    reason = None if (not sid or windows) else _env_pid_rejection(sid)
+    if sid and reason is None:
         return sid
+    stale = sid                     # "" when there was no (usable) env id
     # On Windows the ancestor scan is skipped (see find_agent_root_pid) and a
     # PID fallback would split-brain: the Python CLI sees native-Windows PIDs
     # while the bash hooks see MSYS PIDs — disjoint namespaces, so the CLI
     # would write .agent/sessions/pid-A/ and the gate hook read pid-B/,
     # silently disabling gate enforcement. Fall back to a constant shared
     # verbatim with gate-echo-lib.sh resolve_session_id so both converge.
-    if sys.platform == "win32" or os.name == "nt":
+    if windows:
         _warn_windows_session_id_once()
         return "pid-win-fallback"
     agent_pid, under_daemon = _walk_agent_ancestry()
     if agent_pid is not None:
-        return f"pid-{agent_pid}"
-    if under_daemon:
+        used = f"pid-{agent_pid}"
+    elif under_daemon:
         # Task 105: under the shared background daemon the parent pid is a
         # per-command process — inventing `pid-<ppid>` minted a dead session
         # per call. Unresolved: callers must write nothing (see
         # SESSION_UNRESOLVED_MESSAGE / require_session_id).
-        return ""
-    return f"pid-{os.getppid()}"
+        used = ""
+    else:
+        used = f"pid-{os.getppid()}"
+    if stale and not quiet:
+        _warn_stale_env_id_once(stale, used, reason or "rejected")
+    return used
 
 
 def require_session_id() -> str:

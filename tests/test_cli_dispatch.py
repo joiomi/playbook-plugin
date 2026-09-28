@@ -144,7 +144,7 @@ class DispatchLiveSmoke(unittest.TestCase):
                 env["PATH"] = "/usr/bin:/bin"
             # Pin the session id so arms that write session state stay inside
             # the scratch dir deterministically.
-            env["PLAYBOOK_SESSION_ID"] = "pid-999999999"
+            env["PLAYBOOK_SESSION_ID"] = "pid-dispatch-test"
             return subprocess.run(
                 [sys.executable, "-m", "tasks.cli", cmd],
                 cwd=proj, env=env, capture_output=True, text=True, timeout=120,

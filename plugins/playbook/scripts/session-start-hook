@@ -28,7 +28,31 @@ source "$HOOK_DIR/gate-echo-lib.sh"
 # Same value as pid-$PPID at session-start (claude is direct parent), but
 # consistent with all other hooks — no drift risk.
 INPUT=$(cat)
+# Task 106 (owner decision 2026-09-28): an INHERITED `pid-<digits>` is never
+# this new session's id — a child claude inherits its launcher's environment
+# (measured: a `claude --bg` re-exported a dead parent id into its own env
+# file), so resolve it from the walk alone, with the variable unset. Explicit
+# non-pid ids (`judge`, a subagent's uuid) are exported as before. Windows is
+# untouched (MSYS: no walk).
+#
+# Round 2: the export must be the id this session's HOOKS will use — they see
+# the inherited value, not the env file. So the shared resolver decides (an
+# inherited id naming an agent IN this process chain is kept, e.g. a claude
+# started from a codex started from a claude; a dead or sibling id loses to the
+# walk), and only when the walk finds no agent at all is an inherited
+# `pid-<digits>` dropped (resolved with the variable unset → no export, 105).
 SESSION_ID="$(resolve_session_id)"
+case "${OSTYPE:-}$(uname -s 2>/dev/null)" in
+    msys*|cygwin*|*MINGW*|*MSYS*|*CYGWIN*) : ;;
+    *)
+        case "${PLAYBOOK_SESSION_ID:-}" in
+            pid-*[!0-9]*|pid-|"") : ;;
+            pid-*)
+                if [ -z "$(_agent_walk all)" ]; then
+                    SESSION_ID="$(PLAYBOOK_SESSION_ID= resolve_session_id)"
+                fi ;;
+        esac ;;
+esac
 
 # Task 105: unresolved (under the Claude Code background daemon, no
 # PLAYBOOK_SESSION_ID) — export nothing and provision no directory below; the
@@ -124,8 +148,9 @@ print(t if isinstance(t, str) and t and '\n' not in t and '\r' not in t else '')
             [ -d "$d" ] || continue      # stray files, and the unmatched-glob literal
             name="${d##*/}"              # no basename fork — runs at every session start
 
-            # (1) Never sweep our own session.
-            [ "$name" = "$SESSION_ID" ] && continue
+            # (1) Never sweep our own session. Only when there IS one: with an
+            # unresolved id (task 105/106) an empty name must not match "".
+            [ -n "$SESSION_ID" ] && [ "$name" = "$SESSION_ID" ] && continue
 
             case "$name" in
                 pid-*)

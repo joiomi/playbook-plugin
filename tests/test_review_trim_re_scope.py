@@ -50,7 +50,7 @@ class TrimmedContextDoesNotCrash(unittest.TestCase):
         self.env = os.environ.copy()
         self.env["PYTHONPATH"] = str(_PLAYBOOK)
         self.env["PATH"] = str(empty_bin)  # no judge CLI resolvable
-        self.env["PLAYBOOK_SESSION_ID"] = "pid-999999998"
+        self.env["PLAYBOOK_SESSION_ID"] = "pid-trim-test"
 
     def tearDown(self):
         self._tmp.cleanup()

@@ -105,6 +105,9 @@ FAKE_PS = textwrap.dedent('''\
         if not os.path.exists(flag):
             open(flag, "w").close()
             sys.exit(1)
+    # Task 106: pids listed here do not exist (ps answers nothing, exit 1).
+    if pid in os.environ.get("FAKE_PS_DEAD", "").split(","):
+        sys.exit(1)
     # Round-2: every query about this pid fails ("*" = ps unusable for all).
     fail_all = os.environ.get("FAKE_PS_FAIL_ALL", "")
     if fail_all == "*" or pid in fail_all.split(","):
@@ -118,6 +121,9 @@ FAKE_PS = textwrap.dedent('''\
         sys.stdout.buffer.write(b"claude \\xff--x\\n")
         sys.exit(0)
     row = rows.get(pid) or {"pid": pid, "ppid": root or "1", "comm": "bash", "args": "bash"}
+    # Task 106: `stat` — Z for the pids in FAKE_PS_ZOMBIE, S otherwise.
+    zst = "Z" if pid in os.environ.get("FAKE_PS_ZOMBIE", "").split(",") else "S"
+    row = dict(row, stat=zst, state=zst)
     out = " ".join(row[f] for f in fields)
     # Round-1 R1-3: procps clips the line to $COLUMNS even on a pipe unless -ww.
     cols = os.environ.get("COLUMNS", "")
@@ -137,7 +143,7 @@ def _argv(ca):
     return list(ca[2]) if len(ca) > 2 else ca[1].split()
 
 
-def write_proc_tree(root, rows, *, omit_status=(), omit_cmdline=(), raw_cmdline=None):
+def write_proc_tree(root, rows, *, omit_status=(), omit_cmdline=(), raw_cmdline=None, zombie=()):
     """A /proc fixture: `<pid>/status` (Name:, PPid:) + `<pid>/cmdline` (NUL-
     separated argv) per row, `self/` so the resolvers take the /proc path, and
     the REAL parent of every subprocess (this test process) as a `bash` whose
@@ -153,7 +159,8 @@ def write_proc_tree(root, rows, *, omit_status=(), omit_cmdline=(), raw_cmdline=
         d = root / str(pid)
         d.mkdir(exist_ok=True)
         if pid not in omit_status:
-            (d / "status").write_text(f"Name:\t{ca[0]}\nUmask:\t0002\nState:\tS (sleeping)\n"
+            state = "Z (zombie)" if pid in zombie else "S (sleeping)"
+            (d / "status").write_text(f"Name:\t{ca[0]}\nUmask:\t0002\nState:\t{state}\n"
                                       f"PPid:\t{ppid}\n", encoding="utf-8")
         if pid in raw_cmdline:
             (d / "cmdline").write_bytes(raw_cmdline[pid])
@@ -393,7 +400,9 @@ class ResolverParity(_FakePsMixin):
                                      f"{name!r}: a daemon process became the session root")
 
     def test_env_is_the_only_identity_under_the_daemon(self):
-        self.set_tree(VECTORS["daemon only (pty host → daemon)"][0])
+        # Task 106: an env `pid-<digits>` must name a LIVE AGENT to be honored,
+        # so the fixture now carries pid 777 as a (non-ancestor) claude.
+        self.set_tree(VECTORS["daemon only (pty host → daemon)"][0] + [(777, 1, TERMINAL)])
         self.assertEqual(self.py_resolve(PLAYBOOK_SESSION_ID="pid-777"), "pid-777")
         self.assertEqual(self.bash_resolve(PLAYBOOK_SESSION_ID="pid-777"), "pid-777")
 

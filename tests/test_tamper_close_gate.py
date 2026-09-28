@@ -156,7 +156,7 @@ class ClosePath(unittest.TestCase):
         (td / "task.md").write_text(
             f"# 001 - T\n\n## Status\npending\n\n## Risk\n{risk}\n\n## Work Plan\n- [x] G1: do it\n",
             encoding="utf-8")
-        env = dict(os.environ, PYTHONPATH=str(PLUGIN), PLAYBOOK_SESSION_ID="pid-059")
+        env = dict(os.environ, PYTHONPATH=str(PLUGIN), PLAYBOOK_SESSION_ID="pid-t059")
         r = subprocess.run([sys.executable, "-m", "tasks.cli", "work", "1"],
                            cwd=d, env=env, capture_output=True, text=True, timeout=60)
         assert r.returncode == 0, r.stderr
