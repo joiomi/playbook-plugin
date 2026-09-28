@@ -303,7 +303,13 @@ class RealPsLivenessProbe(unittest.TestCase):
 
 class CommandGuardIgnoresAStaleId(unittest.TestCase):
     """R1-3: the destructive-command guard must not let a stale (dead) session
-    id's in_progress irreversible task acknowledge a dangerous command."""
+    id's in_progress irreversible task acknowledge a dangerous command.
+    POSIX only: on Windows the guard keeps the raw env id by design (the
+    resolvers judge no id there — owner rule "Windows untouched")."""
+
+    def setUp(self):
+        if os.name == "nt":
+            self.skipTest("Windows: the guard keeps the raw env id (no id is judged there)")
 
     def test_dead_id_does_not_acknowledge(self):
         import json, shutil, tempfile
