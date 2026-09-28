@@ -72,6 +72,14 @@ case "$END_REASON" in
         exit 0 ;;               # clear, resume, unknown, unparseable — KEEP
 esac
 
+# Task 105: unresolved (under the Claude Code background daemon, no
+# PLAYBOOK_SESSION_ID). `sessions/` + "" is the sessions dir ITSELF — the rm
+# below would delete every session's pointer. Nothing to clean: exit.
+if [ -z "$SESSION_ID" ]; then
+    session_unresolved_notice
+    exit 0
+fi
+
 # Remove entire session directory (state + counters + offset)
 SESSION_DIR="$AGENT_DIR/sessions/$SESSION_ID"
 rm -rf "$SESSION_DIR"

@@ -21,6 +21,11 @@ from tasks.core import resolve_agent_dir, resolve_session_id
 # so the sweep must never reclaim one there (see _session_is_dead). Computed once.
 _ON_WINDOWS = os.name == "nt"
 
+# Names of the dead session dirs _gc_dead_sessions removed in THIS process, so
+# `tasks doctor` (which runs after the CLI-entry sweep) can report them instead
+# of always reading "clean" (task 105).
+RECLAIMED_SESSIONS: list[str] = []
+
 
 def find_project_root() -> Path:
     """Find project root by looking for the nearest .agent/tasks/ directory."""
@@ -112,7 +117,7 @@ def _session_is_dead(session_dir: Path, own_session: str, cutoff: float) -> bool
     return True
 
 
-def _gc_dead_sessions(project_path: Path) -> None:
+def _gc_dead_sessions(project_path: Path) -> list[str]:
     """Remove dead session dirs and legacy flat files.
 
     Called at every tasks invocation. Cheap: O(N sessions × 1 stat).
@@ -132,6 +137,9 @@ def _gc_dead_sessions(project_path: Path) -> None:
 
     Legacy flat files (.hook_counters.*, current_state*) in .agent/ root
     are always removed — they're pre-migration artifacts.
+
+    Returns the names of the session dirs actually removed (also recorded in
+    RECLAIMED_SESSIONS for `tasks doctor`, task 105).
     """
     agent_dir = resolve_agent_dir(project_path)
     sessions_dir = agent_dir / "sessions"
@@ -146,8 +154,9 @@ def _gc_dead_sessions(project_path: Path) -> None:
                     pass
 
     # Clean dead session dirs (see _session_is_dead)
+    reclaimed: list[str] = []
     if not sessions_dir.exists():
-        return
+        return reclaimed
     cutoff = time.time() - 86400
     own_session = _own_session_id()
     for session_dir in sessions_dir.iterdir():
@@ -158,6 +167,10 @@ def _gc_dead_sessions(project_path: Path) -> None:
             continue
         if _session_is_dead(session_dir, own_session, cutoff):
             shutil.rmtree(session_dir, ignore_errors=True)
+            if not session_dir.exists():
+                reclaimed.append(session_dir.name)
+    RECLAIMED_SESSIONS.extend(reclaimed)
+    return reclaimed
 
 
 def _merge_verify_module():

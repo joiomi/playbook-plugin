@@ -172,13 +172,22 @@ SESSION_ID="$(resolve_session_id)"
 
 SESSION_DIR="$AGENT_DIR/sessions/$SESSION_ID"
 STATE_FILE="$SESSION_DIR/current_state"
+# Task 105: unresolved (under the Claude Code background daemon, no
+# PLAYBOOK_SESSION_ID) — there is no session to read or create. An empty
+# STATE_FILE reads as "no active task" below (fail-closed for code edits), and
+# no directory is made: `sessions/` + "" would be the sessions dir itself.
+if [ -z "$SESSION_ID" ]; then
+    session_unresolved_notice
+    SESSION_DIR=""
+    STATE_FILE=""
+fi
 # Fresh-clone shape: AGENT_DIR is the shared root and creating the session dir
 # there mints a phantom lane. Skip the mkdir — STATE_FILE then simply doesn't
 # exist, which the guards below already read as "no active task" (fail-closed,
 # the correct answer when we cannot tell whose lane this is). Never exit here:
 # a hook that aborts takes the whole session down.
 PB_FRESH_CLONE_LANES="$(lanes_without_marker "$PROJECT_DIR")"
-if [ -z "$PB_FRESH_CLONE_LANES" ]; then
+if [ -z "$PB_FRESH_CLONE_LANES" ] && [ -n "$SESSION_DIR" ]; then
     # NEW-2: guard the mkdir — under `set -e` an unwritable/full (ENOSPC,
     # read-only, wrong-perms) sessions dir made this abort with exit 1, a
     # NON-blocking code, so the ENFORCING gate stopped enforcing globally

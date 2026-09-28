@@ -69,36 +69,185 @@ find_project_root() {
     return 0  # "not found" communicated via empty output, not exit code (set -e safe)
 }
 
-# find_agent_root_pid
-# Walk parent process tree. Output PID of the highest ancestor whose
-# `comm` is claude/codex/agy/pi, or empty if none found within 20 hops.
-# Mirrors `find_agent_root_pid()` in src/tasks/core.py — both walk the
-# same `ps` tree and converge on the same PID. Used as fallback when
-# PLAYBOOK_SESSION_ID env var isn't propagated.
-find_agent_root_pid() {
+# SESSION_UNRESOLVED_MESSAGE — the one stderr line every writer prints when the
+# session id is unresolved (task 105). Verbatim copy of
+# tasks/core.py SESSION_UNRESOLVED_MESSAGE.
+SESSION_UNRESOLVED_MESSAGE="playbook: no session identity — PLAYBOOK_SESSION_ID is not set and the process-tree walk either reached the Claude Code background daemon (bg-pty-host) or could not read an ancestor process with ps; no session state was written."
+
+session_unresolved_notice() {
+    echo "$SESSION_UNRESOLVED_MESSAGE" >&2
+}
+
+# _is_daemon_argv ARGV...
+# True when the EXACT argv (one positional parameter per argument) is a Claude
+# Code background-daemon process: basename(argv[0]) is claude/claude.exe and
+# argv[1] is bg-pty-host/--bg-pty-host, or argv[1..2] is `daemon run` (owner
+# decision 2026-09-28), applied to basename(argv[0])'s words + argv[1..] because
+# the pty host rewrites its title into argv[0] ("claude bg-pty-host", measured
+# live). The shared pty host / daemon is never a session root.
+# Mirrors tasks/core.py _is_daemon_argv.
+_is_daemon_argv() {
+    [ "$#" -ge 1 ] || return 1
+    # Live 2026-09-28: the pty host / spare rewrite their title, so argv[0] is
+    # ONE argument "claude bg-pty-host". Split basename(argv[0]) on whitespace
+    # and put its words in front of argv[1..] (mirrors core.py).
+    local b0="${1##*/}"
+    b0="${b0//$'\n'/ }"      # \n and \r split words like str.split() (post-D6)
+    b0="${b0//$'\r'/ }"
+    local -a head=()
+    read -r -a head <<< "$b0" || true
+    shift
+    [ "${#head[@]}" -gt 0 ] || return 1
+    set -- "${head[@]}" "$@"
+    [ "$#" -ge 2 ] || return 1
+    [ "$1" = "claude" ] || [ "$1" = "claude.exe" ] || return 1
+    case "$2" in
+        bg-pty-host|--bg-pty-host) return 0 ;;
+    esac
+    [ "$2" = "daemon" ] && [ "${3:-}" = "run" ] && return 0
+    return 1
+}
+
+# _is_daemon_args LINE
+# The `ps` fallback (no /proc — macOS): the flattened `ps -o args=` line split
+# on whitespace and fed to the SAME detector. \n and \r become spaces first so
+# the split equals Python's str.split(). HEURISTIC by construction (an argv[0]
+# with spaces cannot be told from argument boundaries) — a declared macOS
+# limitation; no parsing rules are added here (owner decision 2026-09-28).
+_is_daemon_args() {
+    local a="$1"
+    a="${a//$'\n'/ }"
+    a="${a//$'\r'/ }"
+    local -a toks=()
+    read -r -a toks <<< "$a" || true
+    [ "${#toks[@]}" -gt 0 ] || return 1
+    _is_daemon_argv "${toks[@]}"
+}
+
+# _proc_status PID  — sets _PB_PPID / _PB_NAME from <proc root>/PID/status
+# (Name:, PPid:); returns 1 when unreadable. Test seam: PLAYBOOK_PROC_ROOT.
+_proc_status() {
+    local f="${PLAYBOOK_PROC_ROOT:-/proc}/$1/status" line
+    _PB_PPID=""
+    _PB_NAME=""
+    [ -r "$f" ] || return 1
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in
+            Name:*) _PB_NAME="${line#Name:}"
+                    _PB_NAME="${_PB_NAME#"${_PB_NAME%%[![:space:]]*}"}"
+                    _PB_NAME="${_PB_NAME%"${_PB_NAME##*[![:space:]]}"}" ;;
+            PPid:*) _PB_PPID="${line#PPid:}"
+                    _PB_PPID="${_PB_PPID//[[:space:]]/}" ;;
+        esac
+    done < "$f" 2>/dev/null
+    case "$_PB_PPID" in
+        ""|*[!0-9]*) return 1 ;;
+    esac
+    [ -n "$_PB_NAME" ]
+}
+
+# _proc_argv PID — fills the array _PB_ARGV with the exact argv from
+# <proc root>/PID/cmdline (NUL-separated, read with `read -d ''`, bash 3.2);
+# returns 1 when empty or unreadable.
+_proc_argv() {
+    local f="${PLAYBOOK_PROC_ROOT:-/proc}/$1/cmdline" a=""
+    _PB_ARGV=()
+    [ -r "$f" ] || return 1
+    while IFS= read -r -d '' a; do
+        _PB_ARGV[${#_PB_ARGV[@]}]="$a"
+    done < "$f" 2>/dev/null
+    [ -n "$a" ] && _PB_ARGV[${#_PB_ARGV[@]}]="$a"   # a last arg with no trailing NUL
+    [ "${#_PB_ARGV[@]}" -gt 0 ]
+}
+
+# _ps_field PID FIELDS
+# `ps -ww -p PID -o FIELDS`, or empty when it cannot be read — the fallback when
+# /proc is missing (macOS). -ww: procps clips to $COLUMNS even on a pipe. One
+# retry so a single hiccup does not fail a live session closed. Mirrors
+# tasks/core.py _ps_field.
+_ps_field() {
+    local out _try
+    for _try in 1 2; do
+        out=$(ps -ww -p "$1" -o "$2" 2>/dev/null) || out=""
+        if [ -n "${out//[[:space:]]/}" ]; then
+            echo "$out"
+            return 0
+        fi
+    done
+    return 0
+}
+
+# _agent_walk
+# Walk the parent process tree once. Output "<pid>" of the highest agent
+# ancestor BELOW any Claude Code daemon process, "daemon" when the walk stopped
+# (daemon, or an unreadable ancestor) with no agent below it, or "" when no
+# agent was found within 20 hops. Linux reads /proc/<pid>/status + cmdline
+# (exact); only without <proc root>/self (macOS) does it use `ps`. Mirrors
+# `_walk_agent_ancestry()` in tasks/core.py.
+_agent_walk() {
     # Windows/MSYS: the ancestor scan is non-functional — Git-Bash `ps` has no
     # `-o` flag, and MSYS vs native-Windows PID namespaces are disjoint. Skip it
-    # (mirrors the win32 guard in core.py find_agent_root_pid) and let
-    # resolve_session_id fall back to PLAYBOOK_SESSION_ID / $PPID. POSIX is
-    # untouched: the guard only matches MSYS/Cygwin/MinGW shells.
+    # (mirrors the win32 guard in core.py) and let resolve_session_id fall back
+    # to PLAYBOOK_SESSION_ID / $PPID. POSIX is untouched: the guard only matches
+    # MSYS/Cygwin/MinGW shells.
     case "${OSTYPE:-}" in
         msys*|cygwin*) echo ""; return 0 ;;
     esac
     case "$(uname -s 2>/dev/null)" in
         MINGW*|MSYS*|CYGWIN*) echo ""; return 0 ;;
     esac
+    local use_proc=""
+    [ -d "${PLAYBOOK_PROC_ROOT:-/proc}/self" ] && use_proc=1
     local pid=$PPID
     local last_agent=""
     local count=0
-    local info ppid comm
+    local info ppid comm args
     while [ -n "$pid" ] && [ "$pid" != "0" ] && [ "$pid" != "1" ] && [ "$count" -lt 20 ]; do
-        info=$(ps -p "$pid" -o ppid=,comm= 2>/dev/null) || break
-        [ -z "$info" ] && break
-        ppid=$(echo "$info" | awk '{print $1}')
-        comm=$(echo "$info" | awk '{$1=""; sub(/^ +/, ""); print}')
+        if [ -n "$use_proc" ]; then
+            if _proc_status "$pid"; then
+                ppid=$_PB_PPID
+                comm=$_PB_NAME
+            else
+                ppid=""
+                comm=""
+            fi
+        else
+            if [ "$count" -eq 0 ] && ! command -v ps >/dev/null 2>&1; then
+                break   # no ps binary at all (minimal container): legacy fallback
+            fi
+            info=$(_ps_field "$pid" ppid=,comm=)
+            ppid=$(echo "$info" | awk '{print $1}')
+            comm=$(echo "$info" | awk '{$1=""; sub(/^ +/, ""); print}')
+            case "$ppid" in
+                ""|*[!0-9]*) ppid="" ;;
+            esac
+        fi
+        if [ -z "$ppid" ] || [ -z "$comm" ]; then
+            # An ancestor we cannot read, on any hop: it could be the shared
+            # daemon — never fall back to a made-up pid. Mirrors core.py.
+            if [ -n "$last_agent" ]; then echo "$last_agent"; else echo "daemon"; fi
+            return 0
+        fi
         comm="${comm##*/}"  # parameter expansion: strip path; safe for "-zsh" (basename would error)
         case "$comm" in
-            claude|codex|agy|grok|pi) last_agent=$pid ;;
+            claude*)
+                # Task 105: the daemon's processes are `claude.exe` too; they are
+                # shared by every hosted session — stop, never climb past them.
+                # An unreadable argv counts as the boundary (round-1 R1-1).
+                if [ -n "$use_proc" ]; then
+                    if ! _proc_argv "$pid" || _is_daemon_argv "${_PB_ARGV[@]}"; then
+                        if [ -n "$last_agent" ]; then echo "$last_agent"; else echo "daemon"; fi
+                        return 0
+                    fi
+                else
+                    args=$(_ps_field "$pid" args=)
+                    if [ -z "$args" ] || _is_daemon_args "$args"; then
+                        if [ -n "$last_agent" ]; then echo "$last_agent"; else echo "daemon"; fi
+                        return 0
+                    fi
+                fi
+                last_agent=$pid ;;
+            codex|agy|grok|pi) last_agent=$pid ;;
         esac
         [ "$ppid" = "$pid" ] && break
         pid=$ppid
@@ -107,11 +256,26 @@ find_agent_root_pid() {
     echo "$last_agent"
 }
 
+# find_agent_root_pid
+# Output PID of the highest agent ancestor (claude, claude.exe, claude*, codex,
+# agy, grok, pi) below any Claude Code daemon process, or empty if none found
+# within 20 hops. Mirrors `find_agent_root_pid()` in tasks/core.py. Used as
+# fallback when PLAYBOOK_SESSION_ID env var isn't propagated.
+find_agent_root_pid() {
+    local r
+    r=$(_agent_walk)
+    [ "$r" = "daemon" ] && r=""
+    echo "$r"
+}
+
 # resolve_session_id
 # Returns the session_id used to namespace .agent/sessions/<id>/.
-# Order: PLAYBOOK_SESSION_ID env → ancestor scan (root agent PID) →
-# immediate-parent PID. Mirrors resolve_session_id() in src/tasks/core.py
-# — Python and bash converge on the same value when env var is unset.
+# Order: PLAYBOOK_SESSION_ID env → ancestor scan (root agent PID, never a
+# daemon process) → "" when the scan hit the Claude Code background daemon with
+# no agent below it (task 105: unresolved — every writer must check for "" and
+# write nothing, see session_unresolved_notice) → immediate-parent PID. Mirrors
+# resolve_session_id() in tasks/core.py — Python and bash converge on the same
+# value when env var is unset.
 resolve_session_id() {
     if [ -n "${PLAYBOOK_SESSION_ID:-}" ]; then
         # Sanitize (C4): this value becomes a path component in `rm -rf
@@ -139,12 +303,12 @@ resolve_session_id() {
         MINGW*|MSYS*|CYGWIN*) echo "pid-win-fallback"; return 0 ;;
     esac
     local agent_pid
-    agent_pid=$(find_agent_root_pid)
-    if [ -n "$agent_pid" ]; then
-        echo "pid-$agent_pid"
-    else
-        echo "pid-$PPID"
-    fi
+    agent_pid=$(_agent_walk)
+    case "$agent_pid" in
+        daemon) echo "" ;;
+        "") echo "pid-$PPID" ;;
+        *) echo "pid-$agent_pid" ;;
+    esac
 }
 
 # resolve_agent_dir PROJECT_DIR

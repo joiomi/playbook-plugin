@@ -3079,7 +3079,7 @@
     {
       "id": "PB-SESSION-ID",
       "category": "sessions-and-attribution",
-      "statement": "Session identifiers are sanitized so a traversal identifier cannot escape the sessions directory, while valid provider PID and judge identifiers pass through unchanged.",
+      "statement": "Session identifiers are sanitized so a traversal identifier cannot escape the sessions directory, while valid provider PID and judge identifiers pass through unchanged. The Claude ancestor walk that derives the id when PLAYBOOK_SESSION_ID is unset recognizes `claude`, `claude.exe` and any `claude*` process identically in bash and Python, never takes a Claude Code background-daemon process (the shared `bg-pty-host` pty host or `daemon run`) — nor a `claude*` ancestor whose argv cannot be read — as the session root, and never climbs past one. On Linux both resolvers read the tree from `/proc/<pid>/status` (Name, PPid) and `/proc/<pid>/cmdline` (the exact argv), and the daemon is recognized from that argv: the words of basename(argv[0]) followed by argv[1:] must be `claude`/`claude.exe` then `bg-pty-host`/`--bg-pty-host` or `daemon run` (the pty host rewrites its title into argv[0], measured live 2026-09-28); only where `/proc` is missing (macOS) do they fall back to `ps`, whose flattened argv line is split on whitespace and fed to the same detector; when it reaches the daemon with no agent process below it, the id is unresolved — no hook or CLI command creates a session directory or touches any session's pointer, and each prints one stderr line. The walk also stops at an ancestor it cannot read (an unreadable `/proc` status or an empty cmdline; on the `ps` path a `ps` error or a miss of the Python probe's 10 s deadline), keeping an agent already found below it and leaving the id unresolved when none was found — never a made-up `pid-<ppid>`; only a missing `ps` binary on the `ps` path keeps the legacy `pid-<ppid>` fallback. With an unresolved id the stop hook blocks once instead of releasing (the `stop_hook_active` valve ends a re-issued stop). Dead `pid-*` session directories are reclaimed by the session GC, and `tasks doctor` names the ones its own CLI-entry sweep reclaimed in that run (the SessionStart sweep is not recorded).",
       "owner": [
         {
           "path": "plugins/playbook/scripts/gate-echo-lib.sh",
@@ -3092,6 +3092,30 @@
         {
           "path": "plugins/playbook/provider/codex_hooks.py",
           "reference": "symbol:_sanitize_session_id"
+        },
+        {
+          "path": "plugins/playbook/scripts/gate-echo-lib.sh",
+          "reference": "function:_agent_walk"
+        },
+        {
+          "path": "plugins/playbook/scripts/gate-echo-lib.sh",
+          "reference": "function:_is_daemon_args"
+        },
+        {
+          "path": "plugins/playbook/tasks/core.py",
+          "reference": "symbol:_walk_agent_ancestry"
+        },
+        {
+          "path": "plugins/playbook/tasks/core.py",
+          "reference": "symbol:_is_daemon_args"
+        },
+        {
+          "path": "plugins/playbook/tasks/core.py",
+          "reference": "symbol:require_session_id"
+        },
+        {
+          "path": "plugins/playbook/tasks/shared.py",
+          "reference": "symbol:_gc_dead_sessions"
         }
       ],
       "failure_consequence": "Critical",
@@ -3139,6 +3163,238 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_daemon_identity.py",
+          "reference": "ResolverParity.test_every_vector_bash_equals_python_equals_expected",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The process tree is a fake `ps` table on PATH whose shapes were measured on 2026-09-27 (task 105 record); the real daemon chains were walked once by hand in that record, not in CI."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_daemon_identity.py",
+          "reference": "DaemonDetectorParity.test_bash_equals_python_equals_expected",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_daemon_identity.py",
+          "reference": "DaemonOnlyAncestryWritesNothing.test_hooks_invent_no_pid_session_and_leave_a_untouched",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_session_daemon_identity.py",
+            "reference": "ResolverParity.test_env_is_the_only_identity_under_the_daemon"
+          },
+          "limitations": [
+            "The process tree is a fake `ps` table on PATH whose shapes were measured on 2026-09-27 (task 105 record); the real daemon chains were walked once by hand in that record, not in CI."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_daemon_identity.py",
+          "reference": "DaemonOnlyAncestryWritesNothing.test_cli_work_refuses_and_leaves_a_untouched",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The process tree is a fake `ps` table on PATH whose shapes were measured on 2026-09-27 (task 105 record); the real daemon chains were walked once by hand in that record, not in CI."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_daemon_identity.py",
+          "reference": "DaemonOnlyAncestryWritesNothing.test_session_end_deletes_nothing",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The process tree is a fake `ps` table on PATH whose shapes were measured on 2026-09-27 (task 105 record); the real daemon chains were walked once by hand in that record, not in CI."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_daemon_identity.py",
+          "reference": "DoctorReportsReclaimedDeadSessions.test_doctor_names_the_dirs_the_gc_reclaimed",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The process tree is a fake `ps` table on PATH whose shapes were measured on 2026-09-27 (task 105 record); the real daemon chains were walked once by hand in that record, not in CI."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_daemon_identity.py",
+          "reference": "ProbeFailuresFailClosed.test_failed_args_probe_on_the_pty_host_is_not_a_root",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The process tree is a fake `ps` table on PATH whose shapes were measured on 2026-09-27 (task 105 record); the real daemon chains were walked once by hand in that record, not in CI."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_daemon_identity.py",
+          "reference": "ProbeFailuresFailClosed.test_columns_clipping_does_not_hide_the_daemon",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The process tree is a fake `ps` table on PATH whose shapes were measured on 2026-09-27 (task 105 record); the real daemon chains were walked once by hand in that record, not in CI."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_daemon_identity.py",
+          "reference": "DaemonOnlyAncestryWritesNothing.test_refused_work_does_not_resume_a_blocked_task",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The process tree is a fake `ps` table on PATH whose shapes were measured on 2026-09-27 (task 105 record); the real daemon chains were walked once by hand in that record, not in CI."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_daemon_identity.py",
+          "reference": "DaemonOnlyAncestryWritesNothing.test_refused_work_does_not_reopen_a_done_task",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The process tree is a fake `ps` table on PATH whose shapes were measured on 2026-09-27 (task 105 record); the real daemon chains were walked once by hand in that record, not in CI."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_daemon_identity.py",
+          "reference": "ProbeFailuresFailClosed.test_one_args_hiccup_does_not_unresolve_a_terminal_session",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The process tree is a fake `ps` table on PATH whose shapes were measured on 2026-09-27 (task 105 record); the real daemon chains were walked once by hand in that record, not in CI."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_daemon_identity.py",
+          "reference": "ProbeFailuresFailClosed.test_unreadable_ancestor_mid_walk_is_unresolved",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_session_daemon_identity.py",
+            "reference": "ProbeFailuresFailClosed.test_no_ps_binary_keeps_the_legacy_fallback"
+          },
+          "limitations": [
+            "The process tree is a fake `ps` table on PATH whose shapes were measured on 2026-09-27 (task 105 record); the real daemon chains were walked once by hand in that record, not in CI."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_daemon_identity.py",
+          "reference": "ProbeFailuresFailClosed.test_non_utf8_argv_does_not_crash_python",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The process tree is a fake `ps` table on PATH whose shapes were measured on 2026-09-27 (task 105 record); the real daemon chains were walked once by hand in that record, not in CI."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_daemon_identity.py",
+          "reference": "ProbeFailuresFailClosed.test_ps_failing_on_the_first_hop_is_unresolved",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The process tree is a fake `ps` table on PATH whose shapes were measured on 2026-09-27 (task 105 record); the real daemon chains were walked once by hand in that record, not in CI."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_daemon_identity.py",
+          "reference": "DaemonOnlyAncestryWritesNothing.test_stop_hook_fails_closed_when_unresolved",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The process tree is a fake `ps` table on PATH whose shapes were measured on 2026-09-27 (task 105 record); the real daemon chains were walked once by hand in that record, not in CI."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_daemon_identity.py",
+          "reference": "ProbeFailuresFailClosed.test_slow_ps_does_not_split_python_from_bash",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The process tree is a fake `ps` table on PATH whose shapes were measured on 2026-09-27 (task 105 record); the slow probe is a sleep in the fake `ps`."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_session_daemon_identity.py",
+          "reference": "NoticeParity.test_bash_and_python_print_the_same_notice",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_daemon_identity.py",
+          "reference": "DoctorSurvivesASlowPs.test_parity_line_is_printed_not_a_traceback",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The slow probe is a 6 s sleep in the fake `ps`."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_daemon_identity.py",
+          "reference": "DaemonArgvDetectorParity.test_bash_equals_python_equals_expected",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The /proc tree is a fixture under PLAYBOOK_PROC_ROOT whose argv shapes are the live measurement of 2026-09-28 (task 105 record, `## Live re-measure`); the live five-case table was taken by hand, not in CI."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_daemon_identity.py",
+          "reference": "ResolverParityProc.test_every_vector_bash_equals_python_equals_expected",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The /proc tree is a fixture under PLAYBOOK_PROC_ROOT whose argv shapes are the live measurement of 2026-09-28 (task 105 record, `## Live re-measure`); the live five-case table was taken by hand, not in CI."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_daemon_identity.py",
+          "reference": "DaemonOnlyAncestryWritesNothingProc.test_hooks_invent_no_pid_session_and_leave_a_untouched",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The /proc tree is a fixture under PLAYBOOK_PROC_ROOT whose argv shapes are the live measurement of 2026-09-28 (task 105 record, `## Live re-measure`); the live five-case table was taken by hand, not in CI."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_daemon_identity.py",
+          "reference": "ProcProbeFailuresFailClosed.test_missing_status_mid_walk_is_unresolved",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The /proc tree is a fixture under PLAYBOOK_PROC_ROOT whose argv shapes are the live measurement of 2026-09-28 (task 105 record, `## Live re-measure`); the live five-case table was taken by hand, not in CI."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_daemon_identity.py",
+          "reference": "ProcProbeFailuresFailClosed.test_s5_1_spaced_argv0_daemon_is_exact_on_proc",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The /proc tree is a fixture under PLAYBOOK_PROC_ROOT whose argv shapes are the live measurement of 2026-09-28 (task 105 record, `## Live re-measure`); the live five-case table was taken by hand, not in CI."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -3152,7 +3408,11 @@
       "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
-        "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21)."
+        "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21).",
+        "Task 105 (owner decision 2026-09-28): daemon detection depends on the daemon's argv as measured on Claude Code 2.1.283 — pty host `claude bg-pty-host|--bg-pty-host|…` (title rewritten into argv[0]), daemon `…/claude|claude.exe daemon run`, spare `claude bg-spare|…`, comm `claude.exe` (or `claude` when started through the wrapper). A renamed subcommand would be walked as an ordinary agent again — re-measure after a Claude Code upgrade. On LINUX the argv is exact (/proc cmdline). On macOS (no /proc) it is HEURISTIC: the `ps -ww -o args=` line is split on whitespace, so an argv[0] containing spaces (an install path with a space) cannot be told from argument boundaries — a declared limitation of the macOS fallback, not a defect; no parsing rules are added for it (owner rule 2026-09-28).",
+        "Task 105: hooks never receive PLAYBOOK_SESSION_ID (CLAUDE_ENV_FILE reaches Bash-tool commands only; the claude process's own environment has no such variable, measured 2026-09-27), so a daemon-hosted session's hooks are identified by the hosted `claude.exe` process below the daemon; the env var is the only identity only for a process with no agent between it and the daemon.",
+        "Task 105: the ancestor walk is skipped on Windows (unchanged), so the daemon rules are POSIX-only; the new tests skip there.",
+        "Task 105: the 10 s Python `ps` deadline applies only to the macOS `ps` fallback (the Linux /proc reads have no subprocess). There bash `ps` has no deadline; the Python probe waits up to 10 s (retried once) and treats a miss like a failed read, so only a `ps` slower than that can make the CLI stop a hop earlier than the hooks — pinned for a 2.5 s probe by ProbeFailuresFailClosed.test_slow_ps_does_not_split_python_from_bash."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],
@@ -12686,7 +12946,7 @@
     {
       "id": "PB-SESSION-POINTER-ISOLATION",
       "category": "sessions-and-attribution",
-      "statement": "On the review and probe spawn paths — panel and single-judge reviews, run_subagent / stream_subagent, and the direct `claude -p` model-availability probe — a nested process cannot shadow the FOREGROUND session's active-task pointer: every such spawn scrubs the parent-session identity vars (CLAUDE_ENV_FILE plus the CLAUDE_CODE_* / CLAUDE_PID identity and IPC vars) through the single shared scrubber, and writable subagents additionally pin an isolated per-invocation PLAYBOOK_SESSION_ID so they never resolve the foreground session directory. Read-only judges share a fixed non-foreground `judge` identity, which is harmless because they cannot write an active-task pointer.",
+      "statement": "On the review and probe spawn paths — panel and single-judge reviews, run_subagent / stream_subagent, and the direct `claude -p` model-availability probe — a nested process cannot shadow the FOREGROUND session's active-task pointer: every such spawn scrubs the parent-session identity vars (CLAUDE_ENV_FILE plus the CLAUDE_CODE_* / CLAUDE_PID identity and IPC vars) through the single shared scrubber, and writable subagents additionally pin an isolated per-invocation PLAYBOOK_SESSION_ID so they never resolve the foreground session directory. Read-only judges share a fixed non-foreground `judge` identity, which is harmless because they cannot write an active-task pointer. Sessions hosted by the Claude Code background daemon do not share an identity either: the ancestor walk stops at the daemon's shared processes, so one hosted session's hooks and CLI never resolve another session's id — its pointer writes and its session-end cleanup target only its own directory. (Unchanged and out of this sentence: the close scan in `tasks work done`, which clears every session pointer naming the task just closed.)",
       "owner": [
         {
           "path": "plugins/playbook/provider/sandbox.py",
@@ -12699,6 +12959,14 @@
         {
           "path": "plugins/playbook/provider/subagent.py",
           "reference": "symbol:_isolated_subagent_env"
+        },
+        {
+          "path": "plugins/playbook/scripts/gate-echo-lib.sh",
+          "reference": "function:_agent_walk"
+        },
+        {
+          "path": "plugins/playbook/tasks/core.py",
+          "reference": "symbol:_walk_agent_ancestry"
         }
       ],
       "failure_consequence": "High",
@@ -12781,6 +13049,36 @@
           "limitations": [
             "Monkeypatches models_check.subprocess.run; asserts the env the probe would hand a real `claude -p` is scrubbed."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_daemon_identity.py",
+          "reference": "DaemonBetweenSessionsKeepsThemApart.test_b_work_does_not_overwrite_a_pointer",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The process tree is a fake `ps` table on PATH whose shapes were measured on 2026-09-27 (task 105 record); the real daemon chains were walked once by hand in that record, not in CI."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_daemon_identity.py",
+          "reference": "DaemonBetweenSessionsKeepsThemApart.test_b_hooks_leave_a_untouched",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The process tree is a fake `ps` table on PATH whose shapes were measured on 2026-09-27 (task 105 record); the real daemon chains were walked once by hand in that record, not in CI."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_daemon_identity.py",
+          "reference": "DaemonBetweenSessionsKeepsThemApartProc.test_b_work_does_not_overwrite_a_pointer",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The /proc tree is a fixture under PLAYBOOK_PROC_ROOT whose argv shapes are the live measurement of 2026-09-28 (task 105 record, `## Live re-measure`); the live five-case table was taken by hand, not in CI."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -12798,7 +13096,8 @@
         "RESIDUAL (panel sonnet F1): every adapter's launch_interactive/launch_headless build os.environ.copy() and call subprocess.run DIRECTLY, bypassing the scrubber. They have ZERO callers in tasks/ today (only shell-comment references); if one is ever wired to spawn a background claude, route it through sandbox.scrub_parent_session_env or the leak reappears. The shared scrubber now exists for exactly that.",
         "RESIDUAL (panel codex-terra round-5), SCOPED OUT of the statement: the raw `sandbox --` CLI passthrough (provider/sandbox.py _main) calls run() with no env, so a WRITABLE manual `sandbox -- claude ...` run inherits the foreground PLAYBOOK_SESSION_ID and its session-end-hook could delete the foreground session dir. This is a MANUAL dev escape-hatch, not a review/subagent path; a safe fix must preserve the monitor's explicit identity, so it is deferred to a follow-up hardening task alongside the launch_* residual. The shared scrubber now exists for it.",
         "Owner decision 2026-08-21: agent-mode hook enforcement is a SUPPORTED capability on Claude only; grok/codex judge subprocesses inherit the same scrub in code but carry no support claim, so applicable_providers is narrowed to claude.",
-        "The scrub + subagent isolation are proven at the _child_env / run() / run_subagent / stream_subagent / models-check-probe boundaries; they are not exercised against a live nested Claude Code SessionStart hook writing a shared CLAUDE_ENV_FILE (the field repro in task 036, reproduced mechanically by the negative control rather than end-to-end)."
+        "The scrub + subagent isolation are proven at the _child_env / run() / run_subagent / stream_subagent / models-check-probe boundaries; they are not exercised against a live nested Claude Code SessionStart hook writing a shared CLAUDE_ENV_FILE (the field repro in task 036, reproduced mechanically by the negative control rather than end-to-end).",
+        "Task 105: the daemon-hosted case is proven over a fake `ps` table in the shape measured 2026-09-27 (a hosted session below `bg-pty-host` below `daemon run`), including the unsafe shape where the daemon hangs below a live terminal session; no live two-session daemon run is exercised."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],

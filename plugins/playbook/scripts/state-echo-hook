@@ -146,6 +146,13 @@ fi
 export PB_FUSED PB_PATH PB_CMD
 
 SESSION_ID="$(resolve_session_id)"
+# Task 105: unresolved (under the Claude Code background daemon, no
+# PLAYBOOK_SESSION_ID) — no session to echo or count; writing would compose
+# `sessions/` + "" (the sessions dir itself). One line, nothing written.
+if [ -z "$SESSION_ID" ]; then
+    session_unresolved_notice
+    exit 0
+fi
 
 # --- Eval mode: read config flags if PLAYBOOK_EVAL_CONFIG is set ---
 EVAL_GATE_ECHO="on"

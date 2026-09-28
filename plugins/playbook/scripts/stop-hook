@@ -103,6 +103,17 @@ if [ -n "$PLAYBOOK_EVAL_CONFIG" ] && [ -f "$PLAYBOOK_EVAL_CONFIG" ]; then
     fi
 fi
 
+# Task 105: unresolved (under the Claude Code background daemon, or an ancestor
+# whose argv could not be read; no PLAYBOOK_SESSION_ID). The hook cannot see
+# which task's gates are open, so it FAILS CLOSED once (post-D6 single judge:
+# exiting 0 released a session whose own gates were open). The
+# stop_hook_active valve above ends a re-issued stop. Nothing is written.
+if [ -z "$SESSION_ID" ]; then
+    session_unresolved_notice
+    echo "BLOCKED: cannot check this session's task gates (see the line above). Stop again to end the turn." >&2
+    exit 2
+fi
+
 SESSION_DIR="$AGENT_DIR/sessions/$SESSION_ID"
 STATE_FILE="$SESSION_DIR/current_state"
 

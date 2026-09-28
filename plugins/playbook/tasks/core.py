@@ -17,16 +17,137 @@ VERSION = "1.5.45"
 
 AGENT_PROCESS_NAMES = frozenset({"claude", "codex", "agy", "grok", "pi"})
 
+# One line, printed by every writer that finds no session identity (task 105).
+# gate-echo-lib.sh carries the same text verbatim (session_unresolved_notice).
+SESSION_UNRESOLVED_MESSAGE = (
+    "playbook: no session identity — PLAYBOOK_SESSION_ID is not set and the "
+    "process-tree walk either reached the Claude Code background daemon "
+    "(bg-pty-host) or could not read an ancestor process with ps; "
+    "no session state was written.")
+
+
+def _is_agent_comm(comm: str) -> bool:
+    """`claude`, `claude.exe` and any `claude*` (the daemon-hosted sessions'
+    comm is `claude.exe` even on Linux — task 105), plus the other agents."""
+    return comm in AGENT_PROCESS_NAMES or comm.startswith("claude")
+
+
+def _is_daemon_argv(argv: list[str]) -> bool:
+    """A Claude Code background-daemon process, from its EXACT argv: the shared
+    pty host (`claude bg-pty-host --bg-pty-host …`) or the daemon (`…/claude.exe
+    daemon run …`), measured 2026-09-27 (task 105). Shared by every session the
+    daemon hosts, so it is NEVER a session root and the walk never climbs past it.
+
+    basename(argv[0]) ∈ {claude, claude.exe} and argv[1] ∈ {bg-pty-host,
+    --bg-pty-host}, or argv[1:3] == [daemon, run] (owner decision 2026-09-28).
+    A prompt that merely names a marker is a later argument, not argv[1].
+
+    Measured live 2026-09-28: the pty host and the spare REWRITE their process
+    title, so /proc shows argv[0] = "claude bg-pty-host" (one argument). The
+    rule is therefore applied to basename(argv[0]) split on whitespace followed
+    by argv[1:] — the subcommand the title carries becomes argv[1]. A spaced
+    install DIRECTORY is unaffected (basename has no directory part).
+    Mirrored in gate-echo-lib.sh `_is_daemon_argv`.
+    """
+    if not argv:
+        return False
+    eff = argv[0].rsplit("/", 1)[-1].split() + list(argv[1:])
+    if not eff or eff[0] not in ("claude", "claude.exe"):
+        return False
+    return (len(eff) > 1 and eff[1] in ("bg-pty-host", "--bg-pty-host")) \
+        or eff[1:3] == ["daemon", "run"]
+
+
+def _is_daemon_args(args: str) -> bool:
+    """The `ps` fallback (no /proc — macOS): the flattened `ps -o args=` line
+    split on whitespace, fed to the SAME detector. HEURISTIC by construction —
+    an argv[0] containing spaces is indistinguishable from argument boundaries;
+    declared in the ledger as a macOS limitation, and no parsing rules are
+    added on this line (owner decision 2026-09-28)."""
+    return _is_daemon_argv(args.split())
+
+
+def _proc_root() -> str:
+    """`/proc`, or the test seam PLAYBOOK_PROC_ROOT (a fixture tree of
+    `<pid>/status` + `<pid>/cmdline`). Mirrored in gate-echo-lib.sh."""
+    return os.environ.get("PLAYBOOK_PROC_ROOT", "/proc")
+
+
+def _proc_status(root: str, pid: int) -> tuple[int, str] | None:
+    """(PPid, Name) from `<root>/<pid>/status`, or None when unreadable."""
+    try:
+        with open(os.path.join(root, str(pid), "status"), encoding="utf-8",
+                  errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return None
+    name, ppid = None, None
+    for line in text.splitlines():
+        if line.startswith("Name:"):
+            name = line[5:].strip()
+        elif line.startswith("PPid:"):
+            try:
+                ppid = int(line[5:].strip())
+            except ValueError:
+                return None
+    if not name or ppid is None:
+        return None
+    return ppid, name
+
+
+def _proc_argv(root: str, pid: int) -> list[str]:
+    """The exact argv from `<root>/<pid>/cmdline` (NUL-separated); [] when
+    empty or unreadable."""
+    try:
+        with open(os.path.join(root, str(pid), "cmdline"), "rb") as fh:
+            raw = fh.read()
+    except OSError:
+        return []
+    parts = raw.split(b"\0")
+    if parts and parts[-1] == b"":
+        parts.pop()
+    return [x.decode("utf-8", errors="replace") for x in parts]
+
+
+# Generous on purpose: bash `ps` has no deadline and waits, so any SHORT python
+# deadline made the two resolvers stop on different hops and name different
+# sessions (post-D6 single judge, runs 2 and 3). A probe that misses even this
+# is treated exactly like a failed read. Only the `ps` fallback path uses it.
+_PS_DEADLINE_S = 10
+
+
+def _ps_field(pid: int, fields: str) -> str | None:
+    """`ps -ww -p PID -o FIELDS`, stripped; "" when it cannot be read; None
+    when there is no `ps` binary at all (FileNotFoundError — a minimal
+    container, the only case the walk may still fall back to `pid-$PPID`).
+
+    The fallback when /proc is missing (macOS). `-ww`: procps clips output to
+    $COLUMNS even on a pipe (round-1 R1-3). One retry, so a single hiccup does
+    not fail a live session closed (round 2). `errors="replace"`: a non-UTF-8
+    argv byte must not raise UnicodeDecodeError out of the walk (round 2).
+    """
+    for _ in range(2):
+        try:
+            r = subprocess.run(["ps", "-ww", "-p", str(pid), "-o", fields],
+                               capture_output=True, text=True, errors="replace",
+                               timeout=_PS_DEADLINE_S)
+        except FileNotFoundError:
+            return None
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    return ""
+
 
 @functools.lru_cache(maxsize=1)
-def find_agent_root_pid() -> int | None:
-    """Walk parent process tree, return PID of the highest agent ancestor.
+def _walk_agent_ancestry() -> tuple[int | None, bool]:
+    """Walk the parent tree once: (highest agent pid BELOW any daemon, stopped).
 
-    Identifies claude/codex/agy/grok/pi processes by `comm` (basename, no args).
-    Returns None if no agent found within 20 hops or if `ps` is unavailable.
-    Used as fallback when PLAYBOOK_SESSION_ID env var isn't propagated —
-    Python and bash both walk the same tree and converge on the same PID.
-    Result is cached: process tree is stable for the lifetime of this process.
+    The walk stops at the first Claude Code daemon process (see _is_daemon_argv)
+    — everything above it is shared by all hosted sessions — and at any
+    ancestor it cannot read. `stopped` with no agent pid means the id can only
+    come from PLAYBOOK_SESSION_ID.
     """
     # Windows/MSYS: this ancestor scan is non-functional and must be skipped.
     # Git-Bash `ps` has no `-o` flag (breaks on the first call), and MSYS vs
@@ -34,35 +155,77 @@ def find_agent_root_pid() -> int | None:
     # from a hook/CLI subprocess up to claude.exe. Return None and let
     # resolve_session_id() lean on PLAYBOOK_SESSION_ID. POSIX is untouched.
     if sys.platform == "win32" or os.name == "nt":
-        return None
-    pid = os.getppid()
+        return None, False
+    return _walk_from(os.getppid())
+
+
+def _walk_from(pid: int) -> tuple[int | None, bool]:
+    """The walk behind _walk_agent_ancestry, from `pid` upward.
+
+    Linux (owner decision 2026-09-28): `/proc/<pid>/status` (Name:, PPid:) and
+    `/proc/<pid>/cmdline` — exact, no `ps`, no argv parsing. Only where
+    `<proc root>/self` is missing (macOS) does it fall back to `ps`.
+    """
+    root = _proc_root()
+    use_proc = os.path.isdir(os.path.join(root, "self"))
     last_agent_pid: int | None = None
-    for _ in range(20):
+    for _hop in range(20):
         if pid in (0, 1):
             break
-        try:
-            r = subprocess.run(
-                ["ps", "-p", str(pid), "-o", "ppid=,comm="],
-                capture_output=True, text=True, timeout=1,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            break
-        if r.returncode != 0 or not r.stdout.strip():
-            break
-        parts = r.stdout.strip().split(None, 1)
-        if len(parts) < 2:
-            break
-        try:
-            ppid = int(parts[0])
-        except ValueError:
-            break
-        comm = os.path.basename(parts[1].strip())
-        if comm in AGENT_PROCESS_NAMES:
+        if use_proc:
+            st = _proc_status(root, pid)
+            if st is None:
+                return last_agent_pid, True     # unreadable ancestor
+            ppid, comm = st
+        else:
+            info = _ps_field(pid, "ppid=,comm=")
+            parts = info.split(None, 1) if info else []
+            try:
+                ppid_p = int(parts[0]) if len(parts) == 2 else None
+            except ValueError:
+                ppid_p = None
+            if ppid_p is None:
+                # No `ps` binary at all (a minimal container): no daemon
+                # evidence, keep the legacy fallback. Any other unreadable
+                # ancestor (an error, or a miss of the generous deadline) could
+                # be the shared daemon: stop, keep an agent found below.
+                if info is None:
+                    break
+                return last_agent_pid, True
+            ppid, comm = ppid_p, parts[1].strip()
+        comm = os.path.basename(comm)
+        if comm.startswith("claude"):
+            # An unreadable argv is treated as the daemon boundary (round-1
+            # R1-1): promoting it could make the shared daemon the root. Keep
+            # an agent already found below it; otherwise unresolved.
+            if use_proc:
+                argv = _proc_argv(root, pid)
+                if not argv or _is_daemon_argv(argv):
+                    return last_agent_pid, True
+            else:
+                args = _ps_field(pid, "args=") or ""
+                if not args or _is_daemon_args(args):
+                    return last_agent_pid, True
+        if _is_agent_comm(comm):
             last_agent_pid = pid
         if ppid == pid:
             break
         pid = ppid
-    return last_agent_pid
+    return last_agent_pid, False
+
+
+def find_agent_root_pid() -> int | None:
+    """PID of the highest agent ancestor below any Claude Code daemon process.
+
+    Identifies claude/claude.exe/claude*/codex/agy/grok/pi processes by `comm`
+    (/proc Name: on Linux, `ps` comm elsewhere). Returns None if no agent found
+    within 20 hops, if the tree cannot be read, or if the only agents are daemon
+    processes (never a root).
+    Used as fallback when PLAYBOOK_SESSION_ID env var isn't propagated —
+    Python and bash both walk the same tree and converge on the same PID.
+    Result is cached: process tree is stable for the lifetime of this process.
+    """
+    return _walk_agent_ancestry()[0]
 
 
 _SESSION_ID_RE = re.compile(r"[A-Za-z0-9._-]+")
@@ -90,8 +253,10 @@ def _sanitize_session_id(sid: str) -> str:
 def resolve_session_id() -> str:
     """Resolve session_id used to namespace .agent/sessions/<id>/.
 
-    Order: PLAYBOOK_SESSION_ID env (sanitized) → ancestor scan (root agent PID)
-    → immediate-parent PID. The ancestor scan is the robust path: it survives
+    Order: PLAYBOOK_SESSION_ID env (sanitized) → ancestor scan (root agent PID,
+    never a daemon process) → "" when the scan hit the Claude Code background
+    daemon with no agent below it (task 105: unresolved — writers refuse) →
+    immediate-parent PID. The ancestor scan is the robust path: it survives
     env-propagation failures (VSCode CLAUDE_ENV_FILE quirks, missing wrappers,
     subprocess loss). Bash hooks mirror this resolver — including the
     sanitization — in gate-echo-lib.sh.
@@ -108,10 +273,27 @@ def resolve_session_id() -> str:
     if sys.platform == "win32" or os.name == "nt":
         _warn_windows_session_id_once()
         return "pid-win-fallback"
-    agent_pid = find_agent_root_pid()
+    agent_pid, under_daemon = _walk_agent_ancestry()
     if agent_pid is not None:
         return f"pid-{agent_pid}"
+    if under_daemon:
+        # Task 105: under the shared background daemon the parent pid is a
+        # per-command process — inventing `pid-<ppid>` minted a dead session
+        # per call. Unresolved: callers must write nothing (see
+        # SESSION_UNRESOLVED_MESSAGE / require_session_id).
+        return ""
     return f"pid-{os.getppid()}"
+
+
+def require_session_id() -> str:
+    """resolve_session_id() for WRITERS: exits 1 with the one-line notice when
+    the id is unresolved, so no caller composes `sessions/""` (the sessions dir
+    itself) into a pointer path."""
+    sid = resolve_session_id()
+    if not sid:
+        print(SESSION_UNRESOLVED_MESSAGE, file=sys.stderr)
+        sys.exit(1)
+    return sid
 
 
 @functools.lru_cache(maxsize=1)
@@ -4523,6 +4705,9 @@ def task_done(project_path: Path, name_filter: str = "") -> dict:
 
     agent_dir = resolve_agent_dir(project_path)
     session_id = resolve_session_id()
+    if not session_id:
+        # Task 105: unresolved — `sessions/""` is the sessions dir itself.
+        return {"error": SESSION_UNRESOLVED_MESSAGE}
     state_files = [agent_dir / "sessions" / session_id / "current_state"]
 
     for state_file in state_files:

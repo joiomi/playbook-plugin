@@ -30,8 +30,15 @@ source "$HOOK_DIR/gate-echo-lib.sh"
 INPUT=$(cat)
 SESSION_ID="$(resolve_session_id)"
 
+# Task 105: unresolved (under the Claude Code background daemon, no
+# PLAYBOOK_SESSION_ID) — export nothing and provision no directory below; the
+# GC still runs (its self-exclusion simply matches no name).
+if [ -z "$SESSION_ID" ]; then
+    session_unresolved_notice
+fi
+
 # Write to CLAUDE_ENV_FILE so it persists for all Bash calls this session
-if [ -n "$CLAUDE_ENV_FILE" ]; then
+if [ -n "$CLAUDE_ENV_FILE" ] && [ -n "$SESSION_ID" ]; then
     echo "export PLAYBOOK_SESSION_ID=$SESSION_ID" >> "$CLAUDE_ENV_FILE"
 fi
 
@@ -53,7 +60,9 @@ if [ -n "$PROJECT_DIR" ]; then
     # provisioning would mint a phantom lane beside the real ones. Warn instead
     # of exiting: session start is where the user can actually see and fix it.
     LANES_NO_MARKER=$(lanes_without_marker "$PROJECT_DIR" | tr '\n' ' ')
-    if [ -n "$LANES_NO_MARKER" ]; then
+    if [ -z "$SESSION_ID" ]; then
+        :   # unresolved (task 105) — no session directory to provision
+    elif [ -n "$LANES_NO_MARKER" ]; then
         {
             echo "[playbook] WARNING: per-user lanes exist but .agent/current_user is missing."
             echo "           Lane(s): ${LANES_NO_MARKER% }"

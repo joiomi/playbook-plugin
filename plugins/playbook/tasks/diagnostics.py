@@ -57,6 +57,13 @@ def _resolver_parity_verdict(has_root: bool, py_sid: str, bash_sid: str) -> tupl
     production split-brain guarantee is env-authoritative (both honor
     PLAYBOOK_SESSION_ID, always set by the launchers) and is unaffected here.
     """
+    if py_sid == "" or bash_sid == "":
+        # Task 105: "" = unresolved (the walk hit the Claude Code background
+        # daemon with no agent below it). Agreement means BOTH say so.
+        agree = py_sid == bash_sid
+        return agree, ("both unresolved — under the background daemon with no "
+                       "PLAYBOOK_SESSION_ID (writers refuse)" if agree
+                       else f"MISMATCH py={py_sid!r} bash={bash_sid!r}")
     if has_root:
         agree = py_sid == bash_sid and py_sid.startswith("pid-")
         return agree, (f"both → {py_sid}" if agree
@@ -82,7 +89,7 @@ def cmd_audit(cmd_args):
     if task_arg:
         m = list((agent_dir / "tasks").glob(f"{task_arg.zfill(3)}-*/task.md"))
         task_file = m[0] if m else None
-    else:
+    elif resolve_session_id():   # task 105: "" (unresolved) has no pointer
         sf = agent_dir / "sessions" / resolve_session_id() / "current_state"
         if sf.exists():
             active = sf.read_text(encoding="utf-8").strip()
@@ -366,6 +373,14 @@ def cmd_doctor(cmd_args):
                 stale.append(session_dir.name)
     check("session: no dead session dirs", len(stale) == 0,
           f"dead: {', '.join(stale)}" if stale else "clean")
+    # Task 105: the CLI-entry sweep has already run, so the check above only
+    # sees what it could NOT remove. Name what it did remove — dead `pid-*`
+    # dirs are the trace of a session-id fault (e.g. one minted per hook call
+    # under the background daemon), worth seeing even when cleaned up.
+    from tasks.shared import RECLAIMED_SESSIONS
+    check("session: dead dirs reclaimed by the GC", True,
+          f"reclaimed this run: {', '.join(sorted(RECLAIMED_SESSIONS))}"
+          if RECLAIMED_SESSIONS else "none this run")
 
     # 4. Hooks — check .claude/hooks/ (installed) or src/hooks/ (dev repo)
     hooks_dirs = [project_path / "scripts", project_path / ".claude" / "hooks", project_path / "src" / "hooks"]
@@ -572,21 +587,32 @@ def cmd_doctor(cmd_args):
               " — split-brain risk when PLAYBOOK_SESSION_ID is unset")
     elif gate_lib:
         import subprocess as _sub
-        from tasks.core import find_agent_root_pid
+        from tasks.core import _walk_agent_ancestry, find_agent_root_pid
         saved = os.environ.pop("PLAYBOOK_SESSION_ID", None)
         try:
-            find_agent_root_pid.cache_clear()
+            _walk_agent_ancestry.cache_clear()
             has_root = find_agent_root_pid() is not None
             py_sid = resolve_session_id()
             env = {k: v for k, v in os.environ.items() if k != "PLAYBOOK_SESSION_ID"}
-            r = _sub.run(["bash", "-c", f"source '{gate_lib.as_posix()}' && resolve_session_id"],
-                         capture_output=True, text=True, env=env, timeout=5)
-            bash_sid = r.stdout.strip()
+            # Budget above the walk's own: each `ps` probe may take up to
+            # core._PS_DEADLINE_S (twice), and bash waits with no deadline; the
+            # old 5 s killed a merely slow walk and crashed doctor (task 105,
+            # post-D6 single judge run 4). A miss is reported, not raised.
+            try:
+                r = _sub.run(["bash", "-c", f"source '{gate_lib.as_posix()}' && resolve_session_id"],
+                             capture_output=True, text=True, env=env, timeout=120)
+                bash_sid: str | None = r.stdout.strip()
+            except _sub.TimeoutExpired:
+                bash_sid = None
         finally:
             if saved is not None:
                 os.environ["PLAYBOOK_SESSION_ID"] = saved
-        agree, detail = _resolver_parity_verdict(has_root, py_sid, bash_sid)
-        check("session-id: Python ≡ bash resolver", agree, detail)
+        if bash_sid is None:
+            check("session-id: Python ≡ bash resolver", False,
+                  f"bash resolver did not answer within 120 s (py={py_sid!r}) — ps is stalling")
+        else:
+            agree, detail = _resolver_parity_verdict(has_root, py_sid, bash_sid)
+            check("session-id: Python ≡ bash resolver", agree, detail)
     else:
         check("session-id: Python ≡ bash resolver", False, "gate-echo-lib.sh not found")
 

@@ -173,8 +173,14 @@ fi
 # The skip is about the LOG only: it performs the same counter reset a logged
 # prompt does (read by the stop hook's conversational bypass). The two older
 # exits below (empty after filtering, same-second duplicate) predate task 088.
+# Task 105: resolved ONCE here; "" = unresolved (under the Claude Code
+# background daemon, no PLAYBOOK_SESSION_ID) — the prompt is still logged
+# (tagged `no-session`), but no session counters are touched.
+SESSION_ID="$(resolve_session_id)"
+[ -z "$SESSION_ID" ] && session_unresolved_notice
 reset_session_counters() {
-    local session_dir="$AGENT_DIR/sessions/${SESSION_ID:-$(resolve_session_id)}"
+    [ -n "$SESSION_ID" ] || return 0
+    local session_dir="$AGENT_DIR/sessions/$SESSION_ID"
     mkdir -p "$session_dir"
     reset_counters "$session_dir/counters"
 }
@@ -228,8 +234,9 @@ fi
 # Get next message ID
 MSG_ID=$(get_next_id "$COUNTER_FILE")
 
-# Session ID (the PID tag in the chat log; reset_session_counters reuses it)
-SESSION_ID="$(resolve_session_id)"
+# Session ID (the PID tag in the chat log) — resolved above, before the
+# harness-marker exit; `no-session` when unresolved (task 105).
+LOG_SESSION_TAG="${SESSION_ID:-no-session}"
 PROVIDER="${PLAYBOOK_PROVIDER:-claude}"
 
 # Append to local chat log with message ID and PID tag.
@@ -244,7 +251,7 @@ PROVIDER="${PLAYBOOK_PROVIDER:-claude}"
 append_message() {
     echo "---" >> "$LOCAL_LOG"
     echo "" >> "$LOCAL_LOG"
-    echo "**[$MSG_ID]** [$TIMESTAMP] \`HOST\` ($PROVIDER/$SESSION_ID)" >> "$LOCAL_LOG"
+    echo "**[$MSG_ID]** [$TIMESTAMP] \`HOST\` ($PROVIDER/$LOG_SESSION_TAG)" >> "$LOCAL_LOG"
     echo "" >> "$LOCAL_LOG"
     echo "$USER_MESSAGE" >> "$LOCAL_LOG"
     echo "" >> "$LOCAL_LOG"

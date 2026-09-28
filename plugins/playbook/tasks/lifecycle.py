@@ -22,14 +22,18 @@ from pathlib import Path
 from tasks.atomic import atomic_write
 from tasks.core import (
     PLAYBOOKS, _atomic_write, _find_playbook_skill, _rewrite, create_task,
-    resolve_agent_dir, resolve_session_id,
+    require_session_id, resolve_agent_dir,
 )
 from tasks.shared import _merge_verify_module, find_project_root
 
 
 def _state_file(project_path: Path) -> Path:
-    """Return per-session state file under .agent/sessions/<id>/current_state."""
-    session_id = resolve_session_id()
+    """Return per-session state file under .agent/sessions/<id>/current_state.
+
+    Creates the session dir, so it is a WRITER: an unresolved id (task 105 —
+    under the background daemon with no PLAYBOOK_SESSION_ID) exits via
+    require_session_id instead of composing `sessions/""`."""
+    session_id = require_session_id()
     state_dir = resolve_agent_dir(project_path) / "sessions" / session_id
     state_dir.mkdir(parents=True, exist_ok=True)
     return state_dir / "current_state"
@@ -206,7 +210,7 @@ def cmd_work(cmd_args):
     # Handle 'tasks work done' - deactivate current task and set Status in task.md
     if task_num == "done":
         agent_dir = resolve_agent_dir(project_path)
-        session_id = resolve_session_id()
+        session_id = require_session_id()   # task 105: never `sessions/""`
         session_state = agent_dir / "sessions" / session_id / "current_state"
 
         # Find the active task from session state file
@@ -844,6 +848,11 @@ def cmd_work(cmd_args):
         print("Code edits blocked until: tasks work <N>")
         return
 
+    # Task 105 (round-1 R1-4): identity FIRST — the resume and reopen paths
+    # below rewrite task.md, so a refused activation must be refused before
+    # them, not after (exits with SESSION_UNRESOLVED_MESSAGE when unresolved).
+    require_session_id()
+
     # Resume a BLOCKED task (#08): `tasks work <N>` is the "I am picking this
     # up" verb. Clear the block FIRST — flip status back to in_progress — so
     # normal activation below sees an ordinary in_progress task (a blocked
@@ -929,7 +938,7 @@ def cmd_work(cmd_args):
     # Auto-close previous task if all gates are checked
     agent_dir = resolve_agent_dir(project_path)
     agent_dir.mkdir(parents=True, exist_ok=True)
-    session_id = resolve_session_id()
+    session_id = require_session_id()   # task 105: never `sessions/""`
     session_dir = agent_dir / "sessions" / session_id
     session_state = session_dir / "current_state"
     prev_task = None
@@ -1214,7 +1223,7 @@ def cmd_blocked(cmd_args):
               'and what decision you need"', file=sys.stderr)
         sys.exit(1)
     agent_dir = resolve_agent_dir(project_path)
-    session_id = resolve_session_id()
+    session_id = require_session_id()   # task 105: never `sessions/""`
     state_file = agent_dir / "sessions" / session_id / "current_state"
     active = state_file.read_text(encoding="utf-8", errors="replace").strip() if state_file.exists() else None
     if not active:
@@ -1256,7 +1265,7 @@ def cmd_handoff(cmd_args):
         sys.exit(1)
     project_path = find_project_root()
     agent_dir = resolve_agent_dir(project_path)
-    session_id = resolve_session_id()
+    session_id = require_session_id()   # task 105: never `sessions/""`
     state_file = agent_dir / "sessions" / session_id / "current_state"
     active = state_file.read_text(encoding="utf-8", errors="replace").strip() \
         if state_file.exists() else None
@@ -1478,7 +1487,7 @@ def cmd_freehand(cmd_args):
             f"- [ ] Rename this task folder and header to match what was actually done, then check this gate last\n",
         )
         # Activate it
-        session_id = resolve_session_id()
+        session_id = require_session_id()   # task 105: never `sessions/""`
         session_dir = agent_dir / "sessions" / session_id
         session_dir.mkdir(parents=True, exist_ok=True)
         atomic_write(session_dir / "current_state", f"{task_num}\n")

@@ -10,6 +10,7 @@ Task 095: owner decision H2 (any project-root `*.md` is a doc for tail certifica
 Task 096: PLAN S10 (CI + docs correspondence).
 Task 099: two detect-verify doc sentences left wrong at 098's close corrected.
 Task 100: PLAN S8 — the guarantee ledger's binding audit (every cited proof read against its statement) plus the two defects it surfaced.
+Task 105: session identity under Claude Code's background daemon.
 Each fix was written against a test that failed first.
 
 ### Added
@@ -89,6 +90,40 @@ Each fix was written against a test that failed first.
   the same CI-wait pattern.
 
 ### Fixed
+
+- **Sessions hosted by Claude Code's background daemon get one stable identity, and nothing is invented when there is none** (task 105).
+  Claude Code runs background sessions under a daemon shared by every session it hosts (the hosted
+  `claude.exe --session-id …` under a pty host `claude bg-pty-host --bg-pty-host /tmp/cc-daemon-<uid>/…` under
+  `claude daemon run`); on Linux all of them have `comm` `claude.exe` (measured 2026-09-27/28). The ancestor walk in
+  both resolvers (`scripts/gate-echo-lib.sh`, `tasks/core.py`) matched only `claude|codex|agy|grok|pi`, so a hosted
+  session was invisible: each hook fell back to its own per-call `pid-$PPID`, saw "No active task" and left a dead
+  `.agent/sessions/pid-*` directory behind; recognizing `claude.exe` alone would instead have walked up to the
+  daemon, which every hosted session shares, and they would have overwritten each other's pointers.
+  - Both resolvers, in parity, recognize `claude`, `claude.exe` and any `claude*`; a daemon process is never a
+    session root and the walk stops there, as it does at an ancestor it cannot read (keeping an agent already
+    found below it, otherwise leaving the id unresolved — never a made-up `pid-$PPID`).
+  - On Linux the tree is read from `/proc/<pid>/status` and `/proc/<pid>/cmdline` — the exact argv, no `ps`. The
+    daemon is recognized when the words of basename(argv[0]) followed by argv[1:] are `claude`/`claude.exe` then
+    `bg-pty-host`/`--bg-pty-host` or `daemon run` (the pty host rewrites its title into argv[0]: `claude
+    bg-pty-host` is ONE argument, measured live); a prompt that merely names a marker does not count. Only where
+    `/proc` is missing (macOS) do the resolvers fall back to `ps -ww` (retried once, a generous 10 s Python
+    deadline, non-UTF-8 tolerant), whose argv line is split on whitespace — heuristic for an install path that
+    contains a space, a declared limitation. A resolve without `PLAYBOOK_SESSION_ID` got much cheaper
+    (20 resolves: bash 2.6 s → 0.19 s, Python 2.1 s → 0.03 s).
+  - A hosted session's hooks resolve to the hosted `claude.exe` below the daemon (hooks never receive
+    `PLAYBOOK_SESSION_ID`). With no agent between a process and the daemon and no `PLAYBOOK_SESSION_ID`, the id is
+    unresolved: every writer — the session-start, session-end, state-echo, stop, task-gate and chat-log hooks and
+    `tasks work` / `done` / `blocked` / `handoff` / `freehand` — writes no session directory and touches no
+    pointer, printing one line (`playbook: no session identity — …`, naming both possible causes). Before, an
+    empty id in session-end would have been `rm -rf .agent/sessions/`; the stop hook now blocks once instead of
+    releasing open gates.
+  - `tasks doctor` names the dead session directories its own CLI-entry GC reclaimed in that run (it used to run
+    after the sweep and always said "clean"; the SessionStart sweep is not recorded), and its resolver-parity
+    check no longer crashes on a slow `ps`.
+  Ledger rows `PB-SESSION-ID` and `PB-SESSION-POINTER-ISOLATION` updated; red-first tests in
+  `tests/test_session_daemon_identity.py` over a `/proc` fixture (`PLAYBOOK_PROC_ROOT`) and a fake `ps`, bash ↔
+  python parity on both paths. Detection depends on the daemon's argv as measured on Claude Code 2.1.283; re-check
+  it after a Claude Code upgrade.
 
 - **`command-guard-hook` with no `python3` on PATH now says so** (task 100, PLAN S8c). The arm was `command -v python3 || exit 0`:
   fail-open, as the policy says, but silent — a host without python3 allowed every shell call with no trace, while the
