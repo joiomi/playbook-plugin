@@ -1,0 +1,10 @@
+[context] full task.md + mind map delivered (no truncation)
+[tamper guard] clean
+
+- **Important — R17 omite proba cerută de owner.** [Tabelul de triaj](/home/mihnea/Documents/Workspace/playbook-plugin-dev/.agent/tasks/107-retro-091-106/task.md:151) propune doar eticheta `LISTED`, deși [decizia consemnată](/home/mihnea/Documents/Workspace/playbook-plugin-dev/.agent/tasks/107-retro-091-106/task.md:27) cere probe de disponibilitate pentru **grok și codex**; pentru un model listat, [codul actual](/home/mihnea/Documents/Workspace/playbook-plugin-dev/playbook-plugin/plugins/playbook/tasks/models_check.py:624) declară grok `OK` fără probă. Actualizează R17 să ceară explicit probele live și să folosească `LISTED` numai pentru rezultate neprobate.
+
+- **Important — [3] afirmă că promptul nu conține conversație, dar primește fragmente din ea.** [Nodul](/home/mihnea/Documents/Workspace/playbook-plugin-dev/MIND_MAP.md:8) spune „no conversation in its prompt”, în timp ce [review.py](/home/mihnea/Documents/Workspace/playbook-plugin-dev/playbook-plugin/plugins/playbook/tasks/review.py:1498) trimite `task.md`, care conține [Recent Chat](/home/mihnea/Documents/Workspace/playbook-plugin-dev/.agent/tasks/107-retro-091-106/task.md:45); acest canal poate contamina canarul S11. Precizează în ambele versiuni ale nodului că nu se trimite separat transcriptul complet și exclude fragmentele din `task.md` când testezi accesul la `chat_log.md`.
+
+- **Important — [11] indică judecătorul implicit greșit.** [Harta](/home/mihnea/Documents/Workspace/playbook-plugin-dev/MIND_MAP.md:24) spune că verificarea finală depinde de grok, dar [configurația activă](/home/mihnea/Documents/Workspace/playbook-plugin-dev/.agent/models.json:9) și [decizia Q-F](/home/mihnea/Documents/Workspace/playbook-plugin-dev/.agent/tasks/107-retro-091-106/task.md:26) îl stabilesc temporar pe codex. Actualizează [11] în ambele versiuni cu înlocuirea temporară și condiția revenirii la grok.
+
+CAP: 3/5 reported, exhausted

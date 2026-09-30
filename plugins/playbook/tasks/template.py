@@ -311,6 +311,24 @@ def time_budget_instruction(
     )
 
 
+def post_d6_clauses(settled: bool = False, delta: bool = False) -> str:
+    """Task 108 (post-D6 protocol): the severity marker every review prompt now
+    requires (so `tasks.post_d6.parse_verdict` can count findings), plus the
+    SETTLED and POST-PANEL DELTA rules when those context parts were delivered."""
+    s = ("Start every finding with its severity in bold — `**Critical**` or `**Important**` — "
+         "optionally followed by ONE tag: `[SETTLED]`, `[SETTLED-CONTRADICTED]` or `[PRE-EXISTING]`. ")
+    if settled:
+        s += ("A SETTLED block (owner rulings + findings already rejected in triage) precedes "
+              "the task context: read it first and follow its header — a ruling closes a design "
+              "choice, never a correctness defect. ")
+    if delta:
+        s += ("This is a POST-PANEL review: its object is the POST-PANEL DELTA in your context "
+              "(the newest impl panel's base → the current working tree). Every finding must cite "
+              "a line the delta changed or a claim the delta changed; a problem in code the delta "
+              "did not touch is tagged [PRE-EXISTING] — it is parked, not counted. ")
+    return s
+
+
 def plan_review_prompt(
     task_path: str,
     inline_context: bool = False,
@@ -319,6 +337,8 @@ def plan_review_prompt(
     hard_timeout_secs: "int | None" = None,
     trim_notice: str = "",
     judge_verify=None,
+    settled: bool = False,
+    delta: bool = False,
 ) -> str:
     """Return the blind judge prompt for plan review (before implementation)."""
     context_location = "provided below" if inline_context else "provided in your system prompt"
@@ -352,6 +372,7 @@ def plan_review_prompt(
         "(5) Simplify — is anything over-engineered? What can be dropped? "
         "(6) Prove it — cite file:line evidence for claims about existing code. No hand-waving. "
         "Be specific and adversarial — your job is to find problems, not approve. "
+        f"{post_d6_clauses(settled, delta)}"
         "Max 5 findings, Critical and Important only — drop Minor. "
         "Then, as your LAST line, report whether the cap bound you: "
         "`CAP: 5/5 reported, more remain` if you had to drop findings to fit, or "
@@ -373,6 +394,8 @@ def impl_review_prompt(
     hard_timeout_secs: "int | None" = None,
     trim_notice: str = "",
     judge_verify=None,
+    settled: bool = False,
+    delta: bool = False,
 ) -> str:
     """Return the blind judge prompt for implementation review (after code is written)."""
     context_location = "provided below" if inline_context else "provided in your system prompt"
@@ -406,6 +429,7 @@ def impl_review_prompt(
         "(5) Test quality — do the tests verify Intent claims or just confirm the implementation? For pure-function code (parsers, formatters, transformations), are there untested invariants that property tests would catch? "
         "(6) Prove it works — cite file:line evidence showing correctness, or construct a concrete scenario showing failure. "
         "Be specific and adversarial — your job is to find problems, not approve. "
+        f"{post_d6_clauses(settled, delta)}"
         "Max 5 findings, Critical and Important only — drop Minor. "
         "Then, as your LAST line, report whether the cap bound you: "
         "`CAP: 5/5 reported, more remain` if you had to drop findings to fit, or "
@@ -426,6 +450,8 @@ def panel_plan_review_prompt(
     hard_timeout_secs: "int | None" = None,
     trim_notice: str = "",
     judge_verify=None,
+    settled: bool = False,
+    delta: bool = False,
 ) -> str:
     """Panel judge prompt for plan review — writes to stdout, never edits task.md."""
     context_location = "provided below" if inline_context else "provided in your system prompt"
@@ -459,6 +485,7 @@ def panel_plan_review_prompt(
         "(5) Simplify — is anything over-engineered? What can be dropped? "
         "(6) Prove it — cite file:line evidence for claims about existing code. No hand-waving. "
         "Be specific and adversarial — your job is to find problems, not approve. "
+        f"{post_d6_clauses(settled, delta)}"
         "Max 5 findings, Critical and Important only — drop Minor. "
         "Then, as your LAST line, report whether the cap bound you: "
         "`CAP: 5/5 reported, more remain` if you had to drop findings to fit, or "
@@ -478,6 +505,8 @@ def panel_impl_review_prompt(
     hard_timeout_secs: "int | None" = None,
     trim_notice: str = "",
     judge_verify=None,
+    settled: bool = False,
+    delta: bool = False,
 ) -> str:
     """Panel judge prompt for impl review — writes to stdout, never edits task.md."""
     context_location = "provided below" if inline_context else "provided in your system prompt"
@@ -511,6 +540,7 @@ def panel_impl_review_prompt(
         "(5) Test quality — do the tests verify Intent claims or just confirm the implementation? For pure-function code (parsers, formatters, transformations), are there untested invariants that property tests would catch? "
         "(6) Prove it works — cite file:line evidence showing correctness, or construct a concrete scenario showing failure. "
         "Be specific and adversarial — your job is to find problems, not approve. "
+        f"{post_d6_clauses(settled, delta)}"
         "Max 5 findings, Critical and Important only — drop Minor. "
         "Then, as your LAST line, report whether the cap bound you: "
         "`CAP: 5/5 reported, more remain` if you had to drop findings to fit, or "

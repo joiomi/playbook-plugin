@@ -2531,6 +2531,19 @@ def build_panel_snapshot(project_path: Path, tree_fp: str) -> "dict | None":
         # repoint between F0 and the close is refused by tail_cert_delta.
         scopes_out[name] = {"commit": commit, "dirty": dm,
                             "identity": _scope_identity(Path(project_path), repo)}
+        # Task 108 (post-D6 protocol, part b): a reconstructible tree of this
+        # scope's WORKING state, built in a temporary index — the post-D6 single
+        # judge reviews base → current working tree. Best-effort: None when it
+        # cannot be built; the descriptor itself (tail-cert's F0) is unaffected.
+        try:
+            from tasks.post_d6 import worktree_tree_why as _wt
+            _b, _why = _wt(repo, exclude)
+            scopes_out[name]["base"] = _b
+            if not _b:
+                scopes_out[name]["base_error"] = _why or "unknown"
+        except Exception:
+            scopes_out[name]["base"] = None
+            scopes_out[name]["base_error"] = "exception while building the base"
     # Bind the effective exclusion set to F0 (impl-panel r4 codex:terra#1): adding
     # a path to `fingerprint_exclude` AFTER the panel makes the fingerprint stale
     # while hiding that path from the close-time enumeration — the close must
@@ -2932,7 +2945,11 @@ def parse_judge_rounds(text: str) -> "list[dict]":
             except (ValueError, TypeError):
                 snapshot = None
         gm = _ROUND_TAMPER_RE.search(_head)
+        # Task 108: a unique id per panel round (header-only, like the snapshot),
+        # so two panels on the SAME tree are two keys for the post-D6 run cap.
+        rim = re.search(r"^\*\*Round-id:\*\* ([0-9a-f]{8,32})[ \t]*$", _head, re.MULTILINE)
         rounds.append({
+            "round_id": rim.group(1) if rim else "",
             "mode": m.group(1).lower(),
             "verdict": vm.group(1) if vm else None,
             "tree_state": tm.group(1) if tm else "",
@@ -3471,7 +3488,7 @@ def freshness_gate_decision(*, risk: str, panel_required: bool,
 
 
 def format_verify_receipt(entries, head_sha, risk, *, reason=None, timestamp=None,
-                          dirty_files=0, freshness=None) -> str:
+                          dirty_files=0, freshness=None, post_d6=None) -> str:
     """Render ONE receipt ENTRY for the `## Verification Receipt` section (the
     heading itself belongs to upsert_task_section, which keeps entries
     newest-first). `entries` is a list of (source_label, command, rc, output);
@@ -3574,6 +3591,10 @@ def format_verify_receipt(entries, head_sha, risk, *, reason=None, timestamp=Non
         if _td and v != "TAMPER-GUARD-DEGRADED":
             out.append("- **Panel tamper guard:** the carrying impl round's tamper guard was "
                        f"DEGRADED ({' '.join(str(_td).split())})")
+    # Task 108: the post-D6 single-judge series after the newest impl panel — run
+    # count, last verdict and every owner-ok reason (`tasks.post_d6.close_receipt_line`).
+    if post_d6:
+        out.append(" ".join(str(post_d6).split()))
     if not entries:
         out.append("- **Verification:** NONE DECLARED — nothing was verified at close. "
                    "Declare `verify` in `.agent/config.json` to make close self-verifying.")

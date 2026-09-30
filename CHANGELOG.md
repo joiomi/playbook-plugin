@@ -12,10 +12,38 @@ Task 099: two detect-verify doc sentences left wrong at 098's close corrected.
 Task 100: PLAN S8 — the guarantee ledger's binding audit (every cited proof read against its statement) plus the two defects it surfaced.
 Task 105: session identity under Claude Code's background daemon.
 Task 106: a stale `PLAYBOOK_SESSION_ID` (a resumed conversation's dead `pid-N`) is ignored.
+Task 108: the post-D6 review protocol (owner decision Q-E (d), retro 107).
 Each fix was written against a test that failed first.
 
 ### Added
 
+- **The post-D6 review protocol** (task 108, owner decision Q-E (d), retro 107). Retro 107 measured the
+  single-judge series that close an assertive task after its D6 panel rounds: 17 runs, 229.3 judge-minutes,
+  68 % of them in runs 3+, rejected findings re-raised because judge.md never reached the judge. Three parts,
+  in `tasks/post_d6.py`: (a) a SETTLED block — the task's `## Owner rulings` lines plus the `REJECT` triage
+  lines of `judge.md` / `judge-archive.md` — goes first into BOTH the panel's and the single judge's context,
+  under a header that says a ruling closes a design choice, never a correctness defect; a finding tagged
+  `[SETTLED]` is not counted, `[SETTLED-CONTRADICTED]` is; (b) every impl panel's `Panel-snapshot` records,
+  per scope, a `base` tree of the working state (staged, unstaged, untracked) built in a temporary
+  `GIT_INDEX_FILE` — the real index is untouched — and `impl-review` after an impl panel reviews base →
+  current working tree (`[PRE-EXISTING]` outside it: parked, not counted); (c) `impl-review` prints
+  `POST-D6 VERDICT: PASS|FAIL`, appends each run to `post-panel-reviews.jsonl`, keeps the delivered SETTLED +
+  DELTA parts in `post-d6-context.md`, refuses a third run after the same panel (exit 2, nothing spent)
+  unless the second counted a Critical (a fourth always) or `--owner-ok --reason "…"` is given — each run
+  reserved under the task lock before any spawn, keyed by the panel round's new `**Round-id:**` — and the close
+  receipt names the runs and every owner-ok reason. A scope set changed since the panel refuses the delta; a
+  missing final `CAP:` line, or one whose count differs from the recognised findings, fails the verdict closed;
+  a corrupt run-ledger line refuses new runs until repaired; a hard-timeout run counts (`TIMEOUT`); one review
+  at a time per task — panels reserve too (a live reservation refuses a second, without writing); `[PRE-EXISTING]`
+  counts when no delta was delivered or the cited file is in the delta; `CAP: … more remain` fails closed; the
+  judge is told when its context was head-clamped; a base that could not be built records why (e.g. an unmerged
+  index). A reservation stays live while its process runs (POSIX), and a
+  rename counts both paths as delta files; the `[PRE-EXISTING]` check is file-level by owner amendment (2026-09-30).
+  Limit: the cap's key and ledger live in the agent-writable task dir (no integrity check). Every review prompt now requires findings to start with `**Critical**` or
+  `**Important**`. Limits (both owner-accepted 2026-09-29): "accepted" Critical = the judge COUNTED one (the triage's
+  acceptance is not machine-read; it errs toward one more review); judge.md does not separate a judge's output from agent triage, so a judge-written `REJECT` line would
+  also be delivered (until writer-controlled round delimiters ship — S11 item R9, raised in priority); no ref keeps a base alive — a base
+  pruned by `git gc` is reported and the judge reviews the whole task. New ledger row `PB-POST-D6-PROTOCOL`.
 - **`tasks doctor` names the plugin copies that run** (task 086, PLAN S3). The old version check compared a copy
   with itself and said PASS from every copy, while on a directory-marketplace machine the hooks run the
   marketplace checkout and `.claude/bin/tasks` runs the installed cache. The doctor now prints one line each

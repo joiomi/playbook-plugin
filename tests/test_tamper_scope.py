@@ -1081,7 +1081,8 @@ class RoundStampPreSpawn(unittest.TestCase):
 
     def test_the_panel_fingerprints_before_spawning_and_uses_it(self):
         import inspect
-        src = inspect.getsource(R.cmd_panel_review)
+        # task 108: cmd_panel_review is a thin wrapper (reservation release); the body is _cmd_panel_review
+        src = inspect.getsource(R._cmd_panel_review)
         self.assertIn("_fp_before = tree_state_fingerprint(project_path)", src)
         self.assertLess(src.index("_fp_before = tree_state_fingerprint(project_path)"),
                         src.index("executor.submit(run_judge"),

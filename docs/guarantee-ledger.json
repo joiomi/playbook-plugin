@@ -13883,6 +13883,141 @@
       "required_live_evidence": [],
       "semantic_protocol": null,
       "violation_reproduction": null
+    },
+    {
+      "id": "PB-POST-D6-PROTOCOL",
+      "category": "judges-and-reviews",
+      "statement": "The post-D6 review protocol (task 108): both context builders (panel and single judge) deliver FIRST a SETTLED block — the task's last unfenced `## Owner rulings` lines verbatim plus the judge.md/judge-archive.md triage bullets whose VERDICT is `REJECT` (right after the bullet, after its bold title, or ending inside the bold title — not a mention in prose) — under a header that says a ruling closes a design choice, never a correctness defect; every impl panel round's header carries a unique `**Round-id:**` and its Panel-snapshot records per scope a `base` tree of the working state (staged, unstaged, untracked) built in a temporary GIT_INDEX_FILE without changing the real index or `git status`; `impl-review` after an impl panel delivers the diff base → current working tree, refusing to send anything when a tree, the scope set or a scope's directory moves between building the delta and the tamper baseline, and giving task.md only the budget left after SETTLED + delta + map (a head-clamp tells the judge) (an unchanged file absent, an untracked file present; a scope set or scope directory changed since the panel refuses the delta; over budget, the stat of the same two trees — itself bounded to a third of the cap — and the exact diff commands), computes POST-D6 VERDICT (PASS = no counted Critical or Important; a tag counts only right after the severity marker; [SETTLED] is not counted, [SETTLED-CONTRADICTED] is, and [PRE-EXISTING] is not counted only when a delta was delivered and the finding (its whole text) cites no file the FULL delta changed — the file set is taken before any truncation and holds both paths of a rename; the check is deliberately at FILE level (owner amendment 2026-09-30: judges often cite wrong lines, and file level errs toward more review); the response's last non-empty line must BE a whole, bare (not code-spanned) CAP line whose count equals the recognised findings, and `more remain` is incomplete — otherwise the verdict fails closed), and RESERVES each run under the task lock before any judge is spawned: runs 1-2 after a panel are free, run 3 needs a counted Critical in run 2, run 4+ always needs `--owner-ok --reason`; a refused run exits 2 with nothing spent, one review at a time per task — a panel reserves before its tamper snapshot too, so a panel and a single judge exclude each other (a live reservation — while its owning process runs (POSIX, same host; recorded pid + host), otherwise by its OWN recorded expiry — refuses a second one without writing — its append would void the first run by tamper; a reservation older than the hard timeout + 10 min counts as spent), a corrupt ledger line refuses every new reservation until repaired (or `--owner-ok`), a run killed at its hard timeout counts (verdict TIMEOUT), a run that produced no review releases its reservation, and every owner-ok reason is recorded and named in the close receipt.",
+      "owner": [
+        {
+          "path": "plugins/playbook/tasks/post_d6.py",
+          "reference": "symbol:settled_block"
+        },
+        {
+          "path": "plugins/playbook/tasks/post_d6.py",
+          "reference": "symbol:worktree_tree"
+        },
+        {
+          "path": "plugins/playbook/tasks/post_d6.py",
+          "reference": "symbol:gate_run"
+        },
+        {
+          "path": "plugins/playbook/tasks/review.py",
+          "reference": "symbol:_cmd_single_review"
+        }
+      ],
+      "failure_consequence": "High",
+      "claim_kind": "mechanical",
+      "proofs": [
+        {
+          "type": "executable integration",
+          "path": "tests/test_post_d6.py",
+          "reference": "EndToEnd.test_protocol_end_to_end",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_post_d6.py",
+            "reference": "Verdict.test_settled_contradicted_breaks_pass"
+          },
+          "limitations": [
+            "Judges are faked (the real panel and impl-review entry points run; the judge process does not). Mutation-checked in task 108: settled_block → \"\", worktree_tree → None and gate_run → always-allow each turn it red."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "WorktreeTree.test_base_holds_unstaged_staged_and_untracked_and_leaves_real_index",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_post_d6.py",
+            "reference": "WorktreeTree.test_delta_ignores_unchanged_file_and_includes_untracked"
+          },
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "RunCap.test_third_run_refused_without_a_critical_in_run_two",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_post_d6.py",
+            "reference": "RunCap.test_third_run_allowed_with_owner_ok_reason"
+          },
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "Round1Cap.test_concurrent_reservations_never_exceed_the_cap",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_post_d6.py",
+            "reference": "Round1Cap.test_a_failed_run_frees_its_slot_a_finished_one_keeps_it"
+          },
+          "limitations": [
+            "Six separate processes reserve concurrently; exactly one is granted (one review at a time per task)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "SingleRun1.test_a_corrupt_ledger_refuses_new_reservations",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_post_d6.py",
+            "reference": "SingleRun1.test_cap_count_equal_to_the_findings_parses"
+          },
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "SingleRun2.test_a_live_reservation_blocks_a_second_run_without_writing",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_post_d6.py",
+            "reference": "SingleRun2.test_a_stale_reservation_counts_as_spent_and_does_not_block"
+          },
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_post_d6.py",
+          "reference": "EndToEnd.test_a_tree_edit_between_delta_and_tamper_baseline_sends_nothing",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_post_d6.py",
+            "reference": "Round2.test_a_live_panel_reservation_blocks_a_single_judge_and_vice_versa"
+          },
+          "limitations": [
+            "Mutation-checked in task 108 (removing the refusal turns it red)."
+          ]
+        }
+      ],
+      "applicable_platforms": [
+        "linux",
+        "macos",
+        "windows-git-bash"
+      ],
+      "applicable_providers": [
+        "claude",
+        "codex",
+        "grok"
+      ],
+      "status": "verified_by_current_executable_evidence",
+      "missing_evidence_or_limitation": [
+        "\"Accepted Critical\" (D6) is read as a Critical the judge COUNTED; whether the agent accepted it in triage is not machine-read (owner-accepted 2026-09-29: it errs toward one more review, never one fewer).",
+        "judge.md does not separate a judge's own output from agent triage, so a judge-written `REJECT` bullet would also be delivered as settled; SETTLED lowers the count only for a finding the next judge itself tags, and [SETTLED-CONTRADICTED] still counts (owner-accepted 2026-09-29 until writer-controlled round delimiters ship — S11 item R9, raised in priority).",
+        "No ref keeps a base tree alive: a base pruned by `git gc` makes the single judge review the whole task, with a `NO post-panel delta` context receipt.",
+        "The cap counts runs after the NEWEST impl panel: a new panel starts a new count — by design (the owner's rule is \"after the last panel\", and panels are themselves bounded by D6's round cap).",
+        "A run whose process is killed outright (SIGKILL, power loss) keeps its reservation and is counted: the spend happened.",
+        "A judge run that produced NO review (a 402 / out-of-credits failure, a budget-cap exit, a tamper stop) releases its reservation although it may have spent tokens — the owner's rule for the cap is to err toward one more review (2026-09-29); every such run is still in the review-spend journal.",
+        "The cap's key (`**Round-id:**` in judge.md) and its count (post-panel-reviews.jsonl) live in the agent-writable task directory with no integrity check: editing the Round-id or deleting the ledger resets the count. The protocol bounds an honest agent's spend; it is not a control against a hostile one (owner ruling (a) framing).",
+        "Reservation liveness uses os.kill(pid, 0) on POSIX only (on Windows signal 0 terminates, so the recorded expiry decides there); a reused pid can make a dead reservation look live until the pid is gone."
+      ],
+      "follow_up_phases": [],
+      "required_live_evidence": [],
+      "semantic_protocol": null,
+      "violation_reproduction": null
     }
   ]
 }

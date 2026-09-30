@@ -38,6 +38,9 @@ MIRROR_PREFIX = "scripts/lib/provider/"
 # (relative file, a substring of the call's source line) -> why it is NOT routed
 # through tasks.atomic. Every entry must still match a real site (stale entries fail).
 APPROVED = {
+    ("tasks/post_d6.py", "shutil.copyfile(real, idx)"):
+        "task 108: a copy of the git index into a private mkdtemp dir (the temporary GIT_INDEX_FILE "
+        "for the post-D6 base tree), removed in `finally` — ephemeral, never state",
     ("tasks/atomic.py", 'os.fdopen(fd, "wb")'):
         "the primitive itself: the temp file it later os.replace()s into place",
     ("tasks/atomic.py", 'os.fdopen(fd, "w", encoding=encoding, newline=newline)'):

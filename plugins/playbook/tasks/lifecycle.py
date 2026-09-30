@@ -685,9 +685,14 @@ def cmd_work(cmd_args):
                     _dirty = len([ln for ln in _porcelain.splitlines() if ln.strip()])
                 except (OSError, subprocess.SubprocessError):
                     pass
+                try:
+                    from tasks.post_d6 import close_receipt_line as _pd6_line
+                    _pd6_receipt = _pd6_line(task_file.parent)
+                except Exception:
+                    _pd6_receipt = ""
                 receipt = format_verify_receipt(
                     entries, _head, risk, reason=(reason if force else None),
-                    dirty_files=_dirty, freshness=_freshness)
+                    dirty_files=_dirty, freshness=_freshness, post_d6=_pd6_receipt)
                 # Task 058 (plan panel P1/P10): receipt + status are ONE locked
                 # transaction, composed on the bytes just read and re-checked
                 # against what earned this close. Everything expensive (verify,

@@ -1372,7 +1372,24 @@ def _tamper_banner(changes: list[str]) -> str:
     return "\n".join(lines)
 
 
+_PD6_PANEL_PENDING: "list[tuple]" = []
+
+
 def cmd_panel_review(cmd_args):
+    """Task 108 r2: releases the panel's post-D6 reservation on EVERY exit."""
+    try:
+        return _cmd_panel_review(cmd_args)
+    finally:
+        while _PD6_PANEL_PENDING:
+            _td, _rid = _PD6_PANEL_PENDING.pop()
+            try:
+                from tasks.post_d6 import finish_panel
+                finish_panel(_td, _rid)
+            except Exception:
+                pass
+
+
+def _cmd_panel_review(cmd_args):
     import subprocess
     from concurrent.futures import ProcessPoolExecutor, TimeoutError as FuturesTimeout
 
@@ -1487,9 +1504,16 @@ def cmd_panel_review(cmd_args):
     from tasks.core import (load_config, resolve_review_context_chars,
                             select_task_context)
 
+    # Task 108 (post-D6 protocol, part a): the owner's rulings + already-rejected
+    # triage lines ride FIRST in the payload so a head-clamp never drops them.
+    from tasks.post_d6 import settled_block as _settled_block
+    _settled_part = _settled_block(task_file) if (task_file and not bare) else ""
+
     def _build_payload(budget: int) -> dict:
         parts, receipts = [], []
         trim_notice = ""
+        if _settled_part:
+            parts.append(_settled_part)
         if not bare:
             if not no_mind_map:
                 mm_content = _load_mind_map(project_path)
@@ -1497,8 +1521,11 @@ def cmd_panel_review(cmd_args):
                     parts.append(f"=== MIND_MAP.md ===\n{mm_content}")
             if task_file:
                 task_content = task_file.read_text(encoding="utf-8")
+                # Task 108 r2: the task gets what is LEFT after the SETTLED block
+                # and the map, so the final head-clamp does not cut its tail.
+                _used = sum(len(x) for x in parts)
                 task_content, task_receipt = select_task_context(
-                    task_content, budget // 2)
+                    task_content, max(5_000, min(budget // 2, budget - _used - 2_000)))
                 if task_receipt:
                     receipts.append(task_receipt)
                     # Aliased on purpose: other arms' local `import re`
@@ -1528,6 +1555,10 @@ def cmd_panel_review(cmd_args):
                     parts.append(f"=== .agent/chat_log.md (recent) ===\n{chat_content}")
         sc = "\n\n".join(parts)
         if len(sc) > budget:
+            trim_notice = (trim_notice + " " if trim_notice else "") + (
+                f"your inline context was HEAD-CLAMPED to {budget:,} chars — the "
+                f"end of {task_path if task_file else 'it'} may be missing; read the "
+                "files in the repo for the full text.")
             receipts.append(
                 f"combined system context {len(sc):,} → {budget:,} chars "
                 "(head-clamped — mind map is large; raise headroom or use "
@@ -1647,6 +1678,7 @@ def cmd_panel_review(cmd_args):
                 hard_timeout_secs=timeout_secs,
                 trim_notice=_payload["trim_notice"],
                 judge_verify=judge_verify_cmds,
+                settled=bool(_settled_part),
             )
             if extra_prompt:
                 prompt += f"\n\nAdditional steering from the user:\n{extra_prompt}"
@@ -1709,6 +1741,15 @@ def cmd_panel_review(cmd_args):
         print("  ⚠ judges running UNCONTAINED (no usable OS sandbox here) — "
               "the tamper guard is the only defense against repo mutation.",
               file=sys.stderr, flush=True)
+    # Task 108 r2: reserve the task for this panel BEFORE the tamper snapshot, so
+    # a concurrent post-D6 single judge cannot append under it (and vice versa).
+    if task_file:
+        from tasks import post_d6 as _pd6p
+        _ok_p, _prid = _pd6p.reserve_panel(task_file, stale_after=(timeout_secs + 900) if timeout_secs else 7200)
+        if not _ok_p:
+            print(_pd6p.panel_refusal(task_file), file=sys.stderr, flush=True)
+            sys.exit(2)
+        _PD6_PANEL_PENDING.append((task_file.parent, _prid))
     _tamper_before = _snapshot_repo_state(project_path, task_file)
     # Task 085 R2: the tree the judges are about to see — the stamp's reference.
     from tasks.core import tree_state_fingerprint
@@ -1830,6 +1871,9 @@ def cmd_panel_review(cmd_args):
     from tasks.core import tree_state_fingerprint
     if _head_before:
         lines.append(f"**Commit:** {_head_before}\n")
+    # Task 108: a unique round id (post-D6 run cap key — see tasks.post_d6.panel_key).
+    import secrets as _secrets
+    lines.append(f"**Round-id:** {_secrets.token_hex(6)}\n")
     # Tamper-guard receipt (task 059): what the guard could and could not verify
     # for THIS round, on one line the close-gate reader can key on.
     # `degraded` marks the GUARD, not merely "something was noticed": a
@@ -2333,6 +2377,14 @@ def run_tail_cert_judge(project_path, snapshot, non_behavioral, panel_summary,
     return parse_tail_cert_verdict(raw, nonce)
 
 
+# Task 108: a post-D6 run reserved before the judge spawned and not yet finished.
+# Any exit that does not complete it (failure, budget, dead pin, tamper, timeout)
+# releases it in `cmd_single_review`'s `finally` — a run with no review is not
+# counted; only a process killed outright leaves the reservation (counted: the
+# spend happened).
+_PD6_PENDING: "list[tuple]" = []
+
+
 def cmd_single_review(cmd, cmd_args):
     """Thin owner of the temp-file registry around the real body (task 059 /
     T008 #5): whatever exit the body takes — return, `sys.exit`, or an
@@ -2341,6 +2393,13 @@ def cmd_single_review(cmd, cmd_args):
         return _cmd_single_review(cmd, cmd_args)
     finally:
         _drain_temp_registry()
+        while _PD6_PENDING:
+            _td, _rid = _PD6_PENDING.pop()
+            try:
+                from tasks.post_d6 import fail_run
+                fail_run(_td, _rid)
+            except Exception:
+                pass
 
 
 def _cmd_single_review(cmd, cmd_args):
@@ -2348,7 +2407,7 @@ def _cmd_single_review(cmd, cmd_args):
     review_cmd = cmd
     if not cmd_args:
         print(f"Error: '{review_cmd}' requires a task number", file=sys.stderr)
-        print(f"Usage: tasks {review_cmd} <number> [--backend claude|codex|agy|grok|pi] [--model <variant>] [--prompt \"...\"] [--timeout SECONDS] [--budget USD]  (default backend: models.json default_judge, ships \"opus\" (claude); --budget is claude-only)", file=sys.stderr)
+        print(f"Usage: tasks {review_cmd} <number> [--backend claude|codex|agy|grok|pi] [--model <variant>] [--prompt \"...\"] [--timeout SECONDS] [--budget USD] [--owner-ok --reason \"...\"]  (default backend: models.json default_judge, ships \"opus\" (claude); --budget is claude-only)", file=sys.stderr)
         sys.exit(1)
 
     import subprocess
@@ -2360,6 +2419,8 @@ def _cmd_single_review(cmd, cmd_args):
     timeout_flag = None   # --timeout N  HARD (overrides env / config / default)
     soft_timeout_flag = None  # --soft-timeout N  SOFT (prompt wind-down)
     budget_flag = None    # --budget N   (claude only; overrides env / config / default)
+    owner_ok_flag = False  # --owner-ok --reason "…" (task 108: past the post-D6 run cap)
+    owner_ok_reason = None
     remaining_args = []
     i = 0
     while i < len(cmd_args):
@@ -2381,9 +2442,19 @@ def _cmd_single_review(cmd, cmd_args):
         elif cmd_args[i] == "--budget" and i + 1 < len(cmd_args):
             budget_flag = cmd_args[i + 1]
             i += 2
+        elif cmd_args[i] == "--owner-ok":
+            owner_ok_flag = True
+            i += 1
+        elif cmd_args[i] == "--reason" and i + 1 < len(cmd_args):
+            owner_ok_reason = cmd_args[i + 1]
+            i += 2
         else:
             remaining_args.append(cmd_args[i])
             i += 1
+    if owner_ok_flag and not (owner_ok_reason or "").strip():
+        print('Error: --owner-ok requires --reason "why the owner allows another '
+              'post-D6 run" — the acceptance must be on the record.', file=sys.stderr)
+        sys.exit(2)
 
     # No --backend → models.json default_judge (provider or provider:variant,
     # project-overridable; since 1.5.12 ships as "opus" — the all-Claude default,
@@ -2458,11 +2529,55 @@ def _cmd_single_review(cmd, cmd_args):
     context_parts = []
     context_receipts = []
     sj_trim_notice = ""
+    # Task 108 (post-D6 protocol). (a) the SETTLED block rides first; (b) in impl
+    # mode after an impl panel whose snapshot carries per-scope bases, the judge's
+    # object is the POST-PANEL DELTA (base → current working tree); (c) the run
+    # cap is checked BEFORE anything is spent.
+    from tasks import post_d6 as _pd6
+    from tasks.core import _extract_status as _pd6_status
+    _is_impl = review_cmd == "impl-review" or (
+        review_cmd not in ("plan-review", "impl-review")
+        and _pd6_status(task_file).startswith("done"))
+    _sj_settled = _pd6.settled_block(task_file)
+    if _sj_settled:
+        context_parts.append(_sj_settled)
+    _pd6_round = _pd6.newest_impl_round(task_file.parent) if _is_impl else None
+    _pd6_panel_fp = _pd6.panel_key(_pd6_round)
+    _pd6_delta = ""
+    _pd6_rid = ""
+    _pd6_trees: dict = {}
+    _pd6_files: set = set()
+    if _pd6_round is not None:
+        if _pd6_panel_fp:
+            _ok, _run_no, _refusal, _pd6_rid = _pd6.reserve_run(
+                task_file, _pd6_panel_fp,
+                owner_ok_reason if owner_ok_flag else None,
+                stale_after=(review_timeout + 600) if review_timeout else 7200)
+            if not _ok:
+                print(_refusal, file=sys.stderr, flush=True)
+                sys.exit(2)
+            _PD6_PENDING.append((task_file.parent, _pd6_rid))
+            print(f"  post-D6: single-judge run {_run_no} after impl panel {_pd6_panel_fp}"
+                  + (f' (owner-ok: "{owner_ok_reason}")' if owner_ok_flag else ""),
+                  file=sys.stderr, flush=True)
+        _pd6_delta, _pd6_note = _pd6.delta_text(
+            project_path, _pd6_round.get("snapshot"), MAX_CONTEXT_CHARS // 4,
+            trees_out=_pd6_trees, files_out=_pd6_files)
+        if _pd6_delta:
+            context_parts.append(_pd6_delta)
+            context_receipts.append(f"post-panel delta {len(_pd6_delta):,} chars"
+                                    + (f" ({_pd6_note})" if _pd6_note else ""))
+        else:
+            _pd6_delta = ""
+            context_receipts.append(f"NO post-panel delta — {_pd6_note}; the judge reviews the whole task")
     mm_content = _load_mind_map(project_path)
     if mm_content:
         context_parts.append(f"=== MIND_MAP.md ===\n{mm_content}")
     task_content = task_file.read_text(encoding="utf-8")
-    task_content, task_receipt = select_task_context(task_content, MAX_CONTEXT_CHARS // 2)
+    # Task 108 r2: the task gets what is LEFT after SETTLED + DELTA + the map.
+    _sj_used = sum(len(x) for x in context_parts)
+    task_content, task_receipt = select_task_context(
+        task_content, max(5_000, min(MAX_CONTEXT_CHARS // 2, MAX_CONTEXT_CHARS - _sj_used - 2_000)))
     if task_receipt:
         context_receipts.append(task_receipt)
         # Aliased for the same reason as the panel arm's trim-notice site:
@@ -2476,6 +2591,9 @@ def _cmd_single_review(cmd, cmd_args):
     context_parts.append(f"=== {task_path} ===\n{task_content}")
     system_context = "\n\n".join(context_parts)
     if len(system_context) > MAX_CONTEXT_CHARS:
+        sj_trim_notice = (sj_trim_notice + " " if sj_trim_notice else "") + (
+            f"your inline context was HEAD-CLAMPED to {MAX_CONTEXT_CHARS:,} chars — the "
+            f"end of {task_path} may be missing; read it in the repo for the full text.")
         context_receipts.append(
             f"combined system context {len(system_context):,} → {MAX_CONTEXT_CHARS:,} "
             "chars (head-clamped)")
@@ -2505,6 +2623,8 @@ def _cmd_single_review(cmd, cmd_args):
             hard_timeout_secs=review_timeout,
             trim_notice=sj_trim_notice,
             judge_verify=sj_judge_verify,
+            settled=bool(_sj_settled),
+            delta=bool(_pd6_delta),
         )
 
     review_label = "plan review" if review_mode == "plan" else "impl review"
@@ -2615,6 +2735,16 @@ def _cmd_single_review(cmd, cmd_args):
                 duration_ms=int((time.monotonic() - _spend_t0) * 1000),
                 status="timeout", usage=_to_usage,
                 error=_judge_error("", "timeout", timeout_label=review_timeout_label))
+        # Task 108: a judge killed at its hard timeout SPENT its budget — the
+        # post-D6 run counts (verdict TIMEOUT); only a run with no spend is released.
+        if _pd6_rid and (task_file.parent, _pd6_rid) in _PD6_PENDING:
+            try:
+                _pd6.finish_run(task_file.parent, _pd6_rid, {
+                    "panel": _pd6_panel_fp, "verdict": "TIMEOUT", "critical": 0,
+                    "important": 0, "delta": bool(_pd6_delta)})
+                _PD6_PENDING.remove((task_file.parent, _pd6_rid))
+            except OSError:
+                pass
         sys.exit(1)
 
     # Judge tamper guard (#1), same contract as the panel path: snapshot the
@@ -2625,6 +2755,29 @@ def _cmd_single_review(cmd, cmd_args):
               "the tamper guard is the only defense against repo mutation.",
               file=sys.stderr, flush=True)
     _tamper_before = _snapshot_repo_state(project_path, task_file)
+    # Task 108 r2: the delta was built BEFORE this baseline — refuse if the tree
+    # moved in between (the judge would review a stale delta the guard calls clean).
+    if _pd6_delta and _pd6_trees:
+        _snap_scopes = (_pd6_round.get("snapshot") or {}).get("scopes") or {}
+        _pd6_ex = [x for x in ((_pd6_round.get("snapshot") or {}).get("exclude") or []) if isinstance(x, str)]
+        from tasks.core import _tail_cert_scopes as _pd6_scopes, load_config as _pd6_lc
+        _live = _pd6_scopes(Path(project_path), _pd6_lc(Path(project_path)))
+        # D2-2: the scope SET (and each identity) must still be the delta's — a
+        # code_root added in between is otherwise outside every compared tree.
+        from tasks.core import _scope_identity as _pd6_ident
+        _moved = set(_live) != set(_pd6_trees) or any(
+            isinstance(_snap_scopes.get(_n), dict)
+            and _snap_scopes[_n].get("identity") != _pd6_ident(Path(project_path), _live[_n])
+            for _n in _live if _n in _snap_scopes)
+        for _nm, _cur in ([] if _moved else _pd6_trees.items()):
+            if _pd6.worktree_tree(_live.get(_nm, Path(project_path)), _pd6_ex) != _cur:
+                _moved = True
+                break
+        if _moved:
+            print("  post-D6: the working tree changed while the delta was being built "
+                  "(a tree, the scope set or a scope's directory moved) — nothing sent; "
+                  "run impl-review again.", file=sys.stderr, flush=True)
+            sys.exit(1)
     # One advisory before the backend dispatch — covers plan-review AND
     # impl-review across every backend (task 038).
     _print_background_advisory(review_timeout)
@@ -3132,6 +3285,33 @@ def _cmd_single_review(cmd, cmd_args):
     # review: writing any earlier would ingest findings the very next lines
     # declare untrustworthy. `saved_review_text` is the same content written
     # to the backend log, not raw stdout, so log and task.md never diverge.
+    # Task 108 (post-D6 protocol): after an impl panel, every saved single-judge
+    # review gets a mechanical verdict (PASS = no counted Critical/Important; a
+    # [SETTLED] or [PRE-EXISTING] finding is not counted, [SETTLED-CONTRADICTED]
+    # is), is appended to the task's run ledger (the cap counts it), and the exact
+    # SETTLED + DELTA parts the judge received are kept beside the log.
+    if (_pd6_round is not None and _pd6_panel_fp and not _log_save_failed
+            and saved_review_text and saved_review_text.strip()):
+        _v = _pd6.parse_verdict(saved_review_text,
+                                delta_files=(_pd6_files or _pd6.delta_files(_pd6_delta)) if _pd6_delta else None)
+        print("\n" + _pd6.verdict_line(_v), flush=True)
+        try:
+            _pd6.finish_run(task_file.parent, _pd6_rid, {
+                "panel": _pd6_panel_fp, "backend": _sj_spec, "verdict": _v["verdict"],
+                "critical": _v["critical"], "important": _v["important"],
+                "settled": _v["settled"], "contradicted": _v["contradicted"],
+                "pre_existing": _v["pre_existing"], "unparsed": _v["unparsed"],
+                "delta": bool(_pd6_delta),
+                "owner_ok": (" ".join(owner_ok_reason.split())
+                             if owner_ok_flag and owner_ok_reason else None)})
+            if (task_file.parent, _pd6_rid) in _PD6_PENDING:
+                _PD6_PENDING.remove((task_file.parent, _pd6_rid))
+            atomic_write(task_file.parent / _pd6.CONTEXT_NAME,
+                         (_sj_settled or "(no SETTLED block)\n") + "\n"
+                         + (_pd6_delta or "(no POST-PANEL DELTA)\n"))
+        except OSError as _pd6_err:
+            print(f"  ⚠ could not record the post-D6 run ({_pd6_err}) — the cap "
+                  "will not count it", file=sys.stderr, flush=True)
     if _log_save_failed and result.returncode == 0 and saved_review_text and saved_review_text.strip():
         # The durable judge log could not be written (task dir deleted/locked,
         # or judge.log pre-existing as a directory). Do NOT ingest findings with

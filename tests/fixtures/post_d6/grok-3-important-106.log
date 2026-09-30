@@ -1,0 +1,10 @@
+[context] full task.md + mind map delivered (no truncation)
+[tamper guard] clean
+
+Revizuiesc implementarea taskului 106 față de intenția originală și de codul schimbat. Citesc contextul și diff-ul înainte să formulez constatările.**Important** — `plugins/playbook/scripts/command_guard.py:1298` — With `PLAYBOOK_SESSION_ID` unset, `_active_task_is_irreversible` returns before `resolve_session_id`, so the measured hook environment (no env id; `task-gate-hook` still walks) never consults the walked session and an in-progress irreversible task does not acknowledge. Call `resolve_session_id(quiet=True)` on POSIX even when the variable is missing, and keep the path check on the resolved id.
+
+**Important** — `plugins/playbook/scripts/command_guard.py:1428` — The allow/block journal entry records the raw `PLAYBOOK_SESSION_ID`, not the id `resolve_session_id` just chose, so a stale or sibling env is what the enforcement log attributes the decision to. Pass the resolved `sid` into both `j.append` calls.
+
+**Important** — `tests/test_session_stale_env_id.py:348` — `test_guard_follows_a_sibling_env_id_to_the_walked_session` points `pid-400` and `pid-4713` at the same `001-t/task.md`, so the guard still passes if it honors the sibling pointer; the ledger cites this with no limitation. Give the sibling its own task whose risk differs from the walked session and assert which pointer decided.
+
+CAP: 3/5 reported, exhausted

@@ -322,6 +322,10 @@ After all work patterns complete, before code becomes permanent:
 
 `tasks panel-review` / `impl-review` / `plan-review` routinely take longer than the 600 s foreground tool-call cap (a full panel is minutes per seat). Launched in the foreground they get **killed mid-run** and you lose the work. Always launch them **detached** (`… &`) and poll for completion, then read `judge.md`. The CLI prints a one-line advisory at start whenever a run's hard timeout can exceed the cap.
 
+## Owner rulings and the post-panel judge
+
+Write each owner decision under `## Owner rulings` (`<!-- pin -->`, one dated verbatim ruling per line). Every review receives it, together with the `REJECT` triage lines of `judge.md`, as a SETTLED block: a judge tags a re-raise `[SETTLED]` (not counted) and a ruling the code contradicts, or that hides a defect, `[SETTLED-CONTRADICTED]` (counted). After an impl panel, `tasks impl-review <N>` reviews only the delta from the panel's saved working-tree base to the current tree (`[PRE-EXISTING]` outside it: parked, not counted), prints `POST-D6 VERDICT: PASS|FAIL`, and refuses a third run after the same panel unless the second counted a Critical or the owner passes `--owner-ok --reason "…"`.
+
 ## Waiting on CI — push, then check at the next gate
 
 A CI run can outlast any foreground wait (a slow lane is tens of minutes). Push, note the run id, and keep working; check the run at the next gate that needs it — `gh run watch <id>` inside a background `Monitor`, or `gh run view <id>` when you come back. Never block in place on it, and never tick a gate that needs a green run (a release, a hook change) before the run is green.
