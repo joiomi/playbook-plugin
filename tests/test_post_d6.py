@@ -394,13 +394,27 @@ class Round1Cap(_TmpDir):
         # threads would prove nothing (sonnet Critical / codex: the gate→append race)
         tf = self.tmp / "task.md"
         tf.write_text("# t\n", encoding="utf-8")
-        code = ("import sys; sys.path.insert(0, sys.argv[1]); from tasks import post_d6; "
-                "print(int(post_d6.reserve_run(sys.argv[2], 'p', None)[0]))")
-        procs = [subprocess.Popen([sys.executable, "-c", code, str(_HERE.parent / "plugins/playbook"), str(tf)],
-                                  stdout=subprocess.PIPE, text=True) for _ in range(6)]
-        results = [int(p.communicate(timeout=120)[0].strip() or 0) for p in procs]
-        # run 2 (task 108): one run at a time per task — a live reservation blocks the
-        # rest, so exactly ONE of six concurrent processes is granted (≤ the cap of 2)
+        # Each child reserves, prints, then STAYS ALIVE until the release file exists:
+        # since D2-3 a reservation is live exactly while its process runs, so the
+        # children must overlap. (The first version let each child exit at once; on
+        # the CI py3.12 lane a child exited before the next checked, and the dead
+        # owner's reservation correctly counted as spent: 2 granted — reproduced
+        # locally by running them one after another.)
+        release = self.tmp / "release"
+        code = ("import sys, time, pathlib; sys.path.insert(0, sys.argv[1]); from tasks import post_d6; "
+                "print(int(post_d6.reserve_run(sys.argv[2], 'p', None)[0]), flush=True); "
+                "rel = pathlib.Path(sys.argv[3]); t0 = time.time()\n"
+                "while not rel.exists() and time.time() - t0 < 120: time.sleep(0.05)")
+        procs, results = [], []
+        for _ in range(6):          # one after another, each still alive when the next tries
+            pr = subprocess.Popen([sys.executable, "-c", code, str(_HERE.parent / "plugins/playbook"),
+                                   str(tf), str(release)], stdout=subprocess.PIPE, text=True)
+            procs.append(pr)
+            results.append(int((pr.stdout.readline() or "0").strip() or 0))
+        release.write_text("go", encoding="utf-8")
+        for pr in procs:
+            pr.communicate(timeout=120)
+        # one review at a time per task: exactly ONE of six live processes is granted
         self.assertEqual(sum(results), 1, results)
         self.assertEqual(len(post_d6.read_runs(self.tmp)), 1)
 
