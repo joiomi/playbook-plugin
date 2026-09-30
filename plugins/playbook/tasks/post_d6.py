@@ -273,7 +273,10 @@ def worktree_tree_why(repo: Path, exclude: "list[str]") -> "tuple[str | None, st
         env = dict(os.environ, GIT_INDEX_FILE=str(idx))
         env.pop("GIT_WORK_TREE", None)
         if real.is_file():
-            shutil.copyfile(real, idx)          # keeps the stat cache: no full re-hash
+            # copy2: keep the stat cache (no full re-hash) AND the index's own mtime —
+            # git re-hashes a "racily clean" entry only while the index is not newer
+            # than it; a fresh mtime on the copy hid a same-size edit (CI macOS, 108).
+            shutil.copy2(real, idx)
         else:
             head = _git(repo, ["rev-parse", "--verify", "-q", "HEAD"])
             seed = ["read-tree", "HEAD"] if head.returncode == 0 else ["read-tree", "--empty"]

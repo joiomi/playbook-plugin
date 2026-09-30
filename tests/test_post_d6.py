@@ -248,6 +248,26 @@ class WorktreeTree(_TmpDir):
         self.assertIn("+fresh = True", text)
         self.assertNotIn("keep.py", text)
 
+    def test_a_racy_same_size_edit_is_in_the_delta(self):
+        # CI macOS (run 36689720491): `v = 1` -> `v = 3` (same size, same timestamp at
+        # the filesystem's granularity). git re-hashes such a "racily clean" entry only
+        # because the INDEX file is not newer than it; a copy with a fresh mtime lost that
+        # and the edit vanished from the delta. Built deterministically here:
+        idx = self.repo / ".git" / "index"
+        past = 1_600_000_000_000_000_000                        # ns, well in the past
+        os.utime(self.repo / "edit.py", ns=(past, past))
+        subprocess.run(["git", "status", "--porcelain"], cwd=self.repo, capture_output=True)  # entry now has mtime T, unsmudged
+        base = post_d6.worktree_tree(self.repo, self.exclude)
+        (self.repo / "edit.py").write_text("v = 3\n", encoding="utf-8")   # same size
+        os.utime(self.repo / "edit.py", ns=(past, past))                   # same stat as the entry
+        os.utime(idx, ns=(past, past))                                     # the real index is racy
+        ro = dict(os.environ, GIT_OPTIONAL_LOCKS="0")
+        self.assertIn("edit.py", subprocess.run(["git", "status", "--porcelain"], cwd=self.repo,
+                                                capture_output=True, text=True, env=ro).stdout,
+                      "precondition: git itself sees the racy edit")
+        text, note = post_d6.scope_delta(self.repo, base, self.exclude)
+        self.assertIn("+v = 3", text or "", note)
+
     def test_missing_base_object_is_reported_not_guessed(self):
         text, note = post_d6.scope_delta(self.repo, "0" * 40, self.exclude)
         self.assertIsNone(text)
@@ -930,6 +950,8 @@ class EndToEnd(unittest.TestCase):
         (self.d / "fresh.py").write_text("fresh = True\n", encoding="utf-8")
         code, err, out = self._single(
             "**Important** [SETTLED] — `edit.py:1` re-raises the no-export ruling.\n\nCAP: 1/5 reported, exhausted\n")
+        # CI Windows (run 36689720491) spawned no judge here: say why if it recurs
+        self.assertTrue(self.single_calls, f"no judge spawned (exit {code}): {err[-1500:]}")
         seen = self.single_calls[-1]
         self.assertIn("=== SETTLED", seen)
         self.assertIn("POST-PANEL DELTA", seen)
