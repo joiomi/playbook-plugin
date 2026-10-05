@@ -1974,7 +1974,10 @@ class GauntletHookStepsAsVectors(unittest.TestCase):
                     env["CLAUDE_ENV_FILE"] = str(d / "envfile")
                     env["PLAYBOOK_PROC_ROOT"] = agent_proc_root(d / "anc", _os.getpid(), "claude")
                     env.pop("PLAYBOOK_SESSION_ID", None)
-                    sid = f"pid-{_os.getpid()}"
+                    # Windows has no ancestry walk: with no env id the resolver
+                    # answers the shared fallback (tasks 105/106). CI's Windows
+                    # lane (run 37290635414) showed the POSIX id expected there.
+                    sid = "pid-win-fallback" if sys.platform == "win32" else f"pid-{_os.getpid()}"
                 r = subprocess.run([bash_or_skip(), str(self.PLUGIN / "scripts" / hook)],
                                    input=self._payload(d, pay), cwd=d, env=env,
                                    capture_output=True, text=True, timeout=60)
