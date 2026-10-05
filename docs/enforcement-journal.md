@@ -42,8 +42,11 @@ truth.
 
 Emitted by the gate/guard/stop/batch hooks and by the close path. `hook` is one
 of `task-gate`, `command-guard`, `stop`, `gate-batch-check`, or `close`.
-`task-gate` writes `allow` or `block`; `command-guard`/`stop`/`gate-batch-check`
-write `block`; the **close** path writes a `record` (`hook="close"`,
+`task-gate` writes `allow` or `block` (its Bash task-dir refusal too, as
+`reason="manual task dir creation"`, since task 110); `command-guard` writes
+`block`, and `allow` for an acknowledged dangerous command with
+`reason="ack-irreversible-task:<rule>"` or `"ack-operator-env:<rule>"` (task 110);
+`stop`/`gate-batch-check` write `block`; the **close** path writes a `record` (`hook="close"`,
 `reason="verify contract"`) logging the verify bar a close ran. Optional fields:
 `tool`, `path`, `command` (the command head, capped). See
 `PB-ENFORCEMENT-JOURNAL`.

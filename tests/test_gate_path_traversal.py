@@ -229,7 +229,10 @@ class ManualTaskDirGuard(unittest.TestCase):
                     f"{tail} | cat",
                     f"{tail} &",
                     f"({tail})",
-                    f"echo $(ln -s {self.project} {late}) {tail}",
+                    # Task 110: was `echo $(ln -s …) {tail}` — there mkdir is only an
+                    # ARGUMENT of echo and creates nothing (item 31's narrowing
+                    # allows it); the substitution-then-mkdir shape it meant is this:
+                    f"echo $(ln -s {self.project} {late}) && {tail}",
                     f"true\n{tail}",
                     f"X=1 {tail}"):
             r = self._run(cmd)
@@ -463,6 +466,323 @@ class ManualTaskDirHelperPortability(unittest.TestCase):
         m = self._mod()
         with mock.patch.object(m.os, "name", "nt"):
             self.assertTrue(m.may_be_inside("mk" "dir -p /tmp/x/.agent/tasks/1", "/c/proj"))
+
+
+# ── task 110 (PLAN S11 fix batch, group GUARD): the task-dir guard ────────────
+# Source: task 109's gauntlet (REPORT.md G2-02, G2-13; parked R8, R15, item 31)
+# and 085 round 3 V4. Written before the fix and seen failing (record: task 110).
+
+class TaskDirGuardFixBatch110(unittest.TestCase):
+    MK = "mk" + "dir"
+    TD = ".agent/" + "tasks"
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.base = Path(self._tmp.name)
+        (self.base / "proj" / ".agent" / "tasks").mkdir(parents=True)
+
+    def _run(self, command):
+        env = dict(os.environ, PLAYBOOK_SESSION_ID="pid-mkdir-test")
+        env.pop("BASH_ENV", None)
+        return subprocess.run(
+            [bash_or_skip(), str(HOOK)], cwd=self.base / "proj", env=env, text=True,
+            input=json.dumps({"tool_name": "Bash", "tool_input": {"command": command}}),
+            capture_output=True)
+
+    def _journal(self):
+        p = self.base / "proj" / ".agent" / "journal" / "enforcement.jsonl"
+        if not p.exists():
+            return []
+        return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+    def test_a_variable_before_a_final_dotagent_is_not_a_task_dir(self):
+        # G2-02 / R15 (a REGRESSION against 1.5.45, 109 H09): the variable-hint
+        # rule took `.ag` anywhere next to a variable as a task-dir hint, but a
+        # word that ENDS in `.agent` cannot add a `tasks` component — exactly as
+        # unknowable as the allowed `"$D/build"` (owner, 2026-09-23).
+        mk = self.MK
+        for cmd in ('N=$PWD/p2; ' + mk + ' -p "$N/.agent"',
+                    'N=$PWD/p2; ' + mk + ' -p "$N/.agent" && cp a.json "$N/.agent/"',
+                    mk + ' -p "$HOME/.agent"', mk + ' -p "${WORK}/.agent/"'):
+            with self.subTest(cmd=cmd):
+                r = self._run(cmd)
+                self.assertEqual(r.returncode, 0, f"bare .agent dir refused: {cmd!r}: {r.stderr}")
+
+    def test_a_variable_that_can_still_complete_a_task_dir_blocks(self):
+        # controls for the narrowing: a visible `tasks`, or a variable AFTER the
+        # `.ag` hint, can still spell a task dir
+        mk = self.MK
+        for cmd in ('D=agent; ' + mk + ' -p .$D/tasks/999-x', 'T=tasks; ' + mk + ' -p .agent/$T/999-x',
+                    mk + ' -p "$N/.agent/tasks/999-x"', mk + ' -p .ag$X/tasks',
+                    mk + ' -p ".agent/${T}"'):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self._run(cmd).returncode, 2, cmd)
+
+    def test_shell_special_parameters_are_unresolved(self):
+        # 085 round 3 V4 / R8: `$@`, `$*`, `$1` … are expanded at run time;
+        # `_UNRESOLVED` missed the special ones, so `.$@/tasks/9-x` passed.
+        mk = self.MK
+        for cmd in ("set -- agent; " + mk + " -p .$@/tasks/999-x",
+                    "set -- agent; " + mk + " -p .$*/tasks/999-x",
+                    "set -- agent; " + mk + " -p .${@}/tasks/999-x",
+                    "set -- agent; " + mk + " -p .$1/tasks/999-x"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self._run(cmd).returncode, 2, cmd)
+
+    def test_text_that_only_mentions_mkdir_is_not_a_task_dir(self):
+        # Item 31 / R8 (live: the dev repo's own hook refused `tasks new` for this
+        # very task, a heredoc note, and a python script writing a report): the
+        # trigger fires on the WORD mkdir anywhere, so data was judged as a run.
+        # Only a command-position mkdir creates a directory.
+        mk, td = self.MK, self.TD
+        for cmd in (f"cat > note.md <<'EOF'\nreminder: never {mk} -p {td}/1-x by hand\nEOF",
+                    f"cat > note.md <<'EOF'\n{mk} -p {td}/1-x\nEOF",
+                    f'echo "do not run {mk} -p {td}/1-x" > note.md',
+                    f'.claude/bin/tasks new bugfix x "intent: a manual {mk} -p {td}/9-x is refused"',
+                    f'git commit -m "guard: {mk} -p {td}/9-x stays refused"',
+                    f'grep -n "{mk} -p {td}" CHANGELOG.md',
+                    f"printf '%s\\n' '{mk} -p {td}/9-x' >> notes.txt"):
+            with self.subTest(cmd=cmd):
+                r = self._run(cmd)
+                self.assertEqual(r.returncode, 0, f"a mention was judged as a run: {cmd!r}: {r.stderr}")
+
+    def test_a_mkdir_that_really_runs_still_blocks(self):
+        # the narrowing must keep every command position: wrappers, a shell's -c,
+        # eval, a substitution, xargs, find -exec, a heredoc a SHELL reads, a later
+        # line, a group, a herestring
+        mk, td = self.MK, self.TD
+        for cmd in (f"{mk} -p {td}/999-x", f"sudo {mk} -p {td}/999-x",
+                    f"bash -c '{mk} -p {td}/999-x'", f'eval "{mk} -p {td}/999-x"',
+                    f"echo $({mk} -p {td}/999-x)", f"echo ok; {mk} -p {td}/999-x",
+                    f"xargs {mk} -p <<< {td}/999-x",
+                    f"find . -maxdepth 0 -exec {mk} -p {td}/999-x \\;",
+                    f"bash <<'EOF'\n{mk} -p {td}/999-x\nEOF",
+                    f"true\n{mk} -p {td}/999-x", f"( {mk} -p {td}/999-x )",
+                    f"{{ {mk} -p {td}/999-x; }}", f"bash <<< '{mk} -p {td}/999-x'",
+                    f"nohup {mk} -p {td}/999-x", f"timeout 5 {mk} -p {td}/999-x",
+                    "mk{d,z}ir -p " + td + "/999-x", "$'\\x6d'kdir -p " + td + "/999-x"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self._run(cmd).returncode, 2, cmd)
+
+    def test_the_block_is_journalled(self):
+        # G2-13 (109 H08): Guard 2's refusal wrote no journal line, while Guard 0's
+        # (a task.md Write) does.
+        r = self._run(f"{self.MK} -p {self.TD}/999-x")
+        self.assertEqual(r.returncode, 2)
+        rows = [x for x in self._journal() if x.get("hook") == "task-gate"]
+        self.assertEqual(len(rows), 1, rows)
+        self.assertEqual((rows[0]["decision"], rows[0]["reason"]), ("block", "manual task dir creation"))
+        self.assertEqual(rows[0].get("tool"), "Bash")
+        self.assertIn(self.TD, rows[0].get("command", ""))
+
+
+class TaskDirGuardImplPanelRound1(unittest.TestCase):
+    """Task 110 impl panel round 1 (opus, sol-high): the first narrowing allowed
+    whenever no command head READ `mkdir`, so a head it could not resolve and a
+    wrapper command_guard does not model passed — all refused by 1.5.45. A
+    mkdir word is inert now only in masked data or among the arguments of a
+    known read/print command."""
+    MK, TD = TaskDirGuardFixBatch110.MK, TaskDirGuardFixBatch110.TD
+    setUp = TaskDirGuardFixBatch110.setUp
+    _run = TaskDirGuardFixBatch110._run
+
+    def test_unresolved_heads_and_unmodelled_wrappers_block(self):
+        mk, td = self.MK, self.TD
+        for cmd in (f"M={mk}; $M -p {td}/999-x",
+                    f'"$(echo {mk})" -p {td}/999-x',
+                    f"`echo {mk}` -p {td}/999-x",
+                    f"busybox {mk} -p {td}/999-x",
+                    f"flock /tmp/l {mk} -p {td}/999-x",
+                    f"rg --pre {mk} x {td}/999-x",
+                    f"git -c alias.x='!{mk} {td}/999-x' x"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self._run(cmd).returncode, 2, cmd)
+
+    def test_a_parallel_too_large_to_enumerate_blocks(self):
+        mk, td = self.MK, self.TD
+        many = " ".join(f"{td}/{i}-x" for i in range(600))
+        self.assertEqual(self._run(f"parallel {{1}}{{2}} ::: {mk} ::: {many} ::: a b").returncode, 2)
+
+    def test_a_shell_heredoc_body_is_a_script_wherever_it_sits(self):
+        # the quoted-heredoc sink was read from the FIRST command of the line
+        mk, td = self.MK, self.TD
+        for cmd in (f"cd /tmp; bash <<'EOF'\n{mk} -p {td}/999-x\nEOF",
+                    f"cat <<'EOF' | bash\n{mk} -p {td}/999-x\nEOF",
+                    f"true && sudo sh <<'EOF'\n{mk} -p {td}/999-x\nEOF"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self._run(cmd).returncode, 2, cmd)
+
+    def test_mentions_in_read_print_commands_still_pass(self):
+        mk, td = self.MK, self.TD
+        for cmd in (f'git commit -m "note: {mk} {td}/999-x is refused"',
+                    f"grep -n '{mk} -p {td}' notes.md",
+                    f".claude/bin/tasks new quick a 'refuse {mk} {td}/999-x'",
+                    f"echo {mk} {td}/999-x",
+                    f"cat <<'EOF' > n.md\n{mk} -p {td}/999-x\nEOF",
+                    f"cd /tmp; cat >> n.md <<'EOF'\n- a `{mk} -p {td}/999-x` note\nEOF",
+                    f"cd /tmp; python3 - <<'PY'\nprint('{mk} -p {td}/999-x')\nPY"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self._run(cmd).returncode, 0, cmd)
+
+
+class TaskDirGuardImplPanelRound2(unittest.TestCase):
+    """Task 110 impl panel round 2, class 6 (opus) — a REGRESSION against 1.5.45.
+    The narrowing took a mkdir word for inert whenever it sat in masked data or
+    among a read/print command's arguments, without asking whether another
+    command of the SAME call could run that text: a script written through a
+    file-sink heredoc or by echo/printf and then run, a read command's output
+    piped into a shell, a quoted heredoc whose reader the helper cannot name.
+    1.5.45 refused every one (measured on three roots, record `measure/`). A
+    mention is inert now only while EVERY command of the call is one the helper
+    knows to read, print or write text."""
+    MK, TD = TaskDirGuardFixBatch110.MK, TaskDirGuardFixBatch110.TD
+    setUp = TaskDirGuardFixBatch110.setUp
+    _run = TaskDirGuardFixBatch110._run
+
+    def test_text_one_command_writes_is_not_inert_when_the_call_can_run_it(self):
+        body = f"{self.MK} -p {self.TD}/999-x"
+        sink = f"cat > /tmp/s.sh <<'EOF'\n{body}\nEOF\n"
+        for cmd in (sink + "bash /tmp/s.sh",
+                    f"cat > /tmp/s.sh <<EOF\n{body}\nEOF\nsh /tmp/s.sh",
+                    f"tee /tmp/s.sh <<'EOF'\n{body}\nEOF\nbash /tmp/s.sh",
+                    sink + ". /tmp/s.sh",
+                    sink + "chmod +x /tmp/s.sh && /tmp/s.sh",
+                    sink + "bash < /tmp/s.sh",
+                    sink + "make -f /tmp/s.sh",
+                    f"echo '{body}' > /tmp/s.sh; bash /tmp/s.sh",
+                    f"printf '%s\\n' '{body}' > /tmp/s.sh && sh /tmp/s.sh",
+                    f"echo '{body}' | bash",
+                    f"grep -h '{body}' notes.md | sh",
+                    f"python3 - <<'PY'\nopen('/tmp/s.sh','w').write('{body}')\nPY\nbash /tmp/s.sh"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self._run(cmd).returncode, 2, cmd)
+
+    def test_a_quoted_heredoc_with_a_reader_the_helper_cannot_name_is_not_data(self):
+        body = f"{self.MK} -p {self.TD}/999-x"
+        for reader in ("su -", "sudo -s", "frobnicate --stdin"):
+            cmd = f"{reader} <<'EOF'\n{body}\nEOF"
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self._run(cmd).returncode, 2, cmd)
+
+    def test_a_read_command_that_can_be_made_to_run_a_program_is_not_read_only(self):
+        # The closed list holds only commands that cannot run what the call
+        # wrote. A pager or sorter that can start a helper program is not on it,
+        # and an environment prefix can turn any tool into one that does.
+        body = f"{self.MK} -p {self.TD}/999-x"
+        sink = f"cat > /tmp/s.sh <<'EOF'\n{body}\nEOF\n"
+        for cmd in (sink + "less /tmp/s.sh", sink + "sort /tmp/s.sh",
+                    sink + "PAGER=/tmp/s.sh git log -1",
+                    sink + "X=/tmp/s.sh cat /tmp/s.sh"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self._run(cmd).returncode, 2, cmd)
+
+    def test_the_read_only_list_holds_only_in_an_unchanged_environment_and_for_bare_names(self):
+        # My own review after post-D6 run 1, same class: the list said "this
+        # command cannot run what the call wrote", and three things made that
+        # false. (1) A path-qualified head may BE the file the call wrote, named
+        # like a listed tool. (2) An assignment, an `export`, an environment
+        # prefix change what a listed tool starts. (3) git and the `tasks` CLI
+        # start programs they are configured with (a hook, the verify command).
+        # So: a path-qualified head, git and `tasks` count only when no command
+        # of the call writes a file, and any environment change takes the call
+        # off the list.
+        body = f"{self.MK} -p {self.TD}/999-x"
+        sink = f"cat > /tmp/s.sh <<'EOF'\n{body}\nEOF\n"
+        for cmd in (f"cat > /tmp/grep <<'EOF'\n{body}\nEOF\n/tmp/grep x",
+                    sink + ".claude/bin/tasks status",
+                    sink + "git commit -m x",
+                    sink + "git add s.sh && git commit -m x",
+                    sink + "export EDITOR=/tmp/s.sh\ngit commit",
+                    sink + "PATH=/tmp:/usr/bin\ngrep x y",
+                    f"X=1 python3 - <<'PY'\nprint('never run {body} by hand')\nPY",
+                    sink + ".venv/bin/python - <<'PY'\nprint(1)\nPY"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self._run(cmd).returncode, 2, cmd)
+
+    def test_a_write_counts_however_it_is_spelled(self):
+        # Post-D6 run 2 (codex): "the call writes no file" was decided from the
+        # output redirections written as their own word. A read-write
+        # redirection, an operator glued to the word before it, and a listed
+        # command's own output-file operand all write a file too.
+        body = f"{self.MK} -p {self.TD}/999-x"
+        tool = "/tmp/grep"                             # path-qualified, named like a listed tool
+        for write in (f"echo '{body}' 1<> {tool}", f"echo '{body}' <> {tool}",
+                      f"echo '{body}'>{tool}", f"echo '{body}'>>{tool}",
+                      f"echo '{body}' >& {tool}", f"echo '{body}' &>> {tool}",
+                      f"echo '{body}' >| {tool}", f"echo '{body}' | uniq - {tool}",
+                      f"echo '{body}'; git log -1 --output={tool}",
+                      # inside a substitution that itself sits in double quotes
+                      f"echo \"$(echo '{body}' > {tool})\"",
+                      f"echo \"$(echo \"{body}\" > {tool})\"",
+                      f"echo \"`echo '{body}' > {tool}`\""):
+            cmd = f"{write}; {tool} x"
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self._run(cmd).returncode, 2, cmd)
+        # controls: a redirection that writes no file
+        for cmd in (f"echo 'never run {body}' 2>&1; .claude/bin/tasks status",
+                    f"echo 'never run {body}' > /dev/null; .claude/bin/tasks status",
+                    f"grep -c '{body}' notes.md 2>/dev/null; git status"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self._run(cmd).returncode, 0, cmd)
+
+    def test_an_environment_change_counts_however_it_is_made(self):
+        # Post-D6 run 2 (codex): the list describes its tools in the environment
+        # the call found. A listed builtin that sets a variable, an expansion
+        # that assigns, an arithmetic assignment change it without any
+        # assignment word.
+        body = f"{self.MK} -p {self.TD}/999-x"
+        sink = f"cat > /tmp/s.sh <<'EOF'\n{body}\nEOF\n"
+        for change in ("printf -v PATH '%s' /tmp", "printf -vPATH %s /tmp",
+                       ": ${PATH:=/tmp}", 'echo "${EDITOR=/tmp/s.sh}"',
+                       "echo $((PATH=1))", "(( PATH = 1 ))",
+                       "echo $[PATH=1]", "echo ${a[PATH=1]}"):
+            cmd = f"{sink}{change}\ngrep x y"
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self._run(cmd).returncode, 2, cmd)
+        # controls: the same tools without a change
+        for cmd in (f"printf '%s\\n' 'never run {body}' > /tmp/n.md; cat /tmp/n.md",
+                    f"echo 'never run {body}' | cut -c1-20",
+                    f"echo \"note ${{HOME}}: never run {body}\" > /tmp/n.md"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self._run(cmd).returncode, 0, cmd)
+
+    def test_an_interpreter_is_exempt_only_when_its_program_is_the_heredoc(self):
+        # Post-D6 run 1 (codex): the exemption for a non-shell interpreter looked
+        # only for a quoted heredoc on its line. With `-c`, `-e`, `-m`, a script
+        # operand or another stdin redirection, the program is NOT the heredoc —
+        # the heredoc is only its input — and that program can run what the call
+        # wrote.
+        body = f"{self.MK} -p {self.TD}/999-x"
+        sink = f"cat > /tmp/s.sh <<'EOF'\n{body}\nEOF\n"
+        prog = 'import subprocess; subprocess.run(["sh", "/tmp/s.sh"])'
+        for tail in (f"python3 -c '{prog}' <<'X'\ndata\nX",
+                     "python3 -m runpy <<'X'\ndata\nX",
+                     "python3 /tmp/run.py <<'X'\ndata\nX",
+                     "perl -e 'system(\"sh /tmp/s.sh\")' <<'X'\ndata\nX",
+                     "node -e 'x' <<'X'\ndata\nX",
+                     "python3 <<'X' < /tmp/run.py\ndata\nX"):
+            with self.subTest(tail=tail):
+                self.assertEqual(self._run(sink + tail).returncode, 2, tail)
+        # controls: the program IS the heredoc
+        for tail in ("python3 - <<'PY'\nprint(1)\nPY", "python3 <<'PY'\nprint(1)\nPY",
+                     "python3 -B - <<'PY'\nprint(1)\nPY", "python3 - a b <<'PY'\nprint(1)\nPY",
+                     "python3 - <<'PY' > /tmp/out.txt 2>&1\nprint(1)\nPY",
+                     "node - <<'JS'\nconsole.log(1)\nJS"):
+            with self.subTest(tail=tail):
+                self.assertEqual(self._run(sink + tail).returncode, 0, tail)
+
+    def test_a_mention_stays_inert_while_every_command_only_reads_or_prints(self):
+        # controls (item 31 keeps its promise): notes, prints and record writers
+        body = f"{self.MK} -p {self.TD}/999-x"
+        for cmd in (f"cat > /tmp/notes.md <<'EOF'\nnever run {body} by hand\nEOF",
+                    f"echo 'never run {body} by hand' > /tmp/notes.md; cat /tmp/notes.md",
+                    f"cd /tmp && python3 - <<'PY'\nprint('never run {body} by hand')\nPY",
+                    f"git add notes.md && git commit -m 'note: {body} is refused'",
+                    f"grep -n '{body}' notes.md | head -n 3",
+                    f"if [ -f notes.md ]; then grep -c '{body}' notes.md; fi"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(self._run(cmd).returncode, 0, cmd)
 
 
 if __name__ == "__main__":

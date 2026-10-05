@@ -13,6 +13,7 @@ Task 100: PLAN S8 — the guarantee ledger's binding audit (every cited proof re
 Task 105: session identity under Claude Code's background daemon.
 Task 106: a stale `PLAYBOOK_SESSION_ID` (a resumed conversation's dead `pid-N`) is ignored.
 Task 108: the post-D6 review protocol (owner decision Q-E (d), retro 107).
+Task 110: PLAN S11 fix batch, group GUARD (the command guard and the task-dir guard; sources: task 109's gauntlet report and the task 107 erratum).
 Each fix was written against a test that failed first.
 
 ### Added
@@ -119,6 +120,107 @@ Each fix was written against a test that failed first.
   the same CI-wait pattern.
 
 ### Fixed
+
+- **The command guard reads GNU `parallel`'s jobs again, and `eval` past a redirection** (task 110, 109 G2-01 — a
+  regression against 1.5.45 — plus 085 round-3 V2/V3/V6). `parallel rm -rf ::: /etc /usr` was allowed: the walker
+  stopped at the first `:::` and dropped every input argument. The `parallel` branch now composes the jobs it would
+  run. Each argument is appended to the template or substituted whole for `{}`, `{1}` or an
+  `-I`/`--replace` string. Several `:::` sources make their product of distinct values, and every job is judged.
+  Past 512 job lines the invocation is refused as `parallel-too-many-jobs` rather than sampled. An empty template
+  makes every argument a command. The template is judged both dequoted and with its quoting kept, so `parallel
+  bash -c 'rm -rf /' ::: a` blocks. Options come from GNU parallel's own option spec. Where it leaves the grammar
+  open (an optional value such as `--replace`, or an option the table does not know), every reading is judged.
+  `su`/`runuser` gain `--supp-group VALUE`. Found by this task's own corpus review: `eval 'rm -rf /' < /dev/null`
+  was allowed, also by 1.5.45. Eval now joins its dequoted arguments and drops its own redirections. Found by the
+  impl panel: `eval 2>&1 'rm -rf /'` was allowed, also by 1.5.45, because the segment splitter cut at the `&` of
+  `2>&1`. An `&` or `|` inside a redirection operator no longer splits a command. Bound: arguments read from a
+  file (`::::`, `-a FILE`) or from stdin to `xargs` are still unknown.
+- **GNU `parallel` arguments the guard does not model are judged by the command name** (task 110, impl panel
+  round 2, the owner's decision of 2026-10-05). GNU parallel can rewrite an argument before it reaches the job
+  line: split it into columns, pack several into one job, rewrite it through a replacement string, or redefine
+  the separators and the replacement strings themselves. The first candidate composed those job lines as if
+  the argument were used whole, which was wrong for every such form. That grammar is deliberately NOT
+  modelled. The options and replacement strings concerned are listed as data in `command_guard.py`. With one
+  of them present the guard judges only the command names in the template, and refuses the invocation as
+  `parallel-unmodelled-arguments` when a name is one a rule judges by its arguments (`rm`, `git`, `dd`, a
+  shell, a database client) or cannot be read (no template, a replacement string where the name should be, a
+  template the option hides). An ordinary command (`echo`, `gzip`, `mv`) passes as before. The tests are
+  generated from those tables: 2,777 harmless commands, every one allowed by the panel-time tree. A runner the
+  download-then-run rule judges by its operand (an interpreter, a sourcer) is argument-judged for that rule
+  only: after a download in the same command, a `parallel` job that rewrites the runner's operand is refused
+  as `download-then-run`, and without a download it passes (found by the post-panel judge). Measured on
+  the owner's bash history (33,782 unique commands, 149 of them naming `parallel`): the new rule refuses 0.
+  Declared bounds: linked sources (`:::+`) are counted as a full product, so a small linked invocation can be
+  refused at the job cap, and an optional-value option written bare is refused when the next word is the
+  command's name. Provenance: every GNU parallel option table in the guard was written from documentation,
+  with no binary installed to run it against; one entry (`--match`) is from the model's memory and unverified.
+- **Download-then-run within one command line blocks** (task 110, owner decision Q-B (b), parked R3). Covered
+  forms: `curl -o x.sh URL && sh x.sh`, `wget URL/i.sh; bash i.sh`, and `./install` after `curl -O`, through
+  sudo and interpreters. The file is followed into what a later segment delegates to: a `sh -c` body, an `eval`
+  or wrapper payload, a shell reading it on stdin, or the path run as written. It shipped only after a
+  measurement on the owner's bash history: 0 of 282 downloader
+  commands refused (0 of 32,997 commands). An unrestricted first form refused one legitimate record writer, through
+  the substitution scanner lifting backticks out of single quotes. That quirk is parked. The rule therefore skips a
+  quoted heredoc body a non-shell program reads, and command-substitution bodies. Bounds: a download in an earlier
+  tool call, and one inside `$( … )`. Two more were declared by the owner after impl panel round 2: a download
+  made inside a delegated payload is not carried to the later segments, and the saved file's name is read only
+  from an output option or an operand with a URL scheme. The rule is a heuristic over one command's text; the
+  real boundary for unreviewed remote code is the OS sandbox.
+- **The task-dir guard no longer refuses text that only mentions mkdir** (task 110, 109 G2-02 — a regression
+  against 1.5.45 — plus R8, R15 and the 104 text-match item). `N=$PWD/p2; mkdir -p "$N/.agent"` was refused: a
+  variable next to `.ag` counted as a task-dir hint. Now a variable word counts only when it can still spell a task
+  dir: `tasks` is visible, an expansion follows `.ag`, or `.ag` is not a whole `.agent` component. A mkdir word is
+  inert only in masked data or among the arguments of a known read/print command. Masked data means a quoted heredoc
+  a non-shell reads, wherever it sits on the line, or an echo/printf literal. The known commands are echo, printf,
+  grep, cat, the `tasks` CLI, and `git commit/log/show/diff/…` without `-c`. So a heredoc note, a `git commit -m`
+  or a quoted `tasks new` intent passes. Any other command carrying the word refuses, as does every command whose
+  name is unresolved (`$M`, `"$(…)"`, a backtick) or an unmodelled wrapper (`busybox`, `flock`). The impl panel
+  found the first form allowed those, where 1.5.45 refused. The helper walks commands through the command guard's
+  walker (segments, wrappers, payloads, `sh -c`, eval, `$(…)`, herestrings, `find -exec`). Special parameters
+  (`$@`, `$*`, `$#`, `$?`, `$$`, `$!`, `$-`) count as unresolved, so `.$@/tasks/9-x` is refused. Measured on the
+  same corpus: task-dir refusals 123 → 51 of 3,551 triggered commands, 0 newly refused. The 72 newly allowed
+  commands are a subset of the 96 reviewed by hand, and none creates a task dir. Bound: a mkdir run by a non-shell
+  program from a heredoc body (`python3 - <<'PY'` with `os.system`) is not seen.
+  Impl panel round 2 found a second regression in that narrowing: a mention was taken for inert without asking
+  what else the same call runs. A script written through a file-sink heredoc or by echo/printf and then run by
+  a later command, a read command's output piped into a shell, and a quoted heredoc whose reader the helper
+  cannot name were all allowed, and 1.5.45 refuses every one (40 forms in all, with those the two post-panel
+  reviews and my own review added; measured on four roots). A mention
+  is inert now only while EVERY command of the call is one the helper knows to read, print or write text: the
+  list above plus `tee`, `cd`, `ls`, `pwd`, `cut`, `tr`, `nl`, `sleep`, `date`, and a non-shell
+  interpreter whose program IS a quoted heredoc — not one given a program by `-c`, `-e`, `-m` or a script
+  operand, nor one whose stdin comes from elsewhere (the post-panel judge found the first form exempted
+  those). The list is closed and strict. It has no pager and no sorter (`less` can start a preprocessor,
+  `sort` a compressor). It holds for a tool named bare, in the environment the call found: an assignment, an
+  `export` or an environment prefix takes the call off it, and a path-qualified name, git and the `tasks` CLI
+  count only when the call writes no file (the name may be the very file the call wrote; git and `tasks`
+  start programs they are configured with). A write is `tee` or any unquoted `>` in the call that is not aimed
+  at the null device or a descriptor, however it is spelled. An environment change is an assignment, a
+  prefix, `printf -v`, an expansion that assigns, or an arithmetic expression. The second post-panel review
+  found one missed spelling of each; both were repaired as classes, and that review was the last the round
+  cap allows, so no judge has seen those two repairs; the owner closed the task without a further run, the
+  residual risk being a task directory created by hand, not a dangerous command. With anything else in the
+  call the released answer stands.
+  `git -C <dir> status` now counts as the read command it is. Bound: state from an EARLIER call — a hook, a
+  file planted on PATH — is not seen, since the guard keeps no state between calls.
+  Re-measured on today's corpus (33,782 commands, 3,684 that trigger the guard), on the final code: refusals
+  131 (before the task) → 53 (panel time) → 67; 0 commands refused that the tree before the task allowed;
+  14 of the 78 commands the first narrowing let through are refused again, each refused by 1.5.45 as well.
+- **The irreversible-task acknowledgement fires in a normal session** (task 110, owner decision Q-A (b), parked R1 +
+  P1). The cause had two parts:
+  - It required `PLAYBOOK_SESSION_ID`, which no real hook process carries (109 K10: 99 of 99 events). It now reads
+    the session the CLI and hooks resolve, with task 106's identity rule, on every platform. On Windows that is
+    the env id or the shared `pid-win-fallback`.
+  - It required `## Status: in_progress`, which `tasks work N` never writes. An activated task reads `pending`.
+    Found by the live re-run, step X28. `pending` and `in_progress` now acknowledge. `done`, `done (…)`, `blocked`
+    and a stub refuse.
+
+  The lane comes from the enforcing resolver. A malformed marker or the fresh-clone shape never falls back to the
+  root lane.
+- **Guard decisions that were silent are journalled** (task 110, 109 G2-13/G2-14). task-gate's Bash task-dir refusal
+  writes `block "manual task dir creation"`. An acknowledged dangerous command writes `allow
+  ack-operator-env:<rule>` or `allow ack-irreversible-task:<rule>`, with the resolved session id. A harmless command
+  under `PLAYBOOK_ALLOW_DANGEROUS` writes nothing. The ack spellings `1`/`true`/`yes`/`on` are all exercised.
 
 - **A stale `PLAYBOOK_SESSION_ID` no longer splits the CLI from the hooks** (task 106). A resumed Claude Code
   conversation re-sources its OLD session-start env file, and a child `claude` inherits its parent's environment,

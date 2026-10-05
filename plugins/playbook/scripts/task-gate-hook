@@ -494,6 +494,10 @@ MSG
     if { printf '%s' "$CMD" | tr -d "'\"\\\\" | grep -qE '(^|[^[:alnum:]_])mkdir([^[:alnum:]_]|$)' \
          || printf '%s' "$CMD" | grep -qF -e "\$'" -e "{"; } \
        && ! printf '%s' "$CMD" | PB_PROJECT="$PROJECT_DIR" python3 "$HOOK_DIR/task-dir-target.py" 2>/dev/null; then
+        # Task 110 (109 G2-13): this refusal was the one task-gate block with no
+        # journal line (Guard 0's Write refusal above logs one).
+        journal_enforcement "$PB_JOURNAL_DIR" task-gate block "manual task dir creation" \
+            "$SESSION_ID" "$TOOL_NAME" "" "$CMD"
         cat >&2 <<'MSG'
 BLOCKED: Don't create task directories manually.
 

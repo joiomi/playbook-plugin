@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import json
 import os
+import posixpath
 import re
 import shlex
 import sys
@@ -103,6 +104,19 @@ def _strip_comments(text):
     return "".join(out)
 
 
+def _is_redirection_char(text, i, hit):
+    """Is the `&`/`|` at `i` part of a redirection operator rather than a command
+    separator? `2>&1`, `>&2`, `<&3`, `&>f`, `&>>f`, `>|f`. Impl panel round 1
+    (sonnet): splitting `eval 2>&1 'rm -rf /'` at that `&` left eval without its
+    argument, so the command was allowed (1.5.45 too)."""
+    prev = text[i - 1] if i > 0 else ""
+    if hit == "&":
+        return prev in "<>" or text.startswith(">", i + 1)
+    if hit == "|":
+        return prev == ">"
+    return False
+
+
 def _split_segments_keep(text, ops=_SEP_OPS):
     """Like `_split_segments`, but keeps each segment's trailing separator so the
     text can be rebuilt byte-for-byte."""
@@ -130,6 +144,8 @@ def _split_segments_keep(text, ops=_SEP_OPS):
             i += 1
             continue
         hit = next((op for op in ops if text.startswith(op, i)), None)
+        if hit and _is_redirection_char(text, i, hit):
+            hit = None
         if hit:
             out.append(("".join(buf), hit))
             buf = []
@@ -166,6 +182,8 @@ def _split_segments(text, ops=_SEP_OPS):
             i += 1
             continue
         hit = next((op for op in ops if text.startswith(op, i)), None)
+        if hit and _is_redirection_char(text, i, hit):
+            hit = None
         if hit:
             out.append("".join(buf))
             buf = []
@@ -313,14 +331,17 @@ _WRAPPERS = {
     # Task 085 G1: `-s/--shell` and `-w/--whitelist-environment` take a value,
     # and a lone `-` is the login flag — each used to be read as the user
     # operand, moving the command position onto the user name.
+    # Task 110 (085 round 3, V3): `--supp-group` is `-G`'s long form and takes a
+    # value; without it `su --supp-group wheel root -c '…'` read `wheel` as the user.
     "runuser": _wspec(val_short="ugGsw", val_long=("--user", "--group", "--shell",
-                                                   "--whitelist-environment"),
+                                                   "--whitelist-environment",
+                                                   "--supp-group"),
                       terminal=("--version", "--help"), operands=1,
                       operand_satisfied_by=("u", "--user"),
                       split_short="c", split_long=("--command", "--session-command"),
                       bare_dash=True, shell_args=True),
     "su": _wspec(val_short="gGsw", val_long=("--group", "--shell",
-                                             "--whitelist-environment"),
+                                             "--whitelist-environment", "--supp-group"),
                  terminal=("--version", "--help"), operands=1,
                  split_short="c", split_long=("--command", "--session-command"),
                  bare_dash=True, shell_args=True),
@@ -468,6 +489,411 @@ def _unquote(s):
     return s
 
 
+# ── GNU parallel (task 110, PLAN S11 G2-01 + 085 round 3 V2/V6) ──────────────
+# `parallel` runs its TEMPLATE once per input argument: the argument is APPENDED,
+# or substituted for a replacement string (`{}`, `{.}`, `{/}`, `{1}`, an `-I`
+# string); with several `:::` sources the jobs are their product, in order; with
+# an EMPTY template every argument IS the command. The generic split-positional
+# walk stopped at the first `:::` and dropped the arguments, so `parallel rm -rf
+# ::: /etc /usr` was classified as `rm -rf` — a regression against 1.5.45, which
+# read the whole line. Arguments read at run time (`::::`, `-a FILE`) are not
+# known: the same bound as a plain variable target.
+# Option table: GNU parallel's own `GetOptions` spec (`Getopt::Long::Configure(
+# "bundling", "require_order")`; `=s`/`=i`/`=f` take a value, `:s`/`:f` take an
+# OPTIONAL one), plus the value options later releases added. Impl panel round 1
+# (task 110): `--plus` is a FLAG and was listed as taking a value, so
+# `parallel --plus rm -rf / ::: x` read `/` as the template; `--filter`,
+# `--compress-program` and `--sql` take values and were missing. Two readings
+# are judged wherever the spec leaves the grammar open — an OPTIONAL value (`-i`,
+# `--replace`, `-e`, `--eof`, `-l`, `--max-lines`: the next word may or may not
+# be the value) and a long option the table does not know (a newer release's
+# value option reads like a flag to an older table) — and the command blocks if
+# EITHER reading runs a dangerous job.
+_PARALLEL_VAL_SHORT = set("DIUjSBWHJPdsaEnNCL")
+_PARALLEL_OPT_SHORT = set("iel")                       # `:s` / `:f`
+_PARALLEL_FLAG_SHORT = set("mXvkgu0qMTrptxY")
+_PARALLEL_TERMINAL_SHORT = set("hV")
+_PARALLEL_VAL_LONG = {
+    "--debug", "--joblog", "--results", "--result", "--res", "--parens", "--rpl",
+    "--extensionreplace", "--er", "--basenamereplace", "--bnr", "--dirnamereplace",
+    "--dnr", "--basenameextensionreplace", "--bner", "--seqreplace", "--slotreplace",
+    "--jobs", "--delay", "--sshdelay", "--ssh-delay", "--load", "--nice", "--timeout",
+    "--tagstring", "--tag-string", "--ctagstring", "--sshlogin", "--sshloginfile",
+    "--slf", "--return", "--trc", "--basefile", "--bf", "--workdir", "--work-dir",
+    "--wd", "--tmpdir", "--tempdir", "--use-compress-program", "--compress-program",
+    "--use-decompress-program", "--decompress-program", "--halt-on-error", "--halt",
+    "--retries", "--arg-sep", "--argsep", "--arg-file-sep", "--argfilesep", "--trim",
+    "--env", "--profile", "--recstart", "--recend", "--block", "--block-size",
+    "--blocksize", "--memfree", "--memsuspend", "--max-procs", "--delimiter",
+    "--max-chars", "--arg-file", "--max-args", "--max-replace-args", "--colsep",
+    "--col-sep", "--semaphoretimeout", "--st", "--semaphorename", "--id", "--header",
+    "--filter", "--sql", "--sqlmaster", "--sqlworker", "--sqlandworker", "--template",
+    "--tmpl", "--transferfile", "--transfer-file", "--tf", "--ssh", "--group-by",
+    "--shard", "--bin", "--limit", "--termseq", "--block-timeout", "--bt",
+    "--process-slot-var", "--total-jobs", "--total", "--shebang-wrap-arg",
+    "--match",                                        # from the model's memory, UNVERIFIED
+}
+_PARALLEL_OPT_LONG = {"--replace", "--eof", "--max-lines"}
+_PARALLEL_FLAG_LONG = {
+    "--xargs", "--resume", "--resume-failed", "--resumefailed", "--retry-failed",
+    "--silent", "--keep-order", "--keeporder", "--no-keep-order", "--nokeeporder",
+    "--group", "--ungroup", "--linebuffer", "--linebuffered", "--line-buffer",
+    "--line-buffered", "--latest-line", "--tmux", "--tmuxpane", "--null", "--quote",
+    "--plus", "--noswap", "--use-cpus-instead-of-cores", "--use-cores-instead-of-threads",
+    "--use-sockets-instead-of-threads", "--shellquote", "--shell_quote", "--shell-quote",
+    "--tag", "--ctag", "--color", "--color-failed", "--onall", "--nonall",
+    "--filter-hosts", "--filterhosts", "--controlmaster", "--transfer", "--cleanup",
+    "--ctrlc", "--noctrlc", "--compress", "--tty", "--dry-run", "--dryrun",
+    "--progress", "--eta", "--bar", "--recordenv", "--record-env", "--session",
+    "--plain", "--pipe", "--spreadstdin", "--robin", "--round-robin", "--roundrobin",
+    "--regexp", "--regex", "--remove-rec-sep", "--removerecsep", "--rrs", "--files",
+    "--files0", "--output-as-files", "--outputasfiles", "--tollef", "--gnu",
+    "--xapply", "--will-cite", "--willcite", "--nn", "--nonotice", "--no-notice",
+    "--no-run-if-empty", "--interactive", "--verbose", "--exit", "--semaphore",
+    "--fg", "--bg", "--wait", "--shebang", "--hashbang", "--shebang-wrap",
+    "--internal-pipe-means-argfiles", "--skip-first-line", "--cat", "--fifo",
+    "--pipepart", "--pipe-part", "--hgrp", "--hostgroup", "--hostgroups", "--csv",
+    "--tsv", "--embed", "--tee", "--fast", "--show-limits", "--showlimits",
+    "--sqlandworker-only", "--lb",
+}
+_PARALLEL_TERMINAL = {"--help", "--version", "--number-of-cpus", "--number-of-cores",
+                      "--number-of-threads", "--number-of-sockets", "--citation",
+                      "--bibtex", "--minversion", "--min-version",
+                      "--max-line-length-allowed"}
+_PARALLEL_LITERAL_SOURCE = {":::", ":::+"}
+_PARALLEL_FILE_SOURCE = {"::::", "::::+"}
+_PARALLEL_SOURCES = _PARALLEL_LITERAL_SOURCE | _PARALLEL_FILE_SOURCE
+_PARALLEL_REPL = re.compile(r"\{=.*?=\}|\{(\d+)?(?:\.|/|//|/\.|#|%)?\}")
+# Jobs are the product of the DISTINCT values of each known source. Impl panel
+# round 1: the earlier fallback past 64 kept 256 single arguments, so an argument
+# past the slice — or a pair only the full product forms — was never seen; a cap
+# that ALLOWS past its limit is the bypass (the 077 lesson). Past this cap the
+# invocation is REFUSED (`parallel-too-many-jobs`), never classified partially.
+_PARALLEL_MAX_JOBS = 512
+_PARALLEL_MAX_READINGS = 16
+# A sentinel payload: `classify_command` turns it into a block.
+_PARALLEL_UNJUDGEABLE = "\x00parallel-unjudgeable"
+
+# ── what the guard does NOT model in GNU parallel (task 110, owner 2026-10-05) ──
+# The job lines composed below are exact in four cases only: the argument is
+# APPENDED to the template, or substituted WHOLE for `{}`, for `{N}` (one
+# source's value) or for an `-I`/`--replace` string. GNU parallel can also
+# REWRITE an argument before it reaches the job line. That grammar is not
+# modelled here, on purpose: impl panel round 2 found the composition wrong for
+# every such form, and the owner chose one conservative rule over a model of it.
+# What is not modelled is listed here, as DATA:
+#   * `_PARALLEL_UNMODELLED_*` — options that cut an argument into columns or
+#     records, pack several arguments into one job line, or switch on further
+#     replacement strings;
+#   * `_PARALLEL_REWRITING_REPL` — replacement strings that rewrite their
+#     argument (its extension, its directory or base name, a perl expression);
+#   * `_PARALLEL_HIDES_TEMPLATE_LONG` — options that rename the source
+#     separators or declare a replacement string of their own, after which the
+#     guard cannot tell which words of the line are the template at all.
+# PROVENANCE (owner 2026-10-05): every GNU parallel table in this file — the
+# option arities above and the lists below — was written from DOCUMENTATION, on
+# a machine with no GNU parallel binary installed; none was run against the
+# tool. One entry, `--match`, is from the MODEL'S MEMORY of recent releases and
+# is UNVERIFIED (it is marked where it is listed).
+# A long option spelled as a unique PREFIX of a listed one is that option (GNU
+# parallel accepts abbreviations). An option no table knows at all is NOT in
+# these lists: it keeps the two readings it always had. With a listed form
+# present the arguments are UNKNOWN, and the command names in the template are
+# all the guard can judge: see `_parallel_template_unreadable`.
+_PARALLEL_UNMODELLED_LONG = frozenset({
+    "--colsep", "--col-sep", "--csv", "--tsv", "--header", "--delimiter",
+    "--max-args", "--max-replace-args", "--max-lines", "--xargs", "--plus",
+    "--match",                                        # from the model's memory, UNVERIFIED
+})
+_PARALLEL_UNMODELLED_SHORT = frozenset("CdnNLlXm")
+_PARALLEL_HIDES_TEMPLATE_LONG = frozenset({
+    "--arg-sep", "--argsep", "--arg-file-sep", "--argfilesep", "--rpl", "--parens",
+    "--extensionreplace", "--er", "--basenamereplace", "--bnr", "--dirnamereplace",
+    "--dnr", "--basenameextensionreplace", "--bner",
+})
+_PARALLEL_REWRITING_REPL = re.compile(r"\{=.*?=\}|\{\d*(?:\.|/|//|/\.)\}")
+# Anything of a replacement string's SHAPE (`{}`, `{3}`, `{.}`, a `--header`
+# column name, a `--plus` form; not the shell's own `${name}`): the test for
+# "this word is filled in from an argument".
+_PARALLEL_ANY_REPL = re.compile(r"\{=.*?=\}|(?<!\$)\{[^{}\s]*\}")
+# The second sentinel payload: the template cannot be judged without reading an
+# argument the guard does not know.
+_PARALLEL_UNMODELLED = "\x00parallel-unmodelled"
+# The third: under an unmodelled rewriting the template runs a command that ONE
+# rule judges by its operand — the download-then-run rule and its runners
+# (`_DL_RUNNERS`: an interpreter, a sourcer). On its own that is no refusal; it
+# is one for `_downloads_then_runs` once a download precedes it (post-D6 run 1).
+_PARALLEL_RUNS_UNKNOWN = "\x00parallel-runs-unknown"
+# A redirection OPERATOR (with an optional leading fd). Whatever follows it in the
+# same token is the target (`2>&1`, `>/tmp/o`, `<&3`); an operator that ends the
+# token takes the NEXT token as its target (`< /dev/null`). Impl panel round 1
+# (sonnet): the earlier pattern also swallowed the `1` of `2>&1`, so the token
+# looked target-less and the next word — `eval 2>&1 'rm -rf /'` — was skipped.
+_EVAL_REDIR = re.compile(r"^(?:\d*|&)(?:<<<|<<-?|>>|>\||<>|>&|<&|&>>|&>|<|>)")
+
+
+def _parallel_lists(base, table, names):
+    """Is the long option `base` one of `table`? `names` is its exact name when
+    an option table knows the spelling; otherwise the spelling is tried as an
+    abbreviation — a prefix of a listed option."""
+    if names is not None:
+        return bool(names & table)
+    return any(o.startswith(base) for o in table)
+
+
+def _from_argument(text, repl):
+    """Does `text` hold a replacement string — something GNU parallel fills in
+    from an argument? (`repl` is this reading's `-I`/`--replace` string.)"""
+    return bool(_PARALLEL_ANY_REPL.search(text)) or bool(repl and repl in text)
+
+
+def _names_need_an_argument(text, repl, names, _depth=0):
+    """Would judging the command line `text` mean reading an ARGUMENT? True when
+    a command name in it is in `names` — the names some rule judges by their
+    arguments — is itself filled in from an argument, or stands in a line some
+    wrapper RE-PARSES with an argument in it (`eval`, `watch`, `su -c`: there the
+    argument becomes code, so that line has no readable name either). Names are
+    found the way every rule here finds them: per segment, through the wrapper
+    walk, its payloads and substitutions."""
+    if _depth > 16:
+        return True                                    # cannot follow further: refuse
+    text = _strip_comments(text)
+    for seg in _split_segments(text):
+        if not seg.strip():
+            continue
+        rest, executes, payloads = _walk_prefix(seg)
+        for p in payloads:
+            if not p:
+                continue
+            if p.startswith("\x00"):                   # a nested `parallel`'s own verdict
+                if p != _PARALLEL_RUNS_UNKNOWN or names is _DL_RUNNERS:
+                    return True
+                continue
+            if _from_argument(p, repl) or _names_need_an_argument(p, repl, names, _depth + 1):
+                return True
+        if not executes:
+            continue
+        lexed = _lex(rest)
+        if not lexed:
+            continue
+        word = lexed[0][2]
+        if _from_argument(word, repl) or _command_name(word) in names:
+            return True
+    for sub_ in _command_substitutions(text) + _herestring_payloads(text):
+        if sub_.strip() and (_from_argument(sub_, repl)
+                             or _names_need_an_argument(sub_, repl, names, _depth + 1)):
+            return True
+    return False
+
+
+def _parallel_template_unreadable(lexed, start, repl, how, names):
+    """The ONE conservative rule for what the guard does not model (owner ruling
+    2026-10-05, task 110; impl panel round 2, classes 1 and 2). When this reading
+    rewrites its arguments in an unmodelled way — an option from the tables
+    above, or a rewriting replacement string in the template — the arguments are
+    unknown, so only the command NAMES in the template are judged, and the
+    invocation is refused (`parallel-unmodelled-arguments`) when one of them
+    cannot be judged without its arguments: it is argument-judged, or it is not
+    a readable name at all (no template: the arguments ARE the commands; a
+    replacement string where the name should be; a hidden template). `names` is
+    the set of argument-judged names asked about: `_ARGUMENT_JUDGED_HEADS` for
+    the rules that refuse on their own, `_DL_RUNNERS` for the download-then-run
+    rule, which reads a runner's operand only after a download."""
+    if how == 2:
+        return True                                    # the template cannot be located
+    words = []
+    for raw, _st, val, _q in lexed[start:]:
+        if val in _PARALLEL_SOURCES:
+            break
+        words.append((raw, val))
+    forms = {" ".join(v for _r, v in words), " ".join(r for r, _v in words)}
+    if not how and not any(_PARALLEL_REWRITING_REPL.search(f) for f in forms):
+        return False                                   # used whole: the composition is exact
+    for form in sorted(forms):
+        # no replacement string in the template: the argument is APPENDED
+        line = form if _from_argument(form, repl) else (form + " {}").strip()
+        if _names_need_an_argument(line, repl, names):
+            return True
+    return False
+
+
+def _parallel_readings(toks, i):
+    """Every way GNU parallel's option prefix can parse: a list of `(index of
+    the first template/source token, replace string or None, how)`. `how` says
+    how much of the reading the guard models: 0 all of it, 1 an option listed in
+    `_PARALLEL_UNMODELLED_*` was seen (the arguments are rewritten), 2 one from
+    `_PARALLEL_HIDES_TEMPLATE_LONG` (the template cannot be located). Readings
+    that reach a terminal option (`--help`, `-V`) run nothing and are dropped.
+    None when more readings exist than can be judged."""
+    states: list = [(i, None, 0)]
+    done: list = []
+    while states:
+        if len(states) + len(done) > _PARALLEL_MAX_READINGS:
+            return None
+        i, repl, how = states.pop()
+        if i >= len(toks):
+            done.append((i, repl, how))
+            continue
+        t = toks[i]
+        nxt = toks[i + 1] if i + 1 < len(toks) else None
+        nxt_is_value = nxt is not None and not nxt.startswith("-") and nxt not in _PARALLEL_SOURCES
+        if t == "--":
+            done.append((i + 1, repl, how))
+            continue
+        if t in _PARALLEL_SOURCES or not t.startswith("-") or len(t) < 2:
+            done.append((i, repl, how))                # require_order: options end here
+            continue
+        if t.startswith("--"):
+            base, eq, val = t.partition("=")
+            if base in _PARALLEL_TERMINAL:
+                continue
+            # A spelling no table knows may be a unique PREFIX of a listed option
+            # (Getopt::Long abbreviations): it is matched against the listed ones.
+            known = (base in _PARALLEL_OPT_LONG or base in _PARALLEL_VAL_LONG
+                     or base in _PARALLEL_FLAG_LONG)
+            names = {base} if known else None
+            if _parallel_lists(base, _PARALLEL_HIDES_TEMPLATE_LONG, names):
+                how = 2
+            elif _parallel_lists(base, _PARALLEL_UNMODELLED_LONG, names):
+                how = max(how, 1)
+            if base == "--replace":
+                states.append((i + 1, (val or "{}") if eq else "{}", how))
+                if not eq and nxt_is_value:
+                    states.append((i + 2, nxt, how))
+            elif base in _PARALLEL_OPT_LONG:
+                states.append((i + 1, repl, how))
+                if not eq and nxt_is_value:
+                    states.append((i + 2, repl, how))
+            elif base in _PARALLEL_VAL_LONG:
+                states.append((i + (1 if eq else 2), repl, how))
+            elif base in _PARALLEL_FLAG_LONG or eq:
+                states.append((i + 1, repl, how))
+            else:                                      # unknown: flag OR value option
+                states.append((i + 1, repl, how))
+                if nxt is not None:
+                    states.append((i + 2, repl, how))
+            continue
+        letters, k = t[1:], 0                          # a bundle: `-j4`, `-kq`, `-I@@`
+        branched = False
+        while k < len(letters):
+            ch = letters[k]
+            attached = letters[k + 1:]
+            if ch in _PARALLEL_TERMINAL_SHORT:
+                branched = True                        # this reading runs nothing
+                break
+            if ch in _PARALLEL_UNMODELLED_SHORT:
+                how = max(how, 1)
+            if ch in _PARALLEL_VAL_SHORT:
+                new = (attached or nxt) if ch == "I" else repl
+                states.append((i + (1 if attached else 2), new, how))
+                branched = True
+                break
+            if ch in _PARALLEL_OPT_SHORT:
+                new = (attached or "{}") if ch == "i" else repl
+                states.append((i + 1, new, how))
+                if not attached and nxt_is_value:
+                    states.append((i + 2, nxt if ch == "i" else repl, how))
+                branched = True
+                break
+            if ch in _PARALLEL_FLAG_SHORT:
+                k += 1
+                continue
+            states.append((i + 1, repl, how))          # unknown letter: flag or value
+            if not attached and nxt is not None:
+                states.append((i + 2, repl, how))
+            branched = True
+            break
+        if not branched:
+            states.append((i + 1, repl, how))
+    return done
+
+
+def _parallel_jobs(lexed, start, repl):
+    """Command lines for one reading: the template on its own, then one line per
+    job of the source product. The template is read twice — its words joined
+    DEQUOTED (what `parallel` hands its shell) and joined RAW, quoting kept (what
+    `parallel -q` and a shell-word template such as `bash -c '<cmd>'` mean; impl
+    panel round 1, sol-high: dequoting lost the argument boundary, so `parallel
+    bash -c 'rm -rf /' ::: a` was allowed). None when too many jobs to judge."""
+    template, sources, cur = [], [], None
+    for raw, _st, val, _q in lexed[start:]:
+        if val in _PARALLEL_SOURCES:
+            cur = [] if val in _PARALLEL_LITERAL_SOURCE else None
+            sources.append(cur)
+        elif sources:
+            if cur is not None and val not in cur:     # distinct values: same jobs
+                cur.append(val)
+        else:
+            template.append((raw, val))
+    forms = []
+    for f in (" ".join(v for _r, v in template), " ".join(r for r, _v in template)):
+        if f not in forms:
+            forms.append(f)
+    known = [s for s in sources if s]                  # file sources are unknown
+    total = 1
+    for s in known:
+        total *= len(s)
+    if known and total * len(forms) > _PARALLEL_MAX_JOBS:
+        return None
+    import itertools
+    jobs = [list(c) for c in itertools.product(*known)] if known else []
+    payloads = [f for f in forms if f]
+    for tmpl in forms:
+        for job in jobs:
+            if not tmpl:
+                payloads.append(" ".join(job))
+                continue
+            line, hit = tmpl, False
+            if repl and repl in line:
+                line, hit = line.replace(repl, " ".join(job)), True
+
+            def _sub(m, job=job):
+                if m.group(0).startswith("{="):
+                    return " ".join(job)
+                n = m.group(1)
+                if n and n.isdigit() and 0 < int(n) <= len(job):
+                    return job[int(n) - 1]
+                return " ".join(job)
+            line2 = _PARALLEL_REPL.sub(_sub, line)
+            hit = hit or line2 != line
+            payloads.append(line2 if hit else f"{line} {' '.join(job)}")
+    return payloads
+
+
+def _parallel_payloads(lexed, i):
+    """`(executes, payloads)` for a `parallel` invocation whose options start at
+    token `i`: every job line of every reading of its options. A reading count or
+    a job count past the cap yields the `_PARALLEL_UNJUDGEABLE` sentinel, and a
+    reading whose template cannot be judged without its arguments the
+    `_PARALLEL_UNMODELLED` one; the classifier refuses both. A third sentinel,
+    `_PARALLEL_RUNS_UNKNOWN`, is information for the download-then-run rule."""
+    toks = [t[2] for t in lexed]
+    readings = _parallel_readings(toks, i)
+    if readings is None:
+        return True, [_PARALLEL_UNJUDGEABLE]
+    if not readings:
+        return False, []                               # every reading is `--help`/`-V`
+    payloads = []
+    unreadable = runs_unknown = False
+    for start, repl, how in readings:
+        more = _parallel_jobs(lexed, start, repl)
+        if more is None:
+            return True, [_PARALLEL_UNJUDGEABLE]
+        for p in more:
+            if p not in payloads:
+                payloads.append(p)
+        unreadable = unreadable or _parallel_template_unreadable(
+            lexed, start, repl, how, _ARGUMENT_JUDGED_HEADS)
+        runs_unknown = runs_unknown or _parallel_template_unreadable(
+            lexed, start, repl, how, _DL_RUNNERS)
+    if unreadable:
+        # LAST: a job that blocks on its own still names its own rule
+        payloads.append(_PARALLEL_UNMODELLED)
+    elif runs_unknown:
+        payloads.append(_PARALLEL_RUNS_UNKNOWN)
+    return True, payloads
+
+
 def _walk_prefix(seg):
     """Walk the wrapper/option prefix of one segment.
 
@@ -506,9 +932,10 @@ def _walk_prefix(seg):
             if tok == "function" and i < len(toks):
                 i += 1                                 # the name
             continue
-        if tok.endswith(")") and not tok.startswith(("(", "{")):
+        if (tok.endswith(")") and not tok.startswith(("(", "{")) and not lexed[i][3]
+                and "$(" not in tok and "`" not in tok):
             i += 1                                     # a `case` arm: `x) <cmd>`
-            continue
+            continue                                   # (not a quoted/computed name: task 110 r1)
         spec = _WRAPPERS.get(name) if name else None
         if spec is None:
             break                                      # this token is the command
@@ -522,17 +949,37 @@ def _walk_prefix(seg):
                 payloads.append(toks[i][0])
             i = len(toks)
             break
+        if name == "parallel":                         # task 110: one payload per job
+            executes, more = _parallel_payloads(lexed, i + 1)
+            if not executes:
+                return (s, False, payloads)
+            payloads.extend(more)
+            i = len(toks)
+            break
         if name == "eval":                             # delegates to a STRING
             i += 1
             if i < len(toks):
                 rest_toks = lexed[i:]
-                # one quoted operand → its VALUE is the command line; several
-                # tokens → the remainder as written.
                 if rest_toks and rest_toks[0][2] == "--":
                     rest_toks = rest_toks[1:]          # option terminator
-                if rest_toks:
-                    payloads.append(rest_toks[0][2] if len(rest_toks) == 1
-                                    else s[rest_toks[0][1]:])
+                # Task 110: bash's eval joins its DEQUOTED arguments with spaces
+                # and re-parses the result; a redirection of eval itself is not
+                # an argument. Taking the raw remainder kept the quotes, so the
+                # head became the whole quoted string: `eval 'rm -rf /' <
+                # /dev/null` was allowed (1.5.45 too).
+                args, k = [], 0
+                while k < len(rest_toks):
+                    raw, _st, val, quoted = rest_toks[k]
+                    op = None if quoted else _EVAL_REDIR.match(raw)
+                    if op:
+                        if op.end() == len(raw) and k + 1 < len(rest_toks):
+                            k += 1                     # `< /dev/null`: skip the target too
+                        k += 1
+                        continue
+                    args.append(val)
+                    k += 1
+                if args:
+                    payloads.append(" ".join(args))
             i = len(toks)
             break
         i += 1                                         # the wrapper itself
@@ -795,6 +1242,13 @@ def _segment_checks(seg):
     return None
 
 
+# The database clients the SQL rule knows, as a table (task 110: the names are
+# also argument-judged command names, see `_ARGUMENT_JUDGED_HEADS`).
+_DB_CLIENTS = ("psql", "mysql", "mariadb", "sqlite", "sqlite3", "mongo", "mongosh",
+               "clickhouse", "cockroach")
+_DB_CLIENT_RX = r"\b(?:" + "|".join(sorted(_DB_CLIENTS, key=len, reverse=True)) + r")\b"
+_SQL_DESTRUCTIVE_RX = r"\b(?:drop\s+(?:database|table|schema)|truncate\b|delete\s+from)\b"
+
 # Whole-command patterns (context spans segments): pipe-to-shell, and SQL that is
 # clearly issued to a DB client (so `grep "DROP TABLE"` is NOT flagged).
 _WHOLE = [
@@ -804,8 +1258,8 @@ _WHOLE = [
     ("sql-destructive",
      # Either order (task 073 round 2: a statement echoed INTO the client from the
      # left never matched before), spanning lines.
-     re.compile(r"(?:\b(?:psql|mysql|mariadb|sqlite3?|mongo(?:sh)?|clickhouse|cockroach)\b.*\b(?:drop\s+(?:database|table|schema)|truncate\b|delete\s+from)\b)"
-                r"|(?:\b(?:drop\s+(?:database|table|schema)|truncate\b|delete\s+from)\b.*\b(?:psql|mysql|mariadb|sqlite3?|mongo(?:sh)?|clickhouse|cockroach)\b)", re.I | re.S),
+     re.compile(r"(?:" + _DB_CLIENT_RX + r".*" + _SQL_DESTRUCTIVE_RX + r")"
+                r"|(?:" + _SQL_DESTRUCTIVE_RX + r".*" + _DB_CLIENT_RX + r")", re.I | re.S),
      "a DB drop/truncate/delete issued to a client is irreversible"),
 ]
 
@@ -903,13 +1357,12 @@ def _mask_one_echo(line):
     return "".join(out)
 
 
-def _strip_data_regions(command):
-    """Return the command text with inert DATA removed, for the WHOLE-command
-    rules only (the segment rules are line-split and never masked — a heredoc
-    body line `rm -rf /` still blocks, conservatively): a `cat`/`tee` heredoc
-    body written to a plain file (quoted tag, or no expansion inside) and an
-    echo/printf line redirected to a plain file with no pipe/expansion on it.
-    Everything that could run stays."""
+def _drop_sink_heredoc_bodies(command):
+    """The heredoc half of `_strip_data_regions`, on its own (task 110: the
+    task-dir helper scans the call's text for redirections and must not read a
+    note's body, but must still see every word of an echo line): a `cat`/`tee`
+    heredoc body written to a plain file (quoted tag, or no expansion inside)
+    is dropped; everything else stays as written."""
     lines = str(command).split("\n")
     out = []
     i = 0
@@ -929,9 +1382,18 @@ def _strip_data_regions(command):
         if not quoted and _EXPANSION.search("\n".join(lines[i:j])):
             continue                                   # expansions would run
         i = j + 1                                      # drop body + closing tag
+    return "\n".join(out)
 
+
+def _strip_data_regions(command):
+    """Return the command text with inert DATA removed, for the WHOLE-command
+    rules only (the segment rules are line-split and never masked — a heredoc
+    body line `rm -rf /` still blocks, conservatively): a `cat`/`tee` heredoc
+    body written to a plain file (quoted tag, or no expansion inside) and an
+    echo/printf line redirected to a plain file with no pipe/expansion on it.
+    Everything that could run stays."""
     return "\n".join("echo > file" if _DATA_LINE.match(l) else _mask_echo_literals(l)
-                     for l in out)
+                     for l in _drop_sink_heredoc_bodies(command).split("\n"))
 
 
 # The pipe rule had its OWN wrapper list (`sudo|env|command|nice|nohup` with
@@ -1059,6 +1521,24 @@ _QUOTED_HEREDOC = re.compile(r"""<<-?\s*(['"])(?P<tag>[A-Za-z_][A-Za-z0-9_]*)\1"
 # ... unless the SINK is itself a shell: `bash <<'EOF'` does not expand the body
 # when the outer shell reads it, but bash then runs it and expands it there.
 _SHELLS = {"sh", "bash", "zsh", "ksh", "dash", "ash"}
+# The command names whose verdict a rule here reads from their ARGUMENTS: `rm`
+# from its flags and target, `git` from its verb and flags, `dd` from an operand,
+# a shell from the script it is handed, a database client from the statement.
+# When the arguments are unknown, the name is all there is to judge (task 110,
+# owner 2026-10-05). A name a rule refuses on sight (`mkfs…`) needs no entry:
+# the bare template already blocks.
+_ARGUMENT_JUDGED_HEADS = frozenset({"rm", "git", "dd"}) | frozenset(_SHELLS) | frozenset(_DB_CLIENTS)
+
+
+def _line_runs_a_shell(line, _depth=0):
+    for seg in _split_segments(line):
+        rest, _executes, payloads = _walk_prefix(seg)
+        lexed = _lex(rest)
+        if lexed and _command_name(lexed[0][2]) in (_SHELLS | _SOURCERS):
+            return True
+        if _depth < 8 and any(p and _line_runs_a_shell(p, _depth + 1) for p in payloads):
+            return True
+    return False
 
 
 def _strip_quoted_heredoc_bodies(text):
@@ -1074,10 +1554,11 @@ def _strip_quoted_heredoc_bodies(text):
         # `sudo bash <<'EOF'` / `env bash <<…` / `timeout 5 sh <<…`: resolve the
         # sink through the wrapper walk, not from the first token (impl panel
         # round 2, sol:high + sol:medium).
-        rest, _executes, _payloads = _walk_prefix(line)
-        lexed = _lex(rest)
-        sink = _command_name(lexed[0][2]) if lexed else None
-        if sink in _SHELLS:
+        # Task 110 (impl panel round 1 follow-up): the sink was read from the
+        # FIRST command of the line, so `cd x; bash <<'EOF'` and `cat <<'EOF' |
+        # bash` hid a shell script. The body is kept when ANY command on the
+        # line — or a payload it delegates to — is a shell or a sourcer.
+        if _line_runs_a_shell(line):
             continue                                   # the body IS a shell script
         tag = m.group("tag")
         j = i
@@ -1139,7 +1620,126 @@ def _shell_consumes_a_downloader(text):
     return False
 
 
-def classify_command(command, extra_patterns=None, _depth=0, _argv=False):
+# ── download-then-run (owner Q-B (b), task 110, parked R3 from 077) ───────────
+# The pipe rule catches `curl … | sh`; the same threat with the pipe replaced by
+# a FILE — a downloader writes a file in one segment, a later segment of the SAME
+# command runs it — was a disclosed bound. Shipped only after measuring it on the
+# owner's bash history: 0 of 282 commands naming a downloader (0 of 32,997) would
+# have been refused (task 110 record, measure/results-download-then-run.json).
+# Scope: one command line; a file downloaded in an EARLIER tool call is not seen.
+_DL_RUNNERS = _INTERPRETERS | _SOURCERS
+
+
+def _dl_basename(url):
+    return posixpath.basename(url.split("?", 1)[0].split("#", 1)[0])
+
+
+def _downloaded_files(values):
+    """Paths a downloader invocation writes (dequoted tokens; [0] = the name)."""
+    head = _command_name(values[0])
+    urls = [v for v in values[1:] if "://" in v]
+    out, remote_name, named = [], False, False
+    i = 1
+    while i < len(values):
+        v = values[i]
+        nxt = values[i + 1] if i + 1 < len(values) else ""
+        if v.startswith("--"):
+            base, eq, val = v.partition("=")
+            if base in ("--output", "--output-document", "--out"):
+                out.append(val if eq else nxt)
+                named = True
+                i += 1 if eq else 2
+                continue
+            if base == "--remote-name" or base == "--remote-name-all":
+                remote_name = True
+            i += 1
+            continue
+        if v.startswith(">"):                       # `> file` / `>file` / `>>file`
+            out.append(v.lstrip(">") or nxt)
+            i += 1 if v.lstrip(">") else 2
+            continue
+        if v.startswith("-") and len(v) > 1:
+            letters = v[1:]
+            for k, ch in enumerate(letters):
+                if (head in ("curl", "fetch", "aria2c") and ch == "o") or (head == "wget" and ch == "O"):
+                    attached = letters[k + 1:]
+                    out.append(attached or nxt)
+                    named = True
+                    i += 0 if attached else 1
+                    break
+                if head == "curl" and ch == "O":
+                    remote_name = True
+            i += 1
+            continue
+        i += 1
+    if remote_name or (head == "wget" and not named):
+        out += [_dl_basename(u) for u in urls]
+    return {posixpath.normpath(o) for o in out
+            if o and o != "-" and not o.startswith("/dev/")}
+
+
+def _stdin_files(lexed):
+    """Files a command reads as STDIN: `< x.sh`, `<x.sh`, `0< x.sh` (unquoted)."""
+    out = []
+    for k, (raw, _st, _val, quoted) in enumerate(lexed):
+        if quoted:
+            continue
+        m = re.match(r"^0?<(?![<&>(])(.*)$", raw)
+        if not m:
+            continue
+        target = m.group(1) or (lexed[k + 1][2] if k + 1 < len(lexed) else "")
+        if target:
+            out.append(_unquote(target))
+    return out
+
+
+def _downloads_then_runs(text, written=None, _depth=0):
+    """True when a later part of THIS command runs a file a downloader wrote
+    earlier in it. Impl panel round 1: the file is followed into the commands a
+    segment delegates to — wrapper and `eval`/`parallel` payloads, a `sh -c`
+    body — through stdin (`bash < x.sh`), and by the path AS WRITTEN (the head
+    normalisation strips a directory, so `/tmp/x.sh` after `curl -o /tmp/x.sh`
+    was compared as `x.sh`)."""
+    if written is None:
+        written = set()
+    if _depth > 16:
+        return bool(written)                           # cannot follow further: refuse
+    for seg in _split_segments(text):
+        rest, executes, payloads = _walk_prefix(seg)
+        if written:
+            for p in payloads:
+                if p == _PARALLEL_RUNS_UNKNOWN:
+                    return True                        # a runner whose operand is rewritten
+                if p and not p.startswith("\x00") and _downloads_then_runs(p, written, _depth + 1):
+                    return True
+        if not executes:
+            continue
+        raw_lexed = _lex(rest)
+        values = [t[2] for t in _lex(_normalize_command_head(rest))]
+        if not values or not raw_lexed:
+            continue
+        head = _command_name(values[0])
+        if head and _DOWNLOADER.match(head):
+            written |= _downloaded_files(values)
+            continue
+        if not written:
+            continue
+        for name in (raw_lexed[0][2], values[0]):      # `/tmp/x.sh`, `./install`, `x.sh`
+            if posixpath.normpath(name) in written:
+                return True
+        if head in _DL_RUNNERS:
+            operands = [v for v in values[1:] if not v.startswith("-")]
+            if operands and posixpath.normpath(operands[0]) in written:
+                return True
+            if any(posixpath.normpath(f) in written for f in _stdin_files(raw_lexed)):
+                return True                            # `bash < x.sh`
+        inner = _unwrap_shell_c(rest) or _unwrap_shell_c(_normalize_command_head(rest))
+        if inner and _downloads_then_runs(inner, written, _depth + 1):
+            return True                                # `bash -c 'sh x.sh'`
+    return False
+
+
+def classify_command(command, extra_patterns=None, _depth=0, _argv=False, _in_sub=False):
     """Return ("block", name, why) or ("allow", None, None). Pure + deterministic.
 
     `command` may be a str, or a list of argv tokens (Codex `exec_command`), in
@@ -1153,17 +1753,28 @@ def classify_command(command, extra_patterns=None, _depth=0, _argv=False):
             quoted = " ".join(shlex.quote(str(p)) for p in command)
         except Exception:
             quoted = " ".join(str(p) for p in command)
-        return classify_command(quoted, extra_patterns, _depth, _argv=True)
+        return classify_command(quoted, extra_patterns, _depth, _argv=True, _in_sub=_in_sub)
     if not command or not str(command).strip():
         return ("allow", None, None)
     command = str(command)
     for seg in _split_segments(_strip_comments(command)):
         stripped, executes, payloads = _walk_prefix(seg)
         for payload in payloads:                       # `env -S "<command line>"`
+            if payload == _PARALLEL_UNJUDGEABLE:
+                return ("block", "parallel-too-many-jobs",
+                        "GNU parallel would run more jobs (or option readings) than the "
+                        "guard can judge one by one — refusing rather than judging a sample")
+            if payload == _PARALLEL_UNMODELLED:
+                return ("block", "parallel-unmodelled-arguments",
+                        "GNU parallel rewrites its arguments here in a way the guard does not "
+                        "model, and a command in the template is judged by its arguments or "
+                        "cannot be read — refusing rather than guessing what the jobs run")
+            if payload.startswith("\x00"):
+                continue                               # information for another rule
             if payload:
                 if _depth + 1 >= _MAX_DEPTH:
                     return _TOO_DEEP                   # never silently open
-                v = classify_command(payload, extra_patterns, _depth + 1)
+                v = classify_command(payload, extra_patterns, _depth + 1, _in_sub=_in_sub)
                 if v[0] == "block":
                     return v
         if not executes:                               # `sudo --version …` prints, runs nothing
@@ -1176,7 +1787,7 @@ def classify_command(command, extra_patterns=None, _depth=0, _argv=False):
             return ("block", hit[0], hit[1])
         inner = _unwrap_shell_c(stripped) or _unwrap_shell_c(normalized)
         if inner and _depth < _MAX_DEPTH:                       # unwrap `bash -lc "<script>"`
-            v = classify_command(inner, extra_patterns, _depth + 1)
+            v = classify_command(inner, extra_patterns, _depth + 1, _in_sub=_in_sub)
             if v[0] == "block":
                 return v
     # Task 073 (B0): the whole-command patterns must not fire on DATA — a heredoc
@@ -1198,13 +1809,25 @@ def classify_command(command, extra_patterns=None, _depth=0, _argv=False):
             if sub.strip():
                 if _depth + 1 >= _MAX_DEPTH:
                     return _TOO_DEEP                   # fail CLOSED, never silently open
-                v = classify_command(sub, extra_patterns, _depth + 1)
+                v = classify_command(sub, extra_patterns, _depth + 1, _in_sub=True)
                 if v[0] == "block":
                     return v
     if _pipes_downloader_into_shell(whole_text):
         return ("block", "pipe-to-shell", _PIPE_WHY)
     if _shell_consumes_a_downloader(whole_text):
         return ("block", "pipe-to-shell", _PIPE_WHY)
+    # The body of a quoted heredoc that a NON-shell reads (a `python3 - <<'PY'`
+    # program) is not shell code: measured, the unrestricted form refused one
+    # legitimate command of the owner's history — a python script writing prose
+    # that quotes the vector. A shell's heredoc body is kept (the sink runs it).
+    # Not inside a body the SUBSTITUTION scan extracted: that scan also lifts a
+    # backtick span out of single quotes (where bash keeps it literal), and that
+    # pre-existing quirk was the whole of the one false positive measured with
+    # the rule applied there (task 110 — parked as its own finding). Bound: a
+    # download-then-run INSIDE `$( … )` is not seen.
+    if not _in_sub and _downloads_then_runs(_strip_quoted_heredoc_bodies(whole_text)):
+        return ("block", "download-then-run",
+                "running a script this command just downloaded executes unreviewed remote code")
     for name, rx, why in _WHOLE:
         if rx.search(whole_text):
             return ("block", name, why)
@@ -1293,16 +1916,29 @@ def _journal_session_id():
     the guard used (task 106 single judge) — on POSIX the resolved one, so a
     stale or sibling env value is not what the log names; "" when unset."""
     sid = os.environ.get("PLAYBOOK_SESSION_ID", "").strip()
-    if not sid or os.name == "nt":
-        return sid
+    # Task 110 (Q-A b): with no env id — every real hook process (109 K10) — the
+    # walk still names the session; the journal said `"session_id":""` before.
     try:
-        plugin_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        if plugin_dir not in sys.path:
-            sys.path.insert(0, plugin_dir)
-        from tasks.core import resolve_session_id
-        return resolve_session_id(quiet=True)
+        return _resolved_session_id()
     except Exception:
         return sid
+
+
+def _resolved_session_id():
+    """The session id the CLI and the hooks resolve (`tasks.core.
+    resolve_session_id`) on EVERY platform. Impl panel round 1 (sol-high): on
+    Windows the guard kept the raw env id, while the CLI resolves an absent one
+    to the constant `pid-win-fallback` it shares with the bash hooks — so a task
+    activated there could never acknowledge. The resolver's one-time Windows
+    warning is swallowed: on a block, stderr IS the agent's message."""
+    import contextlib
+    import io
+    plugin_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if plugin_dir not in sys.path:
+        sys.path.insert(0, plugin_dir)
+    from tasks.core import resolve_session_id
+    with contextlib.redirect_stderr(io.StringIO()):
+        return resolve_session_id(quiet=True)
 
 
 def _active_task_is_irreversible(root):
@@ -1313,8 +1949,6 @@ def _active_task_is_irreversible(root):
         if not root:
             return False
         sid = os.environ.get("PLAYBOOK_SESSION_ID", "").strip()
-        if not sid or "/" in sid or "\\" in sid or ".." in sid:
-            return False
         plugin_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         if plugin_dir not in sys.path:
             sys.path.insert(0, plugin_dir)
@@ -1324,15 +1958,28 @@ def _active_task_is_irreversible(root):
         # Round 2 (task 106): follow the id the CLI and the hooks resolve — a
         # rejected env id (dead, or a live sibling's) must neither acknowledge
         # through ITS session nor block the session the shell really is in.
-        # Windows is untouched (the raw env id, as before).
-        if os.name != "nt":
-            from tasks.core import resolve_session_id
-            sid = resolve_session_id(quiet=True)
-            if not sid:
+        # Task 110 (owner Q-A (b), parked R1 + P1): with NO env id the walk still
+        # resolves the session — a real hook process carries none (109 K10:
+        # 99/99 events), so requiring one meant the documented acknowledgement
+        # never fired in a normal session. Windows included (impl panel round
+        # 1): there the resolver answers the env id or `pid-win-fallback`.
+        sid = _resolved_session_id()
+        if not sid or "/" in sid or "\\" in sid or ".." in sid:
+            return False
+        # The lane through the ENFORCING resolver (task 110, R1): the journal's
+        # best-effort resolver answers the ROOT lane for a malformed marker, so a
+        # stale root irreversible task could acknowledge for a session whose lane
+        # is unknowable. `resolve_agent_dir` refuses a malformed marker (it exits,
+        # hence BaseException below), and the fresh-clone shape — lanes present,
+        # no marker, no root tasks dir — is refused here as every enforcing
+        # surface refuses it.
+        from tasks.core import resolve_agent_dir
+        from pathlib import Path as _P
+        agent = _P(root) / ".agent"
+        if not (agent / "current_user").exists() and not (agent / "tasks").is_dir():
+            if any((c / "tasks").is_dir() for c in agent.iterdir() if c.is_dir()):
                 return False
-        j = _load_journal()
-        lane = j.resolve_lane_dir(root) if j is not None else None
-        lane = str(lane) if lane else os.path.join(root, ".agent")
+        lane = str(resolve_agent_dir(_P(root)))
         pointer = os.path.join(lane, "sessions", sid, "current_state")
         with open(pointer, encoding="utf-8") as fh:
             num = fh.read().strip()
@@ -1353,8 +2000,17 @@ def _active_task_is_irreversible(root):
         # task.md for the status and AGAIN inside `extract_risk`, so a write
         # landing between them could pair one task's status with another's risk.
         _text = _P(task_md).read_text(encoding="utf-8", errors="replace")
-        if str(_status_from_lines(_physical_lines(_text))).strip().lower() != "in_progress":
-            return False        # a done/blocked/pending task in a stale pointer never acknowledges (round 2)
+        # A done/blocked task in a stale pointer never acknowledges (073 round 3:
+        # a crash between the close and the pointer clear). Task 110 W9: `pending`
+        # is the status of every task `tasks work N` activates — the CLI writes the
+        # pointer, never the status (only a reopen/resume writes `in_progress`) —
+        # so requiring `in_progress` meant the acknowledgement never fired for a
+        # normally activated task. A stub is never activated (`tasks work` refuses
+        # it); one in a pointer still does not acknowledge.
+        if str(_status_from_lines(_physical_lines(_text))).strip().lower() not in ("pending", "in_progress"):
+            return False
+        if "<!-- stub:" in _text:
+            return False
         if str(extract_risk_from_text(_text)).strip().lower() != "irreversible":
             return False
         # RE-READ the pointer: a task switch between the first read and here would
@@ -1366,7 +2022,7 @@ def _active_task_is_irreversible(root):
             if fh.read().strip() != num:
                 return False
         return True
-    except Exception:
+    except BaseException:       # incl. SystemExit from resolve_agent_dir's marker check
         return False
 
 
@@ -1414,8 +2070,11 @@ def main() -> int:
     cfg = _load_cfg(root)
     if cfg.get("command_guard") is False:
         return 0
-    if os.environ.get("PLAYBOOK_ALLOW_DANGEROUS", "").strip().lower() in ("1", "true", "yes", "on"):
-        return 0                                        # operator-acknowledged (round 2: `=0` is not an ack)
+    # Operator acknowledgement (round 2: `=0` is not an ack). Task 110 (109 G2-14):
+    # it is decided AFTER classification, so the allow it grants to a command that
+    # WOULD have blocked is journalled like the irreversible-task ack below — an
+    # override nobody can see afterwards was the one decision with no trace.
+    env_ack = os.environ.get("PLAYBOOK_ALLOW_DANGEROUS", "").strip().lower() in ("1", "true", "yes", "on")
 
     extra = cfg.get("dangerous_commands")
     extra = extra if isinstance(extra, list) else []
@@ -1432,6 +2091,18 @@ def main() -> int:
         return 0
 
     shown = command if isinstance(command, str) else " ".join(str(p) for p in command)
+
+    if env_ack:
+        try:
+            j = _load_journal()
+            if j is not None:
+                j.append(j.resolve_lane_dir(root), "command-guard", "allow",
+                         f"ack-operator-env:{name or 'dangerous-command'}",
+                         session_id=_journal_session_id(),
+                         tool=payload.get("tool_name", ""), command=shown)
+        except Exception:
+            pass
+        return 0
 
     if _active_task_is_irreversible(root):
         # The documented in-session acknowledgement (task 073, impl panel: it was
