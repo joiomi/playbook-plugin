@@ -88,7 +88,42 @@ if [ -z "$JSONL" ]; then
     # containing spaces (iCloud Drive's "Mobile Documents" is the common case)
     # word-splits unquoted, so the glob never matches and the monitor briefs
     # itself with no recent events — silently.
-    JSONL=$(ls -t "$HOME/.claude/projects/$SLUG"/*.jsonl 2>/dev/null | head -1)
+    # Task 124 (gauntlet 2 G2-23): the monitor is itself a claude session in
+    # this project slug, so the newest transcript is often its OWN — skip any
+    # whose early user records START with this script's "# MONITOR BOOTSTRAP"
+    # briefing (a front session merely quoting it stays eligible). Only when
+    # python3 cannot run, the old newest-file guess (never when every
+    # transcript is a monitor's: then there is nothing to watch).
+    if ! JSONL=$(ls -t "$HOME/.claude/projects/$SLUG"/*.jsonl 2>/dev/null | python3 -I -c '
+import json, sys
+def own(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for n, line in enumerate(fh):
+                if n >= 40:
+                    return False
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(rec, dict) or rec.get("type") != "user":
+                    continue
+                c = (rec.get("message") or {}).get("content")
+                parts = [c] if isinstance(c, str) else [
+                    p.get("text") for p in c if isinstance(p, dict)] if isinstance(c, list) else []
+                if any(isinstance(t, str) and t.lstrip().startswith("# MONITOR BOOTSTRAP") for t in parts):
+                    return True
+    except OSError:
+        return False
+    return False
+for line in sys.stdin:
+    path = line.rstrip("\n")
+    if path and not own(path):
+        print(path)
+        break
+' 2>/dev/null); then
+        JSONL=$(ls -t "$HOME/.claude/projects/$SLUG"/*.jsonl 2>/dev/null | head -1)
+    fi
     JSONL_BINDING="WARNING: mtime-guess — no transcript pointer at $POINTER_FILE (front session predates 1.5.7 hooks, or no tool call has fired yet); this may be the WRONG session's transcript"
 fi
 

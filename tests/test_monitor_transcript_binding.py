@@ -152,6 +152,55 @@ class BootstrapBinding(unittest.TestCase):
         self.assertIn("WARNING", out)
         self.assertIn("mtime", out.lower())
 
+    @unittest.skipIf(sys.platform.startswith("win"),
+                     "the mtime-guess fallback's project-slug scheme has no Windows analogue "
+                     "(see test_no_pointer_falls_back_loudly)")
+    def test_the_guess_never_binds_to_a_monitor_transcript(self):
+        # Task 124 (gauntlet 2 G2-23): the monitor is a claude session in the same project
+        # slug, so its own transcript is often the newest — it watched itself (M06).
+        proj = _project()
+        home = Path(tempfile.mkdtemp())
+        slug = self._slugdir(proj, home)
+        front = slug / "front-session.jsonl"
+        front.write_text(_event_line("build the thing"), encoding="utf-8")
+        mon = slug / "monitor-session.jsonl"
+        mon.write_text(_event_line("<local-command-caveat>x</local-command-caveat>")
+                       + _event_line("# MONITOR BOOTSTRAP\n\nYou are the conversation monitor"),
+                       encoding="utf-8")
+        os.utime(front, (1, 1))                      # the monitor's transcript is NEWER
+        (proj / ".agent" / "sessions" / SESSION).mkdir(parents=True)
+        out = self._bootstrap(proj, home)
+        ident = out.split("RECENT EVENTS")[0]
+        self.assertIn("front-session.jsonl", ident)
+        self.assertNotIn("monitor-session.jsonl", ident)
+
+    @unittest.skipIf(sys.platform.startswith("win"),
+                     "the mtime-guess fallback's project-slug scheme has no Windows analogue")
+    def test_only_monitor_transcripts_means_nothing_to_watch(self):
+        proj = _project()
+        home = Path(tempfile.mkdtemp())
+        slug = self._slugdir(proj, home)
+        (slug / "monitor-session.jsonl").write_text(_event_line("# MONITOR BOOTSTRAP\n"), encoding="utf-8")
+        (proj / ".agent" / "sessions" / SESSION).mkdir(parents=True)
+        out = self._bootstrap(proj, home)
+        self.assertNotIn("monitor-session.jsonl", out.split("RECENT EVENTS")[0])
+
+    @unittest.skipIf(sys.platform.startswith("win"),
+                     "the mtime-guess fallback's project-slug scheme has no Windows analogue")
+    def test_a_front_session_that_mentions_the_marker_is_still_eligible(self):
+        proj = _project()
+        home = Path(tempfile.mkdtemp())
+        slug = self._slugdir(proj, home)
+        older = slug / "older.jsonl"
+        older.write_text(_event_line("old"), encoding="utf-8")
+        front = slug / "front-session.jsonl"
+        front.write_text(_event_line("why does the monitor print # MONITOR BOOTSTRAP first?"),
+                         encoding="utf-8")
+        os.utime(older, (1, 1))
+        (proj / ".agent" / "sessions" / SESSION).mkdir(parents=True)
+        out = self._bootstrap(proj, home)
+        self.assertIn("front-session.jsonl", out.split("RECENT EVENTS")[0])
+
     def test_wait_command_follows_the_pointer(self):
         proj = _project()
         home = Path(tempfile.mkdtemp())

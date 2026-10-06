@@ -163,6 +163,11 @@ Each fix was written against a test that failed first.
 
 ### Fixed
 
+- **The monitor no longer watches itself** (task 124, PLAN S11; gauntlet 2 G2-23). Without a transcript pointer
+  the monitor guesses the newest transcript of the project, and the newest is often the monitor's own session — it
+  judged its first wakes from its own conversation. The guess now skips transcripts that are monitor sessions
+  (their first user records start with the monitor's briefing); a front session that merely mentions it is kept.
+
 - **`tasks status` names a stub** (task 123, PLAN S11; gauntlet 2 G2-18). A stub has no gates until `tasks work <N>`
   expands it, and its status line read `- | (all gates checked)`. It now reads ``(stub — `tasks work N` expands it)``.
 
