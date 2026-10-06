@@ -3639,7 +3639,9 @@ _PROMOTED_TO_TASK = re.compile(r"\[promoted\s*(?:→|->)\s*(\d{1,6})(?!\d)\b[^\]
 # a dismissal needs a closed `[dismissed: <reason>]`; a strikethrough must close
 _DISMISSED = re.compile(r"\[dismissed:\s*[^\]\s][^\]]*\]", re.IGNORECASE)
 _STRUCK = re.compile(r"^~~.*\S.*~~")
-_PROMOTED_TO_PLAN = re.compile(r"\[promoted\s*(?:→|->)\s*PLAN(?:\.md)?\s+S\d+\b[^\]]*\]", re.IGNORECASE)
+# a lettered step (`S11b`, `S7b`) is a PLAN step too (gauntlet 2 parked item 20: `S\d+\b`
+# read `[promoted → PLAN S11b]` as OPEN)
+_PROMOTED_TO_PLAN = re.compile(r"\[promoted\s*(?:→|->)\s*PLAN(?:\.md)?\s+S\d+[a-z]?\b[^\]]*\]", re.IGNORECASE)
 _DEFERRAL_DATE = re.compile(r"\[deferred:[^\]]*?\b(20\d{2}-\d{2}-\d{2})\b[^\]]*\]", re.IGNORECASE)
 
 

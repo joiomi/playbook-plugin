@@ -163,6 +163,12 @@ Each fix was written against a test that failed first.
 
 ### Fixed
 
+- **Two advisories no longer report something false** (task 119, PLAN S11; gauntlet 2 G2-03 and parked item 20).
+  `tasks parked` listed a bullet marked `[promoted → PLAN S11b]` as open — a lettered PLAN step (`S11b`, `S7b`)
+  counts as a promotion target now. The "README may be stale" advisory fired in any project where the plugin's
+  source CLI was run; it now speaks only in the source checkout itself (or a workspace holding it as a direct
+  child), as `docs/cli.md` says.
+
 - **A codex judge review with a line-separator character in it is no longer thrown away** (task 111). The
   codex and agy stream parsers split the CLI's JSONL with `str.splitlines()`, which also breaks on U+0085,
   U+2028, U+2029, VT, FF and the C1 separators; codex writes U+2028 / U+2029 raw inside a JSON string, so a

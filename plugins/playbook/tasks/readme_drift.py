@@ -79,11 +79,15 @@ def find_source_repo(
     module = Path(module_file) if module_file else Path(__file__)
     home = Path(plugins_home) if plugins_home else Path.home() / ".claude" / "plugins"
 
-    # Signal 1: this module lives inside a source checkout.
+    # Signal 1: this module lives inside a source checkout — and the project the
+    # command runs for is that checkout (or lies inside it). The source CLI run in
+    # ANOTHER project (a maintainer's scratch project, a gauntlet) says nothing
+    # about that project's README (gauntlet 2 G2-03; cli.md "silent everywhere else").
     try:
         for ancestor in module.resolve().parents:
             if _is_source_repo(ancestor):
-                if not _under(ancestor, home):
+                if not _under(ancestor, home) and (
+                        project_path is None or _under(Path(project_path), ancestor)):
                     return ancestor
                 break  # under ~/.claude/plugins → marketplaces clone, excluded
     except OSError:

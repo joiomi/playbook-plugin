@@ -157,6 +157,22 @@ class PostCapGrammar(_Fixture):
         self.assertEqual(self._status("x [promoted → " + "9" * 5000 + "]"), {"open"})
 
 
+class LetteredPlanStep(_Fixture):
+    """Task 119 (gauntlet 2 parked item 20; 091 impl r2 codex-high #3): a lettered PLAN step
+    (`S11b`, `S7b`) is a promotion target — the grammar the workspace's check-plan.py already
+    reads (`S\\d+[a-z]?`). Before, `S\\d+\\b` left such a bullet OPEN in `tasks parked`."""
+
+    _status = PostCapGrammar._status
+
+    def test_a_lettered_step_resolves(self):
+        for item in ("a [promoted → PLAN S11b]", "b [promoted -> PLAN S7b — 093 Z2]",
+                     "c [promoted → PLAN.md S11B]"):
+            with self.subTest(item=item):
+                self.assertEqual(self._status(item), {"promoted"})
+
+    def test_two_letters_is_not_a_step(self):
+        self.assertEqual(self._status("d [promoted → PLAN S11bc]"), {"open"})
+
 class DatedDeferral(_Fixture):
     def test_a_dated_owner_deferral_is_not_open(self):
         self._task(1, ["bench isolation [deferred: owner decision 2026-09-09 — until the Gemini seat exam]"])

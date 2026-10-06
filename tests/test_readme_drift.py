@@ -111,6 +111,26 @@ class ReadmeDriftTest(unittest.TestCase):
         # compare resolved forms.
         self.assertEqual(found, repo.resolve())
 
+    def test_signal1_is_silent_in_a_foreign_project(self):
+        # Task 119 (gauntlet 2 G2-03): the source CLI run in ANOTHER project (a scratch
+        # project, a gauntlet) nagged that project about the plugin's README; cli.md says
+        # the advisory is for the source checkout and "silent everywhere else"
+        repo = make_source_repo(self.tmp / "checkout")
+        foreign = self.tmp / "scratch-project"
+        (foreign / ".agent" / "tasks").mkdir(parents=True)
+        self.assertIsNone(find_source_repo(project_path=foreign, module_file=self._module_in(repo),
+                                           plugins_home=self.plugins_home))
+        self.assertEqual(self._drift(repo=repo, project=foreign), [])
+
+    def test_signal1_still_fires_for_the_checkout_itself_and_inside_it(self):
+        repo = make_source_repo(self.tmp / "checkout")
+        for project in (repo, repo / "plugins" / "playbook"):
+            with self.subTest(project=project):
+                self.assertEqual(
+                    find_source_repo(project_path=project, module_file=self._module_in(repo),
+                                     plugins_home=self.plugins_home),
+                    repo.resolve())
+
     def test_signal2_child_scan_finds_dogfood_workspace(self):
         ws = self.tmp / "workspace"
         repo = make_source_repo(ws / "playbook-plugin")
