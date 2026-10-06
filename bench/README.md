@@ -167,6 +167,17 @@ weights and "point estimates only" (no bootstrap CIs in v1). Nothing derived is 
   once immediately (the first attempt is kept in `attempts`), the run continues to the next case,
   and a still-failing pair stays `dnf` for `--resume`. Quota wording takes precedence (no retry,
   halt). Anything outside both signature lists is still `fail` — a real completed bad review.
+- **An agy seat is not classified from wording found anywhere in the envelope** (task 111). The agy
+  adapter names a quota stop itself, in the seat's first line (`(FAILED — agy quota exhausted: …)`), and
+  the harness's `/quota` pre-flight uses the same words (`(error: agy quota exhausted: …)`): only those
+  two lines halt a run. The transient list is matched only against a first line the adapter built from
+  agy's own error channels (`(FAILED — agy reported: …)`, `(FAILED — the judge CLI reported an error: …)`,
+  `(FAILED — the agy turn reported an error: …)`), with three agy-only signatures on top of the shared
+  list (`the stream was interrupted`, `currently unavailable`, `resource_exhausted`) — they are not in
+  the shared list, which is searched in the whole envelope of every other backend.
+  Every other failed agy seat is `fail`: the rest of the envelope holds text the judge under test wrote,
+  and a malformed stream is quoted into its own failure line. The scripted runner classifies an agy
+  candidate the same way.
 - **Unique-valid is `n/a`, not 0, whenever some candidate in the manifest has no
   scorable result for a case** — uniqueness is only defined against peers that ran.
 - On Windows the argv-transport preflight applies the adapters' ~30k whole-command-line

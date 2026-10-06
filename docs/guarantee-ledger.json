@@ -1,7 +1,7 @@
 {
   "$schema": "guarantee-ledger.schema.json",
   "schema_version": 1,
-  "ledger_version": "2026-09-27",
+  "ledger_version": "2026-10-05",
   "guarantees": [
     {
       "id": "PB-TASK-ACTIVATE",
@@ -6761,7 +6761,7 @@
     {
       "id": "PB-PROVIDER-CAPABILITY-DEGRADE",
       "category": "providers-and-hooks",
-      "statement": "The model-detection report names Antigravity's model-pinning limitation explicitly (`NOT selectable`) instead of implying parity; the capability matrix (`ProviderCapabilities` / `detect_capabilities`) and the documented Codex plain-shell caveat are asserted by no test.",
+      "statement": "The model-detection report says how each provider's model is pinned instead of implying parity: Antigravity's entry lists the ids `agy models` prints, says to pin a seat as `agy:<id>`, and names it an experimental judge seat whose pin `tasks models check` live-probes; the capability matrix (`ProviderCapabilities` / `detect_capabilities`) and the documented Codex plain-shell caveat are asserted by no test.",
       "owner": [
         {
           "path": "plugins/playbook/provider/capabilities.py",
@@ -6782,7 +6782,7 @@
         {
           "type": "executable unit",
           "path": "tests/test_model_availability.py",
-          "reference": "DetectProvidersTest.test_agy_names_but_pin_note",
+          "reference": "DetectProvidersTest.test_agy_ids_and_how_to_pin_them",
           "boundary": "unit",
           "negative_control": {
             "path": "tests/test_model_availability.py",
@@ -6804,7 +6804,8 @@
         "Provider capability matrix has not been live-certified against current CLI versions.",
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
         "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21).",
-        "Task 100 (PLAN S8 binding audit, 2026-09-27) NARROWED: the single proof covers only the Antigravity pin note in `detect_providers`; no test references `ProviderCapabilities` or `detect_capabilities`, and docs/providers.md's Codex plain-shell caveat is prose. Experimental foreign-provider surface (owner 2026-08-21); S11."
+        "Task 100 (PLAN S8 binding audit, 2026-09-27) NARROWED: the single proof covers only the Antigravity pin note in `detect_providers`; no test references `ProviderCapabilities` or `detect_capabilities`, and docs/providers.md's Codex plain-shell caveat is prose. Experimental foreign-provider surface (owner 2026-08-21); S11.",
+        "Task 111 (2026-10-05) CHANGED THE CLAIM: until agy 1.2 this row said the report names Antigravity's pin as `NOT selectable`. agy 1.2.17 takes `--model <id>` (measured on one Linux account; the id carries the effort), so the report now gives the pin instruction and the proof asserts it. The seat stays an experimental judge seat; the rest of this row is unchanged."
       ],
       "follow_up_phases": [
         2,
@@ -10729,6 +10730,19 @@
           "limitations": [
             "Task 100 (PLAN S8 binding audit, 2026-09-27): budget text is OTHER (a failed seat), never model removal — the `never misclassify timeout/budget text` clause was cited only through a quoted-pattern review until this audit."
           ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_agy_judge.py",
+          "reference": "ModelSelectionErrors.test_probe_tells_the_three_apart",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_agy_judge.py",
+            "reference": "ModelSelectionErrors.test_only_an_unknown_id_classifies_as_model_unavailable"
+          },
+          "limitations": [
+            "Task 111: experimental agy judge seat. The probe's subprocess is replaced by stdout/stderr captured from agy 1.2.17 (2026-10-05, tests/fixtures/agy-1.2.17/) for the three `invalid model selection` messages; no agy runs in the test."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -10743,7 +10757,7 @@
       ],
       "status": "partially_evidenced",
       "missing_evidence_or_limitation": [
-        "No live provider availability/error-classification evidence; Antigravity remains inherently unprobeable.",
+        "No live provider availability/error-classification evidence in CI. Task 111 (2026-10-05): Antigravity is no longer unprobeable — agy 1.2.17 takes a model pin, so `tasks models check` runs one real turn for an agy pin; an id agy does not know is GONE, a missing or contradicted effort is BAD_EFFORT (a spec error, never a dead pin), and a missing sign-in or an exhausted quota is UNKNOWN with the cause. agy is an experimental judge seat and is not in applicable_providers; its proof replays output captured from agy 1.2.17 on one Linux account.",
         "Owner decision 2026-08-21: judge-seat is supported on claude, grok, and codex; antigravity and pi are experimental and removed from applicable_providers.",
         "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending."
       ],
@@ -13337,7 +13351,7 @@
     {
       "id": "PB-REVIEW-SPEND-JOURNAL",
       "category": "judges-and-reviews",
-      "statement": "Every judge invocation the review runner makes — each panel seat, the single judge, and the tail-cert judge — appends, on its completion or timeout, one best-effort, log-only spend record to the lane-resolved .agent/<lane>/journal/enforcement.jsonl via pb_journal.append_review, sharing the enforcement envelope (hook=\"review\", decision=\"record\", reason=\"review spend\") plus the fields kind (panel|single|tail-cert), seat as model:effort, task, round, duration_ms, status (ok|fail|timeout|dnf), and usage, plus — on a fail/dnf/timeout record only (task 096) — an error reason (timed out after <limit>, a specific model-availability verdict, or `exit N: <first failure line>`), sanitized, token-redacted and cut to the byte budget the rest of the line leaves under the 512-byte floor. The one exception is a tamper hard-stop, which records nothing so the journal write can never precede and suppress the tamper banner. Token usage is recorded only WHERE the CLI reports it as a structured envelope — the codex judge path runs `exec --json` (last `turn.completed` usage) and the grok judge path `--output-format json` (`usage` object), the adapters returning the review prose as a str that CARRIES the parsed usage (provider.usage.JudgeOutput) so every journal site (panel seat, single, tail-cert) records the CLI's own input_tokens/output_tokens as reported; claude seats and every spawn-error/unrecognized-stdout case record the explicit marker {\"status\":\"unknown\"}, as does a timeout when no complete usage frame was emitted before the kill (a frame the CLI had already written is parsed strictly from the partial stdout and carried — proof test_timeout_paths_record_a_usage_frame_the_cli_already_wrote); append_review normalizes usage to the fixed {status[,in,out]} schema — numbers are never fabricated (non-int/bool/negative counts are unknown) and free-form judge prose can never poison the field. A journal write failure never changes or breaks a review or any decision, every field is bounded (strings byte-capped with control chars stripped, numerics magnitude-capped) so REAL records are a single O_APPEND line well under PIPE_BUF — a best-effort bound, not absolute (a pathologically escape-heavy field could exceed it, accepted and harmless since the write affects no decision), and the journal is not written through a symlinked/FIFO path (skipped, not followed).",
+      "statement": "Every judge invocation the review runner makes — each panel seat, the single judge, and the tail-cert judge — appends, on its completion or timeout, one best-effort, log-only spend record to the lane-resolved .agent/<lane>/journal/enforcement.jsonl via pb_journal.append_review, sharing the enforcement envelope (hook=\"review\", decision=\"record\", reason=\"review spend\") plus the fields kind (panel|single|tail-cert), seat as model:effort, task, round, duration_ms, status (ok|fail|timeout|dnf), and usage, plus — on a fail/dnf/timeout record only (task 096) — an error reason (timed out after <limit>, a specific model-availability verdict, or `exit N: <first failure line>`), sanitized, token-redacted and cut to the byte budget the rest of the line leaves under the 512-byte floor. The one exception is a tamper hard-stop, which records nothing so the journal write can never precede and suppress the tamper banner. Token usage is recorded only WHERE the CLI reports it as a structured envelope — the codex judge path runs `exec --json` (last `turn.completed` usage) the grok judge path `--output-format json` (`usage` object), and the experimental agy judge path `--output-format stream-json` (the terminal `result` event's `usage`, the turn's totals; an all-zero usage object is recorded as unknown, task 111), the adapters returning the review prose as a str that CARRIES the parsed usage (provider.usage.JudgeOutput) so every journal site (panel seat, single, tail-cert) records the CLI's own input_tokens/output_tokens as reported; claude seats and every spawn-error/unrecognized-stdout case record the explicit marker {\"status\":\"unknown\"}, as does a timeout when no complete usage frame was emitted before the kill (a frame the CLI had already written is parsed strictly from the partial stdout and carried — proof test_timeout_paths_record_a_usage_frame_the_cli_already_wrote); append_review normalizes usage to the fixed {status[,in,out]} schema — numbers are never fabricated (non-int/bool/negative counts are unknown) and free-form judge prose can never poison the field. A journal write failure never changes or breaks a review or any decision, every field is bounded (strings byte-capped with control chars stripped, numerics magnitude-capped) so REAL records are a single O_APPEND line well under PIPE_BUF — a best-effort bound, not absolute (a pathologically escape-heavy field could exceed it, accepted and harmless since the write affects no decision), and the journal is not written through a symlinked/FIFO path (skipped, not followed).",
       "owner": [
         {
           "path": "plugins/playbook/scripts/pb_journal.py",
@@ -13600,6 +13614,19 @@
           },
           "limitations": [
             "Panel seat and single bail killed after a complete codex turn.completed record `timeout` WITH the CLI's usage; the paired grok fragment case records `timeout` + unknown."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_agy_judge.py",
+          "reference": "ReviewRunner.test_panel_seat_writes_one_record_with_agys_token_counts",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_agy_judge.py",
+            "reference": "ReviewRunner.test_panel_seat_self_timeout_records_timeout"
+          },
+          "limitations": [
+            "Task 111: experimental agy judge seat, not in applicable_providers. The real panel runner is driven in-process with `sandbox.run` replaced by stdout captured from agy 1.2.17 (2026-10-05); the JSONL line carries that capture's input_tokens/output_tokens. The single-judge site is pinned by ReviewRunner.test_single_judge_arm_uses_the_adapters_judge_invocation. agy's own `--print-timeout` expiry exits 0 with an all-zero usage object: that record is `timeout` with usage unknown (the negative control)."
           ]
         }
       ],

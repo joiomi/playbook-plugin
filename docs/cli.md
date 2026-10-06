@@ -42,9 +42,9 @@ The **hostile-sequence** lens walks every state-changing flow the change touches
 
 **`tasks judge`** — the low-level runner behind the review commands; use `plan-review` / `impl-review` instead.
 
-**`tasks models check [--no-probe]`** — audit every judge pin against live availability. Pinned model ids rot as providers retire models; this catches it before a review silently degrades. Probes cost a few tiny model calls; `--no-probe` is the free degraded audit. Exits 1 when a pin can't run as configured.
+**`tasks models check [--no-probe]`** — audit every judge pin against live availability. Pinned model ids rot as providers retire models; this catches it before a review silently degrades. Probes cost a few tiny model calls (an agy pin — experimental seat — costs one, and the report adds agy's remaining quota and AI credits); `--no-probe` is the free degraded audit. Exits 1 when a pin can't run as configured.
 
-**`tasks models detect [--json]`** — fast inventory of the installed agent CLIs (claude / codex / agy / grok / pi) and each one's selectable models plus supported reasoning-effort levels (codex/grok). Reads local caches and the cheap listing commands only — no model is live-probed. (Not strictly offline: `grok models` is login-aware, a server call — but each listing is time-bounded.) This is what `/playbook:init` reads to offer a panel menu; `--json` emits the machine-readable form.
+**`tasks models detect [--json]`** — fast inventory of the installed agent CLIs (claude / codex / agy / grok / pi) and each one's selectable models plus supported reasoning-effort levels (codex/grok; an agy model id carries its effort). Reads local caches and the cheap listing commands only — no model is live-probed. (Not strictly offline: `grok models` and `agy models` are login-aware server calls — but each listing is time-bounded.) This is what `/playbook:init` reads to offer a panel menu; `--json` emits the machine-readable form.
 
 **`tasks models select`** — guided (interactive) refresh of the panel: shows the availability report, takes the new seat list, writes `.agent/models.json` (creating it on fresh installs, preserving keys it doesn't manage).
 

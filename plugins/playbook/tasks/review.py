@@ -160,6 +160,13 @@ def _judge_error(output, status, timeout_label=None):
         lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
         if not lines:
             return ""
+        # Task 111: the agy judge path names its cause in a `(FAILED — agy …)` line
+        # (not signed in, quota exhausted, a web tool, the wrong model). On the
+        # single-judge path that line arrives wrapped inside a `(FAILED — exit N)`
+        # block; it is the reason, wherever it sits.
+        _agy_named = next((ln for ln in lines if ln.startswith("(FAILED — agy ")), None)
+        if _agy_named:
+            return _agy_named
         failed = re.compile(r"\(FAILED\s*\S\s*exit (-?\d+)\)")
         m = failed.match(lines[0])
         if m:
@@ -2786,8 +2793,11 @@ def _cmd_single_review(cmd, cmd_args):
     # branch runs, so a single start stamp here measures whichever dispatch
     # fires. The seat spec + round are fixed for this single-judge invocation.
     _spend_t0 = time.monotonic()
-    _spend_seat = _seat_with_effort(backend, model)
+    # The agy seat is named `agy:…` on the panel path (the adapter's binary name);
+    # the single-judge record uses the same name so one seat is one key (task 111).
+    _spend_seat = _seat_with_effort("agy" if backend == "antigravity" else backend, model)
     _spend_round = _next_review_round(project_path, task_file)
+    _agy_expected = None      # the id agy's stream must name (set in the agy arm)
 
     if backend == "claude":
         claude_bin = shutil.which("claude")
@@ -2907,49 +2917,60 @@ def _cmd_single_review(cmd, cmd_args):
             sys.exit(1)
 
         prompt = prompt_fn(task_path, inline_context=True)
-        full_prompt = f"{system_context}\n\n---\n\n{prompt}"
         if extra_prompt:
-            full_prompt += f"\n\nAdditional steering from the user:\n{extra_prompt}"
+            prompt += f"\n\nAdditional steering from the user:\n{extra_prompt}"
 
-        if model:
-            print(f"  (note: agy has no model flag — ignoring --model {model}; uses agy's UI-selected model)", flush=True)
-        # Prompt goes on STDIN, not argv: `agy --print` with no positional
-        # prompt reads stdin (agy >=1.0.15). Windows caps the command line
-        # at 32,767 chars (WinError 206), so full_prompt on argv overflows
-        # it — same fix as the claude branch above and the adapter's
-        # run_headless_judge. --print mode ignores cwd, needs --add-dir;
-        # no -m/--model flag yet (uses whatever the agy UI has set).
-        # Bypass (--dangerously-skip-permissions) prepended by sandbox.
-        agy_args = [
-            "--add-dir", str(project_path),
-            "--print",
-        ]
-        # agy's own internal wait — keep it in step with the subprocess
-        # timeout when finite; omit it entirely when unlimited so agy does
-        # not kill a judge that is still writing.
-        if review_timeout is not None:
-            agy_args += ["--print-timeout", f"{review_timeout}s"]
-
-        agy_env = os.environ.copy()
-        agy_env["PLAYBOOK_SESSION_ID"] = "judge"
+        # The whole invocation is the adapter's (task 111, agy 1.2.17) — the same
+        # `judge_invocation` the panel seat uses, so the two cannot drift: the
+        # prompt is ONE NDJSON line on stdin (no `-p/--print`, no argv size cap),
+        # the model pin is honoured, `--mode plan`, `--print-timeout` in step with
+        # the review's hard timeout (omitted when unlimited), and the no-web line
+        # (this path never enables web search). Bypass
+        # (--dangerously-skip-permissions) prepended by sandbox; the read-only
+        # project bind — not plan mode — is what stops a write.
+        from provider.adapters.antigravity import (
+            AntigravityAdapter, _KILL_GRACE_SECS as _AGY_KILL_GRACE,
+            judge_env as _agy_judge_env, pinned_model_id as _agy_pinned_id)
+        try:
+            inv = AntigravityAdapter("judge", project_path).judge_invocation(
+                prompt, model, context=system_context, web_search=False,
+                timeout_secs=review_timeout)
+            _agy_expected = _agy_pinned_id(model)
+        except ValueError as e:  # bad <base>:<effort> pin — fail pre-spawn
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+        agy_args = inv.argv
+        agy_env = _agy_judge_env(os.environ, "judge")   # API-key variables dropped
 
         from provider import sandbox as _sandbox
+        from provider import usage as _agy_usage
         print(f"Running {review_label} (agy) on {task_path}...", flush=True)
+        _agy_t0 = time.monotonic()
         try:
             result = _sandbox.run(
                 "agy", agy_args,
                 project_root=project_path,
                 project_writable=False,   # judge is read-only — cannot mutate repo/task.md
                 env=agy_env,
-                input=full_prompt,
+                input=inv.stdin,
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=review_timeout,
+                # the killer sits above agy's own --print-timeout, so agy can hand
+                # back its partial text first (plan panel P6)
+                timeout=(None if review_timeout is None
+                         else review_timeout + _AGY_KILL_GRACE),
             )
         except subprocess.TimeoutExpired as _expired:
             _bail_review_timeout(_expired)
+        # agy's own timeout exits 0 with `status: SUCCESS` and PARTIAL text: its
+        # stderr line or the wall clock says so — bail exactly like a killed judge.
+        if _agy_usage.agy_timed_out(result.stderr, review_timeout,
+                                    time.monotonic() - _agy_t0, result.stdout):
+            _bail_review_timeout(subprocess.TimeoutExpired(
+                ["agy", *agy_args], review_timeout,
+                output=result.stdout, stderr=result.stderr))
 
     elif backend == "grok":
         if not shutil.which("grok"):
@@ -3107,8 +3128,9 @@ def _cmd_single_review(cmd, cmd_args):
         _emit_tamper(_tamper_changes)          # degraded notice; the review is KEPT (task 059)
     _tamper_receipt = _tamper_mark(_tamper_changes)
 
-    # Structured judge stdout (task 056): codex `--json` / grok `--output-format
-    # json` carry the real token usage. Extract ONCE here — before the operator
+    # Structured judge stdout (task 056; agy's stream-json since task 111): codex
+    # `--json` / grok `--output-format json` / agy `--output-format stream-json`
+    # carry the real token usage. Extract ONCE here — before the operator
     # stream, the budget/failure classifiers and the save block all read
     # `result.stdout` — so every consumer sees the review PROSE, and the usage
     # parsed from the ORIGINAL stdout rides into the spend record. Same rule as
@@ -3116,11 +3138,18 @@ def _cmd_single_review(cmd, cmd_args):
     # recognized envelope with no review text becomes a FAILED result (never a
     # saved review, never a clean seat); unrecognized stdout stays verbatim.
     _spend_usage = None
-    if backend in ("codex", "grok"):
-        from provider.usage import extract_codex, extract_grok, judge_output_from_result
-        _jo = judge_output_from_result(
-            result, extract_codex if backend == "codex" else extract_grok,
-            _sandbox.format_judge_output)
+    if backend in ("codex", "grok", "antigravity"):
+        from provider.usage import (
+            agy_judge_output, extract_codex, extract_grok, judge_output_from_result)
+        if backend == "antigravity":
+            # agy's rules on top of the shared one: a mid-turn error, a web tool
+            # call, a model other than the pin → FAILED; a named cause first.
+            _jo = agy_judge_output(result, _sandbox.format_judge_output,
+                                   expected_model=_agy_expected, web_search=False)
+        else:
+            _jo = judge_output_from_result(
+                result, extract_codex if backend == "codex" else extract_grok,
+                _sandbox.format_judge_output)
         _spend_usage = _jo.usage
         # ALWAYS publish the formatted text (round 2): on rc≠0 it is the
         # `(FAILED — exit N)` + tails the adapters/panel show, never raw JSON;

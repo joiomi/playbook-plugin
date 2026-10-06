@@ -21,9 +21,16 @@ Per-provider discovery surfaces (probed live, 2026-07-13):
   clobbers the active task's session state (live incident). Probe timeouts
   are UNKNOWN, never GONE. New Claude models can't be discovered, only
   candidate ids supplied via pins/aliases/--claude-candidates.
-- agy: `agy models` lists display names, but `--model` is inert in --print
-  mode (silently runs the UI-selected model), so pins are unverifiable and
-  agy can never raise a model-unavailable error.
+- agy (1.2.17, measured 2026-10-05 — task 111): `agy models` prints
+  `id<TAB>label`; the id carries the effort and is what `--model` takes. A
+  listed id can still be unusable (quota used up, not signed in), so a pin is
+  live-probed with ONE tiny real turn through the judge's own stdin path;
+  listing alone earns the weaker LISTED. A rejected `--model` fails before any
+  turn with `invalid model selection (…)`, which agy uses for three different
+  mistakes: an id it does not know (GONE), a base id without an effort and an
+  id contradicted by an effort flag (both BAD_EFFORT — a spec error, never a
+  dead pin). A pin is a whole id: `agy:<base>:<effort>` is refused, because
+  agy's stream would name only `<base>`. `agy -p /quota` and `/credits` answer without a model turn.
 - grok: `grok models` lists the ACCOUNT'S entitled model ids (login-aware —
   unlike the codex cache this list IS the entitlements), so listing alone
   earns OK. A bad `-m` fails fast pre-turn: exit 1 + stderr `Couldn't set
@@ -33,11 +40,11 @@ Per-provider discovery surfaces (probed live, 2026-07-13):
 
 Verdicts:
   OK                verified available (live probe, or provider-default pin)
-  LISTED            in codex cache but not live-verified (--no-probe)
+  LISTED            in the codex cache / `agy models` but not live-verified (--no-probe)
   GONE              verified NOT available (probe/cache says so)
   BAD_EFFORT        codex model exists but the :effort suffix isn't supported
   NEEDS_CLI_UPGRADE model needs a newer provider CLI (codex 400 signature)
-  UNVERIFIABLE      provider offers no way to check (agy, pi)
+  UNVERIFIABLE      provider offers no way to check (pi)
   PROVIDER_MISSING  the pin's provider CLI is not available on this machine
   UNPROBED          claude pin under --no-probe
   UNKNOWN           probe indeterminate (timeout, launch failure, odd error)
@@ -91,6 +98,17 @@ _BUDGET_EXCEEDED = "Error: Exceeded USD budget"
 _GROK_MODEL_GONE = "Couldn't set model"
 _GROK_MODEL_GONE_2 = 'Invalid params: "unknown model id"'
 
+# Live-captured agy 1.2.17 signatures (task 111, tests/fixtures/agy-1.2.17/). agy
+# answers THREE different mistakes with `invalid model selection (…)`; only the
+# first means the model is gone:
+#   …: model <id> is not recognized as a known model or custom model in settings
+#   …: --model <base> requires --effort (available: low, medium, high)
+#   …: --model <id> conflicts with --effort=<e>
+_AGY_MODEL_SELECTION = "invalid model selection"
+_AGY_MODEL_GONE = "is not recognized as a known model"
+_AGY_EFFORT_MISSING = "requires --effort"
+_AGY_EFFORT_CONFLICT = "conflicts with --effort"
+
 
 def judge_failed(text: str) -> bool:
     """True when a judge's output string is a failure, not a review.
@@ -133,6 +151,8 @@ def classify_failure(output_text: str) -> str:
     if _CLAUDE_MODEL_GONE in t:
         return MODEL_UNAVAILABLE
     if _GROK_MODEL_GONE in t and _GROK_MODEL_GONE_2 in t:
+        return MODEL_UNAVAILABLE
+    if _AGY_MODEL_SELECTION in t and _AGY_MODEL_GONE in t:
         return MODEL_UNAVAILABLE
     return OTHER
 
@@ -268,24 +288,177 @@ def probe_codex_model(model: str, effort: Optional[str] = None,
 # ── agy ──────────────────────────────────────────────────────────────────────
 
 def parse_agy_models(text: str) -> list[str]:
-    """`agy models` stdout → display-name list (one per non-empty line)."""
-    return [ln.strip() for ln in text.splitlines() if ln.strip()]
+    """`agy models` stdout → model-id list.
+
+    agy 1.2.17 prints one `id<TAB>label` line per model (captured:
+    tests/fixtures/agy-1.2.17/models.stdout); the id is the first field and is
+    what `--model` takes. A line with no tab is kept only when it is a single
+    token — so a progress line ("Fetching available models...", stderr in
+    1.2.17) or a display-name-only line from an older agy never becomes an id.
+    """
+    ids: list[str] = []
+    for ln in text.splitlines():
+        s = ln.strip()
+        if not s:
+            continue
+        head = s.split("\t", 1)[0].strip()
+        if head and not any(ch.isspace() for ch in head):
+            ids.append(head)
+    return ids
+
+
+def _agy_env() -> dict:
+    """The environment EVERY agy call of this module runs in — the judge's own
+    (`antigravity.judge_env`: the billed-credential variables dropped), so the listing,
+    the quota and the credits are read with the credential the judge will spend."""
+    from provider import sandbox as _sandbox
+    from provider.adapters.antigravity import judge_env
+    env = judge_env(os.environ, "models-check")
+    _sandbox.scrub_parent_session_env(env)
+    return env
 
 
 def list_agy_models() -> Optional[list[str]]:
-    """Run `agy models`; None when the CLI is missing or errors."""
+    """Run `agy models`; None when the CLI is missing or errors (not signed in:
+    exit 1 in under a second — measured)."""
     if not shutil.which("agy"):
         return None
     try:
         result = subprocess.run(
             ["agy", "models"], stdin=subprocess.DEVNULL, capture_output=True, text=True,
-            timeout=60, encoding="utf-8", errors="replace",
+            timeout=60, encoding="utf-8", errors="replace", env=_agy_env(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
     if result.returncode != 0:
         return None
     return parse_agy_models(result.stdout or "")
+
+
+def _agy_slash_command(command: str) -> Optional[dict]:
+    """`agy -p /<command> --output-format json` → its `command.data` object, or
+    None. These read-only slash commands answer without a model turn (no quota
+    spent). Only call when agy is signed in: unsigned, this `-p` path waits a
+    minute for a login before failing (measured) — hence the short timeout."""
+    if not shutil.which("agy"):
+        return None
+    try:
+        result = subprocess.run(
+            ["agy", "-p", command, "--output-format", "json"],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True,
+            timeout=30, encoding="utf-8", errors="replace", env=_agy_env(),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        obj = json.loads((result.stdout or "").strip())
+    except ValueError:
+        return None
+    data = obj.get("command", {}).get("data") if isinstance(obj, dict) and isinstance(obj.get("command"), dict) else None
+    return data if isinstance(data, dict) else None
+
+
+def agy_quota() -> Optional[list[dict]]:
+    """Remaining agy quota per bucket from `agy -p /quota` — a list of
+    `{id, group, window, remaining_fraction, reset_time}` (captured shape:
+    tests/fixtures/agy-1.2.17/quota.stdout), or None when it cannot be read."""
+    data = _agy_slash_command("/quota")
+    groups = data.get("groups") if data else None
+    if not isinstance(groups, list):
+        return None
+    out: list[dict] = []
+    for g in groups:
+        if not isinstance(g, dict):
+            continue
+        for b in g.get("buckets") or []:
+            if not isinstance(b, dict):
+                continue
+            frac = b.get("remaining_fraction")
+            if isinstance(frac, bool) or not isinstance(frac, (int, float)):
+                continue
+            out.append({"id": str(b.get("id") or ""), "group": str(g.get("name") or ""),
+                        "window": str(b.get("window") or ""),
+                        "remaining_fraction": float(frac),
+                        "reset_time": str(b.get("reset_time") or "")})
+    return out or None
+
+
+def agy_credits() -> Optional[int]:
+    """Remaining AI credits from `agy -p /credits` (what agy spends once the
+    plan quota is gone), or None when it cannot be read."""
+    data = _agy_slash_command("/credits")
+    n = data.get("remaining_credits") if data else None
+    return n if isinstance(n, int) and not isinstance(n, bool) else None
+
+
+def probe_agy_model(variant: Optional[str], timeout: int = PROBE_TIMEOUT_SECS) -> tuple[str, str]:
+    """Live-probe one agy judge seat — a pin (a whole model id) or None for the bare
+    seat (agy's selected model) → (verdict, detail).
+
+    ONE tiny real turn through the judge's own invocation (stdin stream-json,
+    the pin on `--model`), because a listed model can still be unusable — the
+    grok lesson, where a listed pin with no credit read OK. Run directly, from a
+    throwaway cwd, WITHOUT the bypass flag (an unsandboxed probe must not
+    auto-approve tools) and without the API-key variables. A rejected model
+    selection fails before any turn (nothing spent).
+
+      OK          the judge's own acceptance rule holds for the turn
+                  (`usage.agy_judge_output`): it finished, it ANSWERED, agy flagged
+                  no error, and the stream names the pinned model (impl panel r1 —
+                  a turn that ended on an auto-denied tool with an empty answer is
+                  UNKNOWN, not OK)
+      GONE        agy does not know the id
+      BAD_EFFORT  the pin is not a whole agy id (`<base>:<effort>`, or a base id
+                  for which agy asks for an effort)
+      UNKNOWN     not signed in / quota exhausted / timeout / anything else —
+                  with the cause in the detail; never GONE on a guess
+    """
+    from provider import sandbox as _sandbox
+    from provider import usage as _usage
+    from provider.adapters.antigravity import AntigravityAdapter, judge_env, pinned_model_id
+    with tempfile.TemporaryDirectory(prefix="playbook-models-probe-") as td:
+        try:
+            inv = AntigravityAdapter("models-check", Path(td)).judge_invocation(
+                "reply with exactly: ok", variant, web_search=False, timeout_secs=timeout)
+            expected = pinned_model_id(variant)
+        except ValueError as e:
+            return BAD_EFFORT, str(e)
+        env = _agy_env()
+        import time as _time
+        _t0 = _time.monotonic()
+        try:
+            result = subprocess.run(
+                ["agy", *inv.argv], cwd=td, env=env, input=inv.stdin,
+                capture_output=True, text=True, timeout=timeout + 30,
+                encoding="utf-8", errors="replace",
+            )
+        except subprocess.TimeoutExpired:
+            return UNKNOWN, f"probe timed out after {timeout}s"
+        except OSError as e:
+            return UNKNOWN, f"probe failed to launch: {e}"
+    # the judge path's own timeout rule (stderr line, a SUCCESS without usage, a cut
+    # stream at the limit) — not only the stderr line (impl panel r2)
+    if _usage.agy_timed_out(result.stderr, timeout, _time.monotonic() - _t0, result.stdout):
+        return UNKNOWN, f"probe timed out after {timeout}s (agy's own limit)"
+    seat = str(_usage.agy_judge_output(result, _sandbox.format_judge_output,
+                                       expected_model=expected, web_search=False))
+    if not judge_failed(seat):
+        return OK, "responds"
+    combined = (result.stdout or "") + "\n" + (result.stderr or "")
+    if _AGY_MODEL_SELECTION in combined:
+        if _AGY_MODEL_GONE in combined:
+            return GONE, "agy does not know this model id"
+        if _AGY_EFFORT_MISSING in combined:
+            return BAD_EFFORT, "agy needs an effort for this id — pin the full id from `agy models` (e.g. <base>-high)"
+        if _AGY_EFFORT_CONFLICT in combined:
+            return BAD_EFFORT, "agy reports an effort conflict for this model selection"
+    # the seat's first line names what was wrong (a named cause, an auto-denied tool,
+    # the wrong model, no envelope, a flagged turn) — it is the detail
+    first = seat.strip().splitlines()[0] if seat.strip() else f"exit {result.returncode}"
+    first = first.removeprefix("(FAILED — ").removesuffix(")")
+    return UNKNOWN, "probe turn was not a clean answer: " + first[:220]
 
 
 # ── grok ─────────────────────────────────────────────────────────────────────
@@ -541,6 +714,8 @@ def check_pins(project_root: Path, probe: bool = True,
                 probed[key] = probe_claude_model(model)
             elif provider == "grok":
                 probed[key] = probe_grok_model(model)
+            elif provider == "agy":
+                probed[key] = probe_agy_model(model)      # `model` is the whole pin here
             else:
                 probed[key] = probe_codex_model(model, effort=effort)
         return probed[key]
@@ -601,8 +776,40 @@ def check_pins(project_root: Path, probe: bool = True,
             else:
                 verdict, detail = _probe("claude", variant)
         elif provider == "agy":
-            verdict = UNVERIFIABLE
-            detail = "agy always runs the UI-selected model (--model is inert in --print mode)"
+            if not variant:
+                # The bare seat runs whatever model is selected in agy. It is probed like
+                # a pin (impl panel r1: it used to read OK with no call, even signed out).
+                if probe:
+                    verdict, detail = _probe("agy", None)
+                    if verdict == OK:
+                        detail = "responds (the model selected in agy)"
+                elif agy_models is not None:
+                    verdict, detail = LISTED, "agy is signed in (`agy models` answered); the selected model was not live-verified"
+                else:
+                    verdict, detail = UNKNOWN, "`agy models` unavailable (signed in?); re-run without --no-probe"
+            else:
+                from provider.adapters.antigravity import validate_model_id as _agy_id
+                try:
+                    model_id = _agy_id(variant)
+                except ValueError as e:        # `<base>:<effort>` — an agy pin is a whole id
+                    entries.append({"spec": spec, "provider": provider, "variant": variant,
+                                    "verdict": BAD_EFFORT, "detail": str(e)})
+                    continue
+                if agy_models is None:
+                    # CLI present but `agy models` failed (not signed in?).
+                    if probe:
+                        verdict, detail = _probe("agy", variant)
+                    else:
+                        verdict, detail = UNKNOWN, "`agy models` unavailable (signed in?); re-run without --no-probe"
+                elif model_id not in agy_models:
+                    verdict = GONE
+                    detail = f"'{model_id}' not in `agy models` (have: {', '.join(agy_models)})"
+                elif probe:
+                    # Listed is not enough: a listed model with no quota left, or an
+                    # expired sign-in, must not read OK — one real turn decides.
+                    verdict, detail = _probe("agy", variant)
+                else:
+                    verdict, detail = LISTED, "in `agy models` (not live-verified — a listed model can still be out of quota)"
         elif provider == "grok":
             if not variant:
                 verdict, detail = OK, "uses the grok default model"
@@ -653,9 +860,16 @@ def render_report(report: dict) -> str:
         for slug, efforts in codex["models"].items():
             lines.append(f"  {slug:<22} efforts: {', '.join(efforts) if efforts else '-'}")
     if report.get("agy_models") is not None:
-        lines.append("\n=== agy models (pin NOT selectable from CLI — set in the agy UI) ===")
+        lines.append("\n=== agy models (pin as agy:<id> — the id carries the effort) ===")
         for name in report["agy_models"]:
             lines.append(f"  {name}")
+    if report.get("agy_quota"):
+        lines.append("\n=== agy quota left (`agy -p /quota` — no model turn) ===")
+        for b in report["agy_quota"]:
+            lines.append(f"  {b['group']:<24} {b['window']:<7} {b['remaining_fraction'] * 100:5.1f}%  "
+                         f"resets {b['reset_time']}")
+    if report.get("agy_credits") is not None:
+        lines.append(f"  AI credits (spent after the plan quota runs out): {report['agy_credits']}")
     if report.get("grok_models") is not None:
         lines.append("\n=== grok models (account-entitled list from `grok models`) ===")
         for name in report["grok_models"]:
@@ -678,7 +892,8 @@ def bad_pins(report: dict) -> list[dict]:
 
 
 def confirm_dead_specs(failed_outputs: dict, spec_providers: dict, *,
-                       probe_claude=None, probe_codex=None, probe_grok=None) -> dict:
+                       probe_claude=None, probe_codex=None, probe_grok=None,
+                       probe_agy=None) -> dict:
     """Probe-confirm which FAILED judge specs are actually dead.
 
     The shared hard-stop gate for panel and single-judge reviews:
@@ -689,16 +904,19 @@ def confirm_dead_specs(failed_outputs: dict, spec_providers: dict, *,
     failed_outputs: {spec_label: output_text} for failed judges only.
     spec_providers: {spec_label: (provider, variant_or_None)}.
     Probes are injectable for tests. Returns {spec_label: (verdict, detail)}
-    holding only probe-confirmed GONE / NEEDS_CLI_UPGRADE specs — agy/pi,
+    holding only probe-confirmed GONE / NEEDS_CLI_UPGRADE specs — pi,
     variantless pins, and local effort-spec errors are unconfirmable and
     skipped (they keep today's soft-fail). grok pins ARE confirmable (a bad
-    -m fails pre-turn with a stable signature, task 014).
+    -m fails pre-turn with a stable signature, task 014), and so are agy pins
+    (an unknown id fails pre-turn with "is not recognized as a known model",
+    task 111 — a missing or contradicted effort is a spec error, never GONE).
     """
     from provider.adapters.codex import _split_reasoning_effort
     from provider.adapters.grok import _split_reasoning_effort as _grok_split
     probe_claude = probe_claude or probe_claude_model
     probe_codex = probe_codex or probe_codex_model
     probe_grok = probe_grok or probe_grok_model
+    probe_agy = probe_agy or probe_agy_model
     confirmed: dict = {}
     for spec in sorted(failed_outputs):
         if classify_failure(failed_outputs[spec]) not in (
@@ -719,6 +937,8 @@ def confirm_dead_specs(failed_outputs: dict, spec_providers: dict, *,
             except ValueError:
                 continue  # local spec error, not availability
             pv, detail = probe_grok(model_id)
+        elif provider == "agy" and variant:
+            pv, detail = probe_agy(variant)
         else:
             continue
         if pv in (GONE, NEEDS_CLI_UPGRADE):
@@ -748,7 +968,7 @@ def _project_models_path(project_root: Path) -> Path:
 def spec_error(spec: str) -> Optional[str]:
     """Syntactic validation shared by panel entries and default_judge.
 
-    Empty variants and codex/grok effort suffixes are checked here because
+    Empty variants and codex/grok/agy effort suffixes are checked here because
     resolve_judge_spec accepts both (``codex:`` → default model,
     ``codex:gpt-5.5:bogus`` → effort unvalidated until review time). Returns an
     error string, or None when the spec is syntactically usable. Availability
@@ -772,6 +992,12 @@ def spec_error(spec: str) -> Optional[str]:
         from provider.adapters.grok import _split_reasoning_effort as _grok_split
         try:
             _grok_split(variant)
+        except ValueError as e:
+            return str(e)
+    if provider == "agy" and variant:
+        from provider.adapters.antigravity import validate_model_id as _agy_id
+        try:
+            _agy_id(variant)
         except ValueError as e:
             return str(e)
     return None
@@ -1002,8 +1228,8 @@ def detect_providers(project_root: Optional[Path] = None) -> dict:
 
     Fast because it runs NO live model turn: it reads `shutil.which` + local
     surfaces (codex's models_cache.json, Claude Code's settings.json) and the
-    two cheap listing commands (`agy models`, `grok models`). Note `grok models`
-    is login-aware (it lists the account's server-side entitlements), so this is
+    two cheap listing commands (`agy models`, `grok models`). Note both are
+    login-aware (they list the account's server-side entitlements), so this is
     not strictly offline — but each listing is bounded by a 60s timeout and no
     model is prompt-probed. Availability of a chosen pin is confirmed separately
     by `tasks models check` (init's optional probe).
@@ -1058,8 +1284,8 @@ def detect_providers(project_root: Optional[Path] = None) -> dict:
         "cache_age_days": codex_age,
     })
 
-    # agy — `agy models` lists display names; `-m` is inert (the UI selects the
-    # real model), so pins are unverifiable and there is no effort knob.
+    # agy — `agy models` lists `id<TAB>label`; the id carries the effort and is
+    # what `--model` takes (agy 1.2.17, task 111). `tasks models check` live-probes it.
     agy_installed = shutil.which("agy") is not None
     agy_names = list_agy_models() if agy_installed else None
     if not agy_installed:
@@ -1067,7 +1293,8 @@ def detect_providers(project_root: Optional[Path] = None) -> dict:
     elif agy_names is None:
         agy_note = "agy installed but `agy models` returned nothing."
     else:
-        agy_note = "`agy models` names — pin is NOT selectable from the CLI (set it in the agy UI)."
+        agy_note = ("ids from `agy models` — the id carries the effort; pin a seat as agy:<id> "
+                    "(experimental judge seat; `tasks models check` live-probes the pin).")
     providers.append({
         "name": "agy", "installed": agy_installed,
         "models": [{"id": n, "efforts": []} for n in (agy_names or [])], "efforts": [],
@@ -1118,7 +1345,7 @@ def render_detect(report: dict) -> str:
             eff = f"  (efforts: {', '.join(m['efforts'])})" if m["efforts"] else ""
             lines.append(f"    {m['id']}{eff}")
     lines.append("\nPanel spec syntax: provider:variant[:effort] / bare provider / alias")
-    lines.append("  e.g.  opus, sonnet, codex:gpt-5.5:high, grok:grok-build:medium, agy")
+    lines.append("  e.g.  opus, sonnet, codex:gpt-5.5:high, grok:grok-build:medium, agy:gemini-3.8-flash-high")
     return "\n".join(lines)
 
 
@@ -1201,6 +1428,11 @@ def cli_models(cmd_args: list[str], project_root: Path) -> int:
             return 2
     if sub == "check":
         report = check_pins(project_root, probe=probe, claude_candidates=candidates)
+        if probe and report.get("agy_models") is not None:
+            # Signed in (the listing answered): add what is left of the subscription
+            # quota and the AI-credit balance — both read without a model turn.
+            report["agy_quota"] = agy_quota()
+            report["agy_credits"] = agy_credits()
         print(render_report(report))
         dead = bad_pins(report)
         if dead:

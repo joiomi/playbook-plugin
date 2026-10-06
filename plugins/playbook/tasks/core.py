@@ -690,7 +690,8 @@ def resolve_verify_timeout(project_path: Path, cli_value: "str | None" = None) -
 
 # Context budgets are transport-relative (1.5.3): stdin seats (claude/codex)
 # have no OS argv limit — their ceiling is model context and attention, so they
-# get a HIGH budget; argv seats (grok/agy/pi) stay under the byte-guarded
+# get a HIGH budget (the agy judge joined them in task 111); argv seats
+# (grok/pi) stay under the byte-guarded
 # default. Raising a ceiling is honest only alongside the receipts that report
 # what was actually delivered per seat.
 DEFAULT_REVIEW_CONTEXT_CHARS = 100_000

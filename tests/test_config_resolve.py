@@ -590,6 +590,19 @@ class EffortFlagScopeTest(unittest.TestCase):
                     f"{name} is not claude — it has no --effort flag",
                 )
 
+    def test_agy_never_passes_an_effort_flag(self):
+        """agy 1.2.17 has an effort flag of its own, but an agy model id already
+        carries its effort (task 111), so the agy judge passes none — and the
+        source-level scope test above holds for it again."""
+        sys.path.insert(0, str(self.PLAYBOOK))
+        from provider.adapters.antigravity import AntigravityAdapter
+        a = AntigravityAdapter(session_id="judge", project_root=self.PLAYBOOK)
+        for model in (None, "gemini-3.8-flash-high"):
+            self.assertNotIn("--effort", a.headless_argv("P", model, structured=True).argv)
+            self.assertNotIn("--effort", a.headless_argv("P", model).argv)
+        with self.assertRaises(ValueError):
+            a.headless_argv("P", "gemini-3.8-flash:medium", structured=True)
+
 
 class TimedOutSeatStillCountsAsFailedTest(unittest.TestCase):
     """A salvaged partial must not promote a timed-out panel seat to "succeeded".

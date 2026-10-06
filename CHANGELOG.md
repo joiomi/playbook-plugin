@@ -14,10 +14,44 @@ Task 105: session identity under Claude Code's background daemon.
 Task 106: a stale `PLAYBOOK_SESSION_ID` (a resumed conversation's dead `pid-N`) is ignored.
 Task 108: the post-D6 review protocol (owner decision Q-E (d), retro 107).
 Task 110: PLAN S11 fix batch, group GUARD (the command guard and the task-dir guard; sources: task 109's gauntlet report and the task 107 erratum).
+Task 111: an experimental Gemini judge seat through the Antigravity CLI (agy 1.2.17), measured before it was written.
 Each fix was written against a test that failed first.
 
 ### Added
 
+- **An experimental Gemini judge seat through the Antigravity CLI** (task 111). The `gemini` CLI refuses a
+  personal Google login, so a Gemini judge on a consumer subscription goes through `agy`. The agy JUDGE path
+  is rewritten for agy 1.2.17 after measuring it (2026-10-05, one Linux machine, a Google AI Pro sign-in):
+  the prompt is one NDJSON line on stdin (`--input-format stream-json`), so it has no argv size cap and the
+  seat gets the stdin context budget; the seat pins a whole model id (`agy:gemini-3.8-flash-high` — the id
+  carries the effort; `<base>:<effort>` is refused) and fails if agy's output echoes another model value or none; the review text and the turn's token counts
+  come from the `result` event, and the counts go into the review-spend journal; a seat that fails because
+  agy is not signed in, the quota is exhausted or the model selection is rejected says so in its first line.
+  Four ways agy exits 0 without a review are a failed or timed-out seat, never a review: its own
+  `--print-timeout` expiry (exit 0, `status: SUCCESS`, partial text, no token usage — recognised by agy's
+  stderr line, by that shape, or by a stream with no result at the limit; never when agy states an error), an
+  auto-denied tool request, an error mid-turn, and a web or browser tool call while web search is off (agy
+  has no flag to disable those tools; the seat is told not to use them and its output is checked). The judge
+  runs under the same OS sandbox as every other judge — plan mode is passed but did not stop a write in our
+  test; the read-only project bind did — with agy's keyring sign-in and `~/.gemini` used in place, and
+  without `GEMINI_API_KEY` / `GOOGLE_API_KEY` / `GOOGLE_APPLICATION_CREDENTIALS` (a signed-in subscription, never
+  per-call or per-project billing).
+  `tasks models detect` lists agy's model ids; `tasks models check` probes an agy seat — pinned or bare —
+  with one tiny real turn that must be a clean answer from the pinned model (an unknown id is GONE; a missing
+  or contradicted effort is BAD_EFFORT, never a dead pin; anything else UNKNOWN with its cause) and prints
+  the remaining quota and AI credits; `tasks models set` refuses an id agy does not list. The seat is
+  **judge: experimental** (`docs/providers.md`); the main-agent side of the adapter is unchanged. Not
+  measured: macOS, Windows, an expired sign-in, a depleted AI-credit balance — the last two are tested on
+  constructed output and say so. (An exhausted quota WAS met: the task's own exam ran into the 5-hour limit
+  twice; the first stop gave the real output the quota test now replays.) Tests replay output captured from agy (`tests/fixtures/agy-1.2.17/`). judgebench (dev-only):
+  presets `gem-flash-high` / `gem-pro-high`, a `/quota` pre-flight that halts an exam before an agy call when
+  under 3% is left, `corpus validate --transport --candidates`, and agy's "The stream was interrupted" is a
+  transient for an agy seat (one retry) after it cost one exam call a zero-finding `fail` — the wording
+  this task added is matched for agy only, the lists every other provider is read with are unchanged; for an agy seat
+  judgebench reads a quota stop only from the line the agy adapter (or the harness's own `/quota` pre-flight)
+  writes for one, and a transient only from a first line the adapter built from agy's error channels —
+  text a judge wrote, or a malformed stream quoted into its own failure line, can neither halt an exam nor
+  earn a retry; a scripted (`--fake`) agy candidate is classified by the same rule as a live one.
 - **The post-D6 review protocol** (task 108, owner decision Q-E (d), retro 107). Retro 107 measured the
   single-judge series that close an assertive task after its D6 panel rounds: 17 runs, 229.3 judge-minutes,
   68 % of them in runs 3+, rejected findings re-raised because judge.md never reached the judge. Three parts,
@@ -63,6 +97,14 @@ Each fix was written against a test that failed first.
 
 ### Changed
 
+- **What `tasks models` and the spend journal say about agy** (task 111). A bare `agy` seat reads `OK`
+  ("uses the model selected in agy") and a pinned one is probed — neither is `UNVERIFIABLE` any more;
+  `tasks models detect` no longer says agy's pin is "NOT selectable". The single-judge spend record names the
+  seat `agy:<model>` (it was `antigravity:<model>`, a different key from the panel's). The agy judge moved
+  from the argv context budget (100,000 chars) to the stdin one (200,000). Ledger: `PB-PROVIDER-CAPABILITY-DEGRADE`
+  (its statement said the report names the pin `NOT selectable`), `PB-MODEL-AVAILABILITY` ("Antigravity remains
+  inherently unprobeable") and `PB-REVIEW-SPEND-JOURNAL` (which seats carry usage) follow; no row's
+  `applicable_providers` is widened — the seat is experimental; `ledger_version` 2026-10-05.
 - **Guarantee ledger: every cited proof was read against its statement** (task 100, PLAN S8a). 122 rows now
   (`PB-TASK-DIR-GUARD` added for the manual task-directory guard, the item parked by tasks 080/087): 17 rows rebound
   (32 proofs that carried a clause were cited nowhere — e.g. `PB-SANDBOX-DETECTION-FALLBACK` cited an advisory-text
@@ -120,6 +162,14 @@ Each fix was written against a test that failed first.
   the same CI-wait pattern.
 
 ### Fixed
+
+- **A codex judge review with a line-separator character in it is no longer thrown away** (task 111). The
+  codex and agy stream parsers split the CLI's JSONL with `str.splitlines()`, which also breaks on U+0085,
+  U+2028, U+2029, VT, FF and the C1 separators; codex writes U+2028 / U+2029 raw inside a JSON string, so a
+  stream carrying one — in any frame, e.g. the output of a command the judge ran — became "malformed or
+  unrecognized structured judge output": the review was lost and its usage unrecorded. Met for real on
+  task 111's own post-D6 review, twice in a row (56 JSONL lines read as 58). Both parsers now split on
+  `\n` only; the test replays the three characters raw in a tool frame and in the final message.
 
 - **The command guard reads GNU `parallel`'s jobs again, and `eval` past a redirection** (task 110, 109 G2-01 — a
   regression against 1.5.45 — plus 085 round-3 V2/V3/V6). `parallel rm -rf ::: /etc /usr` was allowed: the walker

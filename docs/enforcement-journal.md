@@ -66,7 +66,7 @@ Additional fields:
 | key           | type          | meaning                                                            |
 |---------------|---------------|--------------------------------------------------------------------|
 | `kind`        | string        | `panel` \| `single` \| `tail-cert`                                 |
-| `seat`        | string        | the judge spec as `model:effort` (e.g. `claude:opus:high`, `codex:gpt-5.6-terra:medium`) |
+| `seat`        | string        | the judge spec as `model:effort` (e.g. `claude:opus:high`, `codex:gpt-5.6-terra:medium`; an agy id carries its effort: `agy:gemini-3.8-flash-high`) |
 | `task`        | string        | task number (`"042"`) or `"-"` for a taskless / `--prompt` review  |
 | `round`       | int           | review iteration (see the round note below); `0` = unknown         |
 | `duration_ms` | int, optional | wall time of the judge subprocess in milliseconds (absent if unknown) |
@@ -168,6 +168,19 @@ other than `end_turn` all produce a `(FAILED — …)` result (partial text kept
 diagnostic, usage still recorded when a frame exists) — never a clean seat.
 A reader should still treat `unknown` as an ordinary value (claude seats,
 failures), never assume tokens are present.
+
+The **agy** judge (an experimental seat, task 111; agy 1.2.17) also reports usage:
+its judge path asks for `--output-format stream-json`, and the terminal `result`
+event carries `usage.input_tokens` / `usage.output_tokens` for the WHOLE turn
+(every model call of a tool-using review, summed by agy). `in` is recorded as
+reported — it excludes agy's `cache_read_tokens`; `out` includes its
+`thinking_tokens`; neither extra field is recorded (fixed schema). Two agy
+specifics a reader should know: an **all-zero** usage object is recorded as
+`unknown`, never as a measured zero (agy prints zeros when its own
+`--print-timeout` expires mid-turn, although the turn ran, and for a call that
+failed before reaching the model); and an agy seat's record names the seat
+`agy:<model id>` on both the panel and the single-judge path (the id carries
+the effort, e.g. `agy:gemini-3.8-flash-high`).
 
 One disclosed trade-off: grok's json mode emits its single object at the END, so
 a grok seat killed at the hard timeout salvages no partial prose (its status is

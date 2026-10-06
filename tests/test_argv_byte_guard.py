@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """POSIX argv per-element byte guard (upstream issue #10).
 
-Context is budgeted in CHARACTERS but grok/agy/pi deliver it in one argv element
+Context is budgeted in CHARACTERS but grok/pi deliver it in one argv element (agy did
+too until task 111 moved its JUDGE prompt to stdin — agy 1.2.17's stream-json input)
 capped at MAX_ARG_STRLEN = 32*PAGE_SIZE BYTES. A char budget cannot bound a byte
 channel: past ~1.29 B/char a 100k-char context overflows execve with a cryptic
 E2BIG. The existing guard was Windows-only, counted chars, and summed the whole
@@ -13,8 +14,9 @@ Invariants (from the write-up):
   * MAX over elements, not SUM — many small args over the total pass; one oversized
     element fails;
   * the limit is derived from PAGE_SIZE, not hardcoded 131,072;
-  * parity: grok, agy and pi all refuse an oversized context the same way;
-  * stdin adapters (claude, codex) do not import the guard — they are unaffected.
+  * parity: grok and pi refuse an oversized context the same way;
+  * stdin adapters (claude, codex, and the agy judge since task 111) do not import the
+    guard — they are unaffected, and an oversized context reaches them on stdin.
 
 Pure stdlib unittest. Run: python3 tests/test_argv_byte_guard.py
 """
@@ -74,15 +76,36 @@ class ArgvByteError(unittest.TestCase):
 
 @unittest.skipIf(os.name == "nt", "POSIX-only guard")
 class AdapterParity(unittest.TestCase):
-    """grok, agy, pi all refuse an oversized context before spawning."""
+    """grok and pi refuse an oversized context before spawning; the agy judge
+    (stdin since task 111) carries it instead."""
 
     def _adapters(self):
         from provider.adapters.grok import GrokAdapter
-        from provider.adapters.antigravity import AntigravityAdapter
         from provider.adapters.pi import PiAdapter
-        return [("grok", GrokAdapter), ("agy", AntigravityAdapter), ("pi", PiAdapter)]
+        return [("grok", GrokAdapter), ("pi", PiAdapter)]
 
-    def test_all_three_refuse_oversized_context_without_spawning(self):
+    def test_agy_judge_carries_an_oversized_context_on_stdin(self):
+        import json
+        import subprocess
+        from provider.adapters.antigravity import AntigravityAdapter
+        big = "x" * (LIMIT + 4096)
+        seen = {}
+
+        def fake_run(binary, args, **kw):
+            seen.update(args=list(args), stdin=kw.get("input"))
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+        adapter = AntigravityAdapter(session_id="judge", project_root=PLUGIN)
+        with mock.patch("shutil.which", return_value="/usr/bin/agy"), \
+                mock.patch("provider.sandbox.run", side_effect=fake_run):
+            out = adapter.run_headless_judge(
+                prompt="REVIEW", model=None, system_context=big,
+                web_search=False, timeout_secs=5, budget_usd="2")
+        self.assertNotIn("byte", str(out).lower())               # not refused
+        self.assertIsNone(argv_byte_error(seen["args"], "agy"))  # nothing oversized on argv
+        self.assertIn(big, json.loads(seen["stdin"])["message"]["content"])
+
+    def test_argv_adapters_refuse_oversized_context_without_spawning(self):
         big = "x" * (LIMIT + 4096)   # one ASCII arg guaranteed over the byte cap
         for name, cls in self._adapters():
             with self.subTest(name):
@@ -100,16 +123,17 @@ class AdapterParity(unittest.TestCase):
 
 
 class StdinAdaptersUnaffected(unittest.TestCase):
-    """claude and codex put context on STDIN, so they must NOT wire the argv
-    byte guard — asserting by source so the scope can't silently widen."""
+    """claude, codex and (since task 111) the agy judge put context on STDIN, so
+    they must NOT wire the argv byte guard — asserting by source so the scope can't
+    silently widen."""
 
-    def test_claude_and_codex_do_not_import_the_guard(self):
-        for name in ("claude", "codex"):
+    def test_stdin_adapters_do_not_import_the_guard(self):
+        for name in ("claude", "codex", "antigravity"):
             src = (PLUGIN / "provider" / "adapters" / f"{name}.py").read_text(encoding="utf-8")
             self.assertNotIn("argv_byte_error", src, f"{name} should stay stdin-only")
 
     def test_argv_adapters_do_wire_the_guard(self):
-        for name in ("grok", "antigravity", "pi"):
+        for name in ("grok", "pi"):
             src = (PLUGIN / "provider" / "adapters" / f"{name}.py").read_text(encoding="utf-8")
             self.assertIn("argv_byte_error", src, f"{name} must carry the byte guard")
 

@@ -4,8 +4,9 @@ One helper decides, for a candidate seat, whether its adapter's transport can ca
 prompt — the SAME decision `LiveRunner.preflight` makes before a live invocation, so the
 `corpus validate --transport` report and the run-time exclusion cannot drift:
 
-  * the adapter's own `headless_argv` says whether the prompt rides stdin (codex, claude)
-    or argv (grok);
+  * the adapter's own JUDGE invocation (`headless_argv(…, structured=True)` where the
+    adapter takes it — what `run_headless_judge` builds) says whether the prompt rides
+    stdin (codex, claude, agy since task 111) or argv (grok);
   * an argv seat is capped per element on POSIX (`provider.argv_guard.argv_byte_error`,
     32 × page size bytes) and by the adapters' ~30k whole-command-line guard on Windows;
   * every seat is capped by production's context budget
@@ -52,7 +53,12 @@ def seat_verdict(candidate, prompt: str, repo_root, *, adapter_factory=None, pla
     from tasks.core import resolve_review_context_chars
     nt = (os.name == "nt") if platform_nt is None else bool(platform_nt)
     try:
-        inv = _adapter(candidate, repo_root, adapter_factory).headless_argv(prompt, candidate.variant)
+        adapter = _adapter(candidate, repo_root, adapter_factory)
+        try:
+            # the judge shape: for agy it is a different TRANSPORT (stdin) from the plain one
+            inv = adapter.headless_argv(prompt, candidate.variant, structured=True)
+        except TypeError:                             # an adapter (or test stub) without that keyword
+            inv = adapter.headless_argv(prompt, candidate.variant)
     except Exception as exc:                          # pragma: no cover — adapter construction failure
         return {"transport": "?", "fits": False, "reason": f"preflight could not build argv: {exc}"}
     argv_transport = getattr(inv, "stdin", None) is None

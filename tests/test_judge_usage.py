@@ -6,6 +6,7 @@ bad-model failure for each. The parser recognizes exactly these real envelopes;
 numbers are copied from the CLI's own JSON, never derived. Anything else →
 None (`unknown` in the journal). Stdlib unittest.
 """
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -60,6 +61,44 @@ class ParseUsage(unittest.TestCase):
                     '{"usage":{"input_tokens":1.5,"output_tokens":5}}',
                     '{"usage":{"input_tokens":1}}', '{"usage":[]}', "", None, "{}"):
             self.assertIsNone(parse_usage(bad), repr(bad))
+
+
+class LineSeparatorsInsideJsonl(unittest.TestCase):
+    """Task 111: `str.splitlines()` also breaks on U+0085, U+2028, U+2029 (and VT, FF, the C1
+    separators). codex writes U+2028 / U+2029 raw inside a JSON string — seen in a real `exec
+    --json` stream on 2026-10-06 (a command-output frame; 56 JSONL lines became 58 and the whole
+    review was rejected as malformed, twice). JSONL is split on "\n" only."""
+
+    def _with(self, ch):
+        lines = CODEX_OK.splitlines()
+        tool = json.dumps({"type": "item.completed", "item": {
+            "id": "item_9", "type": "command_execution", "aggregated_output": f"a{ch}b"}}, ensure_ascii=False)
+        msg = json.dumps({"type": "item.completed", "item": {
+            "id": "item_0", "type": "agent_message", "text": f"1. first{ch}second"}}, ensure_ascii=False)
+        return "\n".join([lines[0], lines[1], tool, msg, lines[3]]) + "\n"
+
+    def test_a_raw_separator_in_any_frame_does_not_void_the_stream(self):
+        for ch in ("\u2028", "\u2029", "\u0085"):
+            raw = self._with(ch)
+            self.assertEqual(raw.count(ch), 2)                       # really raw, in two frames
+            got = extract_codex(raw)
+            self.assertIsNotNone(got, repr(ch))
+            text, use, errors = got
+            self.assertEqual(text, f"1. first{ch}second")
+            self.assertEqual(use, {"status": "known", "in": 13080, "out": 5})
+            self.assertEqual(errors, [])
+            self.assertEqual(parse_usage(raw), {"status": "known", "in": 13080, "out": 5})
+            self.assertEqual(salvage_text("codex", raw), f"1. first{ch}second")
+
+    def test_the_judge_output_rule_accepts_such_a_review(self):
+        import subprocess
+        from provider import sandbox
+        from provider.usage import judge_output_from_result
+        raw = self._with("\u2028")
+        out = judge_output_from_result(subprocess.CompletedProcess(["codex"], 0, stdout=raw, stderr=""),
+                                       extract_codex, sandbox.format_judge_output)
+        self.assertEqual(str(out), "1. first\u2028second")
+        self.assertEqual(out.usage, {"status": "known", "in": 13080, "out": 5})
 
 
 class ExtractCodexRound1(unittest.TestCase):

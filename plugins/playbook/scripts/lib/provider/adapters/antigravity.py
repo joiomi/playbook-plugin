@@ -1,10 +1,61 @@
 """
 AntigravityAdapter — provider adapter for Google's Antigravity CLI (`agy`).
 
-agy v1.0.2 (Go-based, brew cask) replaces the legacy `gemini` binary
-(sunsets 2026-06-18). It stores state under ~/.gemini/antigravity/ — bootstrap
-file is GEMINI.md (auto-loaded by agy from project cwd, same convention as
-~/.gemini/GEMINI.md at user scope).
+Two halves with different standing:
+
+JUDGE PATH — rewritten for agy 1.2.17 and measured on 2026-10-05 (task 111; Linux,
+a Google AI Pro sign-in; the complete outputs are in that task's record and the
+captured fixtures in tests/fixtures/agy-1.2.17/). The seat is `judge: experimental`:
+it works on the machine it was measured on and carries no support claim.
+
+  * Why agy at all: the `gemini` CLI (0.62.0) refuses a personal Google login —
+    the owner's attempt answered "This client is no longer supported for Gemini
+    Code Assist for individuals … migrate to the Antigravity suite" — so a Gemini
+    judge paid by a consumer subscription, not an API key, goes through `agy`.
+  * Prompt on stdin: `agy --input-format stream-json --output-format stream-json`
+    with NO `-p/--print` (a string flag — it would take the next token as the
+    prompt) reads one NDJSON line per turn: `{"event":"user","message":{"role":
+    "user","content":…}}`. A 150 KB prompt arrives whole. Nothing of the prompt is
+    on argv, so neither the POSIX per-argument cap nor the Windows command-line cap
+    applies.
+  * Pinned model: a seat pins a WHOLE model id (`gemini-3.8-flash-high` — the id
+    carries the effort; `<base>:<effort>` is refused). agy rejects an unknown id
+    before any turn, and the stream's `init` event echoes the model value agy
+    accepted: a pinned seat whose stream carries another value, or none, fails.
+  * Read-only is the OS sandbox's doing, NOT `--mode plan`'s. Plan mode is passed
+    and agy applies it, but under `--dangerously-skip-permissions` it did not stop
+    a file write (measured); and WITHOUT that flag headless agy auto-denies the
+    first tool request and ends the turn with an empty response. So the seat runs
+    like every other judge — `sandbox.run(..., project_writable=False)` prepends
+    the bypass flag and the read-only project bind refuses the write. Where no OS
+    sandbox is usable the seat is uncontained, exactly as the other judges are.
+  * Credentials in place: agy keeps its sign-in in the OS keyring (Secret Service
+    over the session D-Bus — an empty HOME alone stays signed in) and its state in
+    ~/.gemini, which the sandbox binds read-write at its real path. Nothing is
+    copied. The judge environment drops GEMINI_API_KEY, GOOGLE_API_KEY and
+    GOOGLE_APPLICATION_CREDENTIALS: this seat is for a signed-in subscription, never
+    per-call or per-project billing.
+  * Output: NDJSON events ending in `{"event":"result","result":{status, response,
+    usage,…}}`; `provider/usage.py` (the agy section) is the one parser and lists
+    the ways an agy call can exit 0 and still not be a review — its own
+    `--print-timeout` expiry (exit 0, `status: SUCCESS`, partial text), an
+    auto-denied tool, a mid-turn error, a web or browser tool call when web search
+    is off. agy has no flag that disables its web tools.
+  * Live check, same day and machine: a one-seat agy panel and a single-judge
+    review returned reviews and left spend records whose token counts equal agy's.
+  * A real quota stop (captured in that task's exam): exit 3 mid-turn, "Individual
+    quota reached. … Resets in 34m13s." — the seat fails with that sentence first.
+  * Not measured: macOS and Windows; an expired sign-in and a depleted AI-credit
+    balance (their handling follows agy's documented messages — the fixtures
+    README says which files are constructed).
+
+MAIN-AGENT PATH — written for agy 1.0.2, experimental, NOT touched by task 111
+(the non-judge `headless_argv` shape, hooks, bootstrap, launch, the session log).
+What follows describes that older CLI and may be out of date:
+
+agy v1.0.2 (Go-based, brew cask) stores state under ~/.gemini/antigravity/ —
+bootstrap file is GEMINI.md (auto-loaded by agy from project cwd, same convention
+as ~/.gemini/GEMINI.md at user scope).
 
 Hook surface: agy v1.0.2 has a Claude-compatible plugin loader that accepts
 PreToolUse / PostToolUse / UserPromptSubmit / Stop hooks via project-local
@@ -20,11 +71,9 @@ Records of interest: source=USER_EXPLICIT, type=USER_INPUT — content wrapped
 in <USER_REQUEST>...</USER_REQUEST>, optionally followed by <ADDITIONAL_METADATA>
 and <USER_SETTINGS_CHANGE> blocks.
 
-Panel-review participation: single variant (None) — agy v1.0.2's argparser
-rejects -m and --model outright (probed and confirmed; the LLM-suggested
-~/.config/antigravity/config.toml profile mechanism does not exist). Single
-judge uses whatever model the user has set in agy's UI (Gemini 3.5 Flash by
-default). When upstream ships -m, switch to ["gemini-3.5-flash", "gemini-3.1-pro"].
+Panel-review participation: a configured seat names its model (`agy:<id>`); the
+legacy no-config fan-out contributes one unpinned seat (None) that runs whatever
+model is selected in agy.
 """
 
 from __future__ import annotations
@@ -32,8 +81,9 @@ import json
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
-from typing import Optional
+from typing import Mapping, Optional
 
 from ..adapter import ProviderAdapter, Invocation
 from ..capabilities import ProviderCapabilities
@@ -43,6 +93,63 @@ _USER_REQUEST_RE = re.compile(
     r"<USER_REQUEST>(.*?)</USER_REQUEST>",
     re.DOTALL,
 )
+
+# ── judge path (agy 1.2.17, task 111) ────────────────────────────────────────
+
+# agy has no flag that switches its web and browser tools off, so with web search
+# off the seat is told in one line ahead of the prompt (and the stream is checked
+# afterwards — provider.usage.agy_web_tool_calls).
+_NO_WEB_TOOLS = ("Web search is off for this review: do not call search_web, "
+                 "read_url_content or any browser tool.")
+
+# Never handed to a judge or probe: credentials through which agy could bill per
+# call instead of using the signed-in subscription — the two API-key variables, and
+# GOOGLE_APPLICATION_CREDENTIALS (a service-account file: a project-billed path; no
+# measurement shows agy prefers its keyring sign-in over it — impl panel r2). The
+# cost: an agy signed in through ADC cannot serve as this experimental judge seat.
+_API_KEY_ENV = ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS")
+
+# The killer sits this far above agy's own `--print-timeout`, so agy can return its
+# partial text first (it then exits 0 — provider.usage.agy_timed_out catches that).
+_KILL_GRACE_SECS = 30
+
+
+def validate_model_id(model: str) -> str:
+    """An agy judge pin → the model id handed to agy's model flag, or ValueError.
+
+    A pin is a WHOLE id as `agy models` lists it: the id already carries the effort
+    (`gemini-3.8-flash-high`). The `<base>:<effort>` form other providers use is
+    refused: agy would accept `--model <base>` plus its effort flag, but its stream
+    then names only `<base>` (measured), so the seat could not check which variant it
+    was given."""
+    mid = (model or "").strip()
+    if not mid or ":" in mid or any(ch.isspace() for ch in mid):
+        base, _, effort = mid.partition(":")
+        hint = (f" — did you mean {base.strip()}-{effort.strip()}?"
+                if base.strip() and effort.strip() and not any(c.isspace() for c in mid) else "")
+        raise ValueError(
+            f"bad agy pin {model!r}: pin a whole model id from `agy models` (the id carries "
+            f"the effort, e.g. gemini-3.8-flash-high), not <base>:<effort>{hint}")
+    return mid
+
+
+def pinned_model_id(model: Optional[str]) -> Optional[str]:
+    """The value agy's `init` event must carry for this seat: the pinned id, or None
+    for an unpinned seat. `init.model` echoes the model value agy ACCEPTED (measured);
+    that agy really serves it rests on agy's own behaviour — it refuses an unknown or
+    contradictory selection before any turn (also measured)."""
+    return validate_model_id(model) if model else None
+
+
+def judge_env(env: "Mapping[str, str]", session_id: str = "judge") -> "dict[str, str]":
+    """A copy of `env` for a judge/probe call: the billed-credential variables dropped, the
+    Playbook session id set. HOME, DBUS_SESSION_BUS_ADDRESS and XDG_RUNTIME_DIR pass
+    through untouched — they are how agy reaches its real sign-in."""
+    out = dict(env)
+    for var in _API_KEY_ENV:
+        out.pop(var, None)
+    out["PLAYBOOK_SESSION_ID"] = session_id or "judge"
+    return out
 
 
 class AntigravityAdapter(ProviderAdapter):
@@ -62,9 +169,14 @@ class AntigravityAdapter(ProviderAdapter):
         return "agy"
 
     @classmethod
+    def context_transport(cls) -> str:
+        # The judge prompt rides stdin (stream-json, task 111) — no argv size cap.
+        return "stdin"
+
+    @classmethod
     def panel_variants(cls) -> list[Optional[str]]:
-        # agy v1.0.2 has no -m flag; single judge uses UI-selected model.
-        # When upstream ships -m: return ["gemini-3.5-flash", "gemini-3.1-pro"].
+        # Legacy no-config fan-out only: one unpinned seat (agy's selected model).
+        # A configured panel names its model: `agy:<id>`.
         return [None]
 
     def headless_argv(
@@ -75,7 +187,10 @@ class AntigravityAdapter(ProviderAdapter):
         context: str = "",
         bare: bool = False,
         stream: bool = False,
+        structured: bool = False,
     ) -> Invocation:
+        if structured:
+            return self._judge_argv(prompt, model, context=context, bare=bare)
         # agy 1.1.x `--print`/`--prompt` is a STRING flag: the prompt is its
         # VALUE, not stdin. (Bare `agy --print` errors "flag needs an argument:
         # -print"; agy has no stdin prompt path in 1.1.1 — `--print -` just
@@ -93,6 +208,38 @@ class AntigravityAdapter(ProviderAdapter):
         argv = ["--add-dir", str(self._project_root), "--print", full_prompt]
         return Invocation(argv, stdin=None)
 
+    def _judge_argv(self, prompt: str, model: Optional[str], *, context: str = "",
+                    bare: bool = False) -> Invocation:
+        """The JUDGE invocation (agy 1.2.17): everything the model reads is ONE NDJSON
+        line on stdin; argv carries only flags. `-p/--print` is deliberately absent —
+        it is a string flag, and `--input-format stream-json` already means print
+        mode. No `--add-dir`: agy uses the cwd, which sandbox.run sets to the project.
+        ASCII-escaped JSON (the json.dumps default) keeps the line independent of the
+        pipe's encoding and survives a lone surrogate."""
+        full_prompt = prompt if (bare or not context) else f"{context}\n\n---\n\n{prompt}"
+        argv = ["--input-format", "stream-json", "--output-format", "stream-json"]
+        if model:
+            argv += ["--model", validate_model_id(model)]
+        argv += ["--mode", "plan"]
+        line = json.dumps({"event": "user", "message": {"role": "user", "content": full_prompt}})
+        return Invocation(argv, stdin=line + "\n")
+
+    def judge_invocation(self, prompt: str, model: Optional[str], *, context: str = "",
+                         web_search: bool = False,
+                         timeout_secs: "int | None" = None) -> Invocation:
+        """`_judge_argv` plus the two judge-only extras, shared by the panel seat
+        (`run_headless_judge`) and the single-judge arm in tasks/review.py so the two
+        cannot drift: the no-web line ahead of the prompt when web search is off, and
+        `--print-timeout` when the review has a finite hard timeout (omitted when
+        unlimited — agy's default waits for the turn). Raises ValueError on a bad pin."""
+        if not web_search:
+            prompt = f"{_NO_WEB_TOOLS}\n\n{prompt}"
+        inv = self._judge_argv(prompt, model, context=context)
+        argv = list(inv.argv)
+        if timeout_secs is not None:
+            argv += ["--print-timeout", f"{timeout_secs}s"]
+        return Invocation(argv, stdin=inv.stdin)
+
     def run_headless_judge(
         self,
         prompt: str,
@@ -106,48 +253,35 @@ class AntigravityAdapter(ProviderAdapter):
         import shutil
         if not shutil.which(self.binary_name()):
             return f"(error: {self.binary_name()} not found on PATH)"
-        inv = self.headless_argv(prompt, model, context=system_context)
-        # Judge-only extra: --print-timeout (Go-style duration), but only when
-        # the timeout is finite — with an unlimited timeout the flag is omitted
-        # entirely, or agy would kill a judge that is still writing. Safe to
-        # append after headless_argv's prompt value — `--print` already has its
-        # value, so this is parsed as its own flag (not swallowed as the prompt).
-        agent_args = list(inv.argv)
-        if timeout_secs is not None:
-            agent_args += ["--print-timeout", f"{timeout_secs}s"]
-        # agy 1.1.1 has no stdin prompt path, so prompt+context ride on argv.
-        # Windows caps the whole command line at 32,767 chars (WinError 206) —
-        # fail fast with a clear error instead of a cryptic spawn failure when
-        # a large context can't fit (mirrors the pi adapter).
-        if os.name == "nt":
-            payload = sum(len(a) + 1 for a in agent_args)
-            if payload > 30_000:
-                return (f"(error: agy judge prompt+context is ~{payload} chars on argv; "
-                        "Windows caps the command line at 32,767 chars and agy 1.1.1 reads "
-                        "its prompt from argv only — shrink the context or use another backend)")
-        # POSIX per-element BYTE cap (#10): fail loud before dispatch, not a cryptic E2BIG.
-        from provider.argv_guard import argv_byte_error
-        _argv_err = argv_byte_error(agent_args, "agy")
-        if _argv_err:
-            return _argv_err
-        env = os.environ.copy()
-        env["PLAYBOOK_SESSION_ID"] = self._session_id or "judge"
+        inv = self.judge_invocation(prompt, model, context=system_context,
+                                    web_search=web_search, timeout_secs=timeout_secs)
+        env = judge_env(os.environ, self._session_id)
         from provider import sandbox as _sandbox
+        from provider import usage as _usage
         # encoding="utf-8" guards the stdout decode against the Windows cp1252
-        # locale default. No stdin (prompt is on argv — see headless_argv).
-        # The subprocess timeout sits 30s above agy's own --print-timeout so agy
-        # reports its own expiry first; unlimited stays unlimited (no arithmetic
-        # on None), and sandbox.run then skips its process-group killer.
-        run_timeout = None if timeout_secs is None else timeout_secs + 30
+        # locale default. The subprocess killer sits above agy's own
+        # --print-timeout; unlimited stays unlimited (no arithmetic on None), and
+        # sandbox.run then skips its process-group killer.
+        run_timeout = None if timeout_secs is None else timeout_secs + _KILL_GRACE_SECS
+        t0 = time.monotonic()
         result = _sandbox.run(
-            "agy", agent_args,
+            "agy", inv.argv,
             project_root=self._project_root,
             project_writable=False,   # judge is read-only — cannot mutate repo/task.md
             env=env,
-            input=None,
+            input=inv.stdin,
             capture_output=True, text=True, timeout=run_timeout, encoding="utf-8",
         )
-        return _sandbox.format_judge_output(result)
+        elapsed = time.monotonic() - t0
+        # agy's own timeout exits 0 with `status: SUCCESS` and PARTIAL text: hand it
+        # to the callers' timeout paths (marker first, partial text salvaged, journal
+        # `timeout`) exactly like a judge the killer stopped.
+        if _usage.agy_timed_out(result.stderr, timeout_secs, elapsed, result.stdout):
+            raise subprocess.TimeoutExpired(
+                ["agy", *inv.argv], timeout_secs or 0, output=result.stdout, stderr=result.stderr)
+        return _usage.agy_judge_output(
+            result, _sandbox.format_judge_output,
+            expected_model=pinned_model_id(model), web_search=web_search)
 
     # ── Identity ─────────────────────────────────────────────────────────────
 

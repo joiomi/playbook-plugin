@@ -1,0 +1,2 @@
+{"event":"step_update","step_update":{"conversation_id":"a8a822d8-8431-4861-8fd7-252d7de0bf22","step_index":57,"state":"DONE","step_type":"error_message"}}
+{"event":"result","result":{"conversation_id":"a8a822d8-8431-4861-8fd7-252d7de0bf22","status":"ERROR","response":"","error":"Your AI credits balance is too low to continue.","duration_seconds":305.595893508,"num_turns":1,"usage":{"input_tokens":144619,"output_tokens":30527,"thinking_tokens":27321,"cache_read_tokens":1109412,"total_tokens":175146}}}

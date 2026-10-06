@@ -32,7 +32,9 @@ class Invocation:
 
       - argv:  the agent's command-line args (bypass flag injected by sandbox.run)
       - stdin: text piped to the process, or None. codex reads its prompt from
-               stdin (argv ends in "-"); claude/agy/pi put it in argv.
+               stdin (argv ends in "-"), and so does the agy JUDGE shape (one
+               NDJSON line, task 111); claude/pi and agy's non-judge shape put
+               it in argv.
     """
     argv: list[str]
     stdin: Optional[str] = None
@@ -78,7 +80,7 @@ class ProviderAdapter(ABC):
         """Model variants this provider contributes to multi-judge panel review.
 
         Each entry is a model variant string, or None to invoke with no model flag
-        (e.g. agy v1.0.2 has no -m flag — uses whatever the UI has set). Returns
+        (e.g. agy's no-config seat runs whatever model is selected in agy). Returns
         an empty list if the provider is adapter-supported but panel-ineligible.
         """
 

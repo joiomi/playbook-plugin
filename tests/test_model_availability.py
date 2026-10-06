@@ -180,9 +180,12 @@ class ParserTest(unittest.TestCase):
         self.assertIsNone(mc.cache_age_days("2999-01-01T00:00:00Z"))
 
     def test_agy_models_parser(self):
-        out = "Gemini 3.5 Flash (High)\n\nGemini 3.1 Pro (Low)\n"
-        self.assertEqual(mc.parse_agy_models(out),
-                         ["Gemini 3.5 Flash (High)", "Gemini 3.1 Pro (Low)"])
+        # agy 1.2.17 prints `id<TAB>label` (task 111; the captured listing is pinned
+        # in tests/test_agy_judge.py). The id is what `--model` takes.
+        out = "gemini-3.8-flash-high\tGemini 3.8 Flash (High)\n\ngemini-3.1-pro-low\tGemini 3.1 Pro (Low)\n"
+        self.assertEqual(mc.parse_agy_models(out), ["gemini-3.8-flash-high", "gemini-3.1-pro-low"])
+        # a line that is only a display name (the 1.0.x listing) is not an id
+        self.assertEqual(mc.parse_agy_models("Gemini 3.5 Flash (High)\n"), [])
 
 
 class ClaudeConfiguredModelsTest(unittest.TestCase):
@@ -262,6 +265,8 @@ class CheckPinsTest(unittest.TestCase):
             mock.patch.object(mc, "list_grok_models", return_value=["grok-build"]),
             mock.patch.object(mc, "_adapter_classes", return_value={
                 "claude": avail, "codex": avail, "agy": avail, "pi": avail, "grok": avail}),
+            mock.patch.object(mc, "probe_agy_model",          # a bare agy seat is probed too (task 111 r1)
+                              side_effect=lambda v, timeout=0: (mc.OK, "responds")),
             mock.patch.object(mc, "probe_claude_model",
                               side_effect=lambda m, timeout=0: (mc.OK, "responds")
                               if m == "claude-fable-5" else (mc.GONE, "claude rejects this model id")),
@@ -293,7 +298,7 @@ class CheckPinsTest(unittest.TestCase):
         self.assertEqual(v["codex:gpt-5.6-sol:high"], mc.OK)
         self.assertEqual(v["codex:gpt-5.5:nope"], mc.BAD_EFFORT)  # validator, no probe
         self.assertEqual(v["codex:gpt-5.3-codex"], mc.GONE)
-        self.assertEqual(v["agy"], mc.UNVERIFIABLE)
+        self.assertEqual(v["agy"], mc.OK)     # a bare seat runs agy's selected model, probed (task 111)
         self.assertEqual(v["claude"], mc.OK)  # default_judge, bare provider
         self.assertTrue(any("empty variant" in w for w in report["warnings"]))  # R13
 
@@ -641,10 +646,11 @@ class DetectProvidersTest(unittest.TestCase):
         self.assertEqual(g["efforts"], ["high", "low", "medium"])
         self.assertEqual(g["models"][0]["efforts"], ["high", "low", "medium"])
 
-    def test_agy_names_but_pin_note(self):
-        by = self._by_name(self._detect(installed={"agy"}, agy=["Gemini 3 Pro"]))
-        self.assertEqual([m["id"] for m in by["agy"]["models"]], ["Gemini 3 Pro"])
-        self.assertIn("NOT selectable", by["agy"]["note"])
+    def test_agy_ids_and_how_to_pin_them(self):
+        by = self._by_name(self._detect(installed={"agy"}, agy=["gemini-3.8-flash-high"]))
+        self.assertEqual([m["id"] for m in by["agy"]["models"]], ["gemini-3.8-flash-high"])
+        self.assertIn("agy:<id>", by["agy"]["note"])      # the pin IS selectable since agy 1.2 (task 111)
+        self.assertIn("experimental", by["agy"]["note"])  # and the seat is named for what it is
 
     def test_render_skips_model_list_for_absent_providers(self):
         report = self._detect(installed={"claude"}, claude_models=["claude-opus-4-8"])

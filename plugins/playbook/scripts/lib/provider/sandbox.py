@@ -50,7 +50,9 @@ _BYPASS_FLAGS: dict[str, list[str]] = {
 }
 
 # Home-relative directories that must be writable across all agents.
-# Union of: claude state, codex state, gemini/agy transcripts, omlx server data,
+# Union of: claude state, codex state, agy's state dir (~/.gemini — bound in place,
+# never copied; its sign-in itself is in the OS keyring, which a sandboxed agy
+# reaches over the D-Bus socket under the read-only root: task 111), omlx server data,
 # pi config, grok state (auth/sessions/leader socket — grok dies at startup
 # with FS_PERMISSION_DENIED if ~/.grok is read-only), generic tool caches,
 # macOS Library.

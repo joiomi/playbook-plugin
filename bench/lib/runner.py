@@ -82,6 +82,10 @@ PRESETS = {
     "sol-high": "codex:gpt-5.6-sol:high",
     "grok-med": "grok:grok-4.6:medium",
     "grok-high": "grok:grok-4.6:high",
+    # task 111: the two Gemini candidates for the experimental agy judge seat (the agy
+    # model id carries the effort)
+    "gem-flash-high": "agy:gemini-3.8-flash-high",
+    "gem-pro-high": "agy:gemini-3.1-pro-high",
 }
 
 
@@ -147,6 +151,11 @@ class Invocation:
 # codex-cli 0.151.0 prints "You've hit your usage limit." (+ " for <model>", "Upgrade to
 # Plus/Pro", "purchase more credits"); grok Build answered HTTP 402 "Payment Required" in
 # 2026-08. Extend here when a provider changes its wording — a miss degrades to `fail`.
+# agy is NOT in this list (task 111): for an agy seat the harness does not read quota from the
+# wording at all — `is_quota_exhausted` asks whether the agy ADAPTER named a quota stop (or the
+# harness's own /quota pre-flight did). Both fired in that task's exam: the first halt came
+# from a real refusal ("Individual quota reached … Resets in 34m13s"), the second from the
+# pre-flight (no call spent).
 QUOTA_SIGNATURES = (
     "you've hit your usage limit",
     "you have hit your usage limit",
@@ -181,29 +190,96 @@ TRANSIENT_SIGNATURES = (
 )
 TRANSIENT_NOTE = "transient provider error — retried once; --resume re-runs it"
 
+# agy ONLY (task 111), on top of the shared list, and matched only against the first line the agy
+# adapter built (`_signature_text`). The shared list is searched in the WHOLE envelope of every other
+# backend, so wording added for agy must not sit there: a failed codex review that merely quoted
+# one of these would earn a retry (post-D6 run 3).
+#   * exam, 2026-10-05: one call ended with "The stream was interrupted. Please continue the task
+#     you were working on." and a partial `FINDINGS: NONE` — it had been scored `fail` (a
+#     zero-finding review); a provider-side interruption, retried once from now on;
+#   * the same exam's last flash call ended on `API error (attempt 1): UNAVAILABLE (code 503): The
+#     service is currently unavailable.` — the shared `503 ` entry does not match (code in parentheses);
+#   * a bare RESOURCE_EXHAUSTED / 429 with no quota wording is a rate limit (impl panel r2); a
+#     quota stop is named by the adapter and wins.
+_AGY_TRANSIENT_SIGNATURES = (
+    "the stream was interrupted",
+    "currently unavailable",
+    "resource_exhausted",
+)
 
-def is_quota_exhausted(raw: str) -> bool:
-    """True when a FAILURE envelope carries a provider quota/credit refusal."""
+
+# What the agy adapter itself writes as the first line of a failed seat, from agy's real
+# error channels (stderr `error:` / `AGY_ERROR:` lines, the result event's error field):
+_AGY_QUOTA_PREFIXES = ("(FAILED — agy quota exhausted", "(error: agy quota exhausted")   # adapter / pre-flight
+_AGY_REPORTED_PREFIXES = ("(FAILED — agy reported: ",                       # exit != 0, agy's statement
+                          "(FAILED — the judge CLI reported an error: ",    # exit 0, result.status != SUCCESS
+                          "(FAILED — the agy turn reported an error: ")     # exit 0, SUCCESS, AGY_ERROR / step ERROR
+
+
+def _agy_first_line(raw: str) -> str:
+    return (raw or "").lstrip().split("\n", 1)[0]
+
+
+def _signature_text(raw: str, backend=None) -> str:
+    """The text a TRANSIENT signature may be matched against.
+
+    Any backend but agy: the whole envelope, as before (codex and grok carry their wording in
+    the stdout/stderr tails).
+
+    agy (task 111): the seat's first line, and only when it is a line the adapter built from
+    agy's own error channels (`agy reported: <agy's statement>` for a non-zero exit, `the judge
+    CLI reported an error: <result.error>` for an exit-0 result that is not SUCCESS, `the agy turn
+    reported an error: <AGY_ERROR line / the response step's error>` for an exit-0 SUCCESS whose
+    turn agy still reported as failed — left out at first, so an outage reported that way was
+    scored as a zero-finding review: post-D6 run 2). Every other first line can
+    carry untrusted text — a malformed stream is QUOTED into its own failure line — and the rest
+    of the envelope is untrusted altogether (partial review text; stdout tails in which text can
+    imitate a `[stderr tail]` section). Three review rounds each reproduced an exam halted or
+    retried by text the judge under test had written; the rule is a whitelist for that reason."""
+    t = (raw or "").lstrip()
+    if backend != "agy":
+        return t
+    first = _agy_first_line(t)
+    return first if first.startswith(_AGY_REPORTED_PREFIXES) else ""
+
+
+def _no_output_captured(t: str, backend=None) -> bool:
+    """`format_judge_output`'s both-streams-empty marker. For agy it must be the line right
+    under the `(FAILED — exit N)` header — anywhere else it is stdout text."""
+    if backend != "agy":
+        return "(no output captured)" in t
+    return t.split("\n")[1:2] == ["(no output captured)"]
+
+
+def is_quota_exhausted(raw: str, backend=None) -> bool:
+    """True when a FAILURE envelope carries a provider quota/credit refusal.
+
+    For agy the question is not put to the wording at all: the adapter decides what a quota stop
+    is (`provider.usage.agy_failure_cause`, from agy's error channels) and says so in the seat's
+    first line; the harness's own /quota pre-flight uses the same words. Nothing else is one."""
     t = (raw or "").lstrip()
     if not (t.startswith("(error:") or t.startswith("(FAILED")):
         return False
+    if backend == "agy":
+        return _agy_first_line(t).startswith(_AGY_QUOTA_PREFIXES)
     low = t.lower()
     return any(sig in low for sig in QUOTA_SIGNATURES)
 
 
-def is_transient_provider_error(raw: str) -> bool:
+def is_transient_provider_error(raw: str, backend=None) -> bool:
     """True when a FAILURE envelope carries a provider-side transient (capacity,
     reconnect exhaustion, 5xx, connection reset) and NOT a quota refusal."""
     t = (raw or "").lstrip()
     if not (t.startswith("(error:") or t.startswith("(FAILED")):
         return False
-    if is_quota_exhausted(t):
+    if is_quota_exhausted(t, backend):
         return False
-    low = t.lower()
-    return any(sig in low for sig in TRANSIENT_SIGNATURES)
+    low = _signature_text(t, backend).lower()
+    sigs = TRANSIENT_SIGNATURES + _AGY_TRANSIENT_SIGNATURES if backend == "agy" else TRANSIENT_SIGNATURES
+    return any(sig in low for sig in sigs)
 
 
-def classify(raw: str, timed_out: bool = False) -> tuple:
+def classify(raw: str, timed_out: bool = False, backend=None) -> tuple:
     """(status, retry_ok) over the real adapter envelope. Status is the spend
     enum from `tasks.review._judge_status` refined for the bench: a `(FAILED`
     with no output is a transport failure (dnf), and a clean review is `ok` or
@@ -222,15 +298,15 @@ def classify(raw: str, timed_out: bool = False) -> tuple:
         # the same oversized prompt can only fail again.
         if "caps the command line" in low or "argv element" in low:
             return "dnf", False
-        if is_quota_exhausted(t):
+        if is_quota_exhausted(t, backend):
             return "dnf", False
         return "dnf", True
     if t.startswith("(FAILED"):
-        if is_quota_exhausted(t):
+        if is_quota_exhausted(t, backend):
             return "dnf", False
-        if "(no output captured)" in t:
+        if _no_output_captured(t, backend):
             return "dnf", True
-        if is_transient_provider_error(t):
+        if is_transient_provider_error(t, backend):
             return "dnf", True
         return "fail", False
     base = _judge_status(raw)
@@ -239,9 +315,9 @@ def classify(raw: str, timed_out: bool = False) -> tuple:
     return "ok", False
 
 
-def finish(raw: str, *, timed_out: bool, duration_ms: int, retries: int) -> Invocation:
+def finish(raw: str, *, timed_out: bool, duration_ms: int, retries: int, backend=None) -> Invocation:
     from tasks.review import _parse_judge_usage
-    status, _ = classify(raw, timed_out)
+    status, _ = classify(raw, timed_out, backend)
     usage = _parse_judge_usage(raw) or {"status": "unknown"}
     parsed = None
     if status == "ok":
@@ -250,9 +326,9 @@ def finish(raw: str, *, timed_out: bool, duration_ms: int, retries: int) -> Invo
             status = "malformed"
     note = ""
     if status == "dnf":
-        if is_quota_exhausted(raw):
+        if is_quota_exhausted(raw, backend):
             note = QUOTA_NOTE
-        elif is_transient_provider_error(raw):
+        elif is_transient_provider_error(raw, backend):
             note = TRANSIENT_NOTE
     return Invocation(status=status, raw=raw or "", usage=usage, duration_ms=duration_ms,
                       retries=retries, findings=parsed, note=note)
@@ -272,10 +348,19 @@ class FakeRunner:
         self._lock = threading.Lock()
 
     @staticmethod
-    def render(entry: dict) -> tuple:
+    def render(entry: dict, backend=None) -> tuple:
         status = entry.get("status", "ok")
         if "raw" in entry:
             return entry["raw"], False
+        if backend == "agy" and status in ("quota", "transient"):
+            # an agy seat's failure is classified from the line the agy adapter writes (task 111),
+            # so the scripted failure of an agy candidate has that shape — taken from the real exam
+            if status == "quota":
+                return ("(FAILED — agy quota exhausted: error: Individual quota reached. Please upgrade your "
+                        "subscription to increase your limits. Resets in 34m13s. — `agy -p /quota` shows "
+                        "when it resets)\n\n(FAILED — exit 3)"), False
+            return ("(FAILED — agy reported: Eligibility check failed: UNAVAILABLE (code 503): The service "
+                    "is currently unavailable.)\n\n(FAILED — exit 1)"), False
         if status == "ok":
             fs = entry.get("findings") or [{"file": "src/demo.py", "symbol": "demo",
                                              "severity": "Important", "why": "scripted finding"}]
@@ -309,9 +394,10 @@ class FakeRunner:
         with self._lock:
             self.calls.append((case.id, candidate.label))
         entry = self.script.get(f"{case.id}|{candidate.label}") or self.script.get("default") or {}
-        raw, timed_out = self.render(entry)
+        raw, timed_out = self.render(entry, candidate.backend)
+        # classified exactly as the live runner classifies it: by the candidate's backend
         return finish(raw, timed_out=timed_out, duration_ms=int(entry.get("duration_ms", 1234)),
-                      retries=0)
+                      retries=0, backend=candidate.backend)
 
     def preflight(self, candidates, package, repo_root):
         return {}
@@ -331,14 +417,26 @@ def _adapter_invoke(backend, variant, prompt, project_root, timeout_secs, budget
         return f"(error: bench judge spawn failed: {exc})"
 
 
+AGY_QUOTA_FLOOR = 0.03      # under 3% left in a bucket: do not start another agy call
+
+
+def _read_agy_quota():
+    from tasks.models_check import agy_quota
+    return agy_quota()
+
+
 class LiveRunner:
-    """Real providers. `invoke` and `adapter_factory` are injectable for tests."""
+    """Real providers. `invoke`, `adapter_factory` and `quota_reader` are injectable for tests."""
     needs_tree = True
 
     def __init__(self, repo_root: Path, *, invoke=None, adapter_factory=None, budget_usd=None,
-                 platform_nt=None):
+                 platform_nt=None, quota_reader=None):
         import os as _os
         self.repo_root = Path(repo_root)
+        # The agy /quota pre-flight (task 111). Injected in tests; the real reader only
+        # when the real invoker is in use, so a test with a fake `invoke` never starts agy.
+        self._quota_reader = quota_reader if quota_reader is not None else (
+            _read_agy_quota if invoke is None else None)
         self._invoke = invoke or _adapter_invoke
         self._adapter_factory = adapter_factory
         self.budget_usd = budget_usd
@@ -371,14 +469,42 @@ class LiveRunner:
                                            platform_nt=self.platform_nt,
                                            budget_root=self.repo_root)      # the BENCH repo's policy, not the case's
 
+    def _agy_quota_guard(self, candidate) -> str:
+        """'' to go ahead, or a quota envelope when the agy bucket this candidate draws
+        on is (nearly) empty. Read from `agy -p /quota` — no model turn — so the run
+        HALTS on what agy reports rather than on an error wording nobody has captured
+        (task 111, plan panel P1/P10). An unreadable quota never blocks a call."""
+        if candidate.backend != "agy" or self._quota_reader is None:
+            return ""
+        try:
+            buckets = self._quota_reader()
+        except Exception:
+            return ""
+        prefix = "gemini-" if str(candidate.variant or "gemini").startswith("gemini") else "3p-"
+        for b in buckets or []:
+            try:
+                mine = str(b.get("id", "")).startswith(prefix)
+                frac = float(b.get("remaining_fraction"))
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if mine and frac < AGY_QUOTA_FLOOR:
+                return (f"(error: agy quota exhausted: {frac * 100:.1f}% left in the {b.get('group', '?')} "
+                        f"{b.get('window', '?')} bucket (floor {AGY_QUOTA_FLOOR * 100:.0f}%), resets "
+                        f"{b.get('reset_time', '?')} — judgebench pre-flight from `agy -p /quota`; "
+                        f"no model turn was spent)")
+        return ""
+
     def invoke(self, case, candidate, package, tree, *, soft_timeout, hard_timeout) -> Invocation:
         with self._lock:
             self.calls.append((case.id, candidate.label))
+        guard = self._agy_quota_guard(candidate)
+        if guard:
+            return finish(guard, timed_out=False, duration_ms=0, retries=0, backend=candidate.backend)
         retries = 0
         t0 = time.monotonic()
         raw = self._invoke(candidate.backend, candidate.variant, package.prompt, tree,
                            hard_timeout, self._budget())
-        status, retry_ok = classify(raw)
+        status, retry_ok = classify(raw, backend=candidate.backend)
         attempts = []
         if retry_ok:
             # Keep the first attempt on record (r2 sonnet #2): it may have been billed
@@ -392,7 +518,8 @@ class LiveRunner:
             raw = self._invoke(candidate.backend, candidate.variant, package.prompt, tree,
                                hard_timeout, self._budget())
         duration_ms = int((time.monotonic() - t0) * 1000)
-        inv = finish(raw, timed_out=False, duration_ms=duration_ms, retries=retries)
+        inv = finish(raw, timed_out=False, duration_ms=duration_ms, retries=retries,
+                     backend=candidate.backend)
         inv.attempts = attempts
         return inv
 

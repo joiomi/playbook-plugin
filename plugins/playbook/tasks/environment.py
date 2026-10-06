@@ -46,8 +46,8 @@ SEV_WARNING = "warning"
 _PROVIDER_HINTS: dict[str, tuple[str, str]] = {
     "codex": ("OpenAI Codex CLI — a supported judge seat (non-Claude)",
               "npm install -g @openai/codex"),
-    "agy":   ("Google Antigravity CLI (`agy`, the ex-Gemini agent) — experimental "
-              "judge seat (no support claim)",
+    "agy":   ("Google Antigravity CLI (`agy`) — experimental judge seat for Gemini "
+              "models on a Google subscription (no support claim)",
               ""),
     "grok":  ("xAI Grok CLI (`grok`) — a supported judge seat; restart Grok after install",
               ""),

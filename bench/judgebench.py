@@ -59,6 +59,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="validate corpus.json + every case dir")
     val.add_argument("--transport", action="store_true",
                      help="also render every prompt and report per-seat transport fit (exit 1 if any case fails a seat)")
+    val.add_argument("--candidates", default=None,
+                     help="seats for the transport report (default: sol-med,sol-high,grok-med,grok-high); "
+                          "same grammar as `run --candidates`")
     val.add_argument("--platform", choices=("posix", "windows"), default="posix",
                      help="simulate the argv caps of this platform (default posix — Test B's host; windows is informational)")
     val.add_argument("--soft-timeout", type=int, default=900, help="render with run's time-budget clause (default 900)")
@@ -144,7 +147,12 @@ def cmd_corpus(args) -> int:
         print(f"corpus v{corpus.version}: {len(corpus.cases)} cases OK{size}")
         if getattr(args, "transport", False):
             from bench.lib import REPO_ROOT, runner as _runner, transport as _transport
-            cands = _runner.parse_candidates("sol-med,sol-high,grok-med,grok-high")
+            try:
+                cands = _runner.parse_candidates(getattr(args, "candidates", None)
+                                                 or "sol-med,sol-high,grok-med,grok-high")
+            except _runner.CandidateError as exc:
+                print(f"judgebench: {exc}", file=sys.stderr)
+                return EXIT_UNUSABLE
             nt = args.platform == "windows"
             rows = _transport.transport_rows(corpus.cases, cands, repo_root=REPO_ROOT, platform_nt=nt,
                                              spec_mode=getattr(args, "spec_mode", "full"),
