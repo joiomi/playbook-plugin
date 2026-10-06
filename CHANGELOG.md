@@ -163,6 +163,9 @@ Each fix was written against a test that failed first.
 
 ### Fixed
 
+- **`tasks status` names a stub** (task 123, PLAN S11; gauntlet 2 G2-18). A stub has no gates until `tasks work <N>`
+  expands it, and its status line read `- | (all gates checked)`. It now reads ``(stub — `tasks work N` expands it)``.
+
 - **Two advisories no longer report something false** (task 119, PLAN S11; gauntlet 2 G2-03 and parked item 20).
   `tasks parked` listed a bullet marked `[promoted → PLAN S11b]` as open — a lettered PLAN step (`S11b`, `S7b`)
   counts as a promotion target now. The "README may be stale" advisory fired in any project where the plugin's

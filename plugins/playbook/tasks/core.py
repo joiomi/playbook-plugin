@@ -4236,6 +4236,15 @@ def _extract_head_position(task_file: Path) -> str:
         return "(error reading)"
 
 
+def _is_stub_file(task_file: Path) -> bool:
+    """A `tasks new --stub` task not yet expanded — the same marker test
+    `tasks work` uses to expand it on activation."""
+    try:
+        return "<!-- stub:" in task_file.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+
+
 def _is_done(task_file: Path) -> bool:
     """Check if a task's status starts with 'done'."""
     return _extract_status(task_file).startswith("done")
@@ -5213,6 +5222,10 @@ def task_status(project_path: Path) -> None:
             continue
 
         head = _extract_head_position(task_file)
+        if head == "(all gates checked)" and _is_stub_file(task_file):
+            # Task 123 (gauntlet 2 G2-18): a stub has no gates until activation
+            # expands it — "all gates checked" claimed gates that do not exist.
+            head = f"(stub — `tasks work {name.split('-')[0]}` expands it)"
         print(f"{name:<40} | {progress:<8} | {head}")
 
 
