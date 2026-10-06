@@ -36,6 +36,27 @@ sys.path.insert(0, str(_PLAYBOOK))
 from tasks import review  # noqa: E402
 
 
+_SAVED_ENCODINGS: list = []
+
+
+def setUpModule():
+    # These tests call the review commands in-process. A real run reaches them through
+    # tasks/cli.py `_main`, which makes stdout and stderr UTF-8 first (the commands print
+    # "⚠"); without it a cp1252 console raises UnicodeEncodeError. In ONE process for the
+    # whole suite another module had done that first; run on its own (scripts/verify runs
+    # one process per module since task 113) this module must do what the CLI does.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            _SAVED_ENCODINGS.append((stream, stream.encoding, stream.errors))
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
+def tearDownModule():
+    while _SAVED_ENCODINGS:
+        stream, enc, errors = _SAVED_ENCODINGS.pop()
+        stream.reconfigure(encoding=enc, errors=errors)
+
+
 def _load_pb_journal():
     p = _PLAYBOOK / "scripts" / "pb_journal.py"
     spec = importlib.util.spec_from_file_location("_pbj_test", p)
