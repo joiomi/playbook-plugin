@@ -20,13 +20,17 @@ from __future__ import annotations
 
 import argparse
 import ast
+import concurrent.futures
+import fnmatch
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -103,16 +107,18 @@ def decode(raw: bytes) -> str:
 # whose output was a DIFFERENT invocation). The child env keeps the variable, so
 # tests/test_shell_fixtures.py appends each fixture's full transcript too.
 FULL_LOG_ENV = "PLAYBOOK_VERIFY_FULL_LOG"
+_FULL_LOG_LOCK = threading.Lock()      # the unittest step logs from several threads (task 113)
 
 
 def full_log(header: str, text: str) -> None:
     """Append one block to $PLAYBOOK_VERIFY_FULL_LOG. UTF-8 bytes, never raises:
-    the log is evidence, and must never turn a check's verdict."""
+    the log is evidence, and must never turn a check's verdict. One block is one
+    write under a lock, so blocks from threads that finish together stay whole."""
     path = os.environ.get(FULL_LOG_ENV)
     if not path:
         return
     try:
-        with open(path, "ab") as fh:
+        with _FULL_LOG_LOCK, open(path, "ab") as fh:
             fh.write(f"===== {header} =====\n{text}\n\n".encode("utf-8", "replace"))
     except Exception:
         pass
@@ -126,16 +132,25 @@ def full_log(header: str, text: str) -> None:
 UNITTEST_BUDGET_SECS = 1500
 
 
-def run(cmd: list[str], cwd: Path | str = ROOT, timeout: int = 900):
+def run(cmd: list[str], cwd: Path | str = ROOT, timeout: float = 900,
+        extra_env: dict | None = None, log: bool = True):
+    """Run one child, capture everything. `extra_env` is laid over env(); with
+    `log=False` the caller writes the full-log block itself (the unittest step
+    does: it adds the child's private log to the same block)."""
+    child_env = env()
+    if extra_env:
+        child_env.update(extra_env)
     try:
-        p = subprocess.run(cmd, cwd=str(cwd), env=env(), timeout=timeout,
+        p = subprocess.run(cmd, cwd=str(cwd), env=child_env, timeout=timeout,
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     except subprocess.TimeoutExpired as exc:
-        full_log(f"{' '.join(map(str, cmd))} (cwd {cwd}) — TIMED OUT after {timeout}s",
-                 decode(exc.output or b""))
+        if log:
+            full_log(f"{' '.join(map(str, cmd))} (cwd {cwd}) — TIMED OUT after {timeout}s",
+                     decode(exc.output or b""))
         raise
     out = decode(p.stdout)
-    full_log(f"{' '.join(map(str, cmd))} (cwd {cwd}) — rc {p.returncode}", out)
+    if log:
+        full_log(f"{' '.join(map(str, cmd))} (cwd {cwd}) — rc {p.returncode}", out)
     return p.returncode, out
 
 
@@ -147,9 +162,11 @@ def tail(text: str, n: int = 2) -> str:
 def ut_tail(text: str) -> str:
     """Prefer unittest's own verdict line over whatever a test printed last."""
     lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
-    for ln in reversed(lines):
+    for i in range(len(lines) - 1, -1, -1):
+        ln = lines[i]
         if ln == "OK" or ln.startswith(("OK ", "FAILED", "Ran ", "No tests")):
-            i = lines.index(ln)
+            # `i` is THIS line's position: `lines.index(ln)` found the first identical
+            # one, i.e. the first module's count once many outputs are joined (task 113)
             return " / ".join(lines[max(0, i - 1):i + 1])[:220]
     return tail(text)
 
@@ -381,6 +398,239 @@ GIT = {"git": "cannot enumerate tracked files"}
 BASH = {"bash": "shell fixtures need bash"}
 
 
+# ── the unittest step: one process per test module, several at a time (task 113) ──
+# The suite took ~4.5 min here and ~15 min on the Windows lane in ONE process, and is
+# run after every repair round. Each module passes alone and the modules do not need
+# each other (measured: 154 of 154, 15 parallel runs of the whole suite green), so the
+# step runs today's command once per module, narrowed by a pattern. What it must never
+# do is report green for less than the single run would: every module on discover's
+# list is run once, a failure anywhere fails the step, and SILENCE — a child that dies,
+# times out, is never started, or runs no tests — is a failure with the module's name
+# on it.
+JOBS_ENV = "PLAYBOOK_VERIFY_JOBS"       # 1 = the old single command, unchanged
+_UT_RAN_RE = re.compile(r"^Ran (\d+) tests? in [0-9.]+s", re.M)
+_UT_COUNT_RE = re.compile(r"(failures|errors|skipped|expected failures|unexpected successes)=(\d+)")
+_UT_COUNT_ORDER = ("failures", "errors", "skipped", "expected failures", "unexpected successes")
+_UT_BLOCK_RE = re.compile(r"^(FAIL|ERROR): ", re.M)
+_RULE1, _RULE2 = "=" * 70, "-" * 70
+
+
+class SingleRunNeeded(RuntimeError):
+    """The tree has a shape the per-module split cannot reproduce exactly: the step
+    runs the old single command instead (and says why)."""
+
+
+def _binds_load_tests(path: Path) -> bool:
+    """True when a test module binds `load_tests` at module level (def, assignment to
+    the name, import) or has an `import *` that may — read from the parsed code, so a
+    mention in a string or a comment is not one (the binding rules of
+    tasks/verify_detect.py, task 098). A module that cannot be parsed counts as one:
+    the single run is the safe answer for anything not understood."""
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+    except (SyntaxError, ValueError):
+        return True
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "load_tests":
+            return True
+        if isinstance(node, ast.Assign) and any(isinstance(tg, ast.Name) and tg.id == "load_tests"
+                                                for tg in node.targets):
+            return True
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for a in node.names:
+                if a.name == "*" or (a.asname or a.name.split(".")[0]) == "load_tests":
+                    return True
+    return False
+
+
+def suite_jobs() -> int:
+    """How many modules run at a time: $PLAYBOOK_VERIFY_JOBS, else one core fewer than
+    the machine has (the tests start processes of their own), at most 8, at least 1."""
+    raw = os.environ.get(JOBS_ENV)
+    if raw is not None and raw.strip():
+        val = raw.strip()
+        if val.isdigit() and int(val) >= 1:
+            return int(val)
+        print(f"  note: {JOBS_ENV}={raw!r} is not a positive whole number — using the default",
+              file=sys.stderr)
+    return max(1, min(8, (os.cpu_count() or 1) - 1))
+
+
+def suite_modules(root: Path | str = ROOT) -> list[str]:
+    """The test modules `unittest discover -s tests` runs, by name: `tests/test*.py`
+    (discover's default pattern), top level only. Raises when discover would find
+    MORE or other than this list — a `tests/__init__.py`, any package directly below
+    `tests/`, or a module that binds `load_tests` — as `SingleRunNeeded`: the step
+    then runs the single command, which IS discover."""
+    tests = Path(root) / "tests"
+    if (tests / "__init__.py").exists():
+        raise SingleRunNeeded("tests/__init__.py exists: discovery no longer matches a per-module list")
+    # discover descends only through PACKAGES, and for a package it also runs the
+    # TestCases defined in the package's own __init__.py — so any package directly
+    # below tests/ is outside the list, whether or not it holds a test*.py file
+    packages = sorted(d.name for d in tests.iterdir() if d.is_dir() and (d / "__init__.py").exists())
+    if packages:
+        raise SingleRunNeeded("a package below tests/ is not on a per-module list: " + ", ".join(packages))
+    mods = sorted(p.stem for p in tests.iterdir()
+                  if p.is_file() and fnmatch.fnmatch(p.name, "test*.py"))
+    # `-p <module>.py` hands a load_tests hook a different pattern than the single run
+    # does (review run 4), so a module with a hook cannot be split off
+    hooked = [m for m in mods if _binds_load_tests(tests / f"{m}.py")]
+    if hooked:
+        raise SingleRunNeeded("binds load_tests (or has `import *`): " + ", ".join(f"tests/{m}.py" for m in hooked))
+    return mods
+
+
+def _ut_summary(out: str):
+    """(tests run, counts, verdict line) of ONE unittest run's output; the first is
+    None when the output carries no `Ran N tests` line at all."""
+    hits = list(_UT_RAN_RE.finditer(out))
+    if not hits:
+        return None, {}, ""
+    verdict = ""
+    for ln in out[hits[-1].end():].splitlines():
+        s = ln.strip()
+        if s.startswith(("OK", "FAILED", "NO TESTS RAN")):
+            verdict = s
+            break
+    return int(hits[-1].group(1)), {k: int(v) for k, v in _UT_COUNT_RE.findall(verdict)}, verdict
+
+
+def _run_module(mod: str, verbosity: str, root: Path, deadline: float, budget: float,
+                log_dir: str | None) -> dict:
+    """One module in its own process. Never raises: whatever goes wrong becomes a
+    `problem` the step reports by the module's name."""
+    res = {"mod": mod, "rc": None, "out": "", "problem": None}
+    left = deadline - time.monotonic()
+    if left <= 0:
+        res["problem"] = f"not started: the suite's time budget ({budget:g}s) was already spent"
+        return res
+    cmd = [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", f"{mod}.py", verbosity]
+    header = f"{' '.join(map(str, cmd))} (cwd {root})"
+    tmp = None
+    try:
+        # a private temp dir: a test that looks at the shared one must not see its
+        # neighbours' files (tests/test_tamper_scope.py does). HOME stays the user's.
+        tmp = tempfile.mkdtemp(prefix="pb-verify-")
+        extra = {"TMPDIR": tmp, "TEMP": tmp, "TMP": tmp}
+        child_log = None
+        if log_dir:
+            # tests/test_shell_fixtures.py appends to the full log from INSIDE the child;
+            # it gets a private file, folded into this module's block below
+            child_log = os.path.join(log_dir, f"{mod}.txt")
+            extra[FULL_LOG_ENV] = child_log
+        try:
+            res["rc"], res["out"] = run(cmd, cwd=root, timeout=left, extra_env=extra, log=False)
+            header += f" — rc {res['rc']}"
+        except subprocess.TimeoutExpired as exc:
+            res["out"] = decode(exc.output or b"")
+            res["problem"] = f"timed out: killed when the suite's time budget ({budget:g}s) ran out"
+            header += " — TIMED OUT"
+        inner = ""
+        if child_log:
+            try:
+                with open(child_log, "rb") as fh:
+                    inner = fh.read().decode("utf-8", "replace")
+            except OSError:
+                inner = ""
+        full_log(header, res["out"] + (("\n" + inner) if inner else ""))
+    except Exception as exc:                       # could not even start it
+        res["problem"] = f"could not be run: {type(exc).__name__}: {exc}"
+    finally:
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
+    return res
+
+
+def run_suite(jobs: int, verbosity: str, root: Path | str = ROOT,
+              budget: float | None = None) -> tuple[int, str]:
+    """The whole suite, one process per module, `jobs` at a time → (rc, output).
+    The output is the children's outputs in module order followed by one summary in
+    unittest's own shape, so `ut_tail` and `ut_fails` read it as they read one run."""
+    root = Path(root)
+    budget = UNITTEST_BUDGET_SECS if budget is None else budget
+    mods = suite_modules(root)
+    if not mods:                                   # green for nothing is not green (review run 3)
+        return 1, "\n".join([_RULE1, "ERROR: tests (the suite as a whole — scripts/verify)", _RULE2,
+                             f"no test module matches tests/test*.py under {root}", "", _RULE2,
+                             "Ran 0 tests in 0.000s — 0 modules", "", "FAILED (errors=1)"]) + "\n"
+    order = sorted(mods, key=lambda m: -(root / "tests" / f"{m}.py").stat().st_size)   # big first: wall time only
+    log_dir = tempfile.mkdtemp(prefix="pb-verify-log-") if os.environ.get(FULL_LOG_ENV) else None
+    t0 = time.monotonic()
+    deadline = t0 + budget
+    results: dict[str, dict] = {}
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
+            futures = [pool.submit(_run_module, m, verbosity, root, deadline, budget, log_dir) for m in order]
+            for fut in concurrent.futures.as_completed(futures):
+                r = fut.result()
+                results[r["mod"]] = r
+    finally:
+        if log_dir:
+            shutil.rmtree(log_dir, ignore_errors=True)
+
+    total = 0
+    counts = dict.fromkeys(_UT_COUNT_ORDER, 0)
+    chunks: list[str] = []
+    synthesized: list[str] = []
+    failed = False
+    for mod in mods:
+        r = results.get(mod)
+        if r is None:                              # cannot happen with the pool above; silence is failure
+            r = {"mod": mod, "rc": None, "out": "", "problem": "has no result: it was never run"}
+        ran, c, verdict = _ut_summary(r["out"])
+        problem = r["problem"]
+        if problem is None:
+            # Green is ONE case: exit 0, tests were run, and unittest's own OK. The whole
+            # table (exit code x `Ran` line x verdict) is pinned by
+            # tests/test_verify_parallel.py::test_every_combination_of_exit_code_and_last_words.
+            rc = r["rc"]
+            if ran is None:
+                problem = f"exited {rc} without a unittest verdict (no `Ran N tests` line)"
+            elif verdict.startswith("FAILED"):
+                # red whatever the exit code (see `failed` below); its own FAIL/ERROR blocks
+                # name it — if it printed none, this block does
+                if not _UT_BLOCK_RE.search(r["out"]):
+                    problem = f"exited {rc} with a FAILED verdict but printed no FAIL/ERROR block"
+            elif ran == 0 and rc == 0 and verdict.startswith("OK") and c.get("skipped"):
+                pass                               # every test skipped (setUpModule / setUpClass SkipTest): green, as in the single run
+            elif ran == 0:
+                # No exception for an "empty module" (Python 3.12 exits 5 for one, 3.10 says OK):
+                # from outside it cannot be told from a child that died with those words, and a
+                # test module with nothing to run is a defect anyway. The single run would not
+                # notice it — the one place this step is stricter than that run.
+                problem = (f"ran no tests (exit {rc}): a test module with nothing to run fails "
+                           "the step — remove the file or give it a test")
+            elif rc == 0 and verdict.startswith("OK"):
+                pass
+            else:
+                said = f"the verdict line {verdict!r}" if verdict else "no OK/FAILED verdict line"
+                problem = f"exited {rc} with {said} after `Ran {ran} tests`"
+        if ran:
+            total += ran
+        for k, v in c.items():
+            counts[k] += v
+        if verdict.startswith("FAILED") or c.get("failures") or c.get("errors") or c.get("unexpected successes"):
+            failed = True
+        if r["out"].strip():
+            chunks.append(r["out"].rstrip("\n"))
+        if problem:
+            failed = True
+            counts["errors"] += 1
+            last = [ln.rstrip() for ln in r["out"].strip().splitlines()[-12:]]
+            synthesized.append("\n".join([_RULE1, f"ERROR: {mod} (the module as a whole — scripts/verify)",
+                                          _RULE2, f"{mod}: {problem}"]
+                                         + ([f"its last output lines:"] + [f"    {ln}" for ln in last] if last else [])
+                                         + [""]))
+    parts = [f"{k}={counts[k]}" for k in _UT_COUNT_ORDER if counts[k]]
+    wall = time.monotonic() - t0
+    summary = [_RULE2,
+               f"Ran {total} test{'' if total == 1 else 's'} in {wall:.3f}s — {len(mods)} modules, {max(1, jobs)} at a time",
+               "",
+               ("FAILED" if failed else "OK") + (f" ({', '.join(parts)})" if parts else "")]
+    return (1 if failed else 0), "\n".join(chunks + synthesized + summary) + "\n"
+
+
 @check("unittest discover")
 def _unittest():
     # The dogfooded-ancestry leak class (a test escaping its temp fixture into
@@ -393,11 +643,19 @@ def _unittest():
     # docstring.
     # -v when the full log is on: every test id lands in it (task 096)
     verbosity = "-v" if os.environ.get(FULL_LOG_ENV) else "-q"
-    rc, out = run([sys.executable, "-m", "unittest", "discover", "-s", "tests", verbosity],
-                  timeout=UNITTEST_BUDGET_SECS)
+    jobs = suite_jobs()
+    why_single = ""
+    if jobs > 1:
+        try:
+            rc, out = run_suite(jobs, verbosity)
+        except SingleRunNeeded as exc:
+            why_single = f"single run: {exc} / "
+    if jobs == 1 or why_single:                    # the single-process run, exactly as it was
+        rc, out = run([sys.executable, "-m", "unittest", "discover", "-s", "tests", verbosity],
+                      timeout=UNITTEST_BUDGET_SECS)
     if rc == 0:
-        return PASS, ut_tail(out)
-    return FAIL, ut_tail(out), ut_fails(out)
+        return PASS, why_single + ut_tail(out)
+    return FAIL, why_single + ut_tail(out), ut_fails(out)
 
 
 @check("wrapper-multiuser fixture", {**BASH, **GIT})

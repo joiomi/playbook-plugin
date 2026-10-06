@@ -96,44 +96,62 @@ class RunWritesTheFullLog(unittest.TestCase):
 
 
 class UnittestVerbosity(unittest.TestCase):
-    def _argv(self, env):
-        seen = {}
+    def _argvs(self, env):
+        seen = []
 
-        def fake_run(cmd, cwd=V.ROOT, timeout=900):
-            seen["cmd"] = cmd
+        def fake_run(cmd, cwd=V.ROOT, timeout=900, **kw):
+            seen.append(list(cmd))
             return 0, "Ran 1 test\n\nOK\n"
 
         with mock.patch.dict(os.environ, env, clear=True), \
                 mock.patch.object(V, "run", side_effect=fake_run):
             V._unittest()
-        return seen["cmd"]
+        self.assertTrue(seen)
+        return seen
 
     def test_verbose_only_when_the_full_log_is_on(self):
-        base = {k: v for k, v in os.environ.items() if k != ENV}
-        self.assertIn("-q", self._argv(base))
-        self.assertNotIn("-v", self._argv(base))
-        on = dict(base, **{ENV: "/nonexistent/full.txt"})
-        self.assertIn("-v", self._argv(on))
-        self.assertNotIn("-q", self._argv(on))
+        base = {k: v for k, v in os.environ.items() if k not in (ENV, "PLAYBOOK_VERIFY_JOBS")}
+        # the single command (one job) and every per-module child (task 113) alike
+        for jobs, at_least in (("1", 1), ("4", 100)):
+            env = dict(base, PLAYBOOK_VERIFY_JOBS=jobs)
+            quiet = self._argvs(env)
+            self.assertGreaterEqual(len(quiet), at_least, jobs)
+            for cmd in quiet:
+                self.assertIn("-q", cmd)
+                self.assertNotIn("-v", cmd)
+            for cmd in self._argvs(dict(env, **{ENV: "/nonexistent/full.txt"})):
+                self.assertIn("-v", cmd)
+                self.assertNotIn("-q", cmd)
 
 
 class UnittestBudget(unittest.TestCase):
     """Task 112: the suite has a time budget of its own. On the Windows lane it took 665 s,
     818 s and 888 s on unchanged tests, and task 111's commit was cut twice at the shared
     900 s default while still running — a timeout reported as a failed check, with no
-    failing test. The budget is raised for THIS check only; the default of the others stays."""
+    failing test. The budget is raised for THIS check only; the default of the others stays.
+    Task 113: with several modules at a time the budget is ONE deadline for the whole step —
+    each child gets the time that is left (the details are in tests/test_verify_parallel.py)."""
 
-    def test_the_suite_runs_under_its_own_named_budget(self):
-        seen = {}
+    def _timeouts(self, jobs):
+        seen = []
 
-        def fake_run(cmd, cwd=V.ROOT, timeout=900):
-            seen["timeout"] = timeout
+        def fake_run(cmd, cwd=V.ROOT, timeout=900, **kw):
+            seen.append(timeout)
             return 0, "Ran 1 test\n\nOK\n"
 
-        with mock.patch.object(V, "run", side_effect=fake_run):
+        with mock.patch.dict(os.environ, {"PLAYBOOK_VERIFY_JOBS": jobs}), \
+                mock.patch.object(V, "run", side_effect=fake_run):
             V._unittest()
+        return seen
+
+    def test_the_suite_runs_under_its_own_named_budget(self):
         self.assertEqual(V.UNITTEST_BUDGET_SECS, 1500)
-        self.assertEqual(seen["timeout"], V.UNITTEST_BUDGET_SECS)
+        self.assertEqual(self._timeouts("1"), [V.UNITTEST_BUDGET_SECS])      # the single command: the whole budget
+        many = self._timeouts("4")
+        self.assertGreater(len(many), 100)                                   # one child per module
+        for left in many:
+            self.assertGreater(left, V.UNITTEST_BUDGET_SECS - 120)           # what is left of ONE deadline …
+            self.assertLessEqual(left, V.UNITTEST_BUDGET_SECS)               # … never more than the budget
 
     def test_the_default_of_every_other_check_did_not_move(self):
         import inspect
