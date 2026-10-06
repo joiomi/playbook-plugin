@@ -118,6 +118,14 @@ def full_log(header: str, text: str) -> None:
         pass
 
 
+# The whole unittest suite has a budget of its own (task 112). It ran under the shared
+# 900 s default until the Windows lane, which had taken 665 s, 818 s and 888 s on
+# unchanged tests, cut it twice at 900 s on one commit while it was still running:
+# a timeout shown as a failed check, with no failing test. Raising this number
+# checks nothing less — it only moves how long a real hang takes to be reported.
+UNITTEST_BUDGET_SECS = 1500
+
+
 def run(cmd: list[str], cwd: Path | str = ROOT, timeout: int = 900):
     try:
         p = subprocess.run(cmd, cwd=str(cwd), env=env(), timeout=timeout,
@@ -385,7 +393,8 @@ def _unittest():
     # docstring.
     # -v when the full log is on: every test id lands in it (task 096)
     verbosity = "-v" if os.environ.get(FULL_LOG_ENV) else "-q"
-    rc, out = run([sys.executable, "-m", "unittest", "discover", "-s", "tests", verbosity])
+    rc, out = run([sys.executable, "-m", "unittest", "discover", "-s", "tests", verbosity],
+                  timeout=UNITTEST_BUDGET_SECS)
     if rc == 0:
         return PASS, ut_tail(out)
     return FAIL, ut_tail(out), ut_fails(out)

@@ -117,6 +117,29 @@ class UnittestVerbosity(unittest.TestCase):
         self.assertNotIn("-q", self._argv(on))
 
 
+class UnittestBudget(unittest.TestCase):
+    """Task 112: the suite has a time budget of its own. On the Windows lane it took 665 s,
+    818 s and 888 s on unchanged tests, and task 111's commit was cut twice at the shared
+    900 s default while still running — a timeout reported as a failed check, with no
+    failing test. The budget is raised for THIS check only; the default of the others stays."""
+
+    def test_the_suite_runs_under_its_own_named_budget(self):
+        seen = {}
+
+        def fake_run(cmd, cwd=V.ROOT, timeout=900):
+            seen["timeout"] = timeout
+            return 0, "Ran 1 test\n\nOK\n"
+
+        with mock.patch.object(V, "run", side_effect=fake_run):
+            V._unittest()
+        self.assertEqual(V.UNITTEST_BUDGET_SECS, 1500)
+        self.assertEqual(seen["timeout"], V.UNITTEST_BUDGET_SECS)
+
+    def test_the_default_of_every_other_check_did_not_move(self):
+        import inspect
+        self.assertEqual(inspect.signature(V.run).parameters["timeout"].default, 900)
+
+
 class ShellFixtureTranscript(unittest.TestCase):
     def test_full_transcript_is_appended_when_the_log_is_on(self):
         log = Path(tempfile.mkdtemp()) / "full.txt"

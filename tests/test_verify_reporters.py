@@ -293,8 +293,8 @@ class ForcedS7EndToEnd(unittest.TestCase):
     PRODUCTION 074 composition — real `_failure_detail` → a real unittest
     `self.fail` rendered by a real `TextTestRunner` → `ut_fails` — must keep
     the block. Round 3 (grok): kept in-process (no nested `unittest` of the
-    whole fixture suite) so the Windows lane's 900 s unittest budget is not
-    spent twice."""
+    whole fixture suite) so the Windows lane's unittest budget
+    (`UNITTEST_BUDGET_SECS` in scripts/verify) is not spent twice."""
 
     transcript = ""
     rc = 0
