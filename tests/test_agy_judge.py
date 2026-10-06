@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -1701,6 +1702,14 @@ class ReviewRunner(unittest.TestCase):
         review._PB_JOURNAL_MOD = None
         review._PB_JOURNAL_LOADED = False
         self.calls = []
+        # The review CLI prints characters a cp1252 console cannot encode (its "⚠ … foreground
+        # tool-call cap" advisory). A real run goes through tasks/cli.py, which makes stdout and
+        # stderr UTF-8 first; these tests call the commands in-process, so they give them a sink —
+        # without it all seven calls below died on the Windows CI lane with UnicodeEncodeError.
+        for redirect in (contextlib.redirect_stdout, contextlib.redirect_stderr):
+            cm = redirect(io.StringIO())
+            cm.__enter__()
+            self.addCleanup(cm.__exit__, None, None, None)
 
     def _patched(self, result=None, raises=None):
         def fake_run(agent, args, **kw):
