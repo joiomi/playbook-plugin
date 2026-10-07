@@ -2002,10 +2002,10 @@ def _active_task_is_irreversible(root):
         _text = _P(task_md).read_text(encoding="utf-8", errors="replace")
         # A done/blocked task in a stale pointer never acknowledges (073 round 3:
         # a crash between the close and the pointer clear). Task 110 W9: `pending`
-        # is the status of every task `tasks work N` activates — the CLI writes the
-        # pointer, never the status (only a reopen/resume writes `in_progress`) —
-        # so requiring `in_progress` meant the acknowledgement never fired for a
-        # normally activated task. A stub is never activated (`tasks work` refuses
+        # was the status of every task `tasks work N` activated — requiring
+        # `in_progress` meant the acknowledgement never fired for one. Since task
+        # 140 activation writes `in_progress`; `pending` stays accepted for a task
+        # activated by an older CLI, or whose status write could not land. A stub is never activated (`tasks work` refuses
         # it); one in a pointer still does not acknowledge.
         if str(_status_from_lines(_physical_lines(_text))).strip().lower() not in ("pending", "in_progress"):
             return False

@@ -4,9 +4,21 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
-Built after the 1.5.46 cut, waiting for their review panels (owner Q9: grouped by area).
+Built after the 1.5.46 cut. Tasks 114-130 were reviewed in grouped panels by area (owner Q9; tasks 135-139); task 118 still waits for its live grok check.
 
 ### Fixed
+
+- **Four small CLI decisions** (task 140; owner, 2026-10-07). `tasks work <N>` on a task that is already `done` no
+  longer reopens it silently — it is refused, and `tasks work <N> --reopen` reopens it; an unknown option to
+  `tasks work <N>` is refused too. `tasks work <N>` writes `## Status` `in_progress` (it stayed `pending` until the
+  close, so listings and the retro showed started work as not started; the retro still names a task that was
+  activated and never closed). `tasks blocked` on an already-blocked task adds the new reason under the recorded one
+  instead of replacing it. A bare `tasks models` prints its subcommands instead of running the live check — ask for
+  the probe by name (`tasks models check`). With it: an activation that is refused (the session's current task still
+  has open gates) no longer leaves the target resumed or reopened; a done or blocked task can be named by its folder
+  (`tasks work 007-name --reopen` — a whole folder name wins over partial matches; several partial matches, or a
+  folder whose number another folder shares, are refused and named); the retro prints the status a task has; a `tasks handoff` on an already-blocked
+  task is still offered at the next bootstrap.
 
 - **The agy judge seat is measured on agy 1.3.1** (task 130). The seat was written and measured on agy 1.2.17. The
   same capture commands re-run on 1.3.1 give the same exit codes and the same events; every agy test runs and passes

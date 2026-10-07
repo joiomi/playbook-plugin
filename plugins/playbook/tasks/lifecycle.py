@@ -16,6 +16,7 @@ tasks.core + tasks.shared + tasks.template; never a command module
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -250,6 +251,59 @@ def _gate_bounce(task_id: str, task_file, action: str) -> bool:
         file=sys.stderr,
     )
     return True
+
+
+def _prepare_pointer(session_state: Path, task_num: str) -> Path:
+    """Create the session directory and a prepared copy of the pointer beside it
+    (through the one atomic writer). Raises OSError — before anything else is
+    written; the caller renames the copy into place or removes it."""
+    session_state.parent.mkdir(parents=True, exist_ok=True)
+    tmp = session_state.with_name(f".current_state.{os.getpid()}.tmp")
+    atomic_write(session_state.with_name(tmp.name), f"{task_num}\n")
+    return tmp
+
+
+def _activate_status_then_publish(task_file, task_num, resume_target, reopen_target,
+                                  pointer_tmp: Path, session_state: Path) -> None:
+    """The activation is allowed: clear a block / reopen a done task / claim the task
+    — each decided inside its locked transform, since the status may have moved since
+    it was read — and only then publish the prepared pointer (one rename). A refusal
+    exits before the rename: the session points at nothing new."""
+    if resume_target is not None:
+        from tasks.core import resume_blocked_task
+        try:
+            resume_blocked_task(task_file)
+        except ValueError as exc:       # V7c: a refusal, not a traceback
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+        print(f"Resuming task {task_num} (was blocked — decision made).")
+    if reopen_target is not None:
+        from tasks.core import reopen_done_task
+        # Through the ONE fence-aware status path (V7, task 043); False = the task
+        # is no longer `done` (or its live `## Status` is gone) — refuse.
+        if not reopen_done_task(task_file):
+            print(f"Error: could not reopen task {task_num} — its status is no longer "
+                  "`done` (another writer changed it first); nothing changed.",
+                  file=sys.stderr)
+            sys.exit(1)
+        print(f"Note: task {task_num} was marked done — reopening.")
+
+    # Task 140 (owner Q10): an activated task says so — `pending` → `in_progress`.
+    # Decided under the task lock, and BEFORE the pointer: a task another session
+    # closed or paused after the lookup is not activated (impl panel r2).
+    from tasks.core import claim_for_activation
+    moved = claim_for_activation(task_file)
+    if moved is not None:
+        how = (f"`tasks work {task_num} --reopen` reopens it" if moved.startswith("done")
+               else f"run `tasks work {task_num}` again to resume it")
+        print(f"Error: task {task_num} became `{moved}` while this activation ran "
+              f"(another session changed it) — {how}. Nothing changed.", file=sys.stderr)
+        sys.exit(1)
+
+    # Publish (atomic: a hook may read this concurrently; current_state carries no
+    # lock protocol — only os.replace changes it). The file exists and sits in the
+    # same directory, so this rename needs no new space.
+    os.replace(pointer_tmp, session_state)
 
 
 def cmd_work(cmd_args):
@@ -947,20 +1001,37 @@ def cmd_work(cmd_args):
     require_session_id()
 
     # Resume a BLOCKED task (#08): `tasks work <N>` is the "I am picking this
-    # up" verb. Clear the block FIRST — flip status back to in_progress — so
-    # normal activation below sees an ordinary in_progress task (a blocked
-    # task is skipped by _find_active_task, so it must be cleared here).
-    _resume_matches = list(
-        (resolve_agent_dir(project_path) / "tasks").glob(f"{task_num}-*/task.md"))
-    if _resume_matches:
-        from tasks.core import _is_blocked, resume_blocked_task
-        if _is_blocked(_resume_matches[0]):
-            try:
-                resume_blocked_task(_resume_matches[0])
-            except ValueError as exc:       # V7c: a refusal, not a traceback
-                print(f"Error: {exc}", file=sys.stderr)
-                sys.exit(1)
-            print(f"Resuming task {task_num} (was blocked — decision made).")
+    # up" verb. A blocked task is skipped by _find_active_task, so it is found
+    # here — but its status is written only AFTER the switch check below has
+    # passed (task 140, impl panel r1: the resume and the reopen used to be
+    # written first, so an activation refused for the previous task's open gates
+    # left this one resumed/reopened with no pointer).
+    from tasks.core import _folder_matches_filter, _is_blocked, _iter_task_dirs
+    _named = [tf for _n, _s, tf in _iter_task_dirs(Path(project_path))
+              if _folder_matches_filter(tf.parent.name, task_num)]
+    # A word that is a whole folder name means that folder; otherwise several
+    # matches are ambiguous for the done / blocked arms — never the first one
+    # (impl panel r2: it reopened or resumed somebody else's task).
+    _exact = [tf for tf in _named if tf.parent.name == task_num]
+    if _exact:
+        _named = _exact
+        # …and before the open-task search below, which is by substring (post-D6 run 1:
+        # `001-foo` activated the open `002-001-foo-more`): go on by its number.
+        from tasks.core import number_twins
+        _twins = number_twins(Path(project_path), task_num)
+        if _twins:
+            # the CLI refuses this before its session GC; the in-process backstop
+            print(f"Error: {' and '.join(_twins)} share one task number — the session "
+                  "pointer holds a number and cannot tell them apart. Renumber one "
+                  "(rename its folder), then retry. Nothing changed.", file=sys.stderr)
+            sys.exit(1)
+        _n_exact = task_num.split("-", 1)[0]
+        if _n_exact.isdigit():
+            task_num = _n_exact.zfill(3)
+    _ambiguous = len(_named) > 1
+    _resume_target = (_named[0] if _named and not _ambiguous and _is_blocked(_named[0])
+                      else None)
+    _reopen_target = None
 
     # Verify task exists
     # _extract_head_position is imported here, not further down where the
@@ -969,25 +1040,32 @@ def cmd_work(cmd_args):
     # re-adoption arm below (UnboundLocalError, not NameError).
     from tasks.core import _find_active_task, _extract_head_position
     task_file = _find_active_task(project_path, task_num)
+    if not task_file and _resume_target is not None:
+        task_file = _resume_target
+    elif task_file is not None:
+        _resume_target = None           # another, active task answers to this name
     if not task_file:
-        tasks_dir = resolve_agent_dir(project_path) / "tasks"
-        matches = list(tasks_dir.glob(f"{task_num}-*/task.md"))
+        # the same name forms activation takes (`7`, `007`, `007-slug`) — a done task
+        # named by its folder used to be "not found" here (task 140, impl panel r1)
+        matches = _named
+        if _ambiguous:
+            print(f"Error: {len(matches)} tasks match {task_num!r}: "
+                  + ", ".join(tf.parent.name for tf in matches)
+                  + " — name one by its number. Nothing changed.", file=sys.stderr)
+            sys.exit(1)
         if matches:
-            from tasks.core import _is_done, _set_status
+            from tasks.core import _is_done
             tf = matches[0]
             done = _is_done(tf)
+            if done and "--reopen" not in cmd_args:
+                # Task 140 (owner Q6): the CLI refuses this before its session GC
+                # (`cli._wrong_usage`); this is the backstop for an in-process caller.
+                print(f"Error: task {task_num} is done — `tasks work {task_num} --reopen` "
+                      "reopens it. Nothing changed.", file=sys.stderr)
+                sys.exit(1)
             if done:
-                # Reopen: reset Status to in_progress so activation can proceed.
-                # Through the ONE fence-aware status writer (V7, task 043) — the
-                # same heading _is_done just read; atomic (I9). A False return is
-                # only reachable via a concurrent rewrite between the read and
-                # the write; refuse rather than activate a still-done task.
-                if not _set_status(tf, "in_progress"):
-                    print(f"Error: could not reopen task {task_num} — its live "
-                          "`## Status` disappeared between read and write; "
-                          "nothing changed.", file=sys.stderr)
-                    sys.exit(1)
-                print(f"Note: task {task_num} was marked done — reopening.")
+                # Reopen — written below, after the switch check (`_reopen_target`).
+                _reopen_target = tf
                 task_file = tf
                 # Fall through to activation below
             elif "<!-- stub:" in tf.read_text(encoding="utf-8", errors="replace"):
@@ -1004,8 +1082,9 @@ def cmd_work(cmd_args):
                 # gates. The only sanctioned writer of ## Status needed a
                 # pointer, and the only way to get a pointer was refused, so
                 # the field report's author had to hand-write the file
-                # (task 027). Status is deliberately NOT rewritten here —
-                # activation alone restores the pointer, and `work done`
+                # (task 027). Status is never set to `done` here — activation
+                # restores the pointer (and, since task 140, writes
+                # `in_progress` like every activation), and `work done`
                 # remains the thing that closes the task.
                 print(f"Note: task {task_num} has all gates checked but is "
                       f"not closed — re-adopting; run 'tasks work done' to close it.")
@@ -1072,11 +1151,29 @@ def cmd_work(cmd_args):
             elif not prev_status.startswith("done"):
                 print(f"--force: switching away from task {prev_task} with open gates (left in_progress).")
 
-    # Write task number to per-session current_state (atomic: a hook may read
-    # this concurrently; not flock-guarded, so a plain truncate could be seen
-    # empty). current_state carries no lock protocol — only os.replace changes.
-    session_dir.mkdir(parents=True, exist_ok=True)
-    atomic_write(session_state, f"{task_num}\n")
+    # The activation is allowed: NOW clear a block / reopen a done task — each one
+    # decided inside its locked transform (the status may have moved since it was
+    # read), and each BEFORE the pointer is written: a refusal changes nothing.
+    # The pointer is PREPARED first — its directory and a temp file holding the
+    # number — and only renamed into place after the status steps (impl panel r2,
+    # post-D6 run 1): what can fail (no space, no permission) fails before task.md
+    # is touched, so nothing ever has to be undone. An earlier fix undid a reopen
+    # after a failed pointer write; that left other changes in place and could
+    # close a task another session had activated meanwhile.
+    try:
+        _pointer_tmp = _prepare_pointer(session_state, task_num)
+    except OSError as exc:
+        print(f"Error: could not prepare the session pointer ({exc}) — task {task_num} "
+              "was not activated. Nothing changed.", file=sys.stderr)
+        sys.exit(1)
+    try:
+        _activate_status_then_publish(task_file, task_num, _resume_target, _reopen_target,
+                                      _pointer_tmp, session_state)
+    finally:
+        try:
+            _pointer_tmp.unlink()
+        except OSError:
+            pass                        # published (renamed away) or already gone
 
     # Session GC runs in _gc_dead_sessions() at the CLI entry point — and
     # ALSO in scripts/session-start-hook, which sweeps the same directory at
@@ -1175,6 +1272,12 @@ def cmd_work(cmd_args):
         # Re-read for chat injection and display
         task_content = full_content
         print(f"Expanded stub to full {stub_type} template.")
+
+    # A stub's expansion re-rendered the template's `pending`: say `in_progress` again
+    # (the claim above ran on the stub). Only ever from `pending`, under the lock.
+    if stub_match:
+        from tasks.core import mark_in_progress
+        mark_in_progress(task_file)
 
     # Workflow rules — deferred from bootstrap to task activation
     from tasks.template import workflow_briefing

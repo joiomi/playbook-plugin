@@ -83,14 +83,15 @@ class SetBlockedPure(unittest.TestCase):
         # The reason still round-trips as readable text.
         self.assertIn("fake gate", tf.read_text(encoding="utf-8"))
 
-    def test_reblock_is_idempotent(self):
+    def test_reblock_keeps_both_reasons_in_one_section(self):
+        # Task 140 (owner Q3c, 2026-10-07): the second reason used to REPLACE the first
         tf = self._task()
         set_task_blocked(tf, "first reason")
         set_task_blocked(tf, "second reason")
         text = tf.read_text(encoding="utf-8")
         self.assertEqual(text.count("## Blocked"), 1)
-        self.assertIn("second reason", text)
-        self.assertNotIn("first reason", text)
+        self.assertLess(text.index("> first reason"), text.index("> second reason"))
+        self.assertEqual(_extract_status(tf), "blocked")
 
     def test_resume_flips_status_and_stamps(self):
         tf = self._task()
@@ -1169,7 +1170,7 @@ class BlockedEndToEnd(unittest.TestCase):
         body = ("# 012 - Decide\n\n## Status\ndone\n\n## Docs\n```\n## Status\npending\n```\n\n"
                 "## Work Plan\n- [ ] open gate\n")
         self.task_file.write_text(body, encoding="utf-8")
-        r = self.run_tasks("work", "012")
+        r = self.run_tasks("work", "012", "--reopen")           # task 140: a reopen is asked for
         self.assertEqual(r.returncode, 0, r.stderr)
         text = self.task_file.read_text(encoding="utf-8")
         self.assertIn("## Status\nin_progress\n", text)

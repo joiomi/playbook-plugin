@@ -1351,6 +1351,13 @@ def render_detect(report: dict) -> str:
 
 # ── CLI entry ────────────────────────────────────────────────────────────────
 
+MODELS_USAGE = """Usage: tasks models <subcommand>
+  tasks models check  [--no-probe] [--claude-candidates a,b]   audit the configured pins (launches each CLI once)
+  tasks models detect [--json]                                 installed agents + their models (no launch)
+  tasks models select [--no-probe] [--claude-candidates a,b]   interactive panel rewrite
+  tasks models set    --panel a,b --default-judge c [--force]  non-interactive write"""
+
+
 def cli_models(cmd_args: list[str], project_root: Path) -> int:
     """`tasks models check|select|detect|set [flags]`.
 
@@ -1360,7 +1367,17 @@ def cli_models(cmd_args: list[str], project_root: Path) -> int:
       set    --panel a,b --default-judge c [--force]  non-interactive write
     """
     args = list(cmd_args)
-    sub = args.pop(0) if args and not args[0].startswith("--") else "check"
+    # Task 140 (owner Q3b): a bare `tasks models` used to run `check` — a live CLI
+    # launch nobody asked for. It prints the usage; a probe is asked for by name.
+    if not args:
+        print(MODELS_USAGE)
+        return 0
+    if args[0].startswith("-"):
+        print(f"Error: tasks models needs a subcommand before {args[0]!r}. Nothing changed.",
+              file=sys.stderr)
+        print(MODELS_USAGE, file=sys.stderr)
+        return 2
+    sub = args.pop(0)
 
     if sub == "detect":
         as_json = False

@@ -297,8 +297,39 @@ _USAGE = {
     "dashboard": "tasks dashboard [--no-detect]", "mindmap-sync": "tasks mindmap-sync [--fix]",
     "retro": "tasks retro [--since N]", "freehand": "tasks freehand [log]", "audit": "tasks audit [<N>]",
     "new": "tasks new <type> <name> [intent words …]  (intent words starting with `--` go after a `--`)",
-    "work": 'tasks work done [--force|--stale-panel-ok --reason "why"]',
+    "work": 'tasks work <N> [--force] [--reopen]  |  tasks work done [--force|--stale-panel-ok --reason "why"]',
 }
+
+
+def _ARGS_NUMBER_TWINS(name: str) -> list:
+    """Folders sharing the number of the folder `name` names EXACTLY (read-only; [] else)."""
+    from tasks.core import _iter_task_dirs, number_twins
+    try:
+        root = find_project_root()
+        if not any(tf.parent.name == name for _n, _s, tf in _iter_task_dirs(root)):
+            return []
+        return number_twins(root, name)
+    except (SystemExit, OSError):
+        return []
+
+
+def _ARGS_TASK_IS_DONE(num: str) -> bool:
+    """Is task `num` closed (`## Status` done)? (read-only; False when it cannot be told)"""
+    from tasks.core import _find_active_task, _folder_matches_filter, _is_done, _iter_task_dirs
+    try:
+        root = find_project_root()
+        name = num.zfill(3) if num.isdigit() else num
+        hit = [tf for _n, _s, tf in _iter_task_dirs(root)
+               if _folder_matches_filter(tf.parent.name, name)]
+        exact = [tf for tf in hit if tf.parent.name == name]
+        if exact:
+            return _is_done(exact[0])      # a whole folder name means that folder
+        if _find_active_task(root, name) is not None:
+            return False                   # an open task answers to this name
+        # several matches: cmd_work says which (it refuses an ambiguous name itself)
+        return len(hit) == 1 and _is_done(hit[0])
+    except (SystemExit, OSError):
+        return False
 
 
 def _wrong_usage(cmd: str, args: list) -> "str | None":
@@ -314,6 +345,20 @@ def _wrong_usage(cmd: str, args: list) -> "str | None":
                 reason = rest[i + 1]
         if hatch and not (reason and reason.strip()):
             return f'{hatch} requires --reason "why" — a forced or stale-panel close must record why'
+        return None
+    if cmd == "work" and args:
+        # task 140 (owner Q6): a done task is reopened only on request
+        extra = [a for a in args[1:] if a not in ("--force", "-f", "--reopen")]
+        if extra:
+            return (f"unknown option {extra[0]!r}" if extra[0].startswith("-")
+                    else f"unexpected argument(s) {' '.join(extra)!r}")
+        twins = _ARGS_NUMBER_TWINS(args[0])
+        if twins:
+            return (f"{' and '.join(twins)} share one task number — the session pointer holds a "
+                    "number and cannot tell them apart; renumber one (rename its folder), then retry")
+        if "--reopen" not in args and _ARGS_TASK_IS_DONE(args[0]):
+            return (f"task {args[0]} is done — `tasks work {args[0]} --reopen` reopens it "
+                    "(its status goes back to in_progress; the close receipt stays as history)")
         return None
     if cmd == "audit":
         nums = [a for a in args if a.isdigit()]

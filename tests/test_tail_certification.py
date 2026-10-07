@@ -675,7 +675,7 @@ class ClosePathTailCert(unittest.TestCase):
         (d / "sub" / "PLAN.md").write_text("# plan\n", encoding="utf-8")
         out, err = self._close_inproc(d, "PASS")
         self.assertNotIn("Task 001 done.", out)
-        self.assertIn("pending", self._receipt(td))
+        self.assertIn("## Status\nin_progress", self._receipt(td))   # not closed (task 140: activation writes in_progress)
 
     # (a3) H2 is OUTER-scope only (impl-panel r1 opus): a nested code_roots
     # checkout's OWN root PLAN.md is behavioral and blocks end-to-end ...
@@ -684,7 +684,7 @@ class ClosePathTailCert(unittest.TestCase):
         (d / "sub" / "PLAN.md").write_text("# nested plan\n", encoding="utf-8")
         out, err = self._close_inproc(d, "PASS")
         self.assertNotIn("Task 001 done.", out)
-        self.assertIn("pending", self._receipt(td))
+        self.assertIn("## Status\nin_progress", self._receipt(td))   # not closed (task 140: activation writes in_progress)
 
     # ... while the OUTER root PLAN.md in the same two-scope fixture certifies, so
     # the block above is the scope rule, not a fixture that blocks everything
@@ -701,7 +701,7 @@ class ClosePathTailCert(unittest.TestCase):
         (d / "code.py").write_text("x = 1  # comment\n", encoding="utf-8")
         out, err = self._close_inproc(d, "PASS")   # judge WOULD pass…
         self.assertNotIn("Task 001 done.", out)    # …but behavioral blocks first
-        self.assertIn("pending", self._receipt(td))
+        self.assertIn("## Status\nin_progress", self._receipt(td))   # not closed (task 140: activation writes in_progress)
 
     # (c) a FAIL certification blocks
     def test_fail_certification_blocks(self):
@@ -709,7 +709,7 @@ class ClosePathTailCert(unittest.TestCase):
         (d / "docs" / "guide.md").write_text("# new doc\n", encoding="utf-8")
         out, err = self._close_inproc(d, "FAIL")
         self.assertNotIn("Task 001 done.", out)
-        self.assertIn("pending", self._receipt(td))
+        self.assertIn("## Status\nin_progress", self._receipt(td))   # not closed (task 140: activation writes in_progress)
 
     # (c') a None verdict (unparseable/failed judge) → block
     def test_none_verdict_blocks(self):
@@ -1315,7 +1315,7 @@ class RecordsOnlyDelta(unittest.TestCase):
         self._commit_records(d, ".agent/config.json")
         r = self._close(d, env)
         self.assertNotIn("Task 001 done.", r.stdout)
-        self.assertIn("pending", self._receipt(td))
+        self.assertIn("## Status\nin_progress", self._receipt(td))   # not closed (task 140: activation writes in_progress)
 
     def test_a_records_only_commit_reads_fresh(self):
         d, td, env = self._setup()
@@ -1330,7 +1330,7 @@ class RecordsOnlyDelta(unittest.TestCase):
         self._commit_records(d, "code.py")
         r = self._close(d, env)
         self.assertNotIn("Task 001 done.", r.stdout)
-        self.assertIn("pending", self._receipt(td))
+        self.assertIn("## Status\nin_progress", self._receipt(td))   # not closed (task 140: activation writes in_progress)
 
     def test_a_records_only_commit_with_an_uncommitted_code_edit_still_blocks(self):
         d, td, env = self._setup()
@@ -1338,7 +1338,7 @@ class RecordsOnlyDelta(unittest.TestCase):
         (d / "code.py").write_text("x = 3  # not reviewed\n", encoding="utf-8")
         r = self._close(d, env)
         self.assertNotIn("Task 001 done.", r.stdout)
-        self.assertIn("pending", self._receipt(td))
+        self.assertIn("## Status\nin_progress", self._receipt(td))   # not closed (task 140: activation writes in_progress)
 
 
 if __name__ == "__main__":

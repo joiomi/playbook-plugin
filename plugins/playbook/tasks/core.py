@@ -4311,6 +4311,58 @@ def _set_status(task_file: Path, value: str) -> bool:
     return _rewrite(task_file, _t) is not None
 
 
+def _move_status(task_file: Path, source_ok, value: str) -> bool:
+    """Set the live status to `value` only if `source_ok(current)` — decided INSIDE the
+    locked transform, on the bytes just read (tasks 058 / 085 R3: a status read before
+    the lock can be stale by the time the write lands, and the write would then undo a
+    close or a pause another session committed). False = nothing written."""
+    def _t(text: str) -> "str | None":
+        lines = _physical_lines(text, keepends=True)
+        pair = _live_status_pair(lines)
+        if pair is None or not source_ok(lines[pair[1]].strip()):
+            return None
+        _splice_status_value(lines, pair, value)
+        return "".join(lines)
+    return _rewrite(task_file, _t) is not None
+
+
+def mark_in_progress(task_file: Path) -> bool:
+    """Activation's status write (task 140, owner Q10): `pending` → `in_progress`, and
+    nothing else — a task that is done, blocked or already in progress is left alone."""
+    return _move_status(task_file, lambda s: s == "pending", "in_progress")
+
+
+def claim_for_activation(task_file: Path) -> "str | None":
+    """Activation's status step, decided inside the locked transform (task 140, impl
+    panel r2): `pending` → `in_progress`; `in_progress` stays; a task that is `done…`
+    or `blocked` BY NOW — closed or paused by another session after this activation
+    looked it up — is refused: that status is returned and nothing is written. None =
+    the activation may publish its pointer. A task with no readable live status is not
+    refused (it activates as before; there is nothing to write)."""
+    seen: "list[str]" = []
+
+    def _t(text: str) -> "str | None":
+        lines = _physical_lines(text, keepends=True)
+        pair = _live_status_pair(lines)
+        if pair is None:
+            return None
+        cur = lines[pair[1]].strip()
+        seen.append(cur)
+        if cur != "pending":
+            return None
+        _splice_status_value(lines, pair, "in_progress")
+        return "".join(lines)
+    _rewrite(task_file, _t)
+    cur = seen[-1] if seen else ""
+    return cur if (cur.startswith("done") or cur == "blocked") else None
+
+
+def reopen_done_task(task_file: Path) -> bool:
+    """`tasks work <N> --reopen` (task 140, owner Q6): `done…` → `in_progress`, only
+    from a done status."""
+    return _move_status(task_file, lambda s: s.startswith("done"), "in_progress")
+
+
 _FENCE_OPEN_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
 
 
@@ -4541,6 +4593,17 @@ def _compose_blocked(text: str, clean_reason: str, ts: str) -> str:
             f"the task is already `{_src}` — refusing to mark a closed task blocked "
             "(a close committed first); nothing was changed")
     out = list(lines)
+    # Task 140 (owner Q3c): a task that is ALREADY blocked gains the new reason under
+    # the recorded one — it used to be replaced, and the first reason was lost. (After a
+    # resume the old pause is resolved: a new block starts a new record, as before.)
+    if _src == "blocked":
+        sp = _live_section_span(out, "## Blocked")
+        if sp is not None:
+            end = sp[1]
+            while end > sp[0] + 1 and out[end - 1].strip() == "":
+                end -= 1
+            out = out[:end] + [f"> {clean_reason}  (since {ts})"] + out[end:]
+            return "\n".join(out).rstrip("\n") + "\n"
     _splice_status_value(out, pair, "blocked")
     while True:
         sp = _live_section_span(out, "## Blocked")
@@ -4840,6 +4903,32 @@ def _block_reason_from_lines(lines: "list[str]") -> "str | None":
     return None
 
 
+def _block_reasons(task_file: Path) -> "list[str]":
+    """EVERY reason in the live `## Blocked` section, oldest first (task 140: a task
+    blocked twice records both; `Resumed …` stamps are not reasons)."""
+    try:
+        lines = task_file.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    out: "list[str]" = []
+    in_blocked = False
+    for i, s in _iter_nonfenced(lines, unclosed_is_live=True):
+        if _atx_h2_text(lines[i]) == "## Blocked":
+            in_blocked = True
+            continue
+        if in_blocked:
+            if _atx_h2_text(lines[i]) is not None:
+                break
+            if s.startswith(">"):
+                body = s.lstrip(">").strip()
+                if body.startswith("Resumed "):
+                    continue
+                body = re.sub(r"\s*\((?:since|Resumed)[^)]*\)\s*$", "", body).strip()
+                if body:
+                    out.append(body)
+    return out
+
+
 def find_unconsumed_handoff(project_path: Path):
     """The newest task that is BLOCKED with block-reason 'handoff' — an unconsumed
     handoff. Resuming with `tasks work <N>` flips status to in_progress, which is
@@ -4850,13 +4939,27 @@ def find_unconsumed_handoff(project_path: Path):
         try:
             if not _is_blocked(tf):
                 continue
-            reason = _extract_block_reason(tf)
-            if reason and reason.strip().lower() == "handoff":
+            # any reason, not only the first: a handoff on an already-blocked task is
+            # recorded under the earlier reason (task 140, impl panel r1)
+            if any(r.strip().lower() == "handoff" for r in _block_reasons(tf)):
                 if best is None or num > best[0]:
                     best = (num, slug, tf)
         except Exception:
             continue
     return best
+
+
+def number_twins(project_path: Path, folder_name: str) -> "list[str]":
+    """The task folders that share `folder_name`'s NUMBER, when there is more than one
+    (task 140, post-D6 run 2). The session pointer holds a number, so a folder named
+    exactly cannot be activated apart from a twin — the caller refuses instead of
+    activating whichever sorts first. [] = no twin (or `folder_name` has no number)."""
+    num = folder_name.split("-", 1)[0]
+    if not num.isdigit():
+        return []
+    same = sorted(tf.parent.name for _n, _s, tf in _iter_task_dirs(project_path)
+                  if _folder_matches_filter(tf.parent.name, num))
+    return same if len(same) > 1 else []
 
 
 def _folder_matches_filter(folder_name: str, name_filter: str) -> bool:

@@ -67,7 +67,7 @@ _BASELINE = {
     "list": (0, "No tasks found"),
     "ls": (0, "No tasks found"),
     "panel-review": (1, "'panel-review' requires a task number or --prompt"),
-    "models": (None, "Judge pin verdicts"),
+    "models": (0, "Usage: tasks models <subcommand>"),     # task 140: bare = usage, no live check
     "plan-review": (1, "'plan-review' requires a task number"),
     "impl-review": (1, "'impl-review' requires a task number"),
     "judge": (1, "'judge' requires a task number"),

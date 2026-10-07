@@ -430,8 +430,10 @@ def generate_retro_task(
     if gc["pending"] or gc["loose_ends"]:
         lines.append("**Loose ends:**")
         for p in gc["pending"]:
-            work = "has progress" if p["has_work"] else "not started"
-            lines.append(f"- T{p['number']:03d} ({p['title']}): pending, {p['gates']} ({work})")
+            # the status the task has (task 140: `in_progress` since activation writes it)
+            work = ("has progress" if p["has_work"]
+                    else "not started" if p.get("status", "pending") == "pending" else "no gate checked yet")
+            lines.append(f"- T{p['number']:03d} ({p['title']}): {p.get('status', 'pending')}, {p['gates']} ({work})")
         for le in gc["loose_ends"]:
             if "unchecked" in le:
                 lines.append(f"- T{le['number']:03d} ({le['title']}): done but {le['unchecked']} unchecked")
@@ -469,7 +471,7 @@ def generate_retro_task(
         flags = []
         if bare > 0:
             flags.append(f"{bare} bare")
-        if status == "pending" and t["checked_count"] == t["gate_count"] and t["gate_count"] > 0:
+        if status in ("pending", "in_progress") and t["checked_count"] == t["gate_count"] and t["gate_count"] > 0:
             flags.append("done but not closed")
         if t["playbook_type"].startswith("stub"):
             flags.append("stub")
@@ -656,8 +658,9 @@ def analyze_garbage(tasks: list[dict]) -> dict:
     # Pending tasks
     pending = []
     for t in tasks:
-        if t["status"] == "pending":
+        if t["status"] in ("pending", "in_progress"):      # task 140: activated, never closed
             pending.append({
+                "status": t["status"],
                 "number": t["number"],
                 "title": t["title"],
                 "gates": f"{t['checked_count']}/{t['gate_count']}",

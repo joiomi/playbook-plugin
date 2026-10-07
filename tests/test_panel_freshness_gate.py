@@ -1155,7 +1155,7 @@ class ClosePathMatrix(unittest.TestCase):
         r = self._close(d, env)
         self.assertNotIn("Task 001 done.", r.stdout)
         self.assertIn(BLOCK_MARKER, r.stderr)
-        self.assertIn("pending", self._receipt(td))
+        self.assertIn("## Status\nin_progress", self._receipt(td))   # not closed (task 140: activation writes in_progress)
 
     def test_override_needs_reason_then_closes_with_recorded_reason(self):
         d, td, env = self._setup(risk="irreversible", panel_cfg="all")
@@ -1194,7 +1194,7 @@ class ClosePathMatrix(unittest.TestCase):
         self.assertNotIn("Task 001 done.", r.stdout)
         self.assertIn(BLOCK_MARKER, r.stderr)
         self.assertIn("risk is assertive", r.stderr)  # grok#3: names the class
-        self.assertIn("pending", self._receipt(td))
+        self.assertIn("## Status\nin_progress", self._receipt(td))   # not closed (task 140: activation writes in_progress)
 
     def test_assertive_fresh_closes_with_fresh_clause(self):
         d, td, env = self._setup(risk="assertive", panel_cfg="all",
@@ -1213,7 +1213,7 @@ class ClosePathMatrix(unittest.TestCase):
         r = self._close(d, env)
         self.assertNotIn("Task 001 done.", r.stdout)
         self.assertIn(BLOCK_MARKER, r.stderr)
-        self.assertIn("pending", self._receipt(td))
+        self.assertIn("## Status\nin_progress", self._receipt(td))   # not closed (task 140: activation writes in_progress)
 
     def test_assertive_nested_fresh_closes(self):
         # Negative control: code_roots set, but NO post-panel nested edit — the
@@ -1258,7 +1258,7 @@ class ClosePathMatrix(unittest.TestCase):
         r = self._close(d, env)
         self.assertNotIn("Task 001 done.", r.stdout)
         self.assertIn(BLOCK_MARKER, r.stderr)
-        self.assertIn("pending", self._receipt(td))
+        self.assertIn("## Status\nin_progress", self._receipt(td))   # not closed (task 140: activation writes in_progress)
 
     def test_reversible_stale_still_advisory_under_all(self):
         # O1 negative control: the gate did NOT widen to reversible — a truly

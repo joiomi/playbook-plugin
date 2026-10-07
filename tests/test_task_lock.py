@@ -222,7 +222,9 @@ class NoUnapprovedDirectWriters(unittest.TestCase):
             "lock file plus a content compare-and-swap, not the task lock",
         ("lifecycle.py", "atomic_write(session_state"):
             "the SESSION POINTER is a different resource (one file per session, "
-            "written by `tasks work`); the guard re-reads it rather than locking",
+            "written by `tasks work`); the guard re-reads it rather than locking. "
+            "Since task 140 `tasks work` writes a prepared copy beside it and renames "
+            "that into place after the task's status steps",
         ("lifecycle.py", 'atomic_write(session_dir / "current_state"'):
             "the same session pointer",
         ("review.py", "atomic_write(judge_log"):

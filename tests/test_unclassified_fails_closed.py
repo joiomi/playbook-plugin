@@ -339,7 +339,7 @@ class CloseEndToEnd(unittest.TestCase):
         self.assertNotIn("Task 001 done.", r.stdout)
         # ...and nothing was recorded: a blocked close must change no state.
         body = (d / ".agent/tasks/001-t/task.md").read_text(encoding="utf-8")
-        self.assertIn("pending", body)
+        self.assertIn("## Status\nin_progress", body)      # not closed (task 140)
         self.assertNotIn("## Status\ndone", body)
 
     def test_the_block_is_recoverable_by_classifying(self):

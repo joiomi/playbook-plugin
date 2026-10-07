@@ -108,8 +108,8 @@ class TestReadoptFullyGated(WorkReadoptBase):
         self.assertTrue(self.pointer.exists(), "no session pointer was written")
         self.assertEqual(self.pointer.read_text(encoding="utf-8").strip(), "056")
         # Re-adoption must NOT close the task behind the user's back — `work
-        # done` stays the only writer of ## Status.
-        self.assertEqual(status_of(tf), "pending")
+        # done` stays the only writer of `done` (task 140: activation writes in_progress).
+        self.assertEqual(status_of(tf), "in_progress")
 
     def test_in_progress_fully_gated_task_is_readopted(self):
         """`_is_done` only special-cases `done`, and `_find_active_task` skips
@@ -140,7 +140,7 @@ class TestReadoptFullyGated(WorkReadoptBase):
         self.assertEqual(first.returncode, 0, first.stderr)
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertEqual(self.pointer.read_text(encoding="utf-8").strip(), "059")
-        self.assertEqual(status_of(tf), "pending")
+        self.assertEqual(status_of(tf), "in_progress")
 
     def test_pointer_loss_mid_task_is_recoverable_end_to_end(self):
         """The field scenario in full: activate, lose the pointer the way the GC
@@ -168,7 +168,7 @@ class TestUntouchedBranches(WorkReadoptBase):
 
     def test_done_task_still_reopens(self):
         tf = write_task(self.project, "061", "done", gates_checked=True)
-        r = self.run_tasks("work", "061")
+        r = self.run_tasks("work", "061", "--reopen")     # task 140: a reopen is asked for
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("reopening", r.stdout)
         self.assertEqual(status_of(tf), "in_progress",
@@ -186,7 +186,7 @@ class TestUntouchedBranches(WorkReadoptBase):
         r = self.run_tasks("work", "063")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertNotIn("re-adopting", r.stdout)
-        self.assertEqual(status_of(tf), "pending")
+        self.assertEqual(status_of(tf), "in_progress")
 
     def test_missing_task_still_fails(self):
         r = self.run_tasks("work", "099")
@@ -226,13 +226,13 @@ class TestAdjacentBehaviour(WorkReadoptBase):
         self.assertEqual(r.returncode, 1,
                          "the policy-free auto-close is back: " + r.stdout)
         self.assertIn("tasks work done", r.stderr + r.stdout)
-        self.assertEqual(status_of(prev), "pending",
+        self.assertEqual(status_of(prev), "in_progress",
                          "the switch path wrote ## Status again")
         forced = self.run_tasks("work", "071", "--force")
         self.assertEqual(forced.returncode, 0, forced.stderr)
-        self.assertEqual(status_of(prev), "pending",
+        self.assertEqual(status_of(prev), "in_progress",
                          "--force must leave the task open, never done")
-        self.assertEqual(status_of(nxt), "pending")
+        self.assertEqual(status_of(nxt), "in_progress")
 
     def test_status_reports_a_readopted_task(self):
         """`tasks status` reads the pointer, so a re-adopted task must show up
@@ -278,7 +278,7 @@ class TestForceInteraction(unittest.TestCase):
         self.assertEqual(self.pointer.read_text(encoding="utf-8").strip(), "081")
         self.assertNotEqual(status_of(open_task), "done",
                             "--force must not silently close the abandoned task")
-        self.assertEqual(status_of(target), "pending")
+        self.assertEqual(status_of(target), "in_progress")
 
     def test_force_work_done_needs_a_reason(self):
         """A forced close must be self-documenting (the 046 fix): --force alone is
@@ -442,7 +442,7 @@ class TestEvidenceContract(WorkReadoptBase):
         tf = write_task(self.project, "076", "pending", gates_checked=True)
         self.assertEqual(self.run_tasks("work", "076").returncode, 0)
         self.assertEqual(self.run_tasks("work", "done").returncode, 0)
-        self.assertEqual(self.run_tasks("work", "076").returncode, 0)  # reopen
+        self.assertEqual(self.run_tasks("work", "076", "--reopen").returncode, 0)  # reopen
         self.assertEqual(self.run_tasks("work", "done").returncode, 0)
         body = tf.read_text(encoding="utf-8")
         self.assertEqual(body.count("## Verification Receipt"), 1, body)
