@@ -70,6 +70,37 @@ fi
 
 # Read stdin (PreToolUse JSON)
 INPUT=$(cat)
+# The payload as the host sent it: the session-id injection answers with the
+# call's own tool input (task 118), never the normalized copy built below.
+PB_RAW_INPUT="$INPUT"
+
+# Task 118 (gauntlet 2 G2-04, G2-28): answer a tasks-CLI call with its OWN tool
+# input, only `command` prefixed with the session id. A host replaces the tool
+# input with updatedInput: `{"command": …}` alone made grok deny every such call
+# (its schema needs `description`) and Claude drop the call's description,
+# timeout and run_in_background. Built from the raw payload (grok's `toolInput`;
+# the normalized copy carries added alias keys the tool never sent); the id goes
+# as argv and the payload on stdin, so nothing is pasted into Python source. If
+# it cannot be built: a plain allow with no updatedInput, never a broken object.
+emit_session_injection() {
+    local updated=""
+    updated=$(printf '%s' "$PB_RAW_INPUT" | python3 -I -c '
+import json, sys
+d = json.loads(sys.stdin.buffer.read().decode("utf-8"))
+ti = d.get("tool_input")
+if not isinstance(ti, dict):
+    ti = d.get("toolInput")
+if not isinstance(ti, dict) or not isinstance(ti.get("command"), str):
+    sys.exit(1)
+ti = dict(ti)
+ti["command"] = "export PLAYBOOK_SESSION_ID=" + sys.argv[1] + "; " + ti["command"]
+sys.stdout.write(json.dumps(ti))
+' "$SESSION_ID" 2>/dev/null) || updated=""
+    if [ -n "$updated" ]; then
+        printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","updatedInput":%s}}\n' "$updated"
+    fi
+    exit 0
+}
 
 block_unreadable_payload() {
     cat >&2 <<'MSG'
@@ -214,12 +245,7 @@ if [ -n "$PLAYBOOK_EVAL_CONFIG" ] && [ -f "$PLAYBOOK_EVAL_CONFIG" ]; then
             CMD=$(echo "$INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null || echo "")
             fi
             if echo "$CMD" | grep -qE 'tasks\s+(work|status|bootstrap|freehand|retro|new)' && [ -n "$SESSION_ID" ]; then
-                UPDATED_CMD="export PLAYBOOK_SESSION_ID=$SESSION_ID; $CMD"
-                JSON_CMD=$(python3 -c "import json; print(json.dumps('$UPDATED_CMD'))" 2>/dev/null)
-                cat <<EOF
-{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","updatedInput":{"command":${JSON_CMD}}}}
-EOF
-                exit 0
+                emit_session_injection
             fi
         fi
         echo '{}'; exit 0
@@ -510,12 +536,7 @@ MSG
 
     # Inject PLAYBOOK_SESSION_ID into tasks CLI commands via updatedInput
     if [ -n "$SESSION_ID" ] && echo "$CMD" | grep -qE '(^|[;&|] *)(([^ ]*/)?)tasks (work|status|bootstrap|freehand|retro|new)'; then
-        UPDATED_CMD="export PLAYBOOK_SESSION_ID=$SESSION_ID; $CMD"
-        JSON_CMD=$(echo "$UPDATED_CMD" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read().rstrip()))" 2>/dev/null)
-        cat <<EOFX
-{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","updatedInput":{"command":${JSON_CMD}}}}
-EOFX
-        exit 0
+        emit_session_injection
     fi
 fi
 

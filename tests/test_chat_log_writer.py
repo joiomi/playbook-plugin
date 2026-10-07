@@ -58,6 +58,61 @@ class ChatLogWriter(_ChatLogFixture):
         text = self.log.read_text(encoding="utf-8")
         self.assertRegex(text, r"`HOST` \(codex/pid-clw\)")
 
+    def test_a_long_message_is_kept_whole_up_to_50000_chars(self):
+        # Task 127 (gauntlet 2 R19, owner Q-C (b) 2026-09-29): every message was cut at
+        # 500 characters — a long instruction reached the log and Recent Chat mutilated.
+        long = "start " + ("word " * 2000) + "END-MARK"                 # ~10,000 chars
+        self._run(long)
+        self.assertIn("END-MARK", self.log.read_text(encoding="utf-8"))
+
+    def test_beyond_50000_chars_the_message_is_cut_and_says_so(self):
+        huge = "x" * 60000
+        self._run(huge)
+        text = self.log.read_text(encoding="utf-8")
+        self.assertIn("x" * 50000 + "...[10000 chars removed]", text)
+        self.assertNotIn("x" * 50001, text)
+
+    def test_the_cap_counts_characters_not_bytes_under_a_c_locale(self):
+        # Task 138 G2-2 (sonnet, codex-medium): bash's ${#v} and ${v:0:N} count BYTES under
+        # LC_ALL=C (and on Git-Bash without a UTF-8 LANG): 30,000 `ă` (60,000 bytes) were cut
+        # although under the cap, and a cut could split a character into invalid UTF-8.
+        c = {"LC_ALL": "C", "LANG": "C"}
+        self._run("ă" * 30000 + "END", extra_env=c)
+        text = self.log.read_bytes().decode("utf-8")                      # strict: whole characters
+        self.assertIn("ă" * 30000 + "END", text)
+        self.assertNotIn("chars removed", text)
+        self._run("ă" * 50001, extra_env=c)
+        text = self.log.read_bytes().decode("utf-8")
+        self.assertIn("ă" * 50000 + "...[1 chars removed]", text)
+        self.assertNotIn("ă" * 50001, text)
+
+
+class CodexChatLogWriter(unittest.TestCase):
+    """Task 138 G2-1 (opus): the Codex prompt writer kept its own 500-character cap, so
+    task 127's 50,000 (owner Q-C (b): per message, whatever the provider) missed it."""
+
+    def setUp(self):
+        import sys
+        sys.path.insert(0, str(REPO_ROOT / "plugins" / "playbook"))
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.project = Path(self._tmp.name)
+        (self.project / ".agent" / "tasks").mkdir(parents=True)
+
+    def _log(self, prompt):
+        from provider import codex_hooks
+        self.assertTrue(codex_hooks.append_prompt_to_chat_log(self.project, SID, prompt))
+        return (self.project / ".agent" / "chat_log.md").read_text(encoding="utf-8")
+
+    def test_a_long_codex_prompt_is_kept_whole_up_to_50000_chars(self):
+        text = self._log("start " + ("word " * 2000) + "END-MARK")
+        self.assertIn("END-MARK", text)
+
+    def test_beyond_50000_chars_a_codex_prompt_is_cut_and_says_so(self):
+        text = self._log("y" * 60000)
+        self.assertIn("y" * 50000 + "...[10000 chars removed]", text)
+        self.assertNotIn("y" * 50001, text)
+
 
 class HarnessPromptsAreNotUserWords(_ChatLogFixture):
     """PLAN S5a (task 088): a UserPromptSubmit payload that BEGINS with a harness

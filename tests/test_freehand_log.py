@@ -38,7 +38,7 @@ class FreehandLog(unittest.TestCase):
                               cwd=self.project, env=env, text=True, capture_output=True)
 
     def test_freehand_log_parses_the_z_timestamp(self):
-        c = self.run_tasks("freehand", "fix-thing")
+        c = self.run_tasks("freehand")
         self.assertEqual(c.returncode, 0, f"freehand create failed: {c.stderr}")
         # freehand log reads chat_log.md — provide one with a recent entry so the
         # command runs to completion (the bug was the timestamp parse, before this).

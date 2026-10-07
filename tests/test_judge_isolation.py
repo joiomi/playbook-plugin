@@ -545,8 +545,13 @@ class TamperGuardTest(unittest.TestCase):
             self.assertIsNone(before["porcelain"])       # readable status failed
             self.assertTrue(before["is_git"])            # production recognizes the real repo
             changes = treview._detect_tamper(d, tf, before)   # after also fails → both None
+            full = treview._detect_tamper_full(d, tf, before)
         self.assertTrue(any("degraded" in c for c in changes),
                         "a readable git-status failure on a git repo must fail closed")
+        # Task 121 (review): since task 059 that is a CAUTION — the guard could not run,
+        # which is no evidence of a write — so no tamper banner and the verdict is kept.
+        self.assertEqual(full["mutations"], [])
+        self.assertTrue(any("degraded" in c for c in full["cautions"]), full)
 
     def test_is_git_probe_walks_ancestors(self):
         # panel round-1 codex:sol: a Playbook root can be nested inside a parent
@@ -692,6 +697,31 @@ class TamperGuardTest(unittest.TestCase):
         self.assertIn("TAMPER DETECTED", banner)
         self.assertIn("rogue.md", banner)
         self.assertIn("Do NOT ingest", banner)
+
+    def test_banner_names_no_culprit_it_cannot_see(self):
+        # Task 121 (gauntlet 2 G2-26): the guard compares the tree before and after, so a
+        # judge's write and the operator's own redirect into the project look the same;
+        # the banner said "a judge modified the repo" for the latter.
+        banner = treview._tamper_banner(["working tree: ?? .agent/.q07.out"])
+        self.assertNotIn("a judge modified", banner)
+        self.assertIn("the repo changed while the judges ran", banner)
+        self.assertIn("another process", banner)
+        self.assertIn("your own", banner)
+        self.assertIn("review is void", banner)
+
+    def test_banner_never_tells_the_operator_to_discard_their_own_work(self):
+        # Task 138 G3-9 (opus): having said the change may be the operator's own, the banner
+        # still told them to `git checkout -- <path>` — followed literally, that throws
+        # their legitimate edits away. Inspect first; restore only what nobody made.
+        banner = treview._tamper_banner(["working tree:  M src/app.py"])
+        lines = banner.splitlines()
+        restore = next(i for i, l in enumerate(lines) if "git checkout --" in l)
+        inspect = next(i for i, l in enumerate(lines) if "git status" in l)
+        self.assertLess(inspect, restore)
+        self.assertIn("keep", banner.lower())
+        self.assertRegex(" ".join(lines[restore - 1:restore + 1]), r"only")
+        self.assertIn("A judge, or another process writing into the project during the run (your own "
+                      "commands included), changed it.", " ".join(banner.split()))
 
     def test_no_taskmd_and_non_git_yields_no_signal(self):
         # Promptless panel on a non-git dir with no task.md: nothing to compare,

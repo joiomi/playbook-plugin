@@ -22,11 +22,13 @@ from __future__ import annotations
 
 import importlib.util
 import os
+from collections import Counter
 import subprocess
 from tests._bashcheck import bash_or_skip
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
@@ -382,6 +384,336 @@ class InitWritesBothFiles(unittest.TestCase):
         before = text
         self._run_init(proj)
         self.assertEqual((proj / "CLAUDE.md").read_text(encoding="utf-8"), before)
+
+
+
+# ── task 114: no silent loss ───────────────────────────────────────────────────────────────
+# The gauntlet's R06 plant (task 109, PLAN S11): three shapes written INSIDE the template's
+# `## Don't` section. A refresh deleted all three while init printed "project content preserved".
+R06_PLANT = """
+```md
+# Mine
+keep me (Z1: fence opened inside a template section, closed after a project heading)
+```
+
+- stale item
+---
+kept after a list item (Z2)
+
+Project Title
+=============
+setext H1 body (V7)
+"""
+
+
+def _with_plant(base: str, plant: str, before_heading: str = "## Don't") -> str:
+    """`base` with `plant` appended to the END of the section `before_heading` opens."""
+    i = base.index(before_heading)
+    j = base.find("\n## ", i + 1)
+    j = len(base) if j < 0 else j + 1
+    return base[:j].rstrip("\n") + "\n" + plant + "\n" + base[j:]
+
+
+class NoSilentLoss(unittest.TestCase):
+    """Every non-blank line of the existing file ends up in the merged file or in a backup, and
+    the status says which (task 114)."""
+
+    def setUp(self):
+        self.fresh = cmm.merge_claude_md(TEMPLATE, None, "P")
+
+    def _main(self, text: str, raw: bool = False):
+        root = Path(tempfile.mkdtemp())
+        (root / "CLAUDE.md").write_bytes(text if raw else text.encode("utf-8"))
+        r = subprocess.run([sys.executable, str(SCRIPTS / "claude-md-merge.py"),
+                            str(SCRIPTS / "CLAUDE.md.template"), str(root), "P"],
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        return root, r.stdout
+
+    @staticmethod
+    def _backups(root: Path):
+        d = root / ".agent" / "backups"
+        return sorted(d.glob("CLAUDE.md.*.bak")) if d.is_dir() else []
+
+    def test_the_gauntlet_plant_is_backed_up_and_named(self):
+        planted = _with_plant(self.fresh, R06_PLANT)
+        root, out = self._main(planted)
+        merged = (root / "CLAUDE.md").read_text(encoding="utf-8")
+        status = [ln for ln in out.splitlines() if ln.startswith("CLAUDE.md:")]
+        self.assertEqual(len(status), 1, out)
+        self.assertTrue(status[0].startswith("CLAUDE.md:REPLACED:"), status[0])
+        self.assertIn("## Don't", status[0])
+        self.assertNotIn("preserved", status[0])
+        backups = self._backups(root)
+        self.assertEqual(len(backups), 1, backups)
+        self.assertEqual(backups[0].read_bytes(), planted.encode("utf-8"))   # the old file, whole
+        self.assertIn(str(backups[0].relative_to(root)).replace(os.sep, "/"), status[0])
+        # the Setext part is the project's and stays where it was written
+        self.assertIn("Project Title\n=============\nsetext H1 body (V7)\n", merged)
+        # text inside the template section is replaced, by contract — and was in the backup
+        self.assertNotIn("kept after a list item (Z2)", merged)
+        self.assertNotIn("keep me (Z1", merged)
+
+    def test_every_existing_line_is_kept_or_backed_up_and_counted(self):
+        # the invariant over a set of shapes, each planted inside every template section in turn
+        shapes = {
+            "a line": "my own rule\n",
+            "a list": "- one\n- two\n",
+            "a list then a break": "- stale\n---\nafter\n",
+            "a fenced heading": "```\n# not a heading\n```\n",
+            "a comment": "<!-- my note -->\n",
+            "a Setext part": "My Part\n=======\nits body\n",
+            # after a thematic break: right under a list item it would be that item's content
+            "an indented part": "---\n\n  # Indented Part\nits body\n",
+            "a closing-hash part": "# Closed #\nits body\n",
+            "a level-3 note": "### Mine\ntext\n",
+        }
+        _, sections = cmm.split_sections(self.fresh)
+        headings = [h for h, _b, _p in sections if h]
+        self.assertGreater(len(headings), 5)
+        wrong = []
+        for heading in headings:
+            for name, shape in shapes.items():
+                planted = _with_plant(self.fresh, "\n" + shape, heading)
+                merged, dropped = cmm.merge_report(TEMPLATE, planted, "P")
+                # counted: a line planted twice and kept once is one lost line
+                lost = Counter(ln for ln in planted.splitlines() if ln.strip()) - Counter(merged.splitlines())
+                said = Counter(ln for _sec, ln in dropped)
+                if lost != said or any(sec != heading.strip() for sec, _ln in dropped):
+                    wrong.append((heading, name, "lost", dict(lost), "reported", dropped))
+        self.assertEqual(wrong, [], "\n".join(map(str, wrong[:5])))
+        # D (gemini): the parts are not just "accounted for" — they are KEPT, wherever planted
+        for heading in headings:
+            for name in ("a Setext part", "an indented part", "a closing-hash part"):
+                planted = _with_plant(self.fresh, "\n" + shapes[name], heading)
+                merged, dropped = cmm.merge_report(TEMPLATE, planted, "P")
+                self.assertIn(shapes[name], merged, (heading, name))
+                self.assertEqual(dropped, [], (heading, name))
+
+    def test_project_parts_in_every_level1_form_survive(self):
+        for part in ("Project Title\n=============\nbody V7\n",
+                     "---\n\n  # Indented Title\nbody of the indented part\n",
+                     "---\n\n   # Three spaces\nbody three\n"):
+            planted = _with_plant(self.fresh, "\n" + part)
+            merged, dropped = cmm.merge_report(TEMPLATE, planted, "P")
+            self.assertIn(part, merged, part)
+            self.assertEqual(dropped, [], part)
+
+    def test_a_setext_heading_of_several_lines_is_a_part_and_one_mid_paragraph_is_not(self):
+        two_line = "Project\nTitle on two lines\n=====\nits body\n"
+        planted = _with_plant(self.fresh, "\n" + two_line)
+        merged, dropped = cmm.merge_report(TEMPLATE, planted, "P")
+        self.assertIn(two_line, merged)
+        self.assertEqual(dropped, [])
+        # a paragraph that contains a list item is no heading text: replaced and reported
+        mixed = "intro\n- item\nTitle\n=====\n"
+        merged, dropped = cmm.merge_report(TEMPLATE, _with_plant(self.fresh, "\n" + mixed), "P")
+        self.assertNotIn("intro\n- item", merged)
+        self.assertTrue(dropped)
+
+    def test_two_backups_in_the_same_second_both_survive(self):
+        root = Path(tempfile.mkdtemp())
+        a = cmm.write_backup(root, b"first")
+        b = cmm.write_backup(root, b"second")
+        self.assertNotEqual(a, b)
+        self.assertEqual((a.read_bytes(), b.read_bytes()), (b"first", b"second"))
+
+    def test_a_setext_underline_after_a_list_item_or_quote_is_not_a_part(self):
+        for shape in ("- item\n====\n", "> quoted\n====\n", "    code\n====\n"):
+            planted = _with_plant(self.fresh, "\n" + shape)
+            merged, dropped = cmm.merge_report(TEMPLATE, planted, "P")
+            self.assertNotIn(shape, merged, shape)           # inside the template section: replaced …
+            self.assertTrue(dropped, shape)                  # … and reported
+
+    def test_nothing_dropped_means_no_backup_and_the_old_status(self):
+        root, out = self._main(self.fresh + "\n## Mine\n\nmy own section\n")
+        self.assertEqual(self._backups(root), [])
+        self.assertIn("CLAUDE.md:UNCHANGED", out)
+        stale = self.fresh.replace("## Don't", "## Don't\n", 1)            # a blank line only
+        root, out = self._main(stale)
+        self.assertEqual(self._backups(root), [])
+        self.assertNotIn("REPLACED", out)
+
+    def test_a_second_run_is_unchanged_and_makes_no_second_backup(self):
+        root, _ = self._main(_with_plant(self.fresh, R06_PLANT))
+        first = (root / "CLAUDE.md").read_bytes()
+        r = subprocess.run([sys.executable, str(SCRIPTS / "claude-md-merge.py"),
+                            str(SCRIPTS / "CLAUDE.md.template"), str(root), "P"],
+                           capture_output=True, text=True, timeout=60)
+        self.assertIn("CLAUDE.md:UNCHANGED", r.stdout)
+        self.assertEqual((root / "CLAUDE.md").read_bytes(), first)
+        self.assertEqual(len(self._backups(root)), 1)
+
+    def test_a_crlf_file_is_backed_up_byte_for_byte(self):
+        planted = _with_plant(self.fresh, R06_PLANT).replace("\n", "\r\n").encode("utf-8")
+        root, out = self._main(planted, raw=True)
+        self.assertIn("CLAUDE.md:REPLACED:", out)
+        (backup,) = self._backups(root)
+        self.assertEqual(backup.read_bytes(), planted)
+        merged = (root / "CLAUDE.md").read_bytes()
+        self.assertEqual(merged.count(b"\n"), merged.count(b"\r\n"))
+
+
+class ImplPanelRound1(unittest.TestCase):
+    """Task 114, implementation panel round 1."""
+
+    def setUp(self):
+        self.fresh = cmm.merge_claude_md(TEMPLATE, None, "P")
+
+    def _main(self, raw: bytes):
+        root = Path(tempfile.mkdtemp())
+        (root / "CLAUDE.md").write_bytes(raw)
+        r = subprocess.run([sys.executable, str(SCRIPTS / "claude-md-merge.py"),
+                            str(SCRIPTS / "CLAUDE.md.template"), str(root), "P"],
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        return root, r.stdout
+
+    def test_bytes_that_are_not_utf8_survive_where_the_project_wrote_them(self):
+        # A (gemini, codex x2, opus): `errors="replace"` rewrote them as U+FFFD with no backup
+        stale = self.fresh.replace("## Don't", "## Don't\n\nold template line\n", 1)     # forces a refresh
+        raw = (stale + "\n## Notes\n\n").encode("utf-8") + b"My caf\xe9 notes\n"
+        root, out = self._main(raw)
+        self.assertIn(b"My caf\xe9 notes\n", (root / "CLAUDE.md").read_bytes())
+        self.assertNotIn("�".encode("utf-8"), (root / "CLAUDE.md").read_bytes())
+        # and a non-UTF-8 line INSIDE a template section is reported and backed up like any other
+        raw2 = self.fresh.replace("## Don't", "## Don't\n", 1).encode("utf-8")
+        i = raw2.index(b"## Don't\n") + len(b"## Don't\n")
+        raw2 = raw2[:i] + b"\nna\xefve rule\n" + raw2[i:]
+        root, out = self._main(raw2)
+        self.assertIn("CLAUDE.md:REPLACED:", out)
+        (backup,) = sorted((root / ".agent" / "backups").glob("CLAUDE.md.*.bak"))
+        self.assertEqual(backup.read_bytes(), raw2)
+
+    def test_a_backup_name_is_claimed_exclusively(self):
+        # B (gemini, codex x2): two writers choosing the same absent name overwrote one backup
+        root = Path(tempfile.mkdtemp())
+        real_exists = Path.exists
+        # every writer sees the name as free — only an exclusive claim keeps both
+        with unittest.mock.patch.object(Path, "exists", lambda self: False if self.name.startswith("CLAUDE.md.") else real_exists(self)):
+            a = cmm.write_backup(root, b"first")
+            b = cmm.write_backup(root, b"second")
+        self.assertNotEqual(a, b)
+        self.assertEqual((a.read_bytes(), b.read_bytes()), (b"first", b"second"))
+
+    def test_an_indented_hash_inside_a_list_is_list_content_not_a_part(self):
+        # C (opus): `   # from repo root` under `1. Build:` opened a part and froze every template
+        # section below it (never refreshed again, a fresh copy inserted into the list)
+        custom = "## Setup\n\n1. Build:\n   # from repo root\n   make\n\n"
+        i = self.fresh.index("\n## ") + 1
+        stale = self.fresh.replace("## Don't", "## Don't\n\nold template line\n", 1)
+        planted = stale[:i] + custom + stale[i:]
+        merged, dropped = cmm.merge_report(TEMPLATE, planted, "P")
+        self.assertIn(custom, merged)                                  # the list stays whole
+        self.assertEqual(merged.count("## Don't"), 1)                  # refreshed in place, not duplicated
+        self.assertNotIn("old template line", merged)
+        self.assertEqual([ln for _s, ln in dropped], ["old template line"])
+        for shape in ("- item\n\n   # still the item's\n", "> quote\n>\n  # in the quote? no: a new line\n"):
+            planted = _with_plant(self.fresh, "\n" + shape)
+            merged, _ = cmm.merge_report(TEMPLATE, planted, "P")
+            self.assertEqual(merged.count("## Don't"), 1, shape)
+
+    def test_an_indented_hash_right_under_a_list_is_that_lists_content(self):
+        # Markdown: `  # x` after `- item` (blank line or not) continues the item — it is text of
+        # the template section it sits in, so it is replaced with it, and reported
+        planted = _with_plant(self.fresh, "\n- my item\n\n  # My Title\n")
+        merged, dropped = cmm.merge_report(TEMPLATE, planted, "P")
+        self.assertNotIn("  # My Title", merged)
+        self.assertIn("  # My Title", [ln for _s, ln in dropped])
+        # the same for indented Setext text under a list item
+        planted = _with_plant(self.fresh, "\n- my item\n\n  Item Title\n  ==========\n")
+        merged, dropped = cmm.merge_report(TEMPLATE, planted, "P")
+        self.assertNotIn("  Item Title", merged)
+        self.assertIn("  Item Title", [ln for _s, ln in dropped])
+
+    def test_a_setext_heading_right_under_a_break_or_heading_is_a_part(self):
+        # gemini: a paragraph may start right under a thematic break or an ATX heading
+        for above in ("---\n", "### Notes\n"):
+            part = "Project Title\n=============\nbody\n"
+            planted = _with_plant(self.fresh, "\n" + above + part)
+            merged, dropped = cmm.merge_report(TEMPLATE, planted, "P")
+            self.assertIn(part, merged, above)
+
+
+class ImplPanelRound2(unittest.TestCase):
+    """Task 114, implementation panel round 2 (opus, sonnet)."""
+
+    def setUp(self):
+        self.fresh = cmm.merge_claude_md(TEMPLATE, None, "P")
+
+    def test_every_part_shape_is_stable_over_two_refreshes(self):
+        # opus: an indented part kept on run 1 was read as list content on run 2 (it now sits right
+        # under the template's last list item) — REPLACED, a backup, and the part gone
+        stale = self.fresh.replace("## Don't", "## Don't\n\nold template line\n", 1)
+        for shape in ("\nmy note\n\n  # Mine\nbody\n", "\n---\n\n  # Mine\nbody\n",
+                      "\nProject Title\n=============\nbody\n", "\n---\n\n  Indented Title\n  ==============\nbody\n",
+                      "\n# Plain\nbody\n"):
+            planted = _with_plant(stale, shape)
+            once, _d1 = cmm.merge_report(TEMPLATE, planted, "P")
+            twice, d2 = cmm.merge_report(TEMPLATE, once, "P")
+            self.assertEqual(twice, once, shape)                     # idempotent after the first refresh
+            self.assertEqual(d2, [], shape)
+
+    def test_a_template_heading_in_other_case_is_not_reported_as_dropped(self):
+        # sonnet: `## correctness contract` is the template's section (matched case-insensitively);
+        # re-casing its heading is not text the project loses
+        recased = self.fresh.replace("## Correctness Contract", "## correctness contract", 1)
+        merged, dropped = cmm.merge_report(TEMPLATE, recased, "P")
+        self.assertIn("## Correctness Contract", merged)
+        self.assertEqual(dropped, [])
+
+    def test_an_indented_heading_under_an_indented_paragraph_line_is_text_and_reported(self):
+        # sonnet: "any indented line above" was read as a container; the rule now asks for an
+        # explicit break above an indented heading, which also keeps it stable (opus)
+        planted = _with_plant(self.fresh, "\n    some code\n\n  # After Code\nbody\n")
+        merged, dropped = cmm.merge_report(TEMPLATE, planted, "P")
+        self.assertIn("  # After Code", [ln for _s, ln in dropped])
+        self.assertNotIn("  # After Code", merged)
+
+    def test_an_indented_heading_after_a_paragraph_is_a_part_and_comes_back_unindented(self):
+        # Task 138 G1-4 (codex-high, codex-medium): in Markdown `  # Mine` after a blank line and
+        # a paragraph IS a level-1 heading — it was read as template text and replaced. Kept, its
+        # heading is written without the indent (it renders the same): after a refresh the part
+        # may sit under the template's last list item, where an indented `#` is the item's text.
+        # (a blank line CLOSES a block quote — task 139, opus — so after one it is a heading too)
+        for above in ("my note\n", "### Notes\n", "my note\nmore of it\n", "> quoted\n",
+                      "  > quoted, indented\n"):           # task 139 post-D6 (codex): ≤3 spaces is a quote
+            planted = _with_plant(self.fresh, "\n" + above + "\n  # Mine\nbody\n")
+            merged, dropped = cmm.merge_report(TEMPLATE, planted, "P")
+            self.assertIn("# Mine\nbody\n", merged, above)
+            self.assertNotIn("  # Mine", merged, above)
+            self.assertNotIn("# Mine", [ln.strip() for _s, ln in dropped], above)
+            twice, d2 = cmm.merge_report(TEMPLATE, merged, "P")
+            self.assertEqual((twice, d2), (merged, []), above)
+
+    def test_after_a_list_or_quote_block_it_is_still_that_blocks_text(self):
+        for above in ("- item\n", "1. step\n", "text\n- item\n", "  indented para\n"):
+            planted = _with_plant(self.fresh, "\n" + above + "\n  # Theirs\n")
+            merged, dropped = cmm.merge_report(TEMPLATE, planted, "P")
+            self.assertIn("  # Theirs", [ln for _s, ln in dropped], above)
+
+    def test_init_md_no_longer_promises_every_byte(self):
+        text = (PLUGIN / "commands" / "init.md").read_text(encoding="utf-8")
+        self.assertNotIn("keeps every byte", text)
+        self.assertIn(".agent/backups/CLAUDE.md", text)
+
+
+class InitSaysWhatItReplaced(unittest.TestCase):
+    _run_init = InitWritesBothFiles._run_init
+    _project = InitWritesBothFiles._project
+
+    def test_init_prints_the_replacement_and_the_backup_not_preserved(self):
+        proj = self._project()
+        fresh = cmm.merge_claude_md(TEMPLATE, None, "Fixture Proj")
+        (proj / "CLAUDE.md").write_text(_with_plant(fresh, R06_PLANT), encoding="utf-8")
+        out = self._run_init(proj)
+        line = [ln for ln in out.splitlines() if "CLAUDE.md" in ln and "template" in ln]
+        self.assertEqual(len(line), 1, out)
+        self.assertNotIn("preserved", line[0])
+        self.assertIn("## Don't", line[0])
+        self.assertIn(".agent/backups/CLAUDE.md.", line[0])
+        self.assertEqual(len(list((proj / ".agent" / "backups").glob("CLAUDE.md.*.bak"))), 1)
+        self.assertIn("Project Title\n=============", (proj / "CLAUDE.md").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

@@ -785,7 +785,9 @@ def _normalize_prompt(prompt: str) -> str:
     text = re.sub(r"<ide_selection>[^<]*</ide_selection>", "", text)
     text = text.strip()
 
-    max_len = 500
+    # Task 127 / 138 G2-1 (owner Q-C (b)): 50,000 characters per message, the same
+    # cap as chat-log-hook — whatever the provider.
+    max_len = 50000
     if len(text) > max_len:
         removed = len(text) - max_len
         text = f"{text[:max_len]}...[{removed} chars removed]"

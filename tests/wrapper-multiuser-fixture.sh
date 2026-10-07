@@ -1242,25 +1242,43 @@ _gc_dead_sessions(Path(sys.argv[1]))' "$d2" 2>&1)"; pyrc=$?
     # costs a LIVE pointer, while a missed cleanup is free (the liveness GC
     # reclaims it). `resume` is here because SessionEnd reportedly fires on an
     # interactive /resume while the same process continues.
+    # Task 126 (owner Q-D (b)): a `pid-N` dir is deleted only when the EXITING
+    # process is N — the lowest agent in the hook's own chain. The delete cases
+    # therefore run the hook from a copy of bash named `claude-sh` (an agent by
+    # comm, read from the REAL /proc or ps) whose own $$ is the session id.
+    cp "$(command -v bash)" "$S18_AGENT_DIR/claude-sh"
     for reason in clear resume Clear "" bogus_future_reason logout prompt_input_exit other; do
         d7="$WORK/s18 end-${reason:-empty}"; build_project "$d7" legacy
-        mkdir -p "$d7/.agent/sessions/$OWN"
-        printf '042\n' > "$d7/.agent/sessions/$OWN/current_state"
-        set +e
-        (cd "$d7" && printf '{"reason":"%s"}' "$reason" \
-            | PLAYBOOK_SESSION_ID="$OWN" bash "$END_HOOK" >/dev/null 2>&1); rc=$?
-        set -e
-        assert_eq "$rc" "0" "S18/A2end[$reason] hook exits 0"
         case "$reason" in
             logout|prompt_input_exit|other) expect=delete ;;
             *)                              expect=keep ;;
         esac
         if [ "$expect" = keep ]; then
+            mkdir -p "$d7/.agent/sessions/$OWN"
+            printf '042\n' > "$d7/.agent/sessions/$OWN/current_state"
+            set +e
+            (cd "$d7" && printf '{"reason":"%s"}' "$reason" \
+                | PLAYBOOK_SESSION_ID="$OWN" bash "$END_HOOK" >/dev/null 2>&1); rc=$?
+            set -e
+            assert_eq "$rc" "0" "S18/A2end[$reason] hook exits 0"
             [ -f "$d7/.agent/sessions/$OWN/current_state" ] \
                 && pass "S18/A2end[${reason:-<empty>}] KEEPS the active-task pointer" \
                 || fail "S18/A2end[${reason:-<empty>}] deleted a live pointer (fail-open is inverted)"
         else
-            [ ! -d "$d7/.agent/sessions/$OWN" ] \
+            set +e
+            (cd "$d7" && unset PLAYBOOK_PROC_ROOT && "$S18_AGENT_DIR/claude-sh" -c '
+                sid="pid-$$"
+                mkdir -p ".agent/sessions/$sid"
+                printf "042\n" > ".agent/sessions/$sid/current_state"
+                printf "%s" "$sid" > .agent/.s18-sid
+                printf "{\"reason\":\"%s\"}" "$1" | PLAYBOOK_SESSION_ID="$sid" bash "$2" >/dev/null 2>&1
+                rc=$?
+                exit $rc' _ "$reason" "$END_HOOK"); rc=$?
+            set -e
+            assert_eq "$rc" "0" "S18/A2end[$reason] hook exits 0"
+            sid=$(cat "$d7/.agent/.s18-sid" 2>/dev/null)
+            # (Windows has no process walk: it keeps the old delete-on-exit)
+            [ -n "$sid" ] && [ ! -d "$d7/.agent/sessions/$sid" ] \
                 && pass "S18/A2end[$reason] still cleans up the session dir (process is going away)" \
                 || fail "S18/A2end[$reason] left a session dir behind"
         fi

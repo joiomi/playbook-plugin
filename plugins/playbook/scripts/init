@@ -596,6 +596,8 @@ while IFS= read -r line; do
     case "$line" in
         CLAUDE.md:CREATED)    CREATED+=("CLAUDE.md (from template)") ;;
         CLAUDE.md:MERGED)     CREATED+=("CLAUDE.md (template sections merged — project content preserved)") ;;
+        # task 114: text the merge replaced is backed up first and named — never "preserved"
+        CLAUDE.md:REPLACED:*) CREATED+=("CLAUDE.md (${line#CLAUDE.md:REPLACED:})") ;;
         CLAUDE.md:UNCHANGED)  SKIPPED+=("CLAUDE.md (already current)") ;;
         .gitignore:CREATED)   CREATED+=(".gitignore (playbook runtime-state block)") ;;
         .gitignore:APPENDED)  CREATED+=(".gitignore playbook runtime-state block (appended)") ;;

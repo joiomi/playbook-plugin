@@ -1,7 +1,7 @@
 {
   "$schema": "guarantee-ledger.schema.json",
   "schema_version": 1,
-  "ledger_version": "2026-10-05",
+  "ledger_version": "2026-10-07",
   "guarantees": [
     {
       "id": "PB-TASK-ACTIVATE",
@@ -6096,7 +6096,7 @@
             "reference": "TamperGuardTest.test_non_git_porcelain_none_is_not_flagged"
           },
           "limitations": [
-            "Fails CLOSED via an is_git (.git probe that walks ancestors) when the readable git status --porcelain returns None on a git repo, symmetric with the -z z_read_ok guard; a genuine non-git repo (is_git False) stays the documented uncontained fallback with no alarm. The degraded-guard signal currently routes through the tamper banner/hard-abort like the z_read_ok signal (a known over-assertion of 'a judge modified the repo' for a guard-could-not-verify state); a follow-up should give degraded-guard warnings a distinct advisory path that keeps completed verdicts."
+            "Fails CLOSED via an is_git (.git probe that walks ancestors) when the readable git status --porcelain returns None on a git repo, symmetric with the -z z_read_ok guard; a genuine non-git repo (is_git False) stays the documented uncontained fallback with no alarm. Since task 059 that degraded signal is a CAUTION, not a mutation: the review keeps its completed verdict, prints the degraded-guard notice instead of the tamper banner (panel and single-judge paths alike), and a panel records `**Tamper guard:** degraded` in its round header (review.py, the caution branch after the mutation check). This test pins the caution side (`_detect_tamper_full`: the entry lands in `cautions`, `mutations` empty); the kept verdict, the absent banner, the degraded notice and the mark are pinned end to end by `tests/test_tamper_scope.py` `PanelDegradedKeepsVerdict.test_degraded_panel_is_kept_and_recorded` (round header) and `SingleDegradedKeepsFindings.test_degraded_single_review_is_kept_and_marked`. The tamper banner itself names no writer since task 121: it says the repo changed while the judges ran — a judge, or another process."
           ]
         },
         {
@@ -6958,7 +6958,7 @@
     {
       "id": "PB-INIT-IDEMPOTENT",
       "category": "installation-and-upgrade",
-      "statement": "Re-running initialization refreshes template-owned CLAUDE.md sections in place, preserves unrelated project content (within the heading-recognition limitations listed on its proofs) and a seeded pointer, and appends the gitignore block exactly once.",
+      "statement": "Re-running initialization refreshes template-owned CLAUDE.md sections in place, preserves unrelated project content (within the heading-recognition limitations listed on its proofs) and a seeded pointer, never drops text silently — whenever a refresh replaces text the file held, the previous file is first saved byte-for-byte under .agent/backups/ and init names the sections, the line count and the backup — and appends the gitignore block exactly once.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/claude-md-merge.py",
@@ -6996,11 +6996,24 @@
         {
           "type": "executable integration",
           "path": "tests/test_init_claude_md.py",
+          "reference": "NoSilentLoss.test_every_existing_line_is_kept_or_backed_up_and_counted",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_init_claude_md.py",
+            "reference": "NoSilentLoss.test_nothing_dropped_means_no_backup_and_the_old_status"
+          },
+          "limitations": [
+            "Nine insertion shapes planted into every template section of the current template in turn; the invariant is checked on merge_report's result (every non-blank line of the existing file is in the merged text or reported, counted, with its section). The backup write itself is proven through main() by NoSilentLoss.test_the_gauntlet_plant_is_backed_up_and_named and through the real scripts/init by InitSaysWhatItReplaced."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_init_claude_md.py",
           "reference": "ProjectPartAfterTemplateSections.test_workspace_project_part_survives_merge",
           "boundary": "unit",
           "negative_control": null,
           "limitations": [
-            "Headings are ATX lines outside CLOSED fenced code blocks and CLOSED <!-- --> comments that start a line; Setext headings, headings indented by 1-3 spaces and ATX headings with closing hashes (`## CLI ##`) are not recognised or matched (a Setext or indented `#` part below a template section is still deleted), and other HTML blocks (<div> ...) and a comment opened mid-line are not tracked, so a `#`/`##` line inside one counts as a heading. A template heading is refreshed only at its first occurrence outside the project's `#` parts; a template section the file lacks is inserted above the first such part, so a file an older merge gave a template section BELOW its part — or a future template section named like one inside the part — gets that section once more above it (duplicate template text once, then stable). Parked for S11 (task 093 round 3): a fence or comment opened inside a template section and closed only after the project's `#` heading masks the heading and the part is deleted with the section; a `---` right under a list item or blockquote is taken as a Setext underline and deleted with a refreshed template section (task 093)."
+            "Headings are ATX lines (a level-1 one may be indented by up to three spaces when a thematic break `---` is the nearest non-blank line above it — under a list item it would be that item's content, and the break, carried with the part, keeps the reading stable over refreshes) and Setext level-1 headings (text of one or more lines; indented text under the same break rule), task 114, outside CLOSED fenced code blocks and CLOSED <!-- --> comments that start a line; headings indented by 1-3 spaces below level 1 and ATX headings with closing hashes (`## CLI ##`) are not matched as template sections, and other HTML blocks (<div> ...) and a comment opened mid-line are not tracked, so a `#`/`##` line inside one counts as a heading. A template heading is refreshed only at its first occurrence outside the project's `#` parts; a template section the file lacks is inserted above the first such part, so a file an older merge gave a template section BELOW its part — or a future template section named like one inside the part — gets that section once more above it (duplicate template text once, then stable). Text written INSIDE a template-owned section — including a fence or comment opened there and closed only after a project `#` heading, and a `---` right under a list item or blockquote — is replaced with the section by contract; since task 114 it is never lost silently (the backup proof below). A file that is not UTF-8 is merged byte-preserving (surrogateescape); two init runs on one project at the same time are not serialized (each keeps its own backup)."
           ]
         },
         {
@@ -7084,7 +7097,7 @@
       "owner": [
         {
           "path": "plugins/playbook/commands/upgrade.md",
-          "reference": "section:3. Re-add marketplace and install"
+          "reference": "section:3. Update the plugin"
         },
         {
           "path": "plugins/playbook/tasks/hooks_check.py",
@@ -7108,6 +7121,19 @@
             "reference": "CandidatePathTests.test_installed_playbook_paths_soft_on_missing_manifest"
           },
           "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_wrapper_points_home.py",
+          "reference": "UpgradePullsAReleaseClone.test_a_directory_marketplace_that_is_a_clone_is_pulled",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_wrapper_points_home.py",
+            "reference": "UpgradePullsAReleaseClone.test_any_other_source_is_left_to_marketplace_update"
+          },
+          "limitations": [
+            "Task 138 G1-2: runs upgrade.md's step-2 pull block as written, under a temporary HOME, against a git clone one commit behind its origin; the `claude plugin` commands themselves are not run."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -7121,7 +7147,7 @@
       "status": "partially_evidenced",
       "missing_evidence_or_limitation": [
         "Packaged upgrade, stale-cache selection, and post-upgrade provider behavior are untested.",
-        "Upgrade is snapshot-less: unlike scripts/init (now transactional — see PB-INSTALL-ROLLBACK), this is a Claude skill whose remove-old-plugin / re-add / reinstall steps have no rollback wrapper. The reinit it triggers rolls itself back, but a failure between removing the old copy and completing the new install can still leave a mixed or absent installation; a transactional upgrade is not claimed.",
+        "Upgrade is snapshot-less: unlike scripts/init (now transactional — see PB-INSTALL-ROLLBACK), this is a Claude skill whose steps (pull a release clone, `claude plugin marketplace update`, `claude plugin update`, restart, re-init — in place since task 115/138) have no rollback wrapper. The reinit it triggers rolls itself back, but a failure inside Claude Code's own plugin update can still leave a mixed installation; a transactional upgrade is not claimed.",
         "Task 100 (PLAN S8 binding audit, 2026-09-27) NARROWED `before fallback discovery` to `rather than by globbing`: the cited proof asserts the manifest installPath is read and a foreign plugin's path is not; no test asserts the ORDER of candidate_hooks_paths' sources. The update + re-init steps are the skill's prose (commands/upgrade.md), untested — see the snapshot-less bound above."
       ],
       "follow_up_phases": [
@@ -7162,7 +7188,7 @@
         },
         {
           "path": "plugins/playbook/commands/upgrade.md",
-          "reference": "section:2. Remove old plugin"
+          "reference": "section:2. Refresh the marketplace you installed from"
         }
       ],
       "failure_consequence": "Critical",
@@ -7215,7 +7241,7 @@
       "status": "partially_evidenced",
       "missing_evidence_or_limitation": [
         "scripts/init is now transactional (init_txn.py snapshots every file it may modify and, on any non-zero exit, restores the pre-init state and removes what it created), proven on the host OS by three induced-failure integration tests plus a negative control. Two boundaries remain unproved.",
-        "Upgrade is a Claude skill (commands/upgrade.md), NOT scripts/init, and remains snapshot-less: it re-runs init (which now rolls itself back), but the skill's own remove-then-reinstall steps have no transactional wrapper, so a mid-upgrade failure is not proven rollback-safe here. See PB-UPGRADE-INSTALLED-COPY.",
+        "Upgrade is a Claude skill (commands/upgrade.md), NOT scripts/init, and remains snapshot-less: it re-runs init (which now rolls itself back), but the skill's own in-place refresh (clone pull, marketplace update, plugin update) has no transactional wrapper, so a mid-upgrade failure is not proven rollback-safe here. See PB-UPGRADE-INSTALLED-COPY.",
         "Interrupt coverage is a trapped SIGTERM on the host OS; real power-loss durability and a controlled interruption on windows-git-bash are the pending live-platform evidence.",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
       ],
@@ -7315,7 +7341,7 @@
     {
       "id": "PB-SANDBOX-READ-NETWORK",
       "category": "sandbox",
-      "statement": "Sandbox containment is write-only: on Linux (bubblewrap) and macOS (seatbelt) it denies project writes while leaving the whole filesystem readable and the network reachable by design, because judges invoke provider CLIs that call model APIs; Windows has no containment backend, so judges there run uncontained. The only network isolation is an opt-in bwrap --unshare-net jail that fails loudly on backends that cannot honor it.",
+      "statement": "Sandbox containment is write-only: on Linux (bubblewrap) and macOS (seatbelt) it denies project writes while leaving the whole filesystem readable and the network reachable by design, because judges invoke provider CLIs that call model APIs — except that a read-only (judge) sandbox cannot read the conversation records (`.agent/chat_log.md`, `.agent/sessions/`, `.agent/bash_history`, their rotated/archived copies, in `.agent`, each lane under it and the real directory behind a symlinked lane — resolved once, so the judge's link points at the masked directory; `sessions.*` archives too; task 125, task 139), including ones created or renamed into place while it runs (task 138), unless it is started with --keep-records (the conversation monitor only); Windows has no containment backend, so judges there run uncontained. The only network isolation is an opt-in bwrap --unshare-net jail that fails loudly on backends that cannot honor it.",
       "owner": [
         {
           "path": "plugins/playbook/provider/sandbox.py",
@@ -7376,6 +7402,19 @@
           },
           "limitations": [
             "Linux bubblewrap only; skipped where bwrap is unavailable. Probes the namespace interface set via socket.if_nameindex(), not an outbound connection."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_judge_read_mask.py",
+          "reference": "LiveBwrapMask.test_a_judge_reads_no_chat_but_the_rest_of_the_project",
+          "boundary": "real-os",
+          "negative_control": {
+            "path": "tests/test_judge_read_mask.py",
+            "reference": "LiveBwrapMask.test_negative_control_a_worker_still_reads_them"
+          },
+          "limitations": [
+            "Task 125 (owner decision 2026-10-02, gauntlet 2 G2-05): Linux bubblewrap only, skipped where bwrap is unusable; a canary written to chat_log.md, its rotated copy, bash_history and a lane's chat_log.md is unreadable (PermissionError — the read-only /dev/null bind is nodev) and sessions/ lists empty, while task.md and source files still read. Task 138 adds live proofs in the same class: a record created after the argv is built and a new lane (test_a_record_created_after_launch_stays_hidden), a rename over chat_log.md while the judge runs (test_a_rename_over_the_log_during_the_run_stays_hidden), a symlinked lane at both paths (test_a_symlinked_lane_is_hidden_at_both_paths), an unreadable lane before a readable one (test_an_unreadable_lane_does_not_unmask_the_next_one), and the monitor's --keep-records sandbox still reading sessions (test_a_keep_records_sandbox_reads_the_sessions). The seatbelt rules are name patterns pinned as generated text and matched with Python's re (Masks.test_seatbelt_judge_mode_denies_records_by_name_last), not executed — no macOS lane runs them live. Records deeper than one lane level are not covered; ~/.claude/projects transcripts and .agent/monitor stay readable; Windows has no backend."
           ]
         }
       ],
@@ -7819,6 +7858,19 @@
             "reference": "RefIntegrityTest.test_clean_pair"
           },
           "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_ref_integrity.py",
+          "reference": "RefIntegrityTest.test_the_targets_own_old_problems_are_inherited_and_the_sources_are_new",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_ref_integrity.py",
+            "reference": "RefIntegrityTest.test_outside_a_merge_a_base_without_the_map_fails_closed"
+          },
+          "limitations": [
+            "Task 122 (gauntlet 2 G2-29): on real temp git merges whose merge base predates MIND_MAP.md (a readable commit without the file — `rev-parse <ref>^{commit}` + `ls-tree --full-tree`), `--base` compares against the pre-merge target tip that the tool reads from git's merge state — HEAD while MERGE_HEAD exists, HEAD^1 once HEAD is the merge commit (test_after_the_merge_commit_the_tip_is_head_first_parent) — never a caller-chosen ref (the CLI has no such option: test_the_cli_takes_no_baseline_but_the_merge_base): a slug the source brings is a NEW finding while the target's own dangling slug is inherited; the archive check still runs (test_the_archive_check_still_runs_against_the_target_tip) and only for the merge whose base is --base — a later merge at HEAD fails closed (test_a_later_merge_at_head_is_not_the_merge_under_check, task 138); --remap against a tip that has a map fails closed, since either side may be the renumbered one (test_remap_against_a_target_tip_with_a_map_fails_closed), while with no map at the tip it changes nothing (test_remap_with_no_map_at_the_target_tip_still_runs). With no map at the tip either the base is empty and unmirrored full nodes are an advisory warning. Outside a merge, for a nonexistent ref or a tree id it fails closed. The --base value itself is still the caller's (the merge skill computes it with `git merge-base`); the skill's 'never swap the baseline' rule is prose — an agent can still ignore it."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -12610,7 +12662,7 @@
     {
       "id": "PB-SESSION-END-PRESERVE",
       "category": "sessions-and-attribution",
-      "statement": "The SessionEnd hook removes the session directory for logout, prompt_input_exit, other, and exit, and preserves it for clear, resume, and any unknown or unparseable reason so a same-PID continuation keeps its active-task pointer.",
+      "statement": "The SessionEnd hook removes the session directory for logout, prompt_input_exit, other, and exit, and preserves it for clear, resume, and any unknown or unparseable reason so a same-PID continuation keeps its active-task pointer. Where the hook can walk its process chain (Linux /proc, macOS ps), a `pid-N` directory is removed only when the exiting process is N — the lowest agent in that chain — so a claude started inside another claude's session (which resolves to the outer `pid-N`) keeps the outer session's directory, and with no agent visible in the chain it is kept for the liveness GC (task 126, owner Q-D (b)). Windows (MSYS/Cygwin) has no process walk and no GC that reclaims `pid-*` directories, so there the terminal reasons still remove the directory, nested or not.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/session-end-hook",
@@ -12633,6 +12685,32 @@
           "limitations": [
             "Proves the delete arm for reason=logout only."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_command_guard.py",
+          "reference": "GauntletHookStepsAsVectors.test_each_step_on_the_candidate",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_session_id_sanitization.py",
+            "reference": "SessionEndHookIntegration.test_valid_session_dir_still_cleaned_on_logout"
+          },
+          "limitations": [
+            "Vector H46 (task 138 G2-3): the real session-end-hook with reason=clear keeps the session's current_state — the /clear arm; the other preserve reasons are not exercised."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_daemon_identity.py",
+          "reference": "NestedExitKeepsTheOuterSession.test_a_nested_claude_exiting_keeps_the_outer_dir",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_session_daemon_identity.py",
+            "reference": "NestedExitKeepsTheOuterSession.test_the_session_itself_exiting_still_deletes_its_dir"
+          },
+          "limitations": [
+            "Task 126: runs the real hook on a faked process tree, on both the ps path and the /proc path (the *Proc subclass); test_no_agent_in_the_chain_keeps_it pins the keep when no agent is visible. Not exercised with a live nested claude."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -12645,7 +12723,7 @@
       ],
       "status": "partially_evidenced",
       "missing_evidence_or_limitation": [
-        "No test exercises the preserve arm: reason=clear, reason=resume, an unknown reason, or unparseable stdin. This is the arm the /clear state-preservation claim depends on.",
+        "The preserve arm is proved for reason=clear only (vector H46, task 138); reason=resume, an unknown reason and unparseable stdin are untested.",
         "Case-folding of the reason value is unproved.",
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
         "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21)."
@@ -13351,7 +13429,7 @@
     {
       "id": "PB-REVIEW-SPEND-JOURNAL",
       "category": "judges-and-reviews",
-      "statement": "Every judge invocation the review runner makes — each panel seat, the single judge, and the tail-cert judge — appends, on its completion or timeout, one best-effort, log-only spend record to the lane-resolved .agent/<lane>/journal/enforcement.jsonl via pb_journal.append_review, sharing the enforcement envelope (hook=\"review\", decision=\"record\", reason=\"review spend\") plus the fields kind (panel|single|tail-cert), seat as model:effort, task, round, duration_ms, status (ok|fail|timeout|dnf), and usage, plus — on a fail/dnf/timeout record only (task 096) — an error reason (timed out after <limit>, a specific model-availability verdict, or `exit N: <first failure line>`), sanitized, token-redacted and cut to the byte budget the rest of the line leaves under the 512-byte floor. The one exception is a tamper hard-stop, which records nothing so the journal write can never precede and suppress the tamper banner. Token usage is recorded only WHERE the CLI reports it as a structured envelope — the codex judge path runs `exec --json` (last `turn.completed` usage) the grok judge path `--output-format json` (`usage` object), and the experimental agy judge path `--output-format stream-json` (the terminal `result` event's `usage`, the turn's totals; an all-zero usage object is recorded as unknown, task 111), the adapters returning the review prose as a str that CARRIES the parsed usage (provider.usage.JudgeOutput) so every journal site (panel seat, single, tail-cert) records the CLI's own input_tokens/output_tokens as reported; claude seats and every spawn-error/unrecognized-stdout case record the explicit marker {\"status\":\"unknown\"}, as does a timeout when no complete usage frame was emitted before the kill (a frame the CLI had already written is parsed strictly from the partial stdout and carried — proof test_timeout_paths_record_a_usage_frame_the_cli_already_wrote); append_review normalizes usage to the fixed {status[,in,out]} schema — numbers are never fabricated (non-int/bool/negative counts are unknown) and free-form judge prose can never poison the field. A journal write failure never changes or breaks a review or any decision, every field is bounded (strings byte-capped with control chars stripped, numerics magnitude-capped) so REAL records are a single O_APPEND line well under PIPE_BUF — a best-effort bound, not absolute (a pathologically escape-heavy field could exceed it, accepted and harmless since the write affects no decision), and the journal is not written through a symlinked/FIFO path (skipped, not followed).",
+      "statement": "Every judge invocation the review runner makes — each panel seat, the single judge, and the tail-cert judge — and each blind extraction `tasks intent` runs (task 120) appends, on its completion or timeout, one best-effort, log-only spend record to the lane-resolved .agent/<lane>/journal/enforcement.jsonl via pb_journal.append_review, sharing the enforcement envelope (hook=\"review\", decision=\"record\", reason=\"review spend\") plus the fields kind (panel|single|tail-cert|intent), seat as model:effort, task, round, duration_ms, status (ok|fail|timeout|dnf), and usage, plus — on a fail/dnf/timeout record only (task 096) — an error reason (timed out after <limit>, a specific model-availability verdict, or `exit N: <first failure line>`), sanitized, token-redacted and cut to the byte budget the rest of the line leaves under the 512-byte floor. The one exception is a tamper hard-stop, which records nothing so the journal write can never precede and suppress the tamper banner. Token usage is recorded only WHERE the CLI reports it as a structured envelope — the codex judge path runs `exec --json` (last `turn.completed` usage) the grok judge path `--output-format json` (`usage` object), and the experimental agy judge path `--output-format stream-json` (the terminal `result` event's `usage`, the turn's totals; an all-zero usage object is recorded as unknown, task 111), the adapters returning the review prose as a str that CARRIES the parsed usage (provider.usage.JudgeOutput) so every journal site (panel seat, single, tail-cert) records the CLI's own input_tokens/output_tokens as reported; claude seats and every spawn-error/unrecognized-stdout case record the explicit marker {\"status\":\"unknown\"}, as does a timeout when no complete usage frame was emitted before the kill (a frame the CLI had already written is parsed strictly from the partial stdout and carried — proof test_timeout_paths_record_a_usage_frame_the_cli_already_wrote); append_review normalizes usage to the fixed {status[,in,out]} schema — numbers are never fabricated (non-int/bool/negative counts are unknown) and free-form judge prose can never poison the field. A journal write failure never changes or breaks a review or any decision, every field is bounded (strings byte-capped with control chars stripped, numerics magnitude-capped) so REAL records are a single O_APPEND line well under PIPE_BUF — a best-effort bound, not absolute (a pathologically escape-heavy field could exceed it, accepted and harmless since the write affects no decision), and the journal is not written through a symlinked/FIFO path (skipped, not followed).",
       "owner": [
         {
           "path": "plugins/playbook/scripts/pb_journal.py",
@@ -13467,6 +13545,19 @@
           },
           "limitations": [
             "Drives run_tail_cert_judge in-process with a faked raw judge; the negative control asserts a tamper hard-stop records nothing, and TamperRecordsNothing.test_panel_tamper_no_records pins the same rule for the panel."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_review_spend_journal.py",
+          "reference": "IntentSpendE2E.test_tasks_intent_records_its_task_number",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_review_spend_journal.py",
+            "reference": "IntentSpendE2E.test_an_unwritable_journal_changes_nothing"
+          },
+          "limitations": [
+            "Task 120 (gauntlet 2 G2-25): drives `history.cmd_intent` in-process with a stubbed ClaudeAdapter.run_headless_judge and asserts one kind=intent record per judge call, all carrying the task number; test_one_record_per_extraction pins seat/status/round 0, test_a_failed_extraction_records_why the dnf + error, test_a_raising_judge_is_recorded_then_reraised the timeout record. The journal failing hard leaves the extraction's output unchanged."
           ]
         },
         {

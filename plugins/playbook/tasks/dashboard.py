@@ -290,9 +290,15 @@ def _window(records: "list[dict]", start: datetime, end: datetime) -> "list[dict
 
 def seat_stats(records: "list[dict]") -> "dict[str, dict]":
     """Per seat: runs, ok, timeout, median_ms (None when no record carried a
-    duration). No division here — the renderer formats percentages."""
+    duration). No division here — the renderer formats percentages.
+
+    A `tasks intent` extraction (kind "intent", task 120) is a judge call but not a
+    review — a short prompt over one evidence file — so it stays out: mixed in, its
+    durations would skew the seat's median and raise false drift advice."""
     by: "dict[str, dict]" = {}
     for r in records:
+        if r.get("kind") == "intent":
+            continue
         s = by.setdefault(r["seat"], {"runs": 0, "ok": 0, "timeout": 0, "durations": []})
         s["runs"] += 1
         if r["status"] == "ok":

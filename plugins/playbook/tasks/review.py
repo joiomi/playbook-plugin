@@ -777,6 +777,38 @@ def _neutralise_markers(findings: str, review_mode: str) -> str:
     return out
 
 
+SINGLE_JUDGE_FILE = "judge-single.md"
+
+
+def _append_review_to_judge_md(task_dir, review_mode: str, seat: str, findings: str,
+                               why: str):
+    """Append a single-judge review to the task's `judge-single.md` (task 117) and
+    return its path, or None when it cannot be written.
+
+    Its own file, append-only, under the task lock: judge.md is the PANEL rounds'
+    file — stacked newest first, the oldest moved to judge-archive.md, anything
+    outside a round dropped or glued to one (single-judge review) — so a single
+    review written there would be misfiled or lost at the next panel. Every line is
+    QUOTED (`> `): a judge's own text, which may contain `- … REJECT`, must never
+    look like triage (parked R9) to anything that reads the record."""
+    import datetime as _dt
+    from tasks.filelock import task_lock
+    path = Path(task_dir) / SINGLE_JUDGE_FILE
+    stamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    quoted = "\n".join("> " + ln if ln.strip() else ">" for ln in findings.strip().splitlines())
+    block = (f"## Single-judge {review_mode} review — {stamp} (`{seat}`)\n\n"
+             f"Recorded here by the CLI: task.md has no place for these findings ({why}). "
+             f"The review, verbatim, every line quoted:\n\n{quoted}\n")
+    try:
+        with task_lock(path):
+            old = path.read_text(encoding="utf-8") if path.exists() else ""
+            head = "" if old.strip() else "# Single-judge reviews (appended, oldest first)\n\n"
+            atomic_write(path, (old.rstrip("\n") + "\n\n\n" if old.strip() else head) + block)
+    except OSError:
+        return None
+    return path
+
+
 def _write_review_findings(task_file: Path, review_mode: str, findings: str) -> str | None:
     """Write a single judge's findings into task.md. Returns None on success,
     else a human-readable reason it refused.
@@ -1362,18 +1394,28 @@ def _detect_tamper_safe(project_path: Path, task_file: Path | None, before: dict
 
 
 def _tamper_banner(changes: list[str]) -> str:
-    """Loud banner naming what a judge mutated during a review run."""
+    """Loud banner naming what changed in the repo during a review run.
+
+    It says WHAT changed, not who: the guard sees the tree before and after, so a
+    judge's write and a write by anything else in that window (the operator's own
+    redirect into the project, another session) look the same — the review is
+    void either way (gauntlet 2 G2-26: "a judge modified the repo" was printed for
+    the operator's own `> .agent/….out`)."""
     bar = "!" * 60
     lines = [
         bar,
-        "!! TAMPER DETECTED — a judge modified the repo during review !!",
+        "!! TAMPER DETECTED — the repo changed while the judges ran !!",
         bar,
-        "Judges are read-only evaluators; these changes are NOT trustworthy work:",
+        "A judge, or another process writing into the project during the run (your own",
+        "commands included), changed it. Judges are read-only evaluators, so this",
+        "review is void:",
     ]
     lines += [f"  - {c}" for c in changes]
     lines += [
-        "Do NOT ingest this review into task.md. Inspect and restore:",
-        "  git status && git diff    # then: git checkout -- <path> / rm <new file>",
+        "Do NOT ingest this review into task.md. Inspect each change first:",
+        "  git status && git diff",
+        "Keep what you or another session wrote on purpose; restore only what nobody made",
+        "  (git checkout -- <path>, or delete the new file), then re-run the review.",
         bar,
     ]
     return "\n".join(lines)
@@ -3364,13 +3406,23 @@ def _cmd_single_review(cmd, cmd_args):
                   f"(## {'Plan' if review_mode == 'plan' else 'Implementation'} Review)",
                   flush=True)
         else:
-            # Exit non-zero: the review itself succeeded but its findings
-            # were NOT delivered, and a caller that only checks the status
-            # would otherwise treat an undelivered review as a clean one.
-            print(f"\nCould not write findings into "
-                  f"{task_file.relative_to(project_path)}: {refusal}\n"
-                  f"They are saved in {judge_log.relative_to(project_path)} — "
-                  f"paste them in by hand.", file=sys.stderr, flush=True)
-            sys.exit(1)
+            # Task 117 (gauntlet 2 item 28): task.md has no place for the findings (a
+            # light/quick task, a compacted section) and we still never GUESS where to
+            # write into it — but the review succeeded, so it lands in the task's
+            # judge.md instead of waiting for someone to paste it by hand.
+            landed = _append_review_to_judge_md(task_file.parent, review_mode, _spend_seat,
+                                                _findings_text, refusal)
+            if landed:
+                print(f"Findings written to {landed.relative_to(project_path)} "
+                      f"(task.md has no place for them: {refusal})", flush=True)
+            else:
+                # Exit non-zero: the review itself succeeded but its findings
+                # were NOT delivered, and a caller that only checks the status
+                # would otherwise treat an undelivered review as a clean one.
+                print(f"\nCould not write findings into "
+                      f"{task_file.relative_to(project_path)}: {refusal}\n"
+                      f"They are saved in {judge_log.relative_to(project_path)} — "
+                      f"paste them in by hand.", file=sys.stderr, flush=True)
+                sys.exit(1)
 
     sys.exit(result.returncode)

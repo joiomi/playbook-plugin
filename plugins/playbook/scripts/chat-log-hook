@@ -201,11 +201,24 @@ USER_MESSAGE=$(echo "$USER_MESSAGE" | sed 's/<ide_opened_file>[^<]*<\/ide_opened
 # Trim whitespace
 USER_MESSAGE=$(echo "$USER_MESSAGE" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
 
-# Truncate long messages (e.g., pasted logs) to prevent log pollution
-MAX_LEN=500
+# Truncate only huge messages (a pasted log or dump). Task 127 (owner Q-C (b),
+# 2026-09-29): the cap was 500 characters, which cut ordinary long instructions —
+# the user's own words, which the log and task.md's Recent Chat exist to keep.
+# Task 138 G2-2: counted and cut in CHARACTERS by python3 — bash's ${#v} / ${v:0:N}
+# count bytes under LC_ALL=C (and Git-Bash without a UTF-8 LANG), which cut a message
+# under the cap and could split a character. ${#v} is never below the character count,
+# so it is only the cheap pre-check; bash's cut is the fallback when python3 fails.
+MAX_LEN=50000
 if [ ${#USER_MESSAGE} -gt $MAX_LEN ]; then
-    REMOVED=$((${#USER_MESSAGE} - MAX_LEN))
-    USER_MESSAGE="${USER_MESSAGE:0:$MAX_LEN}...[${REMOVED} chars removed]"
+    _cut=$(printf '%s' "$USER_MESSAGE" | PB_MAX_LEN=$MAX_LEN python3 -c 'import os, sys
+s = sys.stdin.buffer.read().decode("utf-8", "surrogateescape")
+n = int(os.environ["PB_MAX_LEN"])
+if len(s) > n:
+    s = s[:n] + "...[%d chars removed]" % (len(s) - n)
+sys.stdout.buffer.write(s.encode("utf-8", "surrogateescape"))' 2>/dev/null) && USER_MESSAGE="$_cut" || {
+        REMOVED=$((${#USER_MESSAGE} - MAX_LEN))
+        USER_MESSAGE="${USER_MESSAGE:0:$MAX_LEN}...[${REMOVED} chars removed]"
+    }
 fi
 
 # Skip logging if message is empty after filtering

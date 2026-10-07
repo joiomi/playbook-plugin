@@ -126,14 +126,16 @@ class SessionEndHookIntegration(unittest.TestCase):
         # reason — the sanitization must not break normal cleanup.
         # Task 106: the id must name a live agent to be honored (see
         # tests/_fake_agent.py); a made-up pid would now be ignored as stale.
-        agent = spawn_fake_agent(self._tmp.name)
-        self.addCleanup(stop, agent)
-        sid = f"pid-{agent.pid}"
+        # Task 126 (owner Q-D (b)): and that agent must be the EXITING process —
+        # the lowest agent in the hook's chain. The hook's parent is this test
+        # process, so the fixture lists it as the claude and the id names it.
+        sid = f"pid-{os.getpid()}"
         sess = self.project / ".agent" / "sessions" / sid
         sess.mkdir(parents=True)
         (sess / "current_state").write_text("001\n", encoding="utf-8")
         self._run_hook(sid, reason="logout",
-                       PLAYBOOK_PROC_ROOT=agent_proc_root(self._tmp.name, agent.pid))
+                       PLAYBOOK_PROC_ROOT=agent_proc_root(self._tmp.name, os.getpid()))
+        # (Windows has no process walk: it keeps the old delete-on-exit)
         self.assertFalse(sess.exists(),
                          "valid session dir was not cleaned up on logout")
 

@@ -124,7 +124,7 @@ def append_review(agent_dir, *, session_id="", seat="", task="", round_no=0,
     The record shares the enforcement envelope (`hook="review"`,
     `decision="record"`, `reason="review spend"`) so a journal reader sees it as
     one more `record` line, plus review-specific fields:
-      * `kind`        — "panel" | "single" | "tail-cert"
+      * `kind`        — "panel" | "single" | "tail-cert" | "intent" (task 120)
       * `seat`        — the judge spec, e.g. "claude:opus" / "codex:gpt-5.6:medium"
       * `task`        — task number ("042") or "-" for a taskless/--prompt review
       * `round`       — the review iteration this spend belongs to (int; 0 = unknown)

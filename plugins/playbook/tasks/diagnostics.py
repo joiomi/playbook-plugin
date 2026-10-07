@@ -89,6 +89,12 @@ def cmd_audit(cmd_args):
     if task_arg:
         m = list((agent_dir / "tasks").glob(f"{task_arg.zfill(3)}-*/task.md"))
         task_file = m[0] if m else None
+        if task_file is None:
+            # task 116: a task that does not exist is wrong usage — it printed AUDIT PASS
+            # and recorded nothing, which read as "audited"
+            print(f"Error: tasks audit: no task {task_arg} in {agent_dir.relative_to(project_path).as_posix()}"
+                  "/tasks. Nothing changed.", file=sys.stderr)
+            sys.exit(2)
     elif resolve_session_id():   # task 105: "" (unresolved) has no pointer
         sf = agent_dir / "sessions" / resolve_session_id() / "current_state"
         if sf.exists():
@@ -113,6 +119,11 @@ def cmd_audit(cmd_args):
         receipt = format_audit_receipt(audit, head_sha=_head)
         upsert_task_section(task_file, "Pre-Panel Audit", receipt)
         print(f"  Receipt recorded in {task_file.relative_to(project_path)}")
+    else:
+        # task 116: a bare audit with no active task is a plain scan — say so, so a PASS is
+        # never read as "this task's audit is recorded"
+        print("  (no receipt recorded: no active task — `tasks audit <N>` records one into task N)",
+              file=sys.stderr)
     print(f"\nAUDIT {'PASS' if audit['passed'] else 'FAIL'}", flush=True)
     if not audit["passed"]:
         print("  Fix the error-severity findings (or a broken sweep) before "

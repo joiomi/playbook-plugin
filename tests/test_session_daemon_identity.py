@@ -644,6 +644,65 @@ class DaemonBetweenSessionsKeepsThemApart(_ProjectMixin):
         self.assertTrue(self.a_dir.is_dir(), "session B's logout deleted session A's dir")
 
 
+
+class NestedExitKeepsTheOuterSession(_ProjectMixin):
+    """Task 126 (owner Q-D (b), 2026-09-29; 106 P2, gauntlet 2 G2-21): a claude started from
+    another claude's Bash resolves to the OUTER session's `pid-N` (the highest agent), and its
+    SessionEnd deleted that live directory — the outer session lost its task pointer.
+    Session-end now deletes `pid-N` only when the exiting process IS N: the lowest agent in
+    the hook's own chain."""
+
+    def _dir(self, pid):
+        d = self.project / ".agent" / "sessions" / f"pid-{pid}"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "current_state").write_text("001\n", encoding="utf-8")
+        return d
+
+    def test_a_nested_claude_exiting_keeps_the_outer_dir(self):
+        self.set_tree([(450, 400, TERMINAL), (400, 300, TERMINAL), (300, 1, SHELL)])
+        outer = self._dir(400)
+        r = self.run_hook("session-end-hook", {"reason": "exit"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue((outer / "current_state").is_file(),
+                        f"the nested claude's exit deleted the outer session's dir:\n{r.stderr}")
+
+    def test_the_session_itself_exiting_still_deletes_its_dir(self):
+        self.set_tree([(400, 300, TERMINAL), (300, 1, SHELL)])
+        own = self._dir(400)
+        r = self.run_hook("session-end-hook", {"reason": "exit"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(own.exists(), "a top-level exit no longer cleans up its own dir")
+
+    def test_no_agent_in_the_chain_keeps_it(self):
+        # the id falls back to pid-<parent> (no agent seen): nothing proves the exiting
+        # process is that session — keep; the liveness GC reclaims it once it is dead
+        self.set_tree([(300, 1, SHELL)])
+        d = self._dir(os.getpid())
+        r = self.run_hook("session-end-hook", {"reason": "exit"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(d.is_dir(), r.stderr)
+
+    def test_windows_has_no_walk_and_keeps_the_old_delete(self):
+        # opus r1: on Windows (MSYS) there is no process walk and no GC that reclaims a
+        # `pid-*` dir — keeping it would carry one session's pointer into the next (the
+        # shared pid-win-fallback). There the terminal reasons still delete, nested or not.
+        uname = self.fakebin / "uname"
+        uname.write_text("#!/bin/sh\necho MINGW64_NT-10.0\n", encoding="utf-8")
+        uname.chmod(0o755)
+        self.set_tree([(450, 400, TERMINAL), (400, 300, TERMINAL), (300, 1, SHELL)])
+        d = self._dir(400)
+        r = subprocess.run([bash_or_skip(), str(SCRIPTS / "session-end-hook")],
+                           input=json.dumps({"reason": "exit"}), cwd=self.project,
+                           env=self.env(CLAUDE_ENV_FILE=str(self.env_file), PLAYBOOK_SESSION_ID="pid-400"),
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(d.exists(), f"Windows must keep delete-on-exit:\n{r.stderr}")
+
+
+class NestedExitKeepsTheOuterSessionProc(NestedExitKeepsTheOuterSession):
+    PROC = True
+
+
 class DoctorSurvivesASlowPs(_ProjectMixin):
     """Single judge run 4: doctor gave the bash resolver 5 s while each probe
     may take up to 10 s — a 6 s `ps` crashed doctor with a traceback."""

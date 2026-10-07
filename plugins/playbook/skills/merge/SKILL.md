@@ -330,6 +330,17 @@ python3 <this-skill-dir>/ref-integrity.py --remap <OLD:NEW,...> --base "$base"  
 #     ALWAYS pass --base "$base" — the differential mirror + archive-completeness
 #     checks (which catch a skipped Step 6) only run with it. Omit ONLY --remap
 #     when the merge did no renumber.
+#     When the merge base predates MIND_MAP.md the tool compares against the
+#     pre-merge target tip instead (a NOTE says so), which it reads from git's own
+#     merge state (HEAD during the merge, HEAD^1 after the merge commit — only
+#     when "$base" is that merge's base; a later merge at HEAD fails closed): the
+#     target's own old problems are not this merge's, what the source brings is.
+#     If both sides had a map and you renumbered, it cannot tell which side was
+#     renumbered: --remap there fails closed and you compare by hand.
+#     A red (a) is red. NEVER re-run it against a different baseline (another
+#     commit, the target tip as --base, no --base) to get a green one. If (a)
+#     fails, stop, report the finding verbatim, and do not offer or perform the
+#     push (Step 8).
 
 # (b) contamination / markers / legacy paths:
 tasks merge-doctor <source> <target>            # exit 0
@@ -509,7 +520,9 @@ exactly that; if you don't, it says so instead of inventing one.
   sparse subset; every `↗` node has an overflow entry, no orphans; every `[N]`
   resolves (code fences / inline code / `[0]` excluded). With `--remap OLD:NEW,…`
   it proves the renumbered region has no stale self-refs; with `--base <ref>` only
-  NEW dangling `[[slug]]` links fail. Exit 0 clean / 1 findings. `--help` for usage.
+  NEW dangling `[[slug]]` links fail; when the merge base predates the map it
+  compares against the pre-merge target tip read from git's merge state (outside a
+  merge that case fails closed). Exit 0 clean / 1 findings. `--help` for usage.
 - **`merge-verify.py`** (ships in this skill dir; pure stdlib). Runs the command
   the project declares in `.agent/config.json` as `{"merge_verify": {"command":
   "…"}}`, writing it to a temp script and running it via `bash` under

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import contextlib
 import importlib.util
+import io
 import json
 import os
 import sys
@@ -1012,6 +1013,107 @@ class SingleSpendErrorE2E(_E2EBase):
         recs = [r for r in _read_journal(self.agent) if r["hook"] == "review"]
         self.assertEqual(recs[0]["status"], "fail")
         self.assertEqual(recs[0]["error"], "exit 1: unknown option --frobnicate")
+
+
+
+class IntentSpendE2E(_E2EBase):
+    """Task 120 (gauntlet 2 G2-25): every blind extraction `tasks intent` runs is a judge call
+    and writes its spend record (kind "intent") — before, none did (P12: 3 grok extractions,
+    no hook=review line)."""
+
+    def _stub(self, result):
+        from provider.adapters.claude import ClaudeAdapter
+        calls = []
+
+        def run(adapter_self, **kw):
+            calls.append(kw)
+            if isinstance(result, BaseException):
+                raise result
+            return result
+        import unittest.mock as mock
+        p = mock.patch.object(ClaudeAdapter, "run_headless_judge", run)
+        p.start()
+        self.addCleanup(p.stop)
+        return calls
+
+    def _runner(self):
+        from tasks import intent
+        return intent.make_default_runner(self.project, timeout_secs=5, task="042")
+
+    def _intent_records(self):
+        return [r for r in _read_journal(self.agent) if r["hook"] == "review" and r["kind"] == "intent"]
+
+    def test_one_record_per_extraction(self):
+        calls = self._stub("# Intent inferred from chat\n- build the thing\n")
+        run = self._runner()
+        with _chdir(self.project):
+            out1 = run("chat", "prompt --- EVIDENCE a")
+            out2 = run("code", "prompt --- EVIDENCE b")
+        self.assertEqual(len(calls), 2)
+        self.assertIn("build the thing", out1 + out2)
+        recs = self._intent_records()
+        self.assertEqual(len(recs), 2, recs)
+        for r in recs:
+            self.assertEqual(r["seat"], "claude:opus:high")
+            self.assertEqual(r["task"], "042")
+            self.assertEqual(r["status"], "ok")
+            self.assertEqual(r["round"], 0)
+            self.assertIn("duration_ms", r)
+
+    def test_a_failed_extraction_records_why(self):
+        self._stub("(error: claude not found on PATH)")
+        with _chdir(self.project):
+            out = self._runner()("chat", "prompt --- EVIDENCE a")
+        self.assertEqual(out, "(error: claude not found on PATH)")       # unchanged output
+        (r,) = self._intent_records()
+        self.assertEqual(r["status"], "dnf")
+        self.assertTrue(r.get("error"), r)
+
+    def test_a_raising_judge_is_recorded_then_reraised(self):
+        import subprocess
+        self._stub(subprocess.TimeoutExpired(["claude"], 5))
+        with _chdir(self.project), self.assertRaises(subprocess.TimeoutExpired):
+            self._runner()("chat", "prompt --- EVIDENCE a")
+        (r,) = self._intent_records()
+        self.assertEqual(r["status"], "timeout")
+
+    def test_a_timeout_keeps_the_usage_its_partial_output_already_reported(self):
+        # Task 138 G3-8 (codex-medium): the partial stdout's usage frame is real spend — the
+        # panel path keeps it (task 056 round 3), the intent runner dropped it
+        import subprocess
+        raw = (Path(__file__).resolve().parent / "fixtures" / "agy-1.2.17" / "success-pong.stdout").read_bytes()
+        for out in (raw, raw.decode("utf-8")):
+            with self.subTest(type(out).__name__):
+                self._stub(subprocess.TimeoutExpired(["agy"], 5, output=out))
+                with _chdir(self.project), self.assertRaises(subprocess.TimeoutExpired):
+                    self._runner()("chat", "prompt --- EVIDENCE a")
+                r = self._intent_records()[-1]
+                self.assertEqual(r["status"], "timeout")
+                self.assertEqual(r["usage"], {"status": "known", "in": 12555, "out": 214})
+
+    def test_an_adapter_crash_is_recorded_as_dnf_then_reraised(self):
+        self._stub(RuntimeError("spawn failed"))
+        with _chdir(self.project), self.assertRaises(RuntimeError):
+            self._runner()("chat", "prompt --- EVIDENCE a")
+        (r,) = self._intent_records()
+        self.assertEqual(r["status"], "dnf")
+        self.assertIn("spawn failed", r.get("error", ""))
+
+    def test_an_unwritable_journal_changes_nothing(self):
+        self._stub("# Intent\n- x\n")
+        (self.agent / "journal").write_text("not a dir", encoding="utf-8")   # the append hard-fails
+        with _chdir(self.project):
+            self.assertEqual(self._runner()("chat", "prompt --- EVIDENCE a"), "# Intent\n- x\n")
+
+    def test_tasks_intent_records_its_task_number(self):
+        from tasks import history
+        calls = self._stub("# Intent inferred\n- x\n")
+        with _chdir(self.project), contextlib.redirect_stdout(io.StringIO()):
+            history.cmd_intent(["42"])
+        recs = self._intent_records()
+        self.assertTrue(calls)
+        self.assertEqual(len(recs), len(calls), recs)
+        self.assertEqual({r["task"] for r in recs}, {"042"})
 
 
 if __name__ == "__main__":

@@ -33,18 +33,29 @@ def cmd_context(cmd_args):
     project_path = find_project_root()
 
     chat_log = resolve_agent_dir(project_path) / "chat_log.md"
-    if not chat_log.exists():
-        print(f"No {chat_log.relative_to(project_path).as_posix()} found.", file=sys.stderr)
-        sys.exit(1)
-
     import re
     open_tag = re.compile(r'^<!--\s*T' + re.escape(task_num) + r'\s*-->$')
     close_tag = re.compile(r'^<!--\s*/T' + re.escape(task_num) + r'\s*-->$')
 
+    # Read, never exists() first (task 138 G3-5): under seatbelt's deny the stat
+    # fails too, and Python 3.13's exists() then answers False.
+    try:
+        chat_text = chat_log.read_text(encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        print(f"No {chat_log.relative_to(project_path).as_posix()} found.", file=sys.stderr)
+        sys.exit(1)
+    except OSError as e:
+        # Task 125: inside a judge's sandbox the chat log is masked on purpose.
+        print(f"Cannot read {chat_log.relative_to(project_path).as_posix()} here "
+              f"({type(e).__name__}) — a review judge's sandbox hides the chat log; "
+              "the task's Intent and Recent Chat in task.md carry the user's words.",
+              file=sys.stderr)
+        sys.exit(1)
+
     spans = []
     current_span = []
     inside = False
-    for line in chat_log.read_text(encoding="utf-8", errors="replace").splitlines():
+    for line in chat_text.splitlines():
         stripped = line.strip()
         if not inside and open_tag.match(stripped):
             inside = True
@@ -215,7 +226,7 @@ def cmd_intent(cmd_args):
         print(f"\nRunning {len(avail)} blind extraction(s) "
               f"(default judge, {format_timeout_label(timeout_secs)} each)...", flush=True)
         reports = run_extractions(slices, make_default_runner(
-            project_path, timeout_secs=timeout_secs))
+            project_path, timeout_secs=timeout_secs, task=task_num))
 
     run_dir = write_run(task_dir, slices, reports, run_id=run_id)
     rel = run_dir.relative_to(project_path)

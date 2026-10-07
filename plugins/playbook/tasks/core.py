@@ -3228,7 +3228,8 @@ def single_review_tamper_degraded(task_file) -> "str | None":
 
 def has_review_evidence(task_file, impl_only: bool = False) -> bool:
     """True when a task carries evidence that a review actually ran: a judge.md
-    in its directory, or a checked plan/impl/panel-review gate in task.md. Used
+    or a judge-single.md (task 117/138) in its directory, or a checked
+    plan/impl/panel-review gate in task.md. Used
     by the close policy — an assertive/irreversible task with no such evidence
     cannot light-close (the 056 fix).
 
@@ -3243,6 +3244,16 @@ def has_review_evidence(task_file, impl_only: bool = False) -> bool:
             if not impl_only:
                 return True
             if "impl review" in jm.read_text(encoding="utf-8", errors="replace").lower():
+                return True
+        # Task 138 G1-5: a single-judge review with no place in task.md lands in
+        # judge-single.md (task 117). Only its CLI-written headings count — the review
+        # text under them is quoted judge prose and could say anything.
+        js = p.parent / "judge-single.md"
+        if js.exists():
+            heads = [ln for ln in js.read_text(encoding="utf-8", errors="replace").splitlines()
+                     if ln.startswith("## Single-judge ")]
+            if heads and (not impl_only or any(h.startswith("## Single-judge impl review")
+                                               for h in heads)):
                 return True
         for ln in p.read_text(encoding="utf-8", errors="replace").splitlines():
             s = ln.strip().lower()

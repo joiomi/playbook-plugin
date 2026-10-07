@@ -4,6 +4,125 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+Built after the 1.5.46 cut, waiting for their review panels (owner Q9: grouped by area).
+
+### Fixed
+
+- **The agy judge seat is measured on agy 1.3.1** (task 130). The seat was written and measured on agy 1.2.17. The
+  same capture commands re-run on 1.3.1 give the same exit codes and the same events; every agy test runs and passes
+  over the 1.3.1 captures with 1.3.1's own token counts — the cases 1.3.1 could not be made to produce (a real quota
+  stop, a web tool call, a signed-out run, a model/effort conflict, two constructed streams) replay their 1.2.17 capture (`tests/fixtures/
+  agy-1.3.1/`, `tests/test_agy_131.py`; none is skipped); `tasks models check` probed the seat live, and it sat in four
+  real six-seat panels. No code change was needed.
+
+- **The close's "uncommitted files" warning means something again** (task 128, PLAN S11; gauntlet 2 R20). It
+  counted the closing task's own task.md and judge files, which are always dirty at a close, so it fired — and the
+  receipt said "+N uncommitted file(s)" — on every close. Both now count only files outside the closing task's own
+  directory (a rename counts once, and a file moved INTO that directory still counts — it left the project). They
+  also count uncommitted files in each `code_roots` checkout, which the outer repository ignores: that is where the
+  verified code of a nested-checkout project lives, and the warning never saw it.
+
+- **The chat log keeps long messages** (task 127, PLAN S11; gauntlet 2 R19, owner decision Q-C (b)). Every user
+  message was cut at 500 characters, so a long instruction reached `chat_log.md` mutilated. The cap is now 50,000
+  characters per message (a longer paste is still cut, and says how much). The Recent Chat that `tasks work` copies
+  into task.md still shows a 200-character excerpt of each message.
+
+- **A claude started inside another claude's session no longer deletes the outer session's task pointer** (task
+  126, PLAN S11; gauntlet 2 G2-21, owner decision Q-D (b)). The inner claude resolves to the outer session's
+  `pid-N`, and its exit removed that directory. On Linux and macOS, session end now removes `pid-N` only when the
+  process exiting is N (the lowest agent in its own process chain); with no agent visible in the chain the directory
+  is kept and the liveness clean-up reclaims it later. Windows has no process walk (and no clean-up of these
+  directories), so there an exit still removes the directory, nested or not.
+
+- **A judge cannot read the project's chat records** (task 125, PLAN S11; gauntlet 2 G2-05, owner decision
+  2026-10-02). A judge quoted a canary that existed only in `.agent/chat_log.md`: the review prompt is blind, but the
+  sandbox left every file readable. A read-only (judge) sandbox now hides `.agent/chat_log.md`, `.agent/sessions/`
+  and `.agent/bash_history` — with their rotated or archived copies (`sessions.*` too), in every lane, and in a lane
+  that is a symlink (resolved once: the judge's link points at the directory that is masked), and at the real target
+  of a record that is itself a symlink (on Linux a link to a target that does not exist yet stops the judge rather
+  than leave it readable once written) —
+  on Linux (bubblewrap) and macOS (seatbelt). A record created or renamed into place while the judge runs stays
+  hidden too: bubblewrap shows `.agent` as an empty layer with only the non-records put back, and seatbelt denies the
+  records by name. The conversation monitor, which also runs read-only, keeps them (`--keep-records`): it reads the
+  session's transcript pointer. Judges are no longer told to run `tasks context` (it read that log); the task's Intent, Why and
+  Recent Chat carry the user's words, and `tasks context` says so instead of failing with a traceback where the log
+  is hidden. Not covered: the agents' own transcripts under
+  `~/.claude/projects/` (a judge can still read the conversation there), `.agent/monitor/`, and Windows (no
+  sandbox backend).
+
+- **`/playbook:merge` no longer fails a merge whose base predates the mind map** (task 122, PLAN S11; gauntlet 2
+  G2-29). `ref-integrity.py --base` read a merge base without `MIND_MAP.md` as an unreadable ref and failed closed;
+  an agent then re-ran it against another baseline, reported every gate green and offered the push. Now, when the
+  merge base predates the map, the check compares against the pre-merge target tip, which it reads from git's own
+  merge state (HEAD during the merge, HEAD^1 after the merge commit, and only when `--base` is that merge's base —
+  never a ref the caller picks): what the target already had is inherited, what the source brings is checked —
+  mirror, archive and `[[slug]]` alike (on such a base a new dangling slug used to be only a warning). Outside a merge,
+  under a later merge at HEAD, or for a ref that is not a commit, it still fails closed; so does `--remap` when both
+  sides had a map, since the tool cannot tell which side was renumbered. The skill states that a red check is never re-run against a
+  different baseline.
+
+- **The tamper banner no longer blames a judge for a change it cannot attribute** (task 121, PLAN S11; gauntlet 2
+  G2-26). The guard compares the tree before and after a review, so it cannot tell a judge's write from the operator's
+  own (a panel's output redirected into the project was reported as "a judge modified the repo"). The banner now says
+  the repo changed while the judges ran — a judge, or another process — and that the review is void either way; it
+  tells the operator to inspect the changes first and restore only what nobody made, not to discard them all.
+
+- **`tasks intent` records what its judge calls spend** (task 120, PLAN S11; gauntlet 2 G2-25). Each blind
+  extraction is a judge call, but none wrote the review-spend record every panel seat, single judge and tail-cert
+  judge writes. Each now appends one (`kind` `intent`, `round` 0) with its seat, task, duration, status and — on a
+  failure — why; a timed-out call keeps the token usage its partial output had already reported. `tasks dashboard` leaves them out of its per-seat review stats and drift advice (a short extraction
+  is not a review; mixed in, it would make a seat look twice as slow).
+
+- **A `tasks …` call keeps its options through the session-id injection** (task 118, PLAN S11 group 6; gauntlet 2
+  G2-04, G2-28). The task gate prefixes `tasks work|status|bootstrap|freehand|retro|new` with the session id through
+  `updatedInput`, which a host uses in place of the call's input — and it sent the command alone. Claude Code
+  dropped the call's `description`, `timeout` and `run_in_background` (a `tasks` call sent to the background ran in
+  the foreground); grok denied every such call, agent and judge sessions alike ("the updatedInput failed the tool's
+  schema: missing field `description`"). updatedInput is now the call's own input as the hook received it, with only
+  `command` changed. The `pretool_guard: off` eval path also no longer pastes the command into Python source (a `'`
+  in it broke the hook's answer).
+
+- **A single-judge review's findings always land** (task 117, PLAN S11; gauntlet 2 item 28). When task.md has no
+  place for them — a light/quick task has no `## Implementation Review` section, a compacted one has neither its
+  placeholder nor its markers — `tasks plan-review` / `impl-review` still never guess where to write into task.md,
+  but instead of "paste them in by hand" and exit 1 they append the review to the task's `judge-single.md`
+  (append-only, under the task lock, every line quoted so the judge's own text can never pass for triage) and exit 0.
+  Not judge.md: that file stacks panel rounds newest-first and archives the oldest, which would misfile or drop it.
+  A review recorded there counts as review evidence at the close.
+
+- **Wrong usage of the tasks CLI is refused before anything is written** (task 116, PLAN S11 group 4; gauntlet 2
+  G2-08/09/12/19/30). `tasks new quick t1 --bogus` made a task whose Intent was `--bogus`, `retro --bogus` and
+  `freehand --bogus` created tasks, `audit --bogus` appended a receipt, `audit 99` printed `AUDIT PASS` for a task that
+  does not exist, seven read-only commands ignored unknown options, and `--force` / `--stale-panel-ok` without
+  `--reason` ran the whole verify before refusing. Each is refused now, before the CLI touches anything (exit 2; a
+  close hatch without its reason keeps its exit 1; "Nothing changed."); an intent word starting with `--` goes after
+  a `--` (`tasks new quick t1 -- explain --force`), and after it `--help` is a word too; type and name must come
+  before the `--`; `tasks freehand` takes only `log`; a flag is not a `--reason`; a bare `tasks audit` with no active
+  task still scans and says it recorded no receipt.
+
+- **`/playbook:upgrade` no longer re-points your install at another repository** (task 115, PLAN S11 group 1b;
+  gauntlet 2 G2-22). Its recipe removed the installed marketplace and added the upstream GitHub repository under
+  the same name — on a fork or a local-directory install that silently switched the source. It now refreshes the
+  marketplace you have in place (`claude plugin marketplace update`; a local directory that is a git clone is pulled
+  first, since `marketplace update` only re-reads it), updates the plugin, and reads the version with
+  `.claude/bin/tasks --version` before and after.
+
+- **The `.claude/bin/` wrappers find the plugin in isolated Python** (task 115; gauntlet 2 R10, parked since task 086).
+  The wrapper's resolver ran as `python3 -` from the caller's directory, so a `glob.py` or `json.py` there shadowed the
+  standard library and the wrapper failed or ran another copy; the resolver runs as `python3 -I -` now (every wrapper
+  is regenerated once). This covers FINDING the plugin only: the tasks CLI it then starts still has the caller's
+  directory on its import path (a project's own `json.py` or `tasks.py` can still break it — open item). The "plugin
+  not found" message no longer names the upstream marketplace (G2-27): it says how to find and use your own.
+
+- **`init` no longer drops CLAUDE.md text silently** (task 114, PLAN S11 group 1; gauntlet 2 items 22-25).
+  Re-running init replaces the template's own `##` sections; text a project had written INSIDE one — and a
+  project part the merge did not recognise — went with it, while init printed "project content preserved". Now
+  the previous file is saved byte-for-byte to `.agent/backups/CLAUDE.md.<UTC>.bak` before the write, and init
+  says how many lines, from which sections, and where the copy is. A Setext level-1 heading (`Title` / `===`)
+  and a `#` heading indented by up to three spaces — under a `---` break, or after a blank line and a paragraph that
+  is not a list item or a quote — are recognised as project parts and kept (the latter written unindented, so a
+  later refresh cannot turn it into a list item's text).
+
 ## [1.5.46] — 2026-10-07
 
 Released from the work closed on `fix/1.5.46-batch` (owner decision 2026-10-07). Task 085: the six defects parked by the 1.5.45 release panel (task 083)

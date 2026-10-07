@@ -24,12 +24,25 @@ the template sections):
                         further down (task 093) — is preserved byte-for-
                         byte. Project-specific content belongs in its own
                         sections, exactly as the template header instructs.
-                        Headings are ATX lines outside closed fenced code
-                        blocks and `<!-- -->` comments; Setext and indented
-                        headings are not recognised. A template heading is
+                        Headings are ATX lines (a level-1 one may be indented
+                        by up to three spaces right under a `---` break or
+                        after a blank line and a block that is not a list item — kept,
+                        it is written unindented) and
+                        Setext level-1 headings, outside
+                        closed fenced code blocks and `<!-- -->` comments. A
+                        file that is not UTF-8 keeps its bytes (surrogateescape
+                        both ways). A template heading is
                         refreshed at its first occurrence outside the
                         project's `#` parts only; every other same-named
                         section is project text.
+  * text the merge drops — anything a project wrote INSIDE a template-owned
+                        section is replaced by the template text, by contract,
+                        and a part the parser does not recognise goes with the
+                        section above it — is never dropped silently (task 114):
+                        the previous file is saved byte-for-byte to
+                        `.agent/backups/CLAUDE.md.<UTC>.bak` BEFORE the write,
+                        and the status line names the line count, the sections
+                        and the backup (`CLAUDE.md:REPLACED:<message>`);
   * second run        → byte-identical (idempotent).
 
 .gitignore contract: append (create if absent) one marker-guarded block of
@@ -42,15 +55,19 @@ stay the project's business.
 Usage:
     claude-md-merge.py <template-path> <project-root> <project-name>
 
-Prints one status line per file (`CLAUDE.md:CREATED|MERGED|UNCHANGED`,
+Prints one status line per file (`CLAUDE.md:CREATED|MERGED|UNCHANGED`, or
+`CLAUDE.md:REPLACED:<message>` when text was replaced and backed up,
 `.gitignore:CREATED|APPENDED|UNCHANGED`) for init's summary; `ERROR:<msg>`
 and exit 1 on failure. Pure stdlib; importable for tests.
 """
 from __future__ import annotations
 
+import collections
 import importlib.util
+import os
 import re
 import sys
+import time
 from pathlib import Path
 
 # The atomic-write primitive lives in the tasks package (tasks/atomic.py, sibling
@@ -108,8 +125,20 @@ def template_body(template_text: str, project_name: str) -> str:
 FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})([^\n]*)")
 # The start of an HTML comment block.
 COMMENT_RE = re.compile(r"^ {0,3}<!--")
-# A level-1 ATX heading (`# Title`, or a bare `#`); `##` and deeper are not.
-H1_RE = re.compile(r"^#(?:[ \t]|\r?\n|$)")
+# A level-1 ATX heading (`# Title`, or a bare `#`), indented by up to three spaces as
+# Markdown allows (task 114); `##` and deeper are not.
+H1_RE = re.compile(r"^ {0,3}#(?:[ \t]|\r?\n|$)")
+# A Setext level-1 underline (task 114): a run of `=` under a paragraph's first line.
+SETEXT1_RE = re.compile(r"^ {0,3}=+[ \t]*\r?\n?$")
+# Lines that cannot be the text of a Setext heading: a list item, a quote, an ATX
+# heading, a fence, indented code (4+ spaces), a thematic break.
+# Any ATX heading (levels 1-6): a paragraph may start right under one.
+ATX_RE = re.compile(r"^ {0,3}#{1,6}(?:[ \t]|\r?\n|$)")
+NOT_SETEXT_TEXT_RE = re.compile(r"^(?: {4}|\t| {0,3}(?:[-*+][ \t]|\d{1,9}[.)][ \t]|>|#|`{3}|~{3}))")
+# A block quote line, indented by up to three spaces (task 139).
+QUOTE_RE = re.compile(r"^ {0,3}>")
+# A list item line (task 138 G1-4).
+LIST_ITEM_RE = re.compile(r"^ {0,3}(?:[-*+][ \t]|\d{1,9}[.)][ \t])")
 # A thematic break (`---`, `***`, `___`, spaces allowed between the marks).
 BREAK_RE = re.compile(r"^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*\r?\n?$")
 # A Setext level-2 underline: a pure run of `-` (no inner spaces) — right under a
@@ -179,6 +208,69 @@ def split_sections(text: str) -> "tuple[str, list[tuple[str | None, str, bool]]]
     sections: "list[tuple[str | None, str, bool]]" = []
     current: "tuple[str | None, list[str]] | None" = None
     in_part = False
+
+    def after_break(i: int) -> bool:
+        """The nearest non-blank line above i is a thematic break (`---`)."""
+        k = i - 1
+        while k >= 0 and not lines[k].strip():
+            k -= 1
+        return k >= 0 and k not in masked and bool(BREAK_RE.match(lines[k]))
+
+    # An INDENTED level-1 heading or Setext text is a project part only right under a
+    # thematic break (blank lines allowed). Under a list item or quote it is that
+    # container's content in Markdown (impl panel r1), and the break is what makes the
+    # reading STABLE: it is carried into the part, so after a refresh the part still sits
+    # under it — without it, a part kept on one run sat right under the template's last
+    # list item on the next and was read as its content (impl panel r2).
+
+    def after_paragraph(i: int) -> bool:
+        """A blank line, then a top-level block above i: no line of it a list item,
+        none indented or masked. An indented `#` there is a level-1 heading in Markdown
+        (task 138 G1-4); after a list item it is the item's text. A blank line closes a
+        block quote, so a quote above does not stop it (task 139)."""
+        k = i - 1
+        if k < 0 or lines[k].strip():
+            return False
+        while k >= 0 and not lines[k].strip():
+            k -= 1
+        if k < 0:
+            return True
+        s = k
+        while s > 0 and lines[s - 1].strip():
+            s -= 1
+        return not any(j in masked or LIST_ITEM_RE.match(lines[j])
+                       or (lines[j][:1].isspace() and not QUOTE_RE.match(lines[j]))
+                       for j in range(s, k + 1))
+
+    def top_level_h1(i: int) -> bool:
+        """An ATX level-1 heading: unindented, or indented by 1-3 spaces right under a
+        thematic break or after a top-level paragraph."""
+        line = lines[i]
+        if not H1_RE.match(line):
+            return False
+        return not line[:1].isspace() or after_break(i) or after_paragraph(i)
+
+    def paragraph_text(j: int) -> bool:
+        line = lines[j]
+        return (j not in masked and bool(line.strip()) and not NOT_SETEXT_TEXT_RE.match(line)
+                and not BREAK_RE.match(line) and not SETEXT1_RE.match(line))
+
+    def setext_h1(i: int) -> bool:
+        """Line i opens a Setext level-1 heading: it starts a paragraph (a blank
+        line or the section heading above it) whose lines all read as plain text
+        and which ends in a `===` underline. Its text may run over several lines,
+        as in Markdown; a list item, a quote, code, a heading or a break anywhere in
+        it makes it something else (task 114)."""
+        prev = lines[i - 1] if i > 0 else ""
+        if not (i == 0 or not prev.strip() or ATX_RE.match(prev) or BREAK_RE.match(prev)):
+            return False
+        if lines[i][:1].isspace() and not after_break(i):
+            return False
+        j = i
+        while j < len(lines) and paragraph_text(j):
+            j += 1
+        return j > i and j < len(lines) and j not in masked and bool(SETEXT1_RE.match(lines[j]))
+
     for i, line in enumerate(lines):
         if i in masked:
             pass
@@ -187,7 +279,7 @@ def split_sections(text: str) -> "tuple[str, list[tuple[str | None, str, bool]]]
                 sections.append((current[0], "".join(current[1]), in_part))
             current = (line.rstrip("\n"), [])
             continue
-        elif current is not None and H1_RE.match(line):
+        elif current is not None and (top_level_h1(i) or setext_h1(i)):
             body = current[1]
             carried: list[str] = []
             while body and (not body[-1].strip() or BREAK_RE.match(body[-1])):
@@ -198,6 +290,10 @@ def split_sections(text: str) -> "tuple[str, list[tuple[str | None, str, bool]]]
                 carried.pop(0)         # the joiner puts back exactly one blank line
             sections.append((current[0], "".join(body), in_part))
             in_part = True
+            # An indented heading kept on the paragraph rule is written unindented (it
+            # renders the same): after a refresh it may follow a list item (task 138 G1-4).
+            if line[:1].isspace() and not after_break(i) and H1_RE.match(line):
+                line = line.lstrip(" ")
             current = (None, carried + [line])
             continue
         if current is not None:
@@ -212,9 +308,34 @@ def split_sections(text: str) -> "tuple[str, list[tuple[str | None, str, bool]]]
 def merge_claude_md(template_text: str, existing: "str | None",
                     project_name: str) -> str:
     """The deterministic merge described in the module docstring."""
+    return merge_report(template_text, existing, project_name)[0]
+
+
+def _dropped_lines(old: str, new: str, section: str) -> "list[tuple[str, str]]":
+    """(section, line) for every non-blank line of `old` (a template-owned section as
+    the file had it) that `new` (the template's text for it) does not hold — counted,
+    so a line written twice and kept once is one dropped line."""
+    left = collections.Counter(new.splitlines())
+    out: "list[tuple[str, str]]" = []
+    for line in old.splitlines():
+        if not line.strip():
+            continue
+        if left[line] > 0:
+            left[line] -= 1
+        else:
+            out.append((section, line))
+    return out
+
+
+def merge_report(template_text: str, existing: "str | None",
+                 project_name: str) -> "tuple[str, list[tuple[str, str]]]":
+    """(merged text, dropped lines) — see `_dropped_lines`. Text a project wrote
+    INSIDE a template-owned section is replaced by contract; the caller must not let
+    that happen silently (task 114: `main` backs the old file up and says so)."""
     fresh = template_body(template_text, project_name)
     if existing is None or not existing.strip():
-        return fresh
+        return fresh, []
+    original = existing
     # A file whose every line ends in CRLF is merged in LF and written back in CRLF,
     # so refreshed template text and the joiner's blank lines match it (task 093 r1);
     # a mixed or LF file is left as it was.
@@ -238,6 +359,7 @@ def merge_claude_md(template_text: str, existing: "str | None",
     missing = [heading + "\n" + body for heading, body, _ in tmpl_sections
                if heading is not None and heading.strip().lower() not in owner]
     out: list[str] = [preamble]
+    dropped: "list[tuple[str, str]]" = []
     for idx, (heading, body, _) in enumerate(existing_sections):
         if heading is None:            # a project-owned `#` part, kept verbatim
             # template sections the file lacks go right above its first project
@@ -249,6 +371,10 @@ def merge_claude_md(template_text: str, existing: "str | None",
         key = heading.strip().lower()
         if owner.get(key) == idx:
             th, tb = tmpl_map[key]
+            # the only place text leaves the file: a template-owned section replaced
+            # bodies only: the heading matched case-insensitively, so re-casing it is
+            # not text the project loses (impl panel r2)
+            dropped += _dropped_lines(body, tb, heading.strip())
             out.append(th + "\n" + tb)
         else:
             out.append(heading + "\n" + body)
@@ -260,7 +386,38 @@ def merge_claude_md(template_text: str, existing: "str | None",
             merged = merged.rstrip("\n") + "\n\n"
         merged += part
     merged = merged.rstrip("\n") + "\n"
-    return merged.replace("\n", "\r\n") if crlf else merged
+    del original
+    return (merged.replace("\n", "\r\n") if crlf else merged), dropped
+
+
+def write_backup(root: Path, raw: bytes) -> Path:
+    """The previous CLAUDE.md, byte for byte, under `.agent/backups/` (gitignored by
+    init's block). A new name every time; never overwrites an older backup."""
+    d = root / ".agent" / "backups"
+    d.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    n = 0
+    while True:
+        path = d / (f"CLAUDE.md.{stamp}.bak" if n == 0 else f"CLAUDE.md.{stamp}-{n}.bak")
+        try:
+            # claim the name exclusively: two runs in one second can never pick the same
+            # file and overwrite each other's backup (impl panel r1)
+            os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644))
+            break
+        except FileExistsError:
+            n += 1
+    atomic_write(path, raw)            # bytes: written verbatim over our own empty claim
+    return path
+
+
+def replaced_message(dropped: "list[tuple[str, str]]", backup_rel: str) -> str:
+    names: "list[str]" = []
+    for name, _line in dropped:
+        if name not in names:
+            names.append(name)
+    shown = ", ".join(names[:5]) + (f" and {len(names) - 5} more" if len(names) > 5 else "")
+    return (f"template sections merged — {len(dropped)} line(s) of the previous file are not in "
+            f"the new one (in {shown}); the previous file is saved at {backup_rel}")
 
 
 def merge_gitignore(existing: "str | None") -> "str | None":
@@ -302,15 +459,25 @@ def main(argv: "list[str]") -> int:
         # raw bytes in, `newline=""` out: universal-newline reading and os.linesep
         # writing used to rewrite a CRLF file (and, on Windows, an LF one) before the
         # merge could see its endings (task 093 r2)
-        existing = (claude_md.read_bytes().decode("utf-8", errors="replace")
-                    if claude_md.exists() else None)
-        merged = merge_claude_md(template_text, existing, name)
+        raw = claude_md.read_bytes() if claude_md.exists() else None
+        # surrogateescape, both ways: a byte that is not UTF-8 (a cp1252 file, say) is
+        # carried through the merge and written back AS THAT BYTE — `errors="replace"`
+        # turned it into U+FFFD silently (impl panel r1)
+        existing = raw.decode("utf-8", errors="surrogateescape") if raw is not None else None
+        merged, dropped = merge_report(template_text, existing, name)
         if existing is None:
             atomic_write(claude_md, merged, newline="")
             print("CLAUDE.md:CREATED")
         elif merged != existing:
-            atomic_write(claude_md, merged, newline="")
-            print("CLAUDE.md:MERGED")
+            if dropped:
+                # the old file is saved BEFORE it is replaced (task 114: never a silent loss)
+                backup = write_backup(root, raw)
+                atomic_write(claude_md, merged.encode("utf-8", errors="surrogateescape"))
+                rel = backup.relative_to(root).as_posix()
+                print("CLAUDE.md:REPLACED:" + replaced_message(dropped, rel))
+            else:
+                atomic_write(claude_md, merged.encode("utf-8", errors="surrogateescape"))
+                print("CLAUDE.md:MERGED")
         else:
             print("CLAUDE.md:UNCHANGED")
     except OSError as e:

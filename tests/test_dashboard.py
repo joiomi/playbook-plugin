@@ -217,6 +217,23 @@ class JournalParsing(unittest.TestCase):
         st = db.window_stats(recs, NOW)["s"]
         self.assertEqual((st["runs"], st["ok"], st["timeout"], st["median_ms"]), (3, 2, 1, 200_000))
 
+    def test_intent_records_do_not_move_seat_stats(self):
+        # Task 120 review (opus I1): a `tasks intent` extraction is a short prompt over one
+        # evidence file under the default judge's seat — counted with reviews, a run of fast
+        # extractions halves the baseline median and the next review-only window "doubles"
+        # it: a false drift alarm telling the owner to drop a panel seat.
+        reviews = [_rec(1, "s", "ok", 100_000), _rec(2, "s", "timeout", 300_000), _rec(5, "s", "ok", 200_000)]
+        intents = [_rec(d, "s", "ok", 5_000, kind="intent", round=0) for d in (1, 2, 3, 4)]
+        recs, _ = db.load_review_records(self._write(reviews + intents))
+        st = db.window_stats(recs, NOW)["s"]
+        self.assertEqual((st["runs"], st["ok"], st["timeout"], st["median_ms"]), (3, 2, 1, 200_000))
+        j = "codex:gpt-5.6-sol:high"                              # the default judge's seat
+        base = [_rec(d, j, "ok", 5_000, kind="intent", round=0) for d in (20, 21, 22, 23, 24, 25)]
+        base += [_rec(d, j, "ok", 100_000) for d in (26, 27, 28)]
+        cur = [_rec(d, j, "ok", 110_000) for d in (1, 2, 3)]
+        recs, _ = db.load_review_records(self._write(base + cur))
+        self.assertEqual(db.drift_triggers(recs, NOW, DriftTrigger._panel(None)), [])
+
     def _write(self, lines):
         d = tempfile.mkdtemp()
         p = Path(d) / "j.jsonl"

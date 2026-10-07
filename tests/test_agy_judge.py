@@ -44,6 +44,18 @@ def fx(name: str) -> str:
     return (FIX / name).read_text(encoding="utf-8")
 
 
+# The token counts each capture reports, written out — read from the files by hand, so a
+# change in how a version reports usage cannot move the expectation with it (task 138
+# G3-6). test_agy_131 swaps in agy 1.3.1's own table.
+USAGE = {"success-pong": (12555, 214), "success-tools": (50748, 6650),
+         "denied-command": (12586, 1760)}
+
+
+def known(name: str) -> dict:
+    i, o = USAGE[name]
+    return {"status": "known", "in": i, "out": o}
+
+
 def _cp(stdout="", rc=0, stderr=""):
     return subprocess.CompletedProcess(["agy"], rc, stdout=stdout, stderr=stderr)
 
@@ -247,7 +259,7 @@ class ExtractAgy(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual(use, {"status": "known", "in": want["usage"]["input_tokens"],
                                "out": want["usage"]["output_tokens"]})
-        self.assertEqual((use["in"], use["out"]), (12555, 214))      # the capture's own numbers
+        self.assertEqual((use["in"], use["out"]), USAGE["success-pong"])      # the capture's own numbers
 
     def test_tool_using_turn_reports_the_turn_totals(self):
         raw = fx("success-tools.stdout")
@@ -258,7 +270,7 @@ class ExtractAgy(unittest.TestCase):
         # the result event's totals, not any single step's numbers
         self.assertEqual((use["in"], use["out"]),
                          (want["usage"]["input_tokens"], want["usage"]["output_tokens"]))
-        self.assertEqual((use["in"], use["out"]), (50748, 6650))
+        self.assertEqual((use["in"], use["out"]), USAGE["success-tools"])
         steps = [json.loads(ln)["step_update"]["usage"]["input_tokens"] for ln in raw.splitlines()
                  if '"usage"' in ln and '"step_update"' in ln]
         self.assertGreater(len(steps), 1)
@@ -266,7 +278,7 @@ class ExtractAgy(unittest.TestCase):
 
     def test_parse_usage_recognizes_the_stream(self):
         self.assertEqual(usage.parse_usage(fx("success-pong.stdout")),
-                         {"status": "known", "in": 12555, "out": 214})
+                         known("success-pong"))
 
     def test_error_result_is_an_error_with_no_text(self):
         text, use, errors = usage.extract_agy(fx("error-missing-event.stdout"))
@@ -305,7 +317,7 @@ class ExtractAgy(unittest.TestCase):
         raw = fx("error-missing-event.stdout") + fx("success-pong.stdout").splitlines()[-1] + "\n"
         text, use, errors = usage.extract_agy(raw)
         self.assertEqual((text, errors), ("PONG\n", []))
-        self.assertEqual(use["in"], 12555)
+        self.assertEqual(use["in"], USAGE["success-pong"][0])
 
     def test_the_stream_names_the_model_that_ran(self):
         self.assertEqual(usage.agy_stream_model(fx("success-pong.stdout")), "gemini-3.8-flash-high")
@@ -319,8 +331,8 @@ class JudgeOutputRule(unittest.TestCase):
         out, _ = _run_judge(_cp(fx("success-tools.stdout")))
         self.assertIsInstance(out, JudgeOutput)
         self.assertEqual(str(out), "CODE=HERON-5518\nCMD=42")
-        self.assertEqual(out.usage, {"status": "known", "in": 50748, "out": 6650})
-        self.assertEqual(review._parse_judge_usage(out), {"status": "known", "in": 50748, "out": 6650})
+        self.assertEqual(out.usage, known("success-tools"))
+        self.assertEqual(review._parse_judge_usage(out), known("success-tools"))
         self.assertEqual(review._judge_status(out), "ok")
 
     def test_not_signed_in_fails_the_seat_and_names_the_sign_in(self):
@@ -484,7 +496,7 @@ class JudgeOutputRule(unittest.TestCase):
         self.assertTrue(str(out).startswith("(FAILED — "), str(out)[:60])
         self.assertIn("RunCommand", str(out))
         self.assertEqual(review._judge_status(out), "fail")
-        self.assertEqual(out.usage, {"status": "known", "in": 12586, "out": 1760})   # the turn was billed
+        self.assertEqual(out.usage, known("denied-command"))   # the turn was billed
 
     def test_no_result_event_and_non_envelope_stdout_are_failed_seats(self):
         cut = "\n".join(fx("success-pong.stdout").splitlines()[:-1]) + "\n"
@@ -636,7 +648,7 @@ class LooksFineButIsNot(unittest.TestCase):
         for clock in ((1000.0, 1090.0), (1000.0, 1093.5)):
             out, _ = _run_judge(_cp(fx("success-pong.stdout"), stderr=""), timeout=90, clock=clock)
             self.assertEqual(str(out), "PONG")
-            self.assertEqual(out.usage, {"status": "known", "in": 12555, "out": 214})
+            self.assertEqual(out.usage, known("success-pong"))
         out, _ = _run_judge(_cp(fx("success-pong.stdout"), stderr=""), timeout=None, clock=(0.0, 99999.0))
         self.assertEqual(str(out), "PONG")
         # agy's own line still wins over a complete-looking result
@@ -833,7 +845,7 @@ class ImplPanelRound2(unittest.TestCase):
             got = usage.extract_agy(raw)
             self.assertIsNotNone(got, repr(ch))
             self.assertEqual(got[0], f"1. first line{ch}second line\n")
-            self.assertEqual(got[1], {"status": "known", "in": 12555, "out": 214})
+            self.assertEqual(got[1], known("success-pong"))
             out, _ = _run_judge(_cp(raw))
             self.assertEqual(str(out), f"1. first line{ch}second line")
             self.assertEqual(review._judge_status(out), "ok")
@@ -1731,7 +1743,7 @@ class ReviewRunner(unittest.TestCase):
         self.assertEqual(len(recs), 1, recs)
         r = recs[0]
         self.assertEqual((r["kind"], r["seat"], r["status"]), ("panel", "agy:gemini-3.8-flash-high", "ok"))
-        self.assertEqual(r["usage"], {"status": "known", "in": 50748, "out": 6650})
+        self.assertEqual(r["usage"], known("success-tools"))
         agent, args, kw = self.calls[0]
         self.assertEqual(agent, "agy")
         self.assertIn("stream-json", args)
@@ -1787,7 +1799,7 @@ class ReviewRunner(unittest.TestCase):
         self.assertNotIn('"step_update"', task_text)
         (r,) = self._reviews()
         self.assertEqual((r["kind"], r["seat"], r["status"]), ("single", "agy:gemini-3.8-flash-high", "ok"))
-        self.assertEqual(r["usage"], {"status": "known", "in": 50748, "out": 6650})
+        self.assertEqual(r["usage"], known("success-tools"))
 
     def test_single_judge_print_timeout_and_killer(self):
         self._single(_cp(fx("success-pong.stdout")), extra=("--timeout", "1500"))

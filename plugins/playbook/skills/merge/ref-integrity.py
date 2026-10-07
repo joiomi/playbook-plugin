@@ -191,6 +191,64 @@ def _git_show(ref: str, path: str) -> str | None:
     return proc.stdout if proc.returncode == 0 else None
 
 
+def _absent_at(ref: str, path: str) -> bool:
+    """True only when `ref` is a readable commit that has no `path` (task 122).
+
+    `git show <ref>:<path>` fails both for a bad ref and for a file the commit
+    does not have; only the second is a well-defined base — an EMPTY one (the
+    merge base predates the map, so every node and slug is this merge's)."""
+    try:
+        c = subprocess.run(['git', 'rev-parse', '--verify', '--quiet', f'{ref}^{{commit}}'],
+                           capture_output=True, check=False)
+        if c.returncode != 0:
+            return False
+        t = subprocess.run(['git', 'ls-tree', '--full-tree', '--name-only', ref, '--', path],
+                           capture_output=True, text=True, encoding='utf-8', errors='replace',
+                           check=False)
+    except OSError:
+        return False
+    return t.returncode == 0 and t.stdout.strip() == ''
+
+
+def _target_tip(base: str) -> "str | None":
+    """The pre-merge target tip, from git's own merge state (task 122 r2): HEAD
+    while a merge is in progress (MERGE_HEAD exists), HEAD^1 once HEAD is the
+    merge commit — and only when `base` is a merge base of that merge's two sides
+    (task 138 G4-3: a later merge at HEAD, or an old one outside any merge, is not
+    the merge under check). None otherwise. Derived, never passed — a ref the
+    caller chose would be a sanctioned way to swap the baseline (G2-29)."""
+    def _rev(ref: str) -> "str | None":
+        p = subprocess.run(['git', 'rev-parse', '-q', '--verify', f'{ref}^{{commit}}'],
+                           capture_output=True, text=True, check=False)
+        return p.stdout.strip() if p.returncode == 0 and p.stdout.strip() else None
+    try:
+        if _rev('MERGE_HEAD'):
+            target, source = _rev('HEAD'), _rev('MERGE_HEAD')
+        elif _rev('HEAD^2'):
+            target, source = _rev('HEAD^1'), _rev('HEAD^2')
+        else:
+            return None
+        want = _rev(base)
+        if not (target and source and want):
+            return None
+        mb = subprocess.run(['git', 'merge-base', '--all', target, source],
+                            capture_output=True, text=True, check=False)
+        return target if mb.returncode == 0 and want in mb.stdout.split() else None
+    except OSError:
+        return None
+
+
+def _read_base(ref: str, path: str) -> "tuple[str | None, bool]":
+    """(text, absent): the file at `ref`; ('', True) when the commit has no such
+    file; (None, False) when the ref cannot be read — the caller fails closed."""
+    text = _git_show(ref, path)
+    if text is not None:
+        return text, False
+    if _absent_at(ref, path):
+        return '', True
+    return None, False
+
+
 def check(main_path: Path, overflow_path: Path,
           remap: dict[int, int] | None = None,
           base: str | None = None) -> tuple[list[str], list[str], list[str]]:
@@ -270,24 +328,66 @@ def check(main_path: Path, overflow_path: Path,
     # comparing (base [28] == HEAD [35] under --remap 28:35). The differential is
     # on mismatch/missing *status* — NOT body equality — because a renumber
     # legitimately changes a node's content (its inner refs get remapped).
-    base_ctx = None
+    # Task 122 (gauntlet 2 G2-29): the ref the differential compares against.
+    # A merge base that predates the map is a readable commit without the file —
+    # not an unreadable ref. Then the PRE-MERGE TARGET TIP is the inherited state:
+    # what the target already had is not this merge's, what the source brings is
+    # (and can be fixed in the merge). The tip comes from git's merge state, not
+    # from the caller (`_target_tip`). Only when the target had no map either is
+    # the base genuinely empty. Either side may have been renumbered, so --remap
+    # against a tip that has a map fails closed (task 138 G4-4).
+    eff_base: str | None = None        # the ref actually compared against
+    eff_text: str | None = None        # its map ('' = no map there)
+    via_fallback = False
+    both_absent = False
     if base:
-        base_main_text = _git_show(base, main_path.name)
+        base_main_text, base_absent = _read_base(base, main_path.name)
         if base_main_text is None:
             # Fail closed: --base was requested for the gating checks but the ref
             # is unreadable — don't silently fall through to "looks clean".
             findings.append(
                 f"--base {base}: cannot read {main_path.name} at that ref — "
                 "differential mirror/archive checks cannot run (failing closed)")
+        elif not base_absent:
+            eff_base, eff_text = base, base_main_text
+        elif (target_tip := _target_tip(base)) is None:
+            findings.append(
+                f"--base {base}: {main_path.name} did not exist at the merge base (it predates the "
+                "map), and no merge is in progress or committed at HEAD with that merge base to "
+                "take the pre-merge target tip from — run this inside the merge (failing closed)")
         else:
-            base_ov_text = _git_show(base, overflow_path.name) or ''  # absent = newly adopting overflow
-            _to_head = (lambda b: remap.get(b, b)) if remap else (lambda b: b)
-            base_ctx = {
-                'main_bodies': _node_bodies(base_main_text),
-                'ov_ids': set(_node_ids(base_ov_text)),
-                'ov_bodies': _node_bodies(base_ov_text),
-                'to_head': _to_head,
-            }
+            fb_text, fb_absent = _read_base(target_tip, main_path.name)
+            if fb_text is None:
+                findings.append(
+                    f"the pre-merge target tip {target_tip}: cannot read {main_path.name} there "
+                    "(failing closed)")
+            elif remap and not fb_absent:
+                # Task 138 G4-4: SKILL.md lets either side be renumbered (trunk wins / the
+                # richer side), so the tip's ids may be the old ones or the new ones; a
+                # guess either way can cancel a new divergence at a reused id.
+                findings.append(
+                    f"--remap with --base {base}: the merge base predates the map and both sides "
+                    f"have one, so the tool cannot tell which side was renumbered — compare the "
+                    f"mirror and archive by hand against {target_tip} (failing closed)")
+            else:
+                eff_base, eff_text, via_fallback, both_absent = target_tip, fb_text, True, fb_absent
+                notes.append(
+                    f"--base {base}: {main_path.name} did not exist at the merge base — compared "
+                    f"against the pre-merge target tip {target_tip} instead"
+                    + (" (no map there either: every node and [[slug]] is this merge's)"
+                       if fb_absent else ""))
+
+    base_ctx = None
+    if eff_text is not None:
+        base_main_text = eff_text
+        base_ov_text = _git_show(eff_base, overflow_path.name) or ''  # absent = newly adopting overflow
+        _to_head = (lambda b: remap.get(b, b)) if (remap and not via_fallback) else (lambda b: b)
+        base_ctx = {
+            'main_bodies': _node_bodies(base_main_text),
+            'ov_ids': set(_node_ids(base_ov_text)),
+            'ov_bodies': _node_bodies(base_ov_text),
+            'to_head': _to_head,
+        }
 
     # 3b. byte-identical mirror: a NON-↗ node present in both files must match.
     # With --base, flag ONLY mirrors that NEWLY diverged this merge (a pre-existing
@@ -342,6 +442,16 @@ def check(main_path: Path, overflow_path: Path,
                 warnings.append(
                     "archive (advisory — base is a PARTIAL archive, convention unclear): "
                     f"possibly-unmirrored new full node(s): {new_unmirrored}")
+        elif both_absent and overflow_ids:
+            # No map before this merge anywhere: there is no base convention to
+            # hold it to, but silence would hide a skipped Step 6 (task 122 r1).
+            unmirrored = sorted(
+                i for i in main_ids
+                if not _is_summary(main_bodies.get(i, '')) and i not in overflow_ids)
+            if unmirrored:
+                warnings.append(
+                    "archive (advisory — no map at the merge base or the target, so no "
+                    f"convention to compare): full node(s) not in the overflow: {unmirrored}")
 
     # 4. every [N] ref resolves to a defined MIND_MAP node
     all_refs = _refs(main_text) | _refs(overflow_text)
@@ -382,7 +492,9 @@ def check(main_path: Path, overflow_path: Path,
     if dangling:
         base_dangling: set[str] = set()
         if base:
-            base_text = _git_show(base, main_path.name)
+            # the same compared-against ref as the mirror/archive checks (task 122);
+            # when there is none, that failure is already a finding above
+            base_text = eff_text
             if base_text is None:
                 warnings.append(f"--base {base}: could not read {main_path.name} at that ref "
                                 "— treating all dangling slugs as warnings")
@@ -393,7 +505,7 @@ def check(main_path: Path, overflow_path: Path,
                 # Current dangling slugs are collected from BOTH files, so the
                 # inherited set must be too — else a slug that already dangled in
                 # base OVERFLOW would be mis-flagged as NEW.
-                base_ov = _git_show(base, overflow_path.name)
+                base_ov = _git_show(eff_base, overflow_path.name)
                 if base_ov:
                     base_dangling |= _dangling_slugs(base_ov, base_defined)
         if base:

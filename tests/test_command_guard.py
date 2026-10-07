@@ -1904,7 +1904,7 @@ H_VECTORS = [
     ("H34", "stop-hook", "stop-active", {}, {}, 0, 0, ""),
     ("H36", "stop-hook", "stop", {"status": "blocked"}, {}, 0, 0, ""),
     ("H38", "chat-log-hook", "prompt-short", {}, {}, 0, 0, ""),
-    ("H39", "chat-log-hook", "prompt-long", {}, {}, 0, 0, "open: R19 (500-char cut, owner Q-C b = 50,000) — another S11 group"),
+    ("H39", "chat-log-hook", "prompt-long", {}, {}, 0, 0, "kept whole: the cap is 50,000 chars (task 127, owner Q-C b)"),
     ("H40", "chat-log-hook", "prompt-command-name", {}, {}, 0, 0, "1.5.45 logs it; candidate skips (task 088)"),
     ("H41", "chat-log-hook", "prompt-task-notification", {}, {}, 0, 0, "1.5.45 logs it; candidate skips (task 088)"),
     ("H42", "chat-log-hook", "prompt-user-query-tags", {}, {}, 0, 0, ""),
@@ -1912,7 +1912,7 @@ H_VECTORS = [
     ("H45", "session-start-hook", "session-start-resume", {}, {}, 0, 0, ""),
     ("H46", "session-end-hook", "session-end-clear", {}, {}, 0, 0, "keeps the pointer"),
     ("H48", "session-end-hook", "session-end-other", {}, {}, 0, 0, "deletes the session dir"),
-    ("H51", "session-end-hook", "session-end-exit", {}, {}, 0, 0, "open: P2 / Q-D (b) nested exit — another S11 group"),
+    ("H51", "session-end-hook", "session-end-exit", {}, {}, 0, 0, "the exiting session deletes its own dir; a nested one keeps the outer's (task 126, Q-D (b))"),
 ]
 
 
@@ -1978,6 +1978,17 @@ class GauntletHookStepsAsVectors(unittest.TestCase):
                     # answers the shared fallback (tasks 105/106). CI's Windows
                     # lane (run 37290635414) showed the POSIX id expected there.
                     sid = "pid-win-fallback" if sys.platform == "win32" else f"pid-{_os.getpid()}"
+                if hook == "session-end-hook":
+                    # Task 126 (owner Q-D (b)): session-end deletes `pid-N` only when
+                    # the EXITING process is N — the lowest agent in the hook's chain.
+                    # The hook's parent is this test process, so it plays the claude.
+                    import os as _os
+                    from tests._fake_agent import agent_proc_root
+                    sid = f"pid-{_os.getpid()}"
+                    (d / ".agent" / "sessions" / sid).mkdir(parents=True, exist_ok=True)
+                    (d / ".agent" / "sessions" / sid / "current_state").write_text("003\n", encoding="utf-8")
+                    env["PLAYBOOK_PROC_ROOT"] = agent_proc_root(d / "anc", _os.getpid(), "claude")
+                    env["PLAYBOOK_SESSION_ID"] = sid
                 r = subprocess.run([bash_or_skip(), str(self.PLUGIN / "scripts" / hook)],
                                    input=self._payload(d, pay), cwd=d, env=env,
                                    capture_output=True, text=True, timeout=60)
@@ -2005,7 +2016,7 @@ class GauntletHookStepsAsVectors(unittest.TestCase):
         if step == "H38":
             self.assertIn("g2 canary prompt", log)
         if step == "H39":
-            self.assertNotIn("END-MARK", log, "open R19: the cut is still 500 chars")
+            self.assertIn("END-MARK", log, "a 1,100-char prompt is kept whole (task 127: cap 50,000)")
         if step in ("H40", "H41"):
             self.assertEqual(log, "", "the candidate does not log harness envelopes (task 088)")
         if step == "H42":

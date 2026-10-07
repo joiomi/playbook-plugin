@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -314,7 +315,8 @@ def build_prompt(s: Slice) -> str:
     )
 
 
-def make_default_runner(project_path: Path, *, timeout_secs: int = 300):
+def make_default_runner(project_path: Path, *, timeout_secs: int = 300,
+                        task: "str | None" = None):
     """Production runner: default judge model, blindness via an evidence-only dir.
 
     Each call constructs the default-judge adapter with `project_root` pointed at
@@ -323,6 +325,11 @@ def make_default_runner(project_path: Path, *, timeout_secs: int = 300):
     see — blindness is enforced by construction, not just by instruction.
     Guarantee level: strong (cwd is the evidence dir; no repo pointer) but not a
     formal jail — see task 141 OUT-of-scope (full FS isolation deferred).
+
+    Every extraction is a judge call, so each writes one review-spend record
+    (kind "intent", round 0 = unknown) to the project's journal, the way the
+    review runner's calls do (task 120, gauntlet 2 G2-25: none did). Best-effort:
+    a journal failure never changes the extraction.
     """
     import tempfile
 
@@ -360,16 +367,43 @@ def make_default_runner(project_path: Path, *, timeout_secs: int = 300):
     provider, variant = resolve_judge_spec(cfg.get("default_judge") or "opus")
     adapter_cls = adapters.get(provider, ClaudeAdapter)
 
+    from tasks import review as _review
+    seat = _review._seat_with_effort(provider, variant)
+
+    def _spend(t0: float, status: str, output: str = "", error: str = "", usage=None) -> None:
+        _review._journal_review_spend(
+            project_path, kind="intent", seat=seat, task=task, round_no=0,
+            duration_ms=int((time.monotonic() - t0) * 1000), status=status,
+            usage=usage or (_review._parse_judge_usage(output) if output else None),
+            error=error)
+
     def run(layer: str, prompt: str) -> str:
         with tempfile.TemporaryDirectory(prefix=f"intent-{layer}-") as td:
             (Path(td) / "evidence.md").write_text(
                 prompt.split("--- EVIDENCE", 1)[-1], encoding="utf-8")
             adapter = adapter_cls(session_id="judge", project_root=Path(td))
-            return adapter.run_headless_judge(
-                prompt=prompt, model=variant, system_context="",
-                web_search=False, timeout_secs=timeout_secs,
-                budget_usd=budget_usd,
-            )
+            t0 = time.monotonic()
+            try:
+                out = adapter.run_headless_judge(
+                    prompt=prompt, model=variant, system_context="",
+                    web_search=False, timeout_secs=timeout_secs,
+                    budget_usd=budget_usd,
+                )
+            except subprocess.TimeoutExpired as expired:
+                # A usage frame the CLI wrote before the kill is real spend — read it
+                # strictly from the partial stdout, as the panel path does (task 138 G3-8).
+                raw = getattr(expired, "stdout", None) or getattr(expired, "output", None) or ""
+                if isinstance(raw, bytes):
+                    raw = raw.decode("utf-8", errors="replace")
+                from provider.usage import parse_usage
+                _spend(t0, "timeout", error="timed out", usage=parse_usage(raw) if raw else None)
+                raise
+            except Exception as e:
+                _spend(t0, "dnf", error=f"{type(e).__name__}: {e}")
+                raise
+            status = _review._judge_status(out)
+            _spend(t0, status, out, _review._judge_error(out, status))
+            return out
 
     return run
 

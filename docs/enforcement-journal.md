@@ -53,11 +53,12 @@ of `task-gate`, `command-guard`, `stop`, `gate-batch-check`, or `close`.
 
 ## Family 2 — review spend (`hook` = `review`, `decision` = `record`)
 
-Emitted by the review runner (`tasks/review.py`) for **every judge invocation** —
-each panel seat, the single judge, and the tail-cert judge — via
+Emitted for **every judge invocation** — by the review runner (`tasks/review.py`)
+for each panel seat, the single judge and the tail-cert judge, and by `tasks intent`
+(`tasks/intent.py`) for each blind extraction (task 120) — via
 `pb_journal.append_review`, on its completion or timeout. The one exception is a
-**tamper hard-stop**: if a read-only judge mutated the working tree, the review
-emits its tamper banner and stops, recording **no** spend — the journal write
+**tamper hard-stop**: if the working tree changed while the judges ran (a judge or
+any other writer — the guard cannot tell which), the review emits its tamper banner and stops, recording **no** spend — the journal write
 must never precede that banner (a hostile-tree hang inside it could suppress the
 banner, the "operation-before-banner" class the tamper guard is built around),
 so every path emits only past the tamper check. `reason` is `"review spend"`.
@@ -65,7 +66,7 @@ Additional fields:
 
 | key           | type          | meaning                                                            |
 |---------------|---------------|--------------------------------------------------------------------|
-| `kind`        | string        | `panel` \| `single` \| `tail-cert`                                 |
+| `kind`        | string        | `panel` \| `single` \| `tail-cert` \| `intent` (one per `tasks intent` extraction; `round` 0; left out of `tasks dashboard`'s per-seat stats and drift advice, which measure reviews) |
 | `seat`        | string        | the judge spec as `model:effort` (e.g. `claude:opus:high`, `codex:gpt-5.6-terra:medium`; an agy id carries its effort: `agy:gemini-3.8-flash-high`) |
 | `task`        | string        | task number (`"042"`) or `"-"` for a taskless / `--prompt` review  |
 | `round`       | int           | review iteration (see the round note below); `0` = unknown         |

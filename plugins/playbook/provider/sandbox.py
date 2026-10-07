@@ -382,12 +382,217 @@ def _normalize_rw(extra_rw: Iterable[str] | None) -> list[str]:
     return [str(Path(p).resolve()) for p in extra_rw]
 
 
+# The conversation records a read-only judge must not read (owner decision
+# 2026-10-02, gauntlet 2 G2-05: a judge quoted a canary that existed only in the
+# chat log). Names under `.agent` and under each lane dir in it; a file's
+# rotated/archived siblings (`chat_log.md.1`, `bash_history.archived-…`) too.
+_JUDGE_MASKED_FILES = ("chat_log.md", "bash_history")
+_JUDGE_MASKED_DIRS = ("sessions",)
+
+
+def _is_record_file(name: str) -> bool:
+    return any(name == f or name.startswith(f + ".") for f in _JUDGE_MASKED_FILES)
+
+
+def _agent_dir(project_dir: Path | str) -> "Path | None":
+    try:
+        agent = (Path(project_dir).resolve() / ".agent").resolve()
+        return agent if agent.is_dir() else None
+    except OSError:
+        return None
+
+
+def _is_record_dir(name: str) -> bool:
+    # `sessions` and its archives (`sessions.archived-1`, task 139 C-3)
+    return any(name == d or name.startswith(d + ".") for d in _JUDGE_MASKED_DIRS)
+
+
+def _symlinked_lanes(agent: Path) -> "dict[str, Path]":
+    """{link name: the real directory behind it} for the symlinks directly in `.agent`
+    — `--ro-bind / /` (and seatbelt's allow-default) show a symlinked lane at its real
+    path too. Resolved ONCE: the sandbox links each name to exactly the directory it
+    masks (task 139 C-4 — two reads let a re-point in between link one directory and
+    mask another). Not an ancestor of `.agent` (that would hide the project itself; its
+    `.agent` part is masked anyway) and not inside it (a lane there is a layer itself)."""
+    out: "dict[str, Path]" = {}
+    try:
+        entries = sorted(os.scandir(agent), key=lambda e: e.name)
+    except OSError:
+        return out
+    for e in entries:
+        try:
+            if not (e.is_symlink() and e.is_dir()) or _is_record_dir(e.name):
+                continue
+            real = Path(e.path).resolve()
+        except OSError:
+            continue
+        if real == agent or agent.is_relative_to(real) or real.is_relative_to(agent) \
+                or real in out.values():
+            continue
+        out[e.name] = real
+    return out
+
+
+def _record_link_targets(agent: Path, linked: "dict[str, Path]") -> "tuple[list[Path], list[Path]]":
+    """(files, dirs): the real targets of RECORDS that are themselves symlinks — in
+    `.agent`, in each directory directly under it and in each symlinked lane. Masking
+    the name alone left the target readable at its real path (task 139 post-D6). Not
+    an ancestor of `.agent` (that would hide the project itself)."""
+    files: list[Path] = []
+    dirs: list[Path] = []
+    roots = [agent] + list(linked.values())
+    try:
+        roots += sorted(Path(e.path) for e in os.scandir(agent)
+                        if e.is_dir(follow_symlinks=False))
+    except OSError:
+        pass
+    for root in roots:
+        try:
+            entries = sorted(os.scandir(root), key=lambda e: e.name)
+        except OSError:
+            continue
+        for e in entries:
+            try:
+                if not e.is_symlink():
+                    continue
+                # by NAME when dangling: is_dir() is False for a missing target (run 3)
+                if _is_record_dir(e.name) and (e.is_dir() or not os.path.exists(e.path)):
+                    bucket = dirs
+                elif _is_record_file(e.name) and not e.is_dir():
+                    bucket = files
+                else:
+                    continue
+                real = Path(e.path).resolve()
+            except OSError:
+                continue
+            # a DANGLING target is kept too (task 139 post-D6 run 2): the writer may
+            # create it while the judge runs
+            if agent.is_relative_to(real) or real in files or real in dirs:
+                continue
+            bucket.append(real)
+    return files, dirs
+
+
+def _bwrap_record_masks(project_dir: Path | str) -> list[str]:
+    """bwrap args that hide the conversation records from a read-only judge (task
+    125; task 138 G3-2..G3-4). `.agent`, each directory in it, and the real
+    directory behind each symlinked lane become an empty tmpfs LAYER onto which
+    only the non-record entries present at launch are bound back. A record created
+    or renamed into place later never appears (a rename over a single-file mount
+    detached it on Linux >= 3.18); each record present at launch gets /dev/null as
+    a placeholder (opening it is refused: the read-only bind is nodev), `sessions/`
+    an empty dir. A layer that cannot be listed stays empty, an entry that cannot
+    be read is left out — fail closed, never open. Never raises."""
+    agent = _agent_dir(project_dir)
+    if agent is None:
+        return []
+    args: list[str] = []
+    done: set[Path] = set()
+    linked = _symlinked_lanes(agent)
+
+    def layer(real: Path, lanes: bool) -> list[Path]:
+        """Mount the layer for `real`; return its sub-directories that need their own."""
+        if real in done:
+            return []
+        done.add(real)
+        args.extend(["--tmpfs", str(real)])
+        try:
+            entries = sorted(os.scandir(real), key=lambda e: e.name)
+        except OSError:
+            return []
+        subs: list[Path] = []
+        for e in entries:
+            path = str(real / e.name)
+            try:
+                link = e.is_symlink()
+                is_dir = e.is_dir()
+                if _is_record_file(e.name) and not is_dir:
+                    args.extend(["--ro-bind", "/dev/null", path])
+                elif _is_record_dir(e.name) and (is_dir or (link and not os.path.exists(e.path))):
+                    args.extend(["--dir", path])
+                elif link and lanes and e.name in linked:
+                    args.extend(["--symlink", str(linked[e.name]), path])   # the masked dir
+                elif link:
+                    args.extend(["--symlink", os.readlink(e.path), path])
+                elif is_dir and lanes:
+                    subs.append(real / e.name)
+                else:
+                    args.extend(["--ro-bind", path, path])
+            except OSError:
+                continue
+        return subs
+
+    for sub in layer(agent, lanes=True):
+        layer(sub, lanes=False)
+    # after every regular layer, so a bind from one of them cannot cover it
+    for real in linked.values():
+        layer(real, lanes=False)
+    # last: a record that is itself a symlink is hidden at its real path too
+    rec_files, rec_dirs = _record_link_targets(agent, linked)
+    missing = [str(x) for x in rec_dirs + rec_files if not os.path.lexists(x)]
+    if missing:
+        # bwrap cannot mount over a path absent from the read-only root, and left
+        # unmasked the target would be readable once written: refuse (fail closed)
+        raise RuntimeError(
+            "a conversation record in .agent is a symlink to a path that does not exist yet ("
+            + ", ".join(missing) + ") — the judge sandbox cannot hide it there; remove the link "
+            "or create its target, then re-run")
+    for d in rec_dirs:
+        args.extend(["--tmpfs", str(d)])
+    for f in rec_files:
+        args.extend(["--ro-bind", "/dev/null", str(f)])
+    return args
+
+
+def _sb_string(s: str) -> str:
+    """A seatbelt (TinyScheme) string literal for `s`: written as-is when it holds no
+    `"` or `\\` (byte-identical to before), escaped otherwise (task 139 post-D6 run 2 —
+    a `"` in a path ended the string and left an invalid profile)."""
+    if '"' not in s and "\\" not in s:
+        return f'"{s}"'
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _sb_regex_rule(pattern: str) -> str:
+    # the raw #"…" form cannot hold a `"`; use an escaped plain string then
+    if '"' in pattern:
+        return f'(deny file-read* (regex {_sb_string(pattern)}))'
+    return f'(deny file-read* (regex #"{pattern}"))'
+
+
+def _sb_regex(path: str) -> str:
+    return "".join("\\" + c if c in ".^$*+?()[]{}|\\" else c for c in path)
+
+
+def _seatbelt_record_rules(project_dir: Path | str) -> list[str]:
+    """Seatbelt rules that deny reading the conversation records (task 125), by NAME
+    pattern so a record created or renamed after launch is covered too (task 138
+    G3-2): in `.agent`, in any directory directly under it, and in the real
+    directory behind each symlinked lane (G3-3)."""
+    agent = _agent_dir(project_dir)
+    if agent is None:
+        return []
+    files = "|".join(_sb_regex(f) for f in _JUDGE_MASKED_FILES)
+    dirs = "|".join(_sb_regex(d) for d in _JUDGE_MASKED_DIRS)
+    rules = []
+    linked = _symlinked_lanes(agent)
+    for root, depth in [(agent, "([^/]+/)?")] + [(r, "") for r in linked.values()]:
+        base = _sb_regex(str(root))
+        rules.append(_sb_regex_rule(f"^{base}/{depth}({files})(\\.[^/]*)?$"))
+        rules.append(_sb_regex_rule(f"^{base}/{depth}({dirs})(\\.[^/]*)?(/|$)"))
+    rec_files, rec_dirs = _record_link_targets(agent, linked)
+    rules += [f'(deny file-read* (subpath {_sb_string(str(d))}))' for d in rec_dirs]
+    rules += [f'(deny file-read* (literal {_sb_string(str(f))}))' for f in rec_files]
+    return rules
+
+
 def build_seatbelt_profile(
     project_dir: Path | str,
     git_dir: Path | str | None,
     extra_rw: Iterable[str] | None = None,
     *,
     project_writable: bool = True,
+    mask_records: bool | None = None,
 ) -> str:
     """Generate a macOS seatbelt profile: allow default, deny writes except
     project_dir, system temp/dev, per-agent home subpaths, and extra_rw paths.
@@ -452,6 +657,11 @@ def build_seatbelt_profile(
     if not project_writable:
         for rw in rw_paths:
             profile_lines.append(f'(allow file-write* (subpath "{rw}"))')
+    # Task 125: a read-only judge cannot read the conversation records
+    # (terminal rules — seatbelt applies the last match). mask_records=False
+    # keeps them for a read-only observer that needs them (the monitor, G3-1).
+    if (not project_writable) if mask_records is None else mask_records:
+        profile_lines.extend(_seatbelt_record_rules(project))
 
     return "\n".join(profile_lines)
 
@@ -464,6 +674,7 @@ def build_bwrap_argv(
     *,
     project_writable: bool = True,
     no_network: bool = False,
+    mask_records: bool | None = None,
 ) -> list[str]:
     """Generate the bwrap argv: read-only root, bind project + tmp + per-agent
     home subpaths read-write, bind git_dir read-only.
@@ -519,6 +730,13 @@ def build_bwrap_argv(
     if git_dir:
         git_resolved = str(Path(git_dir).resolve())
         argv += ["--ro-bind", git_resolved, git_resolved]
+
+    # Task 125: a read-only judge cannot read the conversation records — layers
+    # after the project bind so they win the overlap (`_bwrap_record_masks`). A
+    # worker keeps them, and so does a read-only observer that passes
+    # mask_records=False (the monitor, task 138 G3-1).
+    if (not project_writable) if mask_records is None else mask_records:
+        argv += _bwrap_record_masks(project)
 
     # extra_rw (the judge workspace / outdir) deliberately LAST: it must stay
     # writable even when it lives inside a read-only project.
@@ -625,6 +843,7 @@ def _wrapped_argv(
     extra_rw: Iterable[str] | None,
     project_writable: bool,
     no_network: bool = False,
+    mask_records: bool | None = None,
 ) -> list[str]:
     """Compose bypass-flag injection + seatbelt/bwrap wrapping into the final
     argv. Shared by run() (blocking) and popen() (streaming) so containment is
@@ -643,7 +862,8 @@ def _wrapped_argv(
     if platform.system() == "Darwin" and shutil.which("sandbox-exec"):
         if _seatbelt_usable():
             git_dir = _git_dir_of(project)
-            profile = build_seatbelt_profile(project, git_dir, extra_rw, project_writable=project_writable)
+            profile = build_seatbelt_profile(project, git_dir, extra_rw, project_writable=project_writable,
+                                             mask_records=mask_records)
             return ["sandbox-exec", "-p", profile, *inner_argv]
         # Nested in a foreign sandbox (macOS forbids sandbox-exec nesting, rc 71).
         _warn_nested_once()
@@ -651,7 +871,8 @@ def _wrapped_argv(
     if shutil.which("bwrap"):
         git_dir = _git_dir_of(project)
         return build_bwrap_argv(project, git_dir, inner_argv, extra_rw,
-                                project_writable=project_writable, no_network=no_network)
+                                project_writable=project_writable, no_network=no_network,
+                                mask_records=mask_records)
     # No sandbox primitive available — exec directly with bypass.
     return inner_argv
 
@@ -757,6 +978,7 @@ def run(
     check: bool = False,
     project_writable: bool = True,
     no_network: bool = False,
+    mask_records: bool | None = None,
     **kwargs,
 ) -> subprocess.CompletedProcess:
     """Run an agent under sandbox containment. Composes bypass-flag injection
@@ -769,7 +991,8 @@ def run(
     """
     project = Path(project_root).resolve()
     child_env = _child_env(env)
-    wrapped = _wrapped_argv(agent, agent_args, project, extra_rw, project_writable, no_network)
+    wrapped = _wrapped_argv(agent, agent_args, project, extra_rw, project_writable, no_network,
+                            mask_records)
 
     if kwargs.get("text") or isinstance(kwargs.get("input"), str):
         # Windows text-mode pipes default to the ANSI code page (cp1252);
@@ -871,6 +1094,7 @@ def popen(
     env: dict[str, str] | None = None,
     project_writable: bool = True,
     no_network: bool = False,
+    mask_records: bool | None = None,
     **kwargs,
 ) -> subprocess.Popen:
     """Non-blocking variant of run() — returns a live Popen for streaming.
@@ -885,7 +1109,8 @@ def popen(
     """
     project = Path(project_root).resolve()
     child_env = _child_env(env)
-    wrapped = _wrapped_argv(agent, agent_args, project, extra_rw, project_writable, no_network)
+    wrapped = _wrapped_argv(agent, agent_args, project, extra_rw, project_writable, no_network,
+                            mask_records)
 
     kwargs.setdefault("stdout", subprocess.PIPE)
     kwargs.setdefault("text", True)
@@ -973,6 +1198,10 @@ def _main(argv: list[str]) -> int:
                         help="Bind the project read-only; only --rw paths stay "
                              "writable project-side (contained-observer mode, "
                              "e.g. the conversation monitor)")
+    parser.add_argument("--keep-records", action="store_true",
+                        help="With --ro-project: do NOT hide the conversation records "
+                             "(.agent chat log, sessions, bash history) — for a read-only "
+                             "observer that needs them, e.g. the monitor. Judges never pass it.")
     parser.add_argument("--print-argv", action="store_true",
                         help="Print the fully wrapped argv (one arg per line) "
                              "instead of executing — inspectable containment")
@@ -1004,6 +1233,13 @@ def _main(argv: list[str]) -> int:
               file=sys.stderr)
         return 2
 
+    # Same for --keep-records: the subagent runner (the judge path) never keeps them.
+    if args.keep_records and args.prompt is not None:
+        print("Error: --keep-records is not supported with --prompt (the subagent "
+              "path, which the judge path shares). Use raw `-- <agent args>`.",
+              file=sys.stderr)
+        return 2
+
     if args.list_agents:
         print("Sandbox agent capability matrix:")
         print(_format_agent_matrix(detect_agents()))
@@ -1021,7 +1257,8 @@ def _main(argv: list[str]) -> int:
 
     if args.print_profile:
         print(build_seatbelt_profile(project, _git_dir_of(project), args.rw,
-                                     project_writable=not args.ro_project))
+                                     project_writable=not args.ro_project,
+                                     mask_records=(False if args.keep_records else None)))
         return 0
 
     forwarded = list(args.agent_args)
@@ -1087,6 +1324,7 @@ def _main(argv: list[str]) -> int:
         try:
             wrapped = _wrapped_argv(agent, forwarded, project, args.rw,
                                     project_writable=not args.ro_project,
+                                    mask_records=(False if args.keep_records else None),
                                     no_network=args.no_network)
         except RuntimeError as exc:
             print(f"Error: {exc}", file=sys.stderr)
@@ -1098,6 +1336,7 @@ def _main(argv: list[str]) -> int:
     try:
         result = run(agent, forwarded, project, extra_rw=args.rw,
                      project_writable=not args.ro_project,
+                     mask_records=(False if args.keep_records else None),
                      no_network=args.no_network)
     except RuntimeError as exc:
         print(f"Error: {exc}", file=sys.stderr)

@@ -17,6 +17,7 @@ tasks.core + tasks.shared + tasks.template; never a command module
 from __future__ import annotations
 
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 from tasks.atomic import atomic_write
@@ -143,6 +144,86 @@ def _inject_chat_into_task(task_file: Path, messages: list[str]) -> None:
     _rewrite(task_file, _t)   # task 058: one locked transaction
 
 
+def _dirty_outside(project_path, task_dir) -> int:
+    """Dirty or untracked files (`git status --porcelain -z`, every untracked file
+    listed) that are NOT inside `task_dir` — the closing task's own records do not
+    count (task 128). The project's repo, plus each `code_roots` checkout that is its
+    own repo (task 138 G4-2: a gitignored nested checkout holds the verified code the
+    warning is for). 0 for a repo git cannot answer for."""
+    try:
+        own = Path(task_dir).resolve()
+    except OSError:
+        own = Path(task_dir)
+    try:
+        top = _git_out(project_path, "rev-parse", "--show-toplevel").strip()
+    except (OSError, subprocess.SubprocessError):
+        return 0
+    if not top:
+        return 0
+    count = _dirty_in(top, own)
+    try:
+        from tasks.core import _code_roots, load_config
+        roots = _code_roots(load_config(Path(project_path)))
+    except Exception:
+        roots = []
+    seen = {Path(top).resolve()}
+    for rel in roots:
+        root = Path(project_path) / rel
+        try:
+            ans = _git_out(root, "rev-parse", "--show-toplevel").strip()
+            if not ans:
+                continue            # git cannot answer here — Path("") would be the cwd
+            rtop = Path(ans).resolve()
+        except (OSError, subprocess.SubprocessError, ValueError):
+            continue
+        # each repo once — a plain directory of the outer repo resolves to the outer
+        # repo, already counted
+        if rtop in seen:
+            continue
+        seen.add(rtop)
+        count += _dirty_in(str(rtop), own)
+    return count
+
+
+def _git_out(cwd, *args) -> str:
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True).stdout
+
+
+def _dirty_in(top: str, own: Path) -> int:
+    """Entries of `git status --porcelain -z` in the repo at `top` that touch a path
+    outside `own`. A rename or copy counts when EITHER end is outside (task 138 G4-1:
+    a file moved into the task's directory left the project)."""
+    try:
+        out = subprocess.run(["git", "status", "--porcelain", "-z", "--untracked-files=all"],
+                             cwd=top, capture_output=True).stdout
+    except (OSError, subprocess.SubprocessError):
+        return 0
+
+    def outside(path: str) -> bool:
+        # porcelain paths are relative to the repository root, even from a
+        # subdirectory (measured, task 138)
+        try:
+            return not (Path(top) / path).resolve().is_relative_to(own)
+        except (OSError, ValueError):
+            return True
+
+    fields = out.decode("utf-8", errors="surrogateescape").split("\0")
+    count, i = 0, 0
+    while i < len(fields):
+        entry = fields[i]
+        i += 1
+        if len(entry) < 4:
+            continue
+        status, paths = entry[:2], [entry[3:]]
+        if "R" in status or "C" in status:
+            if i < len(fields):
+                paths.append(fields[i])  # the rename/copy source follows as its own field
+            i += 1
+        if any(outside(p) for p in paths):
+            count += 1
+    return count
+
+
 def _gate_bounce(task_id: str, task_file, action: str) -> bool:
     """If `task_file` has open (unchecked) gates, print a steering message and
     return True (the caller should abort). Returns False when all gates are
@@ -202,10 +283,21 @@ def cmd_work(cmd_args):
             # "--force", satisfying "a forced close must record why" with a
             # flag name. A real reason is prose; a `--`-prefixed token is
             # another flag, so leave reason unset (the force gate then blocks).
-            if not _val.startswith("--"):
+            # Task 138 G1-6: a short flag (`-f`) is not a reason either.
+            if not _val.startswith("-"):
                 reason = _val
             break
     project_path = find_project_root()
+
+    # Task 116 (gauntlet 2 G2-12): a hatch without its reason is refused BEFORE the close
+    # runs the verify contract — it used to run the whole verify and only then say so.
+    # `cli._wrong_usage` refuses it even earlier, before the session GC; this is the
+    # backstop for an in-process caller, and the close policy keeps the rule too.
+    if task_num == "done" and (force or stale_panel_ok) and not (reason and reason.strip()):
+        hatch = "--force" if force else "--stale-panel-ok"
+        print(f'Error: {hatch} requires --reason "why" — a forced or stale-panel close must '
+              "record why. Nothing changed.", file=sys.stderr)
+        sys.exit(1)
 
     # Handle 'tasks work done' - deactivate current task and set Status in task.md
     if task_num == "done":
@@ -677,14 +769,10 @@ def cmd_work(cmd_args):
                 # Dirty-tree honesty (StrataDB F6): closing before committing
                 # is the normal flow, so say so in the receipt and out loud —
                 # a crash between close and commit silently loses "done" work.
-                _dirty = 0
-                try:
-                    _porcelain = subprocess.run(
-                        ["git", "status", "--porcelain"], cwd=project_path,
-                        capture_output=True, text=True).stdout
-                    _dirty = len([ln for ln in _porcelain.splitlines() if ln.strip()])
-                except (OSError, subprocess.SubprocessError):
-                    pass
+                # Task 128 (gauntlet 2 R20): not the task's own records — its
+                # task.md and judge files are always dirty at a close, so
+                # counting them made the warning fire on every close.
+                _dirty = _dirty_outside(project_path, task_file.parent)
                 try:
                     from tasks.post_d6 import close_receipt_line as _pd6_line
                     _pd6_receipt = _pd6_line(task_file.parent)
@@ -1131,9 +1219,21 @@ def cmd_new(cmd_args):
     # Parse --stub flag — position-independent, so a trailing
     # `tasks new feature name --stub` can't silently become Intent text
     # (gauntlet-155 wart: the flag was only honored in first position).
+    # Task 116: everything after the first `--` is intent text, taken verbatim — a
+    # `--stub` there is a word, and type and name must come before it.
+    tail: list = []
+    if "--" in cmd_args:
+        at = cmd_args.index("--")
+        cmd_args, tail = list(cmd_args[:at]), list(cmd_args[at + 1:])
     is_stub = "--stub" in cmd_args
     if is_stub:
         cmd_args = [a for a in cmd_args if a != "--stub"]
+    if tail and len(cmd_args) != 2:
+        print("Error: 'new' takes <type> <name> before `--`, the intent after it. Nothing changed.",
+              file=sys.stderr)
+        print("Usage: tasks new [--stub] <type> <name> [-- intent words …]", file=sys.stderr)
+        sys.exit(2)
+    cmd_args = cmd_args + tail
 
     if len(cmd_args) < 2:
         print("Error: 'new' requires a type and a name", file=sys.stderr)

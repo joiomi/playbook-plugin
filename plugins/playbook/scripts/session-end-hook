@@ -80,6 +80,29 @@ if [ -z "$SESSION_ID" ]; then
     exit 0
 fi
 
+# Task 126 (owner Q-D (b), 2026-09-29; 106 P2, gauntlet 2 G2-21): a claude
+# started from another claude's Bash resolves to the OUTER session's pid-N (the
+# highest agent), and deleting here took the outer session's live pointer. Delete
+# `pid-N` only when the exiting process IS N — the LOWEST agent in this hook's own
+# chain. No agent visible (an unreadable chain) proves nothing: keep, as for an
+# unknown reason above; the POSIX liveness GC reclaims dead dirs. Windows
+# (MSYS/Cygwin) has no process walk at all and its GC never reclaims a `pid-*`
+# dir, so keeping there would carry one session's task pointer into the next
+# (the shared `pid-win-fallback`): Windows keeps the old delete-on-exit.
+# Other ids (`judge`, a subagent's id) are not process ids: unchanged.
+_PB_NO_WALK=""
+case "${OSTYPE:-}" in msys*|cygwin*) _PB_NO_WALK=1 ;; esac
+case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*) _PB_NO_WALK=1 ;; esac
+case "$SESSION_ID" in
+    pid-*)
+        if [ -z "$_PB_NO_WALK" ]; then
+            _PB_LOWEST=$(_agent_walk all)
+            _PB_LOWEST="${_PB_LOWEST%% *}"
+            [ -n "$_PB_LOWEST" ] && [ "pid-$_PB_LOWEST" = "$SESSION_ID" ] || exit 0
+        fi
+        ;;
+esac
+
 # Remove entire session directory (state + counters + offset)
 SESSION_DIR="$AGENT_DIR/sessions/$SESSION_ID"
 rm -rf "$SESSION_DIR"

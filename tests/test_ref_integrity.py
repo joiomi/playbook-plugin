@@ -7,6 +7,7 @@ One test per failure class plus the differential (--remap / --base) checks.
 Run: python3 tests/test_ref_integrity.py    (or: python3 -m unittest ...)
 """
 import importlib.util
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -167,6 +168,163 @@ class RefIntegrityTest(unittest.TestCase):
         self.addCleanup(lambda: setattr(ri, "_git_show", orig))
         findings, _, _ = self._check("[1] **a** — x\n", "[1] **a** — x\n", base="BADREF")
         self.assertTrue(any("failing closed" in f for f in findings), findings)
+
+    def _merge_whose_base_predates_the_map(self, target_map=None, target_overflow=None,
+                                           source_map="[1] **a** — x\n", merging=True):
+        """A real git repo and a real merge. Commit A (the merge base) has no MIND_MAP.md;
+        branch `target` adds `target_map`/`target_overflow` (only a README edit when
+        `target_map` is None); branch `source`, from A, adds `source_map`. With `merging`,
+        `git merge --no-commit source` runs on `target` (MERGE_HEAD exists; an add/add
+        conflict is resolved by the test writing the merged files). Returns
+        (dir, base, target_tip, source_tip); cwd moves into the repo."""
+        import subprocess
+        d = Path(self._tmp.name) / "repo"
+        d.mkdir()
+        env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
+                   GIT_COMMITTER_EMAIL="t@t")
+
+        def git(*a, check=True):
+            return subprocess.run(["git", "-C", str(d), *a], check=check, capture_output=True, text=True,
+                                  env=env).stdout.strip()
+        git("init", "-q")
+        (d / "README.md").write_text("x\n", encoding="utf-8")
+        git("add", "-A"); git("commit", "-qm", "before the map")
+        base = git("rev-parse", "HEAD")
+        git("checkout", "-q", "-b", "source")
+        (d / "MIND_MAP.md").write_text(source_map, encoding="utf-8")
+        git("add", "-A"); git("commit", "-qm", "the source")
+        source_tip = git("rev-parse", "HEAD")
+        git("checkout", "-q", "-b", "target", base)
+        if target_map is None:
+            (d / "README.md").write_text("y\n", encoding="utf-8")
+        else:
+            (d / "MIND_MAP.md").write_text(target_map, encoding="utf-8")
+            if target_overflow is not None:
+                (d / "MIND_MAP_OVERFLOW.md").write_text(target_overflow, encoding="utf-8")
+        git("add", "-A"); git("commit", "-qm", "the target")
+        target_tip = git("rev-parse", "HEAD")
+        if merging:
+            git("merge", "--no-commit", "--no-ff", "source", check=False)
+        self._git = git
+        prev = os.getcwd()
+        os.chdir(d)
+        self.addCleanup(os.chdir, prev)
+        return d, base, target_tip, source_tip
+
+    def _merged(self, d, main, overflow=None):
+        (d / "MIND_MAP.md").write_text(main, encoding="utf-8")
+        if overflow is not None:
+            (d / "MIND_MAP_OVERFLOW.md").write_text(overflow, encoding="utf-8")
+        return d / "MIND_MAP.md", d / "MIND_MAP_OVERFLOW.md"
+
+    def test_outside_a_merge_a_base_without_the_map_fails_closed(self):
+        # Task 122 (gauntlet 2 G2-29): failing closed there with "cannot read" sent an agent
+        # looking for another baseline; outside a merge there is no target tip to use
+        d, base, _, _ = self._merge_whose_base_predates_the_map("[1] **a** — x\n", merging=False)
+        findings, _, _ = ri.check(*self._merged(d, "[1] **a** — x\n"), None, base)
+        self.assertTrue(any("no merge is in progress" in f and "failing closed" in f for f in findings),
+                        findings)
+        self.assertFalse(any("cannot read" in f for f in findings), findings)
+
+    def test_the_targets_own_old_problems_are_inherited_and_the_sources_are_new(self):
+        # opus r1 I2: an EMPTY base made main's pre-existing dangling slug a red gate the
+        # merge cannot fix. opus r2: the tip is read from git, so the SOURCE tip (where
+        # [[nowhere]] already dangles) can never be used to call it inherited.
+        d, base, tip, _ = self._merge_whose_base_predates_the_map(
+            "[1] **a** — see [[old]]\n", source_map="[1] **b** — see [[nowhere]]\n")
+        findings, warnings, notes = ri.check(
+            *self._merged(d, "[1] **a** — see [[old]]\n[2] **b** — see [[nowhere]]\n"), None, base)
+        self.assertTrue(any("NEW dangling" in f and "nowhere" in f and "old" not in f for f in findings),
+                        findings)
+        self.assertTrue(any("inherited" in w and "old" in w for w in warnings), warnings)
+        self.assertTrue(any(f"pre-merge target tip {tip}" in n for n in notes), notes)
+
+    def test_after_the_merge_commit_the_tip_is_head_first_parent(self):
+        d, base, tip, _ = self._merge_whose_base_predates_the_map(
+            "[1] **a** — see [[old]]\n", source_map="[1] **b** — see [[nowhere]]\n")
+        self._merged(d, "[1] **a** — see [[old]]\n[2] **b** — see [[nowhere]]\n")
+        self._git("add", "-A"); self._git("commit", "-qm", "the merge")
+        findings, _, notes = ri.check(d / "MIND_MAP.md", d / "MIND_MAP_OVERFLOW.md", None, base)
+        self.assertTrue(any(f"pre-merge target tip {tip}" in n for n in notes), notes)
+        self.assertTrue(any("NEW dangling" in f and "nowhere" in f for f in findings), findings)
+
+    def test_the_archive_check_still_runs_against_the_target_tip(self):
+        # opus r1 I1: with an empty base the archive check went silent and an unmirrored
+        # full node passed as clean; the target keeps a complete archive → a finding
+        d, base, _, _ = self._merge_whose_base_predates_the_map("[1] **a** — body\n", "[1] **a** — body\n")
+        findings, _, _ = ri.check(*self._merged(d, "[1] **a** — body\n[2] **b** — new full node\n",
+                                                "[1] **a** — body\n"), None, base)
+        self.assertTrue(any("archive" in f and "2" in f for f in findings), findings)
+
+    def test_remap_against_a_target_tip_with_a_map_fails_closed(self):
+        # Task 138 G4-4 (opus): SKILL.md lets EITHER side be the renumbered one (trunk wins
+        # / the richer side), so the target tip's ids may be pre-renumber; translating
+        # them, or not, can each cancel a new divergence at a reused id. The tool cannot
+        # tell which side was renumbered — it says so instead of guessing.
+        d, base, _, _ = self._merge_whose_base_predates_the_map(
+            "[1] **a** — x\n[2] **b** — main text\n", "[2] **b** — older overflow text\n")
+        findings, _, _ = ri.check(*self._merged(d, "[1] **a** — x\n[2] **b** — main text\n[3] **c** — y\n",
+                                                "[2] **b** — older overflow text\n"), {2: 3}, base)
+        self.assertTrue(any("--remap" in f and "failing closed" in f for f in findings), findings)
+
+    def test_remap_with_no_map_at_the_target_tip_still_runs(self):
+        # an empty baseline has no ids to translate — --remap changes nothing there
+        d, base, _, _ = self._merge_whose_base_predates_the_map(None)
+        findings, _, notes = ri.check(*self._merged(d, "[1] **a** — body\n[2] **b** — y\n"), {1: 2}, base)
+        self.assertEqual(findings, [], findings)
+        self.assertTrue(any("no map there either" in n for n in notes), notes)
+
+    def test_a_later_merge_at_head_is_not_the_merge_under_check(self):
+        # Task 138 G4-3 (agy, sonnet, codex-medium): HEAD^1 is the target tip only for the
+        # merge whose base is --base; another merge committed on top must fail closed
+        d, base, tip, _ = self._merge_whose_base_predates_the_map(
+            "[1] **a** — see [[old]]\n", source_map="[1] **b** — see [[nowhere]]\n")
+        self._merged(d, "[1] **a** — see [[old]]\n[2] **b** — see [[nowhere]]\n")
+        self._git("add", "-A"); self._git("commit", "-qm", "the merge")
+        self._git("checkout", "-q", "-b", "later", tip)
+        (d / "LATER.md").write_text("z\n", encoding="utf-8")
+        self._git("add", "-A"); self._git("commit", "-qm", "later work")
+        self._git("checkout", "-q", "target")
+        self._git("merge", "-q", "--no-ff", "-m", "a later merge", "later")
+        findings, _, notes = ri.check(d / "MIND_MAP.md", d / "MIND_MAP_OVERFLOW.md", None, base)
+        self.assertTrue(any("failing closed" in f for f in findings), findings)
+        self.assertFalse(any("pre-merge target tip" in n for n in notes), notes)
+
+    def test_no_map_at_the_base_or_the_target_is_an_empty_base_with_an_archive_advisory(self):
+        d, base, _, _ = self._merge_whose_base_predates_the_map(None)
+        findings, warnings, notes = ri.check(
+            *self._merged(d, "[1] **a** — body\n[2] **b** — full\n", "[1] **a** — body\n"), None, base)
+        self.assertEqual(findings, [], findings)
+        self.assertTrue(any("no map there either" in n for n in notes), notes)
+        self.assertTrue(any("archive (advisory" in w and "2" in w for w in warnings), warnings)
+
+    def test_a_ref_that_is_not_a_commit_still_fails_closed(self):
+        d, _, _, _ = self._merge_whose_base_predates_the_map("[1] **a** — x\n")
+        findings, _, _ = ri.check(*self._merged(d, "[1] **a** — x\n"), None, "no-such-ref-122")
+        self.assertTrue(any("failing closed" in f for f in findings), findings)
+
+    def test_a_tree_id_is_not_a_merge_base(self):
+        # `git ls-tree` accepts a tree object too; only a COMMIT that lacks the map counts
+        # as "predates the map" — anything else stays unreadable and fails closed
+        d, base, _, _ = self._merge_whose_base_predates_the_map("[1] **a** — x\n")
+        tree = self._git("rev-parse", f"{base}^{{tree}}")
+        findings, _, _ = ri.check(*self._merged(d, "[1] **a** — x\n"), None, tree)
+        self.assertTrue(any("cannot read" in f and "failing closed" in f for f in findings), findings)
+
+    def test_the_cli_takes_no_baseline_but_the_merge_base(self):
+        import subprocess
+        import sys as _sys
+        d, base, tip, src = self._merge_whose_base_predates_the_map(
+            "[1] **a** — x\n", source_map="[1] **b** — see [[nowhere]]\n")
+        self._merged(d, "[1] **a** — x\n[2] **b** — see [[nowhere]]\n")
+        r = subprocess.run([_sys.executable, str(_RI_PATH), "--base", base],
+                           capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("NEW dangling", r.stdout)
+        self.assertIn(f"pre-merge target tip {tip}", r.stdout)
+        r = subprocess.run([_sys.executable, str(_RI_PATH), "--base", base, "--fallback-base", src],
+                           capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)              # no such option
 
     # --- differential checks ----------------------------------------------
     def test_remap_flags_stale_but_resolving_selfref(self):

@@ -16,7 +16,7 @@ Perform **every** step in order.
 
 ### 1. Run mechanical setup
 
-Find and run the plugin's `scripts/init` script, which handles: `.claude/settings.json` permissions, `.agent/tasks/` directory, `MIND_MAP.md` stub, `.claude/bin/` wrappers, **CLAUDE.md** (created from the template, or template-owned sections merged in place — project content is preserved byte-for-byte), and **.gitignore** (a marker-guarded playbook runtime-state block). It also seeds `.agent/config.json` with the review knobs and the risk-gated close policy (`panel_required_for: ["assertive", "irreversible"]` — reversible work closes on verify+single-judge, only claims/data/publish need a panel; set `"all"` for max strictness). Resolve it from the install manifest first (the same copy the harness hooks run — a bare `find` can pick a stale cached version), falling back to a deterministic find:
+Find and run the plugin's `scripts/init` script, which handles: `.claude/settings.json` permissions, `.agent/tasks/` directory, `MIND_MAP.md` stub, `.claude/bin/` wrappers, **CLAUDE.md** (created from the template, or template-owned sections merged in place — the project's own sections and `#` parts are preserved byte-for-byte; text written INSIDE a template-owned section is replaced with it, and then the previous file is first saved to `.agent/backups/CLAUDE.md.<UTC>.bak` and init's summary names the sections, the line count and the backup — tell the user), and **.gitignore** (a marker-guarded playbook runtime-state block). It also seeds `.agent/config.json` with the review knobs and the risk-gated close policy (`panel_required_for: ["assertive", "irreversible"]` — reversible work closes on verify+single-judge, only claims/data/publish need a panel; set `"all"` for max strictness). Resolve it from the install manifest first (the same copy the harness hooks run — a bare `find` can pick a stale cached version), falling back to a deterministic find:
 
 ```bash
 INIT_SCRIPT="$(python3 - "$PWD" 2>/dev/null <<'PY'
@@ -133,7 +133,7 @@ Relay the suggestions to the user with their install hints. Do **not** run any i
 
 ### 5. Review CLAUDE.md and enrich it
 
-The base write already happened mechanically in step 1 (create-or-merge; a pre-existing CLAUDE.md keeps every byte of project-specific content, and template-owned sections are updated in place). Your job is the part that requires intelligence:
+The base write already happened mechanically in step 1 (create-or-merge; a pre-existing CLAUDE.md keeps its own sections and `#` parts byte-for-byte, and template-owned sections are updated in place — any text that was INSIDE one is replaced with it; then the old file is first saved to `.agent/backups/CLAUDE.md.<UTC>.bak` and init's summary line says so: if it does, tell the user what was replaced and where the copy is). Your job is the part that requires intelligence:
 
 - Read the merged CLAUDE.md. If the mechanical merge left anything semantically off — e.g. the project's own rules now duplicate or contradict a template section — reconcile it, keeping the project's intent.
 - Add project-specific content the template cannot know: what the project is, domain rules. Project content belongs in its own sections, not inside template-owned ones (those are refreshed on upgrade).

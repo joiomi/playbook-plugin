@@ -200,11 +200,12 @@ def _intent_check(task_path: str) -> str:
     task_number = _tn.group(1) if _tn else None
     if task_number:
         return (
-            # Unconditional: the old form said "if .agent/chat_log.md exists",
-            # which is false on a multi-user repo (the log lives in the lane),
-            # so judges were told to skip the user's own words. `tasks context`
-            # resolves the lane itself and is harmless when there is no log.
-            f"Run `tasks context {task_number}` to see the user's original messages. "
+            # Task 125: judges cannot read the chat log any more (owner decision
+            # 2026-10-02 — the judge sandbox masks it), so `tasks context` is
+            # not offered; the user's own words reach a judge through the task
+            # record: its Intent/Why and the Recent Chat captured at activation.
+            "The task's `## Intent`, `## Why` and `### Recent Chat` (200-character excerpts of the user's "
+            "messages, captured when the task was activated) carry the user's own words. "
             "Check whether the task addresses what the user actually asked for, not just the agent's interpretation. "
         )
     return ""

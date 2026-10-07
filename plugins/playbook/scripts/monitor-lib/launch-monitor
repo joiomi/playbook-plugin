@@ -163,7 +163,9 @@ That was your bootstrap output. Based on the briefing above, form your initial j
 # comment block used to guard against still fired). --safe-mode disables
 # CLAUDE.md + plugins + hooks at the source; the monitor's whole briefing
 # arrives via $SEED, so it loses nothing.
+# --keep-records (task 138): the monitor reads .agent/sessions/<id>/transcript_path,
+# which the judges' read-only sandbox hides.
 exec env PYTHONPATH="$PLUGIN_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
-    python3 -m provider.sandbox --agent claude --ro-project \
+    python3 -m provider.sandbox --agent claude --ro-project --keep-records \
     --rw "$MONITOR_DIR" --project-root "$PROJECT_DIR" \
     -- --dangerously-skip-permissions --safe-mode "${ARGS[@]}" "$SEED"

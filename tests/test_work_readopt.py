@@ -364,10 +364,7 @@ class TestEvidenceContract(WorkReadoptBase):
     def test_dirty_close_warns_and_marks_receipt(self):
         """StrataDB F6 e2e: closing with uncommitted work must warn out loud and
         mark the receipt — a crash between close and commit loses 'done' work."""
-        import subprocess as sp
-        sp.run(["git", "init", "-q"], cwd=self.project, check=True)
-        sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
-                "commit", "-q", "--allow-empty", "-m", "seed"], cwd=self.project, check=True)
+        self._git_project()
         tf = write_task(self.project, "077", "pending", gates_checked=True)
         (self.project / "wal.py").write_text("x = 1\n", encoding="utf-8")  # uncommitted work
         self.assertEqual(self.run_tasks("work", "077").returncode, 0)
@@ -375,6 +372,68 @@ class TestEvidenceContract(WorkReadoptBase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("UNCOMMITTED work", r.stdout)
         self.assertIn("uncommitted file(s)", tf.read_text(encoding="utf-8"))
+        # task 128: the task's own records are not counted — only wal.py
+        self.assertIn("⚠ 1 modified/untracked file(s)", r.stdout)
+        self.assertIn("+1 uncommitted file(s)", tf.read_text(encoding="utf-8"))
+
+    def _git_project(self):
+        """A git project with init's runtime-state ignore (session pointers are not
+        work), committed — the shape a real `/playbook:init` project has."""
+        import subprocess as sp
+        sp.run(["git", "init", "-q"], cwd=self.project, check=True)
+        (self.project / ".gitignore").write_text(".agent/sessions/\n", encoding="utf-8")
+        sp.run(["git", "add", ".gitignore"], cwd=self.project, check=True)
+        sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                "commit", "-q", "-m", "seed"], cwd=self.project, check=True)
+
+    def test_only_the_tasks_own_records_dirty_means_no_warning(self):
+        """Task 128 (gauntlet 2 R20): the count included the task's own task.md and judge
+        files, so every close warned (17 of 17 in tasks 091-106) and the warning meant
+        nothing. Only paths outside the closing task's directory count."""
+        self._git_project()
+        tf = write_task(self.project, "078", "pending", gates_checked=True)
+        (tf.parent / "judge single.md").write_text("x\n", encoding="utf-8")   # a space in the name too
+        self.assertEqual(self.run_tasks("work", "078").returncode, 0)
+        r = self.run_tasks("work", "done")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("UNCOMMITTED work", r.stdout)
+        self.assertNotIn("uncommitted file(s)", tf.read_text(encoding="utf-8"))
+
+    def test_a_rename_counts_once(self):
+        import subprocess as sp
+        self._git_project()
+        (self.project / "old.py").write_text("x = 1\n", encoding="utf-8")
+        sp.run(["git", "add", "old.py"], cwd=self.project, check=True)
+        sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "a"],
+               cwd=self.project, check=True)
+        sp.run(["git", "mv", "old.py", "new.py"], cwd=self.project, check=True)
+        tf = write_task(self.project, "080", "pending", gates_checked=True)
+        self.assertEqual(self.run_tasks("work", "080").returncode, 0)
+        r = self.run_tasks("work", "done")
+        self.assertIn("⚠ 1 modified/untracked file(s)", r.stdout)
+
+    def test_a_rename_into_the_task_dir_still_counts(self):
+        """Task 138 G4-1: a tracked file moved INTO the task's directory left the project
+        (a deletion outside it) — counting only the destination reported a clean close."""
+        import subprocess as sp
+        self._git_project()
+        (self.project / "notes.py").write_text("x = 1\n", encoding="utf-8")
+        sp.run(["git", "add", "notes.py"], cwd=self.project, check=True)
+        sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "a"],
+               cwd=self.project, check=True)
+        tf = write_task(self.project, "081", "pending", gates_checked=True)
+        sp.run(["git", "mv", "notes.py", str(tf.parent / "notes.py")], cwd=self.project, check=True)
+        self.assertEqual(self.run_tasks("work", "081").returncode, 0)
+        r = self.run_tasks("work", "done")
+        self.assertIn("⚠ 1 modified/untracked file(s)", r.stdout)
+
+    def test_a_dirty_file_with_a_space_outside_the_task_still_counts(self):
+        self._git_project()
+        tf = write_task(self.project, "079", "pending", gates_checked=True)
+        (self.project / "my notes.py").write_text("x = 1\n", encoding="utf-8")
+        self.assertEqual(self.run_tasks("work", "079").returncode, 0)
+        r = self.run_tasks("work", "done")
+        self.assertIn("⚠ 1 modified/untracked file(s)", r.stdout)
 
     def test_reclose_stacks_entries_under_one_receipt_heading(self):
         """Close → reopen → close must not accrete duplicate `## Verification
@@ -526,6 +585,98 @@ class TestParkedAndRetro(WorkReadoptBase):
         r = self.run_tasks("work", "done")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("tasks retro", r.stdout)
+
+
+class TestDirtyOutside(unittest.TestCase):
+    """`_dirty_outside` on its own (task 138): the repo shapes the CLI tests above do not
+    build — a project in a subdirectory of its repo, and `code_roots` nested checkouts."""
+
+    def setUp(self):
+        if str(PLUGIN) not in sys.path:
+            sys.path.insert(0, str(PLUGIN))
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name).resolve()
+
+    def git(self, cwd, *args):
+        subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                        "-c", "maintenance.auto=false", "-c", "gc.auto=0", *args],
+                       cwd=cwd, check=True, capture_output=True)
+
+    def count(self, project, task_dir):
+        from tasks.lifecycle import _dirty_outside
+        return _dirty_outside(project, task_dir)
+
+    def test_a_project_in_a_subdirectory_reads_root_relative_paths(self):
+        """Measured 2026-10-07 (task 138, rejecting a Critical that said otherwise):
+        `git status --porcelain -z` run from a subdirectory prints paths relative to the
+        repository ROOT, so they are joined onto `--show-toplevel`."""
+        self.git(self.root, "init", "-q")
+        project = self.root / "sub"
+        own = project / ".agent" / "tasks" / "081-x"
+        own.mkdir(parents=True)
+        (own / "task.md").write_text("t\n", encoding="utf-8")
+        (project / "a.py").write_text("a\n", encoding="utf-8")
+        (self.root / "top.txt").write_text("b\n", encoding="utf-8")
+        self.assertEqual(self.count(project, own), 2)        # a.py and top.txt, not task.md
+
+    def test_dirty_files_in_a_code_root_count(self):
+        """Task 138 G4-2: verified code in a `code_roots` checkout (gitignored by the outer
+        repo) is the code a close most needs to warn about; the outer status cannot see it."""
+        self.git(self.root, "init", "-q")
+        (self.root / ".gitignore").write_text("nested/\n.agent/\n", encoding="utf-8")
+        self.git(self.root, "add", ".gitignore")
+        self.git(self.root, "commit", "-q", "-m", "seed")
+        (self.root / ".agent").mkdir()
+        (self.root / ".agent" / "config.json").write_text('{"code_roots": ["nested"]}', encoding="utf-8")
+        own = self.root / ".agent" / "tasks" / "081-x"
+        own.mkdir(parents=True)
+        nested = self.root / "nested"
+        nested.mkdir()
+        self.git(nested, "init", "-q")
+        (nested / "seed.py").write_text("s\n", encoding="utf-8")
+        self.git(nested, "add", "seed.py")
+        self.git(nested, "commit", "-q", "-m", "seed")
+        self.assertEqual(self.count(self.root, own), 0)
+        (nested / "seed.py").write_text("changed\n", encoding="utf-8")
+        (nested / "new.py").write_text("n\n", encoding="utf-8")
+        self.assertEqual(self.count(self.root, own), 2)
+
+    def test_a_code_root_git_cannot_answer_for_is_skipped(self):
+        # Task 139 (opus Minor): an empty `--show-toplevel` became Path("") — the cwd — and
+        # the cwd's repo was counted
+        from unittest import mock
+        from tasks import lifecycle
+        self.git(self.root, "init", "-q")
+        (self.root / ".agent").mkdir()
+        (self.root / ".agent" / "config.json").write_text('{"code_roots": ["gone"]}', encoding="utf-8")
+        (self.root / ".gitignore").write_text(".agent/\n", encoding="utf-8")
+        own = self.root / ".agent" / "tasks" / "081-x"
+        own.mkdir(parents=True)
+        real = lifecycle._git_out
+        fake = lambda cwd, *a: "" if Path(cwd).name == "gone" else real(cwd, *a)
+        other = Path(tempfile.mkdtemp()).resolve()
+        self.addCleanup(lambda: __import__("shutil").rmtree(other, True))
+        self.git(other, "init", "-q")
+        (other / "noise.py").write_text("x\n", encoding="utf-8")
+        prev = os.getcwd()
+        os.chdir(other)
+        self.addCleanup(os.chdir, prev)
+        with mock.patch.object(lifecycle, "_git_out", fake):
+            self.assertEqual(self.count(self.root, own), 1)            # .gitignore only
+
+    def test_a_code_root_that_is_not_its_own_repo_is_not_counted_twice(self):
+        """A `code_roots` entry that is just a directory of the outer repo: its files are
+        already in the outer status — counting them again would double the number."""
+        self.git(self.root, "init", "-q")
+        (self.root / ".agent").mkdir()
+        (self.root / ".agent" / "config.json").write_text('{"code_roots": ["plain"]}', encoding="utf-8")
+        (self.root / ".gitignore").write_text(".agent/\n", encoding="utf-8")
+        own = self.root / ".agent" / "tasks" / "081-x"
+        own.mkdir(parents=True)
+        (self.root / "plain").mkdir()
+        (self.root / "plain" / "a.py").write_text("a\n", encoding="utf-8")
+        self.assertEqual(self.count(self.root, own), 2)       # .gitignore + plain/a.py
 
 
 if __name__ == "__main__":
