@@ -414,6 +414,41 @@ def _git_state(copy: str) -> "tuple[str | None, bool | None]":
     return head.stdout.decode().strip(), clean
 
 
+def shell_logger_lines(home: Path, doctor_root: Path) -> "list[tuple[str, str]]":
+    """[(tag, text)] for the shell logger `/playbook:init` deploys into HOME
+    (task 129; 090 R18 — it went stale as a fifth copy nobody listed): each
+    deployed `~/.claude/bash-log.sh` / `.zsh` compared by sha256 with this copy's
+    `scripts/` file. `bash-log.sh` is always reported (INFO when not deployed);
+    the zsh logger only when it is deployed. No plugin update refreshes these
+    files — only init does, hence the remedy in the WARN."""
+    import hashlib
+
+    def _sha(p: Path) -> "str | None":
+        try:
+            return hashlib.sha256(p.read_bytes()).hexdigest()
+        except OSError:
+            return None
+
+    out: "list[tuple[str, str]]" = []
+    for name in ("bash-log.sh", "bash-log.zsh"):
+        deployed = Path(home) / ".claude" / name
+        label = f"shell logger: ~/.claude/{name}"
+        if not deployed.is_file():
+            if name == "bash-log.sh":
+                out.append(("INFO", f"{label} — not deployed (`/playbook:init` deploys it)"))
+            continue
+        mine = _sha(Path(doctor_root) / "scripts" / name)
+        theirs = _sha(deployed)
+        if mine is None or theirs is None:
+            out.append(("WARN", f"{label} — could not be compared (unreadable)"))
+        elif mine == theirs:
+            out.append(("PASS", f"{label} — current (sha {mine[:12]}, same as this copy's scripts/{name})"))
+        else:
+            out.append(("WARN", f"{label} — stale: deployed sha {theirs[:12]} != this copy's {mine[:12]} "
+                                f"— re-run /playbook:init to refresh it"))
+    return out
+
+
 def report(project: Path, *, home: "Path | None" = None,
            doctor_root: "Path | None" = None) -> "list[tuple[str, str]]":
     """[(tag, text)] — always four `plugin: <label> copy — …` lines (hook, installed,

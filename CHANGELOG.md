@@ -163,6 +163,11 @@ Each fix was written against a test that failed first.
 
 ### Fixed
 
+- **`tasks doctor` checks the shell logger copy** (task 129; task 090 R18). `/playbook:init` copies the shell logger
+  into `~/.claude/bash-log.sh`, and no plugin update refreshes it — it went stale unnoticed. Doctor now compares it
+  (and `bash-log.zsh`, when deployed) with its own copy's file and says current, stale (both hashes, and that
+  re-running `/playbook:init` refreshes it) or not deployed.
+
 - **The monitor no longer watches itself** (task 124, PLAN S11; gauntlet 2 G2-23). Without a transcript pointer
   the monitor guesses the newest transcript of the project, and the newest is often the monitor's own session — it
   judged its first wakes from its own conversation. The guess now skips transcripts that are monitor sessions

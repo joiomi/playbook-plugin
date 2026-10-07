@@ -489,6 +489,22 @@ def cmd_doctor(cmd_args):
     except Exception as _e:  # noqa: BLE001 — a doctor section must not abort the doctor
         warn("plugin: copies", f"could not be determined ({type(_e).__name__}: {_e})")
 
+    # 5c. The shell logger init deployed into HOME (task 129, 090 R18): a copy no
+    # plugin update refreshes — compared with this copy's scripts/ file.
+    try:
+        from tasks.plugin_copies import shell_logger_lines as _logger_lines
+        _home = Path(os.environ.get("HOME") or Path.home())
+        for _tag, _text in _logger_lines(_home, Path(__file__).resolve().parent.parent):
+            _name, _, _detail = _text.partition(" — ")
+            if _tag == "PASS":
+                check(_name, True, _detail)
+            elif _tag == "WARN":
+                warn(_name, _detail)
+            else:
+                print(f"  [{_tag}] {_text}")
+    except Exception as _e:  # noqa: BLE001 — a doctor section must not abort the doctor
+        warn("shell logger", f"could not be determined ({type(_e).__name__}: {_e})")
+
     # 6. Python version
     import platform
     py_ver = platform.python_version()
