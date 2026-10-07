@@ -50,7 +50,7 @@ Because state lives in the file and not in memory, execution survives context co
 
 **The sandbox** lets you run the agent in full bypass-permissions mode - no prompts, no interruptions. The tradeoff is that write blast radius is contained at the OS level: your project directory is writable, `.git` is read-only, and **writes** outside the project are blocked. It's write containment, not a read or network jail — the filesystem stays readable and the network stays reachable (judges rely on that to call model APIs). You get the speed of unattended execution without the risk of it *changing* anything it shouldn't.
 
-**Providers — support is scoped by capability** (owner decision 2026-08-21). **Claude Code** is the supported main agent (its hooks gate a live coding agent) *and* a judge. **Grok** and **Codex** are supported review-panel judges (live-verified 2026-08-22); their main-agent enforcement paths ship but are experimental. **Antigravity (agy)** and **Pi** are experimental everywhere — the adapter code ships and is retained, with no support claim. ([Provider matrix](docs/providers.md).)
+**Providers — support is scoped by capability** (owner decision 2026-08-21). **Claude Code** is the supported main agent (its hooks gate a live coding agent) *and* a judge. **Grok** and **Codex** are supported review-panel judges (live-verified 2026-08-22); their main-agent enforcement paths ship but are experimental. **Antigravity (agy)** and **Pi** are experimental everywhere — the adapter code ships and is retained, with no support claim. Since 1.5.46, agy can seat an experimental Gemini judge (`agy:gemini-3.8-flash-high`, measured on agy 1.2.17). ([Provider matrix](docs/providers.md).)
 
 **Shared repos.** Several people — or several workstations — can drive the same repo without trampling each other: agent runtime state is namespaced per user under `.agent/<user>/`, and a dedicated merge skill keeps those lanes from cross-contaminating when branches meet. ([Per-user lanes](docs/architecture.md#per-user-lanes).)
 
@@ -143,4 +143,4 @@ Not everything needs a task. Questions, shell commands, docs, git - just ask. Th
 
 Works on macOS, Linux, and Windows (Git Bash / MSYS).
 
-<!-- readme-audit: v1.5.45 @ 2026-09-23 -->
+<!-- readme-audit: v1.5.46 @ 2026-10-07 -->

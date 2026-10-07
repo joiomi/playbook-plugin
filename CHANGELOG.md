@@ -4,7 +4,9 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
-Branch `fix/1.5.46-batch`. Task 085: the six defects parked by the 1.5.45 release panel (task 083)
+## [1.5.46] — 2026-10-07
+
+Released from the work closed on `fix/1.5.46-batch` (owner decision 2026-10-07). Task 085: the six defects parked by the 1.5.45 release panel (task 083)
 plus the tool defect found at its close. Task 086: PLAN S3. Task 087: PLAN S4. Task 088: PLAN S5. Task 093: PLAN S7b. Task 094: the `opus` alias moves to Opus 5.5.
 Task 095: owner decision H2 (any project-root `*.md` is a doc for tail certification).
 Task 096: PLAN S10 (CI + docs correspondence).
@@ -15,6 +17,10 @@ Task 106: a stale `PLAYBOOK_SESSION_ID` (a resumed conversation's dead `pid-N`) 
 Task 108: the post-D6 review protocol (owner decision Q-E (d), retro 107).
 Task 110: PLAN S11 fix batch, group GUARD (the command guard and the task-dir guard; sources: task 109's gauntlet report and the task 107 erratum).
 Task 111: an experimental Gemini judge seat through the Antigravity CLI (agy 1.2.17), measured before it was written.
+Task 112: the unittest step of `scripts/verify` gets its own 1500 s budget.
+Task 113: `scripts/verify` runs the suite one process per module.
+Tasks 119, 123, 124, 129: PLAN S11 fixes from task 109's gauntlet that closed before the release.
+Not in this release (built, waiting for their review panels — 1.5.47): tasks 114-118, 120-122, 125-128 and 130.
 Each fix was written against a test that failed first.
 
 ### Added
