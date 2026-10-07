@@ -118,7 +118,10 @@ def _main():
     # `dashboard` is read-only END TO END (task 053, plan-panel codex#1): the
     # session GC every other command runs first unlinks legacy flat files and
     # dead session dirs — a read-only screen must not have that side effect.
-    if cmd != "dashboard":
+    # Nor may the dry runs and merge-doctor, which promise to write nothing
+    # (task 148, impl panel r1: the GC deleted a legacy `.agent/current_state`
+    # before `compact`/`prepare-merge`/`tag --dry-run` and `merge-doctor` ran).
+    if cmd != "dashboard" and not _writes_nothing(cmd, cmd_args):
         _gc_dead_sessions(find_project_root())
 
     if cmd == "work":
@@ -330,6 +333,13 @@ def _ARGS_TASK_IS_DONE(num: str) -> bool:
         return len(hit) == 1 and _is_done(hit[0])
     except (SystemExit, OSError):
         return False
+
+
+def _writes_nothing(cmd: str, cmd_args: list) -> bool:
+    """An invocation documented to write nothing, so it skips the session GC."""
+    if cmd == "merge-doctor":
+        return True
+    return cmd in ("compact", "prepare-merge", "tag") and "--dry-run" in cmd_args
 
 
 def _wrong_usage(cmd: str, args: list) -> "str | None":

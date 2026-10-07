@@ -16,6 +16,20 @@ Built after the 1.5.46 cut. Tasks 114-130 were reviewed in grouped panels by are
   (`write_log.pre-cap-…`) and never deleted by Playbook; delete it yourself when you want the space back.
   `docs/configuration.md` says what the log is and that it can hold secrets.
 
+- **23 more guarantee-ledger rows are proved by a test** (task 148, PLAN S12). Task 100 found, for each of the 25
+  no-live rows S12 names, a clause no test asserted — several reproduced by breaking the product while the bound test
+  stayed green (a dry run that writes, a heading a hostile `tasks blocked` reason forges, a chat-log writer that
+  leaks attribution into the body, a rejected `tasks models set` that clobbers an existing models.json). Each now has
+  a test in `tests/test_no_live_row_proofs.py`, watched red on that break, and 23 rows are
+  `verified_by_current_executable_evidence` (85 of 123). Two statements were wrong and are corrected: `tasks status`
+  never read the session pointer — it lists every task that is not done; and recent chat is captured into a task at
+  activation, not creation. `docs/cli.md` says the same for `tasks status`. The two performance rows wait for the
+  owner (a waiver or a budget).
+- **Dry runs and `tasks merge-doctor` no longer run the session clean-up first** (task 148, impl panel). Every
+  `tasks` command first deletes dead session directories and a legacy `.agent/current_state`; `compact`,
+  `prepare-merge` and `tag` with `--dry-run`, and `merge-doctor`, promise to write nothing, so — like `dashboard` —
+  they now skip it.
+
 ### Fixed
 
 - **`tasks retro` reads the tasks since the last retro** (task 145; retro 134). With no `--since` it read the whole

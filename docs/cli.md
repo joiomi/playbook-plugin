@@ -91,7 +91,7 @@ The **hostile-sequence** lens walks every state-changing flow the change touches
 
 **`tasks --version`** (alias `-V`, `version`) — prints the installed plugin version read from the plugin manifest (task 073); `unknown` if the manifest cannot be read.
 
-**`tasks status`** — the active task's current gate position: the fastest way to see where a long run actually is.
+**`tasks status`** — every open (not done) task's current gate position — its progress and first unchecked gate, or BLOCKED with the command that resumes it: the fastest way to see where a long run actually is. It lists by task status, not by the session's active-task pointer.
 
 Unknown options and extra words are refused before anything runs (exit 2, "Nothing changed.") by `status`, `list`/`ls`, `parked`, `bootstrap`, `dashboard`, `timeline`, `mindmap-sync`, `retro`, `freehand` and `audit` — they used to be ignored, and some of those calls then wrote.
 
