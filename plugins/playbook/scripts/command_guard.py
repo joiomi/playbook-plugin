@@ -1994,7 +1994,7 @@ def _active_task_is_irreversible(root):
         if plugin_dir not in sys.path:
             sys.path.insert(0, plugin_dir)
         from tasks.core import (extract_risk_from_text, _status_from_lines,   # fence-aware readers
-                                _physical_lines)
+                                _physical_lines, stub_marker_type)
         from pathlib import Path as _P
         # ONE read, both answers (task 058, plan panel P2): this used to read
         # task.md for the status and AGAIN inside `extract_risk`, so a write
@@ -2005,11 +2005,12 @@ def _active_task_is_irreversible(root):
         # was the status of every task `tasks work N` activated — requiring
         # `in_progress` meant the acknowledgement never fired for one. Since task
         # 140 activation writes `in_progress`; `pending` stays accepted for a task
-        # activated by an older CLI, or whose status write could not land. A stub is never activated (`tasks work` refuses
-        # it); one in a pointer still does not acknowledge.
+        # activated by an older CLI, or whose status write could not land. A stub
+        # is never activated (`tasks work` expands it); one in a pointer still does
+        # not acknowledge.
         if str(_status_from_lines(_physical_lines(_text))).strip().lower() not in ("pending", "in_progress"):
             return False
-        if "<!-- stub:" in _text:
+        if stub_marker_type(_text) is not None:    # task 144: the marker line, not a quote
             return False
         if str(extract_risk_from_text(_text)).strip().lower() != "irreversible":
             return False

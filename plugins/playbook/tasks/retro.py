@@ -171,9 +171,10 @@ def _extract_status(lines: list[str]) -> str:
 
 def _detect_type(content: str) -> str:
     """Detect task type from content heuristics."""
-    if "<!-- stub:" in content:
-        m = re.search(r'<!-- stub:(\w+) -->', content)
-        return f"stub:{m.group(1)}" if m else "stub"
+    from tasks.core import stub_marker_type      # task 144: the marker LINE only
+    stub = stub_marker_type(content)
+    if stub is not None:
+        return f"stub:{stub}"
     if "## Risk Routing" in content and "## Design Phase" not in content:
         return "light"                     # task 073 (C16): light is not quick
     if "## Design Phase" not in content and "## Work" in content:
@@ -274,6 +275,51 @@ def bash_history_ts_to_utc(ts: str) -> str:
         return naive.astimezone().astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     except (OverflowError, OSError, ValueError):
         return ts
+
+
+_GENERATED_RE = re.compile(r"^<!-- retro-generated: (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?: UTC)?) -->$", re.M)
+
+
+def retro_start_time(task_file: Path, num: int, bash_history_path: Path | None) -> "str | None":
+    """When retro `num` was made — the boundary of the next retro's chat (task 145):
+    its `<!-- retro-generated: … -->` stamp (written since 145), else its first
+    `tasks work <num>` in the shell history (an older retro), else None. A gate entry
+    is no boundary — it can come long after the retro's opening discussion — and the
+    attribution windows' first start is year 0000 (post-D6 run 1)."""
+    try:
+        m = _GENERATED_RE.search(task_file.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        m = None
+    if m:
+        return m.group(1)
+    if bash_history_path and bash_history_path.exists():
+        # an INVOCATION of the CLI (`tasks work N`, `.claude/bin/tasks work N`, after a
+        # `cd …&&`), never a command that merely mentions it (`rg "tasks work 2"`, post-D6
+        # run 2): the CLI word starts the command or follows `&&`, `;`, `|`
+        work = re.compile(r'(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+\|\s+\w+\s+\|\s+'
+                          r'(?:(?:.*?(?:&&|;|\|\|)\s*))?(?:\S*/)?tasks\s+work\s+0*'
+                          + str(num) + r'(?=\s|$|;|&)', re.M)
+        seen = [bash_history_ts_to_utc(x.group(1).strip()) for x in
+                work.finditer(bash_history_path.read_text(encoding="utf-8", errors="replace"))]
+        if seen:
+            return min(seen)
+    return None
+
+
+def id_ranges(ids: "list[int]") -> str:
+    """`M002–M004, M007` — exactly these message ids (post-D6 run 1: ids and timestamps
+    need not agree in order, so one first–last range could pull excluded ones back)."""
+    out, run = [], []
+    for i in sorted(set(ids)):
+        if run and i == run[-1] + 1:
+            run.append(i)
+            continue
+        if run:
+            out.append(f"M{run[0]:03d}" + (f"–M{run[-1]:03d}" if len(run) > 1 else ""))
+        run = [i]
+    if run:
+        out.append(f"M{run[0]:03d}" + (f"–M{run[-1]:03d}" if len(run) > 1 else ""))
+    return ", ".join(out)
 
 
 def build_task_windows(chatlog_path: Path, bash_history_path: Path | None = None) -> dict[int, tuple[str, str]]:
@@ -450,6 +496,10 @@ def generate_retro_task(
     lines.append("> Read the user's messages in the window. What were they trying to do?")
     lines.append("> Where did they struggle? What got corrected? What patterns emerge?")
     lines.append("")
+    if chatlog:
+        # the window's own messages, by id (task 145: `tasks log` prints the whole log)
+        lines.append(f"Window chat ({len(chatlog)} messages): {id_ranges([m['id'] for m in chatlog])}.")
+        lines.append("")
     lines.append("- [ ] Read chat_log.md messages for this window (use `.claude/bin/tasks log` for a compact one-line-per-message view, or filter by message IDs listed above). Summarize: what was the user's arc? What themes dominated? What frustrations surfaced?")
     lines.append("- [ ] Identify steering moments — where did the user correct the agent? What was the nature of each correction (misframed intent / over-engineering / wrong abstraction / missing context / process friction)?")
     lines.append("- [ ] What inefficiencies show up? How many messages did simple things take? Where did the conversation loop?")

@@ -63,6 +63,31 @@ class VerifyEnvScrub(unittest.TestCase):
                 f"scripts/verify env() leaked {k} into the child suite env — "
                 "a dogfooding host's value would distort the reading")
 
+    def test_verify_env_turns_off_git_background_maintenance(self):
+        """Task 143 (retro 134 (c)): a test repo's auto-maintenance can still be writing
+        while TemporaryDirectory removes it (the py3.12 CI flake of the 1.5.46 release).
+        Every child gets maintenance.auto=false and gc.auto=0 — and a real git reads them."""
+        import subprocess
+        verify = _load_verify()
+        e = verify.env()
+        for key, want in (("maintenance.auto", "false"), ("gc.auto", "0")):
+            r = subprocess.run(["git", "config", "--get", key], env=e, capture_output=True, text=True)
+            self.assertEqual(r.stdout.strip(), want, (key, r.stderr))
+
+    def test_verify_env_keeps_a_callers_own_git_config_entries(self):
+        verify = _load_verify()
+        os.environ["GIT_CONFIG_COUNT"] = "1"
+        os.environ["GIT_CONFIG_KEY_0"] = "user.name"
+        os.environ["GIT_CONFIG_VALUE_0"] = "From The Caller"
+        self.addCleanup(lambda: [os.environ.pop(k, None) for k in
+                                 ("GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0")])
+        import subprocess
+        e = verify.env()
+        r = subprocess.run(["git", "config", "--get", "user.name"], env=e, capture_output=True, text=True)
+        self.assertEqual(r.stdout.strip(), "From The Caller")
+        r = subprocess.run(["git", "config", "--get", "gc.auto"], env=e, capture_output=True, text=True)
+        self.assertEqual(r.stdout.strip(), "0")
+
     def test_shell_fixtures_clean_env_scrubs_playbook_sandboxed(self):
         # The parallel scrub list in the fixtures runner: a fixture that toggles
         # PLAYBOOK_SANDBOXED internally (gate-logging-failure-fixture) is distorted

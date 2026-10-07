@@ -67,6 +67,18 @@ def env() -> dict:
     for k in ("BASH_ENV", "PLAYBOOK_SESSION_ID", "PLAYBOOK_ROLE",
               "PLAYBOOK_EVAL_CONFIG", "PLAYBOOK_SANDBOXED"):
         e.pop(k, None)
+    # Task 143 (retro 134): no git background maintenance in a test repo — it could
+    # still be writing while TemporaryDirectory removed the repo (the py3.12 CI flake
+    # of the 1.5.46 release). Appended to whatever GIT_CONFIG_* entries are set.
+    try:
+        n = int(e.get("GIT_CONFIG_COUNT", "0") or "0")
+    except ValueError:
+        n = 0
+    for key, value in (("maintenance.auto", "false"), ("gc.auto", "0")):
+        e[f"GIT_CONFIG_KEY_{n}"] = key
+        e[f"GIT_CONFIG_VALUE_{n}"] = value
+        n += 1
+    e["GIT_CONFIG_COUNT"] = str(n)
     return e
 
 

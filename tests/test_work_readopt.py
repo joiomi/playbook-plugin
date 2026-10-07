@@ -58,7 +58,8 @@ def write_task(project: Path, num: str, status: str, gates_checked: bool,
     mark = "x" if gates_checked else " "
     body = TASK_MD.format(num=num, status=status, g1=mark, g2=mark)
     if stub:
-        body = body.replace("## Intent", "<!-- stub:bugfix -->\n\n## Intent")
+        # where `tasks new --stub` writes it: before the first section (task 144)
+        body = body.replace("## Status", "<!-- stub:bugfix -->\n\n## Status", 1)
     tf = d / "task.md"
     tf.write_text(body, encoding="utf-8")
     return tf

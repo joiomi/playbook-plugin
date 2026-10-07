@@ -1694,6 +1694,24 @@ class IrreversibleAckReadsTheResolvedSession(_JournalledGuardRun):
                 d, env = self._with_task(risk, status=status)
                 self.assertEqual(self._guard(d, self.PUSH, env=env).returncode, 2)
 
+    def test_a_task_that_only_QUOTES_the_stub_marker_still_acknowledges(self):
+        # Task 144 (retro 134 (a)): the guard read the raw text `<!-- stub:` anywhere in
+        # task.md, so an irreversible task whose notes quote the marker never acknowledged
+        d, env = self._with_task("irreversible")
+        tf = d / ".agent" / "tasks" / "001-x" / "task.md"
+        tf.write_text(tf.read_text(encoding="utf-8")
+                      + "\n## Notes\nThe stub writer emits `<!-- stub:feature -->` on its own line.\n"
+                      + "```\n<!-- stub:feature -->\n```\n", encoding="utf-8")
+        r = self._guard(d, self.PUSH, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_a_real_stub_marker_line_still_never_acknowledges(self):
+        d, env = self._with_task("irreversible")
+        tf = d / ".agent" / "tasks" / "001-x" / "task.md"
+        tf.write_text(tf.read_text(encoding="utf-8").replace("# 001 - x\n", "# 001 - x\n\n<!-- stub:feature -->\n", 1),
+                      encoding="utf-8")
+        self.assertEqual(self._guard(d, self.PUSH, env=env).returncode, 2)
+
     def test_a_malformed_marker_never_falls_back_to_the_root_lane(self):
         d, env = self._with_task("irreversible")       # the irreversible task is in the ROOT lane
         (d / ".agent" / "current_user").write_text("alice\n../evil\n", encoding="utf-8")
@@ -1952,6 +1970,9 @@ class GauntletHookStepsAsVectors(unittest.TestCase):
                    PLAYBOOK_PROC_ROOT=agent_proc_root(d, self._agent.pid, "claude"))
         for k in ("BASH_ENV", "PLAYBOOK_ALLOW_DANGEROUS", "CLAUDE_ENV_FILE"):
             env.pop(k, None)
+        # Task 142: the hooks write under HOME (the write log); never the real one
+        (d / "home").mkdir()
+        env["HOME"] = env["USERPROFILE"] = str(d / "home")
         return d, sid, env
 
     def _payload(self, d, name):
@@ -1994,6 +2015,22 @@ class GauntletHookStepsAsVectors(unittest.TestCase):
                                    capture_output=True, text=True, timeout=60)
                 self.assertEqual(r.returncode, cand, f"{step} {hook} {pay}: {r.stderr[-400:]}")
                 self._effects(step, d, sid, r)
+
+    def test_the_hook_runs_keep_the_real_home_clean(self):
+        """Task 142: these runs used the real HOME, so the write log left a `tmp-pb-h-*`
+        directory under ~/.local/share/playbook on every verify (241 on the owner's machine,
+        2026-10-07). Each project gets its own HOME inside it."""
+        real = Path.home() / ".local" / "share" / "playbook"
+        d, sid, env = self._project({})
+        self.assertTrue(Path(env["HOME"]).resolve().is_relative_to(d.resolve()), env.get("HOME"))
+        before = set(real.iterdir()) if real.is_dir() else set()
+        r = subprocess.run([bash_or_skip(), str(self.PLUGIN / "scripts" / "state-echo-hook")],
+                           input=self._payload(d, "post-edit-taskmd"), cwd=d, env=env,
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr[-400:])
+        after = set(real.iterdir()) if real.is_dir() else set()
+        self.assertEqual(after - before, set())
+        self.assertTrue(list((Path(env["HOME"]) / ".local" / "share" / "playbook").glob("*/write_log")))
 
     def _effects(self, step, d, sid, r):
         """The key effect each step showed in 109 — beyond the exit code."""

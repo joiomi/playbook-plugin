@@ -1054,7 +1054,7 @@ def cmd_work(cmd_args):
                   + " — name one by its number. Nothing changed.", file=sys.stderr)
             sys.exit(1)
         if matches:
-            from tasks.core import _is_done
+            from tasks.core import _is_done, _is_stub_file
             tf = matches[0]
             done = _is_done(tf)
             if done and "--reopen" not in cmd_args:
@@ -1068,7 +1068,7 @@ def cmd_work(cmd_args):
                 _reopen_target = tf
                 task_file = tf
                 # Fall through to activation below
-            elif "<!-- stub:" in tf.read_text(encoding="utf-8", errors="replace"):
+            elif _is_stub_file(tf):
                 # Stub — allow activation, expansion happens below
                 task_file = tf
             elif _extract_head_position(tf) == "(all gates checked)":
@@ -1167,6 +1167,118 @@ def cmd_work(cmd_args):
               "was not activated. Nothing changed.", file=sys.stderr)
         sys.exit(1)
     try:
+        # A stub is expanded BEFORE the status steps and the pointer (task 144, impl
+        # panel r2): a refused expansion (the task changed meanwhile) then leaves no
+        # pointer and no status change behind, and the claim below moves the expanded
+        # template's `pending` to `in_progress`.
+        # Expand stubs on activation
+        task_content = task_file.read_text(encoding="utf-8", errors="replace")
+        import re as _stub_re
+        # F7: custom playbook type names carry hyphens (`sp-eval`, the flagship
+        # example in playbooks-README) — `\w+` can't match `stub:sp-eval` so the
+        # marker survived `work` and the stub never expanded. Accept `-` too.
+        # task 144: the marker LINE, outside a fence — never the text anywhere
+        from tasks.core import stub_marker_type
+        stub_type = stub_marker_type(task_content)
+        stub_match = stub_type is not None
+        if stub_match:
+            # Extract user's Intent and Why sections before expanding
+            def _extract_section(content, heading):
+                pattern = rf'^## {heading}\n(.*?)(?=\n## |\Z)'
+                m = _stub_re.search(pattern, content, _stub_re.MULTILINE | _stub_re.DOTALL)
+                return m.group(1).strip() if m else ""
+
+            user_intent = _extract_section(task_content, "Intent")
+            user_why = _extract_section(task_content, "Why")
+            user_refs = _extract_section(task_content, "References")
+
+            # Render full template
+            task_num_int = int(task_num)
+            title = task_file.parent.name.split("-", 1)[1].replace("-", " ").title()
+
+            # F18: a custom stub type (.agent/playbooks/<type>.md) must expand to
+            # ITS playbook \u2014 the WHOLE file, as create_task does \u2014 not the base
+            # Build template. Without this dispatch the custom playbook was never
+            # loaded (`_load_playbook` only knows built-in PLAYBOOKS keys), so a
+            # custom stub silently expanded to the base template and every custom
+            # gate vanished on activation. Mirror create_task's dispatch exactly.
+            from tasks.core import _find_custom_playbook, _load_playbook
+            custom = _find_custom_playbook(project_path, stub_type)
+            if custom:
+                full_content = custom.read_text(encoding="utf-8", errors="replace")
+                full_content = full_content.replace("{{NNN}}", f"{task_num_int:03d}")
+                full_content = full_content.replace("{{TITLE}}", title)
+            else:
+                from tasks.template import render_template
+                full_content = render_template(num=task_num_int, title=title, task_type=stub_type)
+                # F3: Append playbook role template (same as create_task)
+                role_template = _load_playbook(stub_type, project_path)
+                if role_template:
+                    full_content += "\n" + role_template + "\n"
+
+            # Inject preserved user content
+            if user_intent:
+                # Try every base-template Intent placeholder variant.
+                for placeholder in [
+                    "(what we want to achieve \u2014 the outcome, not the activity)",
+                    "(one line \u2014 what to do and how to verify)",
+                    # F6: the `light` template's Intent placeholder (B1 twin) \u2014 was
+                    # missing here, so `tasks new --stub light <name> <intent>`
+                    # captured the intent in the stub but dropped it on activation.
+                    "(one line \u2014 what to do and what proves it worked)",
+                ]:
+                    if placeholder in full_content:
+                        full_content = full_content.replace(placeholder, user_intent)
+                        break
+            if user_why:
+                full_content = full_content.replace(
+                    "(why this matters now \u2014 urgency, context, what breaks if delayed)",
+                    user_why,
+                )
+            # F1: Inject preserved references
+            if user_refs and "(optional)" not in user_refs.lower():
+                # Replace the default References content
+                full_content = _stub_re.sub(
+                    r'(## References\n).*?(?=\n---)',
+                    f'## References\n{user_refs}',
+                    full_content,
+                    count=1,
+                    flags=_stub_re.DOTALL,
+                )
+
+            # The stub's own status goes into the expanded template (post-D6 run 1): the
+            # template says `pending`, and the resume / reopen that follow move only a
+            # `blocked` / `done` task — a blocked or done stub then failed half-way.
+            # Spliced into the LIVE status pair (post-D6 run 2) — the same fence-aware
+            # reader/writer as every status write, never a literal text replace.
+            from tasks.core import (_status_from_lines, _physical_lines as _pl144,
+                                    _live_status_pair, _splice_status_value)
+            _stub_status = str(_status_from_lines(_pl144(task_content)) or "").strip()
+            if _stub_status and _stub_status != "pending":
+                _lines144 = _pl144(full_content, keepends=True)
+                _pair144 = _live_status_pair(_lines144)
+                if _pair144 is not None:
+                    _splice_status_value(_lines144, _pair144, _stub_status)
+                    full_content = "".join(_lines144)
+
+            # F8: standing gates land at expansion (a stub has no gates until
+            # now) — same helper create_task uses, same LAST-gates guarantee.
+            from tasks.core import append_standing_gates, load_config
+            full_content, _sg_issues = append_standing_gates(
+                full_content, load_config(project_path), task_num_int)
+            for _msg in _sg_issues:
+                print(f"[playbook] standing_gates: {_msg}", file=sys.stderr)
+
+            # Task 058's locked transaction — on the bytes read UNDER the lock: if the task
+            # changed since it was read above (another `tasks work`, an edit), the expansion
+            # built from the old text is not written over it (task 144, impl panel r1).
+            if _rewrite(task_file, lambda _t: full_content if _t == task_content else None) is None:
+                print(f"Error: task {task_num} changed while it was being expanded (another "
+                      "session or an edit); nothing written — run `tasks work` again.", file=sys.stderr)
+                sys.exit(1)
+            # Re-read for chat injection and display
+            task_content = full_content
+            print(f"Expanded stub to full {stub_type} template.")
         _activate_status_then_publish(task_file, task_num, _resume_target, _reopen_target,
                                       _pointer_tmp, session_state)
     finally:
@@ -1186,98 +1298,6 @@ def cmd_work(cmd_args):
     # it while the session works, so its mtime means "when the task was
     # activated" and is never a liveness signal. Deleting sessions by that
     # mtime is what task 027 fixed; don't reintroduce it.
-
-    # Expand stubs on activation
-    task_content = task_file.read_text(encoding="utf-8", errors="replace")
-    import re as _stub_re
-    # F7: custom playbook type names carry hyphens (`sp-eval`, the flagship
-    # example in playbooks-README) — `\w+` can't match `stub:sp-eval` so the
-    # marker survived `work` and the stub never expanded. Accept `-` too.
-    stub_match = _stub_re.search(r'<!-- stub:([\w-]+) -->', task_content)
-    if stub_match:
-        stub_type = stub_match.group(1)
-        # Extract user's Intent and Why sections before expanding
-        def _extract_section(content, heading):
-            pattern = rf'^## {heading}\n(.*?)(?=\n## |\Z)'
-            m = _stub_re.search(pattern, content, _stub_re.MULTILINE | _stub_re.DOTALL)
-            return m.group(1).strip() if m else ""
-
-        user_intent = _extract_section(task_content, "Intent")
-        user_why = _extract_section(task_content, "Why")
-        user_refs = _extract_section(task_content, "References")
-
-        # Render full template
-        task_num_int = int(task_num)
-        title = task_file.parent.name.split("-", 1)[1].replace("-", " ").title()
-
-        # F18: a custom stub type (.agent/playbooks/<type>.md) must expand to
-        # ITS playbook \u2014 the WHOLE file, as create_task does \u2014 not the base
-        # Build template. Without this dispatch the custom playbook was never
-        # loaded (`_load_playbook` only knows built-in PLAYBOOKS keys), so a
-        # custom stub silently expanded to the base template and every custom
-        # gate vanished on activation. Mirror create_task's dispatch exactly.
-        from tasks.core import _find_custom_playbook, _load_playbook
-        custom = _find_custom_playbook(project_path, stub_type)
-        if custom:
-            full_content = custom.read_text(encoding="utf-8", errors="replace")
-            full_content = full_content.replace("{{NNN}}", f"{task_num_int:03d}")
-            full_content = full_content.replace("{{TITLE}}", title)
-        else:
-            from tasks.template import render_template
-            full_content = render_template(num=task_num_int, title=title, task_type=stub_type)
-            # F3: Append playbook role template (same as create_task)
-            role_template = _load_playbook(stub_type, project_path)
-            if role_template:
-                full_content += "\n" + role_template + "\n"
-
-        # Inject preserved user content
-        if user_intent:
-            # Try every base-template Intent placeholder variant.
-            for placeholder in [
-                "(what we want to achieve \u2014 the outcome, not the activity)",
-                "(one line \u2014 what to do and how to verify)",
-                # F6: the `light` template's Intent placeholder (B1 twin) \u2014 was
-                # missing here, so `tasks new --stub light <name> <intent>`
-                # captured the intent in the stub but dropped it on activation.
-                "(one line \u2014 what to do and what proves it worked)",
-            ]:
-                if placeholder in full_content:
-                    full_content = full_content.replace(placeholder, user_intent)
-                    break
-        if user_why:
-            full_content = full_content.replace(
-                "(why this matters now \u2014 urgency, context, what breaks if delayed)",
-                user_why,
-            )
-        # F1: Inject preserved references
-        if user_refs and "(optional)" not in user_refs.lower():
-            # Replace the default References content
-            full_content = _stub_re.sub(
-                r'(## References\n).*?(?=\n---)',
-                f'## References\n{user_refs}',
-                full_content,
-                count=1,
-                flags=_stub_re.DOTALL,
-            )
-
-        # F8: standing gates land at expansion (a stub has no gates until
-        # now) — same helper create_task uses, same LAST-gates guarantee.
-        from tasks.core import append_standing_gates, load_config
-        full_content, _sg_issues = append_standing_gates(
-            full_content, load_config(project_path), task_num_int)
-        for _msg in _sg_issues:
-            print(f"[playbook] standing_gates: {_msg}", file=sys.stderr)
-
-        _rewrite(task_file, lambda _t: full_content)   # task 058: locked transaction
-        # Re-read for chat injection and display
-        task_content = full_content
-        print(f"Expanded stub to full {stub_type} template.")
-
-    # A stub's expansion re-rendered the template's `pending`: say `in_progress` again
-    # (the claim above ran on the stub). Only ever from `pending`, under the lock.
-    if stub_match:
-        from tasks.core import mark_in_progress
-        mark_in_progress(task_file)
 
     # Workflow rules — deferred from bootstrap to task activation
     from tasks.template import workflow_briefing

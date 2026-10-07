@@ -741,26 +741,15 @@ format_context() {
 # — outside the project tree so agent can't accidentally delete it.
 write_log_append() {
     local input="$1" project_dir="$2"
-    local file_path
-    file_path=$(echo "$input" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('file_path',''))" 2>/dev/null || echo "")
-    if [ -z "$file_path" ] || [ ! -f "$file_path" ]; then
-        return 0
-    fi
     # Project slug: absolute path with / replaced by -
     local slug
     slug=$(echo "$project_dir" | sed 's|^/||; s|/|-|g')
     local log_dir="$HOME/.local/share/playbook/$slug"
-    mkdir -p "$log_dir" 2>/dev/null || return 0
-    local log_file="$log_dir/write_log"
-    local ts
-    ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    local size
-    size=$(wc -c < "$file_path" 2>/dev/null | tr -d ' ')
-    {
-        printf '=== %s %s (%s bytes) ===\n' "$ts" "$file_path" "$size"
-        cat "$file_path"
-        printf '\n'
-    } >> "$log_file" 2>/dev/null || true
+    # Bounded since task 141 (owner Q8): the size cap, the rotation, the one-time
+    # parking of a pre-cap log and the `"write_log": false` switch live in
+    # write_log.py. Best-effort: never fail the tool call.
+    printf '%s' "$input" | python3 "$(dirname "${BASH_SOURCE[0]}")/write_log.py" \
+        "$log_dir" "$project_dir" 2>/dev/null || true
 }
 
 # create_wrapper PROJECT_DIR WRAPPER_NAME

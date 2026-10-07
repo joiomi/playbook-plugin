@@ -3838,19 +3838,51 @@ def scan_parked(project_path: Path, open_only: bool = True) -> "list[dict]":
     return out
 
 
+_RETRO_SLUG_RE = re.compile(r"retro-\d+-\d+")
+
+
+def _is_retro_slug(slug: str) -> bool:
+    """A retro task: the folder `tasks retro` names `retro-<first>-<last>` (task 145,
+    impl panel r1 — a prefix test took `retro-window-…` and `retrofit-api` for retros)."""
+    return bool(_RETRO_SLUG_RE.fullmatch(slug))
+
+
+_RETRO_ROW_RE = re.compile(r"^\|\s*(\d+)\s*\|[^|\n]*\|\s*([^|\n]*?)\s*\|\s*\d+/\d+\s*\|", re.M)
+
+
+def retro_carry_over(project_path: Path, last_retro: "int | None") -> "set[int]":
+    """Tasks numbered below the last retro that it recorded as NOT done (its own
+    `| # | Title | Status | Gates |` table): they belong to the next retro's window
+    (task 145, impl panel r2 — retro 134 here saw 14 tasks blocked that all closed
+    later, and a window by number alone would never have read them). Empty when there
+    is no retro or its record has no table."""
+    if last_retro is None:
+        return set()
+    for num, slug, tf in _iter_task_dirs(project_path):
+        if num == last_retro and _is_retro_slug(slug):
+            try:
+                text = tf.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                return set()
+            return {int(n) for n, st in _RETRO_ROW_RE.findall(text)
+                    if int(n) < last_retro and not st.strip().lower().startswith("done")}
+    return set()
+
+
 def count_tasks_since_retro(project_path: Path) -> "tuple[int, int | None]":
     """Return (closed non-retro tasks since the last retro, last_retro_number).
     last_retro_number is None when no retro has ever run."""
     dirs = list(_iter_task_dirs(project_path))
     last_retro = None
     for num, slug, _tf in dirs:
-        if slug.startswith("retro"):
+        if _is_retro_slug(slug):
             last_retro = num if last_retro is None else max(last_retro, num)
     closed = 0
+    carry = retro_carry_over(project_path, last_retro)
     for num, slug, tf in dirs:
-        if slug.startswith("retro"):
+        if _is_retro_slug(slug):
             continue
-        if last_retro is not None and num <= last_retro:
+        if last_retro is not None and num <= last_retro and num not in carry:
             continue
         try:
             if _extract_status(tf).startswith("done"):
@@ -4247,11 +4279,36 @@ def _extract_head_position(task_file: Path) -> str:
         return "(error reading)"
 
 
+_STUB_MARKER_RE = re.compile(r"^<!-- stub:([^\s]+?) -->$")
+
+
+def stub_marker_type(text: str) -> "str | None":
+    """The TYPE of an unexpanded stub, or None. A stub is marked by the line
+    `<!-- stub:TYPE -->` that `render_stub_template` writes on its own — a WHOLE
+    line, outside a code fence (task 144, retro 134 (a): five readers searched the
+    text for `<!-- stub:` anywhere, so a record that merely quoted the marker read as
+    a stub — `tasks work` then "expanded" a light task into the feature template).
+    The one reader for every place that asks.
+
+    Only where the writer puts it: between the title and the first `##` section
+    (impl panel r1 — a marker ALONE on a line of the Intent still read as a stub, and
+    expansion keeps the Intent, so every later `tasks work` re-expanded). The type is
+    read whole, a dotted custom type included (`sp.eval`)."""
+    lines = _physical_lines(text)
+    for i, s in _iter_nonfenced(lines):
+        if _atx_h2_text(lines[i]) is not None:
+            return None
+        m = _STUB_MARKER_RE.match(lines[i].strip())
+        if m:
+            return m.group(1)
+    return None
+
+
 def _is_stub_file(task_file: Path) -> bool:
     """A `tasks new --stub` task not yet expanded — the same marker test
-    `tasks work` uses to expand it on activation."""
+    `tasks work` uses to expand it on activation (`stub_marker_type`)."""
     try:
-        return "<!-- stub:" in task_file.read_text(encoding="utf-8", errors="replace")
+        return stub_marker_type(task_file.read_text(encoding="utf-8", errors="replace")) is not None
     except OSError:
         return False
 

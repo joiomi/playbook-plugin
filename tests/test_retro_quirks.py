@@ -142,6 +142,198 @@ class GauntletRetroType(unittest.TestCase):
         self.assertEqual(_detect_type(quick), "quick")
 
 
+class DefaultWindow(unittest.TestCase):
+    """Task 145 (retro 134 (b)): a bare `tasks retro` read the WHOLE history while the
+    close-time nudge counts the tasks closed since the last retro. The default window
+    is now the tasks after the last retro, and the command says which window it used."""
+
+    def _project(self, numbered):
+        proj = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, proj, True)
+        for num, slug in numbered:
+            td = proj / ".agent" / "tasks" / f"{num:03d}-{slug}"
+            td.mkdir(parents=True)
+            (td / "task.md").write_text(
+                f"# {num:03d} - {slug}\n\n## Status\ndone (2026-09-01)\n\n## Risk\nreversible\n\n"
+                "## Work\n- [x] Do the work — did it\n", encoding="utf-8")
+        return proj
+
+    def _retro(self, proj, *args, env=None):
+        import subprocess
+        extra = env or {}
+        env = dict(os.environ, PYTHONPATH=str(_PLUGIN), PLAYBOOK_SESSION_ID="pid-retro-window", **extra)
+        env.pop("BASH_ENV", None)
+        r = subprocess.run([sys.executable, "-m", "tasks.cli", "retro", *args], cwd=proj, env=env,
+                           capture_output=True, text=True, timeout=60)
+        made = sorted((proj / ".agent" / "tasks").glob("*-retro-*"))
+        return r, made[-1].name if made else ""
+
+    def test_a_bare_retro_starts_after_the_last_retro(self):
+        proj = self._project([(1, "a"), (2, "b"), (3, "retro-001-002"), (4, "c"), (5, "d")])
+        r, made = self._retro(proj)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(made, "006-retro-004-005")
+        self.assertIn("after retro T003", r.stdout)
+        self.assertIn("--since", r.stdout)
+
+    def test_since_zero_still_reads_everything(self):
+        proj = self._project([(1, "a"), (2, "retro-001-001"), (3, "c")])
+        r, made = self._retro(proj, "--since", "0")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(made, "004-retro-001-003")
+
+    def test_with_no_retro_yet_a_bare_retro_reads_everything(self):
+        proj = self._project([(1, "a"), (2, "b")])
+        r, made = self._retro(proj)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(made, "003-retro-001-002")
+
+    def test_a_task_whose_name_starts_with_retro_is_not_a_retro(self):
+        # impl panel r1 (opus, codex-high, agy): any slug starting `retro` counted — THIS task,
+        # `145-retro-window-after-last-retro`, would have been taken for the last retro
+        proj = self._project([(1, "a"), (2, "retro-001-001"), (3, "retro-window-x"), (4, "retrofit-api")])
+        r, made = self._retro(proj)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(made, "005-retro-003-004")
+        self.assertIn("after retro T002", r.stdout)
+
+    def test_with_no_retro_yet_the_window_is_named_too(self):
+        # impl panel r1 (opus, codex-medium, agy): the window was only named after a retro
+        proj = self._project([(1, "a"), (2, "b")])
+        r, _made = self._retro(proj)
+        self.assertIn("Window: all tasks", r.stdout)
+
+    CHAT = ("# Project Chat Log\n\n"
+            "**[M001]** [2026-10-01 10:30:00 UTC] `HOST`\n\nbefore the last retro\n\n---\n\n"
+            "**[M002]** [2026-10-01 12:30:00 UTC] `HOST`\n\nthe retro's own discussion\n\n---\n\n"
+            "**[G002:1]** [2026-10-01 13:00:00 UTC] gate\n\n---\n\n"
+            "**[M003]** [2026-10-02 10:30:00 UTC] `HOST`\n\nin the window\n\n---\n")
+
+    def _stamp(self, proj, retro_dir, ts):
+        tf = proj / ".agent" / "tasks" / retro_dir / "task.md"
+        lines = tf.read_text(encoding="utf-8").split("\n", 1)
+        tf.write_text(lines[0] + f"\n<!-- retro-generated: {ts} -->\n" + lines[1], encoding="utf-8")
+
+    def test_a_bare_retro_reads_the_chat_from_when_the_last_retro_was_made(self):
+        # impl panel r2 re-run (opus, codex x2): windowing by task ATTRIBUTION dropped the retro
+        # session's own discussion and lost chat with no attribution; post-D6 run 1 (codex): a
+        # gate entry comes AFTER the retro's opening discussion, and the first task's window
+        # starts in year 0000. The boundary is the time the last retro was GENERATED.
+        proj = self._project([(1, "a"), (2, "retro-001-001"), (3, "c")])
+        self._stamp(proj, "002-retro-001-001", "2026-10-01 12:00:00 UTC")
+        (proj / ".agent" / "chat_log.md").write_text(self.CHAT, encoding="utf-8")
+        r, made = self._retro(proj)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(made, "004-retro-003-003")
+        self.assertIn("1 tasks in window, 2 chat messages", r.stdout)
+        text = (proj / ".agent" / "tasks" / made / "task.md").read_text(encoding="utf-8")
+        self.assertIn("M002–M003", text)
+        self.assertRegex(text.split("\n", 2)[1], r"^<!-- retro-generated: \d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC -->$")
+        r, _ = self._retro(proj, "--since", "0")
+        self.assertIn("3 chat messages", r.stdout)
+
+    def test_an_older_retro_is_bounded_by_its_activation_in_the_shell_history(self):
+        proj = self._project([(1, "a"), (2, "retro-001-001"), (3, "c")])
+        (proj / ".agent" / "chat_log.md").write_text(self.CHAT, encoding="utf-8")
+        (proj / ".agent" / "bash_history").write_text(
+            "2026-10-01 12:00:00 | HOST | .claude/bin/tasks work 2\n", encoding="utf-8")
+        r, _ = self._retro(proj, env={"TZ": "UTC"})
+        self.assertIn("2 chat messages", r.stdout)
+
+    def test_a_search_for_the_command_is_not_an_activation(self):
+        # post-D6 run 2 (codex): `rg "tasks work 2"` matched the fallback and moved the boundary back
+        proj = self._project([(1, "a"), (2, "retro-001-001"), (3, "c")])
+        (proj / ".agent" / "chat_log.md").write_text(self.CHAT, encoding="utf-8")
+        (proj / ".agent" / "bash_history").write_text(
+            '2026-10-01 09:00:00 | HOST | rg "tasks work 2" .agent/bash_history\n'
+            "2026-10-01 09:30:00 | HOST | echo remember: tasks work 2 later\n"
+            "2026-10-01 12:00:00 | HOST | .claude/bin/tasks work 2\n", encoding="utf-8")
+        r, _ = self._retro(proj, env={"TZ": "UTC"})
+        self.assertIn("2 chat messages", r.stdout)
+
+    def test_the_stamp_is_taken_before_the_chat_is_read(self):
+        # post-D6 run 2 (codex): a message appended between the read and a LATER stamp fell into
+        # neither retro. The stamp is taken first, so the next window starts no later than the read.
+        from unittest import mock
+        import contextlib
+        import io
+        from tasks import history, retro as _retro
+        proj = self._project([(1, "a"), (2, "b")])
+        seen = []
+        real = _retro.extract_chatlog
+
+        def read_then_note(*a, **k):
+            seen.append(__import__("datetime").datetime.now(__import__("datetime").timezone.utc))
+            __import__("time").sleep(1.2)          # a stamp taken AFTER the read is then visibly later
+            return real(*a, **k)
+        prev = os.getcwd()
+        os.chdir(proj)
+        self.addCleanup(os.chdir, prev)
+        with mock.patch.object(_retro, "extract_chatlog", read_then_note), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            history.cmd_retro([])
+        (made,) = sorted((proj / ".agent" / "tasks").glob("*-retro-*/task.md"))
+        import re as _re
+        stamp = _re.search(r"<!-- retro-generated: (.+?) UTC -->", made.read_text(encoding="utf-8")).group(1)
+        self.assertLessEqual(stamp, seen[0].strftime("%Y-%m-%d %H:%M:%S"))
+
+    def test_a_retro_whose_time_is_unknown_keeps_the_whole_chat_and_says_so(self):
+        # a gate entry alone is no boundary: it can come after the retro's opening discussion
+        proj = self._project([(1, "a"), (2, "retro-001-001"), (3, "c")])
+        (proj / ".agent" / "chat_log.md").write_text(self.CHAT, encoding="utf-8")
+        r, _ = self._retro(proj)
+        self.assertIn("3 chat messages", r.stdout)
+        self.assertIn("not windowed", r.stdout)
+
+    def test_the_listed_ids_are_exactly_the_kept_messages(self):
+        # post-D6 run 1 (codex): ids and timestamps need not agree in order — a range M001–M003
+        # pulled an excluded M002 back in
+        proj = self._project([(1, "a"), (2, "retro-001-001"), (3, "c")])
+        self._stamp(proj, "002-retro-001-001", "2026-10-01 12:00:00 UTC")
+        (proj / ".agent" / "chat_log.md").write_text(
+            "# Project Chat Log\n\n"
+            "**[M001]** [2026-10-01 12:10:00 UTC] `HOST`\n\nin\n\n---\n\n"
+            "**[M002]** [2026-10-01 11:59:00 UTC] `HOST`\n\nout (older)\n\n---\n\n"
+            "**[M003]** [2026-10-01 12:20:00 UTC] `HOST`\n\nin\n\n---\n", encoding="utf-8")
+        r, made = self._retro(proj)
+        text = (proj / ".agent" / "tasks" / made / "task.md").read_text(encoding="utf-8")
+        self.assertIn("M001, M003", text)
+        self.assertNotIn("M001–M003", text)
+
+    def test_an_explicit_since_keeps_the_whole_chat_as_before(self):
+        # sonnet: only the DEFAULT window narrows the chat; `--since N` behaves as it always did
+        proj = self._project([(1, "a"), (2, "retro-001-001"), (3, "c")])
+        self._stamp(proj, "002-retro-001-001", "2026-10-01 12:00:00 UTC")
+        (proj / ".agent" / "chat_log.md").write_text(self.CHAT, encoding="utf-8")
+        r, _ = self._retro(proj, "--since", "3")
+        self.assertIn("3 chat messages", r.stdout)
+
+    def _with_retro_table(self, proj, retro_dir, rows):
+        tf = proj / ".agent" / "tasks" / retro_dir / "task.md"
+        table = "| # | Title | Status | Gates | Bare | Type |\n|---|-------|--------|-------|------|------|\n"
+        table += "".join(f"| {n:03d} | T{n} | {st} | 1/1 | 0 | light |\n" for n, st in rows)
+        tf.write_text(tf.read_text(encoding="utf-8") + "\n## Tasks in window\n\n" + table, encoding="utf-8")
+
+    def test_a_task_still_open_at_the_last_retro_is_carried_into_the_next(self):
+        # impl panel r2 (opus): the window was by NUMBER — retro 134 here saw 14 tasks (114-133)
+        # `blocked`, all closed later, and no later default window would ever have read them
+        proj = self._project([(1, "a"), (2, "b"), (3, "retro-001-002"), (4, "c")])
+        self._with_retro_table(proj, "003-retro-001-002", [(1, "done"), (2, "blocked")])
+        from tasks.core import count_tasks_since_retro
+        self.assertEqual(count_tasks_since_retro(proj), (2, 3))        # T004 and the carried T002
+        r, made = self._retro(proj)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(made, "005-retro-002-004")
+        self.assertIn("T002", r.stdout)
+
+    def test_nothing_since_the_last_retro_says_so(self):
+        proj = self._project([(1, "a"), (2, "retro-001-001")])
+        r, made = self._retro(proj)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("after retro T002", r.stderr)
+        self.assertEqual(made, "002-retro-001-001")                  # no new retro
+
+
 class ScaffoldRisk(unittest.TestCase):
     """PLAN S1c (task 079 finding P1-05): the retro scaffold emitted `## Status`
     and no `## Risk`, so `has_risk_section` read the record as a pre-1.5.0 task

@@ -6,7 +6,32 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 Built after the 1.5.46 cut. Tasks 114-130 were reviewed in grouped panels by area (owner Q9; tasks 135-139); task 118 still waits for its live grok check.
 
+### Changed
+
+- **The write log is bounded and documented** (task 141; owner decision, gauntlet 2 G2-15). After every Edit/Write a
+  full copy of the edited file is appended to `~/.local/share/playbook/<project-slug>/write_log` — it had no size
+  limit (135 MB for one project), no switch and no documentation, and nothing reads it. Now a file over 1 MB is named
+  but not copied, the log rotates before it would pass 10 MB, keeping one old file (older copies are dropped — at
+  most two 10 MB files per project); the log is private (0700/0600) and two edits at once take turns on a lock, and `{"write_log": false}` turns it off. A log that predates the cap is renamed aside once
+  (`write_log.pre-cap-…`) and never deleted by Playbook; delete it yourself when you want the space back.
+  `docs/configuration.md` says what the log is and that it can hold secrets.
+
 ### Fixed
+
+- **`tasks retro` reads the tasks since the last retro** (task 145; retro 134). With no `--since` it read the whole
+  history, while the close-time nudge that suggests it counts the tasks closed since the last retro. It now starts
+  after the last retro — a folder named `retro-<first>-<last>`, so a task called `retro-…` is not one — plus the older
+  tasks that retro recorded as not yet done, with the chat from the time that retro was made (new retros record it;
+  the retro task lists the ids to read); all tasks when none ran yet. It prints the
+  window it used; `--since 0` reads everything. The close-time nudge counts the same window.
+
+- **A task that quotes the stub marker is not a stub** (task 144; retro 134). `tasks work`, `tasks status`, the retro
+  and the command guard's acknowledgement for irreversible tasks each decided "unexpanded stub" by finding the text
+  `<!-- stub:` anywhere in task.md — so a record that only quoted it read as a stub, and `tasks work` "expanded" a
+  light task into the full feature template (it happened to the record of this very fix). One reader now: the marker
+  line `<!-- stub:TYPE -->` where `tasks new --stub` writes it — a whole line before the first section, outside a code
+  fence (a dotted custom type included). Expanding a stub now happens before the session points at it, refuses if the
+  task changed meanwhile, and keeps the stub's own status.
 
 - **Four small CLI decisions** (task 140; owner, 2026-10-07). `tasks work <N>` on a task that is already `done` no
   longer reopens it silently — it is refused, and `tasks work <N> --reopen` reopens it; an unknown option to

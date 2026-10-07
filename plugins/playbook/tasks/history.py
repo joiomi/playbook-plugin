@@ -13,6 +13,7 @@ spans into chat_log.md) and `retro` (a generated retro task). Imports stdlib
 """
 from __future__ import annotations
 
+import datetime
 import sys
 from pathlib import Path
 from tasks.atomic import atomic_write
@@ -490,11 +491,23 @@ def cmd_tag(cmd_args):
             atomic_write(chat_log, "".join(output))
         print(f"Inserted {tags_inserted} tags into chat_log.md")
 
+def _messages_since(chatlog: list, start: str) -> list:
+    """The chat from `start` on (task 145, impl panel r2 re-run): a TIME window from
+    the last retro's activation. Attribution was tried first — it dropped the retro
+    session's own discussion, lost everything for tasks with no attribution, and pulled
+    a carried task's older history in."""
+    from tasks.retro import _normalize_ts
+    start = _normalize_ts(start)
+    return [m for m in chatlog if _normalize_ts(m.get("timestamp", "")) >= start]
+
+
 def cmd_retro(cmd_args):
     """The `tasks retro` arm — body moved verbatim from cli.py (1.5.9 split)."""
     project_path = find_project_root()
-    # Parse --since N flag
-    since = 0
+    # Parse --since N flag. No --since: the tasks AFTER the last retro (task 145,
+    # retro 134 (b): a bare retro read the whole history, while the close-time nudge
+    # counts the tasks closed since the last retro); all of them when none ran yet.
+    since = None
     i = 0
     while i < len(cmd_args):
         if cmd_args[i] == "--since" and i + 1 < len(cmd_args):
@@ -512,6 +525,19 @@ def cmd_retro(cmd_args):
         build_task_windows,
     )
 
+    window = ""
+    carry: "set[int]" = set()
+    last_retro = None                   # set only on the default window
+    if since is None:
+        from tasks.core import count_tasks_since_retro, retro_carry_over
+        _closed, last_retro = count_tasks_since_retro(project_path)
+        since = (last_retro + 1) if last_retro is not None else 0
+        carry = retro_carry_over(project_path, last_retro)
+        window = (f"Window: tasks after retro T{last_retro:03d} (the last retro) — "
+                  "`tasks retro --since N` reads from task N, `--since 0` everything."
+                  if last_retro is not None else
+                  "Window: all tasks (no retro has run yet) — `tasks retro --since N` reads from task N.")
+
     tasks_dir = resolve_agent_dir(project_path) / "tasks"
     chatlog_path = resolve_agent_dir(project_path) / "chat_log.md"
     bash_history_path = resolve_agent_dir(project_path) / "bash_history"
@@ -519,13 +545,35 @@ def cmd_retro(cmd_args):
 
     # Extract data
     tasks = extract_tasks(tasks_dir, since=since)
+    if carry:
+        # still open at the last retro: theirs is this window (impl panel r2)
+        tasks = sorted([t for t in extract_tasks(tasks_dir, since=0) if t["number"] in carry] + tasks,
+                       key=lambda t: t["number"])
+        window += (" Also " + ", ".join(f"T{n:03d}" for n in sorted(carry))
+                   + " — open at the last retro.")
+    # this retro's own "made at" — taken BEFORE the chat is read, so a message that
+    # lands while it is generated is in the next retro's window (post-D6 run 2)
+    _stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     task_windows = build_task_windows(chatlog_path, bash_history_path)
     chatlog = extract_chatlog(chatlog_path, task_windows)
     mindmap = extract_mindmap(mindmap_path)
 
     if not tasks:
-        print("No tasks found in window.", file=sys.stderr)
+        print("No tasks found in window." + (f" {window}" if window else ""), file=sys.stderr)
         sys.exit(1)
+    # The DEFAULT window narrows the chat too, by time: from the last retro's own
+    # activation on (its discussion included). An explicit `--since N` keeps the whole
+    # chat, as it always did. Unknown activation time: the whole chat, said so.
+    if last_retro is not None and chatlog:
+        from tasks.retro import retro_start_time
+        _rf = sorted(tasks_dir.glob(f"{last_retro:03d}-*/task.md"))
+        start = retro_start_time(_rf[0], last_retro, bash_history_path) if _rf else None
+        if start:
+            chatlog = _messages_since(chatlog, start)
+            window += f" Chat: from {start} on (when retro T{last_retro:03d} was made)."
+        else:
+            window += (" The chat is not windowed: when retro "
+                       f"T{last_retro:03d} was made is not recorded.")
 
     # Run structural analysis passes
     from tasks.retro import (
@@ -552,9 +600,14 @@ def cmd_retro(cmd_args):
     task_dir = tasks_dir_path / folder_name
     task_dir.mkdir(parents=True)
     task_file = task_dir / "task.md"
+    # when this retro was made — the next retro's chat boundary (task 145)
+    _head, _sep, _rest = retro_content.partition("\n")
+    retro_content = f"{_head}\n<!-- retro-generated: {_stamp} -->{_sep}{_rest}"
     atomic_write(task_file, retro_content)
 
     print(f"Created: {task_file.relative_to(project_path)}")
+    if window:
+        print(window)
     print(f"Retro task T{task_num:03d} — {len(tasks)} tasks in window, "
           f"{len(chatlog)} chat messages, {len(mindmap)} mind map nodes")
     print(f"Next: tasks work {task_num}")
