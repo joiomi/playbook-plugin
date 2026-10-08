@@ -734,8 +734,6 @@ class JudgebenchWiring(unittest.TestCase):
         big = "x" * 150_000                                  # over the POSIX per-argument cap
         v = self.transport.seat_verdict(cand, big, self.runner.REPO_ROOT, platform_nt=False)
         self.assertEqual((v["transport"], v["fits"]), ("stdin", True), v)
-        v = self.transport.seat_verdict(cand, big, self.runner.REPO_ROOT, platform_nt=True)
-        self.assertEqual((v["transport"], v["fits"]), ("stdin", True), v)
 
     def test_quota_failure_halts_like_a_quota_refusal(self):
         for stem in ("quota-exhausted", "credits-too-low.constructed-not-captured"):

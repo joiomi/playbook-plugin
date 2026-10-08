@@ -321,9 +321,9 @@ class DaemonArgvDetectorParity(unittest.TestCase):
             sys.path.remove(str(PLUGIN))
         for argv, want in DAEMON_ARGV:
             with self.subTest(argv=argv):
-                # argv travels NUL-separated on stdin, not on the command line:
-                # on Windows the MSYS runtime rebuilds argv from the Windows
-                # command line and drops a trailing \r (CI run 36401496454).
+                # argv travels NUL-separated on stdin, not on the command line, so
+                # every byte (a trailing \r included) reaches bash unchanged (the
+                # MSYS runtime dropped it from argv up to 1.5.47, CI run 36401496454).
                 r = subprocess.run([bash_or_skip(), "-c",
                                     f"source '{GATE_LIB.as_posix()}' && A=(); "
                                     "while IFS= read -r -d '' a; do A[${#A[@]}]=\"$a\"; done; "
@@ -347,7 +347,7 @@ class DaemonDetectorParity(unittest.TestCase):
             sys.path.remove(str(PLUGIN))
         for args, want in DAEMON_ARGS.items():
             with self.subTest(args=args):
-                # stdin, not argv (MSYS drops a trailing \r from Windows argv)
+                # stdin, not argv: every byte reaches bash unchanged
                 r = subprocess.run([bash_or_skip(), "-c",
                                     f"source '{GATE_LIB.as_posix()}' && IFS= read -r -d '' a; "
                                     "_is_daemon_args \"$a\""],

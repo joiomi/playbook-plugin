@@ -7153,6 +7153,36 @@
           "limitations": [
             "Runs under real bubblewrap on Linux (skipped where bwrap is not installed)."
           ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_sandbox_bind_order.py",
+          "reference": "BindOrder.test_project_is_ro_bound_in_judge_mode",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "--ro-project (judge mode): the project is bound with --ro-bind — argv level, runs on every Linux host whether or not bwrap is installed."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_sandbox_bind_order.py",
+          "reference": "BindOrder.test_git_ro_bind_after_project",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Worker mode: .git is --ro-bind'ed AFTER the writable project bind, so it stays read-only — argv level."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_sandbox_bind_order.py",
+          "reference": "BindOrder.test_extra_rw_after_project",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "--rw exception: the extra workspace bind comes after the read-only project bind, so it stays writable — argv level."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -7166,11 +7196,12 @@
       "status": "partially_evidenced",
       "missing_evidence_or_limitation": [
         "Confirmed containment failure on macOS CI (run 32381370391, job 96465123480): under --ro-project a project rooted at a _SYSTEM_RW_PATHS entry (e.g. /var/folders, where macOS mktemp places dirs) was fully writable because the read-only project was expressed only as an omitted require-not exemption inside a require-all-of-require-nots deny block, which a broader exemption cancels. Corrected in build_seatbelt_profile: the read-only project is now an explicit terminal deny (the .git precedent), with each extra_rw workspace re-allowed after it.",
-        "The correction is proven at the profile-text level on Linux; end-to-end seatbelt execution is NOT verified on this host — the macOS leg of test_ro_project_prompt_denies_project_write_but_keeps_rw_exception is the pending live proof, due on the next push to macOS CI. [2026-10-08, Linux-only (task 153): the macOS and Windows CI lanes were removed; this coverage ran there up to 1.5.47, tag `last-multiplatform`.]",
-        "Full worker-mode .git mutation matrix under real seatbelt is incomplete.",
+        "The seatbelt correction shipped up to 1.5.47 (tag `last-multiplatform`) with a profile-text proof; since task 154 (2026-10-08, Linux-only) no test in the tree exercises seatbelt, and macOS is not claimed. On Linux the claim rests on the bubblewrap argv tests (tests/test_sandbox_bind_order.py BindOrder, unconditional) and the live bubblewrap test (skipped where bwrap is not installed).",
+        "Full worker-mode .git mutation matrix under real bubblewrap is incomplete.",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
-        "2026-10-08 (task 154, Linux-only): the seatbelt profile-text proof (RoProjectSeatbeltProfileDeniesWrites, control WorkerModeSeatbeltProfileUnchanged) was deleted with the other macOS-only tests; the bubblewrap proof stays."
+        "2026-10-08 (task 154, Linux-only): the seatbelt profile-text proof (RoProjectSeatbeltProfileDeniesWrites, control WorkerModeSeatbeltProfileUnchanged) was deleted with the other macOS-only tests; the bubblewrap proof stays.",
+        "2026-10-08 (task 154 impl panel r1): the three unconditional bubblewrap argv tests (BindOrder) bound as proofs, so the row keeps a proof that runs where bwrap is not installed."
       ],
       "follow_up_phases": [
         8
@@ -7269,9 +7300,9 @@
       ],
       "status": "partially_evidenced",
       "missing_evidence_or_limitation": [
-        "The mechanical argv boundary (no --unshare-net by default, --ro-bind / root leaving the filesystem readable, opt-in --unshare-net) is unit-proven on every platform and live-proven under Linux bwrap; a live end-to-end measurement of read visibility and outbound network reachability from a real judge on Linux and macOS is deferred to Phase 8.",
-        "macOS seatbelt and Windows cannot isolate the network at all; the --no-network opt-in fails loudly on those backends rather than emit a no-op.",
-        "On Windows there is no containment backend, so even write containment is a no-op and judges run uncontained (the working-tree tamper guard is the only defense).",
+        "The mechanical argv boundary (no --unshare-net by default, --ro-bind / root leaving the filesystem readable, opt-in --unshare-net) is unit-proven on every platform and live-proven under Linux bwrap; a live end-to-end measurement of read visibility and outbound network reachability from a real judge on Linux is deferred to Phase 8.",
+        "Up to 1.5.47 (tag `last-multiplatform`; not claimed since 2026-10-08, Linux-only): macOS seatbelt and Windows could not isolate the network at all; the --no-network opt-in fails loudly on any non-bwrap backend rather than emit a no-op.",
+        "Up to 1.5.47 (not claimed since 2026-10-08): on Windows there was no containment backend, so even write containment was a no-op and judges ran uncontained (the working-tree tamper guard was the only defense).",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`)."
       ],

@@ -77,13 +77,6 @@ class GrokInvocationTest(unittest.TestCase):
                 mock.patch("provider.sandbox.format_judge_output", side_effect=lambda r: r.stdout):
             self.a.run_headless_judge("R", "grok-build", "CTX", web_search=True, timeout_secs=90, budget_usd="10")
 
-    def test_windows_argv_guard(self):
-        with mock.patch("shutil.which", return_value="/usr/bin/grok"), \
-                mock.patch.object(os, "name", "nt"):
-            out = self.a.run_headless_judge(
-                "P", "grok-build", "X" * 40000, web_search=False, timeout_secs=60, budget_usd="10")
-        self.assertTrue(out.startswith("(error: grok judge prompt+context is ~"))
-        self.assertIn("Windows caps the command line", out)
 
     def test_panel_variants_and_identity(self):
         self.assertEqual(GrokAdapter.binary_name(), "grok")
