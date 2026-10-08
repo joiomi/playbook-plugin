@@ -10190,6 +10190,7 @@
       ],
       "status": "partially_evidenced",
       "missing_evidence_or_limitation": [
+        "WAIVER 2026-10-08 PB-PERFORMANCE-HOOKS: The owner accepts the recorded T4 measurement (Linux, 2026-08-23: +6.76/+7.53 ms median per Bash tool call from the BASH_ENV trap) as a dated observation, not a guarantee a test enforces; performance is measured properly in Phase B (B1), where any budget is the owner's to set (owner decision 2026-10-08, task 148 N3).",
         "A reproducible median/p95 driver for the BASH_ENV DEBUG-trap delta now exists (scripts/bench_bash_trap.py; T4); still missing for the broader hook budget: named reference hosts, cold-cache measurements, CI-asserted frozen budgets, and macOS/Windows numbers.",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
       ],
@@ -10249,6 +10250,7 @@
       ],
       "status": "missing_evidence",
       "missing_evidence_or_limitation": [
+        "WAIVER 2026-10-08 PB-PERFORMANCE-CLI-JUDGES: No frozen performance budgets exist; the owner accepts this row as the statement of an intent, not a verified guarantee, until Phase B (B1) measures the paths and the owner names budgets a test can enforce (owner decision 2026-10-08, task 148 N3).",
         "All named cross-platform performance budgets and reproducible instruments are missing.",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
       ],
