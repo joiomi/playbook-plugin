@@ -171,10 +171,9 @@ def _write_script(command):
     an early failing step fail; pipefail stops a trailing `| tail` swallowing the
     real status. Caller unlinks."""
     fd, script = tempfile.mkstemp(prefix="verify-", suffix=".sh")
-    # newline="\n": without it, Windows text-mode translates the preamble/command
-    # `\n`→`\r\n`, and git-bash then runs a CRLF script whose `set -e`/`set -o
-    # pipefail` and command lines are CR-corrupted — even a green command exits
-    # non-zero, failing the gate. No-op on POSIX.
+    # newline="\n": the script is written with LF line endings whatever the
+    # platform's newline translation — a CRLF script's `set -e`/`set -o pipefail`
+    # and command lines are CR-corrupted, and even a green command exits non-zero.
     with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(PREAMBLE)
         fh.write(command)

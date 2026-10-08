@@ -36,7 +36,7 @@ esac
 # `last-multiplatform`) is the last version tested on macOS and Windows/Git Bash.
 PB_PLATFORM="$(uname -s 2>/dev/null | tr -cd 'A-Za-z0-9._ -')"
 if [ "$PB_PLATFORM" != "Linux" ]; then
-    PB_PLATFORM_MSG="playbook: platformă nesuportată (${PB_PLATFORM:-unknown}); suportul e doar Linux din 2026-10-08 — pentru Windows/macOS folosește branch-ul \`multiplatform\` (1.5.47)"
+    PB_PLATFORM_MSG="playbook: unsupported platform (${PB_PLATFORM:-unknown}); Linux only since 2026-10-08 — on Windows/macOS use the \`multiplatform\` branch (1.5.47)"
     echo "$PB_PLATFORM_MSG" >&2
     # PB_PLATFORM is reduced to [A-Za-z0-9._ -] above, so the message needs no JSON escaping.
     printf '{"systemMessage":"%s","hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' \

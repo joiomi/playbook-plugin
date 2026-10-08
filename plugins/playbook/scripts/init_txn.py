@@ -59,7 +59,7 @@ def _realm(path: str, project_root: str) -> str:
     try:
         if os.path.commonpath([path, project_root]) == project_root:
             return "project"
-    except ValueError:  # different drives on Windows
+    except ValueError:  # no common path (e.g. mixed absolute/relative)
         pass
     return "user"
 

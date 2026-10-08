@@ -138,7 +138,7 @@ class PrintArgvNeverExecutes(unittest.TestCase):
         self.assertEqual(wrote.read_text(encoding="utf-8"), "allowed", diag)
 
     def test_the_removed_print_profile_flag_is_refused_not_run(self):
-        # Task 155 impl panel r1 (opus): --print-profile printed the macOS seatbelt
+        # Task 155 impl panel r1 (opus): --print-profile printed the macOS sandbox
         # profile and was removed with that backend. A caller still passing it must
         # get argparse's refusal (exit 2) — never a live agent run.
         for flags in (("--print-profile",), ("--print-profile", "--agent", "claude", "--prompt", "hello")):

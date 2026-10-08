@@ -732,7 +732,7 @@ class JudgebenchWiring(unittest.TestCase):
     def test_transport_judges_the_agy_seat_as_a_stdin_seat(self):
         (cand,) = self.runner.parse_candidates("gem-flash-high")
         big = "x" * 150_000                                  # over the POSIX per-argument cap
-        v = self.transport.seat_verdict(cand, big, self.runner.REPO_ROOT, platform_nt=False)
+        v = self.transport.seat_verdict(cand, big, self.runner.REPO_ROOT)
         self.assertEqual((v["transport"], v["fits"]), ("stdin", True), v)
 
     def test_quota_failure_halts_like_a_quota_refusal(self):

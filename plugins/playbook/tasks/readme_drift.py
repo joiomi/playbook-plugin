@@ -118,8 +118,7 @@ def readme_drift(
     if repo is None:
         return []
     # .as_posix(): this path is interpolated into a user-facing "read and follow
-    # <path>" instruction; native str(Path) would render it with backslashes on
-    # Windows. Forward slashes are a stable, portable instruction. No-op on POSIX.
+    # <path>" instruction; forward slashes are the stable form (an identity on Linux).
     skill = (repo / SKILL_REL).as_posix()
     baseline_path = repo / BASELINE_REL
 

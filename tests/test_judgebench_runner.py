@@ -161,12 +161,10 @@ class ClassifyTests(unittest.TestCase):
             with self.subTest(raw=raw[:30]):
                 self.assertEqual(runner.classify(raw), want)
         self.assertEqual(runner.classify("anything", timed_out=True), ("timeout", False))
-        # r4 grok #2: the adapters' own size-cap envelopes are DETERMINISTIC — never retried.
-        for raw in ("(error: grok judge prompt+context is ~40000 chars on argv; Windows caps the command "
-                    "line at 32,767 chars and grok reads its prompt from argv — shrink the context)",
-                    "(error: grok judge context is 200,000 bytes in a single argv element; this platform "
-                    "caps one element at 131,072 bytes (MAX_ARG_STRLEN = 32 * PAGE_SIZE) and grok reads …)"):
-            self.assertEqual(runner.classify(raw), ("dnf", False), raw[:40])
+        # r4 grok #2: the adapters' own size-cap envelope is DETERMINISTIC — never retried.
+        raw = ("(error: grok judge context is 200,000 bytes in a single argv element; this platform "
+               "caps one element at 131,072 bytes (MAX_ARG_STRLEN = 32 * PAGE_SIZE) and grok reads …)")
+        self.assertEqual(runner.classify(raw), ("dnf", False), raw[:40])
 
     def test_quota_exhaustion_is_dnf_not_fail_and_never_retried(self):
         # task 050 W0: a provider quota/credit refusal means the judge NEVER reviewed —

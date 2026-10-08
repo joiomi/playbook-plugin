@@ -166,8 +166,8 @@ if [ -n "$PLAYBOOK_EVAL_CONFIG" ] && [ -f "$PLAYBOOK_EVAL_CONFIG" ]; then
 fi
 
 # Gate-logging write-failure tracking (bug report #4): a write that fails AFTER
-# the AGENT_WRITABLE probe (e.g. a transient Windows AV lock on the counter mv,
-# or a non-writable session dir) silently freezes the gate_key and stops gate
+# the AGENT_WRITABLE probe (e.g. a transient lock on the counter mv, or a
+# non-writable session dir) silently freezes the gate_key and stops gate
 # logging with no error. write_counter (gate-echo-lib) flips this flag instead
 # of dying; we guard the mkdir + gate-log appends the same way and surface it
 # below. Exported so the sourced lib's assignment is visible here.

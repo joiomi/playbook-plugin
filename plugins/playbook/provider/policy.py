@@ -29,11 +29,9 @@ def _is_management_path(file_path: str) -> bool:
     must not be treated as management, or it bypasses the code-edit gate.
     """
     import os
-    # normpath collapses `..`/`.` — but on Windows it also RE-INTRODUCES `\`
-    # (undoing the pre-replace), so `split("/")` would then see one element and
-    # miss a genuine `.agent`/`.claude` component, blocking real management edits.
-    # Re-normalize separators to `/` after normpath. No-op on POSIX (os.sep=="/").
-    norm = os.path.normpath(file_path.replace("\\", "/")).replace(os.sep, "/")
+    # normpath collapses `..`/`.`; a `\` in the path is treated as a separator
+    # first (kept as it was: dropping it would change which paths are exempt).
+    norm = os.path.normpath(file_path.replace("\\", "/"))
     parts = norm.split("/")
     return ".agent" in parts or ".claude" in parts
 

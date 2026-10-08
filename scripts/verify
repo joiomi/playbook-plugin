@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
 """Canonical verification entrypoint: run every check, print PASS/FAIL/SKIP.
 
-Stdlib-only, Python 3 — must behave identically on Linux, macOS and
-Windows/Git Bash. Shell fixtures are invoked as `bash` subprocesses.
+Stdlib-only, Python 3, Linux (the only supported platform since 2026-10-08).
+Shell fixtures are invoked as `bash` subprocesses.
 Exit code is non-zero iff at least one check FAILed; SKIP never fails the run.
 
 The bash used for the shell-dependent checks is resolved once at startup by the
 SHARED resolver in product code (`plugins/playbook/tasks/bash_resolver.py`),
 path-loaded below so this dev script depends on the product, never the reverse.
 Set $PLAYBOOK_BASH to an absolute path to override; $PLAYBOOK_VERIFY_BASH is
-honoured as a documented fallback (CI exports it from inside its Git Bash step so
-Python does not pick up the Windows System32 WSL stub); otherwise `bash` on PATH
-is used. If the resolved bash is unusable (the WSL stub prints an install hint
-and exits non-zero), the shell checks SKIP — a missing usable bash is an
+honoured as a documented fallback; otherwise `bash` on PATH is used. If the
+resolved bash is unusable (its sentinel probe fails), the shell checks SKIP — a missing usable bash is an
 environment fact, not a product defect.
 """
 
@@ -83,10 +81,10 @@ def env() -> dict:
 
 
 def decode(raw: bytes) -> str:
-    """Decode captured subprocess bytes defensively across platforms.
+    """Decode captured subprocess bytes defensively.
 
-    We capture bytes (not text=True): on Windows/Git Bash a child can emit
-    UTF-16, or interleave NUL bytes, which the old text-mode capture reduced to
+    We capture bytes (not text=True): a child can emit UTF-16, or interleave
+    NUL bytes, which the old text-mode capture reduced to
     a lone `^@` (NUL) — an unreadable detail line that looked like N broken
     files when it was one decoding defect. Recover the text when we can;
     otherwise say so explicitly with the raw length and leading bytes in hex,
@@ -765,8 +763,8 @@ def _diffcheck():
 
 
 def utf8_console(stream):
-    """086 W6: a cp1252 Windows console crashed the report on U+2260 and cut the
-    failure list short. Re-encode as UTF-8, replacing what cannot be written."""
+    """086 W6: a console codec that is not UTF-8 (cp1252 then) crashed the report on
+    U+2260 and cut the failure list short. Re-encode as UTF-8, replacing what cannot be written."""
     try:
         stream.reconfigure(encoding="utf-8", errors="replace")
     except Exception:                    # not a TextIOWrapper, or already detached

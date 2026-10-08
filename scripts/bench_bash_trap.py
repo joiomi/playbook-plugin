@@ -76,9 +76,8 @@ def _run_fused_once(cwd: str, env: dict, hooks=(TASK_GATE, CMD_GUARD),
     hooks ALLOW (exit 0) on the benign `echo benchmark` payload, so any non-zero
     is a crash or an unexpected block, not a valid sample.
 
-    `bash` defaults to bare `"bash"` (the dev machine's shell); callers on
-    Windows must pass a RESOLVED git-bash, because bare `bash` there is the
-    System32 WSL stub, which exits non-zero without running the script."""
+    `bash` defaults to bare `"bash"` (the dev machine's shell); a caller whose
+    bare `bash` is not usable passes the RESOLVED one (tasks/bash_resolver.py)."""
     rcs: "list[int]" = []
     for hook in hooks:
         p = subprocess.run(

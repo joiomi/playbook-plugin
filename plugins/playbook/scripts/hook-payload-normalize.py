@@ -221,10 +221,7 @@ def extract_fields(payload):
     return (
         tool_name,
         path,
-        # normpath re-introduces `\` on Windows; the gate matches this field
-        # against `*/.agent/*` (forward-slash), so a native-separator value would
-        # break the exemption. Re-normalize to `/`. No-op on POSIX (os.sep=="/").
-        os.path.normpath(path).replace(os.sep, "/"),
+        os.path.normpath(path),
         command,
         _wire_safe(transcript),
     )
@@ -253,17 +250,15 @@ def emit_fields(raw):
 
 
 def main():
-    # This is an ENFORCING hook. On Windows, stdin/stdout default to the console
-    # codepage (cp1252), so reading a UTF-8 payload or writing a field that holds
-    # a non-ASCII char (e.g. the U+FFFD _wire_safe emits for a lone surrogate)
+    # This is an ENFORCING hook. Robustness: stdin/stdout can run a codec that is
+    # not UTF-8 (PYTHONIOENCODING, a Latin-1 locale; first met as a cp1252
+    # console), so reading a UTF-8 payload or writing a field that holds a
+    # non-ASCII char (e.g. the U+FFFD _wire_safe emits for a lone surrogate)
     # raises UnicodeEncodeError — the producer dies mid-frame and the consumer is
     # forced onto its slower recovery path. Force UTF-8, matching tasks/cli.py.
-    # newline="" disables newline TRANSLATION on the same streams: Windows
-    # stdout otherwise rewrites every '\n' in a field to '\r\n' (and stdin folds
-    # '\r\n' to '\n' on read), so the NUL-framed wire delivered altered bytes to
-    # the enforcing bash consumer and the byte-identity payload echo was not
-    # byte-identical. Newlines are DATA on this wire — only NUL delimits.
-    # Encoding is a no-op on POSIX, where the streams are already UTF-8.
+    # newline="" disables newline TRANSLATION on the same streams, so the
+    # NUL-framed wire delivers every byte unchanged to the enforcing bash
+    # consumer. Newlines are DATA on this wire — only NUL delimits.
     for _stream in (sys.stdin, sys.stdout):
         if hasattr(_stream, "reconfigure"):
             _stream.reconfigure(encoding="utf-8", errors="replace", newline="")

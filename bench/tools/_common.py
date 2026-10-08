@@ -23,8 +23,8 @@ class ToolError(Exception):
 
 
 def utf8_stdio() -> None:
-    """Windows lesson (plan §8): a cp1252 console truncates the output of a tool
-    that prints an arbitrary task title."""
+    """Robustness (plan §8): a console codec that is not UTF-8 (cp1252, Latin-1)
+    truncates the output of a tool that prints an arbitrary task title."""
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             try:

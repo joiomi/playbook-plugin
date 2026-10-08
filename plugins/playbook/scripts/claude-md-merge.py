@@ -457,7 +457,7 @@ def main(argv: "list[str]") -> int:
     claude_md = root / "CLAUDE.md"
     try:
         # raw bytes in, `newline=""` out: universal-newline reading and os.linesep
-        # writing used to rewrite a CRLF file (and, on Windows, an LF one) before the
+        # writing used to rewrite a CRLF file before the
         # merge could see its endings (task 093 r2)
         raw = claude_md.read_bytes() if claude_md.exists() else None
         # surrogateescape, both ways: a byte that is not UTF-8 (a cp1252 file, say) is

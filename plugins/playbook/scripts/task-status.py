@@ -72,9 +72,9 @@ def main(argv: "list[str]") -> int:
         # third field is exactly one line for the hook's `read`.
         out += [str(unchecked), first.replace("\r", ""),
                 "release" if _freehand_release_allowed(lines) else "hold"]
-    # Bytes, `\n` only: a text-mode print() on native Windows emits CRLF and bash
-    # command substitution keeps the CR, so `blocked\r` would miss the hook's exact
-    # match (round-5 panel). The hook also strips one trailing CR — belt + braces.
+    # Bytes, `\n` only: a text-mode print() may translate the newline to CRLF, and
+    # bash command substitution keeps the CR, so `blocked\r` would miss the hook's
+    # exact match (round-5 panel). The hook also strips one trailing CR — belt + braces.
     sys.stdout.buffer.write(("\n".join(out) + "\n").encode("utf-8", "replace"))
     sys.stdout.buffer.flush()
     return 0

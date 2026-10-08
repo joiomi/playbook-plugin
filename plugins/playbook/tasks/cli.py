@@ -54,7 +54,7 @@ def main():
 
 
 def _main():
-    # Force utf-8 on Windows where the default console encoding (cp1252) chokes on → and emoji.
+    # Force utf-8: a stdout/stderr codec that is not UTF-8 (cp1252, Latin-1) chokes on → and emoji.
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     if hasattr(sys.stderr, "reconfigure"):

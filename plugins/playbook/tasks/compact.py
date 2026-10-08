@@ -184,7 +184,7 @@ def cmd_compact(cmd_args) -> None:
         sys.exit(1)
 
     # newline="" preserves the file's real line endings (read_text would fold
-    # CRLF→LF and silently rewrite every line of a Windows task.md).
+    # CRLF→LF and silently rewrite every line of a CRLF task.md).
     with task_md.open(encoding="utf-8", errors="replace", newline="") as _fh:
         text = _fh.read()
     nl = "\r\n" if "\r\n" in text else "\n"

@@ -21,16 +21,16 @@ path-loaded from anywhere.
 
 Override precedence, highest first:
 
-    $PLAYBOOK_BASH          the product-level knob — the variable a real user (or
-                            a Windows shell) sets to name the bash to use.
+    $PLAYBOOK_BASH          the product-level knob — the variable a user sets
+                            to name the bash to use.
     $PLAYBOOK_VERIFY_BASH   the historical dev-harness variable, honoured ONLY as
-                            a documented fallback so existing CI — which exports
-                            it from its Git Bash step — keeps working unchanged.
+                            a documented fallback (the Windows CI lane exported
+                            it up to 1.5.47).
     bash on PATH            otherwise.
 
-A presence check is NOT enough. On Windows a bare `bash` on PATH is usually the
-System32 WSL launcher: with no distro it prints an install hint and exits
-non-zero (and a stub could even exit zero). So the resolver PROBES the chosen
+A presence check is NOT enough: a `bash` on PATH can be a stub or a broken
+install that prints a hint and exits non-zero, or even exits zero (first met as
+Windows' System32 WSL launcher). So the resolver PROBES the chosen
 bash with a sentinel — it must run `printf ok` and print exactly `ok`; any other
 outcome is "unusable" and the resolver fails closed.
 """
@@ -39,7 +39,6 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-from pathlib import Path
 
 BASH_ENV_VAR = "PLAYBOOK_BASH"                   # product-level override
 BASH_FALLBACK_ENV_VAR = "PLAYBOOK_VERIFY_BASH"   # documented dev/CI fallback
@@ -60,15 +59,11 @@ def _candidate() -> "tuple[str | None, str | None]":
     """The bash to try and the env var it came from (or None when from PATH).
 
     Honour $PLAYBOOK_BASH, then the documented $PLAYBOOK_VERIFY_BASH fallback,
-    else `bash` on PATH. A `cygpath -w` conversion can drop the `.exe`; recover
-    it so CreateProcess execs the real binary rather than falling through to a
-    spurious "not usable".
+    else `bash` on PATH.
     """
     for name in (BASH_ENV_VAR, BASH_FALLBACK_ENV_VAR):
         val = os.environ.get(name)
         if val:
-            if not Path(val).exists() and Path(val + ".exe").exists():
-                val += ".exe"
             return val, name
     return shutil.which("bash"), None
 
@@ -84,7 +79,7 @@ def _clean_env() -> dict:
 def _probe(path: str, env: "dict | None" = None) -> "tuple[int, bytes]":
     """Run the sentinel `printf ok` under `path`. Returns (rc, raw_stdout).
 
-    Bytes, not text: a Windows stub can emit odd encodings, and callers compare
+    Bytes, not text: a stub can emit odd encodings, and callers compare
     the stripped bytes to `b"ok"`. `env=None` inherits the parent environment.
     Raises OSError / subprocess.SubprocessError to the caller.
     """

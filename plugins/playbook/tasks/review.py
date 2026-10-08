@@ -931,8 +931,8 @@ def _prefixed(prefix: "str | None", body: str, status: str = "..") -> "re.Patter
 
 
 def _containment_available() -> bool:
-    """Is an OS sandbox actually denying judge writes here? False on Windows and
-    inside a nested sandbox — where the tamper guard is the ONLY defense and the
+    """Is an OS sandbox actually denying judge writes here? False with no bwrap
+    on PATH and inside a nested sandbox — where the tamper guard is the ONLY defense and the
     concurrent-commit demotions below must not apply (059 impl-panel r2, grok
     #1). Never raises: an unanswerable probe is treated as UNCONTAINED."""
     try:
@@ -1058,7 +1058,7 @@ def _scope_changes(before: dict, after: dict, *, label: str = "",
                             f"{str(ah.get('value'))[:12]}) — a concurrent commit; the verdict "
                             "may not describe the current HEAD")
         else:
-            # No OS containment (Windows, or an already-nested sandbox): the guard
+            # No OS containment (no bwrap, or an already-nested sandbox): the guard
             # is the ONLY defense, and a judge that can write can also `git
             # commit` its writes — which would hide them from the porcelain diff
             # and (below) launder its own removals. Fail closed there (059
@@ -2946,11 +2946,11 @@ def _cmd_single_review(cmd, cmd_args):
         if model:
             from provider.adapters.claude import ClaudeAdapter
             claude_args += ["--model", ClaudeAdapter._MODEL_MAP.get(model, model)]
-        # Windows: passing system_context as an argv element overflows the
-        # Win32 command-line cap (32,767 chars → WinError 206). `claude -p`
-        # with no positional prompt reads stdin, so pipe context+prompt
-        # instead of putting them on argv. encoding="utf-8" keeps the pipe
-        # (and stdout decode) off the cp1252 locale default on Windows.
+        # A populated system_context as ONE argv element overflows the kernel's
+        # per-argument cap (128 KB on 4 KB pages → E2BIG). `claude -p` with no
+        # positional prompt reads stdin, so pipe context+prompt instead of
+        # putting them on argv. encoding="utf-8" keeps the pipe (and stdout
+        # decode) off a non-UTF-8 locale codec.
         full_prompt = f"{system_context}\n\n---\n\n{prompt}"
 
         from provider import sandbox as _sandbox
@@ -3114,18 +3114,8 @@ def _cmd_single_review(cmd, cmd_args):
             sys.exit(1)
         grok_args = inv.argv + ["--disable-web-search"]
 
-        # Windows caps the whole command line at 32,767 chars (WinError
-        # 206); grok reads its prompt from argv (stdin is not a prompt
-        # channel) — fail fast like the agy/pi arms.
-        if os.name == "nt":
-            payload = sum(len(a) + 1 for a in grok_args)
-            if payload > 30_000:
-                print(f"Error: grok judge prompt+context is ~{payload} chars on argv; "
-                      "Windows caps the command line at 32,767 chars and grok reads its "
-                      "prompt from argv — shrink the context or use another backend.",
-                      file=sys.stderr)
-                sys.exit(1)
-        # POSIX per-element byte cap (#10) — the char budget can't bound argv bytes.
+        # grok reads its prompt from argv (stdin is not a prompt channel).
+        # Per-element byte cap (#10) — the char budget can't bound argv bytes.
         from provider.argv_guard import argv_byte_error
         _argv_err = argv_byte_error(grok_args, "grok")
         if _argv_err:
@@ -3182,19 +3172,10 @@ def _cmd_single_review(cmd, cmd_args):
         if model:
             pi_args += ["--model", model]
 
-        # Windows caps the whole command line at 32,767 chars (WinError 206);
         # pi reads its prompt AND context from argv only (no verified stdin
-        # path), so fail fast with a clear message rather than a cryptic
-        # spawn failure — mirrors the guard in provider/adapters/pi.py.
-        if os.name == "nt":
-            payload = sum(len(a) + 1 for a in pi_args)
-            if payload > 30_000:
-                print(f"Error: pi judge prompt+context is ~{payload} chars on argv; "
-                      "Windows caps the command line at 32,767 chars and pi reads its "
-                      "prompt from argv only — shrink the context or use another backend.",
-                      file=sys.stderr)
-                sys.exit(1)
-        # POSIX per-element byte cap (#10).
+        # path), so fail fast with a clear message rather than a cryptic spawn
+        # failure — mirrors the guard in provider/adapters/pi.py.
+        # Per-element byte cap (#10).
         from provider.argv_guard import argv_byte_error
         _argv_err = argv_byte_error(pi_args, "pi")
         if _argv_err:

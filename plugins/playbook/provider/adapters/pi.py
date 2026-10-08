@@ -108,18 +108,11 @@ class PiAdapter(ProviderAdapter):
         if shutil.which("omlx") is None and shutil.which("pi") is None:
             return f"(error: neither omlx nor pi found on PATH)"
         inv = self.headless_argv(prompt, model, context=system_context)
-        # Windows caps the whole command line at 32,767 chars (WinError 206).
         # pi takes prompt AND context as flag values on argv; like agy 1.1.1
         # (which has no stdin prompt path — task 013) a stdin path for pi is
         # unverified — so fail fast with a clear error instead of a cryptic
         # spawn failure when the payload can't fit.
-        if os.name == "nt":
-            payload = sum(len(a) + 1 for a in inv.argv)
-            if payload > 30_000:
-                return (f"(error: pi judge prompt+context is ~{payload} chars on argv; "
-                        "Windows caps the command line at 32,767 chars and pi reads its "
-                        "prompt from argv only — shrink the context or use another backend)")
-        # POSIX per-element BYTE cap (#10). pi puts prompt and context in SEPARATE
+        # Per-element BYTE cap (#10). pi puts prompt and context in SEPARATE
         # elements, so this only trips if one element alone exceeds the cap — the
         # max-over-elements check handles that correctly.
         from provider.argv_guard import argv_byte_error
@@ -131,7 +124,7 @@ class PiAdapter(ProviderAdapter):
         from provider import sandbox as _sandbox
         # pi takes its prompt as the `-p <prompt>` flag value (no stdin read),
         # so context stays on argv here; encoding="utf-8" still guards the
-        # stdout decode against the Windows cp1252 locale default.
+        # stdout decode against a non-UTF-8 locale codec.
         # timeout_secs=None → unlimited: sandbox.run only arms its process-group
         # killer when a timeout is set.
         result = _sandbox.run(

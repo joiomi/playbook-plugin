@@ -15,7 +15,7 @@ flag's argv VALUE, stdin is not a prompt channel (same contract as agy 1.1.x,
 task 013). Useful flags: `-m <model>`, `--reasoning-effort <level>`,
 `--disable-web-search`, `--max-turns <N>`, `--output-format plain|json`,
 `--prompt-file <path>` (an argv-cap escape hatch no other provider has — not
-used yet; the win32 >30K guard below mirrors agy/pi instead).
+used yet; the per-argument byte guard below refuses an oversized prompt instead).
 
 Model catalog: `grok models` lists account-entitled models live (verified:
 grok-composer-2.5-fast (default), grok-build) — unlike claude (no list
@@ -254,18 +254,9 @@ class GrokAdapter(ProviderAdapter):
         # opt-in via --search).
         agent_args = inv.argv + ([] if web_search else ["--disable-web-search"])
         # grok reads its prompt as the `-p` flag value (stdin is not a prompt
-        # channel — same contract as agy 1.1.x, task 013). Windows caps the
-        # whole command line at 32,767 chars (WinError 206) — fail fast with a
-        # clear error instead of a cryptic spawn failure. (grok --prompt-file
-        # could lift this cap later; unverified under sandbox, so mirror the
-        # agy/pi guard for now.)
-        if os.name == "nt":
-            payload = sum(len(a) + 1 for a in agent_args)
-            if payload > 30_000:
-                return (f"(error: grok judge prompt+context is ~{payload} chars on argv; "
-                        "Windows caps the command line at 32,767 chars and grok reads its "
-                        "prompt from argv — shrink the context or use another backend)")
-        # POSIX per-element BYTE cap (#10): the char budget can't bound a
+        # channel — same contract as agy 1.1.x, task 013). (grok --prompt-file
+        # could lift the argv cap later; unverified under sandbox.)
+        # Per-element BYTE cap (#10): the char budget can't bound a
         # byte-limited channel. Fail loud before dispatch instead of a cryptic E2BIG.
         from provider.argv_guard import argv_byte_error
         _argv_err = argv_byte_error(agent_args, "grok")
@@ -274,8 +265,8 @@ class GrokAdapter(ProviderAdapter):
         env = os.environ.copy()
         env["PLAYBOOK_SESSION_ID"] = self._session_id or "judge"
         from provider import sandbox as _sandbox
-        # encoding="utf-8" guards the stdout decode against the Windows cp1252
-        # locale default. No stdin (prompt is on argv — see headless_argv).
+        # encoding="utf-8" guards the stdout decode against a non-UTF-8 locale
+        # codec. No stdin (prompt is on argv — see headless_argv).
         # timeout_secs=None → unlimited: sandbox.run only arms its process-group
         # killer when a timeout is set.
         result = _sandbox.run(

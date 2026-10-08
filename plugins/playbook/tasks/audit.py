@@ -140,9 +140,8 @@ def run_sweep(sweep: dict, project_path, timeout_secs=300) -> dict:
     if bash is None:
         # Fail CLOSED: with no bash that can run the scan, the sweep did NOT run,
         # and an unrun scan can certify nothing. rc 126 → ERROR, never "clean" —
-        # the alternative (bare `bash` hitting the Windows WSL stub, which exits
-        # non-zero → classify() = "clean") is a false-green that defeats the
-        # whole audit.
+        # the alternative (a bash that cannot run the script and exits non-zero
+        # → classify() = "clean") is a false-green that defeats the whole audit.
         return {
             "name": sweep.get("name", "(unnamed)"),
             "severity": sweep.get("severity", "advisory"),
@@ -155,8 +154,8 @@ def run_sweep(sweep: dict, project_path, timeout_secs=300) -> dict:
         }
     fd, script = tempfile.mkstemp(prefix="audit-sweep-", suffix=".sh")
     try:
-        # newline="\n": Windows text-mode would emit a CRLF script and git-bash
-        # would run a CR-corrupted sweep. No-op on POSIX.
+        # newline="\n": the sweep script is written with LF line endings
+        # whatever the platform's newline translation.
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(command)
             if not command.endswith("\n"):

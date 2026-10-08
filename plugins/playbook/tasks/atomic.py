@@ -9,18 +9,16 @@ crash mid-write leaves the file permanently truncated.
 
 `atomic_write` closes both: it writes a temp file IN THE SAME DIRECTORY as the
 target (so the final `os.replace` is a rename within one filesystem, which is
-atomic on POSIX and on Windows), fsyncs the temp before the rename when durable
+atomic), fsyncs the temp before the rename when durable
 consequence warrants it, preserves the target's permission bits across the
 rename, and unlinks the temp on any failure so an interrupt never litters
 `.tmp` files.
 
-Why `os.replace` and not `Path.rename`: `rename` onto an existing target raises
-FileExistsError (WinError 183) on Windows; `os.replace` overwrites atomically
-on every platform. Windows adds one real caveat — it cannot replace a file
-another handle holds open without FILE_SHARE_DELETE, which Python does not set,
-so concurrent read+write of the SAME path is not torn-read-safe there the way
-it is on POSIX. That is a platform bound, not a defect in this primitive; the
-CI windows lane is the proof of the `os.replace` semantics we do guarantee.
+Why `os.replace` and not `Path.rename`: `os.replace` overwrites an existing
+target atomically everywhere, and concurrent read+write of the SAME path is
+torn-read-safe on Linux (tests/test_atomic_write_torn_read.py). (Up to 1.5.47
+Windows was also supported, where `rename` onto an existing target raises and a
+file held open cannot be replaced.)
 
 Stdlib only; no dependency on any other tasks module, so every module
 (including tasks.core) can import it without a cycle.
@@ -101,8 +99,8 @@ def atomic_write(
 
         if fsync:
             # Best-effort: fsync the directory so the rename entry itself is
-            # durable. Not portable (Windows has no directory fd to fsync, and
-            # some POSIX filesystems reject O_DIRECTORY fsync) — a failure here
+            # durable. Not guaranteed (some filesystems reject O_DIRECTORY
+            # fsync) — a failure here
             # never invalidates the already-completed atomic replace.
             try:
                 dir_fd = os.open(str(parent), os.O_RDONLY)

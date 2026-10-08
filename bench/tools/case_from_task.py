@@ -94,8 +94,8 @@ def prompt_size(spec: str, diff: str) -> tuple:
 
 
 def _lf(raw: bytes) -> str:
-    """Decode a task.md and normalize CRLF→LF so a case built on Windows (or from a
-    CRLF record) is byte-identical to one built on POSIX (CI Windows lane, task 048)."""
+    """Decode a task.md and normalize CRLF→LF so a case built from a CRLF record is
+    byte-identical to one built from an LF record (task 048)."""
     return raw.decode("utf-8", errors="replace").replace("\r\n", "\n")
 
 

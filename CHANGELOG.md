@@ -15,10 +15,9 @@ Bash) come back after that, starting from `git diff last-multiplatform`. The las
   `linux / py3.12`; the macOS and Windows/Git Bash jobs are gone, and the real-zsh check of `bash-log.zsh` (the four
   lane shapes) moved from the macOS job to the Linux lanes, with zsh installed from apt. A release needs both Linux
   lanes green (this supersedes owner decision D1 (b), "all four lanes on every push").
-- **A session started on another platform is warned, not blocked** (task 153). The SessionStart hook prints
-  `playbook: platformă nesuportată (<platform>); suportul e doar Linux din 2026-10-08 — pentru Windows/macOS
-  folosește branch-ul `multiplatform` (1.5.47)` — on stderr and as the host's `systemMessage` — and the session starts
-  as before.
+- **A session started on another platform is warned, not blocked** (tasks 153, 157). The SessionStart hook prints
+  `playbook: unsupported platform (<platform>); Linux only since 2026-10-08 — on Windows/macOS use the
+  `multiplatform` branch (1.5.47)` — on stderr and as the host's `systemMessage` — and the session starts as before.
 - **The macOS seatbelt sandbox backend is gone** (task 155). Bubblewrap is the only backend; on a host with no `bwrap` on
   PATH the sandbox runs uncontained and says so, as before (a bwrap that is installed but cannot run is not detected). `sandbox --print-profile`, which printed the seatbelt
   profile, is removed — it is now refused (exit 2) like any unknown flag; `--print-argv` shows the bwrap argv. The
@@ -29,6 +28,9 @@ Bash) come back after that, starting from `git diff last-multiplatform`. The las
   spellings), no msvcrt lock. On Linux the hooks behave as before, with two exceptions that follow from Linux-only:
   the batch-close guard no longer treats a `\` in a task.md path as a separator (it is a filename character on
   Linux), and the review journal's error budget counts the one-byte newline it writes (it counted two).
+- **The last Windows code paths are gone** (task 157): the msvcrt lock backend (`fcntl` is the backend), the Windows
+  command-line caps of the grok and pi judge seats (the per-argument byte guard, the Linux limit, stays), the `.exe`
+  recovery in the bash resolver, and judgebench's `--platform windows` simulation. Linux behaviour is unchanged.
 - **Docs and the guarantee ledger claim Linux only** (task 153): README (with the `multiplatform` install steps; the
   install command now names `joiomi/playbook-plugin`), `docs/`, the monitor skill and `/playbook:init`; every ledger row
   applies to `linux`, and live evidence no longer targets macOS or Windows.

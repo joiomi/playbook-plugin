@@ -133,11 +133,12 @@ def read_tools_counter(session_dir: Path) -> int:
 
 
 def main() -> int:
-    # This is an ENFORCING guard. On Windows stdin/stdout default to the console
-    # codepage (cp1252), which cannot encode the "→" in BARE_MSG (U+2192) — so
+    # This is an ENFORCING guard. Robustness: stdin/stdout can run a codec that is
+    # not UTF-8 (PYTHONIOENCODING, a Latin-1 locale; first met as a cp1252
+    # console), which cannot encode the "→" in BARE_MSG (U+2192) — so
     # `print(BARE_MSG…)` raised UnicodeEncodeError, the top-level except swallowed
     # it as exit 1, and the hook treats any non-2 exit as ALLOW: every bare batch
-    # close fail-opened on Windows. (Messages carrying only "—" happened to
+    # close fail-opened there. (Messages carrying only "—" happened to
     # encode as cp1252 0x97 and fired, which is why annotated/born-checked cases
     # blocked while bare ones slipped through — the tell in the CI artifact.)
     # Force UTF-8 so the block message always encodes and the guard always fires.

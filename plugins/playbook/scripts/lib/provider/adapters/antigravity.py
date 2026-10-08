@@ -16,8 +16,7 @@ it works on the machine it was measured on and carries no support claim.
     with NO `-p/--print` (a string flag — it would take the next token as the
     prompt) reads one NDJSON line per turn: `{"event":"user","message":{"role":
     "user","content":…}}`. A 150 KB prompt arrives whole. Nothing of the prompt is
-    on argv, so neither the POSIX per-argument cap nor the Windows command-line cap
-    applies.
+    on argv, so the per-argument cap does not apply.
   * Pinned model: a seat pins a WHOLE model id (`gemini-3.8-flash-high` — the id
     carries the effort; `<base>:<effort>` is refused). agy rejects an unknown id
     before any turn, and the stream's `init` event echoes the model value agy
@@ -45,7 +44,7 @@ it works on the machine it was measured on and carries no support claim.
     review returned reviews and left spend records whose token counts equal agy's.
   * A real quota stop (captured in that task's exam): exit 3 mid-turn, "Individual
     quota reached. … Resets in 34m13s." — the seat fails with that sentence first.
-  * Not measured: macOS and Windows; an expired sign-in and a depleted AI-credit
+  * Not measured: an expired sign-in and a depleted AI-credit
     balance (their handling follows agy's documented messages — the fixtures
     README says which files are constructed).
 
@@ -202,8 +201,6 @@ class AntigravityAdapter(ProviderAdapter):
         # "--print-timeout" instead of reviewing; task 013). --print ignores cwd
         # so --add-dir exposes the project tree; no model flag (rejected).
         # Bypass flag (--dangerously-skip-permissions) prepended by sandbox.
-        # Windows note: agy has no stdin channel, so a large context can exceed
-        # the 32,767-char cmdline cap — run_headless_judge guards that.
         full_prompt = prompt if (bare or not context) else f"{context}\n\n---\n\n{prompt}"
         argv = ["--add-dir", str(self._project_root), "--print", full_prompt]
         return Invocation(argv, stdin=None)
@@ -258,8 +255,8 @@ class AntigravityAdapter(ProviderAdapter):
         env = judge_env(os.environ, self._session_id)
         from provider import sandbox as _sandbox
         from provider import usage as _usage
-        # encoding="utf-8" guards the stdout decode against the Windows cp1252
-        # locale default. The subprocess killer sits above agy's own
+        # encoding="utf-8" guards the stdout decode against a non-UTF-8 locale
+        # codec. The subprocess killer sits above agy's own
         # --print-timeout; unlimited stays unlimited (no arithmetic on None), and
         # sandbox.run then skips its process-group killer.
         run_timeout = None if timeout_secs is None else timeout_secs + _KILL_GRACE_SECS

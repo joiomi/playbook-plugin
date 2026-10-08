@@ -168,8 +168,8 @@ def _read_regular_text(path: Path, cap: int = _JOURNAL_READ_CAP) -> "str | None"
 
 def _read_regular_tagged(path: Path, cap: int = _JOURNAL_READ_CAP) -> "tuple[str | None, str]":
     """(text, status) with status ∈ {ok, missing, unreadable, truncated}. One
-    `O_NONBLOCK|O_NOFOLLOW` open (flags absent on Windows → getattr 0, plain
-    read), `fstat` re-validation AFTER the open. A file larger than `cap` is read
+    `O_NONBLOCK|O_NOFOLLOW` open (read with getattr(…, 0): a platform without
+    them gets a plain read), `fstat` re-validation AFTER the open. A file larger than `cap` is read
     from its TAIL (newest records — impl-panel codex#4: the head is the oldest
     data, useless for a 14-day window), dropping the first partial line, and
     tagged `truncated` so the render can say so instead of presenting a partial

@@ -39,7 +39,7 @@ def _tmp() -> Path:
 class Backend(unittest.TestCase):
     def test_a_backend_is_selected_and_named(self):
         b = filelock.selected_backend()
-        self.assertIn(b, ("fcntl", "msvcrt", "none"), b)
+        self.assertIn(b, ("fcntl", "none"), b)
 
     def test_this_platform_uses_the_expected_backend(self):
         # 058 plan panel (opus #3): assert the backend, so a host that silently took
@@ -70,9 +70,9 @@ class LockBasics(unittest.TestCase):
         self.assertTrue(lock_path.exists(), "the lock file must survive release")
 
     def test_nesting_in_one_process_does_not_deadlock(self):
-        # 058 plan panel (grok F5): a second flock on a NEW fd deadlocks on
-        # BSD/macOS and a second msvcrt.locking on the same range fails, so the
-        # holder is refcounted and locks only on the 0→1 transition.
+        # 058 plan panel (grok F5): a second flock on a NEW fd of the same file
+        # conflicts with the first, so the holder is refcounted and locks only
+        # on the 0→1 transition.
         with filelock.task_lock(self.f):
             with filelock.task_lock(self.f):
                 with filelock.task_lock(self.f):

@@ -87,9 +87,9 @@ class ClaudeAdapter(ProviderAdapter):
     ) -> Invocation:
         # Bypass flag injected by provider.sandbox.run() — don't pass here.
         # Prompt + context go on STDIN, not argv: `claude -p` with no positional
-        # prompt reads stdin. Windows caps the entire command line at 32,767
-        # chars (WinError 206), so a populated system context on argv overflows
-        # it and the process never spawns. All callers (run_headless_judge,
+        # prompt reads stdin. One argv element is capped at 128 KB on Linux
+        # (MAX_ARG_STRLEN), so a populated system context on argv overflows it
+        # and the process never spawns. All callers (run_headless_judge,
         # subagent run/stream) already pipe inv.stdin.
         model_arg = self._MODEL_MAP.get(model, model) if model else "sonnet"
         argv = ["-p", "--model", model_arg]

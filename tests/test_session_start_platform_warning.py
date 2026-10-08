@@ -3,8 +3,9 @@
 
 Playbook is Linux-only since 2026-10-08; 1.5.47 (branch `multiplatform`, tag
 `last-multiplatform`) is the last version tested on macOS and Windows/Git Bash.
-A session started anywhere else gets the owner's sentence on stderr and, for the
-host, as a JSON `systemMessage` + `additionalContext` on stdout — and the hook
+A session started anywhere else gets one English sentence (owner ruling
+2026-10-08) on stderr and, for the host, as a JSON `systemMessage` +
+`additionalContext` on stdout — and the hook
 still exits 0. The platform comes from `uname -s`; a fake `uname` first on PATH
 plays the other platforms here.
 
@@ -22,8 +23,8 @@ from pathlib import Path
 from tests._bashcheck import bash_or_skip
 
 HOOK = Path(__file__).resolve().parent.parent / "plugins" / "playbook" / "scripts" / "session-start-hook"
-MESSAGE = ("playbook: platformă nesuportată ({}); suportul e doar Linux din 2026-10-08 — "
-           "pentru Windows/macOS folosește branch-ul `multiplatform` (1.5.47)")
+MESSAGE = ("playbook: unsupported platform ({}); Linux only since 2026-10-08 — "
+           "on Windows/macOS use the `multiplatform` branch (1.5.47)")
 
 
 class SessionStartPlatformWarning(unittest.TestCase):
@@ -69,7 +70,7 @@ class SessionStartPlatformWarning(unittest.TestCase):
         r = self._hook("Linux")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stdout, "")
-        self.assertNotIn("platformă nesuportată", r.stderr)
+        self.assertNotIn("unsupported platform", r.stderr)
 
     def test_a_judge_session_stays_silent_on_any_platform(self):
         # Task 149: a judge's SessionStart prints nothing — its context is the review prompt.

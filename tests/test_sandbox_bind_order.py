@@ -64,7 +64,7 @@ class BindOrder(unittest.TestCase):
 
     def test_writable_home_binds_are_the_agent_dirs_only(self):
         # Task 155 impl panel r1 (codex-high, codex-medium): the macOS-only
-        # `Library` entry survived the seatbelt removal, so every Linux launch
+        # `Library` entry survived the macOS backend's removal, so every Linux launch
         # created ~/Library and mounted it writable. The writable home subpaths
         # are an allowlist: the agents' state dirs and the generic caches, no more.
         home = str(Path.home())

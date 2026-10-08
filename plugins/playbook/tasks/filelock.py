@@ -10,24 +10,24 @@ call long), the judge/receipt/audit stackers, and handoff/resume.
 
 Design decisions, each load-bearing and each the answer to a plan-panel finding:
 
-* **Capability probe, not `sys.platform`.** `fcntl` where it imports, else
-  `msvcrt`, else no backend. Git-Bash on Windows runs the Windows CPython, which
-  has `msvcrt` and no `fcntl`; `selected_backend()` is public so a test can
-  ASSERT which branch a CI lane actually exercised rather than assume it.
+* **Capability probe.** `fcntl` where it imports, else no backend;
+  `selected_backend()` is public so a test can ASSERT which branch this
+  interpreter actually exercised rather than assume it. (Up to 1.5.47 a second
+  backend, `msvcrt`, served Windows.)
 * **Never wedge the CLI.** The wait is bounded and raises `LockTimeout` naming
   the holder; a platform with neither backend proceeds after ONE loud stderr
   advisory. A tool that cannot run is worse than a race.
 * **The lock file is persistent.** Created once, never unlinked on release: an
   unlinked inode a waiter still holds, plus a fresh one a third process locks,
   is two simultaneous "owners".
-* **No stale-lock stealing.** Both backends are released by the OS when the
+* **No stale-lock stealing.** The lock is released by the OS when the
   holder dies (`kill -9` included), so there is nothing to reclaim; a pid-based
   steal would race pid reuse and let two writers proceed — reintroducing the
   very lost update this module exists to stop. The pid in the lock file is for
   the timeout MESSAGE only.
 * **One fd per resolved path per process, refcounted.** A second `flock` on a
-  fresh fd deadlocks on BSD/macOS and a second `msvcrt.locking` on the same byte
-  range fails, so nesting locks only on the 0→1 transition — which is what lets
+  fresh fd of the same file conflicts with the first, so nesting locks only on
+  the 0→1 transition — which is what lets
   a caller compose several `rewrite` calls into ONE transaction.
 * **Readers never lock.** `tasks status`, the gate hook and the state-echo hook
   read task.md on every tool call; making them wait on a minutes-long close
@@ -76,11 +76,6 @@ def _probe_backend() -> str:
         return "fcntl"
     except Exception:       # noqa: BLE001 — absence is the signal, whatever the reason
         pass
-    try:
-        import msvcrt  # noqa: F401
-        return "msvcrt"
-    except Exception:       # noqa: BLE001
-        pass
     return "none"
 
 
@@ -91,7 +86,7 @@ _HOLDERS: "dict[str, list]" = {}      # resolved lock path -> [fd, depth]
 
 
 def selected_backend() -> str:
-    """`"fcntl"`, `"msvcrt"` or `"none"` — which branch this interpreter uses."""
+    """`"fcntl"` or `"none"` — which branch this interpreter uses."""
     return _BACKEND
 
 
@@ -111,8 +106,8 @@ def lock_path_for(path) -> Path:
 def _key_for(path) -> str:
     """The holder-table key. Derived IDENTICALLY here and in `task_lock` (058
     impl panel r1, opus F1 / sonnet #1: one side resolved the path and the other
-    did not, so on macOS — where a temp dir resolves `/var` → `/private/var` —
-    the lookup always missed and every "the lock was released" assertion in the
+    did not, so wherever a temp dir is reached through a symlink the lookup
+    always missed and every "the lock was released" assertion in the
     tests was vacuous)."""
     lp = lock_path_for(path)
     try:
@@ -138,14 +133,6 @@ def _try_lock(fd: int) -> bool:
             return True
         except OSError:
             return False
-    if _BACKEND == "msvcrt":
-        import msvcrt
-        try:
-            os.lseek(fd, 0, os.SEEK_SET)
-            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
-            return True
-        except OSError:
-            return False
     return True                        # no backend: the caller was already advised
 
 
@@ -154,13 +141,6 @@ def _unlock(fd: int) -> None:
         import fcntl
         try:
             fcntl.flock(fd, fcntl.LOCK_UN)
-        except OSError:
-            pass
-    elif _BACKEND == "msvcrt":
-        import msvcrt
-        try:
-            os.lseek(fd, 0, os.SEEK_SET)
-            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
         except OSError:
             pass
 
@@ -219,7 +199,7 @@ def _lock_on(lock_file: Path, *, timeout: float = DEFAULT_TIMEOUT):
         if not _ADVISED:
             _ADVISED = True
             print("[playbook] this platform offers no file-locking backend "
-                  "(no fcntl, no msvcrt) — task records are written WITHOUT LOCKING; "
+                  "(no fcntl) — task records are written WITHOUT LOCKING; "
                   "avoid running two sessions against one task at the same time.",
                   file=sys.stderr, flush=True)
         yield
@@ -255,13 +235,12 @@ def _lock_on(lock_file: Path, *, timeout: float = DEFAULT_TIMEOUT):
     # inode. It is only ever rewritten in place by the holder.
     # NO-FOLLOW (impl panel r3, codex-high #1, Critical): a crafted task
     # directory could make `task.md.lock` a symlink to any writable file, and the
-    # pid line below would be written INTO that target. `O_NOFOLLOW` is POSIX-only
-    # (getattr-guarded), so the opened descriptor is ALSO verified to be a regular
-    # file with one link — which covers Windows and any platform that ignores the
+    # pid line below would be written INTO that target. `O_NOFOLLOW` is read with
+    # getattr(…, 0), so the opened descriptor is ALSO verified to be a regular
+    # file with one link — which covers any platform that lacks or ignores the
     # flag. Anything else fails closed: no lock, no write, a loud reason.
-    # The portable half of the guard: `Path.is_symlink()` answers on every
-    # platform, while `O_NOFOLLOW` is POSIX-only and Windows silently ignores it
-    # (measured: the windows lane did not raise until this check existed).
+    # The first half of the guard: `Path.is_symlink()` answers everywhere,
+    # whether or not `O_NOFOLLOW` is honoured.
     try:
         if lock_file.is_symlink():
             raise LockTimeout(
@@ -311,9 +290,9 @@ def _lock_on(lock_file: Path, *, timeout: float = DEFAULT_TIMEOUT):
         raise
 
     try:
-        # AFTER the lock byte: `msvcrt.locking` locks byte 0 exclusively, and a
-        # waiter cannot READ a locked byte on Windows — writing the pid there made
-        # every timeout message say "pid unknown" on that lane (measured).
+        # AFTER byte 0 (PID_OFFSET): the lock file's layout — byte 0 was the
+        # lock byte of the Windows backend up to 1.5.47; kept so `_holder_pid`
+        # reads a lock file whichever version wrote it.
         os.lseek(fd, PID_OFFSET, os.SEEK_SET)
         os.write(fd, f"{os.getpid()}\n".encode("ascii", "replace"))
     except OSError:

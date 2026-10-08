@@ -7,12 +7,12 @@ Linux one `argv` element is capped at `MAX_ARG_STRLEN = 32 * PAGE_SIZE` BYTES
 cannot bound a byte-limited channel: past ~1.29 bytes/char, a 100,000-char context
 overflows the transport and `execve` fails with a cryptic `E2BIG` post-mortem.
 
-The adapters already carry a guard — but it is Windows-only (`os.name == "nt"`),
-counts CHARACTERS, and sums the whole command line. All three are correct for
-Windows (which caps a whole-command-line UTF-16 count) and wrong for POSIX (which
-caps EACH element, in bytes). This module adds the POSIX half: measure each
-element in bytes, take the MAX (not the sum), and refuse loudly BEFORE dispatch so
-a knowable condition stops being reported as an environmental spawn failure.
+Up to 1.5.47 the adapters carried only a Windows guard, which counted CHARACTERS
+over the whole command line — right for Windows, wrong for Linux, which caps EACH
+element, in bytes. This module is the Linux guard (the only one since task 157):
+measure each element in bytes, take the MAX (not the sum), and refuse loudly
+BEFORE dispatch so a knowable condition stops being reported as an environmental
+spawn failure.
 
 Pure stdlib; mirrored into scripts/lib/provider/ like the rest of the package.
 """
@@ -30,15 +30,12 @@ def max_arg_bytes() -> int:
 
 
 def argv_byte_error(agent_args, backend: str) -> "str | None":
-    """Return an error string if ANY single argv element exceeds the POSIX
+    """Return an error string if ANY single argv element exceeds the
     per-element byte cap, else None.
 
-    No-op on Windows: its whole-command-line CHARACTER cap is a different limit,
-    still guarded separately by each adapter. Uses `max` over elements, not `sum`
-    — the POSIX limit is per element, so a fixture of many small args totalling
-    far over the cap is fine while one oversized element is fatal."""
-    if os.name == "nt":
-        return None
+    Uses `max` over elements, not `sum` — the limit is per element, so a fixture
+    of many small args totalling far over the cap is fine while one oversized
+    element is fatal."""
     limit = max_arg_bytes()
     worst = max((len(a.encode("utf-8")) for a in agent_args), default=0)
     if worst < limit:

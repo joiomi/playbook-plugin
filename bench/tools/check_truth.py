@@ -187,7 +187,7 @@ def check_spec_regenerates(case, workspaces: dict) -> tuple:
     except ToolError as exc:
         return "fail", f"spec.md does not regenerate: {exc}"
     # Compare bytes decoded WITHOUT newline translation (read_text would fold a CRLF
-    # spec into LF and mask a real difference — or invent one on Windows).
+    # spec into LF and mask a real difference).
     if regen != _lf(case.spec_path.read_bytes()):
         return "fail", "spec.md does not regenerate from reconstruct_spec(task.md) + spec_edits (hand-edited)"
     return "ok", "spec regenerates byte-for-byte from its source"

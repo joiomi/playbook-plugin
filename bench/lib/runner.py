@@ -73,7 +73,6 @@ class Candidate:
 # resolve to the Test A/B seats (impl-panel sol #5). `label=spec` always wins.
 _WINDOWS_DEVICE_NAMES = frozenset({"CON", "PRN", "AUX", "NUL"} | {f"COM{i}" for i in range(1, 10)}
                                   | {f"LPT{i}" for i in range(1, 10)})
-_WINDOWS_CMDLINE_CAP = 30_000       # the adapters' whole-command-line guard (grok.py / agy / pi)
 
 RESERVED_LABELS = frozenset({"journal", "manifest.json", "adjudication.json", "report.md", ".lock", "raw"})
 
@@ -296,7 +295,7 @@ def classify(raw: str, timed_out: bool = False, backend=None) -> tuple:
             return "dnf", False
         # The adapters' own size-cap envelopes are deterministic (r4 grok #2): retrying
         # the same oversized prompt can only fail again.
-        if "caps the command line" in low or "argv element" in low:
+        if "argv element" in low:
             return "dnf", False
         if is_quota_exhausted(t, backend):
             return "dnf", False
@@ -430,8 +429,7 @@ class LiveRunner:
     needs_tree = True
 
     def __init__(self, repo_root: Path, *, invoke=None, adapter_factory=None, budget_usd=None,
-                 platform_nt=None, quota_reader=None):
-        import os as _os
+                 quota_reader=None):
         self.repo_root = Path(repo_root)
         # The agy /quota pre-flight (task 111). Injected in tests; the real reader only
         # when the real invoker is in use, so a test with a fake `invoke` never starts agy.
@@ -440,7 +438,6 @@ class LiveRunner:
         self._invoke = invoke or _adapter_invoke
         self._adapter_factory = adapter_factory
         self.budget_usd = budget_usd
-        self.platform_nt = (_os.name == "nt") if platform_nt is None else bool(platform_nt)
         self.calls = []
         self._lock = threading.Lock()
 
@@ -466,7 +463,6 @@ class LiveRunner:
         from bench.lib import transport as _transport
         return _transport.preflight_errors(candidates, package.prompt, repo_root,
                                            adapter_factory=self._adapter_factory,
-                                           platform_nt=self.platform_nt,
                                            budget_root=self.repo_root)      # the BENCH repo's policy, not the case's
 
     def _agy_quota_guard(self, candidate) -> str:

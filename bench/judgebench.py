@@ -62,8 +62,6 @@ def build_parser() -> argparse.ArgumentParser:
     val.add_argument("--candidates", default=None,
                      help="seats for the transport report (default: sol-med,sol-high,grok-med,grok-high); "
                           "same grammar as `run --candidates`")
-    val.add_argument("--platform", choices=("posix", "windows"), default="posix",
-                     help="simulate the argv caps of this platform (default posix — Test B's host; windows is informational)")
     val.add_argument("--soft-timeout", type=int, default=900, help="render with run's time-budget clause (default 900)")
     val.add_argument("--timeout", type=int, default=1200, help="hard timeout for the clause (default 1200)")
     val.add_argument("--spec-mode", choices=("full", "compact"), default="full",
@@ -153,12 +151,10 @@ def cmd_corpus(args) -> int:
             except _runner.CandidateError as exc:
                 print(f"judgebench: {exc}", file=sys.stderr)
                 return EXIT_UNUSABLE
-            nt = args.platform == "windows"
-            rows = _transport.transport_rows(corpus.cases, cands, repo_root=REPO_ROOT, platform_nt=nt,
+            rows = _transport.transport_rows(corpus.cases, cands, repo_root=REPO_ROOT,
                                              spec_mode=getattr(args, "spec_mode", "full"),
                                              soft_timeout=args.soft_timeout, hard_timeout=args.timeout)
-            label = args.platform
-            print(_transport.render_rows(rows, cands, f"platform={label}, spec_mode={getattr(args, 'spec_mode', 'full')}"))
+            print(_transport.render_rows(rows, cands, f"spec_mode={getattr(args, 'spec_mode', 'full')}"))
             if not all(r["fits_all"] for r in rows):
                 return EXIT_DNF
         return EXIT_OK
@@ -475,8 +471,8 @@ def cmd_report(args) -> int:
 
 
 def main(argv=None) -> int:
-    # Force utf-8 stdio: the Windows console defaults to cp1252 and chokes on
-    # the → / × glyphs in our summaries (same guard as tasks/cli.py::main).
+    # Force utf-8 stdio: a console codec that is not UTF-8 (cp1252, Latin-1) chokes
+    # on the → / × glyphs in our summaries (same guard as tasks/cli.py::main).
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             try:

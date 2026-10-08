@@ -185,9 +185,9 @@ PB_RELEASE=""
     IFS= read -r FIRST_GATE  || PB_STATE_READ=false
     IFS= read -r PB_RELEASE  || PB_STATE_READ=false
 } < <(python3 "$HOOK_DIR/task-status.py" --fields "$TASK_FILE" 2>/dev/null) || PB_STATE_READ=false
-# A CRLF-translating python3 (native Windows) leaves `blocked\r` in the
-# fields; drop one trailing CR per field so the exact matches below hold (same
-# idiom as scripts/init's manifest reader).
+# Read tolerance: a CR-terminated field (`blocked\r`) would miss the exact
+# matches below; drop one trailing CR per field (same idiom as scripts/init's
+# manifest reader).
 STATUS_LINE=${STATUS_LINE%$'\r'}
 UNCHECKED=${UNCHECKED%$'\r'}
 FIRST_GATE=${FIRST_GATE%$'\r'}

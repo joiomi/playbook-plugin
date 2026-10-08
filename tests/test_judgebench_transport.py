@@ -67,7 +67,7 @@ class TransportRowsTests(unittest.TestCase):
 
     def test_rows_carry_sizes_and_a_per_preset_transport_verdict(self):
         rows = transport.transport_rows(self.corpus.cases, self.cands, repo_root=_ROOT,
-                                        adapter_factory=_factory, platform_nt=False)
+                                        adapter_factory=_factory)
         self.assertEqual(len(rows), 1)
         r = rows[0]
         self.assertEqual(r["case_id"], "c1")
@@ -84,7 +84,7 @@ class TransportRowsTests(unittest.TestCase):
         self.addCleanup(os.environ.pop, "PLAYBOOK_REVIEW_CONTEXT_CHARS", None)
         corpus = _mk_corpus(Path(self.tmp.name) / "mid", diff_chars=20_000)
         rows = transport.transport_rows(corpus.cases, self.cands, repo_root=_ROOT,
-                                        adapter_factory=_factory, platform_nt=False)
+                                        adapter_factory=_factory)
         r = rows[0]
         self.assertFalse(r["seats"]["grok-med"]["fits"])
         self.assertIn("budget", r["seats"]["grok-med"]["reason"])
@@ -94,15 +94,14 @@ class TransportRowsTests(unittest.TestCase):
 
     def test_real_adapters_are_used_when_no_factory_is_given(self):
         # The point of the report is the ADAPTERS' decision — construction must not need the CLI.
-        rows = transport.transport_rows(self.corpus.cases, self.cands, repo_root=_ROOT, platform_nt=False)
+        rows = transport.transport_rows(self.corpus.cases, self.cands, repo_root=_ROOT)
         self.assertEqual(rows[0]["seats"]["sol-med"]["transport"], "stdin")
         self.assertEqual(rows[0]["seats"]["grok-med"]["transport"], "argv")
 
 
 class PanelAmendmentTests(unittest.TestCase):
-    """Plan-panel round 1 (task 049): posix is the default platform; the POSIX cap is computed
-    under the SIMULATED platform (not the host's os.name); rows show where the chars come from;
-    the run's time-budget clause is part of what is measured."""
+    """Plan-panel round 1 (task 049): the per-argument cap is applied; rows show where the
+    chars come from; the run's time-budget clause is part of what is measured."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
@@ -110,14 +109,13 @@ class PanelAmendmentTests(unittest.TestCase):
 
     def test_rows_report_spec_and_diff_chars(self):
         corpus = _mk_corpus(Path(self.tmp.name), diff_chars=2_000)
-        r = transport.transport_rows(corpus.cases, self.cands, repo_root=_ROOT, adapter_factory=_factory, platform_nt=False)[0]
+        r = transport.transport_rows(corpus.cases, self.cands, repo_root=_ROOT, adapter_factory=_factory)[0]
         self.assertGreaterEqual(r["diff_chars"], 1_990)
         self.assertGreater(r["spec_chars"], 0)
         self.assertLess(r["spec_chars"] + r["diff_chars"], r["chars"])       # the template is the rest
 
     def test_posix_per_element_cap_is_simulated_regardless_of_host(self):
-        # a stub whose argv element is exactly the POSIX limit must NOT fit (worst < limit is required),
-        # even when the host is "windows" for the other branch — the cap is chosen by platform_nt, not os.name.
+        # a stub whose argv element is exactly the limit must NOT fit (worst < limit is required)
         from provider.argv_guard import max_arg_bytes
         limit = max_arg_bytes()
         big = "é" * ((limit // 2))                              # 2 bytes each → exactly `limit` bytes
@@ -126,9 +124,9 @@ class PanelAmendmentTests(unittest.TestCase):
                 return Invocation(["-p", big], stdin=None)
         os.environ["PLAYBOOK_REVIEW_CONTEXT_CHARS"] = str(limit)   # keep the char budget out of the way
         self.addCleanup(os.environ.pop, "PLAYBOOK_REVIEW_CONTEXT_CHARS", None)
-        v = transport.seat_verdict(self.cands[1], "x", _ROOT, adapter_factory=lambda b, r: Exact(b), platform_nt=False)
+        v = transport.seat_verdict(self.cands[1], "x", _ROOT, adapter_factory=lambda b, r: Exact(b))
         self.assertFalse(v["fits"]); self.assertIn("byte", v["reason"].lower())
-        small = transport.seat_verdict(self.cands[1], "x", _ROOT, adapter_factory=_factory, platform_nt=False)
+        small = transport.seat_verdict(self.cands[1], "x", _ROOT, adapter_factory=_factory)
         self.assertTrue(small["fits"])
 
     def test_time_budget_clause_is_part_of_the_measured_prompt(self):
@@ -144,19 +142,17 @@ class PanelAmendmentTests(unittest.TestCase):
         with_chars = package.build_package(case, soft_timeout_secs=900, hard_timeout_secs=1200).prompt_chars
         self.assertLessEqual(without_chars, 10_000, without_chars)  # …so that ONLY the clause crosses it
         self.assertGreater(with_chars, 10_000, with_chars)
-        with_clause = transport.transport_rows(corpus.cases, self.cands, repo_root=_ROOT, adapter_factory=_factory,
-                                               platform_nt=False, soft_timeout=900, hard_timeout=1200)[0]
-        without = transport.transport_rows(corpus.cases, self.cands, repo_root=_ROOT, adapter_factory=_factory,
-                                           platform_nt=False, soft_timeout=None, hard_timeout=None)[0]
+        with_clause = transport.transport_rows(corpus.cases, self.cands, repo_root=_ROOT, adapter_factory=_factory, soft_timeout=900, hard_timeout=1200)[0]
+        without = transport.transport_rows(corpus.cases, self.cands, repo_root=_ROOT, adapter_factory=_factory, soft_timeout=None, hard_timeout=None)[0]
         self.assertFalse(with_clause["seats"]["grok-med"]["fits"], with_clause)
         self.assertTrue(without["seats"]["grok-med"]["fits"], without)
 
-    def test_cli_default_platform_is_posix_even_when_simulating_is_possible(self):
+    def test_cli_transport_report_prints_spec_mode_and_sizes(self):
         with tempfile.TemporaryDirectory() as td:
             _mk_corpus(Path(td))
             p = _run("corpus", "validate", "--transport", "--corpus", td)
             self.assertEqual(p.returncode, 0, p.stderr + p.stdout)
-            self.assertIn("platform=posix", p.stdout)
+            self.assertIn("spec_mode=full", p.stdout)
             self.assertIn("spec", p.stdout); self.assertIn("diff", p.stdout)
 
 
@@ -172,11 +168,10 @@ class BudgetRootTests(unittest.TestCase):
             corpus = _mk_corpus(Path(td) / "corpus", diff_chars=20_000)
             from bench.lib import package
             pkg = package.build_package(corpus.cases[0])
-            lr = runner.LiveRunner(_ROOT, adapter_factory=_factory, platform_nt=False)
+            lr = runner.LiveRunner(_ROOT, adapter_factory=_factory)
             cands = runner.parse_candidates("grok-med")
             self.assertEqual(lr.preflight(cands, pkg, src), {}, "the source repo's 10k budget must not apply")
-            self.assertEqual(transport.transport_rows(corpus.cases, cands, repo_root=_ROOT, adapter_factory=_factory,
-                                                      platform_nt=False)[0]["fits_all"], True)
+            self.assertEqual(transport.transport_rows(corpus.cases, cands, repo_root=_ROOT, adapter_factory=_factory)[0]["fits_all"], True)
 
 
 class TransportCliTests(unittest.TestCase):
@@ -206,7 +201,7 @@ class FrozenCorpusTransportTests(unittest.TestCase):
         if not corpus.cases:
             self.skipTest("empty corpus")
         rows = transport.transport_rows(corpus.cases, runner.parse_candidates("sol-med,sol-high,grok-med,grok-high"),
-                                        repo_root=_ROOT, platform_nt=False)
+                                        repo_root=_ROOT)
         bad = [(r["case_id"], s, v["reason"]) for r in rows for s, v in r["seats"].items() if not v["fits"]]
         self.assertEqual(bad, [], bad)
 

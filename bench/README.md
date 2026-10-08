@@ -16,7 +16,7 @@ positives, resource use, latency. Raw measurements are persisted; composites
 are computed at report time and labeled with their parameters.
 
 ```
-python3 bench/judgebench.py corpus validate [--transport [--platform posix|windows] [--spec-mode full|compact]]
+python3 bench/judgebench.py corpus validate [--transport [--spec-mode full|compact]]
 python3 bench/judgebench.py corpus show [<case-id>]
 python3 bench/judgebench.py run --cases all|id,id --candidates sol-med,sol-high --run-id A1 [--resume] [--spec-mode compact] (--fake | --live)
 python3 bench/judgebench.py adjudicate <run-id> [--auto]
@@ -199,12 +199,10 @@ weights and "point estimates only" (no bootstrap CIs in v1). Nothing derived is 
 
 - **`corpus validate --transport`** renders every case exactly as `run` would (time-budget clause
   included) and asks each Test A/B seat's ADAPTER whether its transport can carry the prompt:
-  codex/claude read stdin (200k-char budget), grok reads argv (100k-char budget, POSIX 128 KiB
-  per element, Windows ~30k whole line). `bench/lib/transport.py::seat_verdict` is the single
+  codex/claude read stdin (200k-char budget), grok reads argv (100k-char budget, 128 KiB per
+  element). `bench/lib/transport.py::seat_verdict` is the single
   decision and `LiveRunner.preflight` delegates to it, so the report and the run never disagree.
-  The default platform is **posix** — Test B's host; `--platform windows` is an explicit,
-  informational simulation (every frozen prompt exceeds grok's Windows line cap, so Test B is
-  not runnable from a Windows host). Rows print `spec`/`diff` chars so you can see where the
+  (The `--platform windows` simulation ended with 1.5.47 — Linux only since 2026-10-08.) Rows print `spec`/`diff` chars so you can see where the
   size is. Exit 1 when any case fails any seat. Frozen corpus v3: 19/19 fit on posix.
 - **`run --spec-mode compact`** shows every candidate the spec's Intent, Why, References and
   Work Plan only (Design Phase and housekeeping dropped; the leak scan still runs). Recorded in
