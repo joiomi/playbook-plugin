@@ -429,11 +429,9 @@ path = os.environ['PB_CC_SETTINGS_PATH']
 # $HOME, so BASH_ENV can never name a DIFFERENT dir than where the file was
 # deployed (a dangling reference — the bug this path exists to prevent; up to
 # 1.5.47 Windows' expanduser preferred USERPROFILE). Derive from $HOME (always set
-# under the bash that runs init); fall back to expanduser only if it is unset. Forward-slash the result: BASH_ENV is read by
-# Git-Bash, which needs a POSIX-sourceable path (C:/Users/... works). No-op on
-# POSIX, where $HOME == expanduser('~').
+# under the bash that runs init); fall back to expanduser only if it is unset.
 home = os.environ.get('HOME') or os.path.expanduser('~')
-dest = os.path.join(home, '.claude', 'bash-log.sh').replace(os.sep, '/')
+dest = os.path.join(home, '.claude', 'bash-log.sh')
 try:
     data = json.loads(open(path).read()) if os.path.exists(path) else {}
     env = data.setdefault('env', {})
