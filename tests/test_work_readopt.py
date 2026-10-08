@@ -90,6 +90,7 @@ class WorkReadoptBase(unittest.TestCase):
         return subprocess.run(
             [sys.executable, "-m", "tasks.cli", *args],
             cwd=self.project, env=env, capture_output=True, text=True,
+            encoding="utf-8", errors="replace",   # the CLI writes UTF-8; Windows' locale is cp1252 (task 151)
         )
 
     @property

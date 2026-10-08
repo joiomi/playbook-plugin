@@ -317,13 +317,16 @@ class RefIntegrityTest(unittest.TestCase):
         d, base, tip, src = self._merge_whose_base_predates_the_map(
             "[1] **a** — x\n", source_map="[1] **b** — see [[nowhere]]\n")
         self._merged(d, "[1] **a** — x\n[2] **b** — see [[nowhere]]\n")
+        # task 151: the script prints `—` with the locale's encoding (cp1252 on Windows), which
+        # a UTF-8 reader cannot decode — ask the child for UTF-8
+        utf8 = dict(os.environ, PYTHONIOENCODING="utf-8")
         r = subprocess.run([_sys.executable, str(_RI_PATH), "--base", base],
-                           capture_output=True, text=True, encoding="utf-8")
+                           capture_output=True, text=True, encoding="utf-8", env=utf8)
         self.assertEqual(r.returncode, 1, r.stdout)
         self.assertIn("NEW dangling", r.stdout)
         self.assertIn(f"pre-merge target tip {tip}", r.stdout)
         r = subprocess.run([_sys.executable, str(_RI_PATH), "--base", base, "--fallback-base", src],
-                           capture_output=True, text=True, encoding="utf-8")
+                           capture_output=True, text=True, encoding="utf-8", env=utf8)
         self.assertEqual(r.returncode, 2, r.stdout + r.stderr)              # no such option
 
     # --- differential checks ----------------------------------------------

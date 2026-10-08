@@ -344,7 +344,13 @@ class ThroughTheHookLibrary(_Fixture):
                            env=env, capture_output=True, text=True, timeout=120)
         self.assertEqual(r.returncode, 0, r.stderr)
         logs = list((home / ".local" / "share" / "playbook").glob("*/write_log"))
-        self.assertEqual(len(logs), 1, logs)
+        if len(logs) != 1:      # task 151: the Windows lane logged nothing — say where things went
+            seen = subprocess.run([bash_or_skip(), "-c", 'cd "$1"; echo "HOME=$HOME PWD=$(pwd)"; '
+                                   'command -v python3', "x", str(self.project)],
+                                  env=env, capture_output=True, text=True, timeout=60)
+            under = sorted(str(p.relative_to(self.root)) for p in self.root.rglob("*"))
+            self.fail(f"{len(logs)} write logs; bash saw {seen.stdout!r} {seen.stderr!r}; "
+                      f"stderr {r.stderr!r}; files {under}")
         data = logs[0].read_bytes()
         self.assertIn(b"not copied: over 1 MB", data)
         self.assertIn(b"small\n", data)

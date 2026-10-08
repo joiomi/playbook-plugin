@@ -59,7 +59,7 @@ class _BoundFixture(unittest.TestCase):
             "## Work Plan\n- [x] G1: do it\n", encoding="utf-8")
         self.env = dict(os.environ, PYTHONPATH=str(PLUGIN), PLAYBOOK_SESSION_ID="pid-t149")
         r = subprocess.run([sys.executable, "-m", "tasks.cli", "work", "1"], cwd=d, env=self.env,
-                           capture_output=True, text=True, timeout=60)
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
         assert r.returncode == 0, r.stderr
         # the impl panel: a stamped PASS round + its reservation record (today)
         fp = tree_state_fingerprint(d)
@@ -90,7 +90,8 @@ class _BoundFixture(unittest.TestCase):
 
     def _close(self, *flags):
         return subprocess.run([sys.executable, "-m", "tasks.cli", "work", "done", *flags],
-                              cwd=self.d, env=self.env, capture_output=True, text=True, timeout=120)
+                              cwd=self.d, env=self.env, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=120)   # task 151: UTF-8, not cp1252
 
     def _done(self, r):
         return "Task 001 done." in r.stdout
