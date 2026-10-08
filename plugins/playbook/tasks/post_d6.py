@@ -549,7 +549,8 @@ def _owner_fields() -> dict:
     return {"pid": os.getpid(), "host": socket.gethostname()}
 
 
-def reserve_panel(task_file, stale_after: float = 7200) -> "tuple[bool, str]":
+def reserve_panel(task_file, stale_after: float = 7200, *, mode: "str | None" = None,
+                  bound_since: "str | None" = None) -> "tuple[bool, str]":
     """A panel's reservation (round 2): taken BEFORE the panel's tamper snapshot so
     a concurrent single judge cannot append under it; never counted by the cap."""
     import secrets
@@ -559,8 +560,11 @@ def reserve_panel(task_file, stale_after: float = 7200) -> "tuple[bool, str]":
         if _live_reservation(read_runs(task_file.parent), "", stale_after):
             return False, ""
         rid = secrets.token_hex(6)
+        # task 149: the panel's mode and the stale-close opt-in in force when it ran
+        # — a later removal of the opt-in must not free this task from it
+        extra = {k: v for k, v in (("mode", mode), ("bound_since", bound_since)) if v}
         append_run(task_file.parent, {"id": rid, "kind": "panel", "status": "reserved",
-                                      "expires_after": float(stale_after), **_owner_fields()})
+                                      "expires_after": float(stale_after), **_owner_fields(), **extra})
     return True, rid
 
 

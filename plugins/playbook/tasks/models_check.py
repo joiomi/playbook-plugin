@@ -1355,7 +1355,8 @@ MODELS_USAGE = """Usage: tasks models <subcommand>
   tasks models check  [--no-probe] [--claude-candidates a,b]   audit the configured pins (launches each CLI once)
   tasks models detect [--json]                                 installed agents + their models (no launch)
   tasks models select [--no-probe] [--claude-candidates a,b]   interactive panel rewrite
-  tasks models set    --panel a,b --default-judge c [--force]  non-interactive write"""
+  tasks models set    --panel a,b --default-judge c [--force]  non-interactive write
+  tasks models enable <seat>                                   call a seat recorded out of credit again"""
 
 
 def cli_models(cmd_args: list[str], project_root: Path) -> int:
@@ -1378,6 +1379,22 @@ def cli_models(cmd_args: list[str], project_root: Path) -> int:
         print(MODELS_USAGE, file=sys.stderr)
         return 2
     sub = args.pop(0)
+
+    if sub == "enable":
+        # PLAN S12b (task 149): a seat whose provider said the account is out of
+        # credit is skipped by later panels until its reset time — or, when the
+        # provider gave none (grok), until the owner says it has credit again.
+        if len(args) != 1 or args[0].startswith("-"):
+            print("Error: tasks models enable takes one seat, as the panel names it "
+                  "(e.g. grok:grok-4.7:medium). Nothing changed.", file=sys.stderr)
+            return 2
+        from tasks.core import resolve_agent_dir
+        from tasks.seat_outage import clear_outage
+        if clear_outage(resolve_agent_dir(project_root), args[0]):
+            print(f"{args[0]}: enabled — the next panel calls it again.")
+        else:
+            print(f"{args[0]}: no outage recorded for this seat — nothing changed.")
+        return 0
 
     if sub == "detect":
         as_json = False

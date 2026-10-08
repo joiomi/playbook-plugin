@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime
 import functools
+import hashlib
 import json
 import math
 import os
@@ -2768,6 +2769,173 @@ def tail_cert_delta(project_path: Path, snapshot: "dict | None",
     return (True, sorted(all_behavioral), sorted(all_non))
 
 
+def config_sha(project_path: Path) -> str:
+    """sha256 of `.agent/config.json`'s bytes, or "absent" (task 149). The
+    fingerprints exclude `.agent/`, so this is how a bound stale close sees a
+    change to the config — which holds the opt-in itself and the verify bar."""
+    try:
+        return hashlib.sha256((Path(project_path) / ".agent" / "config.json").read_bytes()).hexdigest()
+    except FileNotFoundError:
+        return "absent"
+    except OSError:
+        return "unreadable"
+
+
+STALE_CLOSE_OPT_IN = "stale_panel_requires_post_d6"
+
+
+def post_d6_pass_base(project_path: Path, task_dir: Path) -> "tuple[dict, str, str] | None":
+    """(snapshot, tree fp, run id) of a post-D6 PASS that tail certification may
+    start from, else None (task 149, PLAN S12b; post-D6 run 1, codex): the newest
+    post-D6 run after the newest impl panel is finished, a PASS, recorded the tree
+    it reviewed and ran under today's `.agent/config.json`. From there, a docs or
+    tests delta is certified against the tree that judge reviewed — measured from
+    the impl panel instead, the delta always held the code the judge had passed."""
+    from tasks import post_d6 as _pd6
+    if _pd6.ledger_corrupt_lines(Path(task_dir)):
+        return None
+    panel_fp = _pd6.panel_key(_pd6.newest_impl_round(Path(task_dir)))
+    every = [r for r in _pd6.read_runs(Path(task_dir))
+             if panel_fp and r.get("panel") == panel_fp and r.get("kind") != "panel"]
+    if not every or every[-1].get("status") != "done":
+        return None
+    last = every[-1]
+    snap = last.get("reviewed_snapshot")
+    if (last.get("verdict") != "PASS" or not isinstance(snap, dict) or not snap.get("tree_fp")
+            or last.get("config_sha") != config_sha(Path(project_path))):
+        return None
+    return snap, str(snap["tree_fp"]), str(last.get("id") or "")
+
+
+def bound_stale_close(project_path: Path, task_dir: Path, *,
+                      owner_ok_reason: "str | None") -> "tuple[bool, str, str]":
+    """PB-STALE-CLOSE-BOUND (PLAN S12b, task 149) — (allowed, refusal, receipt note).
+
+    The owner's D6-amended rule, enforced where the workspace opts in with
+    `.agent/config.json` `"stale_panel_requires_post_d6": "<YYYY-MM-DD>"`: a
+    stale-panel close of an assertive/irreversible task (`--stale-panel-ok` or
+    `--force`; the caller decides the risk and the STALE verdict) needs either
+      * the newest post-D6 single-judge run after the newest impl panel to be a
+        PASS that recorded the tree it reviewed (`reviewed_snapshot`, review.py),
+        with nothing changed since but `.agent/` records — `.agent/config.json`
+        excepted, compared by hash — and `MIND_MAP*.md`; or
+      * `tasks work done --owner-ok --reason "…"` — an accountability marker the
+        agent can type, written to the receipt and the journal, not an
+        authentication.
+    Any other change since the PASS (code, a test, docs, a root `*.md`) goes
+    through a fresh post-D6 judge or tail certification (a plain `work done`).
+    A task whose newest panel reservation predates the opt-in date keeps the old
+    rule. Every doubt (no runs, no descriptor, a git error) refuses."""
+    from tasks import post_d6 as _pd6
+    # The panel reservations as WRITTEN (impl panel r1, codex-high: the merged view
+    # takes the completion time) — and only impl panels, or panels recorded before
+    # the mode was (sonnet: a later PLAN panel must not pull an older impl panel
+    # under the rule).
+    reservations = []
+    try:
+        for ln in (Path(task_dir) / _pd6.RUNS_NAME).read_text(encoding="utf-8").splitlines():
+            try:
+                r = json.loads(ln)
+            except ValueError:
+                continue
+            if (isinstance(r, dict) and r.get("kind") == "panel" and r.get("status") == "reserved"
+                    and r.get("mode") in (None, "impl")):
+                reservations.append(r)
+    except OSError:
+        pass
+
+    def _local_day(ts) -> "datetime.date | None":
+        # run records are stamped in UTC; the opt-in is a local calendar date
+        try:
+            return datetime.datetime.fromisoformat(str(ts)).astimezone().date()
+        except (TypeError, ValueError):
+            return None
+    # The carrying round's OWN reservation (post-D6 run 2, codex): since task 149
+    # a panel's Round-id is its reservation id. A round that has none (a panel
+    # from before, a deleted ledger) cannot be dated — refused below when the
+    # rule is on; an older reservation must not stand in for it.
+    _round = _pd6.newest_impl_round(Path(task_dir))
+    _rid = (_round or {}).get("round_id") or ""
+    newest = next((r for r in reservations if _rid and r.get("id") == _rid), None)
+    # The opt-in in force: the EARLIEST of the config's date and the one recorded
+    # with the panel — removing the key, or moving the date later, after the panel
+    # does not free the task (r1 codex-high; r2 opus, codex ×2).
+    dates = []
+    for raw in (load_config(Path(project_path)).get(STALE_CLOSE_OPT_IN),
+                newest.get("bound_since") if newest is not None else None):
+        if raw is None:
+            continue
+        try:
+            dates.append(datetime.date.fromisoformat(str(raw)))
+        except ValueError:
+            return False, (f"{STALE_CLOSE_OPT_IN}={raw!r} (in .agent/config.json or recorded with the panel) "
+                           "is not a YYYY-MM-DD date — fix it; refusing the stale close meanwhile"), ""
+    if owner_ok_reason and owner_ok_reason.strip():
+        # the owner's decision is recorded whether or not the rule applies (r2,
+        # agy) — after the dates are validated, so a malformed one still refuses
+        # (post-D6 run 1, codex)
+        return True, "", f'owner-ok: "{" ".join(owner_ok_reason.split())}"'
+    if not dates:
+        return True, "", ""
+    since = min(dates)
+    if newest is None:
+        # every doubt refuses (r2, opus; post-D6 run 2, codex): the rule is on and a
+        # carrying impl panel exists, but no reservation of ITS OWN dates it
+        return False, ("the stale-close rule is on, but no panel reservation in "
+                       f"{_pd6.RUNS_NAME} belongs to this task's newest impl round "
+                       f"(Round-id {_rid or 'none'}) — a panel from before task 149, or a deleted ledger.\n"
+                       '  Run a post-D6 judge, or let the owner decide:  tasks work done --owner-ok --reason "…"'), ""
+    day = _local_day(newest.get("ts"))
+    if day is not None and day < since:
+        return True, "", ""               # the task's impl panel predates the opt-in: old rule
+    runs = _pd6.read_runs(Path(task_dir))
+    if _pd6.ledger_corrupt_lines(Path(task_dir)):
+        return False, ("the post-D6 run ledger has corrupt lines — a run's record cannot be "
+                       "trusted, so no stale close is bound to it (codex-medium)."), ""
+    # (r2, opus: tail certification used to measure from the impl panel's tree;
+    # since post-D6 run 1 it starts from a bound post-D6 PASS — post_d6_pass_base)
+    exits = ("  Either run the post-D6 single judge on this tree:  tasks impl-review <N>\n"
+             "  or, for a docs/tests change after a post-D6 PASS, close WITHOUT --stale-panel-ok/--force:\n"
+             "  tail certification reviews the delta since the tree that PASS reviewed,\n"
+             '  or let the owner decide:  tasks work done --owner-ok --reason "…"')
+    panel_fp = _pd6.panel_key(_pd6.newest_impl_round(Path(task_dir)))
+    every = [r for r in runs if panel_fp and r.get("panel") == panel_fp and r.get("kind") != "panel"]
+    if every and every[-1].get("status") != "done":
+        return False, (f"the newest post-D6 run ({every[-1].get('id')}) has not finished — a stale close "
+                       "cannot rest on an older run while a newer one is open.\n"
+                       "  Wait for it, or record it failed if its process is gone."), ""
+    after = [r for r in every if r.get("status") == "done"]
+    if not after:
+        return False, ("this workspace binds a stale close to a post-D6 PASS "
+                       f"({STALE_CLOSE_OPT_IN}={since.isoformat()}), and no post-D6 run follows "
+                       "the newest impl panel.\n" + exits), ""
+    last = after[-1]
+    if last.get("verdict") != "PASS":
+        return False, (f"the newest post-D6 run ({last.get('id')}) is {last.get('verdict') or 'not a PASS'} — "
+                       "a stale close needs a PASS.\n" + exits), ""
+    snap = last.get("reviewed_snapshot")
+    if not isinstance(snap, dict) or not snap.get("tree_fp"):
+        return False, (f"the newest post-D6 PASS ({last.get('id')}) recorded no reviewed tree "
+                       "(a run from before task 149, or git failed) — it cannot be bound.\n" + exits), ""
+    if last.get("config_sha") != config_sha(Path(project_path)):
+        return False, (".agent/config.json changed after the post-D6 PASS — the config holds this "
+                       "rule and the verify bar, so its change is not a records-only drift.\n" + exits), ""
+    now_fp = tree_state_fingerprint(Path(project_path))
+    if now_fp and now_fp == snap["tree_fp"]:
+        return True, "", f"bound to post-D6 PASS {last.get('id')} on tree {now_fp} (unchanged since)"
+    can, beh, non = tail_cert_delta(Path(project_path), snap, snap["tree_fp"])
+    if not can:
+        return False, (f"the delta since the post-D6 PASS ({last.get('id')}) cannot be computed "
+                       "exactly (scope change, git error, or an unexplained change).\n" + exits), ""
+    other = beh + [x for x in non if not re.fullmatch(r"MIND_MAP[^/]*\.md", x)]
+    if other:
+        return False, (f"changed since the post-D6 PASS ({last.get('id')}): {', '.join(other[:8])}"
+                       + (" …" if len(other) > 8 else "") + " — only `.agent/` records and "
+                       "MIND_MAP*.md may drift without a judge.\n" + exits), ""
+    return True, "", (f"bound to post-D6 PASS {last.get('id')} on tree {snap['tree_fp']}; "
+                      f"since then only: {', '.join(non) or '`.agent/` records'}")
+
+
 # Paths a records-only commit may touch (task 085 round 3, U4): a task's own
 # record directory, the session pointers, the enforcement journal, the chat log.
 _RECORD_PATH = re.compile(
@@ -3594,6 +3762,8 @@ def format_verify_receipt(entries, head_sha, risk, *, reason=None, timestamp=Non
                 ar = freshness.get("accepted_reason")
                 if ar:
                     line += f', accepted: "{" ".join(ar.split())}"'
+                if freshness.get("bound"):
+                    line += f"; {' '.join(str(freshness['bound']).split())}"
             out.append(line)
         # Task 059 (impl-panel r3, sonnet #2): the tamper degradation can coexist
         # with another verdict (EXCLUDE-COVERS-CODE / NO-STAMP / UNREADABLE) and

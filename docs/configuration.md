@@ -43,7 +43,7 @@ Three more `.agent/config.json` keys tune the judge panel and the close-time ver
 }
 ```
 
-- `panel_quorum` — the minimum number of succeeding judges for a `panel-review` to **PASS**. Accepted values: `"majority"` (the default — `launched // 2 + 1`, a strict majority of the judges that actually *launched*, so a degraded panel with seats missing still needs a real majority rather than quietly lowering the bar), `"all"` (every launched judge must pass), a positive integer (an absolute count), or a float in `(0, 1]` (that fraction of the launched judges, rounded up). A bool, a value `≤ 0`, or an out-of-range fraction is **invalid**; an invalid value at any tier warns once and **falls through to the next tier** — env → config → the built-in `"majority"` — so a bad env var does not mask a valid `config.json` value, and `"majority"` applies only when no tier is valid. **Precedence, highest first:** `PLAYBOOK_PANEL_QUORUM` env → `.agent/config.json` `panel_quorum` → the built-in `"majority"`.
+- `panel_quorum` — the minimum number of succeeding judges for a `panel-review` to **PASS**. Accepted values: `"majority"` (the default — `requested // 2 + 1`, a strict majority of the seats the panel was *asked* for: the configured panel, or the `--models` selection, counted before any seat is skipped for a missing CLI or an outage — so a panel with seats missing cannot quietly lower its own bar; when fewer seats can run than the quorum, the panel fails before any judge is called), `"all"` (every requested seat must pass), a positive integer (an absolute count), or a float in `(0, 1]` (that fraction of the requested seats, rounded up). Until 1.5.47 the count was the judges that *launched*, which let three skipped seats of six drop the default quorum from four to two. A bool, a value `≤ 0`, or an out-of-range fraction is **invalid**; an invalid value at any tier warns once and **falls through to the next tier** — env → config → the built-in `"majority"` — so a bad env var does not mask a valid `config.json` value, and `"majority"` applies only when no tier is valid. **Precedence, highest first:** `PLAYBOOK_PANEL_QUORUM` env → `.agent/config.json` `panel_quorum` → the built-in `"majority"`.
 - `judge_verify` — a list of shell command strings the project declares safe for a judge to run inside its **read-only sandbox** while checking a specific suspicion. **This is prompt guidance, not an enforced execution engine, and whether a judge can actually run the commands depends on its seat's tools:** Claude judge seats are invoked with `--tools Read,Glob,Grep` (plus `WebSearch`) and **cannot execute shell commands at all** — for them the clause is advisory context; codex/grok seats decide for themselves. Only the **first six** declared commands are surfaced to the judge prompt (declare the ones that matter first). Declare only commands that never write inside the repo — redirect caches elsewhere, use a unique temp dir, keep them parallel-safe — because judges run concurrently under the sandbox. Absent or empty (the default) means no execution clause is added at all. A non-list value, or non-string / blank entries, are ignored.
 - `verify_timeout_secs` — the **hard** wall-clock ceiling, in seconds, for **one** declared `verify` command at close (`tasks work done`): on expiry that command is killed and the close is blocked. Default 1200. Set it to `0` or `"unlimited"` (also the JSON strings `"none"` / `"null"` / `"inf"` / `"infinite"`) for **no ceiling** — this knob exists because a verify command with no ceiling can hang `tasks work done` forever, which in headless use is a silent deadlock. **Precedence, highest first:** `PLAYBOOK_VERIFY_TIMEOUT_SECS` env → `.agent/config.json` `verify_timeout_secs` → the 1200 default. This is distinct from `review_timeout_secs`, which bounds the *judge* subprocess, not the verify command.
 - `review_context_chars` / `review_context_chars_stdin` — the per-transport character budget for the task context handed to a review judge. Two keys because the two transports differ: `review_context_chars_stdin` (default **200000**) applies to stdin-fed seats (claude, codex, and the experimental agy judge), which have no OS argv limit so their ceiling is model attention; `review_context_chars` (default **100000**) applies to argv-fed seats (grok and the experimental pi), which stay under the byte-guarded argv bound. Raising a budget past what the transport can carry is reported in the review receipts. **Precedence, highest first, per key:** `PLAYBOOK_REVIEW_CONTEXT_CHARS` / `PLAYBOOK_REVIEW_CONTEXT_CHARS_STDIN` env → `.agent/config.json` → the default.
@@ -429,6 +429,28 @@ exceed the judge's transport limit falls back to a full panel. `--stale-panel-ok
 --reason` and `--force --reason` remain the manual exits; tail certification is
 the automatic one for the docs/test tail.
 
+### Binding a stale close to a post-D6 PASS (`stale_panel_requires_post_d6`)
+
+Off unless set. `.agent/config.json` `"stale_panel_requires_post_d6": "<YYYY-MM-DD>"` turns on a stricter
+exit from the freshness gate, for an `assertive`, `irreversible` or unclassified task whose impl panel was
+reserved on or after that date (local time): `--stale-panel-ok` and `--force` no longer override the gate on a
+reason alone — a stale panel, a degraded tamper guard, an exclude that hides code, a missing or unreadable stamp.
+Removing the key later does not free a task whose panel ran under it. The close goes through only when
+
+- the newest post-D6 single-judge run (`tasks impl-review <N>` after the newest impl panel) is finished and a **PASS** that
+  recorded the tree it reviewed, under the same `.agent/config.json`, and since then only `.agent/` records
+  and `MIND_MAP*.md` changed — a test, a doc or a root `*.md` after it goes through tail certification (a plain
+  `tasks work done`, which then certifies the delta since the tree that PASS reviewed), code through another
+  `impl-review`; or
+- `tasks work done --owner-ok --reason "…"` is given — the owner's decision, written to the receipt and to the
+  enforcement journal (an agent can type it: it is an accountability marker, not an authentication).
+
+A task whose impl panel predates the date keeps the old rule; the date in force is the earlier of the config's
+and the one recorded with the panel, so moving or removing it later changes nothing for that task. With the rule
+on, a carrying panel that no reservation dates (a deleted run ledger) refuses. A value that is not a date refuses
+every stale close until it is fixed. The binding is checked again inside the lock the close commits under. Post-D6 runs made before 1.5.47 recorded no tree and cannot bind a close. Tail
+certification saves its judge's output as `tail-cert.log` in the task directory.
+
 ### The verify-contract guard (a change to `verify` is made visible)
 
 `verify` lives in `.agent/config.json`, which is on the management path and so
@@ -550,6 +572,8 @@ Pinned model ids rot as providers ship and retire models, so the pins have a mai
 - `tasks doctor` warns (never fails) on a missing models.json or dead pins, using the cheap checks only.
 
 ### Failure semantics
+
+- When a panel seat fails because its provider says the account is **out of credit** — grok's `402 Payment Required … usage balance exhausted`, codex's `You've hit your usage limit … try again at <time>`, agy's quota stop — the panel records it in `<lane>/journal/seat-outages.json` (machine-local, gitignored with the journal) and later panels skip that seat with one line naming it: until the reset time the message gives (codex, agy), or until you clear it with `tasks models enable <seat>` (grok gives no time). Skipping never lowers the quorum (above).
 
 - When a review judge fails **specifically because its model no longer exists** — probe-confirmed, not just pattern-matched — the review still saves its output, then prints the availability report and exits nonzero: a deliberate hard stop so you re-pin before trusting a degraded panel. Timeouts, budget caps, and other errors keep their soft behavior.
 - A judge that exhausts its budget cap is reported as **failed** with an explicit notice (raise `judge_budget_usd` or pass `--budget`) instead of masquerading as a successful empty review.

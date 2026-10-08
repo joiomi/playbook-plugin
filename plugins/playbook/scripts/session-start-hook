@@ -19,6 +19,17 @@ if [ "${PLAYBOOK_ROLE:-}" = "monitor" ]; then
     exit 0
 fi
 
+# A judge session (PLAN S12b, task 149): every review judge runs with
+# PLAYBOOK_SESSION_ID=judge (provider/adapters/claude.py) in a read-only project.
+# It has no task, no wrappers to refresh and no sessions to sweep; writing any of
+# them failed this hook in every judge session (task 146 F12). Nothing to do, and
+# nothing printed — the judge's context is the review prompt alone.
+# The tail-certification judge runs the same way with the id `tail-cert`
+# (tasks/review.py; impl panel r1, codex-high).
+case "${PLAYBOOK_SESSION_ID:-}" in
+    judge|tail-cert) exit 0 ;;
+esac
+
 # Source shared lib (same directory)
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$HOOK_DIR/gate-echo-lib.sh"

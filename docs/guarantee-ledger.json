@@ -14904,6 +14904,566 @@
       "required_live_evidence": [],
       "semantic_protocol": null,
       "violation_reproduction": null
+    },
+    {
+      "id": "PB-PANEL-SEAT-OUTAGE",
+      "category": "judges-and-reviews",
+      "statement": "A panel seat whose provider says the account is out of credit — grok's `402 Payment Required … usage balance exhausted`, codex's `You've hit your usage limit … try again at <time>`, agy's quota stop — is recorded in the lane's `journal/seat-outages.json` (machine-local and gitignored, written under a lock) — read from the provider's own error — its stderr tail, and its structured error events on stdout for the CLIs whose stdout is an event stream (codex, grok, agy) — not from output the judge quoted — until the reset time the message gives, or until `tasks models enable <seat>` when it gives none, and later panels skip it with one line naming it. The panel's quorum is resolved against the REQUESTED seats (the configured panel or the --models selection, counted before any seat is skipped), in the preflight and in the verdict: when fewer seats can run than the quorum, the panel fails before any judge is called.",
+      "owner": [
+        {
+          "path": "plugins/playbook/tasks/seat_outage.py",
+          "reference": "symbol:classify_outage"
+        },
+        {
+          "path": "plugins/playbook/tasks/seat_outage.py",
+          "reference": "symbol:record_outage"
+        },
+        {
+          "path": "plugins/playbook/tasks/review.py",
+          "reference": "symbol:_cmd_panel_review"
+        },
+        {
+          "path": "plugins/playbook/tasks/models_check.py",
+          "reference": "symbol:cli_models"
+        }
+      ],
+      "failure_consequence": "High",
+      "claim_kind": "mechanical",
+      "proofs": [
+        {
+          "type": "executable integration",
+          "path": "tests/test_seat_outage.py",
+          "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_an_out_of_credit_seat_is_recorded_then_skipped",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_seat_outage.py",
+            "reference": "ClassifyOutage.test_a_review_that_quotes_the_messages_is_not_an_outage"
+          },
+          "limitations": [
+            "cmd_panel_review in-process, the judges faked at the adapter and the tamper guard stubbed clean."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_seat_outage.py",
+          "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_too_few_live_seats_fail_before_anything_is_spent",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_seat_outage.py",
+            "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_enough_live_seats_still_pass"
+          },
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_seat_outage.py",
+          "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_the_verdict_counts_the_requested_panel",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_seat_outage.py",
+          "reference": "OutageRecord.test_two_processes_recording_at_once_keep_both_entries",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_seat_outage.py",
+            "reference": "OutageRecord.test_record_current_expiry_and_clear"
+          },
+          "limitations": [
+            "Two real processes, 25 writes each."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_seat_outage.py",
+          "reference": "ClassifyOutage.test_provider_texts_are_outages_with_their_reset_time",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "The provider texts are the ones captured live on 2026-10-07 (task 146) and in task 111's agy exam."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_seat_outage.py",
+          "reference": "ModelsEnableClearsAnOutage.test_enable_clears_the_seat_and_says_so",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_seat_outage.py",
+          "reference": "ClassifyOutage.test_a_failed_seat_whose_output_quotes_the_messages_is_not_an_outage",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Added after impl panel r1 (opus): a failed seat's stdout tail quoting these messages."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_seat_outage.py",
+          "reference": "ClassifyOutageProvenance.test_a_quoted_error_line_in_stdout_with_another_stderr_cause_is_not_an_outage",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Added after impl panel r2 (task 149)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_seat_outage.py",
+          "reference": "ClassifyOutageProvenance.test_a_multi_line_stderr_error_is_read_whole",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Added after impl panel r2 (task 149)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_seat_outage.py",
+          "reference": "ClassifyOutageProvenance.test_a_clock_time_passed_minutes_ago_is_already_expired",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Added after impl panel r2 (task 149)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_seat_outage.py",
+          "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_no_live_seat_at_all_is_reported_as_the_quorum_failure",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Added after impl panel r2 (task 149)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_seat_outage.py",
+          "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_a_claude_seat_quoting_the_event_is_not_recorded",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Added after the post-D6 run 1 (task 149)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_seat_outage.py",
+          "reference": "ClassifyOutageProvenance.test_a_late_evening_time_seen_after_midnight_is_yesterdays",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Added after the post-D6 run 1 (task 149)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_seat_outage.py",
+          "reference": "ClassifyOutageProvenance.test_an_error_event_is_decoded_not_matched_byte_for_byte",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Added after the post-D6 run 2 (task 149)."
+          ]
+        }
+      ],
+      "applicable_platforms": [
+        "linux",
+        "macos",
+        "windows-git-bash"
+      ],
+      "applicable_providers": [
+        "claude",
+        "codex",
+        "grok"
+      ],
+      "status": "verified_by_current_executable_evidence",
+      "missing_evidence_or_limitation": [
+        "Added by task 149 (PLAN S12b). Only panels skip a recorded seat; the single-judge path (`tasks impl-review`) still calls its judge.",
+        "A codex clock time without a date (`7:33 PM`) is read as today's when it passed less than six hours before the panel ended (the reset already happened), else as the next such time; a provider that changes its wording is not recognised (the seat fails as before).",
+        "Requiring the quorum of the requested panel means a panel with seats whose CLI is not installed now fails instead of shrinking — name reachable seats with --models.",
+        "A late failure recorded after `tasks models enable` cleared the seat (two panels started before the clear) disables it again; parked (task 149 impl panel r1, codex-high)."
+      ],
+      "follow_up_phases": [
+        8
+      ],
+      "required_live_evidence": [],
+      "semantic_protocol": null,
+      "violation_reproduction": null
+    },
+    {
+      "id": "PB-JUDGE-SESSION-QUIET",
+      "category": "providers-and-hooks",
+      "statement": "In a judge session (`PLAYBOOK_SESSION_ID=judge`, as the claude judge adapter sets it, or `tail-cert`, the tail-certification judge's id) the SessionStart hook exits 0 without output and without writing: no `.claude/bin` wrappers, no session directory, no sweep, nothing in CLAUDE_ENV_FILE — so it no longer fails on the judge's read-only project. An agent session is unchanged.",
+      "owner": [
+        {
+          "path": "plugins/playbook/scripts/session-start-hook",
+          "reference": "whole-file"
+        }
+      ],
+      "failure_consequence": "Medium",
+      "claim_kind": "mechanical",
+      "proofs": [
+        {
+          "type": "executable integration",
+          "path": "tests/test_judge_session_quiet.py",
+          "reference": "JudgeSessionStartIsQuiet.test_judge_session_exits_zero_silently_and_writes_nothing",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_judge_session_quiet.py",
+            "reference": "JudgeSessionStartIsQuiet.test_an_agent_session_still_provisions"
+          },
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_judge_session_quiet.py",
+          "reference": "JudgeSessionStartIsQuiet.test_judge_session_on_a_read_only_project_does_not_fail",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Skipped on native Windows and as root (POSIX permissions)."
+          ]
+        }
+      ],
+      "applicable_platforms": [
+        "linux",
+        "macos",
+        "windows-git-bash"
+      ],
+      "applicable_providers": [
+        "claude"
+      ],
+      "status": "verified_by_current_executable_evidence",
+      "missing_evidence_or_limitation": [
+        "Added by task 149 (PLAN S12b). Covers the SessionStart hook only; the PostToolUse gate echo in a judge session is unchanged (task 146 C6 narrowed it to this)."
+      ],
+      "follow_up_phases": [
+        8
+      ],
+      "required_live_evidence": [],
+      "semantic_protocol": null,
+      "violation_reproduction": null
+    },
+    {
+      "id": "PB-STALE-CLOSE-BOUND",
+      "category": "risk-and-close",
+      "statement": "Where `.agent/config.json` sets `stale_panel_requires_post_d6` to a date, or the task's impl panel was reserved while it was set (the earlier of the two dates is in force) — a close of an assertive, irreversible or unclassified task that overrides the freshness gate (a STALE, tamper-degraded, exclude-covers-code, unstamped or unreadable verdict; with `--stale-panel-ok` and with `--force`) and whose impl panel was reserved on or after that date is refused unless the newest post-D6 single-judge run after the newest impl panel is finished and a PASS that recorded the tree it reviewed, under the same `.agent/config.json`, with nothing but `.agent/` records and `MIND_MAP*.md` changed since (re-checked at the commit), the run ledger is not corrupt, and a reservation dates the panel; the binding is re-checked inside the lock the close commits under; or `tasks work done --owner-ok --reason \"…\"` is given, which is written to the receipt and the enforcement journal. Tail certification after such a PASS certifies the delta since the tree that PASS reviewed, and saves its judge's output beside the task.",
+      "owner": [
+        {
+          "path": "plugins/playbook/tasks/core.py",
+          "reference": "symbol:bound_stale_close"
+        },
+        {
+          "path": "plugins/playbook/tasks/core.py",
+          "reference": "symbol:config_sha"
+        },
+        {
+          "path": "plugins/playbook/tasks/lifecycle.py",
+          "reference": "symbol:cmd_work"
+        },
+        {
+          "path": "plugins/playbook/tasks/review.py",
+          "reference": "symbol:run_tail_cert_judge"
+        },
+        {
+          "path": "plugins/playbook/tasks/core.py",
+          "reference": "symbol:post_d6_pass_base"
+        }
+      ],
+      "failure_consequence": "High",
+      "claim_kind": "mechanical",
+      "proofs": [
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "StaleCloseBound.test_a_bare_stale_panel_ok_is_refused",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_stale_close_bound.py",
+            "reference": "StaleCloseBound.test_a_task_whose_panel_predates_the_opt_in_keeps_the_old_rule"
+          },
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "StaleCloseBound.test_force_is_refused_too",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "StaleCloseBound.test_a_failing_post_d6_run_is_refused",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "StaleCloseBound.test_a_pass_without_a_recorded_tree_is_refused",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "StaleCloseBound.test_a_bound_pass_closes_with_records_only_drift",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_stale_close_bound.py",
+            "reference": "StaleCloseBound.test_a_test_file_change_after_the_pass_is_refused"
+          },
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "StaleCloseBound.test_a_code_change_after_the_pass_is_refused",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "StaleCloseBound.test_a_config_change_after_the_pass_is_refused",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "StaleCloseBound.test_owner_ok_is_recorded",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "StaleCloseBound.test_without_the_opt_in_nothing_changes",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "PostD6RunRecordsTheReviewedTree.test_the_run_record_carries_the_reviewed_tree_and_binds_the_close",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "A real panel + `tasks impl-review` in-process (test_post_d6.EndToEnd's driver, judges faked)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "TailCertSavesWhatItsJudgeSaid.test_the_tail_cert_output_is_saved_in_the_task_dir",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_stale_close_bound.py",
+            "reference": "TailCertSavesWhatItsJudgeSaid.test_a_tampered_run_saves_nothing"
+          },
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "StaleCloseBoundEdges.test_an_unclassified_task_is_held_to_the_same_bar",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Added after impl panel r1 (task 149)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "StaleCloseBoundEdges.test_a_degraded_tamper_guard_round_is_held_too",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Added after impl panel r1 (task 149)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "StaleCloseBoundEdges.test_owner_ok_closes_a_task_from_before_the_opt_in",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Added after impl panel r1 (task 149)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "StaleCloseBoundEdges.test_removing_the_opt_in_after_the_panel_does_not_free_the_task",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Added after impl panel r1 (task 149)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "StaleCloseBoundEdges.test_a_plan_panel_after_the_opt_in_does_not_pull_in_an_older_impl_panel",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Added after impl panel r1 (task 149)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "StaleCloseBoundEdges.test_a_panel_reserved_before_the_date_and_finished_after_keeps_the_old_rule",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Added after impl panel r1 (task 149)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "StaleCloseBoundEdges.test_an_unfinished_newer_run_blocks_an_older_pass",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Added after impl panel r1 (task 149)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "StaleCloseBoundEdges.test_a_corrupt_run_ledger_refuses",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Added after impl panel r1 (task 149)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "StaleCloseBoundEdges.test_moving_the_opt_in_date_later_after_the_panel_does_not_free_the_task",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Added after impl panel r2 (task 149)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "StaleCloseBoundEdges.test_no_reservation_dating_the_panel_refuses",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Added after impl panel r2 (task 149)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "StaleCloseBoundEdges.test_owner_ok_without_the_opt_in_is_still_recorded",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Added after impl panel r2 (task 149)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "StaleCloseBoundEdges.test_a_run_reserved_while_the_close_commits_refuses",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Added after impl panel r2 (task 149)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "StaleCloseBoundEdges.test_a_docs_change_after_the_pass_is_tail_certified_from_the_pass_tree",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Added after the post-D6 run 1 (task 149)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "StaleCloseBoundEdges.test_owner_ok_does_not_pass_a_malformed_date",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Added after the post-D6 run 1 (task 149)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "StaleCloseBoundEdges.test_an_older_reservation_does_not_stand_in_for_the_carrying_rounds",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Added after the post-D6 run 2 (task 149)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "StaleCloseBoundEdges.test_a_run_reserved_during_tail_certification_refuses_the_close",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Added after the post-D6 run 2 (task 149)."
+          ]
+        }
+      ],
+      "applicable_platforms": [
+        "linux",
+        "macos",
+        "windows-git-bash"
+      ],
+      "applicable_providers": [
+        "claude",
+        "codex",
+        "grok"
+      ],
+      "status": "verified_by_current_executable_evidence",
+      "missing_evidence_or_limitation": [
+        "Added by task 149 (PLAN S12b); the plugin default stays off (PLAN B2b decides it after task 146's value check).",
+        "`--owner-ok` is an accountability marker an agent can type, not an authentication.",
+        "A post-D6 run recorded before task 149 carries no reviewed tree and cannot bind a close.",
+        "The carrying impl round is dated by its OWN reservation (a panel's Round-id is its reservation id since task 149); a round from before, or a deleted ledger, cannot be dated and refuses while the rule is on — `--owner-ok` is the way through. Times are compared in local time."
+      ],
+      "follow_up_phases": [
+        8
+      ],
+      "required_live_evidence": [],
+      "semantic_protocol": null,
+      "violation_reproduction": null
     }
   ]
 }

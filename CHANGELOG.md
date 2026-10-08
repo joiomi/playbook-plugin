@@ -30,6 +30,23 @@ Built after the 1.5.46 cut. Tasks 114-130 were reviewed in grouped panels by are
   `prepare-merge` and `tag` with `--dry-run`, and `merge-doctor`, promise to write nothing, so — like `dashboard` —
   they now skip it.
 
+- **A judge seat out of credit is skipped, and the panel quorum is the requested panel's** (task 149, PLAN S12b;
+  task 146). A seat whose provider says the account is out of credit — grok's `402 … usage balance exhausted`,
+  codex's `You've hit your usage limit … try again at <time>`, agy's quota stop — is recorded in the lane's
+  `journal/seat-outages.json` and skipped by later panels with one line, until its reset time or until
+  `tasks models enable <seat>`. The quorum is now counted against the seats the panel was asked for, not the ones
+  that launched: three skipped seats of six used to drop the default quorum from four to two. A panel that cannot
+  reach its quorum fails before calling any judge.
+- **Claude judge sessions no longer fail the SessionStart hook** (task 149). In a judge session (and a tail-certification judge's) the hook does
+  nothing; it used to try to write wrappers and a session directory in the judge's read-only project, every time.
+- **A stale close can be bound to a post-D6 PASS** (task 149; opt-in `stale_panel_requires_post_d6`, see
+  docs/configuration.md). Where a workspace opts in, `--stale-panel-ok`/`--force` on an assertive or irreversible
+  task need a post-D6 PASS that recorded the tree it reviewed, with only `.agent/` records and `MIND_MAP*.md`
+  changed since — or the owner's `tasks work done --owner-ok --reason "…"`. Post-D6 runs now record the tree they
+  reviewed, and tail certification after a post-D6 PASS certifies the delta since THAT tree (it used to
+  measure from the impl panel, so the code the post-D6 judge passed always made it refuse); it also saves
+  its judge's output as `tail-cert.log`.
+
 ### Fixed
 
 - **`tasks retro` reads the tasks since the last retro** (task 145; retro 134). With no `--since` it read the whole

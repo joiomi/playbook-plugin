@@ -369,9 +369,13 @@ class SessionStartIgnoresAnInheritedPidId(_ProjectMixin):
         self.assertEqual(self._export_of(daemon_only, "pid-4713"), [])
 
     def test_non_pid_ids_are_still_exported(self):
-        for sid in ("judge", "9d1c2e4a-uuid-sub"):
-            with self.subTest(sid=sid):
-                self.assertEqual(self._export_of(BASE, sid), [f"export PLAYBOOK_SESSION_ID={sid}"])
+        self.assertEqual(self._export_of(BASE, "9d1c2e4a-uuid-sub"),
+                         ["export PLAYBOOK_SESSION_ID=9d1c2e4a-uuid-sub"])
+        # Task 149 (PLAN S12b): a JUDGE session's hook does nothing at all — the
+        # adapter already put PLAYBOOK_SESSION_ID=judge in the judge's environment,
+        # and every write the hook tried failed on the judge's read-only project
+        # (tests/test_judge_session_quiet.py).
+        self.assertEqual(self._export_of(BASE, "judge"), [])
 
 
 class SessionStartIgnoresAnInheritedPidIdPs(SessionStartIgnoresAnInheritedPidId):

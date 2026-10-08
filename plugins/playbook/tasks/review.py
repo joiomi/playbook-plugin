@@ -1696,6 +1696,37 @@ def _cmd_panel_review(cmd_args):
                 for variant in cls.panel_variants():
                     judges.append((cls, variant))
 
+    # PLAN S12b (task 149): the quorum is resolved against the REQUESTED panel —
+    # the configured seats or the --models selection, counted before any seat is
+    # skipped (a missing binary, an outage). Resolving it against the seats that
+    # launched let three skipped seats of six drop the default quorum from four
+    # to two (task 147 impl panel r1).
+    requested_seats = len(spec_names) if spec_names else len(judges)
+    # A seat whose provider said the account is out of credit is not called
+    # again until its reset time, or until the owner clears it.
+    from tasks import seat_outage as _seat_outage
+    _outages = _seat_outage.current_outages(resolve_agent_dir(project_path))
+    if _outages:
+        _live = []
+        for _cls, _variant in judges:
+            _lbl = f"{_cls.binary_name()}:{_variant}" if _variant else _cls.binary_name()
+            _o = _outages.get(_lbl)
+            if _o is None:
+                _live.append((_cls, _variant))
+                continue
+            _until = (f"until {_o['until']}" if _o.get("until")
+                      else f"until cleared with `tasks models enable {_lbl}`")
+            print(f"  Skipped out of credit: {_lbl} — {_o.get('reason', '?')} ({_until})", flush=True)
+        judges = _live
+    from tasks.core import resolve_panel_quorum
+    _need = resolve_panel_quorum(project_path, requested_seats)
+    # (with no seat left only because no CLI is installed, the error below says so)
+    if requested_seats and len(judges) < _need and (judges or _outages):
+        print(f"Error: only {len(judges)} of the {requested_seats} requested seats can run, and the "
+              f"quorum is {_need} — the panel would fail; nothing was spent. Wait for the seats "
+              "above, or run a smaller panel with --models.", file=sys.stderr)
+        sys.exit(1)
+
     if not judges:
         print("Error: no available judges. Install a provider CLI, or name "
               "reachable ones with --models (e.g. --models codex:gpt-5.5,agy).",
@@ -1792,9 +1823,13 @@ def _cmd_panel_review(cmd_args):
               file=sys.stderr, flush=True)
     # Task 108 r2: reserve the task for this panel BEFORE the tamper snapshot, so
     # a concurrent post-D6 single judge cannot append under it (and vice versa).
+    _prid = None
     if task_file:
         from tasks import post_d6 as _pd6p
-        _ok_p, _prid = _pd6p.reserve_panel(task_file, stale_after=(timeout_secs + 900) if timeout_secs else 7200)
+        from tasks.core import STALE_CLOSE_OPT_IN, load_config as _lc149
+        _ok_p, _prid = _pd6p.reserve_panel(
+            task_file, stale_after=(timeout_secs + 900) if timeout_secs else 7200,
+            mode=review_mode, bound_since=(str(_lc149(project_path).get(STALE_CLOSE_OPT_IN) or "") or None))
         if not _ok_p:
             print(_pd6p.panel_refusal(task_file), file=sys.stderr, flush=True)
             sys.exit(2)
@@ -1875,6 +1910,19 @@ def _cmd_panel_review(cmd_args):
 
     failed = {lbl for lbl, out in results.items() if _judge_failed(out)}
     over_budget = {lbl for lbl in failed if budget_exceeded(results[lbl])}
+    # PLAN S12b: record a seat that failed because its account is out of
+    # credit, so the next panels skip it (best-effort: a write failure only
+    # means the seat is tried again).
+    for _lbl in sorted(failed):
+        _o = _seat_outage.classify_outage(results[_lbl], provider=_lbl.split(":", 1)[0])
+        if _o:
+            try:
+                _seat_outage.record_outage(resolve_agent_dir(project_path), _lbl, _o)
+                print(f"  Recorded {_lbl} as out of credit ({_o['reason']}); later panels skip it "
+                      + (f"until {_o['until']}." if _o.get("until")
+                         else f"until `tasks models enable {_lbl}`."), flush=True)
+            except Exception as _e:   # noqa: BLE001 — never fail the review on it
+                print(f"  ⚠ could not record {_lbl}'s outage ({_e})", file=sys.stderr, flush=True)
     succeeded = len(results) - len(failed)
 
     # Verdict, not just a count (C4/P7). A panel is a gate: resolve the
@@ -1882,8 +1930,7 @@ def _cmd_panel_review(cmd_args):
     # exit non-zero below it (at the end, after all diagnostics print). The
     # tamper hard-stop below still wins — a mutated tree fails regardless of
     # how many judges succeeded.
-    from tasks.core import resolve_panel_quorum
-    panel_quorum = resolve_panel_quorum(project_path, len(results))
+    panel_quorum = resolve_panel_quorum(project_path, requested_seats)
     panel_passed = succeeded >= panel_quorum
     verdict_reason = (
         f"{succeeded}/{len(results)} judges succeeded, quorum {panel_quorum}"
@@ -1922,7 +1969,9 @@ def _cmd_panel_review(cmd_args):
         lines.append(f"**Commit:** {_head_before}\n")
     # Task 108: a unique round id (post-D6 run cap key — see tasks.post_d6.panel_key).
     import secrets as _secrets
-    lines.append(f"**Round-id:** {_secrets.token_hex(6)}\n")
+    # Task 149 (post-D6 run 2, codex): the round id IS the panel's reservation id
+    # when there is one, so the close can date the carrying round itself.
+    lines.append(f"**Round-id:** {_prid or _secrets.token_hex(6)}\n")
     # Tamper-guard receipt (task 059): what the guard could and could not verify
     # for THIS round, on one line the close-gate reader can key on.
     # `degraded` marks the GUARD, not merely "something was noticed": a
@@ -2345,6 +2394,9 @@ def _run_tail_cert_judge_raw(project_path, prompt, timeout_secs) -> str:
         return f"(error: tail-cert judge spawn failed: {e})"
 
 
+TAIL_CERT_LOG = "tail-cert.log"
+
+
 def run_tail_cert_judge(project_path, snapshot, non_behavioral, panel_summary,
                         *, timeout_secs=None, task_file=None) -> "str | None":
     """Dedicated tail-cert judge (finding E): materialize the certifiable delta,
@@ -2401,6 +2453,18 @@ def run_tail_cert_judge(project_path, snapshot, non_behavioral, panel_summary,
     except Exception:
         return None                    # tamper check itself failed → fail closed
                                        # (r4 grok#3: never certify on an errored guard)
+    # PLAN S12b (task 147/149): keep what the tail-cert judge said, beside the task,
+    # like a single-judge log — a refusal with no readable reason invited the
+    # override. Past the tamper check only; best-effort (the verdict stands either way).
+    if task_file:
+        try:
+            atomic_write(Path(task_file).parent / TAIL_CERT_LOG,
+                         f"# tail certification {time.strftime('%Y-%m-%dT%H:%M:%S%z')} "
+                         f"(nonce {nonce})\n\n{raw or '(no output)'}\n")
+            print(f"  tail-cert judge output saved: {Path(task_file).parent / TAIL_CERT_LOG}",
+                  file=sys.stderr, flush=True)
+        except Exception:   # noqa: BLE001
+            pass
     # Emit the spend record only PAST the tamper check (clean tree) — consistent
     # with the panel/single paths, and so the journal write can never precede /
     # hang and suppress a tamper stop. A FAILED/errored judge is still recorded
@@ -2804,6 +2868,19 @@ def _cmd_single_review(cmd, cmd_args):
               "the tamper guard is the only defense against repo mutation.",
               file=sys.stderr, flush=True)
     _tamper_before = _snapshot_repo_state(project_path, task_file)
+    # PLAN S12b (task 149): a post-D6 run records the tree it reviews — the same
+    # descriptor a panel round stores — and the config it ran under, so a later
+    # stale close can be bound to THIS tree (core.bound_stale_close).
+    _pd6_reviewed = None
+    _pd6_config_sha = None
+    if _pd6_round is not None:
+        try:
+            from tasks.core import build_panel_snapshot, config_sha, tree_state_fingerprint
+            _fp_rev = tree_state_fingerprint(project_path)
+            _pd6_reviewed = build_panel_snapshot(project_path, _fp_rev) if _fp_rev else None
+            _pd6_config_sha = config_sha(project_path)
+        except Exception:   # noqa: BLE001 — no descriptor = the close fails closed
+            _pd6_reviewed = None
     # Task 108 r2: the delta was built BEFORE this baseline — refuse if the tree
     # moved in between (the judge would review a stale delta the guard calls clean).
     if _pd6_delta and _pd6_trees:
@@ -3373,6 +3450,7 @@ def _cmd_single_review(cmd, cmd_args):
                 "settled": _v["settled"], "contradicted": _v["contradicted"],
                 "pre_existing": _v["pre_existing"], "unparsed": _v["unparsed"],
                 "delta": bool(_pd6_delta),
+                "reviewed_snapshot": _pd6_reviewed, "config_sha": _pd6_config_sha,
                 "owner_ok": (" ".join(owner_ok_reason.split())
                              if owner_ok_flag and owner_ok_reason else None)})
             if (task_file.parent, _pd6_rid) in _PD6_PENDING:

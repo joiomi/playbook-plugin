@@ -324,6 +324,14 @@ def cmd_work(cmd_args):
     # cheapest sanctioned exit under friction, and the cheap exit must not
     # be whole-policy bypass.
     stale_panel_ok = "--stale-panel-ok" in cmd_args[1:]
+    # --owner-ok --reason "…" (PLAN S12b, task 149): where the workspace binds a
+    # stale close to a post-D6 PASS (core.bound_stale_close), the owner's
+    # recorded decision is the other way through. An accountability marker, not
+    # an authentication: it goes to the receipt and the enforcement journal.
+    owner_ok = "--owner-ok" in cmd_args[1:]
+    if owner_ok:
+        # the owner's recorded decision is at least a stale-panel acceptance
+        stale_panel_ok = True
     # --reason "why": required for any forced close so the escape hatch leaves
     # a trace (the 046 fix). Stored in the verification receipt. Shared by
     # --stale-panel-ok; when BOTH --force and --stale-panel-ok appear, the
@@ -347,8 +355,8 @@ def cmd_work(cmd_args):
     # runs the verify contract — it used to run the whole verify and only then say so.
     # `cli._wrong_usage` refuses it even earlier, before the session GC; this is the
     # backstop for an in-process caller, and the close policy keeps the rule too.
-    if task_num == "done" and (force or stale_panel_ok) and not (reason and reason.strip()):
-        hatch = "--force" if force else "--stale-panel-ok"
+    if task_num == "done" and (force or stale_panel_ok or owner_ok) and not (reason and reason.strip()):
+        hatch = "--force" if force else ("--stale-panel-ok" if stale_panel_ok else "--owner-ok")
         print(f'Error: {hatch} requires --reason "why" — a forced or stale-panel close must '
               "record why. Nothing changed.", file=sys.stderr)
         sys.exit(1)
@@ -686,6 +694,33 @@ def cmd_work(cmd_args):
                     tamper_degraded=_tamper_degraded,
                     records_only=bool(_freshness and _freshness.get("records_only")),
                 )
+                # PB-STALE-CLOSE-BOUND (PLAN S12b, task 149): in an opted-in
+                # workspace a stale close of an assertive/irreversible task may
+                # not rest on a bare reason — --stale-panel-ok and --force alike.
+                # Every verdict the two hatches override, not only STALE (impl
+                # panel r1, opus: a degraded guard or an exclude that hides code
+                # took a bare reason) — and an unset risk is held to the same bar
+                # as everywhere else (agy).
+                _bound_verdicts = ("STALE", "TAMPER-GUARD-DEGRADED", "EXCLUDE-COVERS-CODE",
+                                   "NO-STAMP", "UNREADABLE")
+                if (_carries and _impl is not None and _freshness
+                        and _freshness.get("verdict") in _bound_verdicts
+                        and (stale_panel_ok or force)
+                        and risk != "reversible"):
+                    from tasks.core import bound_stale_close
+                    _b_ok, _b_msg, _b_note = bound_stale_close(
+                        Path(project_path), task_file.parent,
+                        owner_ok_reason=(reason if owner_ok else None))
+                    if not _b_ok:
+                        print(f"\nBlocked: cannot close task {prev_task} — {_b_msg}",
+                              file=sys.stderr, flush=True)
+                        sys.exit(1)
+                    if _b_note:
+                        _freshness["bound"] = _b_note
+                        if owner_ok and not force:
+                            # the owner's decision carries the stale close
+                            _f_allowed = True
+                            _freshness["accepted_reason"] = reason
                 # TAIL CERTIFICATION (task 036, owner decision A). When the panel
                 # is STALE and would block, but the ONLY post-panel delta is in
                 # non-behavioral file classes (docs/tests/ledger/claim docs), a
@@ -704,8 +739,15 @@ def cmd_work(cmd_args):
                     )
                     from tasks.review import run_tail_cert_judge
                     _snap = _impl.get("snapshot") if _impl else None
+                    _snap_fp = _impl["tree_state"]
+                    # Task 149 (PLAN S12b): after a post-D6 PASS, certify the delta
+                    # since the tree THAT judge reviewed, not since the impl panel.
+                    from tasks.core import post_d6_pass_base
+                    _pd6_base = post_d6_pass_base(Path(project_path), task_file.parent)
+                    if _pd6_base:
+                        _snap, _snap_fp, _ = _pd6_base
                     _tc_can, _tc_beh, _tc_non = tail_cert_delta(
-                        project_path, _snap, _impl["tree_state"])
+                        project_path, _snap, _snap_fp)
                     _tc_verdict = None
                     if _tc_can and not _tc_beh:
                         # Give the certifying judge what the panel actually
@@ -727,7 +769,10 @@ def cmd_work(cmd_args):
                             f"{_impl['tree_state']}. The panel's round (verdict + "
                             f"findings) follows — use it to judge whether this "
                             f"non-behavioral delta contradicts what was approved:\n"
-                            f"{_body}")
+                            f"{_body}"
+                            + (f"\nA post-D6 single judge then PASSED the tree {_snap_fp} "
+                               f"(run {_pd6_base[2]}); the delta below is measured from that tree."
+                               if _pd6_base else ""))
                         print("  … non-behavioral post-panel delta — running "
                               "single-judge tail certification", file=sys.stderr,
                               flush=True)
@@ -750,7 +795,7 @@ def cmd_work(cmd_args):
                             # change made during the judge call).
                             _recheck_fp = tree_state_fingerprint(project_path)
                             _r_can, _r_beh, _r_non = tail_cert_delta(
-                                project_path, _snap, _impl["tree_state"])
+                                project_path, _snap, _snap_fp)
                             if (_recheck_fp != _now_fp or not _r_can or _r_beh
                                     or _r_non != _tc_non):
                                 _tc_verdict = None
@@ -766,7 +811,9 @@ def cmd_work(cmd_args):
                             "verdict": "TAIL-CERT-PASS",
                             "round_fp": _impl["tree_state"],
                             "now_fp": _now_fp,
-                            "cert_clause": _tc_clause,
+                            "cert_clause": (_tc_clause + (f" (measured from post-D6 PASS {_pd6_base[2]})"
+                                                          if _pd6_base else "")),
+                            "pd6_base_run": _pd6_base[2] if _pd6_base else None,
                         }
                         print(f"  ✓ tail-certified: {_tc_clause}",
                               file=sys.stderr, flush=True)
@@ -852,6 +899,17 @@ def cmd_work(cmd_args):
                 # escape that exists for an actively-edited repo could not get
                 # through it (impl panel r3, opus F1). The forced close's reason is
                 # already recorded in the receipt.
+                # Task 149 (impl panel r1, codex ×2): a close bound to a post-D6 PASS
+                # is re-checked at the commit — --force included, and the config
+                # too, which the fingerprint cannot see.
+                if _freshness and _freshness.get("bound") and not owner_ok:
+                    from tasks.core import bound_stale_close as _bsc
+                    _ok2, _msg2, _ = _bsc(Path(project_path), task_file.parent, owner_ok_reason=None)
+                    if not _ok2:
+                        print(f"Blocked: cannot close task {prev_task} — the tree or the config "
+                              f"changed while this close was running: {_msg2}",
+                              file=sys.stderr, flush=True)
+                        sys.exit(1)
                 if _now_fp and not force:
                     _commit_fp = tree_state_fingerprint(project_path)
                     # An UNREADABLE fingerprint at the commit must block too (058
@@ -868,8 +926,27 @@ def cmd_work(cmd_args):
                               file=sys.stderr, flush=True)
                         sys.exit(1)
                 from tasks.core import CloseRaceRefused, compose_close
+
+                def _bound_still_holds():
+                    # Task 149 (impl panel r2, codex-high): re-checked INSIDE the task
+                    # lock the commit holds — a post-D6 run reserved (same lock) after
+                    # the check above cannot slip in before the receipt.
+                    if _freshness and _freshness.get("pd6_base_run"):
+                        # post-D6 run 2 (codex): tail-cert started from a post-D6 PASS;
+                        # a newer run reserved meanwhile makes that PASS not the newest
+                        from tasks.core import post_d6_pass_base as _pb3
+                        _base3 = _pb3(Path(project_path), task_file.parent)
+                        if not _base3 or _base3[2] != _freshness["pd6_base_run"]:
+                            raise CloseRaceRefused("the post-D6 PASS tail certification started from "
+                                                   "is no longer the newest finished run")
+                    if _freshness and _freshness.get("bound") and not owner_ok:
+                        from tasks.core import bound_stale_close as _bsc3
+                        _ok3, _msg3, _ = _bsc3(Path(project_path), task_file.parent,
+                                               owner_ok_reason=None)
+                        if not _ok3:
+                            raise CloseRaceRefused(f"the post-D6 binding no longer holds: {_msg3}")
                 try:
-                    _rewrite(task_file, lambda _txt: compose_close(
+                    _rewrite(task_file, lambda _txt: _bound_still_holds() or compose_close(
                         _txt, receipt_heading="Verification Receipt",
                         receipt=receipt, expect_status=_status_at_entry,
                         expect_blocked=_blocked_at_entry,
@@ -924,6 +1001,11 @@ def cmd_work(cmd_args):
                         _pbj.append(agent_dir, "close", "record",
                                     "verify contract",
                                     session_id=session_id, command=_vcmds)
+                        if _freshness and _freshness.get("bound"):
+                            _pbj.append(agent_dir, "close", "record",
+                                        "stale close owner-ok" if owner_ok else "stale close bound",
+                                        session_id=session_id,
+                                        command=_flat(str(_freshness["bound"])))
                 except Exception:
                     pass
                 if _dirty:

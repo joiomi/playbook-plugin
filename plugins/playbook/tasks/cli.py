@@ -300,7 +300,7 @@ _USAGE = {
     "dashboard": "tasks dashboard [--no-detect]", "mindmap-sync": "tasks mindmap-sync [--fix]",
     "retro": "tasks retro [--since N]", "freehand": "tasks freehand [log]", "audit": "tasks audit [<N>]",
     "new": "tasks new <type> <name> [intent words …]  (intent words starting with `--` go after a `--`)",
-    "work": 'tasks work <N> [--force] [--reopen]  |  tasks work done [--force|--stale-panel-ok --reason "why"]',
+    "work": 'tasks work <N> [--force] [--reopen]  |  tasks work done [--force|--stale-panel-ok|--owner-ok --reason "why"]',
 }
 
 
@@ -347,7 +347,7 @@ def _wrong_usage(cmd: str, args: list) -> "str | None":
     so a refusal really changes nothing."""
     if cmd == "work" and args[:1] == ["done"]:
         rest = args[1:]
-        hatch = next((h for h in ("--force", "-f", "--stale-panel-ok") if h in rest), None)
+        hatch = next((h for h in ("--force", "-f", "--stale-panel-ok", "--owner-ok") if h in rest), None)
         reason = None
         if "--reason" in rest:
             i = rest.index("--reason")
