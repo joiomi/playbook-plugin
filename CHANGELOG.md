@@ -34,9 +34,28 @@ Bash) come back after that, starting from `git diff last-multiplatform`. The las
   Kept on purpose, because removing them would change what Linux does or says: the resolver's failure hint (it still
   names the Windows WSL stub), the `\` → `/` step in the codex hooks' management-path check, `bash-log.sh`'s backslash
   strip of `$0`, the `ps` fallback for a host without `/proc`, and judgebench's portable-label rule.
+- **CI runs the sandbox tests** (task 158): the Linux lanes install bubblewrap (and lift Ubuntu 24.04's AppArmor
+  restriction on unprivileged user namespaces for the job), so the live containment tests run there instead of skipping
+  (26 skips → 9).
 - **Docs and the guarantee ledger claim Linux only** (task 153): README (with the `multiplatform` install steps; the
   install command now names `joiomi/playbook-plugin`), `docs/`, the monitor skill and `/playbook:init`; every ledger row
   applies to `linux`, and live evidence no longer targets macOS or Windows.
+
+### Fixed
+
+- **A file named with `\.agent\` in it is no longer exempt from the edit gate on the codex path** (task 158). The
+  Python classifier turned every `\` into `/` before judging, so a codex patch to `src/a\.agent\x.py` passed with no
+  active task. A backslash is a file-name character on Linux; the Claude-path gate never had the hole.
+- **Another spelling of the task.md path no longer skips two guards** (task 158). The batch-close guard and the
+  guard against hand-made task.md files matched the raw path: `…/N-x/./task.md`, a doubled slash or an `x/..` hop
+  named the same file and matched neither. Both now judge the normalised path, like the code-edit guard.
+- **A claude seat at its account limit is recorded as out of credit** (task 158), like codex, grok and agy: the
+  panel names it, skips it until the reset time claude gives (`You've hit your weekly limit · resets Oct 13, 6pm
+  (Europe/Bucharest)`), and `tasks models enable <seat>` clears it. Before, both claude seats were called again on
+  every run and the panel fell below quorum. The line counts only when it is all the seat printed — a review that
+  quotes it is not an outage.
+- **The suite no longer fails by the clock** (task 158): one seat-outage test compared a fixed "7:33 PM" with the
+  real time and failed every day from 19:33 to 01:33 local time, blocking every close in those hours.
 
 ## [1.5.47] — 2026-10-08
 

@@ -1841,7 +1841,7 @@
     {
       "id": "PB-PATH-MANAGEMENT-EXEMPT",
       "category": "hook-payload-and-paths",
-      "statement": "Genuine .agent and .claude management paths are exempt from the edit gate, while traversal through them onto code is normalized and blocked.",
+      "statement": "Genuine .agent and .claude management paths are exempt from the edit gate, while traversal through them onto code is normalized and blocked; a backslash is a file-name character, not a path separator, so a file merely NAMED with `\\.agent\\` in it is not exempt.",
       "owner": [
         {
           "path": "plugins/playbook/provider/policy.py",
@@ -1911,6 +1911,30 @@
           "limitations": [
             "Task 100 (PLAN S8 binding audit, 2026-09-27): the `.claude` half of the genuine-path exemption (`.claude/settings.json` is management) was asserted only here; the subprocess negative control covers a genuine `.agent` path."
           ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_gate_path_traversal.py",
+          "reference": "CodexManagementPathTraversal.test_a_backslash_is_a_file_name_character_not_a_separator",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_gate_path_traversal.py",
+            "reference": "CodexManagementPathTraversal.test_genuine_management_paths_still_true"
+          },
+          "limitations": [
+            "Direct call of the Python classifier (the codex hooks' twin of the bash gate)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_gate_path_traversal.py",
+          "reference": "GatePathTraversal.test_a_backslash_named_code_file_is_gated",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_gate_path_traversal.py",
+            "reference": "GatePathTraversal.test_genuine_agent_path_still_allowed"
+          },
+          "limitations": []
         }
       ],
       "applicable_platforms": [
@@ -1922,7 +1946,8 @@
       "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
-        "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21)."
+        "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21).",
+        "2026-10-09 (task 158): up to 1.5.47 the Python classifier `_is_management_path` (the experimental codex path) turned `\\` into `/` before judging, so a codex patch to a file NAMED `src/a\\.agent\\x.py` was exempt with no active task; the bash gate (the supported Claude path) never did. Fixed; `CodexActiveTaskStatus.test_a_backslash_named_code_file_is_gated_without_a_task` drives the codex decision function."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],
@@ -1932,7 +1957,7 @@
     {
       "id": "PB-BATCH-CLOSE",
       "category": "hook-payload-and-paths",
-      "statement": "The gate hook blocks two or more unannotated gate closures in one edit, annotated batches beyond the five-gate ceiling, born-checked gate lines, and a second batch with no intervening work, while an annotated batch within the limit and a single bare close remain allowed.",
+      "statement": "The gate hook blocks two or more unannotated gate closures in one edit, annotated batches beyond the five-gate ceiling, born-checked gate lines, and a second batch with no intervening work, while an annotated batch within the limit and a single bare close remain allowed — whatever lexical spelling names the active task.md (a `/./` segment, a doubled slash, an `x/..` hop): the guard judges the normalised path.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/gate-batch-check.py",
@@ -1999,6 +2024,19 @@
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_batch_close_guard.py",
+          "reference": "AnotherSpellingOfThePathIsStillGuarded.test_a_bare_batch_is_blocked_under_every_spelling",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_batch_close_guard.py",
+            "reference": "AnotherSpellingOfThePathIsStillGuarded.test_control_an_annotated_batch_is_still_allowed_under_them"
+          },
+          "limitations": [
+            "Lexical normalisation only (as the code-edit guard): a path through a symlinked directory is not resolved."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -2010,7 +2048,8 @@
       "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
-        "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21)."
+        "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21).",
+        "2026-10-09 (task 158): up to 1.5.47 the guard matched the RAW file path, so `…/N-x/./task.md`, `//` or an `x/..` hop skipped it (and the hand-made-task.md guard beside it) while the code-edit guard exempted the edit as an `.agent/` path. Fixed on both the fused and the recovery branch of the hook (`AnotherSpellingOfThePathIsStillGuarded.test_the_recovery_path_judges_the_same_normalised_path`, `…test_creating_a_task_md_by_hand_is_blocked_under_every_spelling`)."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],
@@ -14599,7 +14638,7 @@
     {
       "id": "PB-PANEL-SEAT-OUTAGE",
       "category": "judges-and-reviews",
-      "statement": "A panel seat whose provider says the account is out of credit — grok's `402 Payment Required … usage balance exhausted`, codex's `You've hit your usage limit … try again at <time>`, agy's quota stop — is recorded in the lane's `journal/seat-outages.json` (machine-local and gitignored, written under a lock) — read from the provider's own error — its stderr tail, and its structured error events on stdout for the CLIs whose stdout is an event stream (codex, grok, agy) — not from output the judge quoted — until the reset time the message gives, or until `tasks models enable <seat>` when it gives none, and later panels skip it with one line naming it. The panel's quorum is resolved against the REQUESTED seats (the configured panel or the --models selection, counted before any seat is skipped), in the preflight and in the verdict: when fewer seats can run than the quorum, the panel fails before any judge is called.",
+      "statement": "A panel seat whose provider says the account is out of credit — grok's `402 Payment Required … usage balance exhausted`, codex's `You've hit your usage limit … try again at <time>`, agy's quota stop, claude's `You've hit your weekly limit · resets <time>` — is recorded in the lane's `journal/seat-outages.json` (machine-local and gitignored, written under a lock) — read from the provider's own error — its stderr tail, and its structured error events on stdout for the CLIs whose stdout is an event stream (codex, grok, agy), and for claude — whose stdout is the judge's review — its limit line only when that line is the WHOLE stdout — not from output the judge quoted — until the reset time the message gives, or until `tasks models enable <seat>` when it gives none, and later panels skip it with one line naming it. The panel's quorum is resolved against the REQUESTED seats (the configured panel or the --models selection, counted before any seat is skipped), in the preflight and in the verdict: when fewer seats can run than the quorum, the panel fails before any judge is called.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/seat_outage.py",
@@ -14763,6 +14802,32 @@
           "limitations": [
             "Added after the post-D6 run 2 (task 149)."
           ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_seat_outage.py",
+          "reference": "ClaudeAccountLimit.test_the_captured_limit_is_an_outage_until_its_reset",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_seat_outage.py",
+            "reference": "ClaudeAccountLimit.test_a_review_that_carries_the_line_is_not_an_outage"
+          },
+          "limitations": [
+            "The fixture is the envelope both claude seats returned on 2026-10-08 (task 156's first impl panel), byte for byte."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_seat_outage.py",
+          "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_a_claude_seat_at_its_account_limit_is_recorded_then_skipped",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_seat_outage.py",
+            "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_a_claude_seat_quoting_the_event_is_not_recorded"
+          },
+          "limitations": [
+            "cmd_panel_review in-process, the judges faked at the adapter and the tamper guard stubbed clean; seat_outage's clock pinned."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -14778,7 +14843,8 @@
         "Added by task 149 (PLAN S12b). Only panels skip a recorded seat; the single-judge path (`tasks impl-review`) still calls its judge.",
         "A codex clock time without a date (`7:33 PM`) is read as today's when it passed less than six hours before the panel ended (the reset already happened), else as the next such time; a provider that changes its wording is not recognised (the seat fails as before).",
         "Requiring the quorum of the requested panel means a panel with seats whose CLI is not installed now fails instead of shrinking — name reachable seats with --models.",
-        "A late failure recorded after `tasks models enable` cleared the seat (two panels started before the clear) disables it again; parked (task 149 impl panel r1, codex-high)."
+        "A late failure recorded after `tasks models enable` cleared the seat (two panels started before the clear) disables it again; parked (task 149 impl panel r1, codex-high).",
+        "2026-10-09 (task 158): claude's account limit is recognised from ONE captured wording (`You've hit your weekly limit · resets Oct 13, 6pm (Europe/Bucharest)`); a reset without a date is read as the nearest such clock time (not captured live), a named zone the host cannot resolve as local time, and a reset it cannot read as an outage with no end. The panel tests pin seat_outage's clock: with the real clock one of them failed every day from 19:33 to 01:33 local time."
       ],
       "follow_up_phases": [
         8
