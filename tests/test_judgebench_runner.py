@@ -396,19 +396,6 @@ class LiveRunnerTests(unittest.TestCase):
             # Within budget → nothing excluded.
             self.assertEqual(lr.preflight(cands, pkg, repo), {})
 
-    def test_preflight_applies_the_windows_command_line_cap_for_argv_backends(self):
-        # r4 grok #2: argv_byte_error is a no-op on Windows; the real cap there is the
-        # adapters' ~30k whole-command-line check — preflight must apply it too.
-        with tempfile.TemporaryDirectory() as td:
-            repo, case, pkg = self._case(td)
-            lr = runner.LiveRunner(repo, invoke=lambda *a: "x", adapter_factory=_StubAdapter, budget_usd=1,
-                                   platform_nt=True)
-            big = package.Package(case_id=case.id, spec="", diff="", prompt="x" * 31_000)
-            errs = lr.preflight(runner.parse_candidates("g=grok:grok-4.6:high,c=codex:m"), big, repo)
-            self.assertIn("g", errs); self.assertIn("32,767", errs["g"])
-            self.assertNotIn("32,767", errs.get("c", ""))          # stdin transport: no cmdline cap
-            small = package.Package(case_id=case.id, spec="", diff="", prompt="x" * 1_000)
-            self.assertEqual(lr.preflight(runner.parse_candidates("g=grok:grok-4.6:high"), small, repo), {})
 
     def test_on_result_callback_fires_inside_the_snapshot_per_candidate(self):
         # r4 grok #3: persist each candidate as it completes, while the snapshot still exists.
@@ -427,7 +414,6 @@ class LiveRunnerTests(unittest.TestCase):
             self.assertEqual(trees, [True, True])                  # snapshot alive at callback time
             self.assertEqual(len(out), 2)
 
-    @unittest.skipIf(os.name == "nt", "POSIX argv cap only")
     def test_preflight_uses_adapter_transport_not_a_guess(self):
         with tempfile.TemporaryDirectory() as td:
             repo, case, pkg = self._case(td)

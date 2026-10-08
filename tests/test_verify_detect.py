@@ -451,7 +451,7 @@ class DetectsThisProjectsShape(_NoPytest):
         try:
             os.symlink(outside, d / "link", target_is_directory=True)
         except (OSError, NotImplementedError):
-            self.skipTest("symlinks unavailable (unprivileged Windows)")
+            self.skipTest("symlinks unavailable on this filesystem")
         self.assertEqual(detect_verify(d)["command"], "")
 
 

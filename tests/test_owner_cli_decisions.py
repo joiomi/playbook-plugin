@@ -146,7 +146,6 @@ class BareModelsPrintsUsage(_Project):
             f.chmod(f.stat().st_mode | stat.S_IXUSR)
         return d
 
-    @unittest.skipIf(sys.platform == "win32", "the marker CLIs are POSIX shell scripts")
     def test_bare_models_prints_usage_and_launches_nothing(self):
         fake = self._fake_bin()
         r = self.run_tasks("models", path_prefix=str(fake))

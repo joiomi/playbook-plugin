@@ -636,7 +636,6 @@ class TimedOutSeatStillCountsAsFailedTest(unittest.TestCase):
         self.assertFalse(judge_failed("**INCOMPLETE** — killed mid-response"))
 
 
-@unittest.skipIf(os.name == "nt", "POSIX process-group termination path")
 class RunWithTimeoutTest(unittest.TestCase):
     """Regression guard for the B8 fix: sandbox.run(timeout=) must terminate the
     whole tree on expiry — a naive subprocess.run(timeout=) killed only the

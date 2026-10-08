@@ -326,10 +326,10 @@ class GuaranteeLedgerValidation(_LedgerFixture):
             self.assertIn("canonical YYYY-MM-DD date", stderr.getvalue())
 
     def test_summary_does_not_crash_under_cp1252_stdout(self):
-        # Portability regression (task 039): a non-ASCII limitation must not crash
-        # `--summary` on a Windows-style cp1252 stdout. U+2192 ('->') in a ledger
+        # Robustness regression (task 039): a non-ASCII limitation must not crash
+        # `--summary` on a non-UTF-8 (cp1252) stdout. U+2192 ('->') in a ledger
         # limitation raised UnicodeEncodeError and failed the whole verify lane on
-        # Windows (a break no Linux/macOS run surfaces). main() reconfigures stdout
+        # Windows CI, where the console was cp1252. main() reconfigures stdout
         # to UTF-8. Reproduced via PYTHONIOENCODING=cp1252 in a SUBPROCESS — the
         # in-process StringIO path cannot exercise a real stdout codec.
         ledger = self.mutated()

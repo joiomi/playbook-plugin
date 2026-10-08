@@ -140,7 +140,6 @@ class HarnessPromptsAreNotUserWords(_ChatLogFixture):
                 self._run(f"{marker} probe-harness-{n}")
                 self.assertNotIn(f"probe-harness-{n}", self._logged())
 
-    @unittest.skipIf(os.name == "nt", "builds a PATH out of symlinks")
     def test_a_host_without_jq_still_skips_a_spaced_harness_payload(self):
         # Panel r1 (sol-high, sol-medium): without jq the hook's fallback only
         # recognised compact `"prompt":"..."` JSON; `json.dumps` output is

@@ -3,10 +3,10 @@
 
 Judges are read-only evaluators. Two independent defenses, both tested here:
   1. OS containment — every judge spawn passes `project_writable=False` to
-     `provider.sandbox.run`, so seatbelt/bwrap deny project writes.
+     `provider.sandbox.run`, so bwrap denies project writes.
   2. Tamper guard — panel & single-judge paths snapshot the repo before spawning
      and hard-stop (non-zero, loud banner, judge.md still saved) if the working
-     tree changed, the ONLY defense on uncontained platforms (Windows/nested).
+     tree changed, the ONLY defense where no containment runs (no usable bwrap, nested).
 
 (1) is covered for the five panel adapters (direct call) and the five inline
 single-judge cli.py arms (in-process `main()` drive). (2) is covered against the
@@ -737,8 +737,6 @@ class TamperGuardTest(unittest.TestCase):
         # `read_bytes()` fingerprint BLOCK FOREVER before the exit banner. lstat
         # now rejects non-regular files without reading them — flagged, no hang.
         # task.md is gitignored so the ONLY signal is the task fingerprint.
-        if not hasattr(os, "mkfifo") or not hasattr(__import__("signal"), "SIGALRM"):
-            self.skipTest("os.mkfifo / SIGALRM unavailable (Windows)")
         import signal
         d = self._git_repo()
         (d / ".gitignore").write_text("task.md\n")
@@ -842,8 +840,6 @@ class TamperGuardTest(unittest.TestCase):
         # versions — must still be flagged. The dirty-file loop now records a
         # stable `nonregular:<type>` marker, so regular-hash → nonregular compares
         # unequal instead of the FIFO vanishing from the hash set.
-        if not hasattr(os, "mkfifo"):
-            self.skipTest("os.mkfifo unavailable (Windows)")
         d = self._git_repo()
         tf = d / "task.md"
         tf.write_text("gate1\n")
@@ -866,8 +862,6 @@ class TamperGuardTest(unittest.TestCase):
         # must never block on a non-regular file (a FIFO with no writer would
         # hang a plain read forever). Directly exercises the TOCTOU protection
         # (fstat rejects a FIFO opened under O_NONBLOCK).
-        if not hasattr(os, "mkfifo") or not hasattr(__import__("signal"), "SIGALRM"):
-            self.skipTest("os.mkfifo / SIGALRM unavailable (Windows)")
         import signal
         d = self._git_repo()
         fifo = d / "pipe"
@@ -888,8 +882,6 @@ class TamperGuardTest(unittest.TestCase):
         # panel round-6 (sonnet Critical): the dirty-file content-hash loop routes
         # through the same safe reader, so a dirty file that is a FIFO does not
         # block _snapshot_repo_state — the whole review can't be wedged.
-        if not hasattr(os, "mkfifo") or not hasattr(__import__("signal"), "SIGALRM"):
-            self.skipTest("os.mkfifo / SIGALRM unavailable (Windows)")
         import signal
         d = self._git_repo()
         tf = d / "task.md"

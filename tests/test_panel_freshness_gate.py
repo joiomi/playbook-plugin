@@ -119,7 +119,6 @@ class FingerprintCoverage(unittest.TestCase):
         self.assertIn("fingerprint_exclude", buf.getvalue(),
                       "malformed entries must be skipped LOUDLY")
 
-    @unittest.skipIf(os.name == "nt", "mkfifo / symlink-follow are POSIX-only")
     def test_untracked_symlink_to_fifo_does_not_hang_fingerprint(self):
         # R1/P1 (1.5.39): the untracked-content hash used a bare read_bytes(),
         # which FOLLOWS an untracked symlink into a FIFO and blocks forever (git
@@ -185,7 +184,6 @@ class FingerprintCoverage(unittest.TestCase):
         self.assertNotEqual(fp2, tree_state_fingerprint(d),
                             "a file at/under the cap must be content-hashed")
 
-    @unittest.skipIf(os.name == "nt", "'\"' is illegal in Windows filenames")
     def test_special_char_untracked_filename_content_is_tracked(self):
         # R2/P2 (1.5.39): git C-quotes a special-char untracked filename in the
         # default porcelain (a"b.py → `?? "a\"b.py"`); the old `.strip('"')`
@@ -203,7 +201,6 @@ class FingerprintCoverage(unittest.TestCase):
                             "content edit to a C-quoted untracked filename is "
                             "invisible to the fingerprint (porcelain mis-parse)")
 
-    @unittest.skipIf(os.name == "nt", "CR is illegal in Windows filenames")
     def test_carriage_return_untracked_filename_content_is_tracked(self):
         # R2 impl-panel (codex:sol Important): a raw CR byte in a `-z` path is
         # mangled to LF by `text=True` universal-newline translation → wrong
@@ -220,7 +217,6 @@ class FingerprintCoverage(unittest.TestCase):
                             "content edit to a CR-in-name untracked file is "
                             "invisible (text-mode newline translation)")
 
-    @unittest.skipIf(os.name == "nt", "non-UTF-8 bytes are illegal in Windows filenames")
     def test_non_utf8_untracked_filename_content_is_tracked(self):
         # R2 impl-panel (sonnet #2): a POSIX filename may carry arbitrary
         # non-UTF-8 bytes; the `-z` bytes → os.fsdecode(surrogateescape) path
@@ -259,7 +255,6 @@ class FingerprintCoverage(unittest.TestCase):
                             "content edit to a Unicode-named untracked file is "
                             "invisible (octal-escape un-quoting broken)")
 
-    @unittest.skipIf(os.name == "nt", "leading/trailing spaces are trimmed by Windows")
     def test_whitespace_untracked_filename_content_is_tracked(self):
         # R2 impl-panel round-6 (codex:sol, empirically confirmed): git QUOTES a
         # leading/trailing-whitespace filename (`?? " lead.py"`) WITHOUT escapes,
@@ -412,7 +407,6 @@ class NestedCodeRoots(unittest.TestCase):
         self.assertNotEqual(fp_unt1, tree_state_fingerprint(d),
                             "untracked nested content is not hashed")
 
-    @unittest.skipIf(os.name == "nt", "'\"' is illegal in Windows filenames")
     def test_nested_special_char_untracked_content_is_tracked(self):
         # R2 impl-panel round-2 (sonnet #2): the C-quote fix lives in the shared
         # `_repo_fingerprint_material` called with strict=True for code_roots, so
@@ -599,9 +593,7 @@ class NestedCodeRoots(unittest.TestCase):
 
 
 def _symlink_or_skip(tc, target, link):
-    """Windows: os.symlink exists but needs a privilege — probe, don't hasattr."""
-    if not hasattr(os, "symlink"):
-        tc.skipTest("requires os.symlink")
+    """Probe by creating the link: a filesystem may refuse symlinks."""
     try:
         os.symlink(target, link)
     except (OSError, NotImplementedError) as e:
@@ -630,7 +622,6 @@ class FingerprintRobustness060(unittest.TestCase):
         self.assertNotEqual(fp_a, fp_b,
                             "subdir project: untracked content edit is invisible (false FRESH)")
 
-    @unittest.skipIf(os.name == "nt", "non-UTF-8 bytes are illegal in Windows filenames")
     def test_quotepath_false_non_utf8_name_does_not_crash(self):
         # T023 #2: with `core.quotePath=false` git emits RAW non-UTF-8 path bytes
         # on the readable porcelain; the strict `text=True` read raised an
@@ -649,7 +640,6 @@ class FingerprintRobustness060(unittest.TestCase):
             self.fail(f"quotePath=false + non-UTF-8 name crashed the fingerprint: {e}")
         self.assertRegex(fp, r"^[0-9a-f]{12}$")
 
-    @unittest.skipIf(os.name == "nt", "non-UTF-8 bytes are illegal in Windows filenames")
     def test_two_non_utf8_tracked_names_do_not_collide(self):
         # Plan-panel codex ×2: surrogate-decoded names must survive the FINAL
         # material encode — with `errors="replace"` both `a\xff.py` and
@@ -716,8 +706,6 @@ class FingerprintRobustness060(unittest.TestCase):
     def test_untracked_symlink_to_fifo_still_does_not_hang(self):
         # W5 must not touch `_safe_hash_regular`: a symlink INTO a FIFO is
         # tokened by link text and never opened.
-        if os.name == "nt":
-            self.skipTest("mkfifo is POSIX-only")
         d = _repo()
         os.mkfifo(d / "pipe")
         _symlink_or_skip(self, "pipe", d / "link.py")
@@ -1419,7 +1407,6 @@ class ClosePathMatrix(unittest.TestCase):
                 self.assertNotIn("Task 001 done.", r.stdout, f"{label}: {r.stdout} {r.stderr}")
                 self.assertIn("EXCLUDE-COVERS-CODE", r.stdout + r.stderr)
 
-    @unittest.skipIf(os.name == "nt", "non-UTF-8 bytes are illegal in Windows filenames")
     def test_owner_exclude_override_survives_a_non_utf8_source_name(self):
         # impl-panel r2 (codex-high #4): the EXCLUDE-COVERS-CODE receipt/console
         # text carried surrogate-decoded raw names; the strict UTF-8 receipt write

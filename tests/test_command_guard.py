@@ -1633,7 +1633,6 @@ class OperatorAcknowledgementIsJournalled(_JournalledGuardRun):
         self.assertEqual([x["decision"] for x in self._journal(d)], ["block"])
 
 
-@unittest.skipIf(sys.platform == "win32", "Windows keeps the raw env id (no ancestry walk)")
 class IrreversibleAckReadsTheResolvedSession(_JournalledGuardRun):
     """Q-A (b) (owner, 2026-09-29) = parked R1 + P1: the irreversible-task
     acknowledgement returned False whenever `PLAYBOOK_SESSION_ID` was unset —
@@ -1995,10 +1994,7 @@ class GauntletHookStepsAsVectors(unittest.TestCase):
                     env["CLAUDE_ENV_FILE"] = str(d / "envfile")
                     env["PLAYBOOK_PROC_ROOT"] = agent_proc_root(d / "anc", _os.getpid(), "claude")
                     env.pop("PLAYBOOK_SESSION_ID", None)
-                    # Windows has no ancestry walk: with no env id the resolver
-                    # answers the shared fallback (tasks 105/106). CI's Windows
-                    # lane (run 37290635414) showed the POSIX id expected there.
-                    sid = "pid-win-fallback" if sys.platform == "win32" else f"pid-{_os.getpid()}"
+                    sid = f"pid-{_os.getpid()}"
                 if hook == "session-end-hook":
                     # Task 126 (owner Q-D (b)): session-end deletes `pid-N` only when
                     # the EXITING process is N — the lowest agent in the hook's chain.
@@ -2065,7 +2061,6 @@ class GauntletHookStepsAsVectors(unittest.TestCase):
         if step in ("H48", "H51"):
             self.assertFalse((d / ".agent" / "sessions" / sid).exists(), "the session dir is deleted")
 
-    @unittest.skipIf(sys.platform == "win32", "Windows keeps the raw env id")
     def test_H29_no_env_id_irreversible_task_now_acknowledges(self):
         """H29: 109 measured 2 on BOTH roots (no env id → the ack never fired,
         P1). Owner Q-A (b): the ack reads the resolved session — candidate 0."""
@@ -2160,37 +2155,6 @@ class ImplPanelRound1Bypasses(unittest.TestCase):
                      rule="download-then-run")
         self._allows([d + "bash -c 'echo done'", d + "jq . < /tmp/x.sh", d + "cat /tmp/x.sh",
                       "curl -o /tmp/x.json https://e.example/a && jq . /tmp/x.json"])
-
-
-class AcknowledgementOnWindowsUsesTheResolvedSession(unittest.TestCase):
-    """Impl panel round 1 (sol-high, `[SETTLED-CONTRADICTED]` against owner Q-A
-    (b)): on Windows the guard kept the RAW env id while the CLI resolves an
-    absent one to `pid-win-fallback`, so an irreversible task activated there
-    could never acknowledge. Simulated in-process (`os.name` = "nt")."""
-
-    def test_no_env_id_reads_the_pid_win_fallback_pointer(self):
-        import os
-        from unittest import mock
-        with tempfile.TemporaryDirectory() as t:
-            root = Path(t)
-            (root / ".agent" / "tasks" / "001-x").mkdir(parents=True)
-            (root / ".agent" / "tasks" / "001-x" / "task.md").write_text(
-                "# 001 - x\n\n## Status\npending\n\n## Risk\nirreversible\n\n## Work\n- [ ] g\n",
-                encoding="utf-8")
-            (root / ".agent" / "sessions" / "pid-win-fallback").mkdir(parents=True)
-            (root / ".agent" / "sessions" / "pid-win-fallback" / "current_state").write_text(
-                "001\n", encoding="utf-8")
-            env = {k: v for k, v in os.environ.items() if k != "PLAYBOOK_SESSION_ID"}
-
-            class _NtOs:                                # the guard's `os` reads as Windows;
-                name = "nt"                             # pathlib keeps the real platform
-
-                def __getattr__(self, attr):
-                    return getattr(os, attr)
-            with mock.patch.dict(os.environ, env, clear=True), \
-                    mock.patch.object(cg, "os", _NtOs()), mock.patch.object(sys, "platform", "win32"):
-                got = cg._active_task_is_irreversible(str(root))
-            self.assertTrue(got)
 
 
 # ── task 110, impl panel round 2, classes 1 and 2 (owner ruling 2026-10-05) ───

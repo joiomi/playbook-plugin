@@ -140,8 +140,7 @@ class DispatchLiveSmoke(unittest.TestCase):
             # installs a per-command DEBUG trap in every child shell. Keep the
             # smoke hermetic while retaining ordinary system tools.
             env.pop("BASH_ENV", None)
-            if os.name != "nt":
-                env["PATH"] = "/usr/bin:/bin"
+            env["PATH"] = "/usr/bin:/bin"
             # Pin the session id so arms that write session state stay inside
             # the scratch dir deterministically.
             env["PLAYBOOK_SESSION_ID"] = "pid-dispatch-test"

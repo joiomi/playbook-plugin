@@ -34,7 +34,6 @@ def _fake_copy(base: Path, marker: str) -> Path:
     return base
 
 
-@unittest.skipIf(os.name == "nt", "the fake plugin copies are POSIX scripts")
 class TheWrapperResolvesTheInstalledCopy(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())

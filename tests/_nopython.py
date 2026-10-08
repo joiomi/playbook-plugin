@@ -25,23 +25,14 @@ _NEEDED = [
     "bash", "sh", "cat", "grep", "sed", "head", "tail", "find", "dirname",
     "basename", "printf", "echo", "uname", "tr", "awk", "mkdir", "rm", "mv",
     "cp", "ls", "env", "date", "wc", "cut", "sort", "ps", "chmod", "expr",
-    "ln", "flock", "cygpath",
+    "ln", "flock",
 ]
 
 
 def make_nopython_path(base: Path) -> str:
     """Create ``base`` populated with symlinks to real coreutils (no python3),
     and return it as a single-entry PATH string. Skips the test if any core
-    binary the hooks always need is itself unavailable (an environment fact).
-
-    Windows/Git-Bash runs a NATIVE-Windows python where os.symlink needs
-    Developer Mode / admin, coreutils resolve to Windows-mount paths, and PATH
-    scoping across the MSYS boundary is unreliable — a python3-free PATH cannot
-    be built portably there. These are Linux-measured audit items; skip on
-    Windows rather than assert a false red. The product fix itself is
-    cross-platform; only this PATH-manipulation harness is POSIX-only."""
-    if os.name == "nt":
-        raise unittest.SkipTest("python3-free PATH not portable on native-Windows python")
+    binary the hooks always need is itself unavailable (an environment fact)."""
     base.mkdir(parents=True, exist_ok=True)
     essential = {"bash", "cat", "grep", "sed", "head", "find", "dirname",
                  "printf", "tr", "awk", "mkdir", "rm"}
@@ -50,7 +41,7 @@ def make_nopython_path(base: Path) -> str:
         if real is None:
             if name in essential:
                 raise unittest.SkipTest(f"coreutil {name!r} not on PATH")
-            continue  # optional (flock/cygpath/ps): fine to omit
+            continue  # optional (flock/ps): fine to omit
         link = base / name
         if not link.exists():
             try:

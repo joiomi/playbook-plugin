@@ -105,10 +105,9 @@ class InitRollback(unittest.TestCase):
 
     def _make_readonly_or_skip(self, directory: Path):
         """chmod *directory* read-only and confirm the OS actually blocks file
-        creation there. Windows/MSYS ignore POSIX directory permissions and root
-        bypasses them, so a read-only dir does not induce the failure there — the
-        honest move is to skip (windows-git-bash interruption is Phase 8 live
-        evidence per the ledger), not to assert a failure that cannot happen."""
+        creation there. Root bypasses POSIX directory permissions, so a read-only
+        dir does not induce the failure there — the honest move is to skip, not to
+        assert a failure that cannot happen."""
         os.chmod(directory, stat.S_IRUSR | stat.S_IXUSR)
         probe = directory / ".pb_write_probe"
         try:
@@ -229,9 +228,6 @@ class InitRollback(unittest.TestCase):
     def test_interrupt_signal_rolls_back(self):
         """A SIGTERM mid-run (Ctrl-C class) is trapped → init exits non-zero →
         rollback. Every earlier stage's modifications come back byte-identical."""
-        if sys.platform == "win32":
-            self.skipTest("SIGTERM/MSYS pid semantics differ on windows-git-bash "
-                          "(controlled interruption there is Phase 8 live evidence)")
         originals = self._seed_modifiable_files()
         r = self._run_interrupted()
         self.assertEqual(r.returncode, 143, f"expected SIGTERM exit 143:\n{r.stderr}")

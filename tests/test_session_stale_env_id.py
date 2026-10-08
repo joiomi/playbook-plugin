@@ -161,10 +161,6 @@ class StaleEnvIdRealProcesses(unittest.TestCase):
     agent) against the host's own process table. Whatever the real walk says
     with no env is what a stale env must resolve to."""
 
-    def setUp(self):
-        if os.name == "nt":
-            self.skipTest("the ancestor walk is skipped on Windows")
-
     def _env(self, sid=None):
         env = {k: v for k, v in os.environ.items()
                if k not in ("PLAYBOOK_SESSION_ID", "PLAYBOOK_PROC_ROOT", "BASH_ENV", "CLAUDE_ENV_FILE")}
@@ -278,8 +274,8 @@ class RealPsLivenessProbe(unittest.TestCase):
 
     def setUp(self):
         import shutil
-        if os.name == "nt" or shutil.which("ps") is None:
-            self.skipTest("no POSIX ps")
+        if shutil.which("ps") is None:
+            self.skipTest("no ps on PATH")
 
     def test_python_probe_reads_a_live_process(self):
         sys.path.insert(0, str(PLUGIN))
@@ -306,10 +302,6 @@ class CommandGuardIgnoresAStaleId(unittest.TestCase):
     id's in_progress irreversible task acknowledge a dangerous command.
     POSIX only: on Windows the guard keeps the raw env id by design (the
     resolvers judge no id there — owner rule "Windows untouched")."""
-
-    def setUp(self):
-        if os.name == "nt":
-            self.skipTest("Windows: the guard keeps the raw env id (no id is judged there)")
 
     def test_dead_id_does_not_acknowledge(self):
         import json, shutil, tempfile

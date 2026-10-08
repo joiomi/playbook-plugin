@@ -62,7 +62,7 @@ INVALID_MARKERS = ["", ".", "..", "../evil", "a/b", "-dash", "_under", "has spac
 # newline. (name, bytes, expected_lane_or_None)
 RAW_MARKERS = [
     ("lf",           "alice\n",          "alice"),
-    ("crlf",         "alice\r\n",        "alice"),  # Windows is supported
+    ("crlf",         "alice\r\n",        "alice"),  # a CRLF-saved marker is tolerated on read
     ("no_trailing",  "alice",            "alice"),  # `read` returns 1 but assigns
     ("padded",       "  alice  \n",      "alice"),
     ("blank_second", "alice\n\n",        "alice"),  # trailing blank line is fine
@@ -175,9 +175,6 @@ class TestResolveAgentDir(TempProjectCase):
         except Exception as exc:  # noqa: BLE001 - that's the point of the test
             self.assertNotIsInstance(exc, SystemExit)
 
-    @unittest.skipIf(sys.platform.startswith("win"),
-                     "POSIX-only: chmod(0o000) does not make a file unreadable to "
-                     "its owner on Windows, and os.geteuid is absent there")
     def test_unreadable_marker_raises_rather_than_degrading(self):
         # Task 021's I2 lesson: a present-but-unreadable marker must not be
         # reported as "legacy layout" — that is how state splits in two.
@@ -592,11 +589,6 @@ class TestCodexHooksPaths(TempProjectCase):
         activate(lane, "pid-3", 5)
         self.assertTrue(self.ch.has_active_task(p, "pid-3"))
 
-    @unittest.skipIf(sys.platform.startswith("win"),
-                     "POSIX-only: chmod(0o500) does not remove owner write on "
-                     "Windows and os.access(W_OK) only reflects the read-only "
-                     "attribute, so the lane-vs-root writability split is not "
-                     "observable there; os.geteuid is also absent")
     def test_agent_dir_writable_tests_the_lane(self):
         p = make_project(self.tmp / "wr", "multiuser", marker="alice")
         self.assertTrue(self.ch._agent_dir_writable(p))
@@ -924,12 +916,6 @@ class TestSplitBrainEndToEnd(TempProjectCase):
     running the real three together proves they converged.
     """
 
-    @unittest.skipIf(sys.platform.startswith("win"),
-                     "POSIX-only: runs the `playbook-codex` bash launcher and a "
-                     "`#!/bin/bash` codex shim as direct subprocess execs, which "
-                     "native Windows cannot do (WinError 193 — shebang dispatch "
-                     "is not a Windows exec). The per-surface lane resolution this "
-                     "composes is covered on Windows by TestResolverParity.")
     def test_wrapper_cli_and_hook_share_one_lane(self):
         project = make_project(self.tmp / "e2e", "multiuser", marker="alice")
         lane = project / ".agent" / "alice"

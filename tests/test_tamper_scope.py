@@ -1129,7 +1129,7 @@ class PanelStampEndToEnd(unittest.TestCase):
         os.chdir(self.d)
         try:
             # utf-8 sink: the CLI reconfigures its streams to utf-8, and this
-            # in-process call bypasses the CLI — a cp1252 default (Windows lane)
+            # in-process call bypasses the CLI — a non-UTF-8 default (cp1252, Windows CI)
             # raised on the round's `⚠` warnings (CI run 35881113729).
             with open(os.devnull, "w", encoding="utf-8") as sink, contextlib.suppress(SystemExit), \
                  contextlib.redirect_stderr(sink), contextlib.redirect_stdout(sink):

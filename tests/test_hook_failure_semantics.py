@@ -107,11 +107,7 @@ class CommandGuardMissingHelper(unittest.TestCase):
                       f"fail-open was silent; stderr must name the missing helper: {err!r}")
 
     def test_unreadable_helper_fails_open(self):
-        # POSIX-only: chmod 000 does not remove read on native Windows, and
-        # os.geteuid is absent there. The missing-file case above covers the
-        # cross-platform "helper cannot run" polarity.
-        if os.name == "nt" or not hasattr(os, "geteuid"):
-            self.skipTest("chmod-based unreadability is POSIX-only")
+        # The missing-file case above covers the other "helper cannot run" polarity.
         if os.geteuid() == 0:
             self.skipTest("root ignores file permission bits")
         helper = self.scr / "command_guard.py"
@@ -159,8 +155,6 @@ class CommandGuardCannotRun(unittest.TestCase):
 
     def test_killed_at_the_host_timeout_exits_non_two(self):
         # A python3 shim that answers the version probe but hangs on the guard.
-        if os.name == "nt":
-            self.skipTest("signal delivery through MSYS `timeout` is not the host's semantics")
         timeout_bin = shutil.which("timeout")
         if not timeout_bin:
             self.skipTest("coreutils `timeout` not on PATH")

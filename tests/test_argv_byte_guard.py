@@ -42,7 +42,6 @@ class MaxArgBytes(unittest.TestCase):
             self.assertEqual(max_arg_bytes(), 32 * 4096)
 
 
-@unittest.skipIf(os.name == "nt", "POSIX-only guard; Windows arm is separate")
 class ArgvByteError(unittest.TestCase):
     def test_boundary_is_exact(self):
         self.assertIsNone(argv_byte_error(["x" * (LIMIT - 1)], "grok"))
@@ -74,7 +73,6 @@ class ArgvByteError(unittest.TestCase):
         self.assertIn("grok", msg)
 
 
-@unittest.skipIf(os.name == "nt", "POSIX-only guard")
 class AdapterParity(unittest.TestCase):
     """grok and pi refuse an oversized context before spawning; the agy judge
     (stdin since task 111) carries it instead."""

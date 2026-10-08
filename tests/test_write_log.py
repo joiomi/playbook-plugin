@@ -258,7 +258,6 @@ class PostD6Run1(_Fixture):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self.log.stat().st_size, 10 * MB)
 
-    @unittest.skipIf(os.name == "nt", "symlinks need privileges on Windows")
     def test_a_config_that_is_a_broken_link_turns_it_off(self):
         # post-D6 run 2: open() raises FileNotFoundError for a dangling symlink too — the
         # config entry EXISTS but cannot be read, so it must not read as "no config"
@@ -267,7 +266,7 @@ class PostD6Run1(_Fixture):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertFalse(self.log.exists())
 
-    @unittest.skipIf(os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0,
                      "POSIX permission bits, not as root")
     def test_a_config_that_cannot_be_reached_turns_it_off(self):
         # os.path.exists() is False when `.agent` cannot be traversed — the opt-out read as absent
@@ -424,7 +423,6 @@ class TheLockOnEveryPlatform(_Fixture):
         self.assertFalse(self.log.exists())
 
 
-@unittest.skipIf(os.name == "nt", "POSIX permission bits")
 class ImplPanelRound1(_Fixture):
     """Task 141, implementation panel round 1 (codex-high): private permissions."""
 

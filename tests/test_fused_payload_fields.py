@@ -112,7 +112,7 @@ PAYLOADS = {
 
 
 # The normalizer forces UTF-8 stdout (see its main()); decode its output as
-# UTF-8 too — without that, a locale codec (cp1252 on Windows) mojibakes the
+# UTF-8 too — without that, a non-UTF-8 locale codec (e.g. cp1252) mojibakes the
 # UTF-8 bytes the producer wrote (café → cafÃ©). Read the pipe in BINARY and
 # decode by hand: subprocess text mode also applies universal-newline
 # translation, which rewrites a \r\n inside a field to \n — mangling exactly
@@ -381,12 +381,12 @@ class PathFieldRouting(unittest.TestCase):
         self.assertEqual(fields[3], ".")
 
 
-class WindowsConsoleEncoding(unittest.TestCase):
-    """The enforcing normalizer must not crash writing a non-ASCII field to a
-    non-UTF-8 stdout. On Windows the default is cp1252, which cannot encode the
-    U+FFFD that _wire_safe emits for a lone surrogate — the producer would die
-    mid-frame and the consumer fall onto its slow recovery path. Simulated here
-    by forcing PYTHONIOENCODING=cp1252; red before main() reconfigures to UTF-8.
+class NonUtf8ConsoleEncoding(unittest.TestCase):
+    """Linux robustness: the enforcing normalizer must not crash writing a
+    non-ASCII field to a non-UTF-8 stdout. cp1252 cannot encode the U+FFFD that
+    _wire_safe emits for a lone surrogate — the producer would die mid-frame and
+    the consumer fall onto its slow recovery path. Forced here with
+    PYTHONIOENCODING=cp1252; red before main() reconfigures to UTF-8.
     """
 
     def test_surrogate_payload_does_not_crash_under_cp1252_stdout(self):

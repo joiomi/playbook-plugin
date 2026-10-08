@@ -199,8 +199,6 @@ class _FakePsMixin(unittest.TestCase):
     PROC = False        # True: resolvers read the /proc fixture; False: force the ps path
 
     def setUp(self):
-        if os.name == "nt":
-            self.skipTest("the ancestor walk is skipped on Windows (disjoint PID namespaces)")
         if os.getpid() < 1000:
             # Every fixture pid is < 1000 and this process is the walk's entry
             # (post-rewrite single judge run 2): a collision would start the
@@ -644,7 +642,6 @@ class DaemonBetweenSessionsKeepsThemApart(_ProjectMixin):
         self.assertTrue(self.a_dir.is_dir(), "session B's logout deleted session A's dir")
 
 
-
 class NestedExitKeepsTheOuterSession(_ProjectMixin):
     """Task 126 (owner Q-D (b), 2026-09-29; 106 P2, gauntlet 2 G2-21): a claude started from
     another claude's Bash resolves to the OUTER session's `pid-N` (the highest agent), and its
@@ -681,22 +678,6 @@ class NestedExitKeepsTheOuterSession(_ProjectMixin):
         r = self.run_hook("session-end-hook", {"reason": "exit"})
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue(d.is_dir(), r.stderr)
-
-    def test_windows_has_no_walk_and_keeps_the_old_delete(self):
-        # opus r1: on Windows (MSYS) there is no process walk and no GC that reclaims a
-        # `pid-*` dir — keeping it would carry one session's pointer into the next (the
-        # shared pid-win-fallback). There the terminal reasons still delete, nested or not.
-        uname = self.fakebin / "uname"
-        uname.write_text("#!/bin/sh\necho MINGW64_NT-10.0\n", encoding="utf-8")
-        uname.chmod(0o755)
-        self.set_tree([(450, 400, TERMINAL), (400, 300, TERMINAL), (300, 1, SHELL)])
-        d = self._dir(400)
-        r = subprocess.run([bash_or_skip(), str(SCRIPTS / "session-end-hook")],
-                           input=json.dumps({"reason": "exit"}), cwd=self.project,
-                           env=self.env(CLAUDE_ENV_FILE=str(self.env_file), PLAYBOOK_SESSION_ID="pid-400"),
-                           capture_output=True, text=True, timeout=60)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertFalse(d.exists(), f"Windows must keep delete-on-exit:\n{r.stderr}")
 
 
 class NestedExitKeepsTheOuterSessionProc(NestedExitKeepsTheOuterSession):

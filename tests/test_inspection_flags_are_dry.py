@@ -177,13 +177,6 @@ class MonitorAndSandboxHelpAreDry(unittest.TestCase):
         self.env["PATH"] = f"{self.bindir}{os.pathsep}{self.env.get('PATH', '')}"
         self.env.pop("BASH_ENV", None)
 
-    def _skip_sandbox_on_windows(self):
-        # The fake `claude` is a `#!/bin/sh` script launched by a NATIVE python on
-        # the Windows lane, where no containment backend wraps it in bash — the
-        # sandbox pair is measured on the POSIX lanes (impl panel r2, opus).
-        if os.name == "nt":
-            self.skipTest("fake sh agent is not executable by native Windows python")
-
     def _agent_tree(self):
         return sorted(str(p.relative_to(self.project)) for p in (self.project / ".agent").rglob("*"))
 
@@ -216,7 +209,6 @@ class MonitorAndSandboxHelpAreDry(unittest.TestCase):
         self.assertTrue(self.started.exists())
 
     def test_sandbox_help_forms_print_usage_and_execute_nothing(self):
-        self._skip_sandbox_on_windows()
         before = self._agent_tree()
         for flag in ("-h", "--help"):
             with self.subTest(flag=flag):
@@ -229,7 +221,6 @@ class MonitorAndSandboxHelpAreDry(unittest.TestCase):
     def test_control_sandbox_prompt_does_execute_the_agent(self):
         # `--print-argv`/help are dry because they short-circuit; a real --prompt
         # run reaches the (fake) agent, which is what the marker detects.
-        self._skip_sandbox_on_windows()
         r = self._sandbox("--agent", "claude", "--prompt", "hello")
         self.assertIn(self.AGENT_MARKER, r.stdout + r.stderr, r.stderr)
 

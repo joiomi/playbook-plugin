@@ -10,7 +10,8 @@ unittest-wrapped run is otherwise capped at 40 diagnostic lines). The log must
 never change a verdict.
 
 Also 086 W6: `scripts/verify` printed failure detail with `print()` on a cp1252
-Windows console and crashed on U+2260 (CI 35970907673), cutting the list short.
+console (seen on Windows CI 35970907673) and crashed on U+2260, cutting the list
+short — a non-UTF-8 stdout must not do that on Linux either.
 
 Run: python3 -m unittest tests.test_verify_full_log
 """

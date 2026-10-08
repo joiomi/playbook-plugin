@@ -214,14 +214,7 @@ class BigPrompt(unittest.TestCase):
         self.assertLess(max(len(a.encode("utf-8")) for a in inv.argv), 64)
         self.assertIsNone(argv_byte_error(inv.argv, "agy"))
 
-    def test_windows_has_no_command_line_guard_on_the_stdin_path(self):
-        a = _adapter()                    # pathlib refuses to build a path once os.name says "nt"
-        with mock.patch.object(os, "name", "nt"):
-            out, cap = _run_judge(_cp(fx("success-pong.stdout")), context="X" * 40_000, adapter=a)
-        self.assertEqual(str(out), "PONG")
-        self.assertGreater(len(cap["kw"]["input"]), 40_000)
 
-    @unittest.skipIf(os.name == "nt", "the fake agy executable is a POSIX script")
     def test_prompt_physically_crosses_the_pipe_through_sandbox_run(self):
         prompt = _big_prompt(300_000)
         full = f"CTX\n\n---\n\n{_no_web()}\n\n{prompt}"
@@ -234,7 +227,7 @@ class BigPrompt(unittest.TestCase):
             proj = Path(d) / "proj"
             proj.mkdir()
             env = {"PATH": f"{fake.parent}{os.pathsep}{os.environ.get('PATH', '')}",
-                   # run the real sandbox.run but skip the OS wrapper (bwrap/seatbelt vary per host)
+                   # run the real sandbox.run but skip the OS wrapper (bwrap varies per host)
                    "PLAYBOOK_SANDBOXED": "1"}
             with mock.patch.dict(os.environ, env):
                 out = AntigravityAdapter("judge", proj).run_headless_judge(

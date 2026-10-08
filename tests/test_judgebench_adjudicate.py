@@ -360,9 +360,9 @@ class ValidityTests(unittest.TestCase):
 
 class CliTests(unittest.TestCase):
     def test_cli_output_survives_a_cp1252_console(self):
-        # The Windows lane runs a cp1252 console; every judgebench print carries
-        # non-cp1252 glyphs (→, ×). Reproduce that console on every platform via
-        # PYTHONIOENCODING and require the CLI to reconfigure stdio like tasks.cli does.
+        # Every judgebench print carries non-cp1252 glyphs (→, ×). A non-UTF-8
+        # console (forced via PYTHONIOENCODING) must not crash it: the CLI
+        # reconfigures stdio like tasks.cli does.
         import os
         with tempfile.TemporaryDirectory() as td:
             _mk_corpus(Path(td) / "corpus")

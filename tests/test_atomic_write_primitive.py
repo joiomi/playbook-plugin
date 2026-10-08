@@ -68,7 +68,6 @@ class AtomicWritePrimitive(unittest.TestCase):
         self.assertEqual(strays, [], f"unexpected leftovers: {strays}")
 
     # ── permissions ─────────────────────────────────────────────────────────
-    @unittest.skipIf(os.name == "nt", "POSIX permission bits")
     def test_preserves_existing_mode(self):
         self.path.write_text("v1", encoding="utf-8")
         os.chmod(self.path, 0o640)
@@ -76,7 +75,6 @@ class AtomicWritePrimitive(unittest.TestCase):
         self.assertEqual(os.stat(self.path).st_mode & 0o777, 0o640,
                          "rewrite must preserve the target's permission bits")
 
-    @unittest.skipIf(os.name == "nt", "POSIX permission bits")
     def test_new_file_is_not_private_0600(self):
         # A brand-new file must get the normal umask-masked mode, not mkstemp's
         # 0600 — else a shared config would be unreadable by a second user.
@@ -120,8 +118,6 @@ class AtomicWritePrimitive(unittest.TestCase):
         self.assertEqual(strays, [], f"temp not cleaned up after interrupt: {strays}")
 
     # ── concurrency (POSIX) ─────────────────────────────────────────────────
-    @unittest.skipIf(sys.platform == "win32",
-                     "Windows os.replace cannot swap a file held open by a reader")
     def test_never_tears_under_concurrent_reader(self):
         self.path.write_text(_CONTENT_A, encoding="utf-8")
         stop = threading.Event()
@@ -148,8 +144,6 @@ class AtomicWritePrimitive(unittest.TestCase):
             t.join(timeout=5)
         self.assertEqual(torn[0], 0, f"{torn[0]} torn read(s) — not atomic")
 
-    @unittest.skipIf(sys.platform == "win32",
-                     "Windows os.replace cannot swap a file held open by a reader")
     def test_concurrent_writers_never_half_merge(self):
         # Two writers racing on one path: the reader must only ever see one of
         # the two WHOLE payloads, never a line from each interleaved.

@@ -9,8 +9,8 @@ Verified facts this file locks down (see PB-SANDBOX-READ-NETWORK):
     design, because judges invoke provider CLIs that call model APIs. This is
     the pin that stops the default from silently flipping to isolated.
   * the OPT-IN `--no-network` adds `--unshare-net` on the bwrap path ONLY.
-  * on any non-bwrap backend (macOS seatbelt, Windows, nested sandbox) the
-    opt-in FAILS LOUDLY rather than pretending the network is contained.
+  * on any non-bwrap backend (e.g. a nested sandbox) the opt-in FAILS LOUDLY
+    rather than pretending the network is contained.
 
 Run: python3 tests/test_sandbox_network_boundary.py
 """
@@ -80,15 +80,6 @@ class NoNetworkFailsLoudly(unittest.TestCase):
             argv = sandbox._wrapped_argv("claude", ["-p", "hi"], Path("/proj"),
                                          None, False, no_network=False)
             self.assertNotIn("--unshare-net", argv)
-
-
-class SeatbeltHasNoNetworkKnob(unittest.TestCase):
-    def test_seatbelt_profile_never_isolates_network(self):
-        """macOS seatbelt cannot isolate the network here — the generated profile
-        must contain no network directive, so the opt-in can honestly fail
-        loud on that backend instead of emitting a no-op."""
-        profile = sandbox.build_seatbelt_profile("/proj", "/proj/.git", None)
-        self.assertNotIn("network", profile.lower())
 
 
 class CliNoNetworkGuards(unittest.TestCase):

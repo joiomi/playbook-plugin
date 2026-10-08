@@ -69,16 +69,11 @@ class BashLogScope(unittest.TestCase):
         self.assertNotIn("by-name", "\n".join(self._lines()))
 
     def test_a_statusline_named_by_a_backslash_path_is_not_logged(self):
-        # Windows lane, CI 36000444073: `bash C:\...\statusline.sh` leaves a
-        # backslash path in $0, which `${0##*/}` does not strip. The same string
-        # reaches the logger here as a file NAME containing a backslash (legal on
-        # POSIX); on Windows it is a real subdirectory.
+        # CI 36000444073 (the Windows lane, up to 1.5.47): `bash C:\...\statusline.sh`
+        # left a backslash path in $0, which `${0##*/}` does not strip. On Linux the
+        # same string reaches the logger as a file NAME containing a backslash.
         rel = "sub\\statusline.sh"
-        if os.name == "nt":
-            (self.proj / "sub").mkdir()
-            script = self.proj / "sub" / "statusline.sh"
-        else:
-            script = self.proj / rel
+        script = self.proj / rel
         script.write_bytes(b"#!/bin/bash\necho by-backslash-path >/dev/null\n")
         self._bash("", argv=[bash_or_skip(), rel])
         self.assertNotIn("by-backslash-path", "\n".join(self._lines()))
@@ -88,11 +83,7 @@ class BashLogScope(unittest.TestCase):
         # (`w\statusline-tests\run.sh`), silently dropping every command run
         # from that tree. Only the script's own name counts.
         rel = "w\\statusline-tests\\run.sh"
-        if os.name == "nt":
-            (self.proj / "w" / "statusline-tests").mkdir(parents=True)
-            script = self.proj / "w" / "statusline-tests" / "run.sh"
-        else:
-            script = self.proj / rel
+        script = self.proj / rel
         script.write_bytes(b"echo in-a-statusline-dir >/dev/null\n")
         self._bash("", argv=[bash_or_skip(), rel])
         self.assertIn("in-a-statusline-dir", "\n".join(self._lines()))

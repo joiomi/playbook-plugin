@@ -136,11 +136,6 @@ class BootstrapBinding(unittest.TestCase):
                          out.split("RECENT EVENTS")[0],
                          "identity section must name the bound file, not the decoy")
 
-    @unittest.skipIf(sys.platform.startswith("win"),
-                     "Exercises the mtime-guess jsonl fallback, whose project-slug "
-                     "scheme has no analogue for a Windows drive/backslash path — "
-                     "the fixture jsonl cannot be placed where the fallback looks. "
-                     "The primary pointer-binding path is covered on Windows.")
     def test_no_pointer_falls_back_loudly(self):
         proj = _project()
         home = Path(tempfile.mkdtemp())
@@ -152,9 +147,6 @@ class BootstrapBinding(unittest.TestCase):
         self.assertIn("WARNING", out)
         self.assertIn("mtime", out.lower())
 
-    @unittest.skipIf(sys.platform.startswith("win"),
-                     "the mtime-guess fallback's project-slug scheme has no Windows analogue "
-                     "(see test_no_pointer_falls_back_loudly)")
     def test_the_guess_never_binds_to_a_monitor_transcript(self):
         # Task 124 (gauntlet 2 G2-23): the monitor is a claude session in the same project
         # slug, so its own transcript is often the newest — it watched itself (M06).
@@ -174,8 +166,6 @@ class BootstrapBinding(unittest.TestCase):
         self.assertIn("front-session.jsonl", ident)
         self.assertNotIn("monitor-session.jsonl", ident)
 
-    @unittest.skipIf(sys.platform.startswith("win"),
-                     "the mtime-guess fallback's project-slug scheme has no Windows analogue")
     def test_only_monitor_transcripts_means_nothing_to_watch(self):
         proj = _project()
         home = Path(tempfile.mkdtemp())
@@ -185,8 +175,6 @@ class BootstrapBinding(unittest.TestCase):
         out = self._bootstrap(proj, home)
         self.assertNotIn("monitor-session.jsonl", out.split("RECENT EVENTS")[0])
 
-    @unittest.skipIf(sys.platform.startswith("win"),
-                     "the mtime-guess fallback's project-slug scheme has no Windows analogue")
     def test_a_front_session_that_mentions_the_marker_is_still_eligible(self):
         proj = _project()
         home = Path(tempfile.mkdtemp())

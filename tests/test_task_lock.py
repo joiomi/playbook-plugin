@@ -42,14 +42,11 @@ class Backend(unittest.TestCase):
         self.assertIn(b, ("fcntl", "msvcrt", "none"), b)
 
     def test_this_platform_uses_the_expected_backend(self):
-        # 058 plan panel (opus #3): "the Windows lane is the msvcrt path" was an
-        # ASSUMPTION. Assert it, so a lane that silently took another branch
-        # fails loudly instead of reporting a green proof of an untested one.
+        # 058 plan panel (opus #3): assert the backend, so a host that silently took
+        # another branch fails loudly instead of reporting a green proof of an
+        # untested one.
         b = filelock.selected_backend()
-        if sys.platform.startswith("win"):
-            self.assertEqual(b, "msvcrt", "the windows lane did not exercise msvcrt")
-        else:
-            self.assertEqual(b, "fcntl", f"{sys.platform} did not exercise fcntl")
+        self.assertEqual(b, "fcntl", "this host did not exercise fcntl")
 
 
 class LockBasics(unittest.TestCase):

@@ -232,15 +232,6 @@ class WaitOnce(unittest.TestCase):
         self.assertEqual(events[-1]["type"], "stall_flush")
         self.assertIn("user", [e["type"] for e in events])
 
-    @unittest.skipIf(sys.platform.startswith("win"),
-                     "The sensor's pid-liveness probe is os.kill(pid, 0), which "
-                     "does not signal 'process gone' for a dead pid on Windows "
-                     "(it routes through the Win32 API and does not raise OSError "
-                     "on a reaped pid), so wait_once blocks the full max_wait "
-                     "instead of exiting. The monitor is a POSIX-oriented dev "
-                     "tool; a reliable Windows liveness probe is unverifiable "
-                     "without a Windows host — recorded as a limitation, not "
-                     "silently weakened. Same hazard as the session-GC pid probe.")
     def test_dead_pid_exits_instead_of_blocking(self):
         self.jsonl.write_bytes(b"")
         sensor.save_offset(self.offset_file, 0)
@@ -381,12 +372,6 @@ class BootstrapGuards(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
         self.assertIn("invalid SESSION_ID", r.stderr)
 
-    @unittest.skipIf(sys.platform.startswith("win"),
-                     "Exercises the mtime-guess jsonl fallback, whose project-slug "
-                     "scheme (`tr '/' '-'` of a POSIX path) has no analogue for a "
-                     "Windows drive/backslash path — the fixture jsonl cannot be "
-                     "placed where the fallback would find it. The primary "
-                     "transcript-pointer binding path is covered on Windows.")
     def test_happy_path_emits_commands_and_seeds_offset_at_eof(self):
         home = Path(tempfile.mkdtemp()) / "home"
         proj = Path(tempfile.mkdtemp()) / "proj"

@@ -65,7 +65,7 @@ class JudgeSessionStartIsQuiet(unittest.TestCase):
                 self.assertEqual(_snapshot(self.project), before, f"the {sid} session's hook wrote")
                 self.assertFalse((Path(self._tmp.name) / "env-file").exists())
 
-    @unittest.skipIf(os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0,
                      "needs POSIX permissions and a non-root user")
     def test_judge_session_on_a_read_only_project_does_not_fail(self):
         r = self._hook("judge", readonly=True)

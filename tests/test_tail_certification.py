@@ -834,8 +834,6 @@ class Round2Fixes(unittest.TestCase):
         self.assertIn("REAL CLAIM here", text)      # materialized from content
 
     # I4 — a mode change to an already-dirty code path surfaces (was content-only)
-    @unittest.skipUnless(hasattr(os, "chmod") and os.name == "posix",
-                         "exec-bit mode change is POSIX-only")
     def test_mode_change_to_dirty_code_surfaces(self):
         import os as _os
         import stat as _stat
@@ -893,7 +891,7 @@ class Round2Fixes(unittest.TestCase):
     # r11 codex:sol#1 — a dirty code path UNREADABLE (perms) at F0 and close has no
     # content signal; it must token as "unreadable" (untrusted) and ALWAYS surface,
     # never collapse to a constant "absent" that hides a content change.
-    @unittest.skipUnless(os.name == "posix" and os.getuid() != 0,
+    @unittest.skipUnless(os.getuid() != 0,
                          "perms test is POSIX non-root only")
     def test_unreadable_dirty_code_surfaces(self):
         import stat as _stat

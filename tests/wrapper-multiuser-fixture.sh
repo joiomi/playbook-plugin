@@ -27,13 +27,10 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 SCRIPTS="$HERE/../plugins/playbook/scripts"
 
 # The lane-agreement assertions below (S9, S16) compare a SHELL-derived path to
-# a PYTHON-derived path. On Windows/Git Bash those legitimately differ in string
-# form — MSYS-mount (/tmp/…, forward slashes) vs native drive (C:\Users\…) — even
-# though both name the same directory. Canonicalize BOTH sides through the same
-# product seam so the comparison tests "same location", not "same byte string":
-# the shell half via gate-echo-lib.sh's _canonical_path (cygpath -m on Windows,
-# identity elsewhere) and the Python half via tasks.core.canonical_path
-# (Path.as_posix()). On Linux/macOS both are identities, so these stay green.
+# a PYTHON-derived path. Both sides go through the same product seam so the
+# comparison tests "same location", not "same byte string": the shell half via
+# gate-echo-lib.sh's _canonical_path and the Python half via
+# tasks.core.canonical_path (Path.as_posix()) — identities on Linux.
 # shellcheck source=/dev/null
 . "$SCRIPTS/gate-echo-lib.sh"
 
@@ -79,11 +76,11 @@ echo "launched root=${PLAYBOOK_PROJECT_ROOT:-} session=${PLAYBOOK_SESSION_ID:-} 
 EOF
     chmod +x "$SHIM_BIN/$prov"
 done
-# launch-monitor ends in `exec sandbox-exec … claude …`. If a future change let
-# it get that far under test, an interactive claude would hang the suite
-# forever (it did, once). Shim both so reaching exec is a fast, visible event
+# launch-monitor ends by exec'ing claude inside the sandbox. If a future change
+# let it get that far under test, an interactive claude would hang the suite
+# forever (it did, once). Shim it so reaching exec is a fast, visible event
 # rather than a hang.
-for stub in claude sandbox-exec; do
+for stub in claude; do
     cat > "$SHIM_BIN/$stub" <<'EOF'
 #!/bin/bash
 echo "REACHED_EXEC $(basename "$0")" >&2
@@ -318,7 +315,7 @@ echo "=== S9: wrapper lane agrees with what the tasks CLI reads ==="
     run_wrapper codex "$d"
     wrapper_lane="$(find "$d/.agent" -type d -name 'pid-*' | head -1)"
     wrapper_lane="$(dirname "$(dirname "$wrapper_lane")")"
-    # Canonicalize both halves to the same form (identity off Windows) — see the
+    # Canonicalize both halves to the same form (an identity on Linux) — see the
     # note by the gate-echo-lib.sh source at the top of this file.
     wrapper_lane="$(_canonical_path "$wrapper_lane")"
     cli_lane="$(PYTHONPATH="$SCRIPTS/.." python3 -c '
@@ -492,7 +489,7 @@ PYEOF
 
 echo "=== S13: launch-monitor resolves lane + root without hardcoding ==="
 {
-    # launch-monitor ends in `exec sandbox-exec … claude`, so drive it only as
+    # launch-monitor ends by exec'ing claude in the sandbox, so drive it only as
     # far as its resolution logic: with no alive session it must fail in
     # find_main_session, and the error names the LANE's sessions dir.
     LAUNCH="$HERE/../plugins/playbook/scripts/monitor-lib/launch-monitor"
@@ -930,16 +927,6 @@ echo "=== S18: SessionStart GC must not delete a live session (field report 2026
     # -mtime` buckets by whole days while Python compares epoch seconds, so
     # near-boundary parity is a documented tolerance, not a tested guarantee.
     HOOK="$SCRIPTS/session-start-hook"
-    # On Windows the bash hook runs under git-bash (MSYS pids, real `kill -0`),
-    # but the Python sweeper runs under NATIVE python, where a pid probe is both
-    # unsafe and namespace-blind — so it keeps every pid-* dir (tasks/shared.py
-    # ::_session_is_dead). Three sub-checks below assert POSIX process semantics
-    # the two consumers CANNOT share there; they are win-only-guarded and
-    # unreachable on Linux/macOS (uname -s is Linux/Darwin).
-    case "$(uname -s 2>/dev/null)" in
-        MINGW*|MSYS*|CYGWIN*) IS_WINDOWS=1 ;;
-        *)                    IS_WINDOWS=0 ;;
-    esac
     # Mutants must live BESIDE gate-echo-lib.sh: the hook sources it from
     # `dirname $0` under `set -e`, so a mutant dropped in $WORK dies at the
     # source line and sweeps nothing — every control would then "pass" by
@@ -1025,27 +1012,16 @@ echo "=== S18: SessionStart GC must not delete a live session (field report 2026
     set -e
     assert_eq "$rc" "0" "S18 hook exits 0"
     got="$(survivors "$d/.agent/sessions")"
-    # On Windows the sweep KEEPS every pid-* dir (keep-all parity with the python
-    # sweeper — `kill -0` is unreliable under MSYS); on POSIX it reclaims the dead
-    # / non-own pid-* by liveness. The stale LEGACY name is mtime-swept on both.
-    if [ "$IS_WINDOWS" = 1 ]; then
-        want="$(printf '%s\n' "$OWN" "pid-$OTHER" "pid-$DEAD" pid-12ab pid-win-fallback stray-file uuid-fresh | LC_ALL=C sort)"
-    else
-        want="$(printf '%s\n' "$OWN" "pid-$OTHER" stray-file uuid-fresh | LC_ALL=C sort)"
-    fi
+    # The sweep reclaims the dead / non-own pid-* by liveness; the stale LEGACY
+    # name is mtime-swept.
+    want="$(printf '%s\n' "$OWN" "pid-$OTHER" stray-file uuid-fresh | LC_ALL=C sort)"
     assert_eq "$got" "$want" "S18 keeps exactly the policy's live set"
     # Spelled out individually so a failure names the policy arm that broke.
     [ -d "$d/.agent/sessions/$OWN" ]           && pass "S18 own session survives a 48h-stale pointer (the field bug)" || fail "S18 own session deleted — the reported bug is back"
     [ -d "$d/.agent/sessions/pid-$OTHER" ]     && pass "S18 live foreign session survives a stale pointer" || fail "S18 deleted a live foreign session"
-    if [ "$IS_WINDOWS" = 1 ]; then
-        [ -d "$d/.agent/sessions/pid-$DEAD" ]         && pass "S18 (windows) dead pid KEPT — never probed (keep-all parity with python)" || fail "S18 (windows) reclaimed a pid-* the sweep cannot prove dead"
-        [ -d "$d/.agent/sessions/pid-12ab" ]          && pass "S18 (windows) non-numeric pid- KEPT (keep-all)" || fail "S18 (windows) reclaimed pid-12ab"
-        [ -d "$d/.agent/sessions/pid-win-fallback" ]  && pass "S18 (windows) non-own pid-win-fallback KEPT (keep-all)" || fail "S18 (windows) reclaimed pid-win-fallback"
-    else
-        [ ! -d "$d/.agent/sessions/pid-$DEAD" ]        && pass "S18 dead pid removed despite a fresh pointer" || fail "S18 kept a dead session"
-        [ ! -d "$d/.agent/sessions/pid-12ab" ]         && pass "S18 non-numeric pid- name removed (matches Python's ValueError arm)" || fail "S18 kept pid-12ab"
-        [ ! -d "$d/.agent/sessions/pid-win-fallback" ] && pass "S18 non-own pid-win-fallback removed" || fail "S18 kept a non-own pid-win-fallback"
-    fi
+    [ ! -d "$d/.agent/sessions/pid-$DEAD" ]        && pass "S18 dead pid removed despite a fresh pointer" || fail "S18 kept a dead session"
+    [ ! -d "$d/.agent/sessions/pid-12ab" ]         && pass "S18 non-numeric pid- name removed (matches Python's ValueError arm)" || fail "S18 kept pid-12ab"
+    [ ! -d "$d/.agent/sessions/pid-win-fallback" ] && pass "S18 non-own pid-win-fallback removed" || fail "S18 kept a non-own pid-win-fallback"
     [ ! -d "$d/.agent/sessions/uuid-stale" ]   && pass "S18 legacy stale session removed (mtime fallback)" || fail "S18 kept a stale legacy session"
     [ -d "$d/.agent/sessions/uuid-fresh" ]     && pass "S18 legacy fresh session kept (mtime fallback)" || fail "S18 removed a fresh legacy session"
     [ -f "$d/.agent/sessions/stray-file" ]     && pass "S18 stray non-dir untouched" || fail "S18 clobbered a stray file"
@@ -1064,9 +1040,7 @@ from tasks.shared import _gc_dead_sessions
 _gc_dead_sessions(Path(sys.argv[1]))' "$d2" 2>&1)"; pyrc=$?
     set -e
     assert_eq "$pyrc" "0" "S18/A2 python sweeper runs clean${pyout:+ ($pyout)}"
-    # Now that the bash sweep also keeps-all on Windows (parity fix in
-    # session-start-hook), the two consumers keep the SAME set on EVERY platform:
-    # POSIX both probe liveness, Windows both keep every pid-*. One policy, two
+    # Both sweepers probe liveness and keep the SAME set. One policy, two
     # implementations that agree — which is the whole point of A2.
     assert_eq "$(survivors "$d2/.agent/sessions")" "$got" \
         "S18/A2 bash and python sweepers keep the SAME set (one policy, not two)"
@@ -1075,7 +1049,8 @@ _gc_dead_sessions(Path(sys.argv[1]))' "$d2" 2>&1)"; pyrc=$?
     # For a LIVE NUMERIC own pid, self-exclusion and liveness overlap — deleting
     # the guard changes nothing, so a numeric victim proves nothing. The only
     # case where self-exclusion is load-bearing is an own id that fails
-    # `kill -0`: the Windows `pid-win-fallback` constant. That is the victim.
+    # `kill -0`: a non-numeric pid- name (`pid-win-fallback`, the id shape the
+    # Windows CLI used up to 1.5.47). That is the victim.
     d3="$WORK/s18 nc1"; build_project "$d3" legacy
     build_gc_tree "$d3/.agent/sessions"
     touch -t 202001010000 "$d3/.agent/sessions/pid-win-fallback/current_state"
@@ -1086,12 +1061,6 @@ _gc_dead_sessions(Path(sys.argv[1]))' "$d2" 2>&1)"; pyrc=$?
         && pass "S18 NC1 baseline: own pid-win-fallback survives a stale pointer" \
         || fail "S18 NC1 baseline: own pid-win-fallback deleted (Windows loses its session)"
 
-    if [ "$IS_WINDOWS" = 1 ]; then
-        # Self-exclusion is only load-bearing when the pid- arm PROBES: on Windows
-        # every pid-* is kept regardless of self-exclusion, so removing the guard
-        # changes nothing and the control would be vacuous. Covered on POSIX.
-        skip "S18 NC1 mutant skipped (windows: keep-all keeps pid-win-fallback whether or not self-exclusion runs)"
-    else
     sed '/SESSION_ID" ] \&\& continue/d' "$HOOK" > "$MUT/session-start-hook"
     assert_eq "$(grep -c 'SESSION_ID" ] && continue' "$MUT/session-start-hook")" "0" \
         "S18 NC1: mutant actually removed the self-exclusion line"
@@ -1108,7 +1077,6 @@ _gc_dead_sessions(Path(sys.argv[1]))' "$d2" 2>&1)"; pyrc=$?
     [ ! -d "$d4/.agent/sessions/pid-win-fallback" ] \
         && pass "S18 NC1: mutant without self-exclusion DELETES the own session" \
         || fail "S18 NC1 VACUOUS: own session survived without the self-exclusion guard"
-    fi
 
     # ── Negative control 2: liveness ─────────────────────────────────────────
     # Revert the pid- arm to the pre-1.4.7 mtime rule. This reproduces the
@@ -1119,14 +1087,6 @@ _gc_dead_sessions(Path(sys.argv[1]))' "$d2" 2>&1)"; pyrc=$?
     # Swap the liveness test for the pre-027 mtime rule, leaving everything else
     # intact. The EPERM arm below it then never matches (kill_err stays unset),
     # so the pid- branch becomes purely mtime-driven — exactly the old policy.
-    if [ "$IS_WINDOWS" = 1 ]; then
-        # The liveness arm is the mutation target, but on Windows the keep-all
-        # `continue` fires BEFORE it, so swapping `kill -0` for the mtime rule is
-        # dead code — the mutant still keeps every pid-*, and both observables
-        # this control checks (live-stale dies, dead-fresh survives) are
-        # unreachable. The liveness policy is exercised on POSIX.
-        skip "S18 NC2 skipped (windows: keep-all short-circuits the liveness arm the mutant targets)"
-    else
     sed 's|if kill_err="$(kill -0 "${name#pid-}" 2>&1)"; then|if [ -n "$(find "$d" -maxdepth 1 -name current_state -mtime -1 2>/dev/null)" ]; then|' \
         "$HOOK" > "$MUT/session-start-hook"
     # Count the CODE line, not the policy comment that also says "kill -0".
@@ -1144,7 +1104,6 @@ _gc_dead_sessions(Path(sys.argv[1]))' "$d2" 2>&1)"; pyrc=$?
     [ -d "$d5/.agent/sessions/pid-$DEAD" ] \
         && pass "S18 NC2: mtime-only mutant KEEPS a dead session with a fresh pointer" \
         || fail "S18 NC2 VACUOUS: dead-fresh session removed by the mtime-only mutant"
-    fi
 
     # ── Negative control 3: fail-open removal ────────────────────────────────
     # The hook runs under `set -e`, so an undeletable session dir must not abort
@@ -1179,16 +1138,8 @@ _gc_dead_sessions(Path(sys.argv[1]))' "$d2" 2>&1)"; pyrc=$?
         && pass "S18 symlink: rm -rf did NOT follow the link into the target" \
         || fail "S18 symlink: DESTROYED the symlink target — rm -rf followed the link"
 
-    # Negative control: restore the trailing-slash glob and the target dies.
-    # POSIX-only: it depends on `rm -rf "link/"` FOLLOWING a real symlink into
-    # its target. Under git-bash that does not reproduce — a real symlink often
-    # needs privilege (ln -s degrades to a copy/stub) and MSYS `rm -rf link/`
-    # does not follow the link the way BSD/GNU rm does — so the control cannot
-    # demonstrate the bug and would be VACUOUS. Skip it there with a reason; the
-    # primary "did NOT follow the link" assertion above still runs on Windows.
-    if [ "$IS_WINDOWS" = 1 ]; then
-        pass "S18 symlink NC skipped (windows: MSYS ln/rm cannot reproduce the POSIX rm -rf link/ follow-through — control would be vacuous)"
-    else
+    # Negative control: restore the trailing-slash glob and the target dies —
+    # `rm -rf "link/"` FOLLOWS a real symlink into its target.
     sed 's|for d in "$SESSIONS_DIR"/\*; do|for d in "$SESSIONS_DIR"/*/; do|' \
         "$HOOK" > "$MUT/session-start-hook"
     assert_eq "$(grep -c 'SESSIONS_DIR"/\*/; do' "$MUT/session-start-hook")" "1" \
@@ -1204,19 +1155,11 @@ _gc_dead_sessions(Path(sys.argv[1]))' "$d2" 2>&1)"; pyrc=$?
     [ ! -f "$d9/precious/keepme.txt" ] \
         && pass "S18 symlink NC: trailing-slash glob DOES destroy the target (control is live)" \
         || fail "S18 symlink NC VACUOUS: target survived the buggy glob"
-    fi
 
     # ── EPERM means alive, not dead (impl panel) ─────────────────────────────
     # kill -0 on another user's live process fails with EPERM. Treating that as
     # dead would delete a live session — and the old mtime-only sweep kept it.
-    # POSIX-only: Windows has no EPERM-from-signalling-a-foreign-process
-    # semantic, and MSYS `kill -0 1` names no live root-owned init, so the fake
-    # `pid-1` victim is not "another user's live session" there. On native
-    # Windows the python sweeper keeps every pid-* anyway (no probe), so the
-    # cross-user-delete this guards against cannot occur.
-    if [ "$IS_WINDOWS" = 1 ]; then
-        pass "S18 EPERM skipped (windows: no EPERM/foreign-live-process semantic; pid-* are never probed)"
-    elif [ "$(id -u)" != 0 ]; then
+    if [ "$(id -u)" != 0 ]; then
         d10="$WORK/s18 eperm"; build_project "$d10" legacy
         mkdir -p "$d10/.agent/sessions/pid-1"          # launchd/init: alive, root-owned
         printf '001\n' > "$d10/.agent/sessions/pid-1/current_state"
@@ -1277,7 +1220,6 @@ _gc_dead_sessions(Path(sys.argv[1]))' "$d2" 2>&1)"; pyrc=$?
             set -e
             assert_eq "$rc" "0" "S18/A2end[$reason] hook exits 0"
             sid=$(cat "$d7/.agent/.s18-sid" 2>/dev/null)
-            # (Windows has no process walk: it keeps the old delete-on-exit)
             [ -n "$sid" ] && [ ! -d "$d7/.agent/sessions/$sid" ] \
                 && pass "S18/A2end[$reason] still cleans up the session dir (process is going away)" \
                 || fail "S18/A2end[$reason] left a session dir behind"

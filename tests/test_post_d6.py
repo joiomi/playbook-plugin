@@ -711,7 +711,6 @@ class DeltaRun2(_TmpDir):
         self.assertIsNotNone(text, note)
         self.assertEqual({"old_name.py", "new_name.py"} - files, set(), files)
 
-    @unittest.skipIf(os.name == "nt", "pid liveness is POSIX-only (os.kill(pid, 0) terminates on Windows)")
     def test_a_reservation_of_a_live_process_blocks_past_its_expiry(self):
         tf = self.tmp / "task.md"
         tf.write_text("# t\n", encoding="utf-8")
@@ -723,7 +722,6 @@ class DeltaRun2(_TmpDir):
         self.assertFalse(ok, "an old reservation whose process is alive was treated as stale")
         self.assertIn("in progress", msg)
 
-    @unittest.skipIf(os.name == "nt", "pid liveness is POSIX-only")
     def test_a_reservation_of_a_dead_process_does_not_block(self):
         tf = self.tmp / "task.md"
         tf.write_text("# t\n", encoding="utf-8")

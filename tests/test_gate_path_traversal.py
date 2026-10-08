@@ -363,7 +363,7 @@ class ManualTaskDirGuard(unittest.TestCase):
         try:
             os.symlink(self.base / "proj", link, target_is_directory=True)
         except (OSError, NotImplementedError):
-            self.skipTest("symlinks unavailable (unprivileged Windows)")
+            self.skipTest("symlinks unavailable on this filesystem")
         r = self._run(f"{self.MK} -p {link.as_posix()}/.agent/tasks/001-x")
         self.assertEqual(r.returncode, 2, f"symlink into the project allowed: {r.stderr}")
         # Control: the helper still allows a real outside path in the same run shape.
@@ -374,7 +374,7 @@ class ManualTaskDirGuard(unittest.TestCase):
         try:
             os.symlink(target, link, target_is_directory=True)
         except (OSError, NotImplementedError):
-            self.skipTest("symlinks unavailable (unprivileged Windows)")
+            self.skipTest("symlinks unavailable on this filesystem")
 
     def test_symlink_into_project_subdirectory_is_still_blocked(self):
         # Round 1 (4 seats): samefile against the ROOT missed a link into a subdir.
@@ -403,7 +403,6 @@ class ManualTaskDirGuard(unittest.TestCase):
             r = self._run(cmd)
             self.assertEqual(r.returncode, 2, f"shell expansion judged literally: {cmd!r}")
 
-    @unittest.skipIf(os.name == "nt", "a drive letter IS absolute on Windows")
     def test_drive_letter_is_relative_on_posix(self):
         # Round 1: `C:/x` is a RELATIVE path on POSIX — it lands under the cwd.
         r = self._run(f"{self.MK} -p C:/tmp/.agent/tasks/001-x")
@@ -422,33 +421,13 @@ class ManualTaskDirGuard(unittest.TestCase):
 
 
 class ManualTaskDirHelperPortability(unittest.TestCase):
-    """task-dir-target.py's Windows spelling rules, exercised on any host by
-    simulating `os.name == "nt"` (the real Windows lane runs the hook tests)."""
+    """task-dir-target.py judges the command it reads on stdin."""
 
-    def _mod(self):
-        import importlib.util
-        spec = importlib.util.spec_from_file_location(
-            "task_dir_target", HOOK.parent / "task-dir-target.py")
-        assert spec is not None and spec.loader is not None
-        m = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(m)
-        return m
-
-    def test_nt_dotdot_is_collapsed_before_drive_conversion(self):
-        # Round 1 (grok): converting `/c/` before collapsing `..` let
-        # `/tmp/../c/proj/...` escape the project comparison.
-        from unittest import mock
-        m = self._mod()
-        with mock.patch.object(m.os, "name", "nt"):
-            self.assertTrue(m._lexically_inside("/tmp/../c/proj/.agent/tasks/1", "/c/proj"))
-            self.assertTrue(m._lexically_inside("C:/Proj/.agent/tasks/1", "/c/proj"))
-            self.assertFalse(m._lexically_inside("D:/fixture/.agent/tasks/1", "/c/proj"))
 
     def test_command_is_read_from_stdin_not_the_environment(self):
-        # CI windows lane (task 080): Git Bash rewrites an env value starting
-        # with `/` into a Windows path, so `/bin/mkdir …` reached python as
-        # `C:/Program Files/Git/usr/bin/mkdir …` and was refused. Simulated here:
-        # a mangled PB_CMD in the environment, the real command on stdin.
+        # Task 080: the command is read from stdin, never from the environment
+        # (Git Bash, up to 1.5.47, rewrote an env value starting with `/`). A
+        # mangled PB_CMD in the environment, the real command on stdin.
         import sys as _sys
         with tempfile.TemporaryDirectory() as tmp:
             proj = Path(tmp) / "proj"
@@ -459,13 +438,6 @@ class ManualTaskDirHelperPortability(unittest.TestCase):
             r = subprocess.run([_sys.executable, str(HOOK.parent / "task-dir-target.py")],
                                input=real, env=env, capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, f"stdin command not judged: {r.stderr}")
-
-    def test_nt_msys_rooted_token_may_be_inside(self):
-        # `/tmp/...` under Git Bash is an MSYS mount Python cannot resolve.
-        from unittest import mock
-        m = self._mod()
-        with mock.patch.object(m.os, "name", "nt"):
-            self.assertTrue(m.may_be_inside("mk" "dir -p /tmp/x/.agent/tasks/1", "/c/proj"))
 
 
 # ── task 110 (PLAN S11 fix batch, group GUARD): the task-dir guard ────────────

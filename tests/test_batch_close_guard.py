@@ -174,13 +174,13 @@ class WindowsBackslashPayload(unittest.TestCase):
 
 
 class Cp1252StdoutDoesNotFailOpen(unittest.TestCase):
-    """Regression for the Windows fail-open (CI run 32454916957): gate-batch-check
-    printed its block message to a cp1252 stdout, and BARE_MSG carries "→"
-    (U+2192, absent from cp1252). The UnicodeEncodeError was swallowed as exit 1,
-    which the hook treats as ALLOW — so every BARE batch close slipped through on
-    Windows while annotated/born-checked ones (message encodable as cp1252)
-    blocked. Simulated on any host by forcing PYTHONIOENCODING=cp1252; red against
-    the pre-fix helper, which exits 1 here instead of 2.
+    """Linux robustness — a non-UTF-8 stdout must not fail open (found on the
+    Windows lane, CI run 32454916957): gate-batch-check printed its block message
+    to a cp1252 stdout, and BARE_MSG carries "→" (U+2192, absent from cp1252). The
+    UnicodeEncodeError was swallowed as exit 1, which the hook treats as ALLOW — so
+    every BARE batch close slipped through while annotated/born-checked ones
+    (message encodable as cp1252) blocked. Forced with PYTHONIOENCODING=cp1252;
+    red against the pre-fix helper, which exits 1 here instead of 2.
     """
 
     def _run(self, payload: dict) -> subprocess.CompletedProcess:
@@ -198,7 +198,7 @@ class Cp1252StdoutDoesNotFailOpen(unittest.TestCase):
             "new_string": "\n".join(checked(g) for g in G[:2])}}
         r = self._run(payload)
         self.assertEqual(r.returncode, 2,
-                         "bare batch fail-opened on a cp1252 stdout (Windows)")
+                         "bare batch fail-opened on a cp1252 stdout")
         # The message that carries the arrow must have been emitted (as UTF-8).
         self.assertIn("outcome note", r.stdout.decode("utf-8"))
 

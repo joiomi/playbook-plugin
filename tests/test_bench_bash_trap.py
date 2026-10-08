@@ -48,9 +48,9 @@ def _stub_hook(dir_: Path, name: str, code: int) -> Path:
 
 class BenchExitStatus(unittest.TestCase):
     def test_run_fused_once_returns_exit_codes(self):
-        # Use the RESOLVED bash (skips if none usable): bare `bash` on Windows is
-        # the System32 WSL stub, which exits non-zero without running the script,
-        # so both hooks would read as 1 regardless of their real exit code.
+        # Use the RESOLVED bash (skips if none usable): a bash that exits non-zero
+        # without running the script would make both hooks read as 1 regardless of
+        # their real exit code.
         bash = bash_or_skip()
         bench = _load_bench()
         with tempfile.TemporaryDirectory() as td:

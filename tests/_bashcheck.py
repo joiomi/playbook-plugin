@@ -8,13 +8,12 @@ implementation of "which bash, and is it usable"; every caller shares it. (The
 tests once imported this from ``scripts/verify``; the direction is now inverted —
 the dev script and the tests both depend on the product resolver, not vice versa.)
 
-On Linux and macOS ``bash`` on PATH is usable, so nothing here ever skips. On
-Windows the System32 ``bash.exe`` is the WSL launcher: with no distro installed
-it prints an install hint and exits non-zero, so a presence check is not enough
-and the shell-dependent tests SKIP with that reason — a missing usable bash is
-an environment fact, not a product defect. CI exports ``$PLAYBOOK_VERIFY_BASH``
-(from its Git Bash step) to point Python at the real bash; ``resolve_bash()``
-honours it — as the documented fallback to the product-level ``$PLAYBOOK_BASH``.
+On Linux ``bash`` on PATH is usable, so nothing here skips unless no usable bash
+exists (the resolver probes it with a sentinel; a missing usable bash is an
+environment fact, not a product defect, so the shell-dependent tests SKIP with
+that reason). ``$PLAYBOOK_VERIFY_BASH`` points it at another bash —
+``resolve_bash()`` honours it as the documented fallback to the product-level
+``$PLAYBOOK_BASH``.
 
 The leading underscore keeps unittest's ``test*.py`` discovery from collecting
 this module as a test.

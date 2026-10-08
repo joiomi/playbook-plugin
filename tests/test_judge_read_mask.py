@@ -6,7 +6,7 @@ the judges' sandbox". In gauntlet 2 (J02) a judge quoted a canary that existed o
 filesystem readable. Now, in the read-only (judge) mode only, the sandbox hides those records —
 and their archives (`chat_log.md.*`, `bash_history.*`), in `.agent` and in every lane under it:
 bwrap binds /dev/null over each file (a read is refused — the read-only bind is nodev) and an
-empty tmpfs over `sessions/`; seatbelt denies reading them. A writable (worker) sandbox keeps them. Windows has no backend: unchanged, unmasked.
+empty tmpfs over `sessions/`. A writable (worker) sandbox keeps them.
 
 Run: python3 -m unittest tests.test_judge_read_mask
 """
@@ -25,11 +25,6 @@ sys.path.insert(0, str(_HERE.parent / "plugins/playbook"))
 from provider import sandbox  # noqa: E402
 
 CANARY = "CANARY-125-only-in-the-chat"
-# Task 151: a seatbelt profile only ever runs on macOS. Built on Windows it carries `C:\…` paths
-# (escaped, and joined to `/`-separated record names) that no backend reads, and NTFS refuses a
-# `"` in a name — so the seatbelt assertions skip there; Linux and macOS run every one of them.
-SEATBELT_PATHS = os.name != "nt"
-NO_SEATBELT_PATHS = "a seatbelt profile is macOS-only; Windows paths never reach one"
 
 
 def _project() -> Path:
@@ -89,8 +84,6 @@ class Masks(unittest.TestCase):
         argv = sandbox.build_bwrap_argv(self.p, None, ["true"], None, project_writable=True)
         self.assertNotIn("/dev/null", argv)
         self.assertNotIn("--tmpfs", argv)
-        prof = sandbox.build_seatbelt_profile(self.p, None, None, project_writable=True)
-        self.assertNotIn("file-read", prof)
 
     def test_a_read_only_sandbox_that_keeps_the_records_masks_nothing(self):
         # Task 138 G3-1: the monitor runs read-only too and reads .agent/sessions/<id>/transcript_path
@@ -99,41 +92,7 @@ class Masks(unittest.TestCase):
         self.assertNotIn("/dev/null", argv)
         self.assertNotIn("--tmpfs", argv)
         self.assertIn("--ro-bind", argv)
-        prof = sandbox.build_seatbelt_profile(self.p, None, None, project_writable=False, mask_records=False)
-        self.assertNotIn("file-read", prof)
 
-    @unittest.skipUnless(SEATBELT_PATHS, NO_SEATBELT_PATHS)
-    def test_seatbelt_judge_mode_denies_records_by_name_last(self):
-        import re
-        prof = sandbox.build_seatbelt_profile(self.p, None, None, project_writable=False)
-        lines = prof.splitlines()
-        rules = [re.match(r'\(deny file-read\* \(regex #"(.*)"\)\)$', l) for l in lines]
-        pats = [re.compile(m.group(1)) for m in rules if m]
-        self.assertTrue(pats, prof)
-        denied = lambda path: any(p.search(path) for p in pats)
-        for f in self.files | {str(self.a / "chat_log.md.7"), str(self.a / "carol" / "bash_history"),
-                               str(self.a / "sessions"), str(self.a / "sessions" / "pid-9" / "x"),
-                               str(self.a / "alice" / "sessions" / "y"),
-                               str(self.a / "sessions.archived-1" / "transcript_path")}:
-            self.assertTrue(denied(f), f)                               # incl. ones that do not exist yet
-        for ok in (self.a / "tasks" / "003-x" / "task.md", self.p / "src.py", self.a / "config.json",
-                   self.a / "tasks" / "chat_log.md.notes" / "x", self.a / "sessionsX"):
-            self.assertFalse(denied(str(ok)), ok)
-        last_write = max(i for i, l in enumerate(lines) if "file-write" in l)
-        first_read = min(i for i, l in enumerate(lines) if "file-read" in l)
-        self.assertGreater(first_read, last_write)
-
-    @unittest.skipUnless(SEATBELT_PATHS, NO_SEATBELT_PATHS)
-    def test_seatbelt_also_denies_a_symlinked_lanes_real_records(self):
-        ext = Path(tempfile.mkdtemp(prefix="pb-138x-")).resolve()
-        self.addCleanup(shutil.rmtree, ext, True)
-        (ext / "bob").mkdir()
-        (self.a / "bob").symlink_to(ext / "bob", target_is_directory=True)
-        import re
-        prof = sandbox.build_seatbelt_profile(self.p, None, None, project_writable=False)
-        pats = [re.compile(m.group(1)) for m in
-                (re.match(r'\(deny file-read\* \(regex #"(.*)"\)\)$', l) for l in prof.splitlines()) if m]
-        self.assertTrue(any(p.search(str(ext / "bob" / "chat_log.md")) for p in pats), prof)
 
     def test_a_lane_link_is_resolved_once(self):
         # Task 139 C-4 (codex-medium): the recreated link and the masked layer came from two
@@ -153,20 +112,8 @@ class Masks(unittest.TestCase):
         self.assertIn(str(self.a / "bob"), links)
         self.assertIn(links[str(self.a / "bob")], layers)             # the link points at a masked dir
 
-    @unittest.skipUnless(SEATBELT_PATHS, NO_SEATBELT_PATHS)
-    def test_seatbelt_denies_a_symlinked_records_real_target(self):
-        import re
-        ext = Path(tempfile.mkdtemp(prefix="pb-139s-")).resolve()
-        self.addCleanup(shutil.rmtree, ext, True)
-        (ext / "sess").mkdir()
-        (ext / "log.md").write_text("x\n", encoding="utf-8")
-        (self.a / "sessions.old").symlink_to(ext / "sess", target_is_directory=True)
-        (self.a / "alice" / "bash_history.1").symlink_to(ext / "log.md")
-        prof = sandbox.build_seatbelt_profile(self.p, None, None, project_writable=False)
-        self.assertIn(f'(deny file-read* (subpath "{ext / "sess"}"))', prof.splitlines())
-        self.assertIn(f'(deny file-read* (literal "{ext / "log.md"}"))', prof.splitlines())
 
-    def test_a_dangling_record_link_fails_closed_on_bwrap_and_is_denied_on_seatbelt(self):
+    def test_a_dangling_record_link_fails_closed_on_bwrap(self):
         # Task 139 post-D6 run 2 (codex): a dangling `chat_log.md` link was skipped — the
         # writer could create its target after the judge started, readable at its real path.
         # bwrap cannot mount over a path that does not exist in the read-only root: refuse.
@@ -176,9 +123,6 @@ class Masks(unittest.TestCase):
         with self.assertRaises(RuntimeError) as cm:
             sandbox.build_bwrap_argv(self.p, None, ["true"], None, project_writable=False)
         self.assertIn(str(ext / "not-yet.md"), str(cm.exception))
-        if SEATBELT_PATHS:
-            prof = sandbox.build_seatbelt_profile(self.p, None, None, project_writable=False)
-            self.assertIn(f'(deny file-read* (literal "{ext / "not-yet.md"}"))', prof.splitlines())
         # a worker / a --keep-records sandbox is not affected
         sandbox.build_bwrap_argv(self.p, None, ["true"], None, project_writable=True)
         sandbox.build_bwrap_argv(self.p, None, ["true"], None, project_writable=False, mask_records=False)
@@ -192,24 +136,7 @@ class Masks(unittest.TestCase):
         with self.assertRaises(RuntimeError) as cm:
             sandbox.build_bwrap_argv(self.p, None, ["true"], None, project_writable=False)
         self.assertIn(str(ext / "later"), str(cm.exception))
-        if SEATBELT_PATHS:
-            prof = sandbox.build_seatbelt_profile(self.p, None, None, project_writable=False)
-            self.assertIn(f'(deny file-read* (subpath "{ext / "later"}"))', prof.splitlines())
 
-    @unittest.skipUnless(SEATBELT_PATHS, NO_SEATBELT_PATHS)
-    def test_a_quote_in_a_masked_path_is_escaped_for_seatbelt(self):
-        # Task 139 post-D6 run 2 (codex): a `"` in a target path ended the profile's string
-        ext = Path(tempfile.mkdtemp(prefix='pb-139"q-')).resolve()
-        self.addCleanup(shutil.rmtree, ext, True)
-        (ext / "sess").mkdir()
-        (self.a / "sessions.old").symlink_to(ext / "sess", target_is_directory=True)
-        prof = sandbox.build_seatbelt_profile(self.p, None, None, project_writable=False)
-        want = str(ext / "sess").replace("\\", "\\\\").replace('"', '\\"')
-        self.assertIn(f'(deny file-read* (subpath "{want}"))', prof.splitlines())
-        for line in prof.splitlines():
-            if "file-read" in line:                       # every read rule is one balanced string
-                body = line.replace('\\"', "")
-                self.assertEqual(body.count('"') % 2, 0, line)
 
     def test_the_monitor_launch_keeps_the_records(self):
         text = (_HERE.parent / "plugins/playbook/scripts/monitor-lib/launch-monitor").read_text(encoding="utf-8")
@@ -258,7 +185,7 @@ class JudgesAreNotSentToTheChat(unittest.TestCase):
         self.assertIn("hides the chat log", err.getvalue())
 
     def test_a_denied_stat_is_not_reported_as_a_missing_log(self):
-        # Task 138 G3-5 (agy): seatbelt's deny file-read* covers stat too, and Python 3.13's
+        # Task 138 G3-5 (agy): a read denial can cover stat too, and Python 3.13's
         # Path.exists() returns False on any OSError — the old exists() pre-check then said
         # "No .agent/chat_log.md found." instead of naming the mask
         import contextlib

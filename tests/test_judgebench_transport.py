@@ -91,19 +91,6 @@ class TransportRowsTests(unittest.TestCase):
         self.assertTrue(r["seats"]["sol-med"]["fits"])          # stdin budget is the larger one
         self.assertFalse(r["fits_all"])
 
-    def test_windows_simulation_applies_the_whole_command_line_cap_to_argv_seats(self):
-        corpus = _mk_corpus(Path(self.tmp.name) / "big", diff_chars=40_000)
-        rows = transport.transport_rows(corpus.cases, self.cands, repo_root=_ROOT,
-                                        adapter_factory=_factory, platform_nt=True)
-        r = rows[0]
-        self.assertFalse(r["seats"]["grok-med"]["fits"])
-        self.assertIn("Windows", r["seats"]["grok-med"]["reason"])
-        self.assertIn("30,000", r["seats"]["grok-med"]["reason"])          # the ENFORCED cap, not the 32,767 OS max
-        self.assertNotIn("32,767", r["seats"]["grok-med"]["reason"].split("(")[0])
-        self.assertTrue(r["seats"]["sol-med"]["fits"])
-        rows_posix = transport.transport_rows(corpus.cases, self.cands, repo_root=_ROOT,
-                                             adapter_factory=_factory, platform_nt=False)
-        self.assertTrue(rows_posix[0]["seats"]["grok-med"]["fits"])
 
     def test_real_adapters_are_used_when_no_factory_is_given(self):
         # The point of the report is the ADAPTERS' decision — construction must not need the CLI.
@@ -141,8 +128,6 @@ class PanelAmendmentTests(unittest.TestCase):
         self.addCleanup(os.environ.pop, "PLAYBOOK_REVIEW_CONTEXT_CHARS", None)
         v = transport.seat_verdict(self.cands[1], "x", _ROOT, adapter_factory=lambda b, r: Exact(b), platform_nt=False)
         self.assertFalse(v["fits"]); self.assertIn("byte", v["reason"].lower())
-        v_win = transport.seat_verdict(self.cands[1], "x", _ROOT, adapter_factory=lambda b, r: Exact(b), platform_nt=True)
-        self.assertFalse(v_win["fits"]); self.assertIn("Windows", v_win["reason"])
         small = transport.seat_verdict(self.cands[1], "x", _ROOT, adapter_factory=_factory, platform_nt=False)
         self.assertTrue(small["fits"])
 
@@ -213,13 +198,6 @@ class TransportCliTests(unittest.TestCase):
             self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
             self.assertIn("c1", p.stdout + p.stderr)
             self.assertIn("grok", p.stdout + p.stderr)
-
-    def test_platform_windows_flag_is_accepted(self):
-        with tempfile.TemporaryDirectory() as td:
-            _mk_corpus(Path(td))
-            p = _run("corpus", "validate", "--transport", "--platform", "windows", "--corpus", td)
-            self.assertIn(p.returncode, (0, 1), p.stderr)
-            self.assertIn("windows", p.stdout.lower())
 
 
 class FrozenCorpusTransportTests(unittest.TestCase):

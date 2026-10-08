@@ -3163,16 +3163,6 @@
         {
           "type": "executable unit",
           "path": "tests/test_command_guard.py",
-          "reference": "AcknowledgementOnWindowsUsesTheResolvedSession.test_no_env_id_reads_the_pid_win_fallback_pointer",
-          "boundary": "unit",
-          "negative_control": null,
-          "limitations": [
-            "Impl panel round 1 (sol-high, `[SETTLED-CONTRADICTED]` against owner Q-A (b)). An in-process simulation (the guard's `os` reads `nt`, the CLI's `sys.platform` `win32`); the real Windows lane runs the rest of the suite in CI. [2026-10-08, Linux-only (task 153): the macOS and Windows CI lanes were removed; this coverage ran there up to 1.5.47, tag `last-multiplatform`.]"
-          ]
-        },
-        {
-          "type": "executable unit",
-          "path": "tests/test_command_guard.py",
           "reference": "ParallelArgumentsTheGuardDoesNotModel.test_an_argument_judged_name_is_refused_under_every_unmodelled_option",
           "boundary": "unit",
           "negative_control": {
@@ -3309,7 +3299,8 @@
         "Task 110 impl panel round 1 bound: GNU parallel's option table is read from its source (the `GetOptions` spec) and extended with later releases' value options by hand; an option neither knows is judged under both readings, so a future option can only make the guard block MORE. Past 16 option readings or 512 job lines the invocation is refused, not judged — a deliberate over-block.",
         "Task 110 impl panel round 2, classes 1 and 2 (owner ruling 2026-10-05): GNU parallel's argument-rewriting grammar is deliberately NOT modelled. What the guard does not model is the DATA in command_guard.py (`_PARALLEL_UNMODELLED_*`, `_PARALLEL_REWRITING_REPL`, `_PARALLEL_HIDES_TEMPLATE_LONG`), and the rule that replaces a model is conservative by construction: it refuses on the command NAME. Its cost is an over-block — an argument-judged command (`rm`, `git`, `dd`, a shell, a database client) under one of those forms is refused even when its arguments are harmless, and needs the acknowledgement. Its bounds: the unmodelled set is exactly what the tables list (an option no table knows keeps its two readings and is not treated as rewriting); a name the rules do not judge by its arguments (`find`, an interpreter, a program of the project's own) passes whatever its rewritten arguments become; a redirection target built from a rewritten argument is not judged. Options that reach GNU parallel from OUTSIDE the command text (the `PARALLEL` environment variable, a profile file) are not seen at all, the same class as an alias. PROVENANCE (owner decision 2026-10-05): EVERY GNU parallel option table in command_guard.py — the option arities written in impl panel round 1 and the unmodelled lists written in round 2 — comes from documentation, with no GNU parallel binary installed on the machine where they were written; no table was run against the tool. One entry, `--match`, is from the model's memory of recent releases and is UNVERIFIED; it is marked as such in the table.",
         "Task 110 impl panel round 2, class 3 — DECLARED BOUND (owner ruling 2026-10-05): linked input sources (`:::+`, `--link`) are counted as the full product of their values, not as the pairs GNU parallel runs, so an invocation with few real jobs can pass the 512 job-line cap and be refused (`parallel-too-many-jobs`). It errs toward safety — a refusal with an acknowledgement path, never an allow — and is pinned by `ParallelLinkedSourcesAreCountedAsAProduct.test_the_bound`.",
-        "Task 110 impl panel round 2, classes 4 and 5 — DECLARED BOUNDS of the download-then-run heuristic (owner ruling 2026-10-05): the rule follows a file from the segment that downloads it to the later segments and into what those delegate to. It does not carry a download made INSIDE a delegated payload (a `sh -c` body, an `eval`, wrapper or `parallel` payload) out to the later segments, and it reads the saved file's name only from an output option or from an operand that carries a URL scheme. Both are ALLOWS, and no test pins them (a pin would be the missed form written out). The rule shipped on owner decision Q-B (b) after it refused nothing in the bash history; it narrows a common mistake over one command's text and is not a containment layer. The real boundary for unreviewed remote code is the OS sandbox."
+        "Task 110 impl panel round 2, classes 4 and 5 — DECLARED BOUNDS of the download-then-run heuristic (owner ruling 2026-10-05): the rule follows a file from the segment that downloads it to the later segments and into what those delegate to. It does not carry a download made INSIDE a delegated payload (a `sh -c` body, an `eval`, wrapper or `parallel` payload) out to the later segments, and it reads the saved file's name only from an output option or from an operand that carries a URL scheme. Both are ALLOWS, and no test pins them (a pin would be the missed form written out). The rule shipped on owner decision Q-B (b) after it refused nothing in the bash history; it narrows a common mistake over one command's text and is not a containment layer. The real boundary for unreviewed remote code is the OS sandbox.",
+        "2026-10-08 (task 154, Linux-only): the simulated-Windows acknowledgement proof (AcknowledgementOnWindowsUsesTheResolvedSession, `pid-win-fallback`) was deleted with the other Windows-only tests; the Linux acknowledgement proofs (IrreversibleAckReadsTheResolvedSession) stay."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],
@@ -7154,26 +7145,13 @@
       "claim_kind": "mechanical",
       "proofs": [
         {
-          "type": "executable unit",
-          "path": "tests/test_print_argv_is_dry_run.py",
-          "reference": "RoProjectSeatbeltProfileDeniesWrites.test_project_write_is_denied_under_every_system_rw_root",
-          "boundary": "unit",
-          "negative_control": {
-            "path": "tests/test_print_argv_is_dry_run.py",
-            "reference": "WorkerModeSeatbeltProfileUnchanged.test_project_stays_writable_in_worker_mode"
-          },
-          "limitations": [
-            "Profile-text policy proof only: the generated SBPL is evaluated by an in-process last-matching-rule interpreter on Linux; seatbelt is not executed on this host, so this proves the emitted policy is correct, not that macOS enforces it."
-          ]
-        },
-        {
           "type": "live-platform test",
           "path": "tests/test_print_argv_is_dry_run.py",
           "reference": "PrintArgvNeverExecutes.test_ro_project_prompt_denies_project_write_but_keeps_rw_exception",
           "boundary": "real-os",
           "negative_control": null,
           "limitations": [
-            "Runs under real bubblewrap on Linux; the macOS seatbelt leg is unexecuted on this host and is the pending live proof."
+            "Runs under real bubblewrap on Linux (skipped where bwrap is not installed)."
           ]
         }
       ],
@@ -7191,7 +7169,8 @@
         "The correction is proven at the profile-text level on Linux; end-to-end seatbelt execution is NOT verified on this host — the macOS leg of test_ro_project_prompt_denies_project_write_but_keeps_rw_exception is the pending live proof, due on the next push to macOS CI. [2026-10-08, Linux-only (task 153): the macOS and Windows CI lanes were removed; this coverage ran there up to 1.5.47, tag `last-multiplatform`.]",
         "Full worker-mode .git mutation matrix under real seatbelt is incomplete.",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
-        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`)."
+        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
+        "2026-10-08 (task 154, Linux-only): the seatbelt profile-text proof (RoProjectSeatbeltProfileDeniesWrites, control WorkerModeSeatbeltProfileUnchanged) was deleted with the other macOS-only tests; the bubblewrap proof stays."
       ],
       "follow_up_phases": [
         8
@@ -7276,7 +7255,7 @@
             "reference": "LiveBwrapMask.test_negative_control_a_worker_still_reads_them"
           },
           "limitations": [
-            "Task 125 (owner decision 2026-10-02, gauntlet 2 G2-05): Linux bubblewrap only, skipped where bwrap is unusable; a canary written to chat_log.md, its rotated copy, bash_history and a lane's chat_log.md is unreadable (PermissionError — the read-only /dev/null bind is nodev) and sessions/ lists empty, while task.md and source files still read. Task 138 adds live proofs in the same class: a record created after the argv is built and a new lane (test_a_record_created_after_launch_stays_hidden), a rename over chat_log.md while the judge runs (test_a_rename_over_the_log_during_the_run_stays_hidden), a symlinked lane at both paths (test_a_symlinked_lane_is_hidden_at_both_paths), an unreadable lane before a readable one (test_an_unreadable_lane_does_not_unmask_the_next_one), and the monitor's --keep-records sandbox still reading sessions (test_a_keep_records_sandbox_reads_the_sessions). The seatbelt rules are name patterns pinned as generated text and matched with Python's re (Masks.test_seatbelt_judge_mode_denies_records_by_name_last), not executed — no macOS lane runs them live. Records deeper than one lane level are not covered; ~/.claude/projects transcripts and .agent/monitor stay readable; Windows has no backend."
+            "Task 125 (owner decision 2026-10-02, gauntlet 2 G2-05): Linux bubblewrap only, skipped where bwrap is unusable; a canary written to chat_log.md, its rotated copy, bash_history and a lane's chat_log.md is unreadable (PermissionError — the read-only /dev/null bind is nodev) and sessions/ lists empty, while task.md and source files still read. Task 138 adds live proofs in the same class: a record created after the argv is built and a new lane (test_a_record_created_after_launch_stays_hidden), a rename over chat_log.md while the judge runs (test_a_rename_over_the_log_during_the_run_stays_hidden), a symlinked lane at both paths (test_a_symlinked_lane_is_hidden_at_both_paths), an unreadable lane before a readable one (test_an_unreadable_lane_does_not_unmask_the_next_one), and the monitor's --keep-records sandbox still reading sessions (test_a_keep_records_sandbox_reads_the_sessions). Records deeper than one lane level are not covered; ~/.claude/projects transcripts and .agent/monitor stay readable."
           ]
         }
       ],
@@ -7336,25 +7315,25 @@
       "proofs": [
         {
           "type": "executable unit",
-          "path": "tests/test_windows_uncontained_path.py",
-          "reference": "WindowsTakesUncontainedPath.test_windows_reports_no_containment",
+          "path": "tests/test_sandbox_uncontained_fallback.py",
+          "reference": "LinuxWithoutBwrapTakesUncontainedPath.test_no_bwrap_reports_no_containment",
           "boundary": "unit",
           "negative_control": {
-            "path": "tests/test_windows_uncontained_path.py",
-            "reference": "WindowsTakesUncontainedPath.test_negative_control_bwrap_would_contain"
+            "path": "tests/test_sandbox_uncontained_fallback.py",
+            "reference": "LinuxWithoutBwrapTakesUncontainedPath.test_negative_control_bwrap_would_contain"
           },
           "limitations": [
-            "Windows with neither sandbox-exec nor bwrap: containment_available() is False — the switch review.py's UNCONTAINED warning keys on."
+            "Linux with no bwrap on PATH (simulated: `platform.system()` = Linux, `shutil.which` answers nothing): containment_available() is False — the switch review.py's UNCONTAINED warning keys on. Watched red against a copy whose containment_available() returned True with no backend."
           ]
         },
         {
           "type": "executable unit",
-          "path": "tests/test_windows_uncontained_path.py",
-          "reference": "WindowsTakesUncontainedPath.test_windows_argv_is_unwrapped_direct_exec",
+          "path": "tests/test_sandbox_uncontained_fallback.py",
+          "reference": "LinuxWithoutBwrapTakesUncontainedPath.test_no_bwrap_argv_is_the_unwrapped_direct_exec",
           "boundary": "unit",
           "negative_control": null,
           "limitations": [
-            "The fallback IS the uncontained direct exec: `_wrapped_argv` returns the bare agent argv with no bwrap/sandbox-exec wrapper."
+            "The fallback IS the uncontained direct exec: `_wrapped_argv` returns the bare agent argv with no bwrap wrapper."
           ]
         }
       ],
@@ -7371,7 +7350,8 @@
         "Nested sandbox, no-bwrap, and Windows fallback paths lack integration negative controls; high-consequence uncontained policy is undecided.",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
         "Task 100 (PLAN S8 binding audit, 2026-09-27): this row cited only `test_environment.SandboxItemTest.test_unknown_os_has_no_primitive` — an advisory-text test of environment.py, not of the owner (sandbox.py). Rebound to tests/test_windows_uncontained_path.py (3 tests, cited nowhere before). Still asserted by NO test: nested-containment detection (`is_sandboxed`) and the operator-visible UNCONTAINED warning text (review.py gates it on containment_available(); source-read) — both stay in required_live_evidence.",
-        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`)."
+        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
+        "2026-10-08 (task 154, Linux-only): the two proofs were simulated-Windows tests (tests/test_windows_uncontained_path.py, deleted); rebound to the same three checks on a Linux host without bwrap (tests/test_sandbox_uncontained_fallback.py)."
       ],
       "follow_up_phases": [
         2,

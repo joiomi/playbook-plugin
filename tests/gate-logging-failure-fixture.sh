@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Fixture for the state-echo-hook gate-logging write-failure warning (task 018 /
 # bug report #4). A write that fails AFTER the AGENT_WRITABLE probe (e.g. a
-# Windows AV lock on the counter mv, or a non-writable sessions dir) used to be
+# lock on the counter mv, or a non-writable sessions dir) used to be
 # swallowed by `set -e` — the hook died mid-write, the gate_key froze, and gate
 # logging stopped with NO warning. The fix guards the writes (fail-open) and
 # surfaces a loud warning, suppressed inside a sandboxed judge.
@@ -21,14 +21,6 @@ pass() { echo "  PASS  $*"; PASS=$((PASS+1)); }
 fail() { echo "  FAIL  $*"; FAIL=$((FAIL+1)); }
 
 # Scenarios 1-2 provoke the write failure with `chmod 500` on the session dir.
-# That has no effect on Windows/git-bash — a dir stays writable to its owner — so
-# no failure occurs, the warning never fires, and the assertions that depend on a
-# real failure are unreachable there. Guard them win-only (unreachable on
-# Linux/macOS, where uname is Linux/Darwin).
-case "$(uname -s 2>/dev/null)" in
-    MINGW*|MSYS*|CYGWIN*) IS_WINDOWS=1 ;;
-    *)                    IS_WINDOWS=0 ;;
-esac
 
 echo "=== gate-logging write-failure fixture ==="
 
@@ -73,9 +65,7 @@ if [ "$RC1" -eq 0 ]; then
 else
     fail "hook exited $RC1 — set -e killed it mid-write (the original bug)"
 fi
-if [ "$IS_WINDOWS" = 1 ]; then
-    pass "write-failure warning skipped (windows: chmod 500 cannot make a dir unwritable to its owner, so no failure is provoked)"
-elif printf '%s' "$OUT1" | grep -q "gate-logging write FAILED"; then
+if printf '%s' "$OUT1" | grep -q "gate-logging write FAILED"; then
     pass "write failure surfaces the loud warning"
 else
     fail "no warning emitted on write failure — output: $OUT1"
@@ -87,9 +77,7 @@ make_project "$WORK2"
 lock_session "$WORK2"
 OUT2="$(run_hook "$WORK2" env PLAYBOOK_SANDBOXED=1)"
 unlock_session "$WORK2"; rm -rf "$WORK2"
-if [ "$IS_WINDOWS" = 1 ]; then
-    pass "sandbox-suppression skipped (windows: no write failure to suppress — see above)"
-elif printf '%s' "$OUT2" | grep -q "gate-logging write FAILED"; then
+if printf '%s' "$OUT2" | grep -q "gate-logging write FAILED"; then
     fail "warning leaked into a sandboxed judge (PLAYBOOK_SANDBOXED=1) — would spam verdicts"
 else
     pass "warning suppressed when PLAYBOOK_SANDBOXED=1"

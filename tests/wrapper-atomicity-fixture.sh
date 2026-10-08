@@ -30,15 +30,9 @@ pass() { echo "  PASS  $*"; PASS=$((PASS+1)); }
 fail() { echo "  FAIL  $*"; FAIL=$((FAIL+1)); }
 skip() { echo "  SKIP  $*"; SKIP=$((SKIP+1)); }
 
-# True on Git-Bash / MSYS / Cygwin, where a path has two textual forms.
-is_gitbash() { case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*) return 0 ;; *) return 1 ;; esac; }
-
-# Canonicalise a path to a comparable form. The resolver runs under a native
-# Windows python (MSYS hands it HOME in Windows form), so it emits Windows-form
-# paths (C:\Users\RUNNER~1\…); the fixture builds expectations from bash's
-# $RPLUG (POSIX /tmp/… mount form). Both name the SAME file — resolve through
-# cd+pwd so the R-group asserts on file IDENTITY, not on which spelling MSYS
-# chose. No-op on POSIX, where the two forms already coincide.
+# Canonicalise a path to a comparable form: resolve through cd+pwd -P so the
+# R-group asserts on file IDENTITY, not on one spelling of it (a temp root
+# reached through a symlink has two).
 canon() {
     if [ -e "$1" ]; then
         ( cd "$(dirname "$1")" 2>/dev/null && printf '%s/%s' "$(pwd -P)" "$(basename "$1")" )
@@ -52,8 +46,8 @@ same_file() {
     else fail "$3 got: $1"; fi
 }
 
-# Portable file checksum: git-bash ships neither shasum nor sha256sum reliably,
-# so fall back to python3 (already required by this suite). Only the STABILITY
+# File checksum: shasum or sha256sum when present, else python3 (already
+# required by this suite). Only the STABILITY
 # of the digest across reads matters here, not which algorithm produces it.
 _sum() {
     if command -v shasum >/dev/null 2>&1; then shasum "$1" | awk '{print $1}'
@@ -299,9 +293,7 @@ cat > "$RPLUG/installed_plugins.json" <<EOF
 ]}}
 EOF
 GOT="$(resolve_with_home)"
-if is_gitbash; then
-    skip "R6 manifest-scope precedence — not exercisable under git-bash: the fixture's POSIX-form installPath is not os.access-ible by the native-Windows python that reads installed_plugins.json, so the manifest branch is skipped and the plain version scan runs instead. A real Windows Claude Code writes Windows-form installPath; scope precedence is covered on POSIX."
-elif [ "$GOT" = "$RPLUG/cache/mkt/playbook/1.0.0/scripts/tasks" ]; then pass "R6 other project's pin ignored, user scope wins"; else fail "R6 got: $GOT"; fi
+if [ "$GOT" = "$RPLUG/cache/mkt/playbook/1.0.0/scripts/tasks" ]; then pass "R6 other project's pin ignored, user scope wins"; else fail "R6 got: $GOT"; fi
 
 # ---------------------------------------------------------------------------
 # R7 — a project-pinned entry for THIS project outranks a higher user version
@@ -317,9 +309,7 @@ cat > "$RPLUG/installed_plugins.json" <<EOF
 ]}}
 EOF
 GOT="$(resolve_with_home)"
-if is_gitbash; then
-    skip "R7 project-pin precedence — not exercisable under git-bash (see R6), AND a genuine limitation on native Windows: the pin's projectPath (Windows form, as Claude Code writes it) is compared by same_dir() against PROJECT_ROOT (POSIX form from \`pwd -P\`), which do not resolve equal across the MSYS mount — so a project-pinned version is not honored and the user-scope copy is used. Recorded as a known Windows limitation; covered on POSIX."
-elif [ "$GOT" = "$RPLUG/cache/mkt/playbook/1.0.0/scripts/tasks" ]; then pass "R7 this project's pin outranks higher user version"; else fail "R7 got: $GOT"; fi
+if [ "$GOT" = "$RPLUG/cache/mkt/playbook/1.0.0/scripts/tasks" ]; then pass "R7 this project's pin outranks higher user version"; else fail "R7 got: $GOT"; fi
 
 # ---------------------------------------------------------------------------
 # R8 — version "unknown" (occurs in real manifests): numbered beats unknown;
@@ -346,11 +336,7 @@ cat > "$RPLUG/installed_plugins.json" <<EOF
 ]}}
 EOF
 GOT="$(resolve_with_home)"
-if is_gitbash; then
-    skip "R8b lastUpdated tie-break — needs the manifest branch, which is not reachable under git-bash (see R6): the POSIX-form installPath is not os.access-ible by the native-Windows python, so the scan runs and tie-breaks two equal-version dirs by path (a) not by the manifest's lastUpdated (b). Covered on POSIX."
-else
-    same_file "$GOT" "$RPLUG/cache/b/playbook/unknown/scripts/tasks" "R8 two unknowns: newer lastUpdated wins"
-fi
+same_file "$GOT" "$RPLUG/cache/b/playbook/unknown/scripts/tasks" "R8 two unknowns: newer lastUpdated wins"
 
 # ---------------------------------------------------------------------------
 echo "============================================"

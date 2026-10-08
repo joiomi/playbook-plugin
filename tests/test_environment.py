@@ -127,12 +127,6 @@ class SandboxItemTest(unittest.TestCase):
             item = env._sandbox_item()
         self.assertTrue(item["present"])
 
-    def test_darwin_uses_seatbelt_probe(self):
-        with mock.patch.object(env.platform, "system", return_value="Darwin"), \
-                mock.patch("provider.sandbox._seatbelt_usable", return_value=True):
-            item = env._sandbox_item()
-        self.assertTrue(item["present"])
-        self.assertIn("seatbelt", item["name"])
 
     def test_unknown_os_has_no_primitive(self):
         with mock.patch.object(env.platform, "system", return_value="Plan9"):

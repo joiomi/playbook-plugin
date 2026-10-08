@@ -21,7 +21,7 @@ def spawn_fake_agent(directory: "str | os.PathLike[str]", name: str = "claude",
     sleep = shutil.which("sleep")
     if sleep is None:
         raise RuntimeError("no `sleep` binary to impersonate an agent")
-    exe = Path(directory) / (name + (".exe" if os.name == "nt" else ""))
+    exe = Path(directory) / name
     shutil.copy(sleep, exe)
     exe.chmod(0o755)
     return subprocess.Popen([str(exe), str(seconds)])

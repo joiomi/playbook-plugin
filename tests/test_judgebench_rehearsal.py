@@ -112,8 +112,6 @@ class RehearsalTests(unittest.TestCase):
 
     def test_auto_adjudication_works_on_a_read_only_corpus(self):
         # impl-panel codex:sol #1 / codex:terra #1: --auto never writes the corpus, so it must not need a lock there
-        if os.name == "nt":
-            self.skipTest("read-only directories do not block file creation on Windows")
         copy = Path(self.tmp.name) / "corpus-ro"
         shutil.copytree(DEFAULT_CORPUS_DIR, copy, ignore=shutil.ignore_patterns(".lock"))
         runs = Path(self.tmp.name) / "runs-ro"

@@ -27,7 +27,7 @@ _NEEDED = [
     "bash", "sh", "cat", "grep", "sed", "head", "tail", "find", "dirname",
     "basename", "printf", "echo", "uname", "tr", "awk", "mkdir", "rm", "mv",
     "cp", "ls", "env", "date", "wc", "cut", "sort", "ps", "chmod", "expr",
-    "flock", "cygpath", "id", "whoami", "touch", "readlink", "pwd", "test",
+    "flock", "id", "whoami", "touch", "readlink", "pwd", "test",
 ]
 
 # A fake `python3`: exit 1 for the >= 3.10 version probe (→ guard fails),
@@ -49,9 +49,7 @@ exit 0
 def make_oldpython_path(base: Path) -> str:
     """Create ``base`` with coreutil symlinks plus a fake python3/python that
     reports 3.9, and return it as a single-entry PATH string. Skips (not fails)
-    when the POSIX shim cannot be built — same platform reasons as _nopython."""
-    if os.name == "nt":
-        raise unittest.SkipTest("old-python3 PATH shim is not portable on native-Windows python")
+    when the shim cannot be built (a missing coreutil, a failed symlink)."""
     base.mkdir(parents=True, exist_ok=True)
     essential = {"bash", "cat", "grep", "sed", "head", "find", "dirname",
                  "printf", "tr", "awk", "mkdir", "rm", "env"}

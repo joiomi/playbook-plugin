@@ -394,7 +394,6 @@ class PluginCopiesDegraded(_CopiesFixture):
         self.assertTrue(verdict[0].startswith("[WARN]"), verdict)
         self.assertIn("not in the release: tasks/planted.py", verdict[0])
 
-    @unittest.skipIf(os.name == "nt", "no POSIX execute bit on Windows")
     def test_warns_when_an_installed_execute_bit_differs(self):
         # `scripts/sandbox`, not `scripts/tasks`: without its execute bit the
         # resolver would skip the copy altogether (a different WARN)
@@ -480,7 +479,6 @@ class PluginCopiesDegraded(_CopiesFixture):
         self.assertNotIn(f"] plugin: hook copy — {self.installed}", out)
         self.assertTrue(self._verdict(out)[0].startswith("[WARN]"), out)
 
-    @unittest.skipIf(os.name == "nt", "symlinks need privileges on Windows")
     def test_an_extra_symlinked_directory_is_a_difference(self):
         os.symlink(str(self.root), str(self.installed / "tasks" / "linked"))
         verdict = self._verdict(self._report())
@@ -634,7 +632,6 @@ class PluginCopiesDegraded(_CopiesFixture):
             verdict = self._verdict(self._report())
         self.assertIn("uncommitted changes", verdict[0])
 
-    @unittest.skipIf(os.name == "nt", "no POSIX execute bit on Windows")
     def test_a_non_executable_launcher_warns(self):
         (self.project / ".claude" / "bin" / "tasks").chmod(0o644)
         out = self._report()
@@ -656,8 +653,8 @@ class PluginCopiesDegraded(_CopiesFixture):
                 self.assertNotIn("(sha HEAD", out)
 
     def test_the_resolver_source_is_piped_as_utf8_bytes(self):
-        # Windows CI (run 35970907673): piped as text, the resolver was encoded in
-        # the locale code page (cp1252 turned its em dash into 0x97) while
+        # CI run 35970907673: piped as text, the resolver was encoded in the
+        # locale code page (a non-UTF-8 one — cp1252 turned its em dash into 0x97) while
         # `python -` decodes source as UTF-8 — a SyntaxError, so no copy resolved.
         from unittest import mock
         seen = {}

@@ -1216,8 +1216,7 @@ class BootstrapBlock(unittest.TestCase):
                  mock.patch("tasks.hooks_check.grok_enforcement_issues", return_value=[]), \
                  mock.patch("tasks.dashboard._stale_settings_hook_paths", return_value=[]):
                 h = db.hooks_health(p)
-        if os.name != "nt":                                              # X_OK is meaningless on Windows (doctor has the same limit)
-            self.assertTrue(any("task-gate-hook — found at" in w and "not executable" in w for w in h["warnings"]), h)
+        self.assertTrue(any("task-gate-hook — found at" in w and "not executable" in w for w in h["warnings"]), h)
 
     def test_truncated_journal_marks_bootstrap_incomplete(self):
         # r4 codex-med#2: partial windows must not read as complete counts or drift verdicts
