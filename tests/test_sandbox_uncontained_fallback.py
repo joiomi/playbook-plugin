@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """No usable containment backend → the UNCONTAINED path, said so — pin it on Linux.
 
-On a Linux host without `bwrap` (or with one that cannot run), `_wrapped_argv`
+On a Linux host without `bwrap` on PATH, `_wrapped_argv`
 falls through to a direct exec with bypass flags and no kernel write-denial, and
 `containment_available()` returns False. `tasks/review.py` gates its "⚠ judge(s)
 running UNCONTAINED" warning on exactly that switch — so pinning it False pins
 that the warning path is the one such a host takes. (Up to 1.5.47 the same path
-was pinned through a simulated Windows host, which had no backend at all.)
+was pinned through a simulated Windows host, which had no backend at all.) A bwrap
+that is installed but cannot run (e.g. user namespaces restricted) is NOT detected:
+containment is reported and the launch itself fails.
 
 Run: python3 -m unittest tests.test_sandbox_uncontained_fallback
 """

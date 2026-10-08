@@ -62,6 +62,18 @@ class BindOrder(unittest.TestCase):
                         bind_index(argv, str(Path(proj) / ".git"), kinds=("--ro-bind",)),
                         ".git must stay read-only even when the project is writable")
 
+    def test_writable_home_binds_are_the_agent_dirs_only(self):
+        # Task 155 impl panel r1 (codex-high, codex-medium): the macOS-only
+        # `Library` entry survived the seatbelt removal, so every Linux launch
+        # created ~/Library and mounted it writable. The writable home subpaths
+        # are an allowlist: the agents' state dirs and the generic caches, no more.
+        home = str(Path.home())
+        argv = self._argv(str(Path(tempfile.mkdtemp()).resolve()))
+        binds = {argv[i + 1] for i, a in enumerate(argv[:-1]) if a == "--bind"}
+        under_home = sorted(b[len(home) + 1:] for b in binds if b.startswith(home + "/"))
+        self.assertEqual(under_home, sorted([".cache", ".claude", ".codex", ".gemini", ".grok",
+                                             ".local", ".local/share/playbook", ".omlx", ".pi"]))
+
     def test_extra_rw_after_project(self):
         proj = Path(tempfile.mkdtemp()).resolve()
         ws = proj / "workspace"

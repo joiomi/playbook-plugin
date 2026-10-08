@@ -54,8 +54,7 @@ _BYPASS_FLAGS: dict[str, list[str]] = {
 # never copied; its sign-in itself is in the OS keyring, which a sandboxed agy
 # reaches over the D-Bus socket under the read-only root: task 111), omlx server data,
 # pi config, grok state (auth/sessions/leader socket — grok dies at startup
-# with FS_PERMISSION_DENIED if ~/.grok is read-only), generic tool caches,
-# macOS Library.
+# with FS_PERMISSION_DENIED if ~/.grok is read-only), generic tool caches.
 _HOME_RW_SUBPATHS: tuple[str, ...] = (
     ".codex",
     ".gemini",
@@ -64,7 +63,6 @@ _HOME_RW_SUBPATHS: tuple[str, ...] = (
     ".grok",
     ".cache",
     ".local",
-    "Library",
 )
 
 # Friendly model aliases — collapse "agent + canonical model" into one knob.

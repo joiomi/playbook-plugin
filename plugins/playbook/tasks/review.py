@@ -477,8 +477,8 @@ def _snapshot_repo_state(project_path: Path, task_file: Path | None, _depth: int
 
     Judges are read-only evaluators; nothing they run should change the repo. On
     platforms with OS containment `project_writable=False` blocks writes, but the
-    sandbox falls back to UNCONTAINED direct exec when no usable bwrap exists
-    (Windows) or when already nested — there this snapshot/compare is the ONLY
+    sandbox falls back to UNCONTAINED direct exec when no bwrap is on PATH or
+    when already nested — there this snapshot/compare is the ONLY
     tamper defense, so it is mandatory, not belt-and-braces.
 
     Signals (best-effort, each degradation recorded as a field the detector can
@@ -1813,7 +1813,7 @@ def _cmd_panel_review(cmd_args):
 
     # Judge tamper guard (#1): judges are read-only evaluators, so snapshot
     # the repo before spawning and refuse to trust the run if the working
-    # tree changed under them. On uncontained hosts (no usable bwrap,
+    # tree changed under them. On uncontained hosts (no bwrap on PATH,
     # or nested) project_writable=False was a no-op — this snapshot is then
     # the ONLY defense, so warn.
     from provider import sandbox as _sandbox_mod

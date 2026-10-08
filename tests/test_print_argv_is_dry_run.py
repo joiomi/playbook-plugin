@@ -137,6 +137,17 @@ class PrintArgvNeverExecutes(unittest.TestCase):
                         "the --rw exception never received the write" + diag)
         self.assertEqual(wrote.read_text(encoding="utf-8"), "allowed", diag)
 
+    def test_the_removed_print_profile_flag_is_refused_not_run(self):
+        # Task 155 impl panel r1 (opus): --print-profile printed the macOS seatbelt
+        # profile and was removed with that backend. A caller still passing it must
+        # get argparse's refusal (exit 2) — never a live agent run.
+        for flags in (("--print-profile",), ("--print-profile", "--agent", "claude", "--prompt", "hello")):
+            with self.subTest(flags=flags):
+                r = self._run(*flags)
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn("--print-profile", r.stderr)
+                self.assertNotIn(MARKER, r.stdout + r.stderr, f"{flags} EXECUTED the agent")
+
     def test_other_inspection_flags_never_execute(self):
         for flags in (("--list-agents",), ("--list-models",),
                       ("--list-agents", "--prompt", "hello"),
