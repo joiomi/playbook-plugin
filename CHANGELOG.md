@@ -32,8 +32,9 @@ Bash) come back after that, starting from `git diff last-multiplatform`. The las
   Windows command-line caps of the grok and pi judge seats (the per-argument byte guard, the Linux limit, stays), the
   `.exe` recovery in the bash resolver, and judgebench's `--platform windows` simulation. Linux behaviour is unchanged.
   Kept on purpose, because removing them would change what Linux does or says: the resolver's failure hint (it still
-  names the Windows WSL stub), the `\` → `/` step in the codex hooks' management-path check, `bash-log.sh`'s backslash
-  strip of `$0`, the `ps` fallback for a host without `/proc`, and judgebench's portable-label rule.
+  names the Windows WSL stub), `bash-log.sh`'s backslash strip of `$0`, the `ps` fallback for a host without `/proc`,
+  and judgebench's portable-label rule. (The `\` → `/` step in the codex hooks' management-path check, kept by that
+  task, was a bypass and is removed — see Fixed.)
 - **CI runs the sandbox tests** (task 158): the Linux lanes install bubblewrap (and lift Ubuntu 24.04's AppArmor
   restriction on unprivileged user namespaces for the job), so the live containment tests run there instead of skipping
   (26 skips → 9).
@@ -53,7 +54,8 @@ Bash) come back after that, starting from `git diff last-multiplatform`. The las
   panel names it, skips it until the reset time claude gives (`You've hit your weekly limit · resets Oct 13, 6pm
   (Europe/Bucharest)`), and `tasks models enable <seat>` clears it. Before, both claude seats were called again on
   every run and the panel fell below quorum. The line counts only when it is all the seat printed — a review that
-  quotes it is not an outage.
+  quotes it is not an outage. Every skipped-seat line, and the refusal when too few seats can run, now print the
+  command that clears a seat — the record follows the seat, not the account behind it.
 - **The suite no longer fails by the clock** (task 158): one seat-outage test compared a fixed "7:33 PM" with the
   real time and failed every day from 19:33 to 01:33 local time, blocking every close in those hours.
 

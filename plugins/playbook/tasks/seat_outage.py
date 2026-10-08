@@ -86,13 +86,18 @@ def _parse_claude_time(raw: str, now: _dt.datetime) -> Optional[_dt.datetime]:
     if mon is None:
         return _nearest_clock_time(at, here)
     month = _MONTHS.get(mon[:3].lower())
-    try:
-        at = at.replace(month=month or 0, day=int(day))
-        if here - at > _dt.timedelta(days=183):      # "Jan 2" read on Dec 30
-            at = at.replace(year=at.year + 1)
-    except ValueError:
+    # The line carries no year: take the one that puts the date NEAREST to now —
+    # "Jan 2" read on Dec 30 is next year's, "Dec 31, 11:55pm" read ten minutes
+    # into Jan 1 is last year's and has passed (impl panel r1, codex-medium).
+    candidates = []
+    for year in (here.year - 1, here.year, here.year + 1):
+        try:
+            candidates.append(at.replace(year=year, month=month or 0, day=int(day)))
+        except ValueError:                           # no such month, or Feb 29 in that year
+            continue
+    if not candidates:
         return None
-    return at
+    return min(candidates, key=lambda c: abs(c - here))
 
 
 def _parse_codex_time(raw: str, now: _dt.datetime) -> Optional[_dt.datetime]:

@@ -47,9 +47,11 @@ class CodexManagementPathTraversal(unittest.TestCase):
         self.assertFalse(
             _is_management_path("/proj/x/.claude/../../src/a.py"))
 
-    def test_backslash_traversal_is_resolved_too(self):
-        """Backslashes normalize to `/` BEFORE `..` resolution, so a Windows-
-        spelled traversal cannot dodge the normpath."""
+    def test_a_backslash_spelled_traversal_is_one_file_name(self):
+        """`.agent\\..\\src\\main.py` has no `/`: on Linux it is a single file NAME,
+        so no component of it is `.agent` (task 158 — up to 1.5.47 the `\\` were
+        turned into `/` first and the traversal was then resolved; either way it
+        is not a management path)."""
         self.assertFalse(_is_management_path(".agent\\..\\src\\main.py"))
 
     def test_traversal_that_lands_back_inside_agent_is_management(self):

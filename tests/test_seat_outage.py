@@ -151,6 +151,16 @@ class ClaudeAccountLimit(unittest.TestCase):
         text = CLAUDE_LIMIT.replace("Europe/Bucharest", "Mars/Olympus")
         self.assertEqual(so.classify_outage(text, NOW, provider="claude")["until"], "2026-10-13T18:00+03:00")
 
+    def test_a_date_just_behind_us_across_new_year_is_last_years(self):
+        # impl panel r1 (codex-medium): on Jan 1, "resets Dec 31, 11:55pm" passed ten
+        # minutes ago — it is not next December's. The year is the one that puts the
+        # date NEAREST to now, in either direction.
+        new_year = dt.datetime(2027, 1, 1, 0, 5, tzinfo=NOW.tzinfo)
+        text = CLAUDE_LIMIT.replace("Oct 13, 6pm (Europe/Bucharest)", "Dec 31, 11:55pm")
+        got = so.classify_outage(text, new_year, provider="claude")
+        self.assertEqual(got["until"], "2026-12-31T23:55+03:00")
+        self.assertFalse(so._is_current(got, new_year), "a reset that already happened still skips the seat")
+
     def test_a_date_already_behind_us_by_months_is_next_years(self):
         late = dt.datetime(2026, 12, 30, 10, 0, tzinfo=NOW.tzinfo)
         text = CLAUDE_LIMIT.replace("Oct 13, 6pm (Europe/Bucharest)", "Jan 2, 9am")
@@ -328,6 +338,22 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
         code, out, _ = self._panel(self.CLAUDE, self._judge())
         self.assertNotIn("claude-fable-5", self.calls, "a claude seat at its limit was called again")
         self.assertIn("Skipped out of credit: claude:claude-fable-5", out)
+        # impl panel r1 (opus): this outage lasts days, and the owner may switch accounts
+        # the same hour — the way to clear it must be on the line, not only in the docs.
+        skipped = next(ln for ln in out.splitlines() if "Skipped out of credit: claude:claude-fable-5" in ln)
+        self.assertIn("until 2026-10-13T18:00+03:00", skipped)
+        self.assertIn("`tasks models enable claude:claude-fable-5`", skipped)
+
+    def test_the_quorum_refusal_says_how_to_clear_a_seat_that_works_again(self):
+        # Two of four seats at the account limit: 2 live < quorum 3, the panel refuses
+        # before spending — and names the command that clears a recorded seat.
+        code, out, _ = self._panel(self.CLAUDE, self._judge(outage=("fable", "haiku"), outage_text=CLAUDE_LIMIT))
+        self.calls.clear()
+        code, out, err = self._panel(self.CLAUDE, self._judge())
+        self.assertEqual(code, 1)
+        self.assertEqual(self.calls, [], "a judge was called although the panel could not reach its quorum")
+        self.assertIn("nothing was spent", err)
+        self.assertIn("tasks models enable <seat>", err)
 
     def test_a_claude_seat_quoting_the_event_is_not_recorded(self):
         # post-D6 run 1 (codex): a claude seat's stdout is the review text; a line

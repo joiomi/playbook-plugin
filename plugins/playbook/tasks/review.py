@@ -1714,7 +1714,10 @@ def _cmd_panel_review(cmd_args):
             if _o is None:
                 _live.append((_cls, _variant))
                 continue
-            _until = (f"until {_o['until']}" if _o.get("until")
+            # The command that clears it is on every line: a reset can be days away
+            # and the account behind the seat may change the same hour (task 158).
+            _until = (f"until {_o['until']}; clear it earlier with `tasks models enable {_lbl}`"
+                      if _o.get("until")
                       else f"until cleared with `tasks models enable {_lbl}`")
             print(f"  Skipped out of credit: {_lbl} — {_o.get('reason', '?')} ({_until})", flush=True)
         judges = _live
@@ -1724,7 +1727,8 @@ def _cmd_panel_review(cmd_args):
     if requested_seats and len(judges) < _need and (judges or _outages):
         print(f"Error: only {len(judges)} of the {requested_seats} requested seats can run, and the "
               f"quorum is {_need} — the panel would fail; nothing was spent. Wait for the seats "
-              "above, or run a smaller panel with --models.", file=sys.stderr)
+              "above, clear one that works again with `tasks models enable <seat>`, or run a "
+              "smaller panel with --models.", file=sys.stderr)
         sys.exit(1)
 
     if not judges:
