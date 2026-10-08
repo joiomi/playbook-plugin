@@ -10,7 +10,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # REQUIRED from day one: this is the host the suite has always been run on.
+  # The only lanes since 2026-10-08: the owner made playbook Linux-only until it
+  # is stable. The last version CI tested on macOS and Windows/Git Bash is 1.5.47
+  # (tag `last-multiplatform`, branch `multiplatform`); its workflow had those
+  # two jobs — `git show last-multiplatform:.github/workflows/verify.yml`.
   linux:
     name: linux / py${{ matrix.python }}
     runs-on: ubuntu-latest
@@ -30,41 +33,19 @@ jobs:
         run: |
           set -o pipefail
           python3 scripts/verify | tee verify-linux-py${{ matrix.python }}.txt
-      - name: Step summary
+
+      - name: install zsh (apt)
         if: always()
         shell: bash
         run: |
-          { echo '```'; cat verify-linux-py${{ matrix.python }}.txt; echo '```'; } \
-            >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: verify-linux-py${{ matrix.python }}
-          path: verify-linux-py${{ matrix.python }}.txt
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq zsh
+          zsh --version
 
-  # REQUIRED: macOS went green during discovery and is now a gate. It exercises
-  # what the Linux lanes cannot — bash-log.zsh under real zsh and the shell
-  # fixtures under bash 3.2.
-  macos:
-    name: macos / py3.10
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
-
-      - name: scripts/verify
-        shell: bash
-        run: |
-          set -o pipefail
-          python3 scripts/verify | tee verify-macos.txt
-
-      # bash-log.zsh has never been executed anywhere: zsh is not installed on
-      # the Linux dev host. macOS ships zsh, so run the real file against the
-      # four lane shapes and assert the files it actually writes.
+      # Run the real bash-log.zsh against the four lane shapes and assert the
+      # files it actually writes. Moved here from the macOS job when CI became
+      # Linux-only (owner decision 2026-10-08); the runner has no zsh, so the
+      # step before installs it.
       - name: bash-log.zsh lane shapes (real zsh)
         if: always()
         shell: bash
@@ -110,88 +91,17 @@ jobs:
           printf '../evil\n' > "$WORK/invalid-marker/.agent/current_user"
           lane invalid-marker ""
 
-          echo "bash-log.zsh lane shapes: rc=$RC" | tee -a verify-macos.txt
-          exit $RC
-
-      # macOS /bin/bash is 3.2 — the fixtures have only ever run under bash 5.
-      - name: shell fixtures under /bin/bash (bash 3.2)
-        if: always()
-        shell: bash
-        run: |
-          unset BASH_ENV
-          echo "/bin/bash version: $(/bin/bash --version | head -1)"
-          RC=0
-          for f in wrapper-multiuser-fixture.sh merge-verify-fixture.sh; do
-            ( cd "$(mktemp -d)" && /bin/bash "$GITHUB_WORKSPACE/tests/$f" ) || RC=1
-          done
-          echo "bash 3.2 fixtures: rc=$RC" | tee -a verify-macos.txt
+          echo "bash-log.zsh lane shapes: rc=$RC" | tee -a verify-linux-py${{ matrix.python }}.txt
           exit $RC
 
       - name: Step summary
         if: always()
         shell: bash
         run: |
-          { echo '```'; cat verify-macos.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          { echo '```'; cat verify-linux-py${{ matrix.python }}.txt; echo '```'; } \
+            >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: verify-macos-py3.10
-          path: verify-macos.txt
-
-  # REQUIRED: Windows/Git Bash went green during discovery and is now a gate. It
-  # exercises what no other lane can — the bash-resolution path where the
-  # System32 WSL stub shadows Git Bash on PATH, and MSYS path/pid handling.
-  windows:
-    name: windows / py3.10 git-bash
-    runs-on: windows-latest
-    defaults:
-      run:
-        shell: bash          # Git Bash / MSYS on windows-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
-      - name: scripts/verify
-        run: |
-          set -o pipefail
-          # This step's shell is Git Bash, but scripts/verify spawns bash from
-          # Python, which resolves it against the Windows PATH where the
-          # System32 WSL stub shadows Git Bash. Hand Python this shell's bash
-          # explicitly (Windows path, so CreateProcess can exec it).
-          BASH_PATH="$(command -v bash)"
-          if command -v cygpath >/dev/null 2>&1; then
-            BASH_PATH="$(cygpath -w "$BASH_PATH")"
-          fi
-          export PLAYBOOK_VERIFY_BASH="$BASH_PATH"
-          echo "PLAYBOOK_VERIFY_BASH=$BASH_PATH"
-          # LEGIBILITY (task 096): scripts/verify's console output caps the
-          # per-failure detail (`... and N more`). With this set, verify ALSO
-          # appends every child command's complete output (unittest at -v, each
-          # shell fixture's full transcript — including the one run inside
-          # unittest) to this file, which is uploaded below. It is the failing
-          # run's own output — until 096 a second step re-ran the whole suite
-          # (10.8-13.5 min on every push) and uploaded THAT run instead. Absolute
-          # Windows path: the fixtures run in temp dirs, so a relative path would
-          # scatter the log.
-          FULL_LOG="$PWD/verify-windows-full.txt"
-          if command -v cygpath >/dev/null 2>&1; then
-            FULL_LOG="$(cygpath -w "$FULL_LOG")"
-          fi
-          export PLAYBOOK_VERIFY_FULL_LOG="$FULL_LOG"
-          echo "PLAYBOOK_VERIFY_FULL_LOG=$FULL_LOG"
-          python scripts/verify | tee verify-windows.txt
-
-      - name: Step summary
-        if: always()
-        run: |
-          { echo '```'; cat verify-windows.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: verify-windows-py3.10
-          path: |
-            verify-windows.txt
-            verify-windows-full.txt
+          name: verify-linux-py${{ matrix.python }}
+          path: verify-linux-py${{ matrix.python }}.txt

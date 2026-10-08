@@ -4,6 +4,25 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+**Linux-only** — owner decision 2026-10-08: playbook supports Linux only until it is stable; macOS and Windows (Git
+Bash) come back after that, starting from `git diff last-multiplatform`. The last version supported on them is 1.5.47
+(tag `last-multiplatform`, branch `multiplatform`; install it with
+`claude plugin marketplace add joiomi/playbook-plugin#multiplatform`).
+
+### Changed
+
+- **CI runs only the Linux lanes** (task 153). `.github/workflows/verify.yml` keeps `linux / py3.10` and
+  `linux / py3.12`; the macOS and Windows/Git Bash jobs are gone, and the real-zsh check of `bash-log.zsh` (the four
+  lane shapes) moved from the macOS job to the Linux lanes, with zsh installed from apt. A release needs both Linux
+  lanes green (this supersedes owner decision D1 (b), "all four lanes on every push").
+- **A session started on another platform is warned, not blocked** (task 153). The SessionStart hook prints
+  `playbook: platformă nesuportată (<platform>); suportul e doar Linux din 2026-10-08 — pentru Windows/macOS
+  folosește branch-ul `multiplatform` (1.5.47)` — on stderr and as the host's `systemMessage` — and the session starts
+  as before.
+- **Docs and the guarantee ledger claim Linux only** (task 153): README (with the `multiplatform` install steps; the
+  install command now names `joiomi/playbook-plugin`), `docs/`, the monitor skill and `/playbook:init`; every ledger row
+  applies to `linux`, and live evidence no longer targets macOS or Windows.
+
 ## [1.5.47] — 2026-10-08
 
 **The last release supported on macOS and Windows (Git Bash)** — owner decision 2026-10-08: later releases target

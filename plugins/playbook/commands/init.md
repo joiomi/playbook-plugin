@@ -127,7 +127,7 @@ Playbook runs on Claude alone, but a few optional tools make it run *optimally*.
 .claude/bin/tasks environment --suggest-only
 ```
 
-This reports, advisory-only, four things and how to get each: (a) **other vendor agent CLIs** (`codex` / `agy` / `grok` / `pi`) that aren't installed — the biggest one, because a panel that spans vendors is the whole point of a panel (never trust one model; let them disagree), so if the user's panel is Claude-only, point out that installing e.g. `codex` lets a second vendor onto the panel; (b) **sandbox containment** (Linux `bubblewrap` / macOS seatbelt) that `.claude/bin/sandbox` needs; (c) **verify-command tooling** the verify command calls but that isn't on PATH (a missing one will make close fail — flag it clearly); (d) the **shell-command-logging** wiring.
+This reports, advisory-only, four things and how to get each: (a) **other vendor agent CLIs** (`codex` / `agy` / `grok` / `pi`) that aren't installed — the biggest one, because a panel that spans vendors is the whole point of a panel (never trust one model; let them disagree), so if the user's panel is Claude-only, point out that installing e.g. `codex` lets a second vendor onto the panel; (b) **sandbox containment** (Linux `bubblewrap`) that `.claude/bin/sandbox` needs; (c) **verify-command tooling** the verify command calls but that isn't on PATH (a missing one will make close fail — flag it clearly); (d) the **shell-command-logging** wiring.
 
 Relay the suggestions to the user with their install hints. Do **not** run any installer — these need the user's package manager and judgment. If the user installs a new agent CLI, offer to re-run step 2 so it can join the panel.
 

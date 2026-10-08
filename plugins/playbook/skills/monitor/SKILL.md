@@ -38,7 +38,7 @@ tool call so the transcript binding is clean):
 ```
 This runs `scripts/monitor-lib/launch-monitor`, which starts a second,
 **sandboxed** Claude session (`claude --safe-mode`, so plugin hooks are disabled
-inside it) contained by `provider.sandbox` — seatbelt on macOS, bwrap on Linux:
+inside it) contained by `provider.sandbox` — bwrap (Linux):
 the project is bound read-only and the monitor's own `<agent-dir>/monitor/` is
 the only project-side writable path. It auto-detects the oldest live front-agent
 pid; override with `.claude/bin/monitor start --session-id pid-<N>`.

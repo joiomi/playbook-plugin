@@ -88,9 +88,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -99,7 +97,8 @@
       "missing_evidence_or_limitation": [
         "Live provider and non-Linux platform cells are absent.",
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
-        "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21)."
+        "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21).",
+        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`)."
       ],
       "follow_up_phases": [
         8
@@ -112,15 +111,6 @@
           ],
           "phase": 8,
           "reason": "Confirm each advertised provider reaches the real activation/edit-gate boundary."
-        },
-        {
-          "type": "live-platform test",
-          "targets": [
-            "macos",
-            "windows-git-bash"
-          ],
-          "phase": 8,
-          "reason": "Confirm session pointer and hook behavior outside Linux."
         }
       ],
       "semantic_protocol": null,
@@ -175,9 +165,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -682,9 +670,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -763,9 +749,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -858,9 +842,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -936,9 +918,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -1241,9 +1221,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -1481,9 +1459,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -1553,9 +1529,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -1599,9 +1573,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -1676,9 +1648,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -1798,9 +1768,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -1855,9 +1823,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -1948,9 +1914,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -2038,9 +2002,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -2304,9 +2266,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -3319,9 +3279,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -3503,9 +3461,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -4066,9 +4022,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -4149,9 +4103,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -4162,23 +4114,14 @@
         "Process-liveness semantics are not exercised on macOS or Windows/Git Bash.",
         "On native Windows NEITHER sweeper reclaims a pid-* directory: the Python sweeper (tasks/shared.py::_session_is_dead, _ON_WINDOWS) and the bash SessionStart hook (scripts/session-start-hook) both KEEP every pid-* dir unconditionally, because os.kill(pid, 0) / kill -0 is neither a safe nor a reliable liveness probe there (CPython routes non-CTRL signals through TerminateProcess; git-bash writes MSYS pseudo-pids a native probe cannot resolve; and kill -0 $PPID under MSYS is non-deterministic across process ancestry). The two sweepers therefore keep the SAME set on Windows, and wrapper-multiuser-fixture.sh S18 A2 asserts full bash/python set-parity on every platform; only the liveness-MECHANICS negative controls (NC1 self-exclusion, NC2 mtime-mutant, plus the EPERM and symlink-glob controls) are win-guarded POSIX-only, because keep-all short-circuits the arms they mutate. This is safe-by-construction (a live session is never deleted) but weaker than the reclaim the statement promises: dead pid-* dirs accumulate on Windows until manually cleared. Confirmed green on Windows CI (run 32464020651, all lanes) after the bash sweeper was given the keep-all parity fix on fix/windows-residual; the earlier divergence (bash reclaimed via kill -0 while Python kept-all) is resolved.",
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
-        "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21)."
+        "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21).",
+        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`)."
       ],
       "follow_up_phases": [
         3,
         8
       ],
-      "required_live_evidence": [
-        {
-          "type": "live-platform test",
-          "targets": [
-            "macos",
-            "windows-git-bash"
-          ],
-          "phase": 8,
-          "reason": "Validate process liveness, ownership, and cleanup semantics on supported non-Linux hosts."
-        }
-      ],
+      "required_live_evidence": [],
       "semantic_protocol": null,
       "violation_reproduction": null
     },
@@ -4315,9 +4258,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -4332,7 +4273,8 @@
         "Bounded blast radius of the corrected defect, retained for the record: .agent/bash_history and .agent/*/bash_history are both in the init-seeded gitignore block (plugins/playbook/scripts/claude-md-merge.py::GITIGNORE_ENTRIES), so a stray root history file never propagated between clones, and it never created .agent/tasks/, so it could not cascade into the mixed-layout exemption.",
         "KNOWN PRECISION LIMIT, pre-existing and NOT introduced by this correction: a dot-named lane directory splits the shell family from the Python family. On .agent/.hidden/tasks/ with no marker, provider/paths.py and tasks/core.py report ['.hidden'] while gate-echo-lib.sh reports [] — measured — because it globs and globbing skips dotfiles. Unreachable through supported flows: validate_username rejects a leading dot, so no surface that reads the marker can select such a lane. Pinned by tests/test_provider_multiuser.py::TestResolverParity.test_dot_named_lane_is_a_known_shell_python_divergence. The loggers are no longer part of this split: they read no child of .agent/ at all, so a dot-named lane is just another marker-absent shape with no root tasks/ and they skip — under default options and under shopt -s dotglob or a non-empty GLOBIGNORE alike (HostShellOptionMatrix.test_dotglob_no_longer_moves_the_dot_named_lane_answer). Reconciling the shell and Python families belongs to Phase 4, which is listed in follow_up_phases.",
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
-        "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21)."
+        "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21).",
+        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`)."
       ],
       "follow_up_phases": [
         4,
@@ -4346,14 +4288,6 @@
           ],
           "phase": 8,
           "reason": "Confirm wrapper/hook session restart and lane behavior with real CLIs."
-        },
-        {
-          "type": "live-platform test",
-          "targets": [
-            "windows-git-bash"
-          ],
-          "phase": 8,
-          "reason": "Confirm MSYS path and marker handling."
         }
       ],
       "semantic_protocol": null,
@@ -4463,9 +4397,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -4542,9 +4474,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -4711,9 +4641,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -4727,22 +4655,13 @@
         "zsh and Windows/Git Bash logger behavior lack live platform evidence.",
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
         "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21).",
-        "Owner decision D4 (PLAN S6), 2026-09-24 — accepted, not fixed (S5c stays parked): the stamp is local wall-clock time with no zone offset (`date '+%Y-%m-%d %H:%M:%S'` in bash-log.sh and bash-log.zsh), and readers convert it with the zone in force when they read (tasks/retro.py `bash_history_ts_to_utc`). So in the hour repeated when daylight saving time ends two moments carry the same stamp (measured, TZ=Europe/Bucharest: 2026-10-25 00:30 UTC and 01:30 UTC both write `2026-10-25 03:30:00`, and both read back as 00:30 UTC), and after the machine's time zone changes, older lines are converted with the new zone."
+        "Owner decision D4 (PLAN S6), 2026-09-24 — accepted, not fixed (S5c stays parked): the stamp is local wall-clock time with no zone offset (`date '+%Y-%m-%d %H:%M:%S'` in bash-log.sh and bash-log.zsh), and readers convert it with the zone in force when they read (tasks/retro.py `bash_history_ts_to_utc`). So in the hour repeated when daylight saving time ends two moments carry the same stamp (measured, TZ=Europe/Bucharest: 2026-10-25 00:30 UTC and 01:30 UTC both write `2026-10-25 03:30:00`, and both read back as 00:30 UTC), and after the machine's time zone changes, older lines are converted with the new zone.",
+        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`)."
       ],
       "follow_up_phases": [
         8
       ],
-      "required_live_evidence": [
-        {
-          "type": "live-platform test",
-          "targets": [
-            "macos",
-            "windows-git-bash"
-          ],
-          "phase": 8,
-          "reason": "Exercise zsh deployment plus Bash-tool BASH_ENV and Git Bash history attribution."
-        }
-      ],
+      "required_live_evidence": [],
       "semantic_protocol": null,
       "violation_reproduction": null
     },
@@ -4810,9 +4729,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -4884,9 +4801,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -4930,8 +4845,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -4997,9 +4911,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -5073,9 +4985,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -5086,7 +4996,8 @@
       "missing_evidence_or_limitation": [
         "No current live-provider proof; macOS seatbelt is unavailable in CI. On Windows/Git Bash there is NO OS containment backend at all (neither sandbox-exec nor bwrap), so project_writable=False is a no-op and judges run UNCONTAINED — the before/after working-tree tamper guard is the only defense there.",
         "Owner decision 2026-08-21: judge-seat is supported on claude, grok, and codex; antigravity and pi are experimental and removed from applicable_providers.",
-        "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending."
+        "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending.",
+        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`)."
       ],
       "follow_up_phases": [
         2,
@@ -5102,15 +5013,6 @@
           ],
           "phase": 8,
           "reason": "Attempt a harmless repository write from each real judge and retain the containment artifact."
-        },
-        {
-          "type": "live-platform test",
-          "targets": [
-            "macos",
-            "windows-git-bash"
-          ],
-          "phase": 8,
-          "reason": "Exercise seatbelt on macOS and confirm the Windows/Git Bash fallback runs UNCONTAINED (write-denial is a no-op; tamper guard only)."
         }
       ],
       "semantic_protocol": null,
@@ -5172,9 +5074,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -5266,9 +5166,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -5865,9 +5763,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -6397,9 +6293,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -6419,22 +6313,14 @@
         "v1.5.45 (task 059): a DEGRADED guard is advisory on the review paths — the verdict is kept and the degradation recorded — so the guarantee for those paths is 'a mutation the guard could see is loudly refused', not 'every review ran with a fully working guard'. The unverified case is carried forward to the close (TAMPER-GUARD-DEGRADED) and to tail certification (refuses), where it fails closed.",
         "v1.5.45: the moved-HEAD signal is a CAUTION by design (a read-only judge cannot commit, so a HEAD move during a review is a concurrent actor). It therefore does not stop a review, and the certified-tree question remains the freshness fingerprint's (PB-PANEL-FRESHNESS).",
         "v1.5.45 (task 059, impl-panel rounds 1-2): a concurrent COMMIT during a CONTAINED review removes the porcelain lines it committed; those removals are demoted to cautions only for the paths that commit actually touched (`git diff before..after`), and only while an OS sandbox is denying judge writes — with no containment a moved HEAD is itself a mutation. A judge deleting an untracked file that the same commit also removed is therefore reported as a caution; everything else still hard-stops.",
-        "v1.5.45 (task 059, impl-panel r3): `degraded` on a round means the GUARD could not run, not merely that something was noticed — a concurrent commit is a caution that leaves the round `clean, with notes`, so tail certification stays reachable after a background commit."
+        "v1.5.45 (task 059, impl-panel r3): `degraded` on a round means the GUARD could not run, not merely that something was noticed — a concurrent commit is a caution that leaves the round `clean, with notes`, so tail certification stays reachable after a background commit.",
+        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`)."
       ],
       "follow_up_phases": [
         2,
         8
       ],
-      "required_live_evidence": [
-        {
-          "type": "live-platform test",
-          "targets": [
-            "windows-git-bash"
-          ],
-          "phase": 8,
-          "reason": "Exercise the uncontained fallback with dirty tracked and untracked files."
-        }
-      ],
+      "required_live_evidence": [],
       "semantic_protocol": null,
       "violation_reproduction": null
     },
@@ -6467,9 +6353,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -6559,9 +6443,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "codex",
@@ -6653,9 +6535,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "codex",
@@ -6743,9 +6623,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -6806,9 +6684,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -6935,9 +6811,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -6949,23 +6823,14 @@
         "No packaged-install test and no live macOS/Windows initialization.",
         "Logger wiring is deployed as a per-machine copy outside the plugin (~/.claude/bash-log.{sh,zsh}); the copy on this host is measurably older than the bundled script (sha256 7488c02c... on this host, against plugins/playbook/scripts/bash-log.sh), so no test establishes that an initialized machine runs the shipped logger.",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
-        "Task 100 (PLAN S8 binding audit, 2026-09-27) NARROWED: `wrappers` (`.claude/bin/tasks`, `.claude/bin/monitor`) removed from the statement — no test asserts their creation on a clean init (the rollback proofs assert their REMOVAL after a failed one). S11 gauntlet item. The task structure, config, logger wiring and MIND_MAP.md clauses were cited by no proof until this audit and are bound below; the project `.claude/settings.json` deny list is PB-INIT-DENY-LIST."
+        "Task 100 (PLAN S8 binding audit, 2026-09-27) NARROWED: `wrappers` (`.claude/bin/tasks`, `.claude/bin/monitor`) removed from the statement — no test asserts their creation on a clean init (the rollback proofs assert their REMOVAL after a failed one). S11 gauntlet item. The task structure, config, logger wiring and MIND_MAP.md clauses were cited by no proof until this audit and are bound below; the project `.claude/settings.json` deny list is PB-INIT-DENY-LIST.",
+        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`)."
       ],
       "follow_up_phases": [
         8,
         11
       ],
-      "required_live_evidence": [
-        {
-          "type": "live-platform test",
-          "targets": [
-            "macos",
-            "windows-git-bash"
-          ],
-          "phase": 8,
-          "reason": "Run fresh initialization in disposable homes including zsh and MSYS paths."
-        }
-      ],
+      "required_live_evidence": [],
       "semantic_protocol": null,
       "violation_reproduction": null
     },
@@ -7085,9 +6950,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -7151,9 +7014,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -7162,7 +7023,8 @@
       "missing_evidence_or_limitation": [
         "Packaged upgrade, stale-cache selection, and post-upgrade provider behavior are untested.",
         "Upgrade is snapshot-less: unlike scripts/init (now transactional — see PB-INSTALL-ROLLBACK), this is a Claude skill whose steps (pull a release clone, `claude plugin marketplace update`, `claude plugin update`, restart, re-init — in place since task 115/138) have no rollback wrapper. The reinit it triggers rolls itself back, but a failure inside Claude Code's own plugin update can still leave a mixed installation; a transactional upgrade is not claimed.",
-        "Task 100 (PLAN S8 binding audit, 2026-09-27) NARROWED `before fallback discovery` to `rather than by globbing`: the cited proof asserts the manifest installPath is read and a foreign plugin's path is not; no test asserts the ORDER of candidate_hooks_paths' sources. The update + re-init steps are the skill's prose (commands/upgrade.md), untested — see the snapshot-less bound above."
+        "Task 100 (PLAN S8 binding audit, 2026-09-27) NARROWED `before fallback discovery` to `rather than by globbing`: the cited proof asserts the manifest installPath is read and a foreign plugin's path is not; no test asserts the ORDER of candidate_hooks_paths' sources. The update + re-init steps are the skill's prose (commands/upgrade.md), untested — see the snapshot-less bound above.",
+        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`)."
       ],
       "follow_up_phases": [
         8,
@@ -7172,9 +7034,7 @@
         {
           "type": "live-platform test",
           "targets": [
-            "linux",
-            "macos",
-            "windows-git-bash"
+            "linux"
           ],
           "phase": 8,
           "reason": "Upgrade disposable older installs through the real plugin manager on each supported platform."
@@ -7243,9 +7103,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -7257,7 +7115,8 @@
         "scripts/init is now transactional (init_txn.py snapshots every file it may modify and, on any non-zero exit, restores the pre-init state and removes what it created), proven on the host OS by three induced-failure integration tests plus a negative control. Two boundaries remain unproved.",
         "Upgrade is a Claude skill (commands/upgrade.md), NOT scripts/init, and remains snapshot-less: it re-runs init (which now rolls itself back), but the skill's own in-place refresh (clone pull, marketplace update, plugin update) has no transactional wrapper, so a mid-upgrade failure is not proven rollback-safe here. See PB-UPGRADE-INSTALLED-COPY.",
         "Interrupt coverage is a trapped SIGTERM on the host OS; real power-loss durability and a controlled interruption on windows-git-bash are the pending live-platform evidence.",
-        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
+        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
+        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`)."
       ],
       "follow_up_phases": [
         2,
@@ -7268,9 +7127,7 @@
         {
           "type": "live-platform test",
           "targets": [
-            "linux",
-            "macos",
-            "windows-git-bash"
+            "linux"
           ],
           "phase": 8,
           "reason": "Interrupt disposable installation/upgrade at controlled points and verify recoverable state."
@@ -7321,8 +7178,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -7334,21 +7190,13 @@
         "Confirmed containment failure on macOS CI (run 32381370391, job 96465123480): under --ro-project a project rooted at a _SYSTEM_RW_PATHS entry (e.g. /var/folders, where macOS mktemp places dirs) was fully writable because the read-only project was expressed only as an omitted require-not exemption inside a require-all-of-require-nots deny block, which a broader exemption cancels. Corrected in build_seatbelt_profile: the read-only project is now an explicit terminal deny (the .git precedent), with each extra_rw workspace re-allowed after it.",
         "The correction is proven at the profile-text level on Linux; end-to-end seatbelt execution is NOT verified on this host — the macOS leg of test_ro_project_prompt_denies_project_write_but_keeps_rw_exception is the pending live proof, due on the next push to macOS CI.",
         "Full worker-mode .git mutation matrix under real seatbelt is incomplete.",
-        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
+        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
+        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`)."
       ],
       "follow_up_phases": [
         8
       ],
-      "required_live_evidence": [
-        {
-          "type": "live-platform test",
-          "targets": [
-            "macos"
-          ],
-          "phase": 8,
-          "reason": "Execute the corrected --ro-project profile under real seatbelt: project-write, .git, and --rw negative controls, including a project rooted under /var/folders."
-        }
-      ],
+      "required_live_evidence": [],
       "semantic_protocol": null,
       "violation_reproduction": null
     },
@@ -7433,9 +7281,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -7447,7 +7293,8 @@
         "The mechanical argv boundary (no --unshare-net by default, --ro-bind / root leaving the filesystem readable, opt-in --unshare-net) is unit-proven on every platform and live-proven under Linux bwrap; a live end-to-end measurement of read visibility and outbound network reachability from a real judge on Linux and macOS is deferred to Phase 8.",
         "macOS seatbelt and Windows cannot isolate the network at all; the --no-network opt-in fails loudly on those backends rather than emit a no-op.",
         "On Windows there is no containment backend, so even write containment is a no-op and judges run uncontained (the working-tree tamper guard is the only defense).",
-        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
+        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
+        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`)."
       ],
       "follow_up_phases": [
         2,
@@ -7457,8 +7304,7 @@
         {
           "type": "live-platform test",
           "targets": [
-            "linux",
-            "macos"
+            "linux"
           ],
           "phase": 8,
           "reason": "Measure actual read visibility and outbound network reachability from a real judge run, confirming reads and network stay permitted while project writes are denied."
@@ -7513,9 +7359,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -7526,7 +7370,8 @@
       "missing_evidence_or_limitation": [
         "Nested sandbox, no-bwrap, and Windows fallback paths lack integration negative controls; high-consequence uncontained policy is undecided.",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
-        "Task 100 (PLAN S8 binding audit, 2026-09-27): this row cited only `test_environment.SandboxItemTest.test_unknown_os_has_no_primitive` — an advisory-text test of environment.py, not of the owner (sandbox.py). Rebound to tests/test_windows_uncontained_path.py (3 tests, cited nowhere before). Still asserted by NO test: nested-containment detection (`is_sandboxed`) and the operator-visible UNCONTAINED warning text (review.py gates it on containment_available(); source-read) — both stay in required_live_evidence."
+        "Task 100 (PLAN S8 binding audit, 2026-09-27): this row cited only `test_environment.SandboxItemTest.test_unknown_os_has_no_primitive` — an advisory-text test of environment.py, not of the owner (sandbox.py). Rebound to tests/test_windows_uncontained_path.py (3 tests, cited nowhere before). Still asserted by NO test: nested-containment detection (`is_sandboxed`) and the operator-visible UNCONTAINED warning text (review.py gates it on containment_available(); source-read) — both stay in required_live_evidence.",
+        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`)."
       ],
       "follow_up_phases": [
         2,
@@ -7536,9 +7381,7 @@
         {
           "type": "live-platform test",
           "targets": [
-            "linux",
-            "macos",
-            "windows-git-bash"
+            "linux"
           ],
           "phase": 8,
           "reason": "Exercise supported, absent, and nested containment detection plus visible fallback behavior."
@@ -7617,9 +7460,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -7701,9 +7542,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -7776,9 +7615,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -7888,9 +7725,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -7936,9 +7771,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -7989,9 +7822,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -8075,9 +7906,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -8178,9 +8007,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -8324,9 +8151,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -8431,9 +8256,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -8587,9 +8410,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -8675,9 +8496,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -8780,9 +8599,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -8874,9 +8691,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -8886,7 +8701,8 @@
       "status": "partially_evidenced",
       "missing_evidence_or_limitation": [
         "On-this-platform unit and subprocess evidence now pins the 3.10 floor in doctor, every shell entry point, and the codex python hooks (fail-open advisory / fail-closed enforcing polarity preserved). The minimum/latest interpreter matrix run against a real < 3.10 interpreter across linux, macos, and windows-git-bash remains Phase-8 live-platform work.",
-        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
+        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
+        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`)."
       ],
       "follow_up_phases": [
         8
@@ -8895,9 +8711,7 @@
         {
           "type": "live-platform test",
           "targets": [
-            "linux",
-            "macos",
-            "windows-git-bash"
+            "linux"
           ],
           "phase": 8,
           "reason": "Run the selected minimum/latest Python matrix against real interpreters now that the 3.10 floor is aligned across docs, doctor, and every entry point."
@@ -8909,7 +8723,7 @@
     {
       "id": "PB-PLATFORM-COMPATIBILITY",
       "category": "compatibility-and-package",
-      "statement": "Playbook operates on Linux, macOS, and Windows Git Bash/MSYS, including quoting, paths with spaces/Unicode, session handling, wrappers, and platform containment where advertised.",
+      "statement": "Playbook supports Linux only (owner decision 2026-10-08), including quoting, paths with spaces/Unicode, session handling, wrappers, and bubblewrap containment where advertised. macOS and Windows Git Bash/MSYS were supported up to 1.5.47 (tag `last-multiplatform`, branch `multiplatform`) and are not claimed for any later version; a session started on another platform gets a non-blocking SessionStart warning that names the `multiplatform` branch.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/init",
@@ -8920,8 +8734,12 @@
           "reference": "symbol:containment_available"
         },
         {
+          "path": "plugins/playbook/scripts/session-start-hook",
+          "reference": "whole-file"
+        },
+        {
           "path": "README.md",
-          "reference": "section:Install"
+          "reference": "section:Platforms"
         }
       ],
       "failure_consequence": "High",
@@ -8936,12 +8754,23 @@
           "limitations": [
             "Current execution host is Linux; platform branches are largely mocked/string-tested."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_start_platform_warning.py",
+          "reference": "SessionStartPlatformWarning.test_another_platform_is_warned_and_the_session_still_starts",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_session_start_platform_warning.py",
+            "reference": "SessionStartPlatformWarning.test_linux_is_not_warned"
+          },
+          "limitations": [
+            "The other platforms are played by a fake `uname` first on PATH on a Linux host; no macOS or Windows machine runs the hook."
+          ]
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -8950,24 +8779,15 @@
       ],
       "status": "partially_evidenced",
       "missing_evidence_or_limitation": [
-        "CI runs the full suite on four lanes on every push — Linux py3.10/3.12, macOS (zsh + bash 3.2) and Windows/Git Bash (`.github/workflows/verify.yml`; owner D1 (b); task 096) — so the platform-specific tests and skips in the suite, run on those lanes, are the executable evidence today. Still missing: a live capability matrix (spaces/Unicode/wrappers/sessions/containment driven on a real macOS/Windows host outside CI), which stays Phase-8 work. (Task 100 (PLAN S8 binding audit, 2026-09-27) corrected the stale `lanes are absent` wording.)",
-        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
+        "CI runs the full suite on two Linux lanes (py3.10, py3.12) on every push, plus the real-zsh logger check (`.github/workflows/verify.yml`; owner decision 2026-10-08, which supersedes D1 (b)'s four lanes). The macOS and Windows/Git Bash lanes ran up to 1.5.47 (run 37755401217, green on all four lanes at 6112fe0) and are not claimed after it. Still missing on Linux: a live capability matrix (spaces/Unicode/wrappers/sessions/containment driven outside the test suite), Phase-8 work. (Task 100 (PLAN S8 binding audit, 2026-09-27) corrected the earlier `lanes are absent` wording; task 153 restated it for Linux-only.)",
+        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
+        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`)."
       ],
       "follow_up_phases": [
         3,
         8
       ],
-      "required_live_evidence": [
-        {
-          "type": "live-platform test",
-          "targets": [
-            "macos",
-            "windows-git-bash"
-          ],
-          "phase": 8,
-          "reason": "Run the full capability-specific support matrix with spaces, Unicode, wrappers, sessions, and hooks."
-        }
-      ],
+      "required_live_evidence": [],
       "semantic_protocol": null,
       "violation_reproduction": null
     },
@@ -9028,9 +8848,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -9114,9 +8932,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -9165,9 +8981,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -9177,7 +8991,8 @@
       "status": "partially_evidenced",
       "missing_evidence_or_limitation": [
         "Runtime dependency claim lacks a packaged minimal-tool integration test.",
-        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
+        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
+        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`)."
       ],
       "follow_up_phases": [
         3,
@@ -9188,9 +9003,7 @@
         {
           "type": "live-platform test",
           "targets": [
-            "linux",
-            "macos",
-            "windows-git-bash"
+            "linux"
           ],
           "phase": 8,
           "reason": "Run installed smoke tests on minimal-tool images/hosts without third-party Python packages."
@@ -9254,9 +9067,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -9325,9 +9136,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -9385,9 +9194,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -9451,9 +9258,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "codex",
@@ -9517,9 +9322,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -9575,9 +9378,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -9638,9 +9439,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -9738,9 +9537,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -9805,9 +9602,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -9887,9 +9682,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -9965,9 +9758,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -10015,9 +9806,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -10027,23 +9816,14 @@
       "status": "partially_evidenced",
       "missing_evidence_or_limitation": [
         "No exhaustive CLI compatibility snapshots and no macOS/Windows execution.",
-        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
+        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
+        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`)."
       ],
       "follow_up_phases": [
         5,
         8
       ],
-      "required_live_evidence": [
-        {
-          "type": "live-platform test",
-          "targets": [
-            "macos",
-            "windows-git-bash"
-          ],
-          "phase": 8,
-          "reason": "Run frozen command/output/exit snapshots on supported non-Linux shells."
-        }
-      ],
+      "required_live_evidence": [],
       "semantic_protocol": null,
       "violation_reproduction": null
     },
@@ -10128,9 +9908,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -10149,7 +9927,7 @@
     {
       "id": "PB-PERFORMANCE-HOOKS",
       "category": "performance",
-      "statement": "The bundled BASH_ENV hook fast path avoids the prior material logger penalty; Phase 0 measured the three-hook sequence at means 142.62 ms unset and 146.21 ms with the bundled logger under its stated local method. T4 (2026-08-23) closed the standing DEBUG-trap cost question with a checked-in reproducible driver: on the fused Bash-tool hook path (task-gate-hook + command-guard-hook, fresh process each) MEASURED ON LINUX (py3.10; macOS/Windows pending), having BASH_ENV=bash-log.sh set adds a MEDIAN total of +6.76 and +7.53 ms per tool call over two order-flipped N=150 runs (on a ~208 ms baseline) — well under the owner-ratified 15 ms threshold, so the trap is left unchanged. A 3-arm control (empty-file source_only) attributes essentially all of it to per-command DEBUG dispatch (source cost ~0 ms); because the empty-file control does not incur bash-log.sh's own one-time parse/trap-install, that ~6-7.5 ms is an UPPER BOUND on dispatch. The median is the reliable metric here; the p95 delta is within the wall-clock noise floor (it ranged -0.16 to +4.61 ms across runs).",
+      "statement": "The bundled BASH_ENV hook fast path avoids the prior material logger penalty; Phase 0 measured the three-hook sequence at means 142.62 ms unset and 146.21 ms with the bundled logger under its stated local method. T4 (2026-08-23) closed the standing DEBUG-trap cost question with a checked-in reproducible driver: on the fused Bash-tool hook path (task-gate-hook + command-guard-hook, fresh process each) MEASURED ON LINUX (py3.10), having BASH_ENV=bash-log.sh set adds a MEDIAN total of +6.76 and +7.53 ms per tool call over two order-flipped N=150 runs (on a ~208 ms baseline) — well under the owner-ratified 15 ms threshold, so the trap is left unchanged. A 3-arm control (empty-file source_only) attributes essentially all of it to per-command DEBUG dispatch (source cost ~0 ms); because the empty-file control does not incur bash-log.sh's own one-time parse/trap-install, that ~6-7.5 ms is an UPPER BOUND on dispatch. The median is the reliable metric here; the p95 delta is within the wall-clock noise floor (it ranged -0.16 to +4.61 ms across runs).",
       "owner": [
         {
           "path": "plugins/playbook/scripts/bash-log.sh",
@@ -10179,9 +9957,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -10239,9 +10015,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -10291,9 +10065,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -10401,9 +10173,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -10484,9 +10254,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -10566,9 +10334,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -10639,9 +10405,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -10748,9 +10512,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -10854,9 +10616,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -10956,9 +10716,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -11071,9 +10829,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -11150,9 +10906,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -11221,9 +10975,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -11340,9 +11092,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -11471,9 +11221,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -11569,9 +11317,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -11655,9 +11401,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -11758,9 +11502,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -11822,9 +11564,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -11889,9 +11629,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -11947,9 +11685,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -12031,9 +11767,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -12104,9 +11838,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -12163,9 +11895,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -12251,9 +11981,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -12307,9 +12035,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -12407,9 +12133,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -12499,9 +12223,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -12583,9 +12305,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -12667,9 +12387,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -12735,9 +12453,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -12823,9 +12539,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -12914,9 +12628,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -13006,9 +12718,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -13074,9 +12784,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -13176,9 +12884,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -13232,9 +12938,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -13306,9 +13010,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -13375,9 +13077,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -13472,9 +13172,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -13531,9 +13229,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -13712,9 +13408,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -14030,9 +13724,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -14195,9 +13887,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -14239,9 +13929,7 @@
       "claim_kind": "mechanical",
       "status": "verified_by_current_executable_evidence",
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -14750,9 +14438,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -14882,9 +14568,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -15077,9 +14761,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",
@@ -15136,9 +14818,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude"
@@ -15444,9 +15124,7 @@
         }
       ],
       "applicable_platforms": [
-        "linux",
-        "macos",
-        "windows-git-bash"
+        "linux"
       ],
       "applicable_providers": [
         "claude",

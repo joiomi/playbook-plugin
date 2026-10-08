@@ -30,6 +30,19 @@ case "${PLAYBOOK_SESSION_ID:-}" in
     judge|tail-cert) exit 0 ;;
 esac
 
+# Linux only since 2026-10-08 (owner decision). On any other platform say so
+# clearly — on stderr, and to the host as a JSON systemMessage/additionalContext —
+# then carry on: a warning, never a block. 1.5.47 (branch `multiplatform`, tag
+# `last-multiplatform`) is the last version tested on macOS and Windows/Git Bash.
+PB_PLATFORM="$(uname -s 2>/dev/null | tr -cd 'A-Za-z0-9._ -')"
+if [ "$PB_PLATFORM" != "Linux" ]; then
+    PB_PLATFORM_MSG="playbook: platformă nesuportată (${PB_PLATFORM:-unknown}); suportul e doar Linux din 2026-10-08 — pentru Windows/macOS folosește branch-ul \`multiplatform\` (1.5.47)"
+    echo "$PB_PLATFORM_MSG" >&2
+    # PB_PLATFORM is reduced to [A-Za-z0-9._ -] above, so the message needs no JSON escaping.
+    printf '{"systemMessage":"%s","hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' \
+        "$PB_PLATFORM_MSG" "$PB_PLATFORM_MSG"
+fi
+
 # Source shared lib (same directory)
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$HOOK_DIR/gate-echo-lib.sh"

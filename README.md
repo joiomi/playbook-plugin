@@ -63,9 +63,11 @@ Because state lives in the file and not in memory, execution survives context co
 Playbook installs through Claude Code's plugin manager - you need it once as the install channel, even if you drive a different agent day-to-day:
 
 ```
-claude plugin marketplace add mariuscristescu/playbook-plugin
+claude plugin marketplace add joiomi/playbook-plugin
 claude plugin install playbook@playbook-x-marketplace
 ```
+
+Playbook runs on Linux only (since 2026-10-08); on macOS or Windows install the multi-platform version instead — see [Platforms](#platforms).
 
 Restart Claude Code, then in any project tell the agent `/playbook:init`. This creates `CLAUDE.md`, `MIND_MAP.md`, and `.claude/bin/` - the `tasks` CLI plus a launcher per agent (`playbook-codex`, `playbook-agy`, `playbook-grok`, `playbook-pi`).
 
@@ -113,7 +115,7 @@ For hands-off execution, run in sandbox mode - `--dangerously-skip-permissions` 
 sandbox
 ```
 
-The sandbox uses macOS seatbelt or Linux bubblewrap. Your project directory is writable, `.git` is read-only, and **writes** outside the project are blocked at the kernel level — reads and network access are not (this is write containment, not a read or network jail). The agent runs without permission prompts but can't escape the write containment even if it tries. You still steer by chatting.
+The sandbox uses Linux bubblewrap. Your project directory is writable, `.git` is read-only, and **writes** outside the project are blocked at the kernel level — reads and network access are not (this is write containment, not a read or network jail). The agent runs without permission prompts but can't escape the write containment even if it tries. You still steer by chatting.
 
 When you want to drive yourself - quick experiments, exploration, no gate pressure - say so and the agent switches to freehand mode (`/playbook:freehand`); the hooks relax until the next task.
 
@@ -141,6 +143,17 @@ Nodes cross-reference each other - **[5]** links to **[19]** which links back. W
 
 Not everything needs a task. Questions, shell commands, docs, git - just ask. The rule is simple: the moment the agent touches code files, declare a task first. The hooks enforce this.
 
-Works on macOS, Linux, and Windows (Git Bash / MSYS).
+## Platforms
+
+Linux only (since 2026-10-08). On Windows/macOS use the `multiplatform` branch (1.5.47) — the last release supported on macOS and Windows (Git Bash) as well as Linux (tag `last-multiplatform`, green on all four CI lanes of that time). Pin the marketplace to that branch by appending `#multiplatform` — the form Claude Code documents for pinning a branch or tag of a GitHub marketplace ([Host and maintain a marketplace](https://code.claude.com/docs/en/plugins/host-marketplace#host-your-marketplace)):
+
+```
+claude plugin marketplace add joiomi/playbook-plugin#multiplatform
+claude plugin install playbook@playbook-x-marketplace
+```
+
+Then restart Claude Code and continue with `/playbook:init` as described under [Install](#install). A marketplace is known by its name, so if you already added one called `playbook-x-marketplace` (for example from another fork of this plugin), remove it first: `claude plugin marketplace remove playbook-x-marketplace` (this also uninstalls its plugins). On macOS and Windows, playbook needs `python3` >= 3.10 on `PATH` (the `python3` that ships with Apple's command-line tools may be older); on Windows it runs its hooks with Git Bash.
+
+A later version started on macOS or Windows prints a warning at session start and carries on, unsupported.
 
 <!-- readme-audit: v1.5.47 @ 2026-10-08 -->
