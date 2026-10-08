@@ -58,6 +58,27 @@ Because state lives in the file and not in memory, execution survives context co
 
 <p align="center"><img src="assets/reactive_test_environment.png" width="600" alt="An AI agent in a go-kart racing inside concentric tire barriers labeled Unit Tests, Integration Tests, and E2E Tests, with a Safe Zone in the center"></p>
 
+## Install this multi-platform version
+
+This branch, `multiplatform`, holds **playbook 1.5.47 — the last release supported on macOS and Windows (Git Bash)
+as well as Linux** (tag `last-multiplatform`, green on all four CI lanes). Later releases on `main` target Linux
+only.
+
+To install it, pin the marketplace to this branch by appending `#multiplatform` — the form Claude Code documents for
+pinning a branch or tag of a GitHub marketplace
+([Host and maintain a marketplace](https://code.claude.com/docs/en/plugins/host-marketplace#host-your-marketplace)):
+
+```
+claude plugin marketplace add joiomi/playbook-plugin#multiplatform
+claude plugin install playbook@playbook-x-marketplace
+```
+
+Then restart Claude Code and continue with `/playbook:init` as described under [Install](#install). A marketplace is
+known by its name, so if you already added one called `playbook-x-marketplace` (for example from another fork of
+this plugin), remove it first: `claude plugin marketplace remove playbook-x-marketplace` (this also uninstalls its
+plugins). On macOS and Windows, playbook needs `python3` >= 3.10 on `PATH` (the `python3` that ships with Apple's
+command-line tools may be older); on Windows it runs its hooks with Git Bash.
+
 ## Install
 
 Playbook installs through Claude Code's plugin manager - you need it once as the install channel, even if you drive a different agent day-to-day:
