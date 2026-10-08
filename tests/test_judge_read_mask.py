@@ -25,6 +25,11 @@ sys.path.insert(0, str(_HERE.parent / "plugins/playbook"))
 from provider import sandbox  # noqa: E402
 
 CANARY = "CANARY-125-only-in-the-chat"
+# Task 151: a seatbelt profile only ever runs on macOS. Built on Windows it carries `C:\…` paths
+# (escaped, and joined to `/`-separated record names) that no backend reads, and NTFS refuses a
+# `"` in a name — so the seatbelt assertions skip there; Linux and macOS run every one of them.
+SEATBELT_PATHS = os.name != "nt"
+NO_SEATBELT_PATHS = "a seatbelt profile is macOS-only; Windows paths never reach one"
 
 
 def _project() -> Path:
@@ -97,6 +102,7 @@ class Masks(unittest.TestCase):
         prof = sandbox.build_seatbelt_profile(self.p, None, None, project_writable=False, mask_records=False)
         self.assertNotIn("file-read", prof)
 
+    @unittest.skipUnless(SEATBELT_PATHS, NO_SEATBELT_PATHS)
     def test_seatbelt_judge_mode_denies_records_by_name_last(self):
         import re
         prof = sandbox.build_seatbelt_profile(self.p, None, None, project_writable=False)
@@ -117,6 +123,7 @@ class Masks(unittest.TestCase):
         first_read = min(i for i, l in enumerate(lines) if "file-read" in l)
         self.assertGreater(first_read, last_write)
 
+    @unittest.skipUnless(SEATBELT_PATHS, NO_SEATBELT_PATHS)
     def test_seatbelt_also_denies_a_symlinked_lanes_real_records(self):
         ext = Path(tempfile.mkdtemp(prefix="pb-138x-")).resolve()
         self.addCleanup(shutil.rmtree, ext, True)
@@ -146,6 +153,7 @@ class Masks(unittest.TestCase):
         self.assertIn(str(self.a / "bob"), links)
         self.assertIn(links[str(self.a / "bob")], layers)             # the link points at a masked dir
 
+    @unittest.skipUnless(SEATBELT_PATHS, NO_SEATBELT_PATHS)
     def test_seatbelt_denies_a_symlinked_records_real_target(self):
         import re
         ext = Path(tempfile.mkdtemp(prefix="pb-139s-")).resolve()
@@ -168,8 +176,9 @@ class Masks(unittest.TestCase):
         with self.assertRaises(RuntimeError) as cm:
             sandbox.build_bwrap_argv(self.p, None, ["true"], None, project_writable=False)
         self.assertIn(str(ext / "not-yet.md"), str(cm.exception))
-        prof = sandbox.build_seatbelt_profile(self.p, None, None, project_writable=False)
-        self.assertIn(f'(deny file-read* (literal "{ext / "not-yet.md"}"))', prof.splitlines())
+        if SEATBELT_PATHS:
+            prof = sandbox.build_seatbelt_profile(self.p, None, None, project_writable=False)
+            self.assertIn(f'(deny file-read* (literal "{ext / "not-yet.md"}"))', prof.splitlines())
         # a worker / a --keep-records sandbox is not affected
         sandbox.build_bwrap_argv(self.p, None, ["true"], None, project_writable=True)
         sandbox.build_bwrap_argv(self.p, None, ["true"], None, project_writable=False, mask_records=False)
@@ -183,9 +192,11 @@ class Masks(unittest.TestCase):
         with self.assertRaises(RuntimeError) as cm:
             sandbox.build_bwrap_argv(self.p, None, ["true"], None, project_writable=False)
         self.assertIn(str(ext / "later"), str(cm.exception))
-        prof = sandbox.build_seatbelt_profile(self.p, None, None, project_writable=False)
-        self.assertIn(f'(deny file-read* (subpath "{ext / "later"}"))', prof.splitlines())
+        if SEATBELT_PATHS:
+            prof = sandbox.build_seatbelt_profile(self.p, None, None, project_writable=False)
+            self.assertIn(f'(deny file-read* (subpath "{ext / "later"}"))', prof.splitlines())
 
+    @unittest.skipUnless(SEATBELT_PATHS, NO_SEATBELT_PATHS)
     def test_a_quote_in_a_masked_path_is_escaped_for_seatbelt(self):
         # Task 139 post-D6 run 2 (codex): a `"` in a target path ended the profile's string
         ext = Path(tempfile.mkdtemp(prefix='pb-139"q-')).resolve()

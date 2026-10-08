@@ -276,8 +276,11 @@ class SandboxInspectionPrintsItsContent(_Project):
     capability matrix, the alias table — alone and combined with --prompt."""
 
     def _sandbox(self, *args):
+        # Task 151: the wrapper sets its own PYTHONPATH, joined to an inherited one with `:` —
+        # a Windows `C:\…` value there is split at the drive colon by Git Bash, so drop it.
+        env = {k: v for k, v in self.env.items() if k != "PYTHONPATH"}
         return subprocess.run([bash_or_skip(), str(SCRIPTS / "sandbox"), *args],
-                              cwd=self.project, env=self.env, capture_output=True,
+                              cwd=self.project, env=env, capture_output=True,
                               text=True, encoding="utf-8", errors="replace", timeout=60)
 
     def test_inspection_flags_print_profile_matrix_and_aliases(self):
