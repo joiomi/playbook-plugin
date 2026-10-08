@@ -263,9 +263,9 @@ class TestExitCodes(unittest.TestCase):
 class TestNoUsableBashFailsClosed(unittest.TestCase):
     """When bash cannot run the command, the verify must NEVER report GREEN.
 
-    On Windows a bare `bash` is the System32 WSL launcher; a stub exiting 0 would
-    stamp a red tree GREEN, and one exiting 1 would never run the command yet
-    read as FAILED. Simulated on any host with $PLAYBOOK_VERIFY_BASH pointing at
+    A `bash` that does not run what it is handed (a stub, a broken install): one
+    exiting 0 would stamp a red tree GREEN, and one exiting 1 would never run the
+    command yet read as FAILED. Simulated with $PLAYBOOK_VERIFY_BASH pointing at
     a stub. Red against the pre-fix code that invoked a bare `bash`.
     """
 
@@ -273,11 +273,11 @@ class TestNoUsableBashFailsClosed(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.addCleanup(self.tmp.cleanup)
-        self.stub = Path(self.tmp.name) / "wsl-stub.sh"
-        # WSL-launcher shape: exit 0 WITHOUT running the handed script — the most
-        # dangerous case, because a false 0 is the false-green.
+        self.stub = Path(self.tmp.name) / "broken-bash.sh"
+        # Exit 0 WITHOUT running the handed script — the most dangerous case,
+        # because a false 0 is the false-green.
         self.stub.write_text(
-            "#!/bin/sh\necho 'no WSL distro' >&2\nexit 0\n", encoding="utf-8")
+            "#!/bin/sh\necho 'broken-bash: nothing was run' >&2\nexit 0\n", encoding="utf-8")
         self.stub.chmod(0o755)
 
     def _run_with_stub(self, root):
@@ -294,6 +294,10 @@ class TestNoUsableBashFailsClosed(unittest.TestCase):
                             "a stub bash that never ran the command reported GREEN")
         self.assertEqual(rc, FAILED)
         self.assertIn("no usable bash", out)
+        # Task 159: the reason is what was observed — rc 0, and the probe's output.
+        self.assertIn("(rc=0)", out)
+        self.assertIn("did not print exactly `ok`", out)
+        self.assertIn("broken-bash: nothing was run", out)
 
 
 class TestCommandTransport(unittest.TestCase):

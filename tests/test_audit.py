@@ -171,11 +171,11 @@ class Severity(unittest.TestCase):
 class NoUsableBashFailsClosed(unittest.TestCase):
     """When bash cannot run the scan, the audit must ERROR, never certify clean.
 
-    On Windows a bare `bash` on PATH is the System32 WSL launcher; with no distro
-    it exits non-zero, which classify() would read as exit 1 = "clean" — a
-    false-green that never scanned. Simulated here on any host by pointing
-    $PLAYBOOK_VERIFY_BASH at a stub that behaves like the WSL launcher. Red
-    against the pre-fix code that invoked a bare `bash` and ignored the resolver.
+    A `bash` that is on PATH but cannot run a script (a stub, a broken install)
+    exits non-zero, which classify() would read as exit 1 = "clean" — a
+    false-green that never scanned. Simulated by pointing $PLAYBOOK_VERIFY_BASH
+    at such a stub. Red against the pre-fix code that invoked a bare `bash` and
+    ignored the resolver. (First met as Windows' WSL launcher, up to 1.5.47.)
     """
 
     def setUp(self):
@@ -187,12 +187,12 @@ class NoUsableBashFailsClosed(unittest.TestCase):
         self._real_env = os.environ.get("PLAYBOOK_VERIFY_BASH")
         self._real_cache = resolver_mod._RESOLVED_BASH
         self.tmp = Path(tempfile.mkdtemp())
-        stub = self.tmp / "wsl-stub.sh"
-        # Mimic the WSL launcher: print an install hint, exit non-zero, and
+        stub = self.tmp / "broken-bash.sh"
+        # A bash that cannot run anything: print a hint, exit non-zero, and
         # crucially NEVER run the script it was handed.
         stub.write_text(
             "#!/bin/sh\n"
-            "echo 'Windows Subsystem for Linux has no installed distributions.' >&2\n"
+            "echo 'broken-bash: this shell cannot run scripts' >&2\n"
             "exit 1\n", encoding="utf-8")
         stub.chmod(0o755)
         os.environ["PLAYBOOK_VERIFY_BASH"] = str(stub)
@@ -205,6 +205,16 @@ class NoUsableBashFailsClosed(unittest.TestCase):
             else:
                 os.environ["PLAYBOOK_VERIFY_BASH"] = self._real_env
         self.addCleanup(_restore)
+
+    def test_the_reason_reports_what_the_probe_did(self):
+        # Task 159 (impl panel r1): the reason is an observation — the exit status and
+        # what `printf ok` printed — not a guess at the cause (it used to say "likely
+        # the Windows WSL stub", then "it did not run the probe").
+        path, reason = self.resolver.usable_bash()
+        self.assertIsNone(path)
+        self.assertIn("(rc=1)", reason)
+        self.assertIn("did not print exactly `ok`", reason)
+        self.assertIn("broken-bash: this shell cannot run scripts", reason)
 
     def test_sweep_that_would_find_dirt_errors_when_bash_is_unusable(self):
         p = Path(tempfile.mkdtemp())

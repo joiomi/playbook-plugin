@@ -196,7 +196,7 @@ def parked() -> str:
 def _intent_check(task_path: str) -> str:
     """Extract task number and return intent-check instruction for judge prompts."""
     import re as _re
-    _tn = _re.search(r'[/\\](\d{3})-', task_path)
+    _tn = _re.search(r'/(\d{3})-', task_path)
     task_number = _tn.group(1) if _tn else None
     if task_number:
         return (

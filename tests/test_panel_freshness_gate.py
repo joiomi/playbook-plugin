@@ -423,6 +423,22 @@ class NestedCodeRoots(unittest.TestCase):
                             "special-char untracked content inside a nested "
                             "code_roots repo is invisible to the fingerprint")
 
+    def test_a_backslash_name_is_a_relative_code_root(self):
+        # Task 159 (impl panel r1, opus + codex-high): on Linux `\nested` is a relative
+        # NAME. Refusing it as "absolute" (a Windows rule) left that nested repo out of
+        # the fingerprint and of the review snapshot — both read this validated list.
+        import contextlib
+        import io
+        from tasks import core
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(core._code_roots({"code_roots": ["sub/app", "\\nested"]}),
+                             ["\\nested", "sub/app"])
+            self.assertEqual(err.getvalue(), "")
+            # Controls: an absolute path and a `..` hop are still refused, loudly.
+            self.assertEqual(core._code_roots({"code_roots": ["/abs", "../up", "ok"]}), ["ok"])
+        self.assertEqual(err.getvalue().count("must be a relative path"), 2)
+
     def test_unset_code_roots_is_byte_identical(self):
         # Unset (and empty-list) must be EXACTLY today's behavior: a nested edit
         # leaves the outer fingerprint unchanged, and unset == [] byte-for-byte.

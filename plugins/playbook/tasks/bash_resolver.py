@@ -94,8 +94,9 @@ def usable_bash() -> "tuple[str | None, str]":
     THE form audit.py and merge-verify.py use. On success `(path, "")`; on
     failure `(None, reason)`, and the caller must fail closed — an unusable bash
     is never silently treated as usable. The reason strings come from the two
-    `_usable_bash()` copies this replaces (the not-usable one says what was seen
-    since task 159; it used to guess a Windows stub). The probe runs in the
+    `_usable_bash()` copies this replaces (the not-usable one reports the exit
+    status and the probe's last line since task 159; it used to guess a Windows
+    stub). The probe runs in the
     inherited environment, matching those copies exactly.
     """
     global _RESOLVED_BASH
@@ -113,8 +114,13 @@ def usable_bash() -> "tuple[str | None, str]":
     if rc == 0 and raw.strip() == b"ok":
         _RESOLVED_BASH = (candidate, "")
     else:
-        _RESOLVED_BASH = (None, f"bash at {candidate} is not usable (rc={rc}) "
-                                "— it did not run the probe")
+        # What was observed, not a guess at the cause: the exit status and the
+        # last line the probe printed (as bash_usable reports it).
+        out = raw.decode("utf-8", "replace").replace("\x00", "")
+        lines = [ln.strip() for ln in out.strip().splitlines() if ln.strip()]
+        detail = lines[-1][:220] if lines else "(no output)"
+        _RESOLVED_BASH = (None, f"bash at {candidate} is not usable (rc={rc}): `printf ok` "
+                                f"did not print exactly `ok` (last line: {detail})")
     return _RESOLVED_BASH
 
 

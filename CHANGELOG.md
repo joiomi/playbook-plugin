@@ -31,15 +31,19 @@ Bash) come back after that, starting from `git diff last-multiplatform`. The las
 - **The remaining Windows-only branches are removed** (task 157): the msvcrt lock backend (`fcntl` is the backend), the
   Windows command-line caps of the grok and pi judge seats (the per-argument byte guard, the Linux limit, stays), the
   `.exe` recovery in the bash resolver, and judgebench's `--platform windows` simulation. Linux behaviour is unchanged.
-- **The Windows leftovers with no use on Linux are gone too** (task 159). The bash resolver's failure hint no longer
-  guesses "the Windows WSL stub" — it says the probe did not run. The shell logger no longer cuts a script's name at a
-  backslash: a script NAMED `sub\statusline.sh` is an ordinary script and its commands are logged. The code-file
-  classifier, on the Claude and on the codex path, no longer reads `\` as a path separator: a file NAMED `src\deploy`
-  is not inside `src/` (and the same step in the codex management-path check was a bypass — see Fixed). judgebench
-  accepts the labels Windows reserves (`CON`, a trailing dot). Kept, because they serve Linux: the `ps` fallback for a
-  host without `/proc`, the command guard's own backslash handling, the Windows-style names in its dangerous-variable
-  list (an unset variable expands to nothing here too), and the rule that a heredoc delimiter is never a prefix of a
-  body line — measured: bash 5.2 and 5.3 on Linux cut such a heredoc exactly as Git Bash did.
+- **The Windows leftovers with no use on Linux are gone too** (task 159). The bash resolver's failure reason no longer
+  guesses "the Windows WSL stub" — it reports the exit status and the last line the probe printed. The shell logger no
+  longer cuts a script's name at a backslash: a script NAMED `sub\statusline.sh` is an ordinary script and its commands
+  are logged. A `\` is a file-name character, not a path separator, in the code-file classifier (Claude and codex
+  paths: a file NAMED `src\deploy` is not inside `src/`), in `code_roots` (a nested repo named `\nested` is no
+  longer refused as "absolute") and where a judge prompt finds the task number in a path; the same step in the codex
+  management-path check was a bypass — see Fixed. judgebench accepts the labels Windows reserves (`CON`, a trailing
+  dot). Kept, because they serve Linux: the `ps` fallback for a host without `/proc`; the Windows-style names in the
+  command guard's dangerous-variable list (an unset variable expands to nothing here too); and the rule that a heredoc
+  delimiter is never a prefix of a body line — measured on Linux: inside `$( )`, bash 5.2.15-5.2.37 and 5.3.20 end the
+  heredoc at a body line that starts with the delimiter and holds a `)`, bash 5.1.16 does not. Left in place, not
+  proven dead: ten `\`→`/` steps in the helper of the hand-made-task-directory guard (`task-dir-target.py`) —
+  measured to change nothing on Linux.
 - **CI runs the sandbox tests** (task 158): the Linux lanes install bubblewrap (and lift Ubuntu 24.04's AppArmor
   restriction on unprivileged user namespaces for the job), so the live containment tests run there instead of skipping
   (26 skips → 9).

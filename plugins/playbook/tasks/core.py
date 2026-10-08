@@ -2013,7 +2013,7 @@ def _code_roots(cfg: dict) -> "list[str]":
             continue
         rel = p.strip()
         parts = Path(rel).parts
-        if os.path.isabs(rel) or rel.startswith(("/", "\\")) or ".." in parts:
+        if os.path.isabs(rel) or ".." in parts:      # a leading `\` is a name, not a root (task 159)
             print(f"[playbook] code_roots[{i}]={rel!r}: must be a relative path "
                   "inside the project (no absolute paths, no '..') — skipped",
                   file=sys.stderr)

@@ -159,6 +159,9 @@ class JudgesAreNotSentToTheChat(unittest.TestCase):
         self.assertNotIn("tasks context", clause)
         for part in ("## Intent", "## Why", "### Recent Chat"):
             self.assertIn(part, clause)
+        # Task 159 (impl panel r1, opus): the task number follows a `/`. A backslash
+        # is a file-name character on Linux, so a path spelled with them names no task.
+        self.assertEqual(_intent_check("p\\.agent\\tasks\\125-x\\task.md"), "")
 
     def test_tasks_context_says_why_when_the_log_cannot_be_read(self):
         import contextlib
