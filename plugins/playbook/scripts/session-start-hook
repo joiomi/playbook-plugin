@@ -56,8 +56,7 @@ INPUT=$(cat)
 # this new session's id — a child claude inherits its launcher's environment
 # (measured: a `claude --bg` re-exported a dead parent id into its own env
 # file), so resolve it from the walk alone, with the variable unset. Explicit
-# non-pid ids (`judge`, a subagent's uuid) are exported as before. Windows is
-# untouched (MSYS: no walk).
+# non-pid ids (`judge`, a subagent's uuid) are exported as before.
 #
 # Round 2: the export must be the id this session's HOOKS will use — they see
 # the inherited value, not the env file. So the shared resolver decides (an
@@ -66,16 +65,12 @@ INPUT=$(cat)
 # walk), and only when the walk finds no agent at all is an inherited
 # `pid-<digits>` dropped (resolved with the variable unset → no export, 105).
 SESSION_ID="$(resolve_session_id)"
-case "${OSTYPE:-}$(uname -s 2>/dev/null)" in
-    msys*|cygwin*|*MINGW*|*MSYS*|*CYGWIN*) : ;;
-    *)
-        case "${PLAYBOOK_SESSION_ID:-}" in
-            pid-*[!0-9]*|pid-|"") : ;;
-            pid-*)
-                if [ -z "$(_agent_walk all)" ]; then
-                    SESSION_ID="$(PLAYBOOK_SESSION_ID= resolve_session_id)"
-                fi ;;
-        esac ;;
+case "${PLAYBOOK_SESSION_ID:-}" in
+    pid-*[!0-9]*|pid-|"") : ;;
+    pid-*)
+        if [ -z "$(_agent_walk all)" ]; then
+            SESSION_ID="$(PLAYBOOK_SESSION_ID= resolve_session_id)"
+        fi ;;
 esac
 
 # Task 105: unresolved (under the Claude Code background daemon, no
@@ -156,16 +151,16 @@ print(t if isinstance(t, str) and t and '\n' not in t and '\r' not in t else '')
     # Policy, in order (mirrors _gc_dead_sessions exactly):
     #   1. never our own session — mtime is irrelevant, we are demonstrably alive
     #   2. `pid-*` (ALL of them, numeric or not): keep iff `kill -0` succeeds.
-    #      A non-numeric suffix (e.g. a non-own `pid-win-fallback`) fails kill
+    #      A non-numeric suffix (e.g. a non-own `pid-12ab`) fails kill
     #      and is removed — matching Python's ValueError→remove arm.
     #   3. anything else (legacy UUIDs, "default"): 24h `current_state` mtime.
     SESSIONS_DIR="$AGENT_DIR/sessions"
     if [ -d "$SESSIONS_DIR" ]; then
         for d in "$SESSIONS_DIR"/*; do
             # NO trailing slash in the glob, and symlinks are skipped outright:
-            # `rm -rf "link/"` follows the link and destroys the TARGET (measured
-            # on macOS: the target directory itself was removed and the symlink
-            # left behind). Python's shutil.rmtree refuses a symlink, so skipping
+            # `rm -rf "link/"` follows the link and destroys the TARGET (measured:
+            # the target directory itself was removed and the symlink left
+            # behind). Python's shutil.rmtree refuses a symlink, so skipping
             # also keeps the two sweepers in agreement. Nothing legitimately
             # creates symlinks in here.
             [ -L "$d" ] && continue
@@ -178,21 +173,6 @@ print(t if isinstance(t, str) and t and '\n' not in t and '\r' not in t else '')
 
             case "$name" in
                 pid-*)
-                    # (2w) Windows/MSYS: KEEP every pid-* dir, never probe. This
-                    # mirrors tasks/shared.py::_session_is_dead under _ON_WINDOWS,
-                    # which stopped probing on Windows because `kill -0` there is
-                    # both unsafe (routes through TerminateProcess) and unreliable
-                    # (git-bash MSYS pids do not map to native pids). Leaving this
-                    # sweep probing while the Python sweeper kept-all was a parity
-                    # break: `kill -0 $PPID` gives non-deterministic answers under
-                    # MSYS depending on process ancestry, so this hook would delete
-                    # a LIVE foreign session on some runs and not others (the
-                    # wrapper-multiuser S18 271/2-vs-273/0 split in CI). Over-keeping
-                    # is safe (no data loss); an unprovable-dead pid is never
-                    # reclaimed. Legacy (non-pid) names still use the mtime fallback.
-                    case "$(uname -s 2>/dev/null)" in
-                        MINGW*|MSYS*|CYGWIN*) continue ;;
-                    esac
                     # (2) Liveness, not mtime. A busy session's pointer can be
                     # arbitrarily old; a dead session's can be seconds fresh.
                     #

@@ -47,8 +47,8 @@ STALE_LOCK = 30.0
 
 
 class _DirLock:
-    """An exclusive advisory lock on `<log_dir>/write_log.lock`: flock on POSIX,
-    msvcrt on Windows. `acquired` is False after LOCK_WAIT seconds without it."""
+    """An exclusive advisory lock on `<log_dir>/write_log.lock` (flock).
+    `acquired` is False after LOCK_WAIT seconds without it."""
 
     def __init__(self, log_dir: str):
         self.log_dir = log_dir
@@ -59,13 +59,8 @@ class _DirLock:
         deadline = time.monotonic() + LOCK_WAIT
         while True:
             try:
-                if os.name == "nt":
-                    import msvcrt
-                    self.fh.seek(0)
-                    msvcrt.locking(self.fh.fileno(), msvcrt.LK_NBLCK, 1)
-                else:
-                    import fcntl
-                    fcntl.flock(self.fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                import fcntl
+                fcntl.flock(self.fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 self.acquired = True
                 return
             except OSError as exc:
@@ -116,13 +111,8 @@ class _DirLock:
             return
         try:
             if self.acquired:
-                if os.name == "nt":
-                    import msvcrt
-                    self.fh.seek(0)
-                    msvcrt.locking(self.fh.fileno(), msvcrt.LK_UNLCK, 1)
-                else:
-                    import fcntl
-                    fcntl.flock(self.fh.fileno(), fcntl.LOCK_UN)
+                import fcntl
+                fcntl.flock(self.fh.fileno(), fcntl.LOCK_UN)
         except OSError:
             pass
         finally:
@@ -130,7 +120,7 @@ class _DirLock:
 
 
 def _private(log_dir: str) -> None:
-    """0700 on the directory, 0600 on every file in it (no-ops on Windows)."""
+    """0700 on the directory, 0600 on every file in it."""
     try:
         os.chmod(log_dir, 0o700)
         for name in os.listdir(log_dir):

@@ -124,8 +124,7 @@ It comes from a CLI's stderr, so it is sanitized: control characters are dropped
 style key, or a 32+ run of letters and digits with no `_` or `/` — hex or
 base64-shaped; paths and snake_case test ids survive) become `<redacted>`. It is then cut to
 the bytes the rest of the record leaves under the 512-byte atomic-append floor
-(counting the newline as two bytes: on Windows the journal's text-mode write
-emits CRLF), and
+(its one-byte newline included), and
 left out when fewer than 8 bytes remain — the field can shorten, never lengthen a
 line past the floor.
 

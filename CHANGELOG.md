@@ -24,6 +24,11 @@ Bash) come back after that, starting from `git diff last-multiplatform`. The las
   profile, is removed — it is now refused (exit 2) like any unknown flag; `--print-argv` shows the bwrap argv. The
   macOS-only `~/Library` is no longer created and bound writable in every Linux launch. The platform-only tests went first (task 154: 3720 →
   3692 tests, Linux skips unchanged).
+- **The hooks and the session-identity code lost their Windows/MSYS branches** (task 156). No `pid-win-fallback`
+  session id, no skipped process walk, no keep-every-session GC, no Git Bash path conversion (`cygpath`, drive-letter
+  spellings), no msvcrt lock. On Linux the hooks behave as before, with two exceptions that follow from Linux-only:
+  the batch-close guard no longer treats a `\` in a task.md path as a separator (it is a filename character on
+  Linux), and the review journal's error budget counts the one-byte newline it writes (it counted two).
 - **Docs and the guarantee ledger claim Linux only** (task 153): README (with the `multiplatform` install steps; the
   install command now names `joiomi/playbook-plugin`), `docs/`, the monitor skill and `/playbook:init`; every ledger row
   applies to `linux`, and live evidence no longer targets macOS or Windows.

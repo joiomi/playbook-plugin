@@ -252,23 +252,15 @@ if [ ! -f "$PROJECT_DIR/.agent/models.json" ]; then
     echo "                                   tasks models select  (writes .agent/models.json)"
 fi
 
-# On Git-Bash/MSYS, python3 is usually native Windows Python, which cannot open
-# MSYS-style paths (/c/Users/...). Convert to a mixed-mode Windows path
-# (C:/Users/...) — forward slashes so it's also safe inside a Python string
-# literal — before handing a path to python3. No-op on real POSIX, where
-# cygpath is absent and the original path is echoed unchanged.
-to_native_path() {
-    cygpath -m "$1" 2>/dev/null || echo "$1"
-}
 
 # --- (b) settings.json permissions.deny merge ---
 SETTINGS_FILE="$PROJECT_DIR/.claude/settings.json"
 mkdir -p "$PROJECT_DIR/.claude"
-SETTINGS_FILE_PY="$(to_native_path "$SETTINGS_FILE")"
+SETTINGS_FILE_PY="$SETTINGS_FILE"
 # Task 100 (PLAN S8c): the embedded python below writes settings.json through the
 # same atomic primitive the CLI uses (temp + fsync + os.replace), never a plain
 # truncating write — a crash mid-write must not empty a settings file.
-ATOMIC_PY="$(to_native_path "$SCRIPT_DIR/../tasks/atomic.py")"
+ATOMIC_PY="$SCRIPT_DIR/../tasks/atomic.py"
 
 SETTINGS_RESULT=$(PB_SETTINGS_PATH="$SETTINGS_FILE_PY" PB_ATOMIC_PY="$ATOMIC_PY" python3 -c "
 import json, sys, os
@@ -367,7 +359,7 @@ done
 # Claude Code's Bash tool is /bin/bash no matter what $SHELL says — and the
 # settings.json injection below always points BASH_ENV at it. Before task 027
 # the $SHELL branch deployed ONLY bash-log.zsh on zsh hosts while still setting
-# BASH_ENV=~/.claude/bash-log.sh, so on every macOS/zsh install that variable
+# BASH_ENV=~/.claude/bash-log.sh, so on every zsh install that variable
 # dangled at a nonexistent file and CC-side command logging was silently dead.
 # (Task 023 found this but deferred it deliberately: fixing it ARMS bash-log's
 # DEBUG trap on every zsh host, which was unsafe until the trap's set -e kill
@@ -382,7 +374,7 @@ deploy_bash_log() {   # $1 = filename under $SCRIPT_DIR; deploys to ~/.claude/
     [ -f "$src" ] || return 0
     mkdir -p "$HOME/.claude"
     # Normalize CRLF→LF on the way out. These files are SOURCED by every hook
-    # shell, and a CRLF copy from a Windows checkout breaks that; normalizing at
+    # shell, and a CRLF copy (a checkout with autocrlf) breaks that; normalizing at
     # deploy time also makes the up-to-date comparison meaningful, since
     # comparing a CRLF source against an LF destination never matches and would
     # re-copy on every single init run. Written through a temp + atomic mv, the
@@ -424,7 +416,7 @@ if [ -f "$BASH_LOG_SRC" ]; then
     # Inject BASH_ENV into ~/.claude/settings.json so CC passes it to every bash shell it spawns.
     # This is the reliable path — CC reads settings.json env key and injects vars before tool calls.
     CC_SETTINGS="$HOME/.claude/settings.json"
-    CC_SETTINGS_PY="$(to_native_path "$CC_SETTINGS")"
+    CC_SETTINGS_PY="$CC_SETTINGS"
     BASH_ENV_RESULT=$(PB_CC_SETTINGS_PATH="$CC_SETTINGS_PY" PB_ATOMIC_PY="$ATOMIC_PY" python3 -c "
 import json, os, tempfile
 import importlib.util as _ilu
@@ -434,11 +426,10 @@ _m = _ilu.module_from_spec(_s); _s.loader.exec_module(_m); atomic_write = _m.ato
 path = os.environ['PB_CC_SETTINGS_PATH']
 # Always bash-log.sh — CC's Bash tool is /bin/bash regardless of user's login shell.
 # Point BASH_ENV at the SAME dir deploy_bash_log wrote to, which uses the shell's
-# $HOME. On Windows os.path.expanduser('~') prefers USERPROFILE over $HOME, so it
-# could name a DIFFERENT dir than where the file was deployed and leave BASH_ENV
-# dangling — the exact dangling-reference bug this path exists to prevent. Derive
-# from $HOME (always set under the bash that runs init); fall back to expanduser
-# only if it is somehow unset. Forward-slash the result: BASH_ENV is read by
+# $HOME, so BASH_ENV can never name a DIFFERENT dir than where the file was
+# deployed (a dangling reference — the bug this path exists to prevent; up to
+# 1.5.47 Windows' expanduser preferred USERPROFILE). Derive from $HOME (always set
+# under the bash that runs init); fall back to expanduser only if it is unset. Forward-slash the result: BASH_ENV is read by
 # Git-Bash, which needs a POSIX-sourceable path (C:/Users/... works). No-op on
 # POSIX, where $HOME == expanduser('~').
 home = os.environ.get('HOME') or os.path.expanduser('~')
@@ -579,19 +570,18 @@ fi
 # I4: guard the assignment — `set -e` aborts on a bare `VAR=$(cmd)` when cmd
 # fails, which would kill init here (before the FAILED handler + summary) on any
 # CLAUDE.md merge failure. The `if` form captures output AND rc without aborting.
-if MERGE_OUT=$(python3 "$(to_native_path "$SCRIPT_DIR/claude-md-merge.py")" \
-    "$(to_native_path "$SCRIPT_DIR/CLAUDE.md.template")" \
-    "$(to_native_path "$PROJECT_DIR")" "$PROJECT_NAME" 2>&1); then
+if MERGE_OUT=$(python3 "$SCRIPT_DIR/claude-md-merge.py" \
+    "$SCRIPT_DIR/CLAUDE.md.template" \
+    "$PROJECT_DIR" "$PROJECT_NAME" 2>&1); then
     MERGE_RC=0
 else
     MERGE_RC=$?
 fi
 while IFS= read -r line; do
-    # claude-md-merge.py prints via Python text-mode stdout, which on Windows
-    # emits CRLF; command substitution keeps the embedded CR, so `$line` arrives
-    # as `CLAUDE.md:CREATED\r` and matches NONE of the exact patterns below,
-    # dropping every status into the catch-all → a spurious FAILED → exit 1 even
-    # though init did all its work. Strip a trailing CR. No-op on Linux/macOS.
+    # Read tolerance: a CR-terminated status line (`CLAUDE.md:CREATED\r`) would
+    # match NONE of the exact patterns below, dropping every status into the
+    # catch-all → a spurious FAILED → exit 1 even though init did all its work.
+    # Strip a trailing CR.
     line=${line%$'\r'}
     case "$line" in
         CLAUDE.md:CREATED)    CREATED+=("CLAUDE.md (from template)") ;;

@@ -3,35 +3,13 @@
 # Shared logic for hooks: project root detection + gate parsing.
 
 # _canonical_path PATH
-# Canonical cross-language form of an absolute path, so a Git-Bash shell and a
-# native-Windows Python resolve the SAME string for the same location.
-#
-# The divergence this fixes: under MSYS/Git Bash the shell speaks POSIX-mount
-# paths (/tmp/…, forward slashes), but the Python CLI runs as a native Windows
-# process — MSYS converts its argv and .resolve() yields drive-letter paths
-# (C:\Users\…). The two halves then address one directory by two different
-# strings, so any string comparison across the seam disagrees.
-#
-# Canonical direction = forward-slash drive form (C:/Users/…). It is the only
-# form BOTH halves can produce AND use for real I/O:
-#   * the MSYS mount form (/tmp/…) is unusable by native Python for file I/O;
-#   * the pure-backslash native form (C:\…) is hostile to bash, which treats
-#     backslash as an escape — so we do NOT reuse the CI's `cygpath -w`
-#     (that exists for CreateProcess exec, a different boundary), we use
-#     `cygpath -m` (mixed: drive letter + forward slashes). Python meets it
-#     from the other side with `Path.as_posix()` (see tasks.core.canonical_path).
-#
-# Applied only at the cross-language BOUNDARY (never threaded through the
-# resolvers themselves — that would break bash's own I/O and force every call
-# site to convert). cygpath's presence IS the Windows/Cygwin signal: on Linux
-# and macOS there is no cygpath, so this is a pure identity and those lanes are
-# byte-for-byte unchanged.
+# The one seam where a shell-derived path meets a Python-derived one (the lane
+# comparisons, write_log's arguments). On Linux both halves already speak the
+# same form, so this is the identity. It stays as the named boundary: up to
+# 1.5.47 (tag `last-multiplatform`) it converted Git Bash's mount form with
+# `cygpath -m`, and bringing Windows back starts here.
 _canonical_path() {
-    if command -v cygpath >/dev/null 2>&1; then
-        cygpath -m "$1"
-    else
-        printf '%s\n' "$1"
-    fi
+    printf '%s\n' "$1"
 }
 
 # find_project_root
@@ -109,11 +87,11 @@ _is_daemon_argv() {
 }
 
 # _is_daemon_args LINE
-# The `ps` fallback (no /proc — macOS): the flattened `ps -o args=` line split
+# The `ps` fallback (no /proc mounted): the flattened `ps -o args=` line split
 # on whitespace and fed to the SAME detector. \n and \r become spaces first so
 # the split equals Python's str.split(). HEURISTIC by construction (an argv[0]
-# with spaces cannot be told from argument boundaries) — a declared macOS
-# limitation; no parsing rules are added here (owner decision 2026-09-28).
+# with spaces cannot be told from argument boundaries) — a declared limitation
+# of that fallback; no parsing rules are added here (owner decision 2026-09-28).
 _is_daemon_args() {
     local a="$1"
     a="${a//$'\n'/ }"
@@ -166,7 +144,7 @@ _proc_argv() {
 
 # _ps_field PID FIELDS
 # `ps -ww -p PID -o FIELDS`, or empty when it cannot be read — the fallback when
-# /proc is missing (macOS). -ww: procps clips to $COLUMNS even on a pipe. One
+# /proc is missing. -ww: procps clips to $COLUMNS even on a pipe. One
 # retry so a single hiccup does not fail a live session closed. Mirrors
 # tasks/core.py _ps_field.
 _ps_field() {
@@ -185,21 +163,10 @@ _ps_field() {
 # Walk the parent process tree once. Output "<pid>" of the highest agent
 # ancestor BELOW any Claude Code daemon process, "daemon" when the walk stopped
 # (daemon, or an unreadable ancestor) with no agent below it, or "" when no
-# agent was found within 20 hops. Linux reads /proc/<pid>/status + cmdline
-# (exact); only without <proc root>/self (macOS) does it use `ps`. Mirrors
+# agent was found within 20 hops. It reads /proc/<pid>/status + cmdline
+# (exact); only without <proc root>/self (no /proc mounted) does it use `ps`. Mirrors
 # `_walk_agent_ancestry()` in tasks/core.py.
 _agent_walk() {
-    # Windows/MSYS: the ancestor scan is non-functional — Git-Bash `ps` has no
-    # `-o` flag, and MSYS vs native-Windows PID namespaces are disjoint. Skip it
-    # (mirrors the win32 guard in core.py) and let resolve_session_id fall back
-    # to PLAYBOOK_SESSION_ID / $PPID. POSIX is untouched: the guard only matches
-    # MSYS/Cygwin/MinGW shells.
-    case "${OSTYPE:-}" in
-        msys*|cygwin*) echo ""; return 0 ;;
-    esac
-    case "$(uname -s 2>/dev/null)" in
-        MINGW*|MSYS*|CYGWIN*) echo ""; return 0 ;;
-    esac
     # `_agent_walk all` prints EVERY agent pid below any daemon (bottom-up,
     # space-separated; empty when none) instead of the root — for the env-id
     # check (task 106), mirroring core.py _walk_agent_chain.
@@ -361,11 +328,7 @@ resolve_session_id() {
             *)
                 # Task 106: a `pid-<digits>` that is not a live agent is stale —
                 # fall through to the walk (silently here; the Python CLI prints
-                # the one line). Windows is untouched (MSYS pids are not probed).
-                case "${OSTYPE:-}$(uname -s 2>/dev/null)" in
-                    msys*|cygwin*|*MINGW*|*MSYS*|*CYGWIN*)
-                        echo "$PLAYBOOK_SESSION_ID"; return 0 ;;
-                esac
+                # the one line).
                 if ! _env_pid_is_stale "$PLAYBOOK_SESSION_ID"; then
                     # Owner-accepted deviation 2026-09-28: a live agent's
                     # `pid-N` is refused when the walk finds agents and N is
@@ -394,17 +357,6 @@ resolve_session_id() {
                 fi ;;
         esac
     fi
-    # Windows/MSYS: a PID fallback split-brains — this shell sees MSYS PIDs
-    # while the Python CLI sees native-Windows PIDs (disjoint namespaces), so
-    # the gate hook would read a different .agent/sessions/<id>/ than the CLI
-    # writes. Return the constant shared verbatim with core.py
-    # resolve_session_id so both converge.
-    case "${OSTYPE:-}" in
-        msys*|cygwin*) echo "pid-win-fallback"; return 0 ;;
-    esac
-    case "$(uname -s 2>/dev/null)" in
-        MINGW*|MSYS*|CYGWIN*) echo "pid-win-fallback"; return 0 ;;
-    esac
     local agent_pid
     agent_pid=$(_agent_walk)
     case "$agent_pid" in
@@ -424,7 +376,7 @@ resolve_session_id() {
 # same vectors):
 #   * exactly ONE content line; a second non-empty line is INVALID
 #     (`alice\n../evil` must not silently resolve to lane `alice`)
-#   * a trailing CR is stripped, so CRLF markers work (Windows is supported)
+#   * a trailing CR is stripped, so a CRLF-saved marker works (read tolerance)
 #   * a missing trailing newline is fine — `read` returns 1 but still assigns,
 #     hence `|| true`; without it errexit fires inside a DEBUG trap
 #   * surrounding whitespace is ignored, matching Python's .strip()
@@ -628,7 +580,7 @@ read_counter_int() {
 # Algorithm: extension decides first (code ext -> gate; doc/data ext -> exempt);
 # an undecided extension gates iff a path component is a known code dir.
 # Extension match is case-insensitive (parity with Python's .lower()); use `tr`
-# not `${x,,}` so macOS's bash 3.2 is fine.
+# not `${x,,}` (works in any bash, 3.2 included).
 is_code_file_path() {
     local file_path="$1"
     local norm="${file_path//\\//}"          # backslashes -> slashes (Python parity)
@@ -687,8 +639,8 @@ write_counter() {
     if [ -f "$file" ]; then
         grep -v "^${key}=" "$file" > "$tmp" 2>/dev/null || true
     fi
-    # Fail-OPEN and fail-LOUD: a write failure here (e.g. a Windows AV lock on
-    # the atomic mv) must never kill the caller under `set -e` — that silently
+    # Fail-OPEN and fail-LOUD: a write failure here (e.g. a lock or a full disk
+    # on the atomic mv) must never kill the caller under `set -e` — that silently
     # freezes the gate_key and stops all gate logging (bug report #4). Record it
     # in PLAYBOOK_WRITE_FAILED so the hook can surface it, and always return 0.
     if ! { printf '%s=%s\n' "$key" "$value" >> "$tmp" 2>/dev/null && mv "$tmp" "$file" 2>/dev/null; }; then
@@ -748,8 +700,8 @@ write_log_append() {
     # Bounded since task 141 (owner Q8): the size cap, the rotation, the one-time
     # parking of a pre-cap log and the `"write_log": false` switch live in
     # write_log.py. Best-effort: never fail the tool call.
-    # The paths cross into native Python: canonical form at that boundary (task 151 — the
-    # Windows lane wrote no log; on Linux/macOS _canonical_path is the identity)
+    # The paths cross into Python: canonical form at that boundary (task 151;
+    # _canonical_path is the identity on Linux)
     printf '%s' "$input" | python3 "$(_canonical_path "$(dirname "${BASH_SOURCE[0]}")")/write_log.py" \
         "$(_canonical_path "$log_dir")" "$(_canonical_path "$project_dir")" 2>/dev/null || true
 }

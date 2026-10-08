@@ -193,18 +193,15 @@ def _fit_error(rec: dict, error) -> str:
     """Task 096: the reason a judge invocation failed, fitted to what the rest of
     `rec` leaves under the 512-byte floor. Control characters are dropped and
     `"`/`\\` replaced, so the encoded length equals the byte length; the budget
-    counts the newline as two bytes (CRLF, what Windows writes), so it is exact
-    there and one byte conservative on POSIX. Token-shaped runs are redacted
+    counts the newline as the one byte the journal writes, so it is exact.
+    Token-shaped runs are redacted
     (the reason comes from a CLI's stderr). Returns "" when fewer than 8 bytes
     remain."""
     s = str(error).strip().split("\n", 1)[0]
     s = "".join(ch for ch in s if ch >= " " and ch != "\x7f")
     s = s.replace('"', "'").replace("\\", "/")
     s = _TOKENISH.sub("<redacted>", s)
-    # "\r\n", not "\n": `_write_record` opens without O_BINARY, so on Windows the
-    # text-mode fd writes the newline as CRLF — one byte more than on POSIX
-    # (caught by the Windows CI lane, run 36107317940: 513 bytes).
-    base = len((json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\r\n").encode("utf-8"))
+    base = len((json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8"))
     budget = _LINE_FLOOR - base - len(',"error":""'.encode("utf-8"))
     if budget < 8:
         return ""
@@ -284,17 +281,15 @@ def _write_record(agent_dir, rec) -> None:
     # journal component and skip if it is a symlink. (Residual, honestly bounded:
     # a TOCTOU swap of the dir between this lstat and the open below is a tiny
     # window on a best-effort log with no reader waiting — far under this
-    # feature's threat model; a dirfd/openat anchor would close it fully but is
-    # not portable to Windows-Git-Bash.)
+    # feature's threat model; a dirfd/openat anchor would close it fully.)
     jfile = jdir / "enforcement.jsonl"
     # Skip a symlinked `journal` DIRECTORY or a symlinked leaf FILE — either would
     # let the open below resolve OUTSIDE the lane. lstat both components: this is
-    # the PORTABLE guard (O_NOFOLLOW below is POSIX-only and absent on Windows, so
-    # on Windows it is these islink checks doing the work). Residual, honestly
+    # the first guard (O_NOFOLLOW below may be absent — getattr → 0 — and then
+    # these islink checks do the work). Residual, honestly
     # bounded: a TOCTOU swap between an lstat and the open is a tiny window on a
     # best-effort log with no reader waiting — far under this feature's threat
-    # model; a dirfd/openat anchor would close it fully but is not portable to
-    # Windows-Git-Bash (impl-panel round 4 + CI).
+    # model; a dirfd/openat anchor would close it fully (impl-panel round 4).
     try:
         if jdir.is_symlink():
             return
@@ -312,10 +307,9 @@ def _write_record(agent_dir, rec) -> None:
     data = (json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
     # O_NONBLOCK: a FIFO with no reader fails ENXIO here rather than blocking.
     # O_NOFOLLOW: a symlinked final component fails ELOOP (no lane escape).
-    # Both are POSIX-only — Windows Python defines neither, so getattr(...,0)
-    # makes them no-ops there (the islink check above is the portable guard, and
-    # Windows has no FIFO-hang vector; the fstat regular-file check below still
-    # applies). Using os.O_NONBLOCK directly raised AttributeError on Windows,
+    # Read with getattr(…, 0): a platform without them gets no-ops (the islink
+    # check above and the fstat regular-file check below still apply). Using
+    # os.O_NONBLOCK directly once raised AttributeError where it was missing,
     # which the caller swallowed and silently dropped EVERY journal write.
     fd = os.open(str(jfile),
                  os.O_WRONLY | os.O_APPEND | os.O_CREAT

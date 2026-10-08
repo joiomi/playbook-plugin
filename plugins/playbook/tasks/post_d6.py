@@ -275,7 +275,7 @@ def worktree_tree_why(repo: Path, exclude: "list[str]") -> "tuple[str | None, st
         if real.is_file():
             # copy2: keep the stat cache (no full re-hash) AND the index's own mtime —
             # git re-hashes a "racily clean" entry only while the index is not newer
-            # than it; a fresh mtime on the copy hid a same-size edit (CI macOS, 108).
+            # than it; a fresh mtime on the copy hid a same-size edit (seen in CI, task 108).
             shutil.copy2(real, idx)
         else:
             head = _git(repo, ["rev-parse", "--verify", "-q", "HEAD"])
@@ -489,10 +489,10 @@ def gate_run(runs: "list[dict]", panel_fp: str, owner_ok: "str | None" = None
 
 def _owner_alive(rec: dict) -> "bool | None":
     """True/False when the reservation's owning process can be judged (same host,
-    POSIX), None otherwise. Never os.kill on Windows: signal 0 there TERMINATES."""
+    live pid), None otherwise."""
     import socket
     pid = rec.get("pid")
-    if os.name == "nt" or not isinstance(pid, int) or rec.get("host") != socket.gethostname():
+    if not isinstance(pid, int) or rec.get("host") != socket.gethostname():
         return None
     try:
         os.kill(pid, 0)

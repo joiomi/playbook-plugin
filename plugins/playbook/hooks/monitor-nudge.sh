@@ -84,7 +84,7 @@ NUDGE_FILE="$AGENT_DIR/monitor/nudge.md"
 # invocation's own claim, re-land any stranded claim whose OWNER PROCESS IS DEAD.
 # A claim whose pid is still alive is a concurrent in-flight delivery: leave it.
 # All arms are `set -e`-safe (guards / `|| true` / `if`), and $$/$RANDOM/kill are
-# bash 3.2 builtins (macOS ok). Re-landing uses the SAME atomic `ln` no-clobber
+# bash builtins (bash 3.2+). Re-landing uses the SAME atomic `ln` no-clobber
 # as the failure path so a stale orphan can never destroy a newer live nudge.
 for orphan in "$AGENT_DIR"/monitor/nudge.md.delivering.*; do
     [ -e "$orphan" ] || continue                    # glob had no match
@@ -122,7 +122,7 @@ done
 # destination makes `mv` the mutual exclusion: exactly ONE concurrent firing can
 # rename the single nudge.md (rename is atomic on the source inode); the losers'
 # `mv` finds the source already gone and exits silently. `$$` (this hook
-# process's pid) + `$RANDOM` are bash builtins (bash 3.2 / macOS ok); together
+# process's pid) + `$RANDOM` are bash builtins (bash 3.2+); together
 # they're unique across concurrent firings and robust to pid reuse.
 DELIVERING="$NUDGE_FILE.delivering.$$.$RANDOM"
 mv "$NUDGE_FILE" "$DELIVERING" 2>/dev/null || exit 0

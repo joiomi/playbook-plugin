@@ -95,7 +95,7 @@ def resolve_launcher_script(doctor_root: Path, project: Path, home: Path) -> "st
     env = dict(os.environ, HOME=str(home))
     try:
         # BYTES, UTF-8: `python -` decodes its source as UTF-8, while a text pipe
-        # would encode it in the locale code page (cp1252 on Windows turned the
+        # would encode it in the locale code page (a cp1252 one turned the
         # resolver's em dash into 0x97 → SyntaxError → nothing resolved; CI
         # run 35970907673). The wrapper passes the file's own bytes the same way.
         # `-I` (isolated): no cwd on sys.path, no PYTHON* env — a project file
@@ -368,8 +368,8 @@ def content_differences(repo: str, prefix: str, install_path: str, sha: str) -> 
             else:
                 changed.append(rel)
             continue
-        # the execute bit decides which copy a wrapper selects; Windows has none
-        if os.name != "nt" and mode in ("100644", "100755"):
+        # the execute bit decides which copy a wrapper selects
+        if mode in ("100644", "100755"):
             try:
                 x = bool(os.lstat(root / rel).st_mode & 0o111)
             except OSError:
@@ -476,7 +476,7 @@ def report(project: Path, *, home: "Path | None" = None,
         wstate = "custom"
     elif wtext != wrapper_template(doctor_root, "tasks"):
         wstate = "stale"
-    elif os.name != "nt" and not os.access(wrapper, os.X_OK):
+    elif not os.access(wrapper, os.X_OK):
         wstate = "not executable"                 # it cannot run at all (impl panel round 3)
     else:
         wstate = "current"

@@ -17,10 +17,6 @@ import time
 from pathlib import Path
 from tasks.core import resolve_agent_dir, resolve_session_id
 
-# On native Windows a `pid-*` session dir CANNOT be probed for liveness safely,
-# so the sweep must never reclaim one there (see _session_is_dead). Computed once.
-_ON_WINDOWS = os.name == "nt"
-
 # Names of the dead session dirs _gc_dead_sessions removed in THIS process, so
 # `tasks doctor` (which runs after the CLI-entry sweep) can report them instead
 # of always reading "clean" (task 105).
@@ -50,11 +46,10 @@ def _own_session_id() -> str:
 
     Prefers PLAYBOOK_SESSION_ID but falls back to resolve_session_id() rather
     than to "" — the env var does not always propagate (VSCode CLAUDE_ENV_FILE
-    quirks, missing wrappers, subprocess loss), and on Windows resolve_session_id
-    returns the constant `pid-win-fallback`, whose non-numeric suffix makes
-    `int()`/`kill -0` fail. With an empty own-id, every CLI invocation would
-    therefore classify the shared Windows session dir as dead and delete it
-    (task 027).
+    quirks, missing wrappers, subprocess loss). With an empty own-id, an own id
+    whose suffix is non-numeric (the Windows CLI's `pid-win-fallback` up to
+    1.5.47) made `int()`/`kill -0` fail and every CLI invocation classified the
+    own session dir as dead and deleted it (task 027).
 
     Delegates to resolve_session_id() so the env value is SANITIZED (a malformed
     PLAYBOOK_SESSION_ID is neutralized to the derived pid, not returned raw) —
@@ -81,20 +76,6 @@ def _session_is_dead(session_dir: Path, own_session: str, cutoff: float) -> bool
     if own_session and name == own_session:
         return False                      # never our own session
     if name.startswith("pid-"):
-        if _ON_WINDOWS:
-            # Windows has NEITHER semantic this policy relies on. os.kill(pid, 0)
-            # is not a liveness probe there: CPython routes any signal other than
-            # CTRL_C/CTRL_BREAK straight to TerminateProcess, so os.kill(pid, 0)
-            # would KILL a process it can open — using it to "check" a session
-            # could destroy a live one. And the pid-* dirs are written by the
-            # git-bash SessionStart hook using MSYS pseudo-pids, which do not map
-            # to native Windows pids at all, so a native probe cannot even name
-            # the right process. With no way to establish deadness safely, KEEP:
-            # never reclaim a session we cannot prove dead. Reclaiming dead pid-*
-            # dirs on Windows is left to the git-bash hook, whose `kill -0` runs
-            # in the same MSYS namespace that wrote the names. (Ledger: this
-            # limits the session-GC guarantee on windows — reported, not silent.)
-            return False
         try:
             os.kill(int(name[4:]), 0)
             return False                  # alive — keep

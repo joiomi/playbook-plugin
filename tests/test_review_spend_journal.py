@@ -910,10 +910,9 @@ class AppendReviewError(unittest.TestCase):
                           usage={"status": "known", "in": 10 ** 30, "out": 10 ** 30},
                           error='"\\' * 400 + "\x00" * 50 + "é" * 300)
         line = self._line()
-        # measured as Windows writes it: the journal's text-mode fd emits CRLF
-        # there (CI run 36107317940 saw 513 bytes with an LF-only budget)
-        as_windows = len(line.rstrip(b"\r\n")) + 2
-        self.assertLessEqual(as_windows, 512, as_windows)
+        # the whole line as written, its one-byte newline included
+        written = len(line.rstrip(b"\n")) + 1
+        self.assertLessEqual(written, 512, written)
         json.loads(line)                                  # still one valid record
 
     def test_realistic_error_survives_intact_and_quotes_are_neutralised(self):

@@ -42,7 +42,7 @@ COUNTER_FILE="$AGENT_DIR/chat_log_counter"
 # Create agent directory if it doesn't exist
 mkdir -p "$AGENT_DIR"
 
-# Get next message ID (flock for atomicity where available, plain fallback on macOS)
+# Get next message ID (flock for atomicity where available, plain fallback otherwise)
 get_next_id() {
     local counter_file="$1"
     # _safe_int on the file content: chat_log_counter lives under .agent/
@@ -151,8 +151,7 @@ else
     # No jq: parse with python3 (the normalizer above already needs it). The old
     # grep matched only compact `"prompt":"..."` JSON, so an ordinary spaced
     # payload fell back to the raw JSON and the harness filter below saw `{`
-    # (task 088, panel r1). Bytes in and out as UTF-8: Windows would otherwise
-    # decode and encode with the console code page.
+    # (task 088, panel r1). Bytes in and out as UTF-8 whatever the locale.
     USER_MESSAGE=$(printf '%s' "$INPUT" | python3 -c 'import json, sys
 try:
     v = json.loads(sys.stdin.buffer.read().decode("utf-8")).get("prompt")
@@ -258,7 +257,7 @@ PROVIDER="${PLAYBOOK_PROVIDER:-claude}"
 # just around the id allocation. `tasks tag` REWRITES this file (tag insertion),
 # and an append that began while that rewrite was in flight was replaced away
 # with it — the prompt was simply gone. With both sides on this lock the two
-# protocols serialize; where `flock` is unavailable (macOS without util-linux)
+# protocols serialize; where `flock` is unavailable (no util-linux)
 # the append is unchanged and `tasks tag` still refuses a stale rewrite rather
 # than losing a message.
 append_message() {

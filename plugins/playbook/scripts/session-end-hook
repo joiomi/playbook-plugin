@@ -35,8 +35,7 @@ fi
 # This used to be `${PLAYBOOK_SESSION_ID:-pid-$PPID}` with a comment claiming it
 # matched session-start-hook — it did not. When the env var fails to propagate
 # (VSCode CLAUDE_ENV_FILE quirks, missing wrappers, subprocess loss) the ancestor
-# scan returns pid-<root agent>, not pid-$PPID, and on MSYS the resolver returns
-# the constant pid-win-fallback — so this hook could delete a directory that was
+# scan returns pid-<root agent>, not pid-$PPID — so this hook could delete a directory that was
 # never a session while leaving the real one behind (task 027).
 INPUT=$(cat)
 SESSION_ID="$(resolve_session_id)"
@@ -85,21 +84,13 @@ fi
 # highest agent), and deleting here took the outer session's live pointer. Delete
 # `pid-N` only when the exiting process IS N — the LOWEST agent in this hook's own
 # chain. No agent visible (an unreadable chain) proves nothing: keep, as for an
-# unknown reason above; the POSIX liveness GC reclaims dead dirs. Windows
-# (MSYS/Cygwin) has no process walk at all and its GC never reclaims a `pid-*`
-# dir, so keeping there would carry one session's task pointer into the next
-# (the shared `pid-win-fallback`): Windows keeps the old delete-on-exit.
+# unknown reason above; the liveness GC reclaims dead dirs.
 # Other ids (`judge`, a subagent's id) are not process ids: unchanged.
-_PB_NO_WALK=""
-case "${OSTYPE:-}" in msys*|cygwin*) _PB_NO_WALK=1 ;; esac
-case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*) _PB_NO_WALK=1 ;; esac
 case "$SESSION_ID" in
     pid-*)
-        if [ -z "$_PB_NO_WALK" ]; then
-            _PB_LOWEST=$(_agent_walk all)
-            _PB_LOWEST="${_PB_LOWEST%% *}"
-            [ -n "$_PB_LOWEST" ] && [ "pid-$_PB_LOWEST" = "$SESSION_ID" ] || exit 0
-        fi
+        _PB_LOWEST=$(_agent_walk all)
+        _PB_LOWEST="${_PB_LOWEST%% *}"
+        [ -n "$_PB_LOWEST" ] && [ "pid-$_PB_LOWEST" = "$SESSION_ID" ] || exit 0
         ;;
 esac
 

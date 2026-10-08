@@ -250,10 +250,9 @@ def save_offset(offset_file: Path, offset: int, jsonl_path: "Path | str | None" 
         tmp.write_text(f"{jsonl_path}\n{offset}")
     else:
         tmp.write_text(str(offset))
-    # os.replace, not Path.rename: rename onto an existing target raises
-    # FileExistsError (WinError 183) on Windows, and this offset file is
-    # rewritten on every poll, so the target almost always exists. os.replace
-    # overwrites atomically on every platform — the same pattern the 12 other
+    # os.replace, not Path.rename: this offset file is rewritten on every poll,
+    # so the target almost always exists, and os.replace overwrites it
+    # atomically — the same pattern the 12 other
     # atomic writers in this codebase use. Path.rename here was the lone outlier.
     os.replace(tmp, offset_file)
 

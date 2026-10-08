@@ -1926,11 +1926,9 @@ def _journal_session_id():
 
 def _resolved_session_id():
     """The session id the CLI and the hooks resolve (`tasks.core.
-    resolve_session_id`) on EVERY platform. Impl panel round 1 (sol-high): on
-    Windows the guard kept the raw env id, while the CLI resolves an absent one
-    to the constant `pid-win-fallback` it shares with the bash hooks — so a task
-    activated there could never acknowledge. The resolver's one-time Windows
-    warning is swallowed: on a block, stderr IS the agent's message."""
+    resolve_session_id`) — never a raw env id of its own (impl panel round 1,
+    sol-high). The resolver's one-time warnings are swallowed: on a block,
+    stderr IS the agent's message."""
     import contextlib
     import io
     plugin_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1961,8 +1959,7 @@ def _active_task_is_irreversible(root):
         # Task 110 (owner Q-A (b), parked R1 + P1): with NO env id the walk still
         # resolves the session — a real hook process carries none (109 K10:
         # 99/99 events), so requiring one meant the documented acknowledgement
-        # never fired in a normal session. Windows included (impl panel round
-        # 1): there the resolver answers the env id or `pid-win-fallback`.
+        # never fired in a normal session.
         sid = _resolved_session_id()
         if not sid or "/" in sid or "\\" in sid or ".." in sid:
             return False

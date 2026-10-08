@@ -60,10 +60,10 @@ def _is_daemon_argv(argv: list[str]) -> bool:
 
 
 def _is_daemon_args(args: str) -> bool:
-    """The `ps` fallback (no /proc — macOS): the flattened `ps -o args=` line
+    """The `ps` fallback (no /proc mounted): the flattened `ps -o args=` line
     split on whitespace, fed to the SAME detector. HEURISTIC by construction —
     an argv[0] containing spaces is indistinguishable from argument boundaries;
-    declared in the ledger as a macOS limitation, and no parsing rules are
+    declared in the ledger as that fallback's limitation, and no parsing rules are
     added on this line (owner decision 2026-09-28)."""
     return _is_daemon_argv(args.split())
 
@@ -110,8 +110,8 @@ def _proc_argv(root: str, pid: int) -> list[str]:
     return [x.decode("utf-8", errors="replace") for x in parts]
 
 
-# `state` (not procps' `stat`): the keyword BSD ps (macOS, the only platform
-# that takes the ps fallback) and procps both accept; first char Z/X = zombie
+# `state` (not procps' `stat`): the keyword procps and BSD ps both accept (the
+# fallback runs only where /proc is missing); first char Z/X = zombie
 # (task 106 single judge run 4). gate-echo-lib.sh uses the same keywords.
 _PS_LIVENESS_FIELDS = "state=,comm="
 
@@ -127,7 +127,7 @@ def _ps_field(pid: int, fields: str) -> str | None:
     when there is no `ps` binary at all (FileNotFoundError — a minimal
     container, the only case the walk may still fall back to `pid-$PPID`).
 
-    The fallback when /proc is missing (macOS). `-ww`: procps clips output to
+    The fallback when /proc is missing. `-ww`: procps clips output to
     $COLUMNS even on a pipe (round-1 R1-3). One retry, so a single hiccup does
     not fail a live session closed (round 2). `errors="replace"`: a non-UTF-8
     argv byte must not raise UnicodeDecodeError out of the walk (round 2).
@@ -150,8 +150,6 @@ def _ps_field(pid: int, fields: str) -> str | None:
 def _walk_agent_chain() -> tuple[tuple[int, ...], bool]:
     """Walk the parent tree once: (every agent pid BELOW any daemon, bottom-up;
     stopped). The single cached walk; _walk_agent_ancestry derives the root."""
-    if sys.platform == "win32" or os.name == "nt":
-        return (), False
     agents: list[int] = []
     _, stopped = _walk_from(os.getppid(), agents)
     return tuple(agents), stopped
@@ -165,13 +163,6 @@ def _walk_agent_ancestry() -> tuple[int | None, bool]:
     ancestor it cannot read. `stopped` with no agent pid means the id can only
     come from PLAYBOOK_SESSION_ID.
     """
-    # Windows/MSYS: this ancestor scan is non-functional and must be skipped.
-    # Git-Bash `ps` has no `-o` flag (breaks on the first call), and MSYS vs
-    # native-Windows PID namespaces are disjoint — there is no walkable path
-    # from a hook/CLI subprocess up to claude.exe. Return None and let
-    # resolve_session_id() lean on PLAYBOOK_SESSION_ID. POSIX is untouched.
-    if sys.platform == "win32" or os.name == "nt":
-        return None, False
     chain, stopped = _walk_agent_chain()
     return (chain[-1] if chain else None), stopped
 
@@ -185,7 +176,7 @@ def _walk_from(pid: int, agents: "list[int] | None" = None) -> tuple[int | None,
 
     Linux (owner decision 2026-09-28): `/proc/<pid>/status` (Name:, PPid:) and
     `/proc/<pid>/cmdline` — exact, no `ps`, no argv parsing. Only where
-    `<proc root>/self` is missing (macOS) does it fall back to `ps`.
+    `<proc root>/self` is missing (no /proc mounted) does it fall back to `ps`.
     """
     root = _proc_root()
     use_proc = os.path.isdir(os.path.join(root, "self"))
@@ -286,8 +277,8 @@ def _env_pid_is_stale(sid: str) -> bool:
     comm is an agent (_is_agent_comm). N need NOT be an ancestor (owner rule:
     under the daemon the hosted session is not one). Other ids are never
     stale. Reads /proc/<N>/status on Linux, `ps -o comm=` without /proc; with
-    no `ps` binary at all it cannot judge and keeps the id. Windows never
-    reaches here. Mirrors gate-echo-lib.sh `_env_pid_is_stale`.
+    no `ps` binary at all it cannot judge and keeps the id. Mirrors
+    gate-echo-lib.sh `_env_pid_is_stale`.
     """
     m = _PID_ID_RE.fullmatch(sid)
     if not m:
@@ -416,20 +407,10 @@ def resolve_session_id(quiet: bool = False) -> str:
     sanitization — in gate-echo-lib.sh.
     """
     sid = _sanitize_session_id(os.environ.get("PLAYBOOK_SESSION_ID", ""))
-    windows = sys.platform == "win32" or os.name == "nt"
-    reason = None if (not sid or windows) else _env_pid_rejection(sid)
+    reason = None if not sid else _env_pid_rejection(sid)
     if sid and reason is None:
         return sid
     stale = sid                     # "" when there was no (usable) env id
-    # On Windows the ancestor scan is skipped (see find_agent_root_pid) and a
-    # PID fallback would split-brain: the Python CLI sees native-Windows PIDs
-    # while the bash hooks see MSYS PIDs — disjoint namespaces, so the CLI
-    # would write .agent/sessions/pid-A/ and the gate hook read pid-B/,
-    # silently disabling gate enforcement. Fall back to a constant shared
-    # verbatim with gate-echo-lib.sh resolve_session_id so both converge.
-    if windows:
-        _warn_windows_session_id_once()
-        return "pid-win-fallback"
     agent_pid, under_daemon = _walk_agent_ancestry()
     if agent_pid is not None:
         used = f"pid-{agent_pid}"
@@ -456,20 +437,6 @@ def require_session_id() -> str:
         sys.exit(1)
     return sid
 
-
-@functools.lru_cache(maxsize=1)
-def _warn_windows_session_id_once() -> None:
-    """Emit a one-time stderr warning that Windows session-id namespacing relies
-    on PLAYBOOK_SESSION_ID (the ancestor process-walk can't run there)."""
-    print(
-        "[playbook] PLAYBOOK_SESSION_ID is not set. On Windows the session id "
-        "falls back to the constant 'pid-win-fallback' shared by the Python CLI "
-        "and the bash hooks, so gate enforcement still works — but sessions are "
-        "not uniquely namespaced (fine for one session at a time, collides "
-        "across concurrent sessions). Set env.BASH_ENV in ~/.claude/settings.json "
-        "so PLAYBOOK_SESSION_ID propagates and each session gets its own id.",
-        file=sys.stderr,
-    )
 
 _USERNAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]*$")
 
@@ -562,18 +529,12 @@ def resolve_agent_dir(project_path: Path) -> Path:
 def canonical_path(path: "Path | str") -> str:
     """Canonical cross-language string form of a path: forward-slash separators.
 
-    The seam this closes: under MSYS/Git Bash the shell hooks speak POSIX-mount
-    paths (forward slashes), while this CLI runs as a native Windows process
-    where ``str(Path(...))`` yields backslashes (``C:\\Users\\…``). A shell
-    writer and a Python reader then name the same directory with two different
-    strings, and any cross-half string comparison disagrees.
-
-    ``as_posix()`` is the Python half of the fix: it renders the native path
-    with forward slashes (``C:/Users/…``), meeting the shell's ``cygpath -m``
-    output (see ``_canonical_path`` in scripts/gate-echo-lib.sh). On POSIX this
-    is identical to ``str()`` for an absolute path, so Linux and macOS behaviour
-    is unchanged. Use ONLY at the boundary where a path crosses to/from the
-    shell — never to build paths for I/O, which must stay native ``Path``.
+    The Python half of the shell/Python path seam (``_canonical_path`` in
+    scripts/gate-echo-lib.sh is the other): on Linux ``as_posix()`` equals
+    ``str()`` for an absolute path, so both halves are the identity. It stays
+    the named boundary — up to 1.5.47 (tag ``last-multiplatform``) it met Git
+    Bash's ``cygpath -m`` form. Use ONLY where a path crosses to/from the shell
+    — never to build paths for I/O, which must stay native ``Path``.
     """
     return Path(path).as_posix()
 
@@ -1371,10 +1332,10 @@ def _iter_fenced_flags(lines: "list[str]", *, unclosed_is_live: bool,
     in_indented_code = False
     for i, line in enumerate(lines):
         # keep indentation, drop BOM, and drop the trailing line ending: callers
-        # may pass keepends/newline='' lines (compact preserves a Windows file's
-        # CRLF), so a closer `` ```\r\n `` must still count — the old str.strip()
-        # ate the `\r`; the ASCII-only closer (V6) would otherwise miss it and a
-        # fence would never close on Windows (Windows-only CI regression).
+        # may pass keepends/newline='' lines (compact preserves a CRLF file's
+        # line endings), so a closer `` ```\r\n `` must still count — the old
+        # str.strip() ate the `\r`; the ASCII-only closer (V6) would otherwise
+        # miss it and a CRLF file's fence would never close (read tolerance).
         raw = line.lstrip("﻿").rstrip("\r\n")
         fm = _FENCE_OPEN_RE.match(raw)
         if fence_char:
@@ -1650,10 +1611,8 @@ def _safe_hash_regular(path: "Path", cap: int) -> "tuple[str, object, int]":
     read cannot block, and a symlink swapped in (or, for the untracked-content
     caller, an untracked symlink pointing INTO a FIFO/device/huge file) cannot be
     followed. Reads at most `cap` bytes, so a file grown to gigabytes cannot
-    exhaust memory. O_NONBLOCK / O_NOFOLLOW are absent on native Windows
-    (getattr → 0): there it degrades to a plain size-bounded read (a documented
-    limitation — Windows is the uncontained fallback where the OS sandbox is
-    anyway unavailable). Returns:
+    exhaust memory. O_NONBLOCK / O_NOFOLLOW are read with getattr(…, 0), so a
+    platform without them degrades to a plain size-bounded read. Returns:
       ("hash", hexdigest, nbytes)  — a regular file within the cap
       ("toolarge", size, 0)        — a regular file larger than the cap
       ("error", None, 0)           — not a plain regular file now (symlink/FIFO/
@@ -1661,10 +1620,9 @@ def _safe_hash_regular(path: "Path", cap: int) -> "tuple[str, object, int]":
     """
     import hashlib
     import stat as _stat
-    # O_BINARY (Windows) keeps the read RAW: without it Windows text-mode
-    # translates CRLF→LF, so a rogue that only rewrites line endings of a
-    # gitignored task.md would hash identically and slip the guard (panel round-8
-    # codex:sol). No-op (0) on POSIX.
+    # O_BINARY is 0 on Linux (getattr): the read is always RAW, so a rogue that
+    # only rewrites line endings of a gitignored task.md cannot hash identically
+    # and slip the guard (panel round-8 codex:sol).
     flags = (os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
              | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0))
     try:
@@ -1712,8 +1670,8 @@ def _safe_read_regular(path: "Path", cap: int) -> "bytes | None":
     closed."""
     import stat as _stat
     # An explicit lstat/is_symlink refusal BEFORE os.open (impl-panel r7 grok#2):
-    # O_NOFOLLOW degrades to 0 on native Windows, so the fstat-regular check below
-    # is not enough there to stop following a symlink into an external secret.
+    # O_NOFOLLOW may be absent (getattr → 0), and the fstat-regular check below is
+    # not enough alone to stop following a symlink into an external secret.
     try:
         if _stat.S_ISLNK(os.lstat(path).st_mode):
             return None
@@ -1803,7 +1761,7 @@ def _git_toplevel(repo_path: Path) -> "Path | None":
     relative even when the project is a SUBDIRECTORY of a larger repo, so every
     reader that opens a porcelain-named file must join it to THIS, never to
     `repo_path` (T023 #1 — the doubled prefix read `unreadable`/`absent`). Drop
-    exactly one trailing `\n` then one `\r` (Git-for-Windows), never `.strip()`
+    exactly one trailing `\n` then one `\r` (a CR-terminated line), never `.strip()`
     (a space-suffixed path). Shared by `_repo_fingerprint_material` and
     `_dirty_path_content_map` (impl-panel r1 opus: the dirty-map had the same
     bug, so a subdir project's tail-cert delta under-enumerated)."""
@@ -1907,7 +1865,7 @@ def _repo_fingerprint_material(repo_path: Path, exclude: "list[str]", *,
         # when the project is a SUBDIRECTORY of a larger repo (T023 #1 — the
         # untracked content used to be resolved against `repo_path`, doubling the
         # prefix → `unreadable` → edits invisible → false FRESH). Drop exactly
-        # one trailing `\n` then one `\r` (Git-for-Windows), never `.strip()` (a
+        # one trailing `\n` then one `\r` (a CR-terminated line), never `.strip()` (a
         # space-suffixed path). A resolver failure is NOT a reason to fall back
         # to `repo_path` (that recreates the bug) — it is unavailable material.
         toplevel = _git_toplevel(repo_path)
@@ -2069,8 +2027,8 @@ def _scope_identity(project_path: Path, cand: Path) -> str:
     relative to the real path of the project (task 060, T036 r8 codex:sol #2 —
     a scope keyed by its config NAME alone let a symlink repoint to a same-HEAD
     clone read FRESH). Relative, so the token is the same in every checkout
-    location of the same layout; never raises — a cross-drive `relpath`
-    (Windows), a loop, or a vanished root yields the stable `<unresolvable>`."""
+    location of the same layout; never raises — a `relpath` that cannot be
+    computed, a loop, or a vanished root yields the stable `<unresolvable>`."""
     try:
         return os.path.relpath(os.path.realpath(cand),
                                os.path.realpath(project_path)).replace(os.sep, "/")
@@ -5586,7 +5544,7 @@ _MERGE_DOCTOR_FOREIGN_BYTES_MIN = 20
 
 
 def _md_git(cmd: list[str], cwd: Path) -> tuple[int, str, str]:
-    # errors="replace": git blobs may be non-UTF-8 (e.g. Windows cp1252 task.md);
+    # errors="replace": git blobs may be non-UTF-8 (e.g. a cp1252 task.md);
     # strict decoding would raise UnicodeDecodeError and abort the whole audit.
     proc = subprocess.run(
         ["git", *cmd],

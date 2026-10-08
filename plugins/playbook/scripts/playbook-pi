@@ -82,12 +82,11 @@ MODELS_JSON="$SHIPPED_MODELS_JSON"
 
 # Derive the allow-list (model ids) from the active models.json — single source
 # of truth. python3 is always available (stdlib only). Use a read loop (not
-# `mapfile`) so this works on macOS's bash 3.2.
+# `mapfile`) so this works on any bash, 3.2 included.
 ALLOWED_MODELS=()
 while IFS= read -r _mid; do
-  # Windows python3 stdout is text-mode → CRLF; `read` keeps the trailing CR, so
-  # each allow-list entry would be "model\r" and never match the clean requested
-  # model. Strip it. No-op on POSIX (no CR).
+  # Read tolerance: a CR-terminated line would make the allow-list entry
+  # "model\r" and never match the clean requested model. Strip it.
   _mid="${_mid%$'\r'}"
   [ -n "$_mid" ] && ALLOWED_MODELS+=("$_mid")
 done < <(python3 -c '

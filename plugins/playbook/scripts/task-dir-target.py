@@ -17,9 +17,7 @@ brace or newline anywhere — the filesystem is read BEFORE the command runs, so
 earlier step (`ln -s …;`, `cd … &&`, `$(…)`) could repoint what was judged.
 Within it, only a literal absolute path is ever judged "outside"; a relative
 path, `~`, or a command shlex cannot split all count as "may be inside" — the
-guard's old answer. Tokens are matched after collapsing `..` and `//`. On Windows,
-only a drive-letter or Git-Bash `/c/…` spelling can be judged: any other
-leading-`/` path is an MSYS mount (`/tmp`) that Python cannot resolve.
+guard's old answer. Tokens are matched after collapsing `..` and `//`.
 
 A token is inside when ANY of these says so (so no single view can let it out):
 its `..`-collapsed spelling under the project's spelling or its realpath; the
@@ -47,29 +45,17 @@ _UNRESOLVED = re.compile(r"\$[A-Za-z_{(0-9@*#?!$-]|`|[?*\[]")
 # One unresolved expansion in a word, for the hint test below.
 _EXPANSION_PART = re.compile(r"\$\{[^}]*\}|\$\([^)]*\)|`[^`]*`|\$[A-Za-z_][A-Za-z0-9_]*|\$[0-9@*#?!$-]")
 _NAME_HINT = re.compile(r"\.ag|tasks", re.I)
-_MSYS_DRIVE = re.compile(r"^/([A-Za-z])(/|$)")
-_WIN_DRIVE = re.compile(r"^[A-Za-z]:/")
 _SHELL_EXPANDS = set("$`*?[{")
 _OPERATORS = set(";&|()<>")
 
 
 def _canon(path: str) -> str:
-    """Lexical form: forward slashes and `..` collapsed FIRST; then, on Windows,
-    the Git-Bash `/c/…` spelling becomes `c:/…` and case is folded."""
-    p = posixpath.normpath(path.replace("\\", "/"))
-    if os.name == "nt":
-        m = _MSYS_DRIVE.match(p)
-        if m:
-            p = f"{m.group(1)}:/{p[3:]}"
-        p = p.lower()
-    return p
+    """Lexical form: forward slashes and `..` collapsed."""
+    return posixpath.normpath(path.replace("\\", "/"))
 
 
 def _is_absolute(token: str) -> bool:
-    t = token.replace("\\", "/")
-    if os.name == "nt":
-        return bool(_WIN_DRIVE.match(t) or _MSYS_DRIVE.match(t))
-    return t.startswith("/")
+    return token.replace("\\", "/").startswith("/")
 
 
 def _under(path: str, root: str) -> bool:
@@ -78,11 +64,6 @@ def _under(path: str, root: str) -> bool:
 
 def _lexically_inside(path: str, project: str) -> bool:
     return _under(_canon(path), _canon(project))
-
-
-def _fs(path: str) -> str:
-    """A spelling the OS can open (Windows needs `c:/…`, not `/c/…`)."""
-    return _canon(path) if os.name == "nt" else path
 
 
 def _existing_ancestor(path: str) -> str | None:
@@ -96,16 +77,16 @@ def _existing_ancestor(path: str) -> str | None:
 
 
 def _physically_inside(path: str, project: str) -> bool:
-    proj_real = _canon(os.path.realpath(_fs(project)))
-    candidates = {os.path.realpath(_fs(path)),
-                  os.path.realpath(_fs(posixpath.normpath(path.replace("\\", "/"))))}
+    proj_real = _canon(os.path.realpath(project))
+    candidates = {os.path.realpath(path),
+                  os.path.realpath(posixpath.normpath(path.replace("\\", "/")))}
     for cand in candidates:
         if _under(_canon(cand), proj_real):
             return True
         probe = _existing_ancestor(cand)
         while probe is not None:
             try:
-                if os.path.samefile(probe, _fs(project)):
+                if os.path.samefile(probe, project):
                     return True
             except OSError:
                 pass
@@ -708,10 +689,9 @@ def may_be_inside(command: str, project: str) -> bool:
 
 
 def main() -> int:
-    # The command arrives on STDIN, never in the environment: Git Bash (MSYS)
-    # rewrites an env value that starts with `/` into a Windows path before a
-    # native python sees it (`/bin/mkdir …` became `C:/Program Files/…`) — CI
-    # windows lane, task 080. PB_PROJECT may be rewritten; _canon accepts both.
+    # The command arrives on STDIN, never in the environment (task 080: Git Bash,
+    # up to 1.5.47, rewrote an env value starting with `/`; stdin carries the
+    # command byte for byte everywhere).
     command = sys.stdin.read()
     project = os.environ.get("PB_PROJECT", "")
     if not command or not project:
