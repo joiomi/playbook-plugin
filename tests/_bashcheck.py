@@ -57,7 +57,7 @@ def bash_probe() -> "tuple[str | None, bool, str]":
 
 def bash_or_skip() -> str:
     """Return a usable bash path, or raise ``SkipTest`` with the environment
-    reason. Never skips on Linux or macOS, where ``bash`` on PATH is usable."""
+    reason. Never skips on a Linux host whose ``bash`` on PATH is usable."""
     path, usable, note = bash_probe()
     if not usable or path is None:
         raise unittest.SkipTest(f"no usable bash: {note}")

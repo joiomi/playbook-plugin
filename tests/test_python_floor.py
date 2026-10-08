@@ -17,8 +17,8 @@ reconciled contract:
      `match` syntax) gate BEFORE that import so a < 3.10 interpreter gets the
      clear message, not a SyntaxError repr.
 
-The full min/latest interpreter matrix across linux/macos/windows is Phase-8
-live-platform work (PB-PYTHON-FLOOR); these are the on-this-platform proofs.
+CI runs the suite on the floor and on a later interpreter (linux / py3.10 and
+py3.12, .github/workflows/verify.yml); these are the on-this-platform proofs.
 
 Run: python3 -m unittest tests.test_python_floor
 """

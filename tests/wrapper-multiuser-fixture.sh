@@ -1059,7 +1059,7 @@ _gc_dead_sessions(Path(sys.argv[1]))' "$d2" 2>&1)"; pyrc=$?
     set -e
     [ -d "$d3/.agent/sessions/pid-win-fallback" ] \
         && pass "S18 NC1 baseline: own pid-win-fallback survives a stale pointer" \
-        || fail "S18 NC1 baseline: own pid-win-fallback deleted (Windows loses its session)"
+        || fail "S18 NC1 baseline: own pid-win-fallback deleted (a non-numeric own id loses its session)"
 
     sed '/SESSION_ID" ] \&\& continue/d' "$HOOK" > "$MUT/session-start-hook"
     assert_eq "$(grep -c 'SESSION_ID" ] && continue' "$MUT/session-start-hook")" "0" \

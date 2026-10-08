@@ -11,11 +11,6 @@ Covers, per the PB-CONFIG-ATOMIC-DURABILITY contract:
     interrupt leaves neither a torn target nor a stray .tmp;
   - text newline control (default translation vs newline="" byte preservation)
     and raw bytes support.
-
-Windows note: os.replace cannot swap a file another handle holds open without
-FILE_SHARE_DELETE (which CPython does not set), so the live concurrent-reader
-hammers are POSIX-only; the CI windows lane still exercises os.replace via every
-migrated writer and the non-concurrent cases here.
 """
 
 from __future__ import annotations

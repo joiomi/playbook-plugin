@@ -5,8 +5,8 @@ plan panel P2 — opus).
 Task 059 made a degraded guard (git could not fully run) advisory on the panel
 and single-judge paths: the paid verdict is KEPT and the round header records
 `**Tamper guard:** degraded — …`. That header is also what the close accepts
-as impl-panel evidence — so on Windows (uncontained: the guard is the only
-defense) an assertive/irreversible close would otherwise proceed on a PASS
+as impl-panel evidence — so on a host without bwrap (uncontained: the guard is
+the only defense) an assertive/irreversible close would otherwise proceed on a PASS
 whose tamper-freedom was never verified. These tests pin the other half: the
 close treats such a round like a STALE one — block with the same two exits
 (re-run the panel / `--stale-panel-ok --reason`, recorded), advisory for

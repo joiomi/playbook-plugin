@@ -143,7 +143,7 @@ Three rules define the boundary:
 
 * **Writers serialize, readers never do.** Every read-modify-write of task.md /
   judge.md goes through `atomic.rewrite(path, transform)`, which holds a
-  per-task advisory lock (`fcntl` → `msvcrt` → a loud unlocked degrade) on a
+  per-task advisory lock (`fcntl`, else a loud unlocked degrade) on a
   persistent sibling `<name>.lock`. `tasks status`, the gate hook and the
   state-echo hook read on every tool call and take no lock — waiting on a
   minutes-long close would stall the session, and `atomic_write` already

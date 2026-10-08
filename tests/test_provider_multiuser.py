@@ -1060,9 +1060,9 @@ class TestSplitBrainEndToEnd(TempProjectCase):
 # candidate's behavior. Every probe therefore runs with `BASH_ENV` stripped and
 # sources the repository copy by explicit path.
 #
-# zsh is not installed on this host, so `bash-log.zsh` cannot be executed here.
-# It is held to the same policy structurally (`ZshLoggerSourceParity`) and its
-# live execution is scheduled for the Phase 8 macOS cell — not claimed here.
+# zsh may not be installed on this host, so `bash-log.zsh` is not executed here.
+# It is held to the same policy structurally (`ZshLoggerSourceParity`); CI runs
+# its lane shapes under a real zsh (.github/workflows/verify.yml).
 
 PROBE = "playbook_lane_probe_command"
 

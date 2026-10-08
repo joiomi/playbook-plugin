@@ -178,10 +178,7 @@ class ImplPanelRound2b(_Fixture):
             "sys.path.insert(0, sys.argv[1])\n"
             "def no_locks(*a, **k):\n"
             "    raise OSError(errno.ENOLCK, 'No locks available')\n"
-            "try:\n"
-            "    import fcntl; fcntl.flock = no_locks\n"
-            "except ImportError:\n"
-            "    import msvcrt; msvcrt.locking = no_locks\n"
+            "import fcntl; fcntl.flock = no_locks\n"
             "sys.argv = sys.argv[1:]\n"
             "sys.argv[0] = sys.argv[0] + '/write_log.py'\n"
             "runpy.run_path(sys.argv[0], run_name='__main__')\n")
@@ -200,10 +197,7 @@ NO_LOCKS = (
     "sys.path.insert(0, sys.argv[1])\n"
     "def no_locks(*a, **k):\n"
     "    raise OSError(errno.ENOLCK, 'No locks available')\n"
-    "try:\n"
-    "    import fcntl; fcntl.flock = no_locks\n"
-    "except ImportError:\n"
-    "    import msvcrt; msvcrt.locking = no_locks\n"
+    "import fcntl; fcntl.flock = no_locks\n"
     "{extra}"
     "sys.argv = sys.argv[1:]\n"
     "sys.argv[0] = sys.argv[0] + '/write_log.py'\n"
@@ -220,7 +214,7 @@ class PostD6Run1(_Fixture):
                               capture_output=True, timeout=60)
 
     def test_without_lock_support_a_held_fallback_lock_is_waited_for(self):
-        # without flock/msvcrt the hooks ran unserialized: two could both decide an entry fits
+        # without flock the hooks ran unserialized: two could both decide an entry fits
         # and pass the cap together. The fallback is an atomic mkdir lock.
         import time
         self.capped()
@@ -328,27 +322,25 @@ class Switch(_Fixture):
 class ThroughTheHookLibrary(_Fixture):
     def test_write_log_append_goes_through_the_script(self):
         """The shell function the state-echo hook calls. The project path is the one bash
-        sees (`pwd` — `/c/…` on Git-Bash, impl panel r1), and the log directory is found,
+        sees (`pwd`, impl panel r1), and the log directory is found,
         not re-derived: exactly one appears under the temporary HOME."""
         home = self.root / "home"
         home.mkdir()
         big = self.edited("big.bin", b"B" * (MB + 1))
         small = self.edited("a.py", b"small\n")
-        # task 151: the payloads come on stdin, as the hook reads its own (`INPUT=$(cat)`) — on
-        # Windows a JSON argument to bash.exe loses its `\\` to the command-line parsing
+        # task 151: the payloads come on stdin, as the hook reads its own (`INPUT=$(cat)`)
         script = ('source "$1"; cd "$2" || exit 9; IFS= read -r a; IFS= read -r b; '
                   'write_log_append "$a" "$(pwd)"; write_log_append "$b" "$(pwd)"')
         env = dict(os.environ, HOME=str(home))
         env.pop("BASH_ENV", None)
         mk = lambda p: json.dumps({"tool_name": "Write", "tool_input": {"file_path": str(p)}})
-        # task 151: forward slashes, as the hook's `cd "$(dirname "$0")" && pwd` gives it — the
-        # library finds write_log.py by `dirname "${BASH_SOURCE[0]}"`, which is `.` for `D:\…`
+        # the library finds write_log.py by `dirname "${BASH_SOURCE[0]}"` (task 151)
         r = subprocess.run([bash_or_skip(), "-c", script, "x", (SCRIPTS / "gate-echo-lib.sh").as_posix(),
                             str(self.project)], input=f"{mk(big)}\n{mk(small)}\n",
                            env=env, capture_output=True, text=True, timeout=120)
         self.assertEqual(r.returncode, 0, r.stderr)
         logs = list((home / ".local" / "share" / "playbook").glob("*/write_log"))
-        if len(logs) != 1:      # task 151: the Windows lane logged nothing — say where things went
+        if len(logs) != 1:      # task 151: a CI lane once logged nothing — say where things went
             # `/` and `\` are swapped for `|` and `!` so the CI log's secret masking keeps it
             probe = ('source "$1"; cd "$2"; d="$HOME/.local/share/playbook/x"; '
                      'echo "HOME=$HOME PWD=$(pwd) py=$(command -v python3) '
@@ -381,9 +373,9 @@ lock.release()
 
 
 class TheLockOnEveryPlatform(_Fixture):
-    """Impl panel r2 (agy, sonnet): the lock tests ran on POSIX only, so the Windows
-    `msvcrt` path was never exercised. A helper process holds the lock through
-    write_log's own `_DirLock` — flock or msvcrt, whichever the platform uses."""
+    """Impl panel r2 (agy, sonnet): a helper process holds the lock through write_log's
+    own `_DirLock` (flock), so the wait is tested against the lock the script really
+    takes. (Up to 1.5.47 that was flock or msvcrt, hence the class name.)"""
 
     def hold(self):
         self.log_dir.mkdir(parents=True, exist_ok=True)

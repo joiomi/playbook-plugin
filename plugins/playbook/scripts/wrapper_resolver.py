@@ -6,8 +6,8 @@ def vkey(v):
     return tuple(int(x) if x.isdigit() else -1 for x in str(v).split("."))
 
 def same_dir(a, b):
-    # inode compare survives case-insensitive filesystems (default APFS) where
-    # realpath string equality can miss; realpath as fallback for missing paths.
+    # inode compare survives a case-insensitive filesystem, where realpath
+    # string equality can miss; realpath as fallback for missing paths.
     try:
         return os.path.samefile(a, b)
     except OSError:

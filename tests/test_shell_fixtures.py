@@ -101,7 +101,7 @@ def _failure_detail(lines: list[str]) -> str:
 
 def _full_log(name: str, rc: int, text: str) -> None:
     """Task 096: when scripts/verify runs this suite with PLAYBOOK_VERIFY_FULL_LOG
-    set (the Windows CI job), append the fixture's FULL transcript there — the
+    set (the Windows CI job did, up to 1.5.47), append the fixture's FULL transcript there — the
     failure message above is capped at 40 diagnostic lines per block, and this is
     the failing invocation's own output. UTF-8 bytes; never raises."""
     path = os.environ.get("PLAYBOOK_VERIFY_FULL_LOG")

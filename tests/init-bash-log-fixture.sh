@@ -49,13 +49,10 @@ assert_eq() {
     if [ "$got" = "$want" ]; then pass "$label"; else fail "$label — expected [$want], got [$got]"; fi
 }
 
-# Canonicalise a path to a comparable form. On git-bash the same file has two
-# textual forms — the POSIX mount path ($HOME as bash sees it, /tmp/…) and the
-# native Windows path (C:/Users/RUNNER~1/…) that MSYS hands to a native-Windows
-# python via the HOME env var. settings.json's BASH_ENV is written by python, so
-# it is Windows-form; the fixture builds its expectation from bash's $RUN_HOME,
-# so it is POSIX-form. Both name the SAME file. Resolve through cd+pwd so the
-# comparison is by identity, not by which spelling git-bash chose. No-op on POSIX.
+# Canonicalise a path to a comparable form: settings.json's BASH_ENV is written
+# by python, the fixture builds its expectation from bash's $RUN_HOME, and the two
+# can spell the SAME file differently (a symlinked HOME or TMPDIR). Resolve through
+# cd+pwd so the comparison is by identity, not by spelling.
 canon() {
     if [ -e "$1" ]; then
         ( cd "$(dirname "$1")" 2>/dev/null && printf '%s/%s' "$(pwd -P)" "$(basename "$1")" )

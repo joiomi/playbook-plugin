@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Task 049 / plan §5.1: `corpus validate --transport` — per case, the rendered prompt's
 chars/bytes and whether each Test A/B seat's TRANSPORT (stdin for codex/claude, argv for
-grok; POSIX per-element cap, Windows whole-line cap, production's char budget) can carry it,
+grok; the per-element byte cap, production's char budget) can carry it,
 decided by the adapters' own `headless_argv` (the same seam `LiveRunner.preflight` uses)."""
 import json
 import os

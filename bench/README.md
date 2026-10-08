@@ -180,9 +180,7 @@ weights and "point estimates only" (no bootstrap CIs in v1). Nothing derived is 
   candidate the same way.
 - **Unique-valid is `n/a`, not 0, whenever some candidate in the manifest has no
   scorable result for a case** — uniqueness is only defined against peers that ran.
-- On Windows the argv-transport preflight applies the adapters' ~30k whole-command-line
-  cap (the POSIX per-argument cap does not exist there); an adapter's own size-cap
-  envelope is deterministic and is never retried.
+- An adapter's own size-cap envelope is deterministic and is never retried.
 - A lock whose holder process is provably dead (hard crash) is reclaimed automatically;
   an unreadable holder is not — delete the `.lock` by hand only when you are sure.
 - **Corpus-builder duty the filter cannot do for you:** `## Design Phase` answers are

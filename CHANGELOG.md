@@ -28,9 +28,12 @@ Bash) come back after that, starting from `git diff last-multiplatform`. The las
   spellings), no msvcrt lock. On Linux the hooks behave as before, with two exceptions that follow from Linux-only:
   the batch-close guard no longer treats a `\` in a task.md path as a separator (it is a filename character on
   Linux), and the review journal's error budget counts the one-byte newline it writes (it counted two).
-- **The last Windows code paths are gone** (task 157): the msvcrt lock backend (`fcntl` is the backend), the Windows
-  command-line caps of the grok and pi judge seats (the per-argument byte guard, the Linux limit, stays), the `.exe`
-  recovery in the bash resolver, and judgebench's `--platform windows` simulation. Linux behaviour is unchanged.
+- **The remaining Windows-only branches are removed** (task 157): the msvcrt lock backend (`fcntl` is the backend), the
+  Windows command-line caps of the grok and pi judge seats (the per-argument byte guard, the Linux limit, stays), the
+  `.exe` recovery in the bash resolver, and judgebench's `--platform windows` simulation. Linux behaviour is unchanged.
+  Kept on purpose, because removing them would change what Linux does or says: the resolver's failure hint (it still
+  names the Windows WSL stub), the `\` → `/` step in the codex hooks' management-path check, `bash-log.sh`'s backslash
+  strip of `$0`, the `ps` fallback for a host without `/proc`, and judgebench's portable-label rule.
 - **Docs and the guarantee ledger claim Linux only** (task 153): README (with the `multiplatform` install steps; the
   install command now names `joiomi/playbook-plugin`), `docs/`, the monitor skill and `/playbook:init`; every ledger row
   applies to `linux`, and live evidence no longer targets macOS or Windows.
