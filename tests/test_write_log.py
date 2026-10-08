@@ -347,8 +347,16 @@ class ThroughTheHookLibrary(_Fixture):
         self.assertEqual(r.returncode, 0, r.stderr)
         logs = list((home / ".local" / "share" / "playbook").glob("*/write_log"))
         if len(logs) != 1:      # task 151: the Windows lane logged nothing — say where things went
-            seen = subprocess.run([bash_or_skip(), "-c", 'cd "$1"; echo "HOME=$HOME PWD=$(pwd)"; '
-                                   'command -v python3', "x", str(self.project)],
+            # `/` and `\` are swapped for `|` and `!` so the CI log's secret masking keeps it
+            probe = ('source "$1"; cd "$2"; d="$HOME/.local/share/playbook/x"; '
+                     'echo "HOME=$HOME PWD=$(pwd) py=$(command -v python3) '
+                     'canon=$(_canonical_path "$d")"; '
+                     'python3 -c "import sys; print(sys.argv[1:])" "$d" "$(pwd)"; '
+                     'printf "%s" "$3" | python3 "$(dirname "$1")/write_log.py" "$d" "$(pwd)"; '
+                     'echo "rc=$?"; ls -la "$HOME" "$HOME/.local/share/playbook" 2>&1')
+            seen = subprocess.run([bash_or_skip(), "-c", "{ " + probe + "; } 2>&1 | tr '/\\\\' '|!'", "x",
+                                   (SCRIPTS / "gate-echo-lib.sh").as_posix(), str(self.project),
+                                   mk(small)],
                                   env=env, capture_output=True, text=True, timeout=60)
             under = sorted(str(p.relative_to(self.root)) for p in self.root.rglob("*"))
             self.fail(f"{len(logs)} write logs; bash saw {seen.stdout!r} {seen.stderr!r}; "
