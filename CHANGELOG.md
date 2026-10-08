@@ -4,10 +4,15 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
-**Linux-only** — owner decision 2026-10-08: playbook supports Linux only until it is stable; macOS and Windows (Git
-Bash) come back after that, starting from `git diff last-multiplatform`. The last version supported on them is 1.5.47
-(tag `last-multiplatform`, branch `multiplatform`; install it with
-`claude plugin marketplace add joiomi/playbook-plugin#multiplatform`).
+## [1.6.0] — 2026-10-09
+
+**The first Linux-only release** — owner decision 2026-10-08: playbook supports Linux only until it is stable; macOS
+and Windows (Git Bash) come back after that, starting from `git diff last-multiplatform`. On macOS or Windows install
+1.5.47 instead, the last version supported there (tag `last-multiplatform`, branch `multiplatform`):
+`claude plugin marketplace add joiomi/playbook-plugin#multiplatform`. The minor version marks the break — 1.5.x stays
+the multi-platform line. Released from `feat/linux-only`: tasks 153-159. The suite has 3712 tests (3717 at 1.5.47:
+the platform-only tests are gone, new ones came with the fixes below); CI is two Linux lanes (py3.10, py3.12), which
+now also run the sandbox tests under bubblewrap.
 
 ### Changed
 
@@ -18,11 +23,12 @@ Bash) come back after that, starting from `git diff last-multiplatform`. The las
 - **A session started on another platform is warned, not blocked** (tasks 153, 157). The SessionStart hook prints
   `playbook: unsupported platform (<platform>); Linux only since 2026-10-08 — on Windows/macOS use the
   `multiplatform` branch (1.5.47)` — on stderr and as the host's `systemMessage` — and the session starts as before.
-- **The macOS seatbelt sandbox backend is gone** (task 155). Bubblewrap is the only backend; on a host with no `bwrap` on
-  PATH the sandbox runs uncontained and says so, as before (a bwrap that is installed but cannot run is not detected). `sandbox --print-profile`, which printed the seatbelt
-  profile, is removed — it is now refused (exit 2) like any unknown flag; `--print-argv` shows the bwrap argv. The
-  macOS-only `~/Library` is no longer created and bound writable in every Linux launch. The platform-only tests went first (task 154: 3720 →
-  3692 tests, Linux skips unchanged).
+- **The macOS seatbelt sandbox backend is gone** (task 155). Bubblewrap is the only backend; on a host with no `bwrap`
+  on PATH the sandbox runs uncontained and says so, as before (a bwrap that is installed but cannot run is not
+  detected). `sandbox --print-profile`, which printed the seatbelt profile, is removed — it is now refused (exit 2)
+  like any unknown flag; `--print-argv` shows the bwrap argv. The macOS-only `~/Library` is no longer created and
+  bound writable in every Linux launch. The platform-only tests went first (task 154: 3720 → 3692 tests, Linux skips
+  unchanged).
 - **The hooks and the session-identity code lost their Windows/MSYS branches** (task 156). No `pid-win-fallback`
   session id, no skipped process walk, no keep-every-session GC, no Git Bash path conversion (`cygpath`, drive-letter
   spellings), no msvcrt lock. On Linux the hooks behave as before, with two exceptions that follow from Linux-only:

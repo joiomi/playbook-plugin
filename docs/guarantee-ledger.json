@@ -1,7 +1,7 @@
 {
   "$schema": "guarantee-ledger.schema.json",
   "schema_version": 1,
-  "ledger_version": "2026-10-08",
+  "ledger_version": "2026-10-09",
   "guarantees": [
     {
       "id": "PB-TASK-ACTIVATE",
