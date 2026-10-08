@@ -1,8 +1,9 @@
 """Unified sandbox launcher for headless and interactive agent invocations.
 
 Single source of truth for write-containment when running any of the supported
-CLI agents (claude, codex, agy, pi). Backends: macOS seatbelt (sandbox-exec) and
-Linux bubblewrap (bwrap). Stdlib only.
+CLI agents (claude, codex, agy, pi). Backend: Linux bubblewrap (bwrap) — the only
+one since 2026-10-08 (owner decision, Linux-only; the macOS backend
+ended with 1.5.47, tag `last-multiplatform`). Stdlib only.
 
 Callers (cli.py judge dispatch, adapter run_headless_judge, bin/sandbox shim)
 import from here; do not re-implement profile generation elsewhere.
@@ -11,7 +12,6 @@ import from here; do not re-implement profile generation elsewhere.
 from __future__ import annotations
 
 import os
-import platform
 import shutil
 import signal
 import subprocess
@@ -311,16 +311,6 @@ _AVAILABILITY_SIGNATURES = (
 )
 
 
-# Top-level paths (non-home) that must be writable.
-_SYSTEM_RW_PATHS: tuple[str, ...] = (
-    "/tmp",
-    "/private/tmp",
-    "/var/folders",
-    "/private/var/folders",
-    "/dev",
-)
-
-
 @dataclass(frozen=True)
 class AgentInfo:
     name: str
@@ -409,7 +399,7 @@ def _is_record_dir(name: str) -> bool:
 
 def _symlinked_lanes(agent: Path) -> "dict[str, Path]":
     """{link name: the real directory behind it} for the symlinks directly in `.agent`
-    — `--ro-bind / /` (and seatbelt's allow-default) show a symlinked lane at its real
+    — `--ro-bind / /` shows a symlinked lane at its real
     path too. Resolved ONCE: the sandbox links each name to exactly the directory it
     masks (task 139 C-4 — two reads let a re-point in between link one directory and
     mask another). Not an ancestor of `.agent` (that would hide the project itself; its
@@ -544,128 +534,6 @@ def _bwrap_record_masks(project_dir: Path | str) -> list[str]:
     return args
 
 
-def _sb_string(s: str) -> str:
-    """A seatbelt (TinyScheme) string literal for `s`: written as-is when it holds no
-    `"` or `\\` (byte-identical to before), escaped otherwise (task 139 post-D6 run 2 —
-    a `"` in a path ended the string and left an invalid profile)."""
-    if '"' not in s and "\\" not in s:
-        return f'"{s}"'
-    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
-
-
-def _sb_regex_rule(pattern: str) -> str:
-    # the raw #"…" form cannot hold a `"`; use an escaped plain string then
-    if '"' in pattern:
-        return f'(deny file-read* (regex {_sb_string(pattern)}))'
-    return f'(deny file-read* (regex #"{pattern}"))'
-
-
-def _sb_regex(path: str) -> str:
-    return "".join("\\" + c if c in ".^$*+?()[]{}|\\" else c for c in path)
-
-
-def _seatbelt_record_rules(project_dir: Path | str) -> list[str]:
-    """Seatbelt rules that deny reading the conversation records (task 125), by NAME
-    pattern so a record created or renamed after launch is covered too (task 138
-    G3-2): in `.agent`, in any directory directly under it, and in the real
-    directory behind each symlinked lane (G3-3)."""
-    agent = _agent_dir(project_dir)
-    if agent is None:
-        return []
-    files = "|".join(_sb_regex(f) for f in _JUDGE_MASKED_FILES)
-    dirs = "|".join(_sb_regex(d) for d in _JUDGE_MASKED_DIRS)
-    rules = []
-    linked = _symlinked_lanes(agent)
-    for root, depth in [(agent, "([^/]+/)?")] + [(r, "") for r in linked.values()]:
-        base = _sb_regex(str(root))
-        rules.append(_sb_regex_rule(f"^{base}/{depth}({files})(\\.[^/]*)?$"))
-        rules.append(_sb_regex_rule(f"^{base}/{depth}({dirs})(\\.[^/]*)?(/|$)"))
-    rec_files, rec_dirs = _record_link_targets(agent, linked)
-    rules += [f'(deny file-read* (subpath {_sb_string(str(d))}))' for d in rec_dirs]
-    rules += [f'(deny file-read* (literal {_sb_string(str(f))}))' for f in rec_files]
-    return rules
-
-
-def build_seatbelt_profile(
-    project_dir: Path | str,
-    git_dir: Path | str | None,
-    extra_rw: Iterable[str] | None = None,
-    *,
-    project_writable: bool = True,
-    mask_records: bool | None = None,
-) -> str:
-    """Generate a macOS seatbelt profile: allow default, deny writes except
-    project_dir, system temp/dev, per-agent home subpaths, and extra_rw paths.
-    Then deny .git writes within the project.
-
-    project_writable=False is the contained "outdir" mode: the project/corpus
-    becomes read-only (its write exception is dropped), so the only writable
-    project-side location is whatever's passed via extra_rw (the workspace).
-    Home/system paths stay writable — the agent binary needs its config/caches.
-    """
-    project = str(Path(project_dir).resolve())
-    home = str(Path.home())
-    rw_paths = _normalize_rw(extra_rw)
-
-    require_nots: list[str] = []
-    if project_writable:
-        require_nots.append(f'        (require-not (subpath "{project}"))')
-    for sys_path in _SYSTEM_RW_PATHS:
-        require_nots.append(f'        (require-not (subpath "{sys_path}"))')
-    # ~/.claude and ~/.claude.json* — regex covers both.
-    require_nots.append(
-        f'        (require-not (regex #"^{home}/\\.claude"))'
-    )
-    for sub in _HOME_RW_SUBPATHS:
-        require_nots.append(
-            f'        (require-not (subpath "{home}/{sub}"))'
-        )
-    for rw in rw_paths:
-        require_nots.append(f'        (require-not (subpath "{rw}"))')
-
-    profile_lines = [
-        "(version 1)",
-        "(allow default)",
-        "(deny file-write*",
-        "    (require-all",
-        *require_nots,
-        "    )",
-        ")",
-    ]
-    # Rule ORDER is load-bearing: seatbelt applies the LAST matching rule, so the
-    # terminal rules below (project deny, .git deny, extra_rw re-allow) each win
-    # over the require-all exemption block above and over each other in listed
-    # order. The order mirrors build_bwrap_argv: project (ro) → .git (ro) →
-    # extra_rw (rw, last).
-    #
-    # When project_writable=False the read-only project MUST be an explicit
-    # terminal deny — expressing it only as an omitted require-not exemption is a
-    # confirmed containment failure: a project rooted under any _SYSTEM_RW_PATHS
-    # entry (e.g. /var/folders, where macOS mktemp places dirs) matches that
-    # exemption's require-not, so require-all is false and nothing denies the
-    # project write. The .git deny already relied on this terminal precedent.
-    if not project_writable:
-        profile_lines.append(f'(deny file-write* (subpath "{project}"))')
-    if git_dir:
-        git_resolved = str(Path(git_dir).resolve())
-        profile_lines.append(f'(deny file-write* (subpath "{git_resolved}"))')
-    # Re-allow each extra_rw workspace AFTER the project deny (last wins), so a
-    # writable workspace living inside the read-only project keeps its access —
-    # the half build_bwrap_argv gets right by binding extra_rw last. Only in
-    # ro-project mode: in worker mode the project is already writable and adding
-    # these allows would change that unchanged behaviour.
-    if not project_writable:
-        for rw in rw_paths:
-            profile_lines.append(f'(allow file-write* (subpath "{rw}"))')
-    # Task 125: a read-only judge cannot read the conversation records
-    # (terminal rules — seatbelt applies the last match). mask_records=False
-    # keeps them for a read-only observer that needs them (the monitor, G3-1).
-    if (not project_writable) if mask_records is None else mask_records:
-        profile_lines.extend(_seatbelt_record_rules(project))
-
-    return "\n".join(profile_lines)
-
-
 def build_bwrap_argv(
     project_dir: Path | str,
     git_dir: Path | str | None,
@@ -691,7 +559,7 @@ def build_bwrap_argv(
     no_network=True is the OPT-IN network jail: it appends `--unshare-net`, which
     drops the sandbox into a fresh network namespace (loopback only). It is never
     a default and is never wired into the judge path — the judge needs the
-    network. Only bwrap supports it; macOS seatbelt and Windows have no
+    network. Only bwrap supports it; a nested sandbox has no
     equivalent, and the launcher fails loudly there rather than pretend (see
     `network_isolation_available` / `_wrapped_argv`).
     """
@@ -782,60 +650,6 @@ def _git_dir_of(project_dir: Path) -> Path | None:
     return None
 
 
-_SEATBELT_USABLE: bool | None = None
-_NESTED_WARNED = False
-
-
-# Representative probe profile. MUST contain a `(deny file-write* ...)` rule:
-# macOS lets a trivial `(allow default)` profile nest inside another sandbox,
-# but rejects any profile that ADDS a deny rule with rc 71 `sandbox_apply:
-# Operation not permitted`. Our real profiles (build_seatbelt_profile) always
-# emit deny rules, so the probe must too or it won't predict the real failure.
-# The sentinel path is harmless — `/usr/bin/true` never writes there.
-_SEATBELT_PROBE_PROFILE = (
-    '(version 1)(allow default)'
-    '(deny file-write* (subpath "/playbook-seatbelt-nesting-probe"))'
-)
-
-
-def _seatbelt_usable() -> bool:
-    """True if `sandbox-exec` can apply a *deny-bearing* profile in this process.
-
-    Returns False when nested inside *another* macOS sandbox (e.g. Codex's
-    default Seatbelt command sandbox): `sandbox-exec` then fails at
-    `sandbox_apply` with rc 71 because macOS forbids a nested sandbox adding
-    write restrictions. We can't see a foreign outer sandbox via env (only our
-    own PLAYBOOK_SANDBOXED), so we probe once with a representative profile
-    (must mirror build_seatbelt_profile's deny rule) and cache the result.
-    """
-    global _SEATBELT_USABLE
-    if _SEATBELT_USABLE is None:
-        if platform.system() != "Darwin" or not shutil.which("sandbox-exec"):
-            _SEATBELT_USABLE = False
-        else:
-            try:
-                probe = subprocess.run(
-                    ["sandbox-exec", "-p", _SEATBELT_PROBE_PROFILE, "/usr/bin/true"],
-                    capture_output=True, timeout=10,
-                )
-                _SEATBELT_USABLE = probe.returncode == 0
-            except (OSError, subprocess.SubprocessError):
-                _SEATBELT_USABLE = False
-    return _SEATBELT_USABLE
-
-
-def _warn_nested_once() -> None:
-    global _NESTED_WARNED
-    if not _NESTED_WARNED:
-        _NESTED_WARNED = True
-        print(
-            "[playbook] sandbox-exec can't apply here (nested inside another "
-            "sandbox, e.g. Codex's) — running under the outer sandbox's "
-            "containment instead.",
-            file=sys.stderr,
-        )
-
-
 def _wrapped_argv(
     agent: str,
     agent_args: list[str],
@@ -845,10 +659,10 @@ def _wrapped_argv(
     no_network: bool = False,
     mask_records: bool | None = None,
 ) -> list[str]:
-    """Compose bypass-flag injection + seatbelt/bwrap wrapping into the final
+    """Compose bypass-flag injection + bwrap wrapping into the final
     argv. Shared by run() (blocking) and popen() (streaming) so containment is
-    generated in exactly one place. If already inside a sandbox (ours OR a
-    foreign one we can't nest in), returns the inner argv with bypass flags only.
+    generated in exactly one place. If already inside a sandbox, returns the
+    inner argv with bypass flags only.
 
     no_network=True (opt-in only, never the judge path) is honored solely on the
     bwrap backend; on any other backend it raises rather than silently emit a
@@ -858,15 +672,6 @@ def _wrapped_argv(
     if no_network and not network_isolation_available():
         raise RuntimeError(_NO_NETWORK_UNSUPPORTED)
     if is_sandboxed():
-        return inner_argv
-    if platform.system() == "Darwin" and shutil.which("sandbox-exec"):
-        if _seatbelt_usable():
-            git_dir = _git_dir_of(project)
-            profile = build_seatbelt_profile(project, git_dir, extra_rw, project_writable=project_writable,
-                                             mask_records=mask_records)
-            return ["sandbox-exec", "-p", profile, *inner_argv]
-        # Nested in a foreign sandbox (macOS forbids sandbox-exec nesting, rc 71).
-        _warn_nested_once()
         return inner_argv
     if shutil.which("bwrap"):
         git_dir = _git_dir_of(project)
@@ -882,28 +687,23 @@ def containment_available() -> bool:
 
     Mirrors `_wrapped_argv`'s decision so callers (the judge tamper guard) can
     tell when a judge will run UNCONTAINED — already sandboxed (nested
-    short-circuit), seatbelt unusable/nested on macOS, or no seatbelt/bwrap
-    primitive at all (e.g. Windows). On those paths OS write-denial is a no-op
-    and the before/after tamper snapshot is the only defense."""
+    short-circuit) or no bwrap on PATH. On those paths OS write-denial is a
+    no-op and the before/after tamper snapshot is the only defense."""
     if is_sandboxed():
         return False
-    if platform.system() == "Darwin" and shutil.which("sandbox-exec"):
-        return _seatbelt_usable()
     if shutil.which("bwrap"):
         return True
     return False
 
 
 # The opt-in network jail (`--no-network` / no_network=True) exists ONLY on the
-# Linux bwrap backend. On every other path — macOS seatbelt, Windows, or nested
-# inside a foreign sandbox we cannot re-wrap — there is no `--unshare-net`
-# equivalent, so the launcher REFUSES rather than emit a no-op that pretends the
-# network is contained.
+# bwrap backend. Without it — no bwrap, or nested inside a sandbox we cannot
+# re-wrap — there is no `--unshare-net` equivalent, so the launcher REFUSES
+# rather than emit a no-op that pretends the network is contained.
 _NO_NETWORK_UNSUPPORTED = (
     "--no-network requires the Linux bubblewrap (bwrap) backend. Network "
-    "isolation is not supported on macOS seatbelt, on Windows, or when nested "
-    "inside another sandbox — refusing to run rather than pretend the network "
-    "is contained."
+    "isolation is not supported without bwrap or when nested inside another "
+    "sandbox — refusing to run rather than pretend the network is contained."
 )
 
 
@@ -913,8 +713,6 @@ def network_isolation_available() -> bool:
     choice so callers can gate the opt-in before invoking it."""
     if is_sandboxed():
         return False
-    if platform.system() == "Darwin" and shutil.which("sandbox-exec"):
-        return False  # seatbelt (usable or nested) — never reaches bwrap
     return bool(shutil.which("bwrap"))
 
 
@@ -982,7 +780,7 @@ def run(
     **kwargs,
 ) -> subprocess.CompletedProcess:
     """Run an agent under sandbox containment. Composes bypass-flag injection
-    into argv, generates seatbelt/bwrap wrapping, exports PLAYBOOK_SANDBOXED=1
+    into argv, generates bwrap wrapping, exports PLAYBOOK_SANDBOXED=1
     in child env. If already inside a sandbox (ours OR a foreign one we can't
     nest in), skips wrapping but still injects bypass flags.
 
@@ -995,9 +793,10 @@ def run(
                             mask_records)
 
     if kwargs.get("text") or isinstance(kwargs.get("input"), str):
-        # Windows text-mode pipes default to the ANSI code page (cp1252);
-        # any non-cp1252 char in stdin/stdout (e.g. U+2197 in MIND_MAP.md)
-        # kills the stdin writer thread. Pin UTF-8; tolerate stray bytes out.
+        # Robustness: text-mode pipes use the locale's codec, which need not be
+        # UTF-8 (C/POSIX, Latin-1); any char it cannot encode in stdin/stdout
+        # (e.g. U+2197 in MIND_MAP.md) kills the stdin writer thread. Pin UTF-8;
+        # tolerate stray bytes out.
         kwargs.setdefault("encoding", "utf-8")
         kwargs.setdefault("errors", "replace")
 
@@ -1021,16 +820,10 @@ def run(
 
 def _kill_process_tree(proc: subprocess.Popen) -> None:
     """Best-effort terminate the agent AND its descendants. Grandchildren
-    otherwise survive a lone proc.kill() and hold captured pipes open. POSIX:
-    signal the whole process group; Windows: taskkill /T walks the child tree."""
+    otherwise survive a lone proc.kill() and hold captured pipes open: signal
+    the whole process group."""
     try:
-        if os.name == "nt":
-            subprocess.run(
-                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                capture_output=True, check=False,
-            )
-        else:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
     except (ProcessLookupError, OSError):
         pass
     try:
@@ -1056,10 +849,7 @@ def _run_with_timeout(wrapped, project, child_env, capture_output, check, kwargs
     if input_data is not None:
         kwargs.setdefault("stdin", subprocess.PIPE)
     # Own process group / job so the whole tree is signalable, not just the leader.
-    if os.name == "nt":
-        kwargs.setdefault("creationflags", subprocess.CREATE_NEW_PROCESS_GROUP)
-    else:
-        kwargs.setdefault("start_new_session", True)
+    kwargs.setdefault("start_new_session", True)
 
     proc = subprocess.Popen(wrapped, cwd=str(project), env=child_env, **kwargs)
     try:
@@ -1114,8 +904,8 @@ def popen(
 
     kwargs.setdefault("stdout", subprocess.PIPE)
     kwargs.setdefault("text", True)
-    # utf-8 (not the Windows cp1252 locale default) so piped stdin (e.g. the
-    # claude prompt now on stdin) encodes and stream-json stdout decodes cleanly.
+    # utf-8 (not the locale's codec, which need not be UTF-8) so piped stdin (e.g.
+    # the claude prompt now on stdin) encodes and stream-json stdout decodes cleanly.
     # errors="replace": one stray non-utf-8 byte on agent stdout must not raise
     # UnicodeDecodeError and kill the whole stream.
     kwargs.setdefault("encoding", "utf-8")
@@ -1175,8 +965,8 @@ def _format_agent_matrix(agents: dict[str, AgentInfo]) -> str:
 
 
 def _main(argv: list[str]) -> int:
-    """CLI entry: python3 -m provider.sandbox [--list-agents | --print-profile |
-    --agent X --] <agent-args>."""
+    """CLI entry: python3 -m provider.sandbox [--list-agents | --list-models |
+    --print-argv | --agent X --] <agent-args>."""
     import argparse
 
     parser = argparse.ArgumentParser(prog="provider.sandbox", add_help=True)
@@ -1190,8 +980,6 @@ def _main(argv: list[str]) -> int:
                         help="Print capability matrix and exit")
     parser.add_argument("--list-models", action="store_true",
                         help="Print model alias table and exit")
-    parser.add_argument("--print-profile", action="store_true",
-                        help="Print seatbelt profile to stdout and exit")
     parser.add_argument("--rw", action="append", default=[],
                         help="Extra read-write path (repeatable)")
     parser.add_argument("--ro-project", action="store_true",
@@ -1206,10 +994,10 @@ def _main(argv: list[str]) -> int:
                         help="Print the fully wrapped argv (one arg per line) "
                              "instead of executing — inspectable containment")
     parser.add_argument("--no-network", action="store_true",
-                        help="OPT-IN network jail: add bwrap --unshare-net "
-                             "(Linux only). Fails loudly on macOS seatbelt / "
-                             "Windows / nested sandboxes (no --unshare-net "
-                             "equivalent). Never a default; never the judge path.")
+                        help="OPT-IN network jail: add bwrap --unshare-net. "
+                             "Fails loudly without bwrap or inside a nested "
+                             "sandbox (no --unshare-net equivalent). Never a "
+                             "default; never the judge path.")
     parser.add_argument("--project-root", default=None,
                         help="Project root (default: cwd)")
     parser.add_argument("--prompt", default=None,
@@ -1254,12 +1042,6 @@ def _main(argv: list[str]) -> int:
         return 0
 
     project = Path(args.project_root or Path.cwd()).resolve()
-
-    if args.print_profile:
-        print(build_seatbelt_profile(project, _git_dir_of(project), args.rw,
-                                     project_writable=not args.ro_project,
-                                     mask_records=(False if args.keep_records else None)))
-        return 0
 
     forwarded = list(args.agent_args)
     if forwarded and forwarded[0] == "--":

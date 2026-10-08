@@ -19,6 +19,10 @@ Bash) come back after that, starting from `git diff last-multiplatform`. The las
   `playbook: platformă nesuportată (<platform>); suportul e doar Linux din 2026-10-08 — pentru Windows/macOS
   folosește branch-ul `multiplatform` (1.5.47)` — on stderr and as the host's `systemMessage` — and the session starts
   as before.
+- **The macOS seatbelt sandbox backend is gone** (task 155). Bubblewrap is the only backend; on a host without a usable
+  `bwrap` the sandbox runs uncontained and says so, as before. `sandbox --print-profile`, which printed the seatbelt
+  profile, is removed (`--print-argv` shows the bwrap argv). The platform-only tests went first (task 154: 3720 →
+  3692 tests, Linux skips unchanged).
 - **Docs and the guarantee ledger claim Linux only** (task 153): README (with the `multiplatform` install steps; the
   install command now names `joiomi/playbook-plugin`), `docs/`, the monitor skill and `/playbook:init`; every ledger row
   applies to `linux`, and live evidence no longer targets macOS or Windows.

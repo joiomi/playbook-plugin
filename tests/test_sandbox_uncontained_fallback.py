@@ -26,19 +26,18 @@ class LinuxWithoutBwrapTakesUncontainedPath(unittest.TestCase):
     def _linux(self, which):
         return (
             mock.patch.object(sandbox, "is_sandboxed", return_value=False),
-            mock.patch.object(sandbox.platform, "system", return_value="Linux"),
             mock.patch.object(sandbox.shutil, "which", side_effect=which),
         )
 
     def test_no_bwrap_reports_no_containment(self):
-        a, b, c = self._linux(lambda name: None)
-        with a, b, c:
+        a, b = self._linux(lambda name: None)
+        with a, b:
             self.assertFalse(sandbox.containment_available(),
                              "no bwrap on PATH — must report uncontained")
 
     def test_no_bwrap_argv_is_the_unwrapped_direct_exec(self):
-        a, b, c = self._linux(lambda name: None)
-        with a, b, c:
+        a, b = self._linux(lambda name: None)
+        with a, b:
             argv = sandbox._wrapped_argv("claude", ["-p", "hi"], Path("/proj"), None, False)
         # Exactly the bypass-injected inner argv — no bwrap wrapper.
         self.assertEqual(argv, sandbox._compose_agent_argv("claude", ["-p", "hi"]))
@@ -47,8 +46,8 @@ class LinuxWithoutBwrapTakesUncontainedPath(unittest.TestCase):
     def test_negative_control_bwrap_would_contain(self):
         """The False above is because no backend exists, not vacuously: hand the
         same code a bwrap on PATH and containment flips to True."""
-        a, b, c = self._linux(lambda name: "/usr/bin/bwrap" if name == "bwrap" else None)
-        with a, b, c:
+        a, b = self._linux(lambda name: "/usr/bin/bwrap" if name == "bwrap" else None)
+        with a, b:
             self.assertTrue(sandbox.containment_available())
 
 

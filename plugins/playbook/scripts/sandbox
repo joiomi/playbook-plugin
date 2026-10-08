@@ -2,19 +2,19 @@
 # scripts/sandbox — launch a headless or interactive agent with write containment.
 #
 # Thin bash shim → delegates to src/provider/sandbox.py (single source of truth
-# for profile generation, agent dispatch, nesting guard, autodetect).
+# for bwrap containment, agent dispatch, nesting guard, autodetect).
 #
 # Usage:
 #   scripts/sandbox [--agent NAME] [--rw PATH]... [--no-hooks] [-- agent-args...]
 #   scripts/sandbox --list-agents
-#   scripts/sandbox --print-profile [--agent NAME]
+#   scripts/sandbox --print-argv [--agent NAME] [-- agent-args...]
 #
 # Options:
 #   --agent NAME     Agent to launch: claude|codex|agy|pi (default: autodetect)
 #   --rw PATH        Add a read-write path (repeatable)
 #   --no-hooks       claude-only: disable all plugin hooks (clean isolated run)
 #   --list-agents    Print capability matrix and exit
-#   --print-profile  Print generated seatbelt profile and exit
+#   --print-argv     Print the wrapped (bwrap) argv and exit
 #   --               Everything after this is forwarded to the agent binary
 #
 # Examples:

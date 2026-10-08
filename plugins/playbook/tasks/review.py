@@ -477,7 +477,7 @@ def _snapshot_repo_state(project_path: Path, task_file: Path | None, _depth: int
 
     Judges are read-only evaluators; nothing they run should change the repo. On
     platforms with OS containment `project_writable=False` blocks writes, but the
-    sandbox falls back to UNCONTAINED direct exec when no seatbelt/bwrap exists
+    sandbox falls back to UNCONTAINED direct exec when no usable bwrap exists
     (Windows) or when already nested — there this snapshot/compare is the ONLY
     tamper defense, so it is mandatory, not belt-and-braces.
 
@@ -1813,7 +1813,7 @@ def _cmd_panel_review(cmd_args):
 
     # Judge tamper guard (#1): judges are read-only evaluators, so snapshot
     # the repo before spawning and refuse to trust the run if the working
-    # tree changed under them. On uncontained platforms (no seatbelt/bwrap,
+    # tree changed under them. On uncontained hosts (no usable bwrap,
     # or nested) project_writable=False was a no-op — this snapshot is then
     # the ONLY defense, so warn.
     from provider import sandbox as _sandbox_mod
@@ -2935,7 +2935,7 @@ def _cmd_single_review(cmd, cmd_args):
 
         # Bypass flag injected by provider.sandbox.run() — don't pass here.
         # The judge is a read-only evaluator sandboxed via provider.sandbox
-        # (write containment via seatbelt/bwrap). PLAYBOOK_SESSION_ID=judge
+        # (write containment via bwrap). PLAYBOOK_SESSION_ID=judge
         # above lets hooks identify judge sessions if needed.
         # --effort high for the same reason as the panel adapter (see
         # ClaudeAdapter.run_headless_judge): a judge is bought for its
@@ -2985,7 +2985,7 @@ def _cmd_single_review(cmd, cmd_args):
         # Under the read-only judge sandbox (project_writable=False), codex
         # cannot write its `-o` transcript into the project tree. Point `-o`
         # at a temp file — system temp (/tmp, /var/folders) stays writable
-        # under both seatbelt and bwrap — and copy it into the task dir from
+        # under bwrap — and copy it into the task dir from
         # the parent, after the tamper check (see the save block below).
         # Owned from allocation to process exit (task 059 / T008 #5): every
         # `sys.exit` below (timeout / budget / dead-pin / tamper) and any

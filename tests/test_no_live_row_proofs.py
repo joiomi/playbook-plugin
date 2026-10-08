@@ -272,8 +272,8 @@ class PrepareMergeDryRunWritesNothing(_Project):
 
 # ── PB-CLI-SANDBOX-INSPECTION ─────────────────────────────────────────────────
 class SandboxInspectionPrintsItsContent(_Project):
-    """The inspection flags return their CONTENT — the seatbelt profile, the
-    capability matrix, the alias table — alone and combined with --prompt."""
+    """The inspection flags return their CONTENT — the capability matrix, the
+    alias table — alone and combined with --prompt."""
 
     def _sandbox(self, *args):
         # Task 151: the wrapper sets its own PYTHONPATH (joined to an inherited one with `:`);
@@ -285,7 +285,6 @@ class SandboxInspectionPrintsItsContent(_Project):
 
     def test_inspection_flags_print_profile_matrix_and_aliases(self):
         expect = {
-            "--print-profile": ("(version 1)", "(deny file-write*", "(require-not (subpath"),
             "--list-agents": ("Sandbox agent capability matrix:", "claude", "codex", "grok"),
             "--list-models": ("Model aliases", "opus", "-> --agent claude"),
         }
@@ -299,10 +298,9 @@ class SandboxInspectionPrintsItsContent(_Project):
 
     def test_each_inspection_flag_prints_only_its_own_content(self):
         # Negative control: the needles are specific — each flag's output
-        # lacks the other two flags' headers, so a flag that printed the wrong
-        # table (or all of them) would not pass the content test by accident.
-        heads = {"--print-profile": "(version 1)", "--list-agents": "capability matrix",
-                 "--list-models": "Model aliases"}
+        # lacks the other flag's header, so a flag that printed the wrong
+        # table (or both) would not pass the content test by accident.
+        heads = {"--list-agents": "capability matrix", "--list-models": "Model aliases"}
         for flag in heads:
             with self.subTest(flag=flag):
                 out = self._sandbox(flag).stdout

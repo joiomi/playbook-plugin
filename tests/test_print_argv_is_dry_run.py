@@ -139,8 +139,6 @@ class PrintArgvNeverExecutes(unittest.TestCase):
 
     def test_other_inspection_flags_never_execute(self):
         for flags in (("--list-agents",), ("--list-models",),
-                      ("--print-profile",),
-                      ("--print-profile", "--prompt", "hello"),
                       ("--list-agents", "--prompt", "hello"),
                       ("--list-models", "--prompt", "hello")):
             with self.subTest(flags=flags):

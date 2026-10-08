@@ -9,7 +9,7 @@ four categories:
             (the shipped default panel is all-Claude): codex and grok are
             supported judge seats, agy and pi experimental (docs/providers.md).
   sandbox   the OS containment primitive `.claude/bin/sandbox` needs for its
-            write-blast-radius guarantee (Linux bubblewrap / macOS seatbelt).
+            write-blast-radius guarantee (Linux bubblewrap).
   verify    the command-word binaries the project's declared `verify` command
             calls but that are not on PATH — a missing one makes close fail.
   logging   the ~/.claude/bash-log.sh (BASH_ENV) wiring that feeds chat/task
@@ -145,15 +145,6 @@ def _sandbox_item() -> dict:
     system = platform.system()
     why = (".claude/bin/sandbox uses it for deny-write OS containment "
            "(blast-radius control when running --skip-permissions)")
-    if system == "Darwin":
-        try:
-            from provider.sandbox import _seatbelt_usable
-            present = _seatbelt_usable()
-        except Exception:
-            present = shutil.which("sandbox-exec") is not None
-        hint = ("seatbelt (`sandbox-exec`) ships with macOS but could not apply a "
-                "deny profile here — check SIP / that you are not already sandboxed")
-        return _item("sandbox: seatbelt", "sandbox", present, SEV_RECOMMENDED, why, hint)
     if system == "Linux":
         present = shutil.which("bwrap") is not None
         return _item("sandbox: bubblewrap", "sandbox", present, SEV_RECOMMENDED,

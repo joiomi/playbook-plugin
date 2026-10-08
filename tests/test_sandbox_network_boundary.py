@@ -59,13 +59,12 @@ class NoNetworkFailsLoudly(unittest.TestCase):
     def _no_backend(self):
         return (
             mock.patch.object(sandbox, "is_sandboxed", return_value=False),
-            mock.patch.object(sandbox.platform, "system", return_value="Linux"),
             mock.patch.object(sandbox.shutil, "which", return_value=None),
         )
 
     def test_raises_when_backend_is_not_bwrap(self):
-        a, b, c = self._no_backend()
-        with a, b, c:
+        a, b = self._no_backend()
+        with a, b:
             self.assertFalse(sandbox.network_isolation_available())
             with self.assertRaises(RuntimeError):
                 sandbox._wrapped_argv("claude", ["-p", "hi"], Path("/proj"),
@@ -75,8 +74,8 @@ class NoNetworkFailsLoudly(unittest.TestCase):
         """Same no-backend environment, but WITHOUT the opt-in the run proceeds
         uncontained (no --unshare-net) — so the raise above is caused by the flag,
         not by the missing backend on its own."""
-        a, b, c = self._no_backend()
-        with a, b, c:
+        a, b = self._no_backend()
+        with a, b:
             argv = sandbox._wrapped_argv("claude", ["-p", "hi"], Path("/proj"),
                                          None, False, no_network=False)
             self.assertNotIn("--unshare-net", argv)

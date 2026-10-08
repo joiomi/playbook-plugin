@@ -193,7 +193,7 @@ def ut_fails(text: str, per_cap: int = 15, overall_cap: int = 80) -> list[str]:
     follows it — the lines from the FAIL:/ERROR: header through the end of that
     failure block (traceback + assertion message). Capped per failure and
     overall, with a `... and N more` marker, so a multi-line assertion message
-    (e.g. a dumped seatbelt profile) reaches the log without flooding it."""
+    (e.g. a dumped profile or argv) reaches the log without flooding it."""
     def rule(s: str, ch: str) -> bool:                 # unittest frames blocks with ==== / ----
         s = s.strip()
         return len(s) >= 20 and set(s) == {ch}

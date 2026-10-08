@@ -149,7 +149,7 @@ class CodexAdapter(ProviderAdapter):
     ) -> Invocation:
         # codex reads its prompt from stdin (argv ends in "-"); context is
         # joined into the stdin payload. Bypass flag inserted after `exec` by
-        # provider.sandbox._compose_agent_argv; outer seatbelt/bwrap provides
+        # provider.sandbox._compose_agent_argv; outer bwrap provides
         # write containment (codex's internal --sandbox would nest and fail).
         full_prompt = prompt if (bare or not context) else f"{context}\n\n---\n\n{prompt}"
         argv = ["exec", "--ephemeral", "--skip-git-repo-check", "-s", "workspace-write"]

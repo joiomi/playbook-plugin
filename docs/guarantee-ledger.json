@@ -4947,10 +4947,6 @@
         {
           "path": "plugins/playbook/provider/sandbox.py",
           "reference": "symbol:build_bwrap_argv"
-        },
-        {
-          "path": "plugins/playbook/provider/sandbox.py",
-          "reference": "symbol:build_seatbelt_profile"
         }
       ],
       "failure_consequence": "Critical",
@@ -4985,10 +4981,11 @@
       ],
       "status": "partially_evidenced",
       "missing_evidence_or_limitation": [
-        "No current live-provider proof; macOS seatbelt is unavailable in CI. On Windows/Git Bash there is NO OS containment backend at all (neither sandbox-exec nor bwrap), so project_writable=False is a no-op and judges run UNCONTAINED — the before/after working-tree tamper guard is the only defense there.",
+        "No current live-provider proof. Where no usable bwrap exists (or the judge runs nested inside another sandbox), project_writable=False is a no-op and judges run UNCONTAINED — the before/after working-tree tamper guard is the only defense there. (Up to 1.5.47: macOS seatbelt, never run in CI; Windows had no backend at all.)",
         "Owner decision 2026-08-21: judge-seat is supported on claude, grok, and codex; antigravity and pi are experimental and removed from applicable_providers.",
         "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending.",
-        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`)."
+        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
+        "2026-10-08 (task 155, Linux-only): the macOS seatbelt backend (build_seatbelt_profile) was deleted; bubblewrap is the only backend."
       ],
       "follow_up_phases": [
         2,
@@ -7135,10 +7132,6 @@
         {
           "path": "plugins/playbook/provider/sandbox.py",
           "reference": "symbol:build_bwrap_argv"
-        },
-        {
-          "path": "plugins/playbook/provider/sandbox.py",
-          "reference": "symbol:build_seatbelt_profile"
         }
       ],
       "failure_consequence": "Critical",
@@ -7201,7 +7194,8 @@
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
         "2026-10-08 (task 154, Linux-only): the seatbelt profile-text proof (RoProjectSeatbeltProfileDeniesWrites, control WorkerModeSeatbeltProfileUnchanged) was deleted with the other macOS-only tests; the bubblewrap proof stays.",
-        "2026-10-08 (task 154 impl panel r1): the three unconditional bubblewrap argv tests (BindOrder) bound as proofs, so the row keeps a proof that runs where bwrap is not installed."
+        "2026-10-08 (task 154 impl panel r1): the three unconditional bubblewrap argv tests (BindOrder) bound as proofs, so the row keeps a proof that runs where bwrap is not installed.",
+        "2026-10-08 (task 155, Linux-only): the macOS seatbelt backend (build_seatbelt_profile) was deleted; bubblewrap is the only backend."
       ],
       "follow_up_phases": [
         8
@@ -7213,15 +7207,11 @@
     {
       "id": "PB-SANDBOX-READ-NETWORK",
       "category": "sandbox",
-      "statement": "Sandbox containment is write-only: on Linux (bubblewrap) and macOS (seatbelt) it denies project writes while leaving the whole filesystem readable and the network reachable by design, because judges invoke provider CLIs that call model APIs — except that a read-only (judge) sandbox cannot read the conversation records (`.agent/chat_log.md`, `.agent/sessions/`, `.agent/bash_history`, their rotated/archived copies, in `.agent`, each lane under it and the real directory behind a symlinked lane — resolved once, so the judge's link points at the masked directory; `sessions.*` archives too; task 125, task 139), including ones created or renamed into place while it runs (task 138), unless it is started with --keep-records (the conversation monitor only); Windows has no containment backend, so judges there run uncontained. The only network isolation is an opt-in bwrap --unshare-net jail that fails loudly on backends that cannot honor it. (Its macOS/Windows clauses describe behaviour supported up to 1.5.47, tag `last-multiplatform`; since 2026-10-08 the row claims Linux only — owner decision, task 153.)",
+      "statement": "Sandbox containment is write-only: on Linux (bubblewrap) it denies project writes while leaving the whole filesystem readable and the network reachable by design, because judges invoke provider CLIs that call model APIs — except that a read-only (judge) sandbox cannot read the conversation records (`.agent/chat_log.md`, `.agent/sessions/`, `.agent/bash_history`, their rotated/archived copies, in `.agent`, each lane under it and the real directory behind a symlinked lane — resolved once, so the judge's link points at the masked directory; `sessions.*` archives too; task 125, task 139), including ones created or renamed into place while it runs (task 138), unless it is started with --keep-records (the conversation monitor only); without a usable bwrap (or nested inside another sandbox) judges run uncontained. The only network isolation is an opt-in bwrap --unshare-net jail that fails loudly on backends that cannot honor it.",
       "owner": [
         {
           "path": "plugins/playbook/provider/sandbox.py",
           "reference": "symbol:build_bwrap_argv"
-        },
-        {
-          "path": "plugins/playbook/provider/sandbox.py",
-          "reference": "symbol:build_seatbelt_profile"
         },
         {
           "path": "docs/architecture.md",
@@ -7304,7 +7294,8 @@
         "Up to 1.5.47 (tag `last-multiplatform`; not claimed since 2026-10-08, Linux-only): macOS seatbelt and Windows could not isolate the network at all; the --no-network opt-in fails loudly on any non-bwrap backend rather than emit a no-op.",
         "Up to 1.5.47 (not claimed since 2026-10-08): on Windows there was no containment backend, so even write containment was a no-op and judges ran uncontained (the working-tree tamper guard was the only defense).",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
-        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`)."
+        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
+        "2026-10-08 (task 155, Linux-only): the macOS seatbelt backend (build_seatbelt_profile) was deleted; bubblewrap is the only backend."
       ],
       "follow_up_phases": [
         2,
@@ -10939,12 +10930,8 @@
     {
       "id": "PB-CLI-SANDBOX-INSPECTION",
       "category": "cli-contracts",
-      "statement": "sandbox --print-profile, --list-agents, and --list-models each return their inspection output and exit before any prompt or provider execution, including when combined with --prompt.",
+      "statement": "sandbox --list-agents and --list-models each return their inspection output and exit before any prompt or provider execution, including when combined with --prompt.",
       "owner": [
-        {
-          "path": "plugins/playbook/provider/sandbox.py",
-          "reference": "symbol:build_seatbelt_profile"
-        },
         {
           "path": "plugins/playbook/provider/sandbox.py",
           "reference": "symbol:detect_agents"
@@ -10967,8 +10954,7 @@
             "reference": "PromptContainmentMatchesTheCliFlags.test_read_only_and_rw_paths_reach_prompt_runner"
           },
           "limitations": [
-            "The test asserts non-execution for all three flags; the content of the printed profile, agent matrix, and alias table is not asserted.",
-            "Profile text is not executed under seatbelt by this test."
+            "The test asserts non-execution for both flags; the content of the agent matrix and alias table is not asserted here (the second proof asserts it)."
           ]
         },
         {
@@ -10981,7 +10967,7 @@
             "reference": "SandboxInspectionPrintsItsContent.test_each_inspection_flag_prints_only_its_own_content"
           },
           "limitations": [
-            "Asserts characteristic lines (profile rules, matrix header and agent rows, alias rows), not the full output; the matrix's availability ticks depend on the host."
+            "Asserts characteristic lines (matrix header and agent rows, alias rows), not the full output; the matrix's availability ticks depend on the host."
           ]
         }
       ],
@@ -10996,7 +10982,8 @@
       "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
         "Content now proved (task 148 (PLAN S12)): each flag, alone and with --prompt, prints its own content and not the others'.",
-        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
+        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
+        "2026-10-08 (task 155, Linux-only): --print-profile — it printed the macOS seatbelt profile — was removed with the seatbelt backend; the row now covers --list-agents and --list-models."
       ],
       "follow_up_phases": [
         3

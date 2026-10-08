@@ -1,7 +1,7 @@
 #!/bin/bash
 # launch-monitor — start claude as the conversation monitor, sandboxed
 #
-# Containment via provider.sandbox (Darwin seatbelt / Linux bwrap):
+# Containment via provider.sandbox (Linux bwrap):
 #   - project read-only, <agent-dir>/monitor/ the only project-side writable
 #   - plugin hooks disabled at the source via claude --safe-mode
 #
@@ -114,12 +114,10 @@ MONITOR_DIR="$AGENT_DIR/monitor"
 mkdir -p "$MONITOR_DIR"
 
 # --- Containment: delegate to provider.sandbox (batch-5 fix) ---
-# This launcher used to hand-roll a seatbelt profile and exec the macOS
-# sandbox binary directly — macOS-only, found broken on Linux by the owner
-# (batch 5).
-# provider.sandbox is the single source of truth for containment: Darwin
-# seatbelt AND Linux bwrap, with the bind-order lesson (1.5.3 spike) encoded
-# once. Monitor containment model, expressed in its terms:
+# This launcher used to hand-roll a macOS-only profile and exec the macOS
+# sandbox binary directly — found broken on Linux by the owner (batch 5).
+# provider.sandbox is the single source of truth for containment (bwrap),
+# with the bind-order lesson (1.5.3 spike) encoded once. Monitor containment model, expressed in its terms:
 #   --ro-project           project (incl. sessions/, chat_log.md, tasks/,
 #                          MIND_MAP.md) binds READ-ONLY
 #   --rw "$MONITOR_DIR"    the one project-side writable, bound last so it

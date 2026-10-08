@@ -38,7 +38,7 @@ def cmd_context(cmd_args):
     open_tag = re.compile(r'^<!--\s*T' + re.escape(task_num) + r'\s*-->$')
     close_tag = re.compile(r'^<!--\s*/T' + re.escape(task_num) + r'\s*-->$')
 
-    # Read, never exists() first (task 138 G3-5): under seatbelt's deny the stat
+    # Read, never exists() first (task 138 G3-5): under a read deny the stat
     # fails too, and Python 3.13's exists() then answers False.
     try:
         chat_text = chat_log.read_text(encoding="utf-8", errors="replace")
