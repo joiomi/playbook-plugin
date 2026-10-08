@@ -258,9 +258,13 @@ if [ "$TOOL_NAME" = "Write" ]; then
         FILE_PATH=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('file_path',''))" 2>/dev/null || echo "")
     fi
 
-    # Check if it's a task.md in .agent/tasks/ that doesn't exist yet
-    if echo "$FILE_PATH" | grep -qE '\.agent(/[^/]+)?/tasks/[^/]+/task\.md$'; then
-        if [ ! -f "$FILE_PATH" ]; then
+    # Check if it's a task.md in .agent/tasks/ that doesn't exist yet. Judged on
+    # the NORMALISED path, like Guard 1 (task 158): `…/N-x/./task.md`, a doubled
+    # slash or an `x/..` hop name the same file, and the raw spelling matched no
+    # pattern here while Guard 1 exempted it as an `.agent/` path.
+    TASK_MD_PATH="${NORM_PATH:-$FILE_PATH}"
+    if echo "$TASK_MD_PATH" | grep -qE '\.agent(/[^/]+)?/tasks/[^/]+/task\.md$'; then
+        if [ ! -f "$TASK_MD_PATH" ]; then
             journal_enforcement "$PB_JOURNAL_DIR" task-gate block "manual task.md creation" \
                 "$SESSION_ID" "$TOOL_NAME" "$FILE_PATH"
             cat >&2 <<'MSG'
@@ -292,10 +296,12 @@ if [ "$TOOL_NAME" = "Edit" ] || [ "$TOOL_NAME" = "Write" ]; then
         FILE_PATH=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('file_path',''))" 2>/dev/null || echo "")
     fi
 
-    # Check if this targets the active task's task.md.
-    if [ -f "$STATE_FILE" ] && echo "$FILE_PATH" | grep -qE '\.agent(/[^/]+)?/tasks/[^/]+/task\.md$'; then
+    # Check if this targets the active task's task.md — on the normalised path,
+    # for the reason given at Guard 0 (task 158).
+    TASK_MD_PATH="${NORM_PATH:-$FILE_PATH}"
+    if [ -f "$STATE_FILE" ] && echo "$TASK_MD_PATH" | grep -qE '\.agent(/[^/]+)?/tasks/[^/]+/task\.md$'; then
         ACTIVE_TASK=$(head -1 "$STATE_FILE" | tr -d '[:space:]')
-        if [ -n "$ACTIVE_TASK" ] && echo "$FILE_PATH" | grep -q "/${ACTIVE_TASK}-"; then
+        if [ -n "$ACTIVE_TASK" ] && echo "$TASK_MD_PATH" | grep -q "/${ACTIVE_TASK}-"; then
             # "The guard could not run" => fail OPEN, loudly (uniform policy).
             # `python3 <missing-file>` exits 2, which is INDISTINGUISHABLE from
             # gate-batch-check's own legitimate block-with-exit-2 — so a missing
@@ -313,7 +319,7 @@ if [ "$TOOL_NAME" = "Edit" ] || [ "$TOOL_NAME" = "Write" ]; then
             else
                 BATCH_RC=0
                 BATCH_MSG=$(echo "$INPUT" | python3 "$BATCH_HELPER" \
-                    --tool "$TOOL_NAME" --file "$FILE_PATH" \
+                    --tool "$TOOL_NAME" --file "$TASK_MD_PATH" \
                     --session-dir "$SESSION_DIR" 2>/dev/null) || BATCH_RC=$?
                 if [ "$BATCH_RC" = "2" ]; then
                     echo "$BATCH_MSG" >&2

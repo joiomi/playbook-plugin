@@ -335,5 +335,96 @@ class WritePathAndScope(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr.decode())
 
 
+class AnotherSpellingOfThePathIsStillGuarded(unittest.TestCase):
+    """Task 158 (found by task 156's impl panel, opus): Guard 0 and the batch-close
+    guard matched the RAW `file_path`. `…/001-thing/./task.md`, a doubled slash or an
+    `x/..` hop name the same file while matching neither pattern — and Guard 1 then
+    exempted the edit as an `.agent/` path. The guards now judge the path the hook
+    already normalises (lexically, like Guard 1)."""
+
+    SPELLINGS = {
+        "dot segment": lambda p, d: p.replace(f"/{d}/", f"/{d}/./"),
+        "doubled slash": lambda p, d: p.replace("/tasks/", "/tasks//"),
+        "hop and back": lambda p, d: p.replace(f"/{d}/", f"/{d}/x/../"),
+        "dot before tasks": lambda p, d: p.replace("/.agent/", "/.agent/./"),
+    }
+
+    def test_a_bare_batch_is_blocked_under_every_spelling(self):
+        for name, spell in self.SPELLINGS.items():
+            with self.subTest(spelling=name):
+                f = ProjectFixture()
+                payload = f.edit_payload(G[:3], [checked(g) for g in G[:3]])
+                payload["tool_input"]["file_path"] = spell(str(f.task_file), "001-thing")
+                self.assertNotEqual(payload["tool_input"]["file_path"], str(f.task_file))
+                r = f.run_hook(payload)
+                self.assertEqual(r.returncode, 2, r.stderr.decode())
+                self.assertIn(b"outcome note", r.stderr)
+
+    def test_control_an_annotated_batch_is_still_allowed_under_them(self):
+        for name, spell in self.SPELLINGS.items():
+            with self.subTest(spelling=name):
+                f = ProjectFixture()
+                payload = f.edit_payload(G[:3], [checked(g, NOTE) for g in G[:3]])
+                payload["tool_input"]["file_path"] = spell(str(f.task_file), "001-thing")
+                r = f.run_hook(payload)
+                self.assertEqual(r.returncode, 0, r.stderr.decode())
+
+    def test_creating_a_task_md_by_hand_is_blocked_under_every_spelling(self):
+        # Guard 0: only `tasks new` creates a task.md. The plain spelling is the
+        # control — it was blocked before this task too.
+        spellings = dict(self.SPELLINGS, plain=lambda p, d: p)
+        for name, spell in spellings.items():
+            with self.subTest(spelling=name):
+                f = ProjectFixture()
+                new = str(f.proj / ".agent" / "tasks" / "002-by-hand" / "task.md")
+                payload = {"hook_event_name": "PreToolUse", "tool_name": "Write",
+                           "tool_input": {"file_path": spell(new, "002-by-hand"),
+                                          "content": "# 002 - by hand\n"}}
+                r = f.run_hook(payload)
+                self.assertEqual(r.returncode, 2, r.stderr.decode())
+                self.assertIn(b"creates task.md files", r.stderr)
+                self.assertFalse(Path(new).exists())
+
+    def test_control_rewriting_an_existing_task_md_is_not_a_creation(self):
+        for name, spell in self.SPELLINGS.items():
+            with self.subTest(spelling=name):
+                f = ProjectFixture()
+                payload = f.write_payload(f.task_file.read_text(encoding="utf-8"))
+                payload["tool_input"]["file_path"] = spell(str(f.task_file), "001-thing")
+                r = f.run_hook(payload)
+                self.assertEqual(r.returncode, 0, r.stderr.decode())
+
+    def test_the_recovery_path_judges_the_same_normalised_path(self):
+        # The hook reads its fields in one fused call and, when that yields no
+        # sentinel, extracts them one by one. Both branches must hand the guards
+        # the same normalised path: here the fused call answers nothing, in a
+        # COPY of scripts/ (the repo is not touched).
+        import shutil
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        scripts = tmp / "scripts"
+        shutil.copytree(PLUGIN / "scripts", scripts, ignore=shutil.ignore_patterns("__pycache__"))
+        norm = scripts / "hook-payload-normalize.py"
+        src = norm.read_text(encoding="utf-8")
+        marker = 'if __name__ == "__main__":'
+        self.assertEqual(src.count(marker), 1)
+        norm.write_text(src.replace(
+            marker, 'if "--emit-fields" in sys.argv[1:]:\n    sys.exit(0)\n' + marker), encoding="utf-8")
+        probe = subprocess.run([sys.executable, str(norm), "--emit-fields"], input=b"{}",
+                               capture_output=True, timeout=60)
+        self.assertEqual(probe.stdout, b"", "control: the copied normaliser still emits fields")
+        f = ProjectFixture()
+        env = dict(os.environ, PLAYBOOK_SESSION_ID=SESSION)
+        env.pop("PLAYBOOK_ROLE", None)
+        for note, want in (("", 2), (NOTE, 0)):
+            with self.subTest(annotated=bool(note)):
+                payload = f.edit_payload(G[:3], [checked(g, note) for g in G[:3]])
+                payload["tool_input"]["file_path"] = str(f.task_file).replace("/001-thing/", "/001-thing/./")
+                r = subprocess.run([bash_or_skip(), str(scripts / "task-gate-hook")],
+                                   input=json.dumps(payload).encode(), cwd=f.proj, env=env,
+                                   capture_output=True, timeout=60)
+                self.assertEqual(r.returncode, want, r.stderr.decode())
+
+
 if __name__ == "__main__":
     unittest.main()

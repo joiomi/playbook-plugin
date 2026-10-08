@@ -44,6 +44,55 @@ _CODEX_OUT = re.compile(r"you(?:'|’)ve hit your usage limit", re.I)
 _CODEX_AT = re.compile(r"try again at ([^.\"\n]+?)(?:\.|\"|\n|$)", re.I)
 _AGY_OUT = re.compile(r"agy quota exhausted", re.I)
 _AGY_IN = re.compile(r"resets in (?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?", re.I)
+# claude prints its account limit as ONE plain line on stdout and exits 1 (both
+# claude seats of task 156's panel, 2026-10-08: "You've hit your weekly limit ·
+# resets Oct 13, 6pm (Europe/Bucharest)").
+_CLAUDE_OUT = re.compile(r"^you(?:'|’)ve hit your ([a-z0-9][a-z0-9 -]*?) limit\s*·\s*resets (.+?)\s*$", re.I)
+_CLAUDE_AT = re.compile(r"^(?:([A-Za-z]{3,9}) (\d{1,2}), )?(\d{1,2})(?::(\d{2}))?\s*(am|pm)"
+                        r"(?: \(([A-Za-z0-9_+-]+(?:/[A-Za-z0-9_+-]+)*)\))?$", re.I)
+_MONTHS = {m: i for i, m in enumerate(
+    ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"), 1)}
+
+
+def _nearest_clock_time(at: _dt.datetime, now: _dt.datetime) -> _dt.datetime:
+    """A bare clock time, placed on today's date: the next such time — unless it
+    passed less than _RECENT_PAST ago, then it is the reset that already happened."""
+    if at > now and now - (at - _dt.timedelta(days=1)) <= _RECENT_PAST:
+        return at - _dt.timedelta(days=1)   # 23:55 seen at 00:10: yesterday's, passed (post-D6 run 1)
+    if at > now or now - at <= _RECENT_PAST:
+        return at
+    return at + _dt.timedelta(days=1)
+
+
+def _parse_claude_time(raw: str, now: _dt.datetime) -> Optional[_dt.datetime]:
+    """`Oct 13, 6pm (Europe/Bucharest)`; without a date, the nearest such clock
+    time. An unknown zone (or a host without the zone database) reads as local."""
+    m = _CLAUDE_AT.match(raw.strip())
+    if not m:
+        return None
+    mon, day, hour, minute, ampm, zone = m.groups()
+    if not 1 <= int(hour) <= 12 or int(minute or 0) > 59:
+        return None
+    tz = now.tzinfo
+    if zone:
+        try:
+            from zoneinfo import ZoneInfo
+            tz = ZoneInfo(zone)
+        except Exception:
+            tz = now.tzinfo
+    here = now.astimezone(tz)
+    at = here.replace(hour=int(hour) % 12 + (12 if ampm.lower() == "pm" else 0),
+                      minute=int(minute or 0), second=0, microsecond=0)
+    if mon is None:
+        return _nearest_clock_time(at, here)
+    month = _MONTHS.get(mon[:3].lower())
+    try:
+        at = at.replace(month=month or 0, day=int(day))
+        if here - at > _dt.timedelta(days=183):      # "Jan 2" read on Dec 30
+            at = at.replace(year=at.year + 1)
+    except ValueError:
+        return None
+    return at
 
 
 def _parse_codex_time(raw: str, now: _dt.datetime) -> Optional[_dt.datetime]:
@@ -52,11 +101,7 @@ def _parse_codex_time(raw: str, now: _dt.datetime) -> Optional[_dt.datetime]:
     try:
         t = _dt.datetime.strptime(raw.upper(), "%I:%M %p")
         at = now.replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
-        if at > now and now - (at - _dt.timedelta(days=1)) <= _RECENT_PAST:
-            return at - _dt.timedelta(days=1)   # 23:55 seen at 00:10: yesterday's, passed (post-D6 run 1)
-        if at > now or now - at <= _RECENT_PAST:
-            return at
-        return at + _dt.timedelta(days=1)
+        return _nearest_clock_time(at, now)
     except ValueError:
         pass
     cleaned = re.sub(r"(\d)(st|nd|rd|th)\b", r"\1", raw)
@@ -70,7 +115,8 @@ def _parse_codex_time(raw: str, now: _dt.datetime) -> Optional[_dt.datetime]:
 
 # Providers whose stdout is the CLI's own JSON event stream: a raw error-event line
 # there is the CLI speaking. A claude seat's stdout is the judge's review text,
-# where such a line could only be a quote (post-D6 run 1, codex).
+# where such a line could only be a quote (post-D6 run 1, codex) — claude's own
+# limit line is read by a narrower rule in classify_outage (task 158).
 _EVENT_STREAM_PROVIDERS = ("codex", "grok", "agy")
 
 
@@ -85,13 +131,16 @@ def classify_outage(output_text: str, now: Optional[_dt.datetime] = None,
         return None
     now = now or _dt.datetime.now().astimezone()
     lines = text.lstrip().splitlines()
-    kept, section = lines[:1], ""
+    kept, section, claude_stdout = lines[:1], "", []
     for ln in lines[1:]:
         if ln.strip() in ("[stdout tail]", "[stderr tail]"):
             section = ln.strip()
             continue
         if section == "[stderr tail]":
             kept.append(ln)
+        elif provider == "claude":
+            if section == "[stdout tail]" and ln.strip():
+                claude_stdout.append(ln.strip())
         elif provider is None or provider in _EVENT_STREAM_PROVIDERS:
             s = ln.strip()
             if s.startswith("AGY_ERROR:"):
@@ -105,6 +154,14 @@ def classify_outage(output_text: str, now: Optional[_dt.datetime] = None,
                     continue
                 if isinstance(ev, dict) and ev.get("type") in ("error", "turn.failed"):
                     kept.append(json.dumps(ev, ensure_ascii=False))
+    # A claude seat's stdout is the judge's review, so its limit line counts only
+    # when it is the WHOLE of it: a review that quotes the line has other lines.
+    if len(claude_stdout) == 1:
+        m = _CLAUDE_OUT.match(claude_stdout[0])
+        if m:
+            at = _parse_claude_time(m.group(2), now)
+            return {"reason": f"claude: {m.group(1).lower()} limit reached (resets {m.group(2).strip()})",
+                    "until": at.isoformat(timespec="minutes") if at else None}
     text = "\n".join(kept)
     low = text.lower()
     if any(s in low for s in _GROK_OUT):

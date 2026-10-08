@@ -71,6 +71,23 @@ class CodexActiveTaskStatus(unittest.TestCase):
         self._write_status("blockedness")
         self.assertIsNone(apply_patch_pre_decision(patch, self.root, SID))
 
+    def test_a_backslash_named_code_file_is_gated_without_a_task(self):
+        # Task 158 (codex-medium, task 157's panel): on Linux `src/a\.agent\module.py`
+        # is a file NAME, not a path through `.agent/` — with no active task the
+        # patch must be refused like any other code file.
+        from provider.codex_hooks import apply_patch_pre_decision
+
+        def patch(path):
+            return {"tool_input": {"command": f"*** Begin Patch\n*** Update File: {path}\n"
+                                              "@@\n-a\n+b\n*** End Patch\n"}}
+        self._write_status("done")                       # no ACTIVE task
+        d = apply_patch_pre_decision(patch("src/a\\.agent\\module.py"), self.root, SID)
+        self.assertIsNotNone(d, "a file NAMED `a\\.agent\\module.py` was exempt from the edit gate")
+        self.assertEqual(d["decision"], "block")
+        # Controls: a real management path is still allowed, a plain code file is still refused.
+        self.assertIsNone(apply_patch_pre_decision(patch(".agent/tasks/001-x/helper.py"), self.root, SID))
+        self.assertEqual(apply_patch_pre_decision(patch("src/main.py"), self.root, SID)["decision"], "block")
+
     def test_done_with_suffix_is_done(self):
         # 1.5.20: parity with the CLI `_is_done` (startswith "done").
         self._write_status("done (2026-08-15)")

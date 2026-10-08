@@ -81,6 +81,18 @@ class CodexManagementPathTraversal(unittest.TestCase):
         self.assertTrue(
             _is_management_path("/proj/.agent/tasks/001-задача/task.md"))
 
+    def test_a_backslash_is_a_file_name_character_not_a_separator(self):
+        # Task 158 (Linux only): `src/a\.agent\x.py` is ONE file name inside src/.
+        # Up to 1.5.47 the classifier turned every `\` into `/` first (Windows
+        # spellings), so that name read as a path THROUGH `.agent/` and a codex
+        # patch to it was exempt from the edit gate with no active task.
+        self.assertFalse(_is_management_path("src/a\\.agent\\x.py"))
+        self.assertFalse(_is_management_path("/proj/src/x\\.claude\\settings.py"))
+        self.assertFalse(_is_management_path(".agent\\tasks\\001-x\\main.py"))
+        # Controls: the real directories stay management, a `\` inside one changes nothing.
+        self.assertTrue(_is_management_path("/proj/.agent/a\\b.py"))
+        self.assertTrue(_is_management_path(".claude/settings.json"))
+
 
 class GatePathTraversal(unittest.TestCase):
     def setUp(self):
@@ -128,6 +140,13 @@ class GatePathTraversal(unittest.TestCase):
         r = self._run(p)
         self.assertEqual(r.returncode, 2,
                          f".agent/tasks/../../ traversal bypassed the gate (rc={r.returncode})")
+
+    def test_a_backslash_named_code_file_is_gated(self):
+        # Task 158: the bash gate never read `\` as a separator — this is the
+        # behaviour the codex twin (provider/policy.py) now matches.
+        r = self._run(str(self.project / "src") + "/a\\.agent\\module.py")
+        self.assertEqual(r.returncode, 2,
+                         f"a file NAMED `a\\.agent\\module.py` was exempted (rc={r.returncode})")
 
     def test_lookalike_agent_dir_is_not_exempt(self):
         r = self._run(str(self.project / ".agentx" / "file.py"))

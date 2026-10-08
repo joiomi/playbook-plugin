@@ -37,6 +37,30 @@ CODEX = ('(FAILED — exit 1)\n[stdout tail]\n{"type":"error","message":"You’v
 CODEX_DATE = ('(FAILED — exit 1)\n{"type":"error","message":"You\'ve hit your usage limit. Upgrade to '
               'Pro or try again at Oct 10th, 2026 12:11 AM."}')
 AGY = "(FAILED — agy quota exhausted: error: Individual quota reached. Resets in 34m13s.)"
+# claude's account limit, byte for byte as both claude seats of a panel returned it on
+# 2026-10-08 (task 156's first impl panel, judge.md): one plain line on stdout, exit 1.
+CLAUDE_LIMIT = ("(FAILED — exit 1)\n[stdout tail]\n"
+                "You've hit your weekly limit · resets Oct 13, 6pm (Europe/Bucharest)\n\n")
+
+
+def _pin_clock(test, now=NOW):
+    """seat_outage reads the wall clock through its `_dt` alias; pin it for a test
+    that drives the real panel. A clock-time fixture ("try again at 7:33 PM") must
+    mean the same thing at whatever hour the suite runs: on the real clock the
+    panel tests failed every day from 19:33 to 01:33 local time, the six hours in
+    which 7:33 PM reads as the reset that has just happened (task 158)."""
+    import types
+    from unittest import mock
+
+    class _Pinned(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now if tz is None else now.astimezone(tz)
+
+    shim = types.SimpleNamespace(datetime=_Pinned, timedelta=dt.timedelta, timezone=dt.timezone)
+    patcher = mock.patch.object(so, "_dt", shim)
+    patcher.start()
+    test.addCleanup(patcher.stop)
 
 
 class ClassifyOutage(unittest.TestCase):
@@ -72,6 +96,65 @@ class ClassifyOutage(unittest.TestCase):
                 "tests/test_seat_outage.py:33:    '402 Payment Required): Grok Build usage balance exhausted'\n"
                 '{"type":"error","message":"stream disconnected before completion"}\n')
         self.assertIsNone(so.classify_outage(tail, NOW))
+
+
+class ClaudeAccountLimit(unittest.TestCase):
+    """Task 158: a claude seat at its account limit is an outage like the others. A
+    claude seat's stdout is the judge's REVIEW, so the limit line counts only when it
+    is the whole of it — the CLI printed nothing else before exiting 1."""
+
+    def test_the_captured_limit_is_an_outage_until_its_reset(self):
+        self.assertEqual(so.classify_outage(CLAUDE_LIMIT, NOW, provider="claude"),
+                         {"reason": "claude: weekly limit reached (resets Oct 13, 6pm (Europe/Bucharest))",
+                          "until": "2026-10-13T18:00+03:00"})
+
+    def test_a_review_that_carries_the_line_is_not_an_outage(self):
+        line = "You've hit your weekly limit · resets Oct 13, 6pm (Europe/Bucharest)"
+        for name, text in {
+            "quoted in a failed review": "(FAILED — exit 1)\n[stdout tail]\n**Important** — the panel printed:\n" + line + "\n",
+            "after a cut-off tail line": "(FAILED — exit 1)\n[stdout tail]\nrest of a sentence.\n" + line + "\n",
+            "inside a longer line": "(FAILED — exit 1)\n[stdout tail]\nthe seat said: " + line + "\n",
+            "a review that did not fail": "**Important** — " + line + "\n",
+        }.items():
+            with self.subTest(case=name):
+                self.assertIsNone(so.classify_outage(text, NOW, provider="claude"))
+
+    def test_the_line_is_claudes_only_for_a_claude_seat(self):
+        # another provider's stdout is its JSON event stream: a plain line there is not its voice
+        for provider in ("codex", "grok", "agy", None):
+            with self.subTest(provider=provider):
+                self.assertIsNone(so.classify_outage(CLAUDE_LIMIT, NOW, provider=provider))
+
+    def test_a_bare_clock_time_is_the_next_such_time_in_the_named_zone(self):
+        # not captured live — the same line without a date, as a shorter limit would print it
+        text = CLAUDE_LIMIT.replace("Oct 13, 6pm", "9:30pm")
+        self.assertEqual(so.classify_outage(text, NOW, provider="claude")["until"], "2026-10-07T21:30+03:00")
+        # NOW is 18:00 +03:00 = 15:00 UTC: "4pm (UTC)" is one hour ahead, whatever zone the host is in
+        try:
+            import zoneinfo
+            zoneinfo.ZoneInfo("UTC")
+        except Exception:
+            self.skipTest("no IANA zone database on this host (a named zone then reads as local time)")
+        utc = CLAUDE_LIMIT.replace("Oct 13, 6pm (Europe/Bucharest)", "4pm (UTC)")
+        self.assertEqual(so.classify_outage(utc, NOW, provider="claude")["until"], "2026-10-07T16:00+00:00")
+
+    def test_a_reset_it_cannot_read_is_still_an_outage_with_no_end(self):
+        # like a codex limit with no "try again at": skipped until the owner clears it
+        for when in ("soon", "Oct 13, 6pm (Not/AZone) maybe", "Smarch 13, 6pm"):
+            with self.subTest(when=when):
+                text = CLAUDE_LIMIT.replace("Oct 13, 6pm (Europe/Bucharest)", when)
+                got = so.classify_outage(text, NOW, provider="claude")
+                self.assertIsNotNone(got)
+                self.assertIsNone(got["until"])
+
+    def test_an_unknown_zone_is_read_as_local_time(self):
+        text = CLAUDE_LIMIT.replace("Europe/Bucharest", "Mars/Olympus")
+        self.assertEqual(so.classify_outage(text, NOW, provider="claude")["until"], "2026-10-13T18:00+03:00")
+
+    def test_a_date_already_behind_us_by_months_is_next_years(self):
+        late = dt.datetime(2026, 12, 30, 10, 0, tzinfo=NOW.tzinfo)
+        text = CLAUDE_LIMIT.replace("Oct 13, 6pm (Europe/Bucharest)", "Jan 2, 9am")
+        self.assertEqual(so.classify_outage(text, late, provider="claude")["until"], "2027-01-02T09:00+03:00")
 
 
 class ClassifyOutageProvenance(unittest.TestCase):
@@ -179,6 +262,7 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
         self.calls = []
         R._PB_JOURNAL_MOD = None
         R._PB_JOURNAL_LOADED = False
+        _pin_clock(self)
 
     def _panel(self, models, judge, codex_available=False):
         import contextlib
@@ -204,13 +288,13 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
                 os.chdir(old)
         return code, out.getvalue(), err.getvalue()
 
-    def _judge(self, fail=(), outage=()):
+    def _judge(self, fail=(), outage=(), outage_text=CODEX):
         calls = self.calls
 
         def judge(adapter, prompt, model, system_context, **kw):
             calls.append(model)
             if any(m in model for m in outage):
-                return CODEX
+                return outage_text
             if any(m in model for m in fail):
                 return "(FAILED — exit 1)\nTraceback: something else broke"
             return "1. **Note** — fine.\n"
@@ -231,6 +315,19 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
         code, out, _ = self._panel(models, self._judge(), codex_available=True)
         self.assertNotIn("gpt-5.5", self.calls, "a seat out of credit was called again")
         self.assertIn("Skipped out of credit: codex:gpt-5.5", out)
+
+    def test_a_claude_seat_at_its_account_limit_is_recorded_then_skipped(self):
+        # Task 158: on 2026-10-08 both claude seats of a five-seat panel answered with
+        # the limit line; the panel fell below quorum and the next run called them again.
+        code, out, _ = self._panel(self.CLAUDE, self._judge(outage=("fable",), outage_text=CLAUDE_LIMIT))
+        self.assertIn("Recorded claude:claude-fable-5 as out of credit", out)
+        record = json.loads(so._record(self.d / ".agent").read_text(encoding="utf-8"))
+        self.assertEqual(list(record), ["claude:claude-fable-5"])
+        self.assertEqual(record["claude:claude-fable-5"]["until"], "2026-10-13T18:00+03:00")
+        self.calls.clear()
+        code, out, _ = self._panel(self.CLAUDE, self._judge())
+        self.assertNotIn("claude-fable-5", self.calls, "a claude seat at its limit was called again")
+        self.assertIn("Skipped out of credit: claude:claude-fable-5", out)
 
     def test_a_claude_seat_quoting_the_event_is_not_recorded(self):
         # post-D6 run 1 (codex): a claude seat's stdout is the review text; a line

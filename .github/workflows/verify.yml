@@ -28,6 +28,21 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+      # The sandbox is the product's containment and Linux is its only platform:
+      # with bubblewrap on the runner the live sandbox tests run here instead of
+      # skipping (task 158). bwrap needs unprivileged user namespaces, which the
+      # Ubuntu 24.04 image restricts through AppArmor — lifted for this job only.
+      # The probe fails the step, loudly, if bwrap still cannot start.
+      - name: install bubblewrap (apt)
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --version
+          bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid true
+          echo "bwrap usable on this runner"
+
       - name: scripts/verify
         shell: bash
         run: |

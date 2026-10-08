@@ -29,9 +29,11 @@ def _is_management_path(file_path: str) -> bool:
     must not be treated as management, or it bypasses the code-edit gate.
     """
     import os
-    # normpath collapses `..`/`.`; a `\` in the path is treated as a separator
-    # first (kept as it was: dropping it would change which paths are exempt).
-    norm = os.path.normpath(file_path.replace("\\", "/"))
+    # normpath collapses `..`/`.`. A `\` is a file-name character here, as it is
+    # for the bash gate: `src/a\.agent\x.py` is one name inside src/, not a path
+    # through `.agent/` (up to 1.5.47 it was turned into `/` first, which exempted
+    # that file from the edit gate — task 158).
+    norm = os.path.normpath(file_path)
     parts = norm.split("/")
     return ".agent" in parts or ".claude" in parts
 
