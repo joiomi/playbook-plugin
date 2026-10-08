@@ -583,7 +583,7 @@ read_counter_int() {
 # not `${x,,}` (works in any bash, 3.2 included).
 is_code_file_path() {
     local file_path="$1"
-    local norm="${file_path//\\//}"          # backslashes -> slashes (Python parity)
+    local norm="$file_path"                  # a backslash is a file-name character (task 159)
     # Strip trailing CR/LF (Python parity: norm = ....rstrip("\r\n")). Without
     # this a crafted trailing \r stays inside the extension (".py\r"), defeats
     # the code-ext match, finds no code dir, and falls through to ALLOW — while
@@ -732,13 +732,14 @@ create_wrapper() {
     fi
 
     local content
-    # Delimiter MUST NOT be a prefix of any line in the body below. Git Bash /
-    # MSYS bash 5.2's `$( )` parser terminates a heredoc at a body line that
-    # merely STARTS with the delimiter, so the old `WRAPPER` delimiter was cut
-    # short by the body's own `WRAPPER_DIR=` line — every regenerated wrapper
-    # was silently truncated to six lines on Windows, and session-start-hook
+    # Delimiter MUST NOT be a prefix of any line in the body below. Inside
+    # `$( )`, bash 5.2 and later end a heredoc at a body line that merely STARTS
+    # with the delimiter and holds a `)`, so the old `WRAPPER` delimiter was cut
+    # short by the body's own `WRAPPER_DIR="$(…)"` line — every regenerated
+    # wrapper was silently truncated to six lines, and session-start-hook
     # regenerates all of them on every session. Field report: cristi
-    # (ai-ring-vet, Git Bash MSYS 5.2.26), 2026-07-21.
+    # (ai-ring-vet, Git Bash MSYS 5.2.26), 2026-07-21; measured on Linux bash
+    # 5.2.15-5.2.37 and 5.3.20 on 2026-10-09 (5.1.16 is not affected).
     # `tests/test_wrapper_template.py` holds this invariant for both this
     # delimiter and the nested PYRESOLVE one.
     # The resolver runs as `python3 -I -` (task 115, parked since 086): isolated mode keeps

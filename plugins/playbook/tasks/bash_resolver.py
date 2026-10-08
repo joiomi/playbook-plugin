@@ -93,9 +93,10 @@ def usable_bash() -> "tuple[str | None, str]":
 
     THE form audit.py and merge-verify.py use. On success `(path, "")`; on
     failure `(None, reason)`, and the caller must fail closed — an unusable bash
-    is never silently treated as usable. The reason strings are unchanged from
-    the two `_usable_bash()` copies this replaces. The probe runs in the inherited
-    environment, matching those copies exactly.
+    is never silently treated as usable. The reason strings come from the two
+    `_usable_bash()` copies this replaces (the not-usable one says what was seen
+    since task 159; it used to guess a Windows stub). The probe runs in the
+    inherited environment, matching those copies exactly.
     """
     global _RESOLVED_BASH
     if _RESOLVED_BASH is not None:
@@ -113,7 +114,7 @@ def usable_bash() -> "tuple[str | None, str]":
         _RESOLVED_BASH = (candidate, "")
     else:
         _RESOLVED_BASH = (None, f"bash at {candidate} is not usable (rc={rc}) "
-                                "— likely the Windows WSL stub")
+                                "— it did not run the probe")
     return _RESOLVED_BASH
 
 

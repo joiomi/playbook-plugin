@@ -31,10 +31,15 @@ Bash) come back after that, starting from `git diff last-multiplatform`. The las
 - **The remaining Windows-only branches are removed** (task 157): the msvcrt lock backend (`fcntl` is the backend), the
   Windows command-line caps of the grok and pi judge seats (the per-argument byte guard, the Linux limit, stays), the
   `.exe` recovery in the bash resolver, and judgebench's `--platform windows` simulation. Linux behaviour is unchanged.
-  Kept on purpose, because removing them would change what Linux does or says: the resolver's failure hint (it still
-  names the Windows WSL stub), `bash-log.sh`'s backslash strip of `$0`, the `ps` fallback for a host without `/proc`,
-  and judgebench's portable-label rule. (The `\` → `/` step in the codex hooks' management-path check, kept by that
-  task, was a bypass and is removed — see Fixed.)
+- **The Windows leftovers with no use on Linux are gone too** (task 159). The bash resolver's failure hint no longer
+  guesses "the Windows WSL stub" — it says the probe did not run. The shell logger no longer cuts a script's name at a
+  backslash: a script NAMED `sub\statusline.sh` is an ordinary script and its commands are logged. The code-file
+  classifier, on the Claude and on the codex path, no longer reads `\` as a path separator: a file NAMED `src\deploy`
+  is not inside `src/` (and the same step in the codex management-path check was a bypass — see Fixed). judgebench
+  accepts the labels Windows reserves (`CON`, a trailing dot). Kept, because they serve Linux: the `ps` fallback for a
+  host without `/proc`, the command guard's own backslash handling, the Windows-style names in its dangerous-variable
+  list (an unset variable expands to nothing here too), and the rule that a heredoc delimiter is never a prefix of a
+  body line — measured: bash 5.2 and 5.3 on Linux cut such a heredoc exactly as Git Bash did.
 - **CI runs the sandbox tests** (task 158): the Linux lanes install bubblewrap (and lift Ubuntu 24.04's AppArmor
   restriction on unprivileged user namespaces for the job), so the live containment tests run there instead of skipping
   (26 skips → 9).

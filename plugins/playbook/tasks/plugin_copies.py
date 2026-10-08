@@ -228,7 +228,7 @@ def _release_repo(hook: "str | None", home: Path, key: str) -> "tuple[str | None
 
 def posix_rel(rel: str) -> str:
     """`./plugins/playbook` → `plugins/playbook`; `.` → ``."""
-    r = rel.replace("\\", "/").strip("/")
+    r = rel.strip("/")
     while r.startswith("./"):
         r = r[2:]
     return "" if r in (".", "") else r

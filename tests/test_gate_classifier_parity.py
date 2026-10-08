@@ -61,8 +61,11 @@ VECTORS = [
     ("config/app.ini", False), ("a/mysrc/b.xyz", False),
     # Case-insensitive extension match (parity with Python's .lower()).
     ("STYLES.CSS", True), ("a/b/c.JSON", False), ("X.Py", True),
-    # Backslash paths normalize to forward slashes on both.
+    # A backslash is a file-name character on both (Linux only, task 159): the
+    # extension still decides, and a NAME is not inside the directory it spells —
+    # up to 1.5.47 both sides turned `\\` into `/` first, so `src\\deploy` was gated.
     ("src\\main.py", True), ("data\\notes.md", False),
+    ("src\\deploy", False), ("scripts\\run", False), ("a\\lib\\b.xyz", False),
     # 1.5.20 extension additions (strict-consistent: preprocessors/modules/schema).
     ("app.mjs", True), ("m.cjs", True), ("style.scss", True), ("style.less", True),
     ("api.proto", True), ("q.graphql", True), ("build.gradle", True),

@@ -127,14 +127,18 @@ class CandidateTests(unittest.TestCase):
                 with self.assertRaises(runner.CandidateError):
                     runner.parse_candidates(bad)
 
-    def test_labels_are_portable_path_segments(self):
-        # r4 sol #5: Windows folds case and forbids device names / trailing dots.
+    def test_labels_are_unique_whatever_their_case(self):
+        # r4 sol #5: two columns of a report must not differ only by case.
         with self.assertRaises(runner.CandidateError):
             runner.parse_candidates("A=opus,a=sonnet")
-        for bad in ("CON=opus", "nul=opus", "com1=opus", "trail.=opus"):
-            with self.subTest(label=bad):
-                with self.assertRaises(runner.CandidateError):
-                    runner.parse_candidates(bad)
+
+    def test_a_label_is_a_linux_directory_name(self):
+        # Linux only (task 159): the names Windows reserves (CON, NUL, COM1) and a
+        # trailing dot are ordinary directory names here; they were refused up to 1.5.47.
+        for ok in ("CON=opus", "nul=opus", "com1=opus", "trail.=opus"):
+            with self.subTest(label=ok):
+                [cand] = runner.parse_candidates(ok)
+                self.assertEqual(cand.label, ok.split("=")[0])
 
     def test_bad_spec_duplicate_label_and_empty(self):
         with self.assertRaises(runner.CandidateError):

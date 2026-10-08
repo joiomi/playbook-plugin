@@ -68,25 +68,25 @@ class BashLogScope(unittest.TestCase):
         self._bash("", argv=[bash_or_skip(), str(script)])
         self.assertNotIn("by-name", "\n".join(self._lines()))
 
-    def test_a_statusline_named_by_a_backslash_path_is_not_logged(self):
-        # CI 36000444073 (the Windows lane, up to 1.5.47): `bash C:\...\statusline.sh`
-        # left a backslash path in $0, which `${0##*/}` does not strip. On Linux the
-        # same string reaches the logger as a file NAME containing a backslash.
-        rel = "sub\\statusline.sh"
-        script = self.proj / rel
-        script.write_bytes(b"#!/bin/bash\necho by-backslash-path >/dev/null\n")
-        self._bash("", argv=[bash_or_skip(), rel])
-        self.assertNotIn("by-backslash-path", "\n".join(self._lines()))
-
     def test_a_directory_named_statusline_does_not_hide_its_scripts(self):
-        # Panel r1 P8: `*\\statusline-*` also matched a DIRECTORY component
-        # (`w\statusline-tests\run.sh`), silently dropping every command run
-        # from that tree. Only the script's own name counts.
-        rel = "w\\statusline-tests\\run.sh"
-        script = self.proj / rel
-        script.write_bytes(b"echo in-a-statusline-dir >/dev/null\n")
-        self._bash("", argv=[bash_or_skip(), rel])
+        # Only the script's own name counts: a script INSIDE a directory called
+        # `statusline-tests` is an ordinary script, and its commands are logged.
+        (self.proj / "statusline-tests").mkdir()
+        (self.proj / "statusline-tests" / "run.sh").write_bytes(b"#!/bin/bash\necho in-a-statusline-dir >/dev/null\n")
+        self._bash("", argv=[bash_or_skip(), "statusline-tests/run.sh"])
         self.assertIn("in-a-statusline-dir", "\n".join(self._lines()))
+
+    def test_a_backslash_is_part_of_the_script_name(self):
+        # Linux only (task 159): `sub\statusline.sh` is ONE file name — it is not the
+        # statusline, and `w\statusline-tests\run.sh` is not a script in a directory.
+        # Up to 1.5.47 the logger also cut the name at its last backslash (Git Bash
+        # handed it `bash C:\…\statusline.sh`), which dropped the first script's commands.
+        for rel, marker in (("sub\\statusline.sh", "by-backslash-name"),
+                            ("w\\statusline-tests\\run.sh", "in-a-statusline-named-name")):
+            with self.subTest(name=rel):
+                (self.proj / rel).write_bytes(f"#!/bin/bash\necho {marker} >/dev/null\n".encode())
+                self._bash("", argv=[bash_or_skip(), rel])
+                self.assertIn(marker, "\n".join(self._lines()))
 
     def test_a_repeated_lifecycle_command_is_logged_each_time(self):
         # Panel r1 P5: `tasks work 7; tasks work 8; tasks work 7` in one shell

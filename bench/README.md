@@ -42,8 +42,8 @@ bench/runs/<run-id>/
 - **Candidates** are `provider:model:effort` specs (or a models.json alias), optionally
   labeled: `--candidates sol-med=codex:gpt-5.6-sol:medium,sol-high=codex:gpt-5.6-sol:high`.
   Presets `sol-med`, `sol-high`, `grok-med`, `grok-high` name the Test A/B seats. Labels are
-  portable directory names: `[A-Za-z0-9._-]`, ≤64 chars, no leading/trailing dot, unique
-  case-insensitively, not a Windows device name, not `journal`/`raw`/`manifest.json`.
+  directory names: `[A-Za-z0-9._-]`, ≤64 chars, no leading dot, unique
+  case-insensitively, not `journal`/`raw`/`manifest.json`.
 - **Snapshots, not worktrees.** A live run reviews a `git archive <repo_base_sha>` snapshot
   in a temp dir — no `.git`, so a judge cannot `git log --all` its way into the future
   (fix commits). One snapshot per case, shared by all candidates. Pass the checkout for

@@ -589,24 +589,8 @@ class TamperGuardTest(unittest.TestCase):
         subprocess.run(["git", "-C", str(d), "commit", "-qm", "init"], check=True)
         before = treview._snapshot_repo_state(d, tf)
         self.assertIsNotNone(before["porcelain"])
-        # Windows/git-bash marks pack files read-only and may hold handles, so a
-        # plain rmtree of .git raises WinError 5 — clear the read-only bit and
-        # retry; if the OS still refuses, skip rather than error (the transition
-        # logic is proven on POSIX and unit-injectable elsewhere).
-        import os as _os
-        import stat as _stat
-        def _force(_func, _path, _exc):
-            try:
-                _os.chmod(_path, _stat.S_IWRITE)
-                _func(_path)
-            except OSError:
-                pass
-        try:
-            shutil.rmtree(d / ".git", onerror=_force)   # rogue destroys the repo
-        except OSError:
-            self.skipTest("OS will not let the test delete .git")
-        if (d / ".git").exists():
-            self.skipTest("OS retained .git despite rmtree (locked handles)")
+        shutil.rmtree(d / ".git")                   # rogue destroys the repo
+        self.assertFalse((d / ".git").exists())
         changes = treview._detect_tamper(d, tf, before)
         self.assertTrue(changes, ".git deletion produced no tamper signal")
         self.assertIn("unreadable", " ".join(changes))

@@ -80,7 +80,8 @@ def _is_code_file_path(file_path: str) -> bool:
         return False
     # rstrip trailing CR/LF so a malformed path ending in a newline classifies
     # like the bash side (whose `$(…)` ext extraction drops it) — 1.5.20 parity.
-    norm = file_path.replace("\\", "/").rstrip("\r\n")
+    # A backslash is a file-name character: no `\`→`/` step since task 159.
+    norm = file_path.rstrip("\r\n")
     _, ext = os.path.splitext(norm)
     ext = ext.lower()
     if ext in _CODE_EXTENSIONS:

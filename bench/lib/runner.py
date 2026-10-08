@@ -71,8 +71,6 @@ class Candidate:
 
 # Bench-local presets so the plan's literal commands (§14/§24: `sol-med,sol-high`)
 # resolve to the Test A/B seats (impl-panel sol #5). `label=spec` always wins.
-_WINDOWS_DEVICE_NAMES = frozenset({"CON", "PRN", "AUX", "NUL"} | {f"COM{i}" for i in range(1, 10)}
-                                  | {f"LPT{i}" for i in range(1, 10)})
 
 RESERVED_LABELS = frozenset({"journal", "manifest.json", "adjudication.json", "report.md", ".lock", "raw"})
 
@@ -112,10 +110,8 @@ def parse_candidates(csv: str) -> list:
         # control path, never dot-prefixed, never longer than a portable filename.
         if label.startswith(".") or len(label) > 64 or label.lower() in RESERVED_LABELS:
             raise CandidateError(f"candidate label {label!r} is reserved/unsafe as a directory name")
-        # Portable path segment (r4 sol #5): Windows folds case, forbids device names and
-        # trailing dots — enforce those rules on every platform so a run dir is portable.
-        if label.endswith(".") or label.split(".")[0].upper() in _WINDOWS_DEVICE_NAMES:
-            raise CandidateError(f"candidate label {label!r} is not a portable directory name")
+        # Unique whatever the case (r4 sol #5): two columns of a report must not differ
+        # only by case. (The Windows device-name and trailing-dot rules went with task 159.)
         if label.casefold() in seen:
             raise CandidateError(f"duplicate candidate label {label!r} (labels are case-insensitive)")
         seen.add(label.casefold())

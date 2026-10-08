@@ -271,7 +271,7 @@ def _logging_item() -> dict:
         data = json.loads(settings.read_text(encoding="utf-8"))
         env = data.get("env") if isinstance(data, dict) else None
         be = env.get("BASH_ENV") if isinstance(env, dict) else None
-        wired = bool(be) and be.replace("\\", "/").endswith("/.claude/bash-log.sh")
+        wired = bool(be) and be.endswith("/.claude/bash-log.sh")
         present = bash_log.is_file() and wired
     except (OSError, ValueError, RuntimeError):
         present = False

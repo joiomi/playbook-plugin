@@ -21,13 +21,13 @@ _cpb_log_cmd() {
     # check must live in the DEBUG callback (where $0 is final), not at source
     # time.  It avoids both history noise and the expensive walk/date fork for
     # every hook-internal command. Real Bash tool shells keep $0 as bash/sh.
-    # The script's own NAME only: `${0##*/}` then `##*\\` also strips a Git Bash
-    # backslash path (`bash C:\…\statusline.sh`, Windows lane CI 36000444073)
-    # without matching a directory such as `…\statusline-tests\run.sh` (panel
-    # r1). ONE line, ending in the S17 marker: the wrapper fixture's negative
-    # control deletes the marked line, and any statement left before the
-    # `$BASH_COMMAND` case would reset the stale status that control needs.
-    local _me="${0##*/}"; case "${_me##*\\}" in *-hook|statusline|statusline.sh|statusline-*) return 0 ;; esac  # PB-S17-FAST-PATH
+    # The script's own NAME only (`${0##*/}`), never a directory of that name.
+    # A backslash is part of a name on Linux (up to 1.5.47 the name was also cut
+    # at its last backslash, for Git Bash's `bash C:\…\statusline.sh`). ONE
+    # line, ending in the S17 marker: the wrapper fixture's negative control
+    # deletes the marked line, and any statement left before the `$BASH_COMMAND`
+    # case would reset the stale status that control needs.
+    local _me="${0##*/}"; case "$_me" in *-hook|statusline|statusline.sh|statusline-*) return 0 ;; esac  # PB-S17-FAST-PATH
 
     # Filter shell internals and CC infrastructure noise.
     #

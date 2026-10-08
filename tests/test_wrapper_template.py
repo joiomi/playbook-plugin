@@ -1,22 +1,27 @@
 """The wrapper template's heredocs must survive a strict `$( )` parser.
 
 `create_wrapper` in `gate-echo-lib.sh` builds `.claude/bin/<name>` from a
-heredoc inside a command substitution. Git Bash / MSYS bash 5.2 terminates a
-heredoc at a body line that merely *starts with* the delimiter — it does not
-require an exact match — so a delimiter that is a prefix of any body line cuts
-the template short. The body's own `WRAPPER_DIR="$(…)"` line did exactly that
-to the old `WRAPPER` delimiter: every wrapper regenerated on Windows was six
-lines long instead of ninety.
+heredoc inside a command substitution. bash 5.2 and later end such a heredoc
+at a body line that merely *starts with* the delimiter when that line also
+holds a `)` — no exact match needed — so a delimiter that is a prefix of a body
+line cuts the template short, and the rest of the body runs as commands. The
+body's own `WRAPPER_DIR="$(…)"` line did exactly that to the old `WRAPPER`
+delimiter: every regenerated wrapper was six lines long instead of ninety.
+
+Measured on Linux, 2026-10-09 (task 159; the official `bash` images): 5.1.16
+captures the whole body; 5.2.15, 5.2.21, 5.2.26, 5.2.37 and 5.3.20 cut it
+(quoted delimiter). On 5.2.21 and 5.3.20 the double-quoted, unquoted and `<<-`
+forms were measured too and are cut alike. Ubuntu 24.04, the CI runner, ships
+5.2.21. This was first taken for a Git Bash quirk; it is not one.
 
 That is a severe silent failure, because `session-start-hook` regenerates
 `tasks`, `sandbox` and all four `playbook-*` wrappers on EVERY session start —
 so the truncation takes out `.claude/bin/tasks`, the CLI that arms the gate
 hook. Reported by cristi (ai-ring-vet, Git Bash MSYS 5.2.26) on 2026-07-21.
 
-The bug does not reproduce on a permissive parser (macOS bash 3.2 captures the
-body fine either way), so a platform-specific behavioral test would pass here
-and rot. These tests pin the *structural* invariant instead, which holds on
-every platform:
+It does not reproduce on bash 5.1 or older, so a behavioural test would pass or
+fail by the host's bash and rot. These tests pin the *structural* invariant
+instead, which is stricter than the measured trigger and holds on every bash:
 
     no line of a heredoc body may start with that heredoc's own delimiter
 
@@ -40,8 +45,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO_ROOT / "plugins" / "playbook" / "scripts"
 GATE_ECHO_LIB = SCRIPTS / "gate-echo-lib.sh"
 
-# All the forms bash accepts, because the MSYS prefix-termination bug does not
-# care whether the delimiter was quoted: `<<EOF`, `<<'EOF'`, `<<"EOF"`, each
+# All the forms bash accepts, because the prefix termination does not care
+# whether the delimiter was quoted (measured): `<<EOF`, `<<'EOF'`, `<<"EOF"`, each
 # optionally `<<-` and optionally with space after the operator. Restricting
 # this to the quoted form (the first version did) made the "repo-wide" check
 # skip most of the shipped heredocs — `task-gate-hook`, `state-echo-hook`,
@@ -106,8 +111,8 @@ class TestHeredocDelimiterInvariant(unittest.TestCase):
                 self.assertFalse(
                     line.startswith(delim),
                     f"{source}: heredoc <<'{delim}' has a body line starting with "
-                    f"its own delimiter (body line {lineno}: {line!r}). MSYS bash "
-                    f"5.2 will terminate the heredoc there and truncate the output. "
+                    f"its own delimiter (body line {lineno}: {line!r}). bash 5.2+ "
+                    f"can end the heredoc there and truncate the output. "
                     f"Rename the delimiter so it is not a prefix of any body line.",
                 )
         return checked
@@ -153,7 +158,7 @@ class TestHeredocDelimiterInvariant(unittest.TestCase):
     def test_unquoted_heredocs_are_actually_scanned(self):
         """Guards the coverage gap directly: `<<EOF` must be seen.
 
-        The shipped hooks use the unquoted form, and the MSYS prefix bug applies
+        The shipped hooks use the unquoted form, and the prefix termination applies
         to it identically. The first version of this file matched only `<<'EOF'`
         while claiming repo-wide coverage.
         """
@@ -266,11 +271,11 @@ class TestGeneratedWrapperIsComplete(unittest.TestCase):
     def test_a_truncated_template_is_actually_detected(self):
         """Negative control for the completeness assertions above.
 
-        The MSYS truncation cannot be reproduced on a permissive parser, so
+        The truncation needs bash 5.2 or later, which this host may not have, so
         reproduce its OUTPUT instead: a lib whose heredoc closes right after the
         `WRAPPER_DIR=` line, which is exactly where the old delimiter was cut.
         The completeness checks must reject the result — otherwise they are
-        asserting nothing and Windows breakage ships green again.
+        asserting nothing and the breakage ships green again.
         """
         text = GATE_ECHO_LIB.read_text(encoding="utf-8")
         marker = 'WRAPPER_DIR="$(cd "$(dirname "$0")" && pwd -P)"\n'
