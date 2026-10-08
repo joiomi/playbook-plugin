@@ -339,7 +339,9 @@ class ThroughTheHookLibrary(_Fixture):
         env = dict(os.environ, HOME=str(home))
         env.pop("BASH_ENV", None)
         mk = lambda p: json.dumps({"tool_name": "Write", "tool_input": {"file_path": str(p)}})
-        r = subprocess.run([bash_or_skip(), "-c", script, "x", str(SCRIPTS / "gate-echo-lib.sh"),
+        # task 151: forward slashes, as the hook's `cd "$(dirname "$0")" && pwd` gives it — the
+        # library finds write_log.py by `dirname "${BASH_SOURCE[0]}"`, which is `.` for `D:\…`
+        r = subprocess.run([bash_or_skip(), "-c", script, "x", (SCRIPTS / "gate-echo-lib.sh").as_posix(),
                             str(self.project), mk(big), mk(small)],
                            env=env, capture_output=True, text=True, timeout=120)
         self.assertEqual(r.returncode, 0, r.stderr)
