@@ -4,7 +4,14 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
-Built after the 1.5.46 cut. Tasks 114-130 were reviewed in grouped panels by area (owner Q9; tasks 135-139); task 118 still waits for its live grok check.
+## [1.5.47] — 2026-10-08
+
+**The last release supported on macOS and Windows (Git Bash)** — owner decision 2026-10-08: later releases target
+Linux only until the owner reopens the other platforms. The tag `last-multiplatform` and the branch `multiplatform`
+are cut on this release's commit on `main` only once that commit is green on all four CI lanes (Linux py3.10 and
+py3.12, macOS, Windows Git Bash). Released from the work closed on `fix/1.5.46-batch`: tasks 114-118, 120-122,
+125-128 and 130 (reviewed in grouped panels by area, owner Q9; tasks 135-139; task 118's live grok check passed
+2026-10-08), 140-145, 148 (PLAN S12), 149 (PLAN S12b) and 151. The suite grew from 3302 to 3717 tests.
 
 ### Changed
 
@@ -21,10 +28,11 @@ Built after the 1.5.46 cut. Tasks 114-130 were reviewed in grouped panels by are
   stayed green (a dry run that writes, a heading a hostile `tasks blocked` reason forges, a chat-log writer that
   leaks attribution into the body, a rejected `tasks models set` that clobbers an existing models.json). Each now has
   a test in `tests/test_no_live_row_proofs.py`, watched red on that break, and 23 rows are
-  `verified_by_current_executable_evidence` (85 of 123). Two statements were wrong and are corrected: `tasks status`
+  `verified_by_current_executable_evidence` (85 of 123 then; with task 149's three new verified rows, 88 of the 126
+  rows in this release). Two statements were wrong and are corrected: `tasks status`
   never read the session pointer — it lists every task that is not done; and recent chat is captured into a task at
-  activation, not creation. `docs/cli.md` says the same for `tasks status`. The two performance rows wait for the
-  owner (a waiver or a budget).
+  activation, not creation. `docs/cli.md` says the same for `tasks status`. The two performance rows are waived
+  by the owner (2026-10-08).
 - **Dry runs and `tasks merge-doctor` no longer run the session clean-up first** (task 148, impl panel). Every
   `tasks` command first deletes dead session directories and a legacy `.agent/current_state`; `compact`,
   `prepare-merge` and `tag` with `--dry-run`, and `merge-doctor`, promise to write nothing, so — like `dashboard` —
@@ -49,6 +57,11 @@ Built after the 1.5.46 cut. Tasks 114-130 were reviewed in grouped panels by are
 
 ### Fixed
 
+- **The Windows CI lane is green again** (task 151). Tests added in this release decoded the CLI's UTF-8 output
+  with the Windows locale, built seatbelt (macOS-only) profiles from Windows paths, and passed a JSON payload to
+  `bash.exe` as an argument (Windows command-line parsing drops its backslashes); they now match how the product
+  runs. The hook library's write-log call passes its paths through `_canonical_path`, like the library's other
+  calls into native Python (no change on Linux or macOS).
 - **`tasks retro` reads the tasks since the last retro** (task 145; retro 134). With no `--since` it read the whole
   history, while the close-time nudge that suggests it counts the tasks closed since the last retro. It now starts
   after the last retro — a folder named `retro-<first>-<last>`, so a task called `retro-…` is not one — plus the older
