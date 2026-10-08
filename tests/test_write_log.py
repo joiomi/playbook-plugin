@@ -335,14 +335,17 @@ class ThroughTheHookLibrary(_Fixture):
         home.mkdir()
         big = self.edited("big.bin", b"B" * (MB + 1))
         small = self.edited("a.py", b"small\n")
-        script = 'source "$1"; cd "$2" || exit 9; write_log_append "$3" "$(pwd)"; write_log_append "$4" "$(pwd)"'
+        # task 151: the payloads come on stdin, as the hook reads its own (`INPUT=$(cat)`) — on
+        # Windows a JSON argument to bash.exe loses its `\\` to the command-line parsing
+        script = ('source "$1"; cd "$2" || exit 9; IFS= read -r a; IFS= read -r b; '
+                  'write_log_append "$a" "$(pwd)"; write_log_append "$b" "$(pwd)"')
         env = dict(os.environ, HOME=str(home))
         env.pop("BASH_ENV", None)
         mk = lambda p: json.dumps({"tool_name": "Write", "tool_input": {"file_path": str(p)}})
         # task 151: forward slashes, as the hook's `cd "$(dirname "$0")" && pwd` gives it — the
         # library finds write_log.py by `dirname "${BASH_SOURCE[0]}"`, which is `.` for `D:\…`
         r = subprocess.run([bash_or_skip(), "-c", script, "x", (SCRIPTS / "gate-echo-lib.sh").as_posix(),
-                            str(self.project), mk(big), mk(small)],
+                            str(self.project)], input=f"{mk(big)}\n{mk(small)}\n",
                            env=env, capture_output=True, text=True, timeout=120)
         self.assertEqual(r.returncode, 0, r.stderr)
         logs = list((home / ".local" / "share" / "playbook").glob("*/write_log"))
@@ -352,11 +355,11 @@ class ThroughTheHookLibrary(_Fixture):
                      'echo "HOME=$HOME PWD=$(pwd) py=$(command -v python3) '
                      'canon=$(_canonical_path "$d")"; '
                      'python3 -c "import sys; print(sys.argv[1:])" "$d" "$(pwd)"; '
-                     'printf "%s" "$3" | python3 "$(dirname "$1")/write_log.py" "$d" "$(pwd)"; '
+                     'IFS= read -r a; printf "%s" "$a" | python3 "$(dirname "$1")/write_log.py" "$d" "$(pwd)"; '
                      'echo "rc=$?"; ls -la "$HOME" "$HOME/.local/share/playbook" 2>&1')
             seen = subprocess.run([bash_or_skip(), "-c", "{ " + probe + "; } 2>&1 | tr '/\\\\' '|!'", "x",
-                                   (SCRIPTS / "gate-echo-lib.sh").as_posix(), str(self.project),
-                                   mk(small)],
+                                   (SCRIPTS / "gate-echo-lib.sh").as_posix(), str(self.project)],
+                                  input=mk(small) + "\n",
                                   env=env, capture_output=True, text=True, timeout=60)
             under = sorted(str(p.relative_to(self.root)) for p in self.root.rglob("*"))
             self.fail(f"{len(logs)} write logs; bash saw {seen.stdout!r} {seen.stderr!r}; "
