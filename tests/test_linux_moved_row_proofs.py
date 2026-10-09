@@ -39,7 +39,7 @@ from tests._bashcheck import bash_or_skip  # noqa: E402
 from tests._bwrap_standin import bwrap_usable  # noqa: E402
 
 _NOT_INHERITED = ("PLAYBOOK_SANDBOXED", "PYTHONPATH", "PLAYBOOK_SESSION_ID", "PLAYBOOK_PROJECT_DIR",
-                  "CLAUDE_PROJECT_DIR", "CLAUDE_ENV_FILE", "PLAYBOOK_PROC_ROOT")
+                  "CLAUDE_PROJECT_DIR", "CLAUDE_ENV_FILE", "PLAYBOOK_PROC_ROOT", "PLAYBOOK_NO_BASHLOG", "BASH_ENV")
 
 
 def child_env(**extra) -> dict:
@@ -251,6 +251,112 @@ class TheCliSweepsSessionsAtARealInvocation(unittest.TestCase):
         r = self._tasks("--version")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(self._names(), before)
+
+
+# --------------------------------------------------------------------------- #
+# PB-INIT-SCAFFOLD — "No packaged-install test"; "no test establishes that an
+# initialized machine runs the shipped logger"; and (task 100) no test asserted the
+# wrappers on a clean init.
+# --------------------------------------------------------------------------- #
+class InitFromAPackagedInstall(unittest.TestCase):
+    """The plugin as Claude Code installs it — a versioned directory under the cache,
+    named by `installed_plugins.json` — and ITS init, run in an empty project."""
+    INSTALLED, NEWER_BESIDE_IT = "9.9.8", "9.9.9"
+
+    def setUp(self):
+        import json
+        self.tmp = Path(tempfile.mkdtemp()).resolve()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.home = self.tmp / "home"
+        plugins = self.home / ".claude" / "plugins"
+        cache = plugins / "cache" / "a-marketplace" / "playbook"
+        for version in (self.INSTALLED, self.NEWER_BESIDE_IT):
+            shutil.copytree(PLUGIN, cache / version, ignore=shutil.ignore_patterns("__pycache__"))
+            manifest = cache / version / ".claude-plugin" / "plugin.json"
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+            data["version"] = version
+            manifest.write_text(json.dumps(data), encoding="utf-8")
+        self.packaged = cache / self.INSTALLED
+        # the INSTALLED copy is the OLDER one on purpose: a wrapper that scanned the
+        # cache instead of reading the manifest would answer from the newer directory
+        self.manifest = plugins / "installed_plugins.json"
+        self.manifest.write_text(json.dumps({"version": 2, "plugins": {"playbook@a-marketplace": [
+            {"scope": "user", "installPath": str(self.packaged), "version": self.INSTALLED,
+             "lastUpdated": "2026-01-01T00:00:00.000Z"}]}}), encoding="utf-8")
+        self.project = self.tmp / "proj"
+        self.project.mkdir()
+
+    def _run(self, argv, **extra):
+        return subprocess.run([str(a) for a in argv], cwd=self.project, capture_output=True, text=True,
+                              timeout=180, env=child_env(HOME=str(self.home), **extra))
+
+    def _init(self):
+        r = self._run([bash_or_skip(), self.packaged / "scripts" / "init", "proj"])
+        self.assertEqual(r.returncode, 0, r.stdout[-800:] + r.stderr[-800:])
+        return r
+
+    def test_init_creates_everything_the_row_lists(self):
+        import json
+        self._init()
+        p, claude = self.project, self.home / ".claude"
+        self.assertTrue((p / ".agent" / "tasks").is_dir())                                   # task structure
+        self.assertIn("TodoWrite", (p / ".claude" / "settings.json").read_text(encoding="utf-8"))   # settings
+        self.assertIn("panel_required_for", json.loads((p / ".agent" / "config.json").read_text(encoding="utf-8")))
+        self.assertIn(".claude/bin/tasks", (p / "CLAUDE.md").read_text(encoding="utf-8"))    # CLAUDE.md
+        self.assertEqual((p / "MIND_MAP.md").read_text(encoding="utf-8").splitlines()[0], "# Mind Map — proj")
+        ignored = (p / ".gitignore").read_text(encoding="utf-8").splitlines()                # gitignore block
+        for line in ("# --- playbook runtime state (machine-local; managed by playbook init) ---",
+                     ".agent/sessions/", ".agent/bash_history", ".agent/chat_log.md"):
+            self.assertIn(line, ignored)
+        # logger wiring: the copy init deployed IS the shipped logger, and the setting names it
+        self.assertEqual((claude / "bash-log.sh").read_bytes(),
+                         (self.packaged / "scripts" / "bash-log.sh").read_bytes())
+        self.assertEqual(json.loads((claude / "settings.json").read_text(encoding="utf-8"))["env"]["BASH_ENV"],
+                         str(claude / "bash-log.sh"))
+
+    def _version_through_the_wrapper(self):
+        r = self._run([self.project / ".claude" / "bin" / "tasks", "--version"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout.strip()
+
+    def test_the_wrappers_exist_and_answer_from_the_installed_copy(self):
+        self._init()
+        for name in ("tasks", "monitor", "sandbox"):
+            wrapper = self.project / ".claude" / "bin" / name
+            self.assertTrue(wrapper.is_file() and os.access(wrapper, os.X_OK), name)
+        self.assertEqual(self._version_through_the_wrapper(), self.INSTALLED)
+
+    def test_control_without_the_manifest_the_wrapper_falls_back_to_the_newest_directory(self):
+        # the other side of the test above: what it would have answered had it scanned
+        self._init()
+        self.manifest.unlink()
+        self.assertEqual(self._version_through_the_wrapper(), self.NEWER_BESIDE_IT)
+
+    def _logged(self, **extra):
+        import json
+        setting = json.loads((self.home / ".claude" / "settings.json").read_text(encoding="utf-8"))["env"]["BASH_ENV"]
+        r = self._run([bash_or_skip(), "-c", "echo reached-the-history >/dev/null"], BASH_ENV=setting, **extra)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        history = self.project / ".agent" / "bash_history"
+        return history.read_text(encoding="utf-8") if history.exists() else ""
+
+    def test_a_shell_started_with_the_setting_init_wrote_reaches_the_history(self):
+        # plan panel (both codex seats): bytes and a setting do not show that the
+        # logger RUNS — a shell started the way the harness starts one has to log
+        self._init()
+        self.assertRegex(self._logged(),
+                         r"(?m)^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d \| AGENT \| echo reached-the-history > /dev/null$")
+
+    def test_control_a_shell_that_opts_out_leaves_no_line(self):
+        self._init()
+        self.assertNotIn("reached-the-history", self._logged(PLAYBOOK_NO_BASHLOG="1"))
+
+    def test_init_replaces_an_older_logger_copy(self):
+        (self.home / ".claude").mkdir(exist_ok=True)
+        (self.home / ".claude" / "bash-log.sh").write_text("# an older logger\n", encoding="utf-8")
+        self._init()
+        self.assertEqual((self.home / ".claude" / "bash-log.sh").read_bytes(),
+                         (self.packaged / "scripts" / "bash-log.sh").read_bytes())
 
 
 if __name__ == "__main__":
