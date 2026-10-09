@@ -171,5 +171,87 @@ class TheGitBindIsLaidLast(unittest.TestCase):
                                        "a writable bind is laid after .git's read-only bind")
 
 
+# --------------------------------------------------------------------------- #
+# PB-SESSION-CLEANUP — "No executable integration proof crosses the real
+# SessionStart GC boundary; the policy is proved at the predicate level only."
+#
+# The SessionStart side has such a proof, never bound until task 169: fixture
+# scenario S18 (tests/wrapper-multiuser-fixture.sh) runs the real hook over every
+# case and carries its own mutant controls. What nothing showed is the other
+# sweeper at ITS real boundary: that an actual `tasks` invocation runs the policy
+# over the project's tree. A2 of S18 and the unit tests call the function.
+# --------------------------------------------------------------------------- #
+class TheCliSweepsSessionsAtARealInvocation(unittest.TestCase):
+    STALE = 1577836800          # 2020-01-01: far from the 24 h boundary on purpose
+
+    def setUp(self):
+        from tests._fake_agent import agent_proc_root, spawn_fake_agent, stop
+        self.tmp = Path(tempfile.mkdtemp()).resolve()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.project = self.tmp / "proj"
+        self.sessions = self.project / ".agent" / "sessions"
+        (self.project / ".agent" / "tasks").mkdir(parents=True)
+        self.sessions.mkdir()
+        (self.tmp / "home").mkdir()
+        # our own session: a `pid-N` id is honoured only while N is a live AGENT
+        # process, and only an agent the walk does not contradict (task 106) — so a
+        # stand-in agent, and a /proc fixture that lists it alone (the same answer
+        # here, under a real agent, and on CI, where there is none)
+        (self.tmp / "agent").mkdir()
+        agent = spawn_fake_agent(self.tmp / "agent")
+        self.addCleanup(stop, agent)
+        self.own = f"pid-{agent.pid}"
+        self.proc_root = agent_proc_root(self.tmp, agent.pid)
+        gone = subprocess.Popen([sys.executable, "-c", "pass"])
+        gone.wait()
+        try:
+            os.kill(gone.pid, 0)
+        except OSError:
+            pass
+        else:
+            self.skipTest("the harvested pid is alive again (pid reuse)")
+        self.live, self.dead = f"pid-{os.getpid()}", f"pid-{gone.pid}"
+        for name, stale in ((self.own, True), (self.live, True), (self.dead, False),
+                            ("pid-12ab", False), ("uuid-stale", True), ("uuid-fresh", False)):
+            d = self.sessions / name
+            d.mkdir()
+            (d / "current_state").write_text("001\n", encoding="utf-8")
+            if stale:
+                os.utime(d / "current_state", (self.STALE, self.STALE))
+        (self.sessions / "stray-file").write_text("", encoding="utf-8")
+        self.precious = self.tmp / "precious"
+        self.precious.mkdir()
+        (self.precious / "keepme.txt").write_text("PRECIOUS\n", encoding="utf-8")
+        os.symlink(self.precious, self.sessions / "pid-77zz")     # a name the policy calls dead
+
+    def _tasks(self, *args):
+        return subprocess.run(
+            [bash_or_skip(), str(SCRIPTS / "tasks"), *args], cwd=self.project,
+            capture_output=True, text=True, timeout=120,
+            env=child_env(HOME=str(self.tmp / "home"), PLAYBOOK_SESSION_ID=self.own,
+                          PLAYBOOK_PROC_ROOT=self.proc_root))
+
+    def _names(self):
+        return sorted(p.name for p in self.sessions.iterdir())
+
+    def test_a_listing_keeps_the_live_set_and_spares_a_links_target(self):
+        r = self._tasks("list")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        # kept: our own (stale pointer), a live foreign pid (stale pointer), a fresh
+        # legacy name, the stray file, the link itself. Gone: the dead pid (fresh
+        # pointer), the non-numeric pid name, the stale legacy name.
+        self.assertEqual(self._names(), sorted([self.own, self.live, "uuid-fresh", "stray-file", "pid-77zz"]))
+        self.assertEqual((self.precious / "keepme.txt").read_text(encoding="utf-8"), "PRECIOUS\n")
+
+    def test_control_an_invocation_that_returns_before_the_sweep_removes_nothing(self):
+        # not every invocation sweeps: `--version` answers before it (so do `--help`,
+        # `dashboard` and the dry runs) — which also shows the tree above is not
+        # swept by anything but the command under test
+        before = self._names()
+        r = self._tasks("--version")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self._names(), before)
+
+
 if __name__ == "__main__":
     unittest.main()
