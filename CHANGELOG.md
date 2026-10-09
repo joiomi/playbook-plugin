@@ -27,9 +27,10 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 - **The close no longer blames a judge that never ran for a change in the repository** (task 168, PLAN S11
   item 15). When the judge that certifies a docs-and-tests tail could not be started AND the tamper check found
-  the repository changed, could not check it, or failed itself, the refusal read "the repository changed while
+  the repository changed — or could not check that it had not — the refusal read "the repository changed while
   the judge ran … the answer was discarded". It now says that the judge could not be started (with the error),
-  what the tamper check found, and that no judge was called. The close is refused in these cases, as before.
+  that the repository also changed during the attempt or could not be checked, and that no judge was called.
+  The close is refused in these cases, as before.
 
 - **A project file no longer takes the place of a module in the plugin's launchers and inline programs** (task 167, PLAN S11 item 1;
   the open item of task 115's entry below). The CLI launcher started `python3 -m tasks.cli` with the project's

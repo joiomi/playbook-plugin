@@ -1621,7 +1621,29 @@ class RunTailCertJudgeGuards(unittest.TestCase):
             why = self._through_the_real_runner(self._no_such_backend)
         self._assert_no_judge_is_blamed(why, "could not check that it had not")
 
-    def test_no_start_and_a_tamper_check_that_fails(self):
+    def test_no_start_and_a_tamper_check_that_cannot_run(self):
+        # The way this really happens (impl panel r1, opus): the shipped detector never
+        # raises — when its own second snapshot fails it REPORTS that, as a change it
+        # could not rule out. Only the snapshot is made to fail here; the detector and
+        # the runner are the real ones.
+        from unittest import mock
+        import tasks.review as R
+        real, calls = R._snapshot_repo_state, []
+
+        def second_snapshot_fails(project_path, task_file=None):
+            calls.append(1)
+            if len(calls) > 1:
+                raise OSError("git is gone")
+            return real(project_path, task_file)
+        with mock.patch.object(R, "_snapshot_repo_state", side_effect=second_snapshot_fails):
+            why = self._through_the_real_runner(self._no_such_backend)
+        self.assertEqual(len(calls), 2)
+        self._assert_no_judge_is_blamed(why, "could not check that it had not")
+
+    def test_no_start_and_a_detector_that_raises_the_runners_backstop(self):
+        # A backstop, not a path of today's code: the runner also catches a detector that
+        # RAISES. The shipped one does not (the test above), so this holds only the
+        # wording of the backstop, should a later detector ever raise.
         from unittest import mock
         import tasks.review as R
         with mock.patch.object(R, "_detect_tamper_full", side_effect=RuntimeError("boom")):
@@ -1629,7 +1651,8 @@ class RunTailCertJudgeGuards(unittest.TestCase):
         self._assert_no_judge_is_blamed(why, "the tamper check failed as well")
 
     def test_control_a_tamper_check_that_fails_after_a_call_that_was_made(self):
-        # the other side: a judge WAS called — the sentence about its answer stays
+        # the other side of the backstop: a judge WAS called — the sentence about its
+        # answer stays
         from unittest import mock
         R, d, snap = self._case()
         why = []
