@@ -656,11 +656,18 @@ def _bwrap_exe() -> "str | None":
     a different directory in the launcher, in the monitor's launcher after its
     `cd`, and in the launch itself, which runs in the PROJECT — so what it finds
     can be a project-controlled file, and a different one each time (task 164,
-    panel rounds 2 and 3). `which` stops at the first match, so a relative entry
-    that comes first hides a real bubblewrap behind it: that is refused too,
-    and `launch_refusal` says why."""
+    panel rounds 2 and 3). `which` stops at the first match, so when that match
+    is behind a relative entry the absolute entries are searched for the
+    bubblewrap behind it: a stray relative entry must not leave a host that has
+    a real bubblewrap without one (post-D6 run 3)."""
     exe = shutil.which("bwrap")
-    return exe if exe and os.path.isabs(exe) else None
+    if not exe or os.path.isabs(exe):
+        return exe
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        candidate = os.path.join(entry, "bwrap")
+        if os.path.isabs(entry) and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
 
 
 def _wrapped_argv(
@@ -780,7 +787,7 @@ def bwrap_state() -> "tuple[str, str, str]":
       "ok"            path = the bubblewrap that is used
       "missing"       no `bwrap` on PATH
       "relative"      path = what `which` found, through a relative PATH entry —
-                      not used (`_bwrap_exe`)
+                      not used, and no absolute entry holds another (`_bwrap_exe`)
       "cannot-start"  path = the bubblewrap, detail = why it could not start a
                       sandbox (`bwrap_start_error`)"""
     exe = _bwrap_exe()

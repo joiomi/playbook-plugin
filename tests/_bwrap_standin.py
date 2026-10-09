@@ -19,7 +19,6 @@ module as a test.
 from __future__ import annotations
 
 import os
-import shutil
 import sys
 from pathlib import Path
 
@@ -31,11 +30,12 @@ if str(_PLUGIN) not in sys.path:
 def bwrap_usable(path: "str | None" = None) -> bool:
     """True when the bubblewrap found on `path` (default: this process's PATH) starts a
     sandbox here — the launcher's own probe, so the tests and the product agree."""
-    from provider.sandbox import bwrap_start_error
-    exe = shutil.which("bwrap", path=os.environ.get("PATH", "") if path is None else path)
-    # the launcher's rule (provider.sandbox.bwrap_state): only a bwrap behind an ABSOLUTE
-    # PATH entry is used, and only if it starts
-    return bool(exe) and os.path.isabs(exe) and bwrap_start_error(exe) is None
+    from unittest import mock
+
+    from provider.sandbox import bwrap_state
+    # the launcher's own rule, asked directly — not a second copy of it
+    with mock.patch.dict(os.environ, {} if path is None else {"PATH": path}):
+        return bwrap_state()[0] == "ok"
 
 
 def path_with_bwrap(bindir: Path, path: "str | None" = None) -> str:

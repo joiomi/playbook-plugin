@@ -8,6 +8,7 @@ Run: python3 tests/test_environment.py   (or: python3 -m unittest ...)
 """
 import io
 import json
+import os
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -150,6 +151,7 @@ class SandboxItemTest(unittest.TestCase):
                 mock.patch.object(sandbox, "is_sandboxed", return_value=False), \
                 mock.patch.object(env.shutil, "which",
                                   side_effect=lambda name: "bin/bwrap" if name == "bwrap" else None), \
+                mock.patch.dict(os.environ, {"PATH": "bin"}), \
                 mock.patch.object(sandbox, "bwrap_start_error", return_value=None):
             item = env._sandbox_item()
             refusal = sandbox.launch_refusal()
@@ -168,6 +170,7 @@ class SandboxItemTest(unittest.TestCase):
                     mock.patch.object(sandbox, "is_sandboxed", return_value=False), \
                     mock.patch.object(env.shutil, "which",
                                       side_effect=lambda name, f=found: f if name == "bwrap" else None), \
+                    mock.patch.dict(os.environ, {"PATH": "bin"}), \
                     mock.patch.object(sandbox, "bwrap_start_error", return_value=err):
                 self.assertEqual(env._sandbox_item()["present"], sandbox.launch_refusal() is None)
 
