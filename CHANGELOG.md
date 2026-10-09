@@ -35,7 +35,9 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   `code_roots` had a writable `.git`. Now the `.git` directory or file, the git directory and the common
   directory — of the project and of every repository named in `code_roots` — are bound read-only AFTER all
   writable binds; a git directory that contains the project (worktrees kept inside a bare repository) is bound
-  before the project instead, with its own entries bound last, so the project stays writable. git is asked about
+  before the project instead, with the entries git keeps in it bound last — recognised by name, from git's
+  repository layout (`rr-cache`, `remotes`, the `MERGE_*`/`BISECT_*`/`*_HEAD` state files and the like; a name
+  git does not use is project content there) — so the project stays writable. git is asked about
   the layout with `GIT_DIR` and its relatives removed from the environment. What changes for you: an agent in
   the sandbox can no longer commit in a `code_roots` repository (it never could in the project's own), and an
   `--rw` path inside `.git` is not writable. Not covered: a nested repository that `code_roots` does not name; a
@@ -47,7 +49,8 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   (`.agent/sessions/<id>`, a lane's directory) replaced the mask at that place in the same way. Such a launch is
   refused now, before anything starts, and the message names `--keep-records` — the way to say that this run may
   read the records. What changes for you: `--ro-project` without `--keep-records` no longer takes an `--rw` path
-  in or over `.agent`, whether or not it holds a record; a path elsewhere in the project works as before, and
+  in or over `.agent`, whether or not it holds a record and whether or not `.agent` exists yet (the launcher
+  used to create it); a path elsewhere in the project works as before, and
   the monitor (which passes `--keep-records`) is not affected.
 - **Six ledger rows have a Linux proof of their own** (task 169, PLAN S11 — the rows that lost their macOS and
   Windows evidence with the Linux-only decision): the sandbox's write rules, the tamper guard at a real review

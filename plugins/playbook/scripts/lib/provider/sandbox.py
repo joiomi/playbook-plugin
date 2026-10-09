@@ -479,15 +479,23 @@ def _bwrap_record_masks(project_dir: Path | str, hidden: "list[str] | None" = No
     and the real directory behind each symlinked lane — the two kinds of tree the
     layers are built in, where a record may also appear later — each record file and
     record directory present now, the real target of a record that is a symlink, and
-    a layer that could not be listed."""
+    a layer that could not be listed. `<project>/.agent` is reported even when it does
+    not exist (or is not a directory) and nothing can be masked: a bind laid there
+    would CREATE the place the records are then written to."""
+    def hide(path) -> None:
+        if hidden is not None and str(path) not in hidden:
+            hidden.append(str(path))
+
+    try:
+        named = Path(project_dir).resolve() / ".agent"
+        hide(named)
+        hide(named.resolve())           # where a link of that name leads, if it is one
+    except OSError:
+        pass
     agent = _agent_dir(project_dir)
     if agent is None:
         return []
     args: list[str] = []
-
-    def hide(path) -> None:
-        if hidden is not None and str(path) not in hidden:
-            hidden.append(str(path))
 
     hide(agent)
     done: set[Path] = set()
@@ -674,9 +682,9 @@ def build_bwrap_argv(
     git_binds: list[str] = []
     for g in git_all:
         if g in containing:
-            for name in _GIT_DIR_ENTRIES:
+            for name in _git_dir_entries(g):
                 entry = os.path.join(g, name)
-                if os.path.lexists(entry) and not _covers(entry, Path(project)) and entry not in git_binds:
+                if not _covers(entry, Path(project)) and entry not in git_binds:
                     git_binds.append(entry)
         elif g not in git_binds:
             git_binds.append(g)
@@ -708,13 +716,36 @@ def _overlaps(a: "Path | str", b: "Path | str") -> bool:
 
 
 # What git keeps at the top of a git directory. Used only for a git directory that
-# CONTAINS the project, where the directory itself cannot be bound read-only last.
-_GIT_DIR_ENTRIES = (
+# CONTAINS the project, where the directory itself cannot be bound read-only last —
+# there the line between git's entries and the project's own can only be drawn by
+# NAME. The names: gitrepository-layout(5) and the list of shared paths in git's own
+# `path.c`, the state files git writes beside HEAD during a merge, rebase, bisect,
+# cherry-pick or notes merge, and the directories of git-lfs, git-svn, git-annex and
+# git-filter-repo. (The first list here held 27 names and missed `rr-cache`, the
+# recorded conflict resolutions git replays — the single judge's run 2, task 169.)
+_GIT_DIR_NAMES = frozenset((
     "HEAD", "config", "config.worktree", "description", "hooks", "info", "objects", "refs",
     "packed-refs", "logs", "index", "shallow", "worktrees", "modules", "commondir", "gitdir",
-    "branches", "lfs", "FETCH_HEAD", "ORIG_HEAD", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD",
-    "BISECT_LOG", "rebase-merge", "rebase-apply", "sequencer",
-)
+    "branches", "remotes", "common", "rr-cache", "lost-found", "reftable", "locked",
+    "rebase-merge", "rebase-apply", "sequencer", "AUTO_MERGE", "SQUASH_MSG",
+    "gc.log", "gc.pid", "git-daemon-export-ok", "lfs", "svn", "annex", "filter-repo",
+))
+_GIT_DIR_PREFIXES = ("sharedindex.", "BISECT_", "MERGE_", "NOTES_MERGE_", "fsmonitor--daemon")
+_GIT_DIR_SUFFIXES = ("_HEAD", "_EDITMSG")
+
+
+def _is_git_dir_entry(name: str) -> bool:
+    return (name in _GIT_DIR_NAMES or name.startswith(_GIT_DIR_PREFIXES)
+            or name.endswith(_GIT_DIR_SUFFIXES))
+
+
+def _git_dir_entries(git_dir: "Path | str") -> "list[str]":
+    """The entries present at the top of `git_dir` that are git's, by name, sorted.
+    A directory that cannot be listed gives the fixed names that exist."""
+    try:
+        return sorted(n for n in os.listdir(git_dir) if _is_git_dir_entry(n))
+    except OSError:
+        return sorted(n for n in _GIT_DIR_NAMES if os.path.lexists(os.path.join(git_dir, n)))
 
 
 # git reads these from the environment and would then answer for ANOTHER repository

@@ -219,6 +219,34 @@ class GitMetadataThatIsNotADirectoryCalledDotGit(_SandboxedProject):
             'try head sh -c \'printf x > "$PWD/HEAD"\'\n'))
         self.assertEqual(got, {"project": "WROTE", "config": "denied", "hook": "denied", "head": "denied"})
 
+    def test_a_bare_repository_as_the_project_every_entry_git_keeps_there(self):
+        # The single judge's run 2: the entries were protected from a short list of
+        # names, and `rr-cache` — the recorded conflict resolutions git replays — was
+        # not on it. Here every name git documents for the top of a repository, and the
+        # state files it writes there, exist; none takes a write, and a file of the
+        # project's own beside them still does.
+        bare = self.tmp / "bare"
+        git(self.tmp, "clone", "-q", "--bare", str(self.project), str(bare))
+        dirs = ("rr-cache", "remotes", "branches", "logs", "worktrees", "modules", "svn", "lfs",
+                "rebase-merge", "sequencer", "common", "lost-found", "reftable")
+        files = ("MERGE_MSG", "MERGE_RR", "AUTO_MERGE", "COMMIT_EDITMSG", "REBASE_HEAD", "BISECT_START",
+                 "NOTES_MERGE_REF", "sharedindex.0123", "gc.log", "git-daemon-export-ok", "FETCH_HEAD")
+        # (not planted: `commondir`, `shallow`, `index` — with made-up content git no
+        # longer recognises the repository at all, and that is another test's subject)
+        for d in dirs:
+            os.makedirs(bare / d, exist_ok=True)
+        for f in files:
+            (bare / f).write_text("x\n", encoding="utf-8")
+        (bare / "notes.txt").write_text("the project's own\n", encoding="utf-8")
+        script = "".join(f'try {d} sh -c \'printf x > "$PWD/{d}/planted"\'\n' for d in dirs)
+        script += "".join(f'try {f} sh -c \'printf x >> "$PWD/{f}"\'\n' for f in files)
+        script += ('try own-file sh -c \'printf x >> "$PWD/notes.txt"\'\n'
+                   'try project sh -c \'printf x > "$PWD/a-new-file"\'\n')
+        got = self.launch(project=bare, script=script)
+        self.assertEqual((got.pop("own-file"), got.pop("project")), ("WROTE", "WROTE"))
+        self.assertEqual({k: v for k, v in got.items() if v != "denied"}, {}, got)
+        self.assertEqual(len(got), len(dirs) + len(files))
+
     def test_git_variables_in_the_environment_do_not_hide_the_repository(self):
         # (codex-medium, grok) with GIT_DIR naming ANOTHER repository, `git rev-parse` in
         # the worktree answered for that one, and the worktree's own shared directory was
@@ -351,6 +379,23 @@ class TheRecordsStayHiddenWhateverCoversThem(_SandboxedProject):
             with self.subTest(rw=str(rw.relative_to(self.tmp))):
                 self._assert_refused("--ro-project", "--rw", str(rw))
 
+    def test_a_writable_path_at_an_agent_directory_that_does_not_exist_yet_is_refused(self):
+        # The single judge's run 2: with no `.agent` at launch the masks hide nothing, and
+        # `--rw <project>/.agent` had the LAUNCHER create that directory and bind it
+        # writable — whatever the host then wrote there was readable. The place is
+        # refused whether or not it exists; nothing is created.
+        agent = self.project / ".agent"
+        self.assertFalse(agent.exists())
+        for rw in (agent, agent / "monitor", self.project):
+            with self.subTest(rw=str(rw.relative_to(self.project.parent))):
+                self._assert_refused("--ro-project", "--rw", str(rw))
+        self.assertFalse(agent.exists(), "a refused launch created .agent")
+        # control: elsewhere in the same project, the launch goes through
+        os.makedirs(self.project / "out")
+        got = self.launch("--ro-project", "--rw", str(self.project / "out"),
+                          script='echo "project: ran"\ntry out sh -c \'printf x > "$PWD/out/wrote"\'\n')
+        self.assertEqual(got["out"], "WROTE")
+
     def test_control_with_the_records_kept_a_path_inside_agent_is_writable(self):
         # the other side, and what the monitor does: `--keep-records` is the way in
         self._with_a_chat_log(self.project)
@@ -418,11 +463,18 @@ class TheGitBindIsLaidLast(unittest.TestCase):
         (project / ".git" / "hooks").mkdir(parents=True)
         self.addCleanup(shutil.rmtree, project.parent, ignore_errors=True)
         gitdir = str(project / ".git")
-        for writable in (True, False):
+        # worker mode; a read-only run that keeps the records; a read-only run that hides
+        # them — which takes no writable path over `<project>/.agent`, so the two shapes
+        # that cover the project are refused there (the records' rule, tested below)
+        for writable, keep in ((True, None), (False, False), (False, None)):
             for rw in (None, project, project.parent, project / ".git", project / ".git" / "hooks"):
-                with self.subTest(project_writable=writable, rw=rw and rw.name):
+                if (writable, keep) == (False, None) and rw in (project, project.parent):
+                    with self.subTest(refused=rw.name), self.assertRaises(RuntimeError):
+                        build_bwrap_argv(project, gitdir, ["true"], [str(rw)], project_writable=False)
+                    continue
+                with self.subTest(project_writable=writable, mask_records=keep, rw=rw and rw.name):
                     argv = build_bwrap_argv(project, gitdir, ["true"], [str(rw)] if rw else None,
-                                            project_writable=writable)
+                                            project_writable=writable, mask_records=keep)
                     binds = [(i, a, argv[i + 1]) for i, a in enumerate(argv[:-2])
                              if a in ("--bind", "--ro-bind")]
                     last_writable = max(i for i, kind, _ in binds if kind == "--bind")
@@ -478,6 +530,15 @@ class TheGitBindIsLaidLast(unittest.TestCase):
                 with self.assertRaises(RuntimeError) as refused:
                     build_bwrap_argv(project, project / ".git", ["true"], [str(rw)], project_writable=False)
                 self.assertIn("--keep-records", str(refused.exception))
+        # ... and where `.agent` does not exist at launch (the builder would create it)
+        bare_project = project.parent / "no-agent-yet"
+        os.makedirs(bare_project)
+        for rw in (bare_project / ".agent", bare_project / ".agent" / "monitor"):
+            with self.subTest(rw="absent:" + rw.name):
+                with self.assertRaises(RuntimeError) as refused:
+                    build_bwrap_argv(bare_project, None, ["true"], [str(rw)], project_writable=False)
+                self.assertIn("--keep-records", str(refused.exception))
+        self.assertFalse((bare_project / ".agent").exists())
         # git metadata is held to the same rule: a repository kept inside `.agent`
         with self.assertRaises(RuntimeError) as refused:
             build_bwrap_argv(project, project / ".git", ["true"], None, project_writable=False,

@@ -7542,6 +7542,19 @@
           "limitations": [
             "Argv level: of a git directory that contains the project only the entries git keeps there are bound after the project's writable bind, never the directory itself."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_linux_moved_row_proofs.py",
+          "reference": "GitMetadataThatIsNotADirectoryCalledDotGit.test_a_bare_repository_as_the_project_every_entry_git_keeps_there",
+          "boundary": "real-os",
+          "negative_control": {
+            "path": "tests/test_linux_moved_row_proofs.py",
+            "reference": "GitMetadataThatIsNotADirectoryCalledDotGit.test_a_bare_repository_as_the_project"
+          },
+          "limitations": [
+            "A bare repository used as the project, with 13 directories and 11 files of git's own planted at its top (`rr-cache`, `remotes`, `logs`, `svn`, `lfs`, `reftable`, `MERGE_MSG`, `REBASE_HEAD`, `BISECT_START`, `sharedindex.*`, `git-daemon-export-ok`, …): none takes a write, while a file of the project's own and a new file do. Red on the code before it for 16 of the 24 (the list of names then held 27 and missed `rr-cache`; the single judge's run 2)."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -7558,7 +7571,7 @@
         "The seatbelt correction shipped up to 1.5.47 (tag `last-multiplatform`) with a profile-text proof; since task 154 (2026-10-08, Linux-only) no test in the tree exercises seatbelt, and macOS is not claimed. On Linux the claim rests on the bubblewrap argv tests (tests/test_sandbox_bind_order.py BindOrder, unconditional) and the live bubblewrap test (skipped where bwrap is not installed).",
         "Proved (task 169, PLAN S11): the worker-mode .git matrix under real bubblewrap, through the shipped launcher — create, append, hook, re-point HEAD, delete a ref — alone and with an `--rw` path that covers .git. Until that task the statement was FALSE in the second case: the extra writable binds were laid after .git's read-only bind, and the later bind won, so `--rw <project>`, a parent of it, or `.git` itself made .git writable (found by the task's plan panel, measured, fixed in build_bwrap_argv: the .git bind is laid last). Consequence: an `--rw` path INSIDE .git is not writable either. The same task's impl panel then showed three more layouts open, each measured: in a linked worktree the `.git` FILE was rewritten to point elsewhere and the shared repository's config and hooks were written; a nested repository's `.git` was written. Fixed there too (`_git_paths_to_protect`): the gitfile, the git directory and the common directory of the project and of each `code_roots` repository are bound read-only, last.",
         "Bound: a nested repository that `.agent/config.json` does NOT name under `code_roots` is project content like any other — its `.git` is writable in worker mode (pinned by a test). A `.git` that is a SYMLINK is protected at what it points to, but the link itself is an entry of a writable directory and can be replaced. A repository found only through the GIT_DIR environment variable is not looked for. What a link INSIDE a git directory points to is protected only if that target is itself git metadata: a `.git/config` or a hooks directory that is a symlink into the project (or a `core.hooksPath` that names a project directory) is project content, and writable (measured, task 169 impl round 2).",
-        "Task 169, impl round 2: a git directory that CONTAINS the project (worktrees inside a bare repository; a bare repository used as the project) is bound read-only BEFORE the project's bind — so the project stays writable — and the entries git keeps in it are bound read-only again after every writable bind. Bound: an entry that does not exist at launch (a `packed-refs` git has not written yet) can be created where the directory itself is writable — in a bare repository used as the project, or when an `--rw` path covers the shared directory. git is asked about the layout with GIT_DIR, GIT_WORK_TREE, GIT_COMMON_DIR and the like removed from its environment.",
+        "Task 169, impl round 2: a git directory that CONTAINS the project (worktrees inside a bare repository; a bare repository used as the project) is bound read-only BEFORE the project's bind — so the project stays writable — and the entries git keeps in it are bound read-only again after every writable bind. Those entries are recognised BY NAME, read from the directory at launch (`_is_git_dir_entry`): the names of gitrepository-layout(5) and of the shared paths in git's `path.c`, the state files git writes beside HEAD (`*_HEAD`, `*_EDITMSG`, `MERGE_*`, `BISECT_*`, `NOTES_MERGE_*`, `sharedindex.*`, `AUTO_MERGE`, `SQUASH_MSG`, `gc.log`, `gc.pid`), and the directories of git-lfs, git-svn, git-annex and git-filter-repo. Bounds, both of this by-name rule and both only where the directory itself is writable — a bare repository used as the project, or an `--rw` path that covers the shared directory: (1) an entry under a name that is not on that list (another tool's data kept at the top of a git directory) is project content there; (2) an entry that does not exist at launch (a `packed-refs` git has not written yet) can be created. git is asked about the layout with GIT_DIR, GIT_WORK_TREE, GIT_COMMON_DIR and the like removed from its environment. (History: the first list held 27 fixed names and missed `rr-cache`; the single judge after round 2, run 2.)",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
         "2026-10-08 (task 154, Linux-only): the seatbelt profile-text proof (RoProjectSeatbeltProfileDeniesWrites, control WorkerModeSeatbeltProfileUnchanged) was deleted with the other macOS-only tests; the bubblewrap proof stays.",
@@ -7575,7 +7588,7 @@
     {
       "id": "PB-SANDBOX-READ-NETWORK",
       "category": "sandbox",
-      "statement": "Sandbox containment is write-only: on Linux (bubblewrap) it denies project writes while leaving the whole filesystem readable and the network reachable by design, because judges invoke provider CLIs that call model APIs — except that a read-only (judge) sandbox cannot read the conversation records (`.agent/chat_log.md`, `.agent/sessions/`, `.agent/bash_history`, their rotated/archived copies, in `.agent`, each lane under it and the real directory behind a symlinked lane — resolved once, so the judge's link points at the masked directory; `sessions.*` archives too; task 125, task 139), including ones created or renamed into place while it runs (task 138), unless it is started with --keep-records (the conversation monitor only); with no bwrap on PATH (or nested inside another sandbox) judges run uncontained — a bwrap that is installed but cannot run is not detected (the launch fails). The only network isolation is an opt-in bwrap --unshare-net jail that fails loudly on backends that cannot honor it.",
+      "statement": "Sandbox containment is write-only: on Linux (bubblewrap) it denies project writes while leaving the whole filesystem readable and the network reachable by design, because judges invoke provider CLIs that call model APIs — except that a read-only (judge) sandbox cannot read the conversation records (`.agent/chat_log.md`, `.agent/sessions/`, `.agent/bash_history`, their rotated/archived copies, in `.agent`, each lane under it and the real directory behind a symlinked lane — resolved once, so the judge's link points at the masked directory; `sessions.*` archives too; task 125, task 139), including ones created or renamed into place while it runs (task 138) in an `.agent` that existed at launch, unless it is started with --keep-records (the conversation monitor only); with no bwrap on PATH (or nested inside another sandbox) judges run uncontained — a bwrap that is installed but cannot run is not detected (the launch fails). The only network isolation is an opt-in bwrap --unshare-net jail that fails loudly on backends that cannot honor it.",
       "owner": [
         {
           "path": "plugins/playbook/provider/sandbox.py",
@@ -7677,7 +7690,7 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": [
-            "Argv level: a git directory that is the project is never bound after the masks (its entries are); an extra writable path that covers a hidden place OR lies inside one raises, naming `--keep-records`, and so does git metadata inside `.agent`; the same paths build when the records are kept or in worker mode, and a path elsewhere in the project builds with the masks on."
+            "Argv level: a git directory that is the project is never bound after the masks (its entries are); an extra writable path that covers a hidden place OR lies inside one raises, naming `--keep-records` — also where `.agent` does not exist at launch, and nothing is created there — and so does git metadata inside `.agent`; the same paths build when the records are kept or in worker mode, and a path elsewhere in the project builds with the masks on."
           ]
         },
         {
@@ -7718,6 +7731,19 @@
           "limitations": [
             "`.agent/sessions` a symlink to a directory elsewhere: hidden at its real path, and an `--rw` path inside that directory, equal to it or covering it is refused. The inside shape red on round 2's code."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_linux_moved_row_proofs.py",
+          "reference": "TheRecordsStayHiddenWhateverCoversThem.test_a_writable_path_at_an_agent_directory_that_does_not_exist_yet_is_refused",
+          "boundary": "real-os",
+          "negative_control": {
+            "path": "tests/test_linux_moved_row_proofs.py",
+            "reference": "TheRecordsStayHiddenWhateverCoversThem.test_control_a_writable_path_elsewhere_in_the_project_is_not_refused"
+          },
+          "limitations": [
+            "A project with no `.agent` at launch: `--ro-project --rw <project>/.agent`, `…/.agent/monitor` and `--rw <project>` are REFUSED and `.agent` is not created; `--rw <project>/out` launches and is written. Red on the code before it (`0 == 0 : project: ran`; `a refused launch created .agent`) — the single judge's run 2."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -7736,7 +7762,8 @@
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
         "2026-10-08 (task 155, Linux-only): the macOS seatbelt backend (build_seatbelt_profile) was deleted; bubblewrap is the only backend.",
-        "Task 169 (PLAN S11): a bind laid after the record masks must not OVERLAP a place where they hide records — `.agent`, the real directory behind a symlinked lane, the real target of a record that is a symlink. A read-only run whose `--rw` path covers such a place, is it, or lies anywhere inside it is REFUSED before that path is created or anything is launched, and the message names `--keep-records`; so with the records hidden there is no writable path in `.agent` at all (the monitor, which has one, keeps the records). Git metadata is held to the same rule: a repository kept inside `.agent` and named in `code_roots` makes a read-only run refuse. A git directory that is the project is bound before the masks, never after. (History: round 1 of that task laid the masks again over a covering path, which silently made the path's files read-only and dropped new ones; round 2 replaced that with a refusal of covering paths only; the single judge after it showed that a path inside `.agent/sessions/<id>`, or equal to a lane with no record yet, still replaced the mask there.) Bound, not changed here: the check is made on the paths as they resolve at launch."
+        "Task 169 (PLAN S11): a bind laid after the record masks must not OVERLAP a place where they hide records — `.agent`, the real directory behind a symlinked lane, the real target of a record that is a symlink. A read-only run whose `--rw` path covers such a place, is it, or lies anywhere inside it is REFUSED before that path is created or anything is launched, and the message names `--keep-records`; so with the records hidden there is no writable path in `.agent` at all (the monitor, which has one, keeps the records). Git metadata is held to the same rule: a repository kept inside `.agent` and named in `code_roots` makes a read-only run refuse. A git directory that is the project is bound before the masks, never after. (History: round 1 of that task laid the masks again over a covering path, which silently made the path's files read-only and dropped new ones; round 2 replaced that with a refusal of covering paths only; the single judge after it showed that a path inside `.agent/sessions/<id>`, or equal to a lane with no record yet, still replaced the mask there.) `<project>/.agent` is such a place whether or not it exists at launch: with none, `--rw <project>/.agent` had the launcher itself create the directory and bind it writable (the single judge's run 2). Bound, not changed here: the check is made on the paths as they resolve at launch.",
+        "MEASURED BOUND (task 169, 2026-10-10, real bubblewrap; older than that task): a project that has NO `.agent` directory at launch has nothing masked — there is nothing to lay a layer on, and bubblewrap cannot mount over a path that is absent from a read-only bind. A chat log the host wrote into an `.agent` created 0.7 s after the launch was read from inside the read-only run, with no `--rw` at all. So `created … while it runs` in the statement holds for an `.agent` that existed at launch (every review has one: the task record is in it); a read-only run started in a folder where the plugin has not been initialised, and initialised during the run, is outside it. Not cured here — the cures are design choices (refuse such a run; have the launcher create `.agent`, a write by a read-only launch); parked in task 169 for the owner."
       ],
       "follow_up_phases": [
         2,
