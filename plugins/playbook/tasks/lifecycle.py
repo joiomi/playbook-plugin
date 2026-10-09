@@ -41,6 +41,13 @@ def _state_file(project_path: Path) -> Path:
     return state_dir / "current_state"
 
 
+# How much of one chat message `### Recent Chat` keeps. The judge prompt that
+# describes those excerpts (`template._intent_check`) reads this same number. The
+# chat log itself keeps up to 50,000 characters of a message, so "whole" is no
+# bound for a task record that judges read through a budget.
+RECENT_CHAT_CUT = 1000
+
+
 def _capture_recent_chat(project_path: Path, max_messages: int = 10,
                          max_gap_seconds: int = 10800) -> list[str]:
     """Capture recent chat_log messages for task attribution.
@@ -51,7 +58,9 @@ def _capture_recent_chat(project_path: Path, max_messages: int = 10,
     - max_messages reached (default 10)
 
     Returns list of message blocks (most recent last), each as:
-    "**[MNNN]** [timestamp]\\n<text truncated to 200 chars>"
+    "**[MNNN]** [timestamp]\\n<text>" — the text whole up to `RECENT_CHAT_CUT`
+    characters; a longer one is cut there and says how much was left out and
+    under which message id the whole text is (task 166).
     """
     import re
     from datetime import datetime
@@ -101,8 +110,14 @@ def _capture_recent_chat(project_path: Path, max_messages: int = 10,
         if "tasks done" in text_lower or "tasks work done" in text_lower:
             break
 
-        # Truncate long messages
-        display_text = text[:200] + "..." if len(text) > 200 else text
+        # A long message is cut — and says so. At 200 characters, mid-sentence and
+        # with a bare "...", three of four of the owner's messages reached the task
+        # record without their end (PLAN S11 item 9, task 166).
+        if len(text) > RECENT_CHAT_CUT:
+            display_text = (f"{text[:RECENT_CHAT_CUT]}… [cut here: {len(text) - RECENT_CHAT_CUT:,} "
+                            f"more characters — the whole message is {msg_id} in chat_log.md]")
+        else:
+            display_text = text
         captured.append(f"**[{msg_id}]** [{ts_str}]\n{display_text}")
 
         if len(captured) >= max_messages:
@@ -1250,12 +1265,22 @@ def cmd_work(cmd_args):
                           f"Or switch anyway: tasks work {task_num} --force   "
                           f"(leaves {prev_task} open)", file=sys.stderr)
                     sys.exit(1)
+            elif prev_status.startswith("blocked"):
+                # A task that is honestly waiting for the owner is not being
+                # abandoned: it is left as it is, without the override word, and
+                # the command says so (PLAN S11 item 8, task 166 — task 160 → 161
+                # needed `--force`, and `--force` then said "left in_progress"
+                # of a task whose status stayed `blocked`).
+                print(f"Task {prev_task} is blocked (waiting for a decision) — it stays blocked, "
+                      f"with its reason; switching to task {task_num}. "
+                      f"Resume it with: tasks work {prev_task}")
             elif not prev_status.startswith("done") and not force:
                 # prev task still has open gates — don't silently abandon it.
                 _gate_bounce(prev_task, prev_file, f"switching to task {task_num}")
                 sys.exit(1)
             elif not prev_status.startswith("done"):
-                print(f"--force: switching away from task {prev_task} with open gates (left in_progress).")
+                print(f"--force: switching away from task {prev_task} with open gates "
+                      f"(left as it is: {prev_status.split()[0] if prev_status.split() else 'open'}).")
 
     # The activation is allowed: NOW clear a block / reopen a done task — each one
     # decided inside its locked transform (the status may have moved since it was

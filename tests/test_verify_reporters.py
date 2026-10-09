@@ -375,5 +375,58 @@ class AstCheckRefusesAWarning(unittest.TestCase):
         self.assertIsNotNone(self.problem(src, "pkg/x.py"))
 
 
+def _failing_transcript(count: int, body_lines: int = 30, kind: str = "FAIL") -> str:
+    """unittest's own output for `count` failing tests, each with a long assertion message."""
+    rule, dash = "=" * 70, "-" * 70
+    blocks = []
+    for i in range(count):
+        body = "\n".join(f"    line {j} of the assertion message of test {i}" for j in range(body_lines))
+        blocks.append(f"{rule}\n{kind}: test_number_{i} (tests.test_x.Case)\n{dash}\n"
+                      f"Traceback (most recent call last):\n{body}\nAssertionError: {i}\n")
+    return "\n".join(blocks) + f"\n{dash}\nRan {count} tests in 1.0s\n\nFAILED (failures={count})\n"
+
+
+class EveryFailingTestIsNamed(unittest.TestCase):
+    """PLAN S11 item 4 (task 166; from task 151). `ut_fails` capped its whole listing at 80
+    lines, headers and message bodies alike — in CI run 37743978697 seven failing tests were
+    never named because the dumps of the first ones had used the budget. The cap is for the
+    bodies: which tests failed is the one thing the log must always say."""
+
+    def setUp(self):
+        self.verify = _load_verify()
+
+    @staticmethod
+    def _named(lines):
+        return [ln for ln in lines if ln.startswith(("FAIL:", "ERROR:"))]
+
+    def test_twelve_long_failures_are_all_named(self):
+        got = self.verify.ut_fails(_failing_transcript(12))
+        self.assertEqual(len(self._named(got)), 12, "\n".join(got))
+        self.assertLess(len(got), 200, "the message bodies are no longer capped")
+        self.assertTrue(any("body left out" in ln for ln in got),
+                        "a failure whose body was dropped does not say so")
+
+    def test_the_number_named_is_the_number_that_failed(self):
+        for count in range(1, 31):
+            got = self.verify.ut_fails(_failing_transcript(count))
+            self.assertEqual(len(self._named(got)), count, f"{count} failed")
+
+    def test_errors_are_named_like_failures(self):
+        got = self.verify.ut_fails(_failing_transcript(12, kind="ERROR"))
+        self.assertEqual(len(self._named(got)), 12)
+
+    def test_a_suite_that_fails_everywhere_is_named_up_to_a_ceiling_and_counted(self):
+        got = self.verify.ut_fails(_failing_transcript(250, body_lines=2))
+        ceiling = self.verify.HEADER_CAP
+        self.assertEqual(len(self._named(got)), ceiling)
+        self.assertIn(f"{250 - ceiling} more failing test", "\n".join(got))
+
+    def test_a_short_run_is_listed_as_before(self):
+        # under the cap nothing changes: header, traceback, message
+        got = self.verify.ut_fails(_failing_transcript(2, body_lines=3))
+        self.assertEqual(len(self._named(got)), 2)
+        self.assertIn("    line 2 of the assertion message of test 1", got)
+        self.assertFalse(any("left out" in ln or "more" in ln for ln in got), got)
+
 if __name__ == "__main__":
     unittest.main()

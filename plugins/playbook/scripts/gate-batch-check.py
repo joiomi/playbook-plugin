@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Guard 0.5 v2 — annotated batch-close check (F1; blind-judge-reviewed).
 
-Called by task-gate-hook on Edit/Write to the ACTIVE task's task.md. Decides
+Called by task-gate-hook on Edit/Write/MultiEdit to the ACTIVE task's task.md. Decides
 whether the write's newly-checked gates are an allowed batch. stdin: the hook
 payload JSON. Exit 0 = allow (stdout empty), exit 2 = block (stdout = the
 message the hook relays to stderr). Any other failure = exit 1 and the hook
@@ -187,6 +187,30 @@ def main() -> int:
             old = Path(file_path).read_text(encoding="utf-8", errors="replace")
         except OSError:
             old = ""
+    elif tool == "MultiEdit":
+        # Judged like a Write (task 166): the file as it is on disk against the
+        # file as the edits, applied in order, leave it — so a gate ticked across
+        # two edits of one call, or rewritten by one edit and ticked by the next,
+        # is seen as what it is. An edit whose `old_string` is absent changes
+        # nothing here (the tool itself fails it); a payload that is not a list
+        # of edits leaves the text as it was, and the guard passes it — its own
+        # errors never block an edit.
+        replace_all = False
+        try:
+            old = Path(file_path).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            old = ""
+        new = old
+        edits = ti.get("edits")
+        for e in edits if isinstance(edits, list) else ():
+            if not isinstance(e, dict):
+                continue
+            o, n = str(e.get("old_string", "")), str(e.get("new_string", ""))
+            if not o:
+                if not new:                 # the first edit of a new file is its content
+                    new = n
+                continue
+            new = new.replace(o, n) if e.get("replace_all") else new.replace(o, n, 1)
     else:
         return 0
 

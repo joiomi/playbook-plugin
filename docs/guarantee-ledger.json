@@ -1957,7 +1957,7 @@
     {
       "id": "PB-BATCH-CLOSE",
       "category": "hook-payload-and-paths",
-      "statement": "The gate hook blocks two or more unannotated gate closures in one edit, annotated batches beyond the five-gate ceiling, born-checked gate lines, and a second batch with no intervening work, while an annotated batch within the limit and a single bare close remain allowed — whatever lexical spelling names the active task.md (a `/./` segment, a doubled slash, an `x/..` hop): the guard judges the normalised path.",
+      "statement": "The gate hook blocks two or more unannotated gate closures in one edit — an `Edit`, a `Write`, or a `MultiEdit`, the last judged on the file before and after all its edits — annotated batches beyond the five-gate ceiling, born-checked gate lines, and a second batch with no intervening work, while an annotated batch within the limit and a single bare close remain allowed — whatever lexical spelling names the active task.md (a `/./` segment, a doubled slash, an `x/..` hop): the guard judges the normalised path.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/gate-batch-check.py",
@@ -2037,6 +2037,19 @@
           "limitations": [
             "Lexical normalisation only (as the code-edit guard): a path through a symlinked directory is not resolved."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_batch_close_guard.py",
+          "reference": "MultiEditIsJudgedLikeAWrite.test_three_bare_ticks_are_blocked",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_batch_close_guard.py",
+            "reference": "MultiEditIsJudgedLikeAWrite.test_control_three_annotated_ticks_are_allowed"
+          },
+          "limitations": [
+            "The Claude Code version this was built on (2.1.295) offers no `MultiEdit` tool: the payload is the documented shape (`file_path` + `edits`), not one captured from a live session."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -2049,7 +2062,8 @@
       "missing_evidence_or_limitation": [
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
         "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21).",
-        "2026-10-09 (task 158): up to 1.5.47 the guard matched the RAW file path, so `…/N-x/./task.md`, `//` or an `x/..` hop skipped it (and the hand-made-task.md guard beside it) while the code-edit guard exempted the edit as an `.agent/` path. Fixed on both the fused and the recovery branch of the hook (`AnotherSpellingOfThePathIsStillGuarded.test_the_recovery_path_judges_the_same_normalised_path`, `…test_creating_a_task_md_by_hand_is_blocked_under_every_spelling`)."
+        "2026-10-09 (task 158): up to 1.5.47 the guard matched the RAW file path, so `…/N-x/./task.md`, `//` or an `x/..` hop skipped it (and the hand-made-task.md guard beside it) while the code-edit guard exempted the edit as an `.agent/` path. Fixed on both the fused and the recovery branch of the hook (`AnotherSpellingOfThePathIsStillGuarded.test_the_recovery_path_judges_the_same_normalised_path`, `…test_creating_a_task_md_by_hand_is_blocked_under_every_spelling`).",
+        "2026-10-09 (task 166, PLAN S11 item 6; owner: \"Acopăr totuși, în S11\"): until then the guard ran for `Edit` and `Write` only, and three gates ticked bare in ONE `MultiEdit` went through. It now applies the call's edits in order to the file as it is on disk and judges the result like a `Write`."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],
@@ -2319,6 +2333,61 @@
         "Task 110 bound: a mkdir run by a non-shell program from a quoted HEREDOC BODY (`python3 - <<'PY'` with os.system / subprocess) is not seen — the body is data to the guard. A non-shell command whose own words carry the mkdir word (`python3 -c \"…mkdir…\"`, `make … mkdir`) still refuses (impl panel round 1: only known read/print commands make the word inert).",
         "Task 110 impl panel round 2 bound: the read/print list is CLOSED on purpose. A harmless tool it does not name (`sed`, `awk`, `jq`, a test runner) in the same call as a mention keeps the released refusal when the call also names a task dir; the cost is measured above (14 corpus commands refused again, all refused by 1.5.45). A program a listed command is CONFIGURED to start (a git hook, a pager, the verify command `tasks` runs) is covered inside one call — git, `tasks` and a path-qualified name do not count as read commands when the call writes a file, and an environment change takes the call off the list — but one planted in an EARLIER call is not seen. The two exemptions that remain are the declared ones: a non-shell interpreter reading its PROGRAM from a quoted heredoc is not followed into what that program does, and a file written in one tool call and run in a LATER one is not seen (the guard keeps no state between calls).",
         "Task 110, review status (2026-10-05): the post-panel single-judge run cap (owner rule D6) was reached after run 2, which counted two Important findings in this helper's read/print list. Both were repaired as classes (`test_a_write_counts_however_it_is_spelled`, `test_an_environment_change_counts_however_it_is_made`), test-pinned, measured on the bash-history corpus and covered by the full verify — but NO judge has reviewed those two repairs. The owner closed the task on 2026-10-05 WITHOUT a third run, by decision: the cap had been reached on a fourth task in a row, each extra run granted before had found new edges in fresh repairs and no Critical, the dangerous-command guard drew no finding in run 2, and a miss in this helper means a task directory created without `tasks new`, not a dangerous command executed. A design item is parked for PLAN S11: detect such a directory after the fact instead of predicting from the command text what a command may start."
+      ],
+      "follow_up_phases": [],
+      "required_live_evidence": [],
+      "semantic_protocol": null,
+      "violation_reproduction": null
+    },
+    {
+      "id": "PB-TASK-MD-GUARD",
+      "category": "hook-payload-and-paths",
+      "statement": "task-gate-hook refuses a `Write` that would CREATE a task record by hand — a `file_path` naming `.agent[/<lane>]/tasks/<dir>/task.md` where no such file exists — whatever lexical spelling names it (a `/./` segment, a doubled slash, an `x/..` hop: the guard judges the normalised path), and answers that only `tasks new` creates task.md files. A `Write` over a task.md that already exists is not a creation and is not refused by this guard.",
+      "owner": [
+        {
+          "path": "plugins/playbook/scripts/task-gate-hook",
+          "reference": "whole-file"
+        }
+      ],
+      "failure_consequence": "High",
+      "claim_kind": "mechanical",
+      "proofs": [
+        {
+          "type": "executable integration",
+          "path": "tests/test_batch_close_guard.py",
+          "reference": "AnotherSpellingOfThePathIsStillGuarded.test_creating_a_task_md_by_hand_is_blocked_under_every_spelling",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_batch_close_guard.py",
+            "reference": "AnotherSpellingOfThePathIsStillGuarded.test_control_rewriting_an_existing_task_md_is_not_a_creation"
+          },
+          "limitations": [
+            "The real hook run as a subprocess on a PreToolUse payload: the plain spelling of the path and four lexical variants of it."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_batch_close_guard.py",
+          "reference": "GuardZeroIsAStatedGuarantee.test_what_the_row_admits_is_what_the_guard_does",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Shows the bound stated below, not a protection: a new task.md path OUTSIDE the project is refused as well."
+          ]
+        }
+      ],
+      "applicable_platforms": [
+        "linux"
+      ],
+      "applicable_providers": [
+        "claude"
+      ],
+      "status": "verified_by_current_executable_evidence",
+      "missing_evidence_or_limitation": [
+        "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
+        "Row added by task 166 (PLAN S11 fix batch, item 5; owner 2026-10-09: \"Adaug rândul în S11 (Recomandat)\"). The guard is older than the ledger and its tests date from task 158; until this row it was enforced and tested, and stated nowhere here.",
+        "Bound: the guard has no project scope. A `Write` that would create `<anywhere>/.agent/tasks/<dir>/task.md` OUTSIDE the project is refused too (corpus vector H07 in tests/test_command_guard.py, an open PLAN S11 item) — a fixture that needs such a file in a temp directory must make it another way.",
+        "Bound: only a payload whose tool is `Write` is judged by this guard. One of another tool (`Edit`, `MultiEdit`, `NotebookEdit`) that names a task.md which does not exist is not refused here; whether such a tool can create a file at all is the host's behaviour and is not checked. Making a task DIRECTORY through the shell is `PB-TASK-DIR-GUARD`'s subject, not this row's."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],

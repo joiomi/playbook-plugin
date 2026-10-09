@@ -1356,5 +1356,76 @@ class EditGateWhileBlocked(unittest.TestCase):
         self.assertEqual(r.returncode, 0, f"an active task's code edit was refused: {r.stderr}")
 
 
+class LeavingABlockedTask(unittest.TestCase):
+    """PLAN S11 item 8 (task 166; retro 161). A task that is honestly `blocked` — waiting
+    for the owner — could be left only with `--force` (task 160 → 161 on 2026-10-09): the
+    refusal counted its open gates as if it had been abandoned, and `--force`'s own
+    message then said the task was "left in_progress" while its status stayed `blocked`."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.project = Path(self._tmp.name) / "proj"
+        for n, slug in (("012", "decide"), ("013", "next")):
+            td = self.project / ".agent" / "tasks" / f"{n}-{slug}"
+            td.mkdir(parents=True)
+            (td / "task.md").write_text(TASK.format(n=n), encoding="utf-8")
+        self.first = self.project / ".agent" / "tasks" / "012-decide" / "task.md"
+
+    def _tasks(self, *args):
+        env = dict(os.environ, PYTHONPATH=str(PLUGIN), PLAYBOOK_SESSION_ID=SID)
+        env.pop("BASH_ENV", None)
+        return subprocess.run([sys.executable, "-m", "tasks.cli", *args], cwd=self.project,
+                              env=env, capture_output=True, text=True)
+
+    def _pointer(self):
+        return (self.project / ".agent" / "sessions" / SID / "current_state").read_text(
+            encoding="utf-8").strip()
+
+    def _block_the_first(self):
+        self.assertEqual(self._tasks("work", "012").returncode, 0)
+        b = self._tasks("blocked", "rewrite or cancel is the owner's call")
+        self.assertEqual(b.returncode, 0, b.stderr)
+        self.assertEqual(_extract_status(self.first), "blocked")
+
+    def test_a_blocked_task_is_left_without_force(self):
+        self._block_the_first()
+        r = self._tasks("work", "013")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self._pointer(), "013")
+        self.assertEqual(_extract_status(self.first), "blocked")            # still waiting
+        self.assertIn("rewrite or cancel is the owner's call", self.first.read_text(encoding="utf-8"))
+        said = r.stdout + r.stderr
+        self.assertIn("012", said)
+        self.assertIn("blocked", said)
+        self.assertIn("tasks work 012", said)                               # how to come back
+
+    def test_control_open_gates_without_a_block_are_still_refused(self):
+        self.assertEqual(self._tasks("work", "012").returncode, 0)
+        r = self._tasks("work", "013")
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(self._pointer(), "012")
+        self.assertIn("--force", r.stderr)
+
+    def test_force_on_a_blocked_task_says_the_status_it_has(self):
+        self._block_the_first()
+        r = self._tasks("work", "013", "--force")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        about_the_first = [ln for ln in r.stdout.splitlines() if "012" in ln]
+        self.assertTrue(about_the_first, r.stdout)
+        for ln in about_the_first:                       # the activation of 013 prints more below
+            self.assertNotIn("in_progress", ln)
+            self.assertIn("blocked", ln)
+        self.assertEqual(_extract_status(self.first), "blocked")
+
+    def test_the_task_that_was_left_can_be_resumed(self):
+        self._block_the_first()
+        self.assertEqual(self._tasks("work", "013").returncode, 0)
+        self.assertEqual(self._tasks("blocked", "this one waits too").returncode, 0)
+        r = self._tasks("work", "012")                                      # back, again without force
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self._pointer(), "012")
+        self.assertNotEqual(_extract_status(self.first), "blocked")
+
 if __name__ == "__main__":
     unittest.main()

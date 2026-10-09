@@ -193,6 +193,14 @@ def parked() -> str:
 ---"""
 
 
+def _recent_chat_cut() -> int:
+    """The capture's own number (`lifecycle.RECENT_CHAT_CUT`), so the prompt cannot
+    describe a cut the capture does not make. Imported here, not at the top:
+    `lifecycle` imports this module."""
+    from tasks.lifecycle import RECENT_CHAT_CUT
+    return RECENT_CHAT_CUT
+
+
 def _intent_check(task_path: str) -> str:
     """Extract task number and return intent-check instruction for judge prompts."""
     import re as _re
@@ -204,8 +212,9 @@ def _intent_check(task_path: str) -> str:
             # 2026-10-02 — the judge sandbox masks it), so `tasks context` is
             # not offered; the user's own words reach a judge through the task
             # record: its Intent/Why and the Recent Chat captured at activation.
-            "The task's `## Intent`, `## Why` and `### Recent Chat` (200-character excerpts of the user's "
-            "messages, captured when the task was activated) carry the user's own words. "
+            "The task's `## Intent`, `## Why` and `### Recent Chat` (the user's messages as captured when "
+            f"the task was activated — each whole up to {_recent_chat_cut():,} characters, a longer one cut "
+            "there and marked with what was left out) carry the user's own words. "
             "Check whether the task addresses what the user actually asked for, not just the agent's interpretation. "
         )
     return ""

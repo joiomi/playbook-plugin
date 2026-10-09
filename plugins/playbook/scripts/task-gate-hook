@@ -290,8 +290,10 @@ fi
 # Logic lives in gate-batch-check.py (shared, testable); the helper fails
 # OPEN on its own errors — only an explicit exit 2 blocks.
 # Must run BEFORE the .agent/* early-exit in Guard 1.
-if [ "$TOOL_NAME" = "Edit" ] || [ "$TOOL_NAME" = "Write" ]; then
-    # Extract file_path (reuse from Guard 0 for Write, extract for Edit)
+# MultiEdit too (task 166): three gates ticked bare in one MultiEdit went through
+# where the same ticks as one Edit were refused.
+if [ "$TOOL_NAME" = "Edit" ] || [ "$TOOL_NAME" = "Write" ] || [ "$TOOL_NAME" = "MultiEdit" ]; then
+    # Extract file_path (reuse from Guard 0 for Write, extract for Edit/MultiEdit)
     if [ -z "$FILE_PATH" ] && [ -z "$PB_FUSED" ]; then
         FILE_PATH=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('file_path',''))" 2>/dev/null || echo "")
     fi

@@ -426,5 +426,90 @@ class AnotherSpellingOfThePathIsStillGuarded(unittest.TestCase):
                 self.assertEqual(r.returncode, want, r.stderr.decode())
 
 
+class MultiEditIsJudgedLikeAWrite(unittest.TestCase):
+    """PLAN S11 item 6 (task 166; from task 158). The batch-close guard looked at `Edit` and
+    `Write` only: three gates ticked with no outcome note in ONE `MultiEdit` went through,
+    where the same ticks as one `Edit` are refused. The owner chose to cover the tool
+    although the Claude Code he runs offers none ("Acopăr totuși, în S11")."""
+
+    @staticmethod
+    def _multi(f, pairs, path=None):
+        return {"hook_event_name": "PreToolUse", "tool_name": "MultiEdit",
+                "tool_input": {"file_path": path or str(f.task_file),
+                               "edits": [{"old_string": o, "new_string": n} for o, n in pairs]}}
+
+    def test_three_bare_ticks_are_blocked(self):
+        f = ProjectFixture()
+        r = f.run_hook(self._multi(f, [(g, checked(g)) for g in G[:3]]))
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+        self.assertIn(b"outcome note", r.stderr)
+
+    def test_control_three_annotated_ticks_are_allowed(self):
+        f = ProjectFixture()
+        r = f.run_hook(self._multi(f, [(g, checked(g, NOTE)) for g in G[:3]]))
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+
+    def test_control_one_tick_is_not_a_batch(self):
+        f = ProjectFixture()
+        r = f.run_hook(self._multi(f, [(G[0], checked(G[0]))]))
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+
+    def test_six_ticks_are_over_the_ceiling_even_annotated(self):
+        f = ProjectFixture()
+        r = f.run_hook(self._multi(f, [(g, checked(g, NOTE)) for g in G]))
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+
+    def test_the_edits_are_applied_in_order_to_the_file_as_it_is(self):
+        # the second edit ticks the text the FIRST edit wrote: judged on the file before and
+        # after the whole call, that gate was rewritten while it was closed (born checked)
+        f = ProjectFixture()
+        rewritten = "- [ ] G1: run the whole suite twice"
+        r = f.run_hook(self._multi(f, [(G[0], rewritten),
+                                       (rewritten, checked(rewritten, NOTE)),
+                                       (G[1], checked(G[1], NOTE))]))
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+
+    def test_another_spelling_of_the_path_is_still_guarded(self):
+        f = ProjectFixture()
+        path = str(f.task_file).replace("/001-thing/", "/001-thing/./")
+        r = f.run_hook(self._multi(f, [(g, checked(g)) for g in G[:3]], path=path))
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+
+    def test_a_payload_it_cannot_read_fails_open(self):
+        # the helper's contract: its own errors never block an edit
+        f = ProjectFixture()
+        payload = self._multi(f, [])
+        payload["tool_input"]["edits"] = "not a list"
+        self.assertEqual(f.run_hook(payload).returncode, 0)
+
+
+class GuardZeroIsAStatedGuarantee(unittest.TestCase):
+    """PLAN S11 item 5 (task 166; from task 158). Guard 0 — only `tasks new` creates a
+    task.md — was enforced and tested, and stated nowhere in the guarantee ledger."""
+
+    def test_one_ledger_row_rests_on_guard_zeros_tests(self):
+        ledger = json.loads((_HERE.parent / "docs" / "guarantee-ledger.json").read_text(encoding="utf-8"))
+        cite = "AnotherSpellingOfThePathIsStillGuarded.test_creating_a_task_md_by_hand_is_blocked_under_every_spelling"
+        rows = [g for g in ledger["guarantees"]
+                if any(p.get("reference") == cite for p in g.get("proofs", []))]
+        self.assertEqual([g["id"] for g in rows], ["PB-TASK-MD-GUARD"])
+        row = rows[0]
+        self.assertEqual(row["status"], "verified_by_current_executable_evidence")
+        proof = next(p for p in row["proofs"] if p.get("reference") == cite)
+        self.assertEqual(proof["negative_control"]["reference"],
+                         "AnotherSpellingOfThePathIsStillGuarded."
+                         "test_control_rewriting_an_existing_task_md_is_not_a_creation")
+        self.assertEqual(row["required_live_evidence"], [], "the row joined the live spine")
+        # its known bound is stated, not hidden: the guard has no project scope
+        self.assertTrue(any("outside the project" in x.lower() for x in row["missing_evidence_or_limitation"]))
+
+    def test_what_the_row_admits_is_what_the_guard_does(self):
+        # a NEW task.md path outside the project is refused too — the row says so
+        f = ProjectFixture()
+        outside = Path(tempfile.mkdtemp()) / ".agent" / "tasks" / "003-elsewhere" / "task.md"
+        r = f.run_hook({"hook_event_name": "PreToolUse", "tool_name": "Write",
+                        "tool_input": {"file_path": str(outside), "content": "# 003\n"}})
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+
 if __name__ == "__main__":
     unittest.main()
