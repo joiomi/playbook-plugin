@@ -592,12 +592,6 @@ def build_bwrap_argv(
     project_bind = "--bind" if project_writable else "--ro-bind"
     argv += [project_bind, project, project]
 
-    # .git stays read-only even when the project is writable — after the
-    # project bind so it wins the overlap.
-    if git_dir:
-        git_resolved = str(Path(git_dir).resolve())
-        argv += ["--ro-bind", git_resolved, git_resolved]
-
     # Task 125: a read-only judge cannot read the conversation records — layers
     # after the project bind so they win the overlap (`_bwrap_record_masks`). A
     # worker keeps them, and so does a read-only observer that passes
@@ -605,11 +599,20 @@ def build_bwrap_argv(
     if (not project_writable) if mask_records is None else mask_records:
         argv += _bwrap_record_masks(project)
 
-    # extra_rw (the judge workspace / outdir) deliberately LAST: it must stay
+    # extra_rw (the judge workspace / outdir) after the project bind: it must stay
     # writable even when it lives inside a read-only project.
     for rw in rw_paths:
         Path(rw).mkdir(parents=True, exist_ok=True)
         argv += ["--bind", rw, rw]
+
+    # .git stays read-only even when the project is writable — and its bind is
+    # laid LAST, after the project bind AND after every extra writable bind, so it
+    # wins whatever they cover. It used to come before them, and a writable path
+    # that covered `.git` — `--rw <project>`, a parent of it, `.git` itself —
+    # made it writable again (task 169; measured with real bubblewrap).
+    if git_dir:
+        git_resolved = str(Path(git_dir).resolve())
+        argv += ["--ro-bind", git_resolved, git_resolved]
 
     argv += list(target_argv)
     return argv

@@ -9,8 +9,11 @@ profile shell created a file inside a /tmp-resident "read-only" project).
 Invariants:
   * every broad rw mount (/tmp, write log, home subpaths) precedes the project
     bind, so the project bind governs overlap;
-  * .git's ro-bind comes after the project bind (stays ro even in rw mode);
-  * extra_rw comes last (a judge workspace inside a ro project stays writable);
+  * extra_rw comes after the project bind (a judge workspace inside a ro
+    project stays writable);
+  * .git's ro-bind comes after the project bind AND after every extra_rw bind
+    (stays ro even in rw mode, and whatever an extra writable path covers —
+    task 169; the live proof is tests/test_linux_moved_row_proofs.py);
   * live negative control (skipped without bwrap): a /tmp-resident project is
     actually write-BLOCKED under the fixed profile, while /tmp itself and
     subprocess exec still work — the facts judge-execution (L1) rests on.
