@@ -19,8 +19,9 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   bubblewrap the launcher would refuse as present. A `bwrap` reached only through a relative `PATH` entry is no
   longer used, by the sandbox or by a review: a launch runs in the project directory, where such an entry can name a
   file of the project instead of the bubblewrap that was checked — every wrapped launch now names bubblewrap by its
-  absolute path. Reviews otherwise behave as before: a judge is not launched through that command, and where there
-  is no usable bubblewrap on `PATH` it still runs — uncontained, with the review's warning.
+  absolute path. Reviews otherwise behave as before: a judge is not launched through that command; where there is no
+  bubblewrap on an absolute `PATH` entry it still runs — uncontained, with the review's warning — and where
+  bubblewrap is found but cannot start, a judge's launch fails.
 
 ## [1.6.0] — 2026-10-09
 
