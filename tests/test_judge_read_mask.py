@@ -141,9 +141,15 @@ class Masks(unittest.TestCase):
     def test_the_monitor_launch_keeps_the_records(self):
         text = (_HERE.parent / "plugins/playbook/scripts/monitor-lib/launch-monitor").read_text(encoding="utf-8")
         self.assertIn("--keep-records", text)
+        # a preview needs a bubblewrap on PATH since task 164 — the host's, or the stand-in
+        from tests._bwrap_standin import path_with_bwrap
+        bindir = Path(tempfile.mkdtemp(prefix="pb-standin-"))
+        self.addCleanup(shutil.rmtree, bindir, ignore_errors=True)
+        env = {k: v for k, v in os.environ.items() if k != "PLAYBOOK_SANDBOXED"}
+        env["PATH"] = path_with_bwrap(bindir)
         r = subprocess.run([sys.executable, "-m", "provider.sandbox", "--agent", "claude", "--ro-project",
                             "--keep-records", "--project-root", str(self.p), "--print-argv", "--", "x"],
-                           cwd=str(_HERE.parent / "plugins/playbook"), capture_output=True, text=True)
+                           cwd=str(_HERE.parent / "plugins/playbook"), env=env, capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertNotIn(str(self.a / "sessions"), r.stdout)
         self.assertNotIn("/dev/null", r.stdout.splitlines())

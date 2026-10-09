@@ -221,6 +221,12 @@ class MonitorAndSandboxHelpAreDry(unittest.TestCase):
     def test_control_sandbox_prompt_does_execute_the_agent(self):
         # `--print-argv`/help are dry because they short-circuit; a real --prompt
         # run reaches the (fake) agent, which is what the marker detects.
+        import shutil
+        if not shutil.which("bwrap"):
+            # No bubblewrap here, so the launcher refuses a launch (task 164). This control
+            # only has to show that the marker CAN fire: run it as a nested launch, which
+            # starts the agent without wrapping it (the nesting guard).
+            self.env["PLAYBOOK_SANDBOXED"] = "1"
         r = self._sandbox("--agent", "claude", "--prompt", "hello")
         self.assertIn(self.AGENT_MARKER, r.stdout + r.stderr, r.stderr)
 

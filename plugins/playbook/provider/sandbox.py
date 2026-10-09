@@ -694,6 +694,59 @@ def containment_available() -> bool:
     return False
 
 
+# One text for the launcher's refusal below and for `tasks environment`'s advice.
+BWRAP_INSTALL_HINT = ("install bubblewrap — e.g. `apt install bubblewrap` (Debian/Ubuntu), "
+                      "`dnf install bubblewrap` (Fedora), `pacman -S bubblewrap` (Arch)")
+
+
+def _bwrap_start_error(exe: str) -> "str | None":
+    """None when `exe` starts a trivial sandbox here; otherwise ONE line saying what
+    happened — bwrap's own last stderr line where it printed one.
+
+    The probe asks for the first mounts every launch asks for (`build_bwrap_argv`:
+    read-only root, /proc, /dev), so a host that refuses them — user namespaces
+    switched off, some containers — fails here the way the real launch would."""
+    try:
+        r = subprocess.run([exe, "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev", "true"],
+                           stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                           errors="replace", timeout=15)
+    except subprocess.TimeoutExpired:
+        return "it did not finish a trivial sandbox within 15 s"
+    except OSError as e:
+        return f"it could not be run ({e.strerror or e})"
+    if r.returncode == 0:
+        return None
+    lines = [ln.strip() for ln in (r.stderr or "").splitlines() if ln.strip()]
+    return lines[-1] if lines else f"it exited {r.returncode} and printed nothing"
+
+
+def launch_refusal() -> "str | None":
+    """Why the LAUNCHER (`_main`) must not start an agent here; None when it may.
+
+    Owner ruling 2026-10-09 (task 164). `_wrapped_argv` falls through to the bare
+    agent argv when there is no bwrap, and that argv carries the permission-bypass
+    flag: the launcher used to exec it with nothing around it and said nothing —
+    the opposite of what it is for. It refuses instead, the way `--no-network`
+    already does without its backend. Inside a sandbox the outer one contains us
+    (the nesting guard), so there is nothing to refuse.
+
+    NOT used by `run()`/`popen()`: the judge paths (tasks/review.py) call those
+    directly and keep the uncontained path with their "UNCONTAINED" warning and the
+    tamper guard — the same ruling left them as they are."""
+    if is_sandboxed():
+        return None
+    exe = shutil.which("bwrap")
+    if not exe:
+        return ("no containment — bubblewrap (`bwrap`) is not installed, so the agent would run "
+                "with its permission prompts off and nothing fencing its writes. Refusing to "
+                f"start it. To fix: {BWRAP_INSTALL_HINT}.")
+    why = _bwrap_start_error(exe)
+    if why:
+        return (f"no containment — bubblewrap is installed ({exe}) but could not start a "
+                f"sandbox here: {why}. Refusing to start the agent.")
+    return None
+
+
 # The opt-in network jail (`--no-network` / no_network=True) exists ONLY on the
 # bwrap backend. Without it — no bwrap, or nested inside a sandbox we cannot
 # re-wrap — there is no `--unshare-net` equivalent, so the launcher REFUSES
@@ -1065,6 +1118,14 @@ def _main(argv: list[str]) -> int:
     else:
         agent = args.agent or default_agent()
         model_for_spec = None
+
+    # No containment → no launch. Everything below either starts an agent or
+    # previews the argv that would, so the refusal covers a run, a --prompt run and
+    # --print-argv alike: a preview must not show a launch that would be refused.
+    refusal = launch_refusal()
+    if refusal:
+        print(f"Error: {refusal}", file=sys.stderr)
+        return 2
 
     # --prompt: route through the unified subagent runner (builds the agent's
     # native invocation via headless_argv). Raw `--` passthrough still works

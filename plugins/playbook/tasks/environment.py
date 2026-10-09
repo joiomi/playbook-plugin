@@ -137,14 +137,17 @@ def _search_items() -> list[dict]:
 # ── sandbox containment ───────────────────────────────────────────────────────
 
 def _bwrap_install_hint() -> str:
-    return ("install bubblewrap — e.g. `apt install bubblewrap` (Debian/Ubuntu), "
-            "`dnf install bubblewrap` (Fedora), `pacman -S bubblewrap` (Arch)")
+    # one text, shared with the launcher's refusal (provider/sandbox.py, task 164)
+    from provider.sandbox import BWRAP_INSTALL_HINT
+    return BWRAP_INSTALL_HINT
 
 
 def _sandbox_item() -> dict:
     system = platform.system()
     why = (".claude/bin/sandbox uses it for deny-write OS containment "
-           "(blast-radius control when running --skip-permissions)")
+           "(blast-radius control when running --skip-permissions); without it "
+           "the sandbox refuses to start an agent, and judges run uncontained "
+           "with a warning")
     if system == "Linux":
         present = shutil.which("bwrap") is not None
         return _item("sandbox: bubblewrap", "sandbox", present, SEV_RECOMMENDED,

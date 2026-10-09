@@ -4,6 +4,17 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+### Changed
+
+- **`sandbox` refuses to start an agent without bubblewrap** (task 164, owner decision 2026-10-09). On a host where
+  `bwrap` is not installed, `.claude/bin/sandbox` used to start the agent anyway — with its permission prompts off
+  and no containment — and printed no warning (the 1.6.0 entry below says the sandbox "says so": that was true of
+  reviews only). It now exits 2 before anything is launched and says how to install bubblewrap. The same when
+  `bwrap` is installed but cannot start a sandbox: it prints bubblewrap's own error. This covers a run, a `--prompt`
+  run, the `--print-argv` preview and `monitor start`; `--list-agents`, `--list-models` and `--help` still answer,
+  and inside a sandbox nothing changes. Reviews are not affected: a judge is not launched through that command, and
+  without bubblewrap it still runs — uncontained, with the review's warning.
+
 ## [1.6.0] — 2026-10-09
 
 **The first Linux-only release** — owner decision 2026-10-08: playbook supports Linux only until it is stable; macOS
@@ -21,8 +32,8 @@ now also run the sandbox tests under bubblewrap.
   lane shapes) moved from the macOS job to the Linux lanes, with zsh installed from apt. A release needs both Linux
   lanes green (this supersedes owner decision D1 (b), "all four lanes on every push").
 - **A session started on another platform is warned, not blocked** (tasks 153, 157). The SessionStart hook prints
-  `playbook: unsupported platform (<platform>); Linux only since 2026-10-08 — on Windows/macOS use the
-  `multiplatform` branch (1.5.47)` — on stderr and as the host's `systemMessage` — and the session starts as before.
+  ``playbook: unsupported platform (<platform>); Linux only since 2026-10-08 — on Windows/macOS use the
+  `multiplatform` branch (1.5.47)`` — on stderr and as the host's `systemMessage` — and the session starts as before.
 - **The macOS seatbelt sandbox backend is gone** (task 155). Bubblewrap is the only backend; on a host with no `bwrap`
   on PATH the sandbox runs uncontained and says so, as before (a bwrap that is installed but cannot run is not
   detected). `sandbox --print-profile`, which printed the seatbelt profile, is removed — it is now refused (exit 2)

@@ -7360,7 +7360,7 @@
     {
       "id": "PB-SANDBOX-DETECTION-FALLBACK",
       "category": "sandbox",
-      "statement": "Containment availability and nested-containment failure are detected; when unavailable, execution falls back uncontained with an observable warning rather than claiming kernel containment.",
+      "statement": "Containment availability and nested containment are detected. The sandbox launcher refuses to start or preview an agent when no usable containment exists — bubblewrap missing, or installed but unable to start a sandbox — instead of launching it uncontained; the judge paths, which call `run()` directly, fall back uncontained with an observable warning rather than claiming kernel containment.",
       "owner": [
         {
           "path": "plugins/playbook/provider/sandbox.py",
@@ -7373,6 +7373,10 @@
         {
           "path": "plugins/playbook/provider/sandbox.py",
           "reference": "symbol:run"
+        },
+        {
+          "path": "plugins/playbook/provider/sandbox.py",
+          "reference": "symbol:launch_refusal"
         }
       ],
       "failure_consequence": "Critical",
@@ -7400,6 +7404,42 @@
           "limitations": [
             "The fallback IS the uncontained direct exec: `_wrapped_argv` returns the bare agent argv with no bwrap wrapper."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_sandbox_refuses_uncontained.py",
+          "reference": "TheRealLauncherWithoutBubblewrap.test_a_run_is_refused_and_the_agent_never_starts",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_sandbox_refuses_uncontained.py",
+            "reference": "TheRealLauncherWithoutBubblewrap.test_negative_control_the_same_harness_does_see_a_launch"
+          },
+          "limitations": [
+            "The real `scripts/sandbox`, a PATH with everything but `bwrap`, a fake agent that writes a marker file if it is executed: exit 2, the install hint, no marker. Watched red on the unchanged launcher (the marker existed, exit 0). Needs no bubblewrap, so it runs on every host. The negative control runs the same harness as a nested launch (PLAYBOOK_SANDBOXED=1) and the marker appears — which also exercises nested detection through the real launcher."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_sandbox_refuses_uncontained.py",
+          "reference": "TheRealLauncherWithoutBubblewrap.test_a_bubblewrap_that_cannot_start_is_refused_with_its_error",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "A stand-in `bwrap` that exits 1 with an error line, first on PATH: the launcher refuses with that line and starts nothing. It is a stand-in, not a real bubblewrap on a host that denies user namespaces."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_sandbox_refuses_uncontained.py",
+          "reference": "NoBubblewrapInstalled.test_print_argv_is_refused_and_shows_no_argv",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_sandbox_refuses_uncontained.py",
+            "reference": "WorkingBubblewrap.test_print_argv_prints_the_wrapped_argv_and_launches_nothing"
+          },
+          "limitations": [
+            "`_main` with the backend switched by mocks: the preview is refused like a launch (it used to print the bare agent argv with exit 0); with a bwrap it prints the wrapped argv."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -7412,7 +7452,7 @@
       ],
       "status": "partially_evidenced",
       "missing_evidence_or_limitation": [
-        "Nested sandbox and no-bwrap fallback paths lack integration negative controls; high-consequence uncontained policy is undecided.",
+        "2026-10-09 (task 164, owner ruling): the uncontained policy is decided for the LAUNCHER — it refuses (tests/test_sandbox_refuses_uncontained.py, live, with a negative control) — and for the judge paths the owner left the fallback as it is: uncontained, with the review's warning and the tamper guard. Still without an integration test: a real review on a host with no bwrap (the warning it prints is source-read), and a real bubblewrap that cannot start (the launcher's probe is tested against a stand-in binary).",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
         "Task 100 (PLAN S8 binding audit, 2026-09-27): this row cited only `test_environment.SandboxItemTest.test_unknown_os_has_no_primitive` — an advisory-text test of environment.py, not of the owner (sandbox.py). Rebound to tests/test_windows_uncontained_path.py (3 tests, cited nowhere before). Still asserted by NO test: nested-containment detection (`is_sandboxed`) and the operator-visible UNCONTAINED warning text (review.py gates it on containment_available(); source-read) — both stay in required_live_evidence.",
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",

@@ -74,7 +74,10 @@ class PrintArgvNeverExecutes(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if k != "PLAYBOOK_SANDBOXED"}
         env["PYTHONPATH"] = str(PLUGIN)
         # Fake agent first so shutil.which resolves it, real tools still reachable.
-        env["PATH"] = f"{self.bindir}:{env.get('PATH', '')}"
+        # The launcher refuses without a bubblewrap (task 164); these tests are about the
+        # preview and the inspection flags, so a host that has none gets the stand-in.
+        from tests._bwrap_standin import path_with_bwrap
+        env["PATH"] = f"{self.bindir}:{path_with_bwrap(self.bindir, env.get('PATH', ''))}"
         return subprocess.run(
             [sys.executable, "-m", "provider.sandbox",
              "--project-root", str(self.proj), *flags],
@@ -173,8 +176,11 @@ class PromptContainmentMatchesTheCliFlags(unittest.TestCase):
             captured.append(spec)
             return iter(())
 
+        # launch_refusal: the launcher refuses without a bubblewrap (task 164); what reaches
+        # the prompt runner does not depend on the backend, so the host's is taken out of it.
         with mock.patch.object(subagent, "run_subagent", side_effect=fake_run), \
                 mock.patch.object(subagent, "stream_subagent", side_effect=fake_stream), \
+                mock.patch.object(sandbox, "launch_refusal", return_value=None), \
                 redirect_stdout(StringIO()):
             rc = sandbox._main([
                 "--agent", "grok", "--project-root", str(_HERE.parent),
