@@ -139,6 +139,37 @@ class TheOwnersWordsAreNotCutMidSentence(unittest.TestCase):
         self.assertIn("the one real gate", head)
         self.assertEqual(status, "in_progress")
 
+    # Impl panel round 2 (opus): the capture is written before the record's first `---`
+    # line — and a message that IS `---` put that line inside its fence. The next activation
+    # then cut the old block INSIDE the fence and left its closing fence behind, open over
+    # everything below.
+    def _twice(self, *texts):
+        import shutil
+        from tasks.core import _extract_head_position, _extract_status
+        from tasks.lifecycle import _inject_chat_into_task
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(d, ignore_errors=True))
+        tf = d / "task.md"
+        tf.write_text("# 001 - T\n\n## Status\nin_progress\n\n## References\n- context\n\n---\n\n"
+                      "## Work\n- [ ] the one real gate\n", encoding="utf-8")
+        once = None
+        for _ in range(2):
+            _inject_chat_into_task(tf, self._capture(*texts))
+            once = once or tf.read_text(encoding="utf-8")
+        return _extract_head_position(tf), _extract_status(tf), once, tf.read_text(encoding="utf-8")
+
+    def test_a_message_that_is_only_a_rule_does_not_move_the_anchor(self):
+        head, status, once, twice = self._twice("first", "---")
+        self.assertIn("the one real gate", head)
+        self.assertEqual(status, "in_progress")
+        self.assertEqual(twice, once, "a second activation changed the record")
+        self.assertEqual(twice.count("### Recent Chat"), 1)
+
+    def test_control_a_second_activation_replaces_the_block_and_nothing_else(self):
+        head, status, once, twice = self._twice("an ordinary message", "another one")
+        self.assertEqual(twice, once)
+        self.assertIn("the one real gate", head)
+
     def test_a_very_long_message_is_cut_and_says_what_was_left_out(self):
         from tasks.lifecycle import RECENT_CHAT_CUT
         long = "word " * 600                                   # 3,000 characters, stripped to 2,999

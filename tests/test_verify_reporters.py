@@ -415,28 +415,12 @@ class EveryFailingTestIsNamed(unittest.TestCase):
         got = self.verify.ut_fails(_failing_transcript(12, kind="ERROR"))
         self.assertEqual(len(self._named(got)), 12)
 
-    def test_a_suite_that_fails_everywhere_is_named_up_to_a_ceiling_and_counted(self):
+    def test_a_suite_that_fails_everywhere_is_named_whole(self):
+        # impl panel round 2 (codex-high): a ceiling on the NAMES (200) still left the 201st
+        # failing test unnamed — the item is that every failing test is named
         got = self.verify.ut_fails(_failing_transcript(250, body_lines=2))
-        ceiling = self.verify.HEADER_CAP
-        self.assertEqual(len(self._named(got)), ceiling)
-        self.assertIn(f"{250 - ceiling} more failing test", "\n".join(got))
-
-    def test_what_is_dropped_past_the_header_ceiling_is_counted_whole(self):
-        # impl panel round 1 (sonnet): the diagnostic-block lines of a failure past the
-        # ceiling were dropped without being counted
-        ceiling = self.verify.HEADER_CAP
-        plain = _failing_transcript(ceiling + 3, body_lines=1)
-        marker = "AssertionError: %d" % (ceiling + 2)                 # the last failure's own line
-        with_block = plain.replace(marker, marker + "\n" + "\n".join(
-            f"{self.verify.BLOCK_PREFIX}fixture output line {j}" for j in range(7)))
-
-        def dropped(text):
-            got = self.verify.ut_fails(text)
-            self.assertNotIn(f"{self.verify.BLOCK_PREFIX}fixture output line 0", got)
-            tail = [ln for ln in got if ln.startswith("... and") and "failure detail" in ln]
-            self.assertEqual(len(tail), 1, got[-4:])
-            return int(tail[0].split()[2])
-        self.assertEqual(dropped(with_block) - dropped(plain), 7)     # the seven block lines are counted
+        self.assertEqual(len(self._named(got)), 250)
+        self.assertFalse(hasattr(self.verify, "HEADER_CAP"))
 
     def test_a_short_run_is_listed_as_before(self):
         # under the cap nothing changes: header, traceback, message

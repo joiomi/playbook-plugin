@@ -152,10 +152,20 @@ def _inject_chat_into_task(task_file: Path, messages: list[str]) -> None:
         chat_block += f"\n{_utf8_safe(msg)}\n"
 
     def _t(content: str) -> "str | None":
-        # Insert after the first --- (end of References section, before Design Phase)
-        first_sep = content.find("\n---\n")
-        if first_sep < 0:
+        # Insert before the first `---` line (end of the References section, before
+        # the Design Phase) — the first one OUTSIDE a code fence. A captured message
+        # is written inside a fence, and one whose text is `---` would otherwise be
+        # taken for the anchor at the next activation: the old block was then cut
+        # inside its own fence, leaving the closing fence open over the whole task
+        # (task 166, impl panel r2). A record with an unclosed fence gives no
+        # anchor — nothing is written into it.
+        from tasks.core import _iter_nonfenced
+        lines = content.split("\n")
+        sep = next((i for i, _s in _iter_nonfenced(lines) if i > 0 and lines[i] == "---"
+                    and i + 1 < len(lines)), None)
+        if sep is None:
             return None                            # no anchor → nothing to write
+        first_sep = len("\n".join(lines[:sep]))    # the offset of that line's "\n---\n"
         references = content[:first_sep]
         references = re.sub(
             r'\n### Recent Chat \(auto-captured at activation — review and remove unrelated\)\n.*\Z',

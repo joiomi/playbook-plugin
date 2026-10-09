@@ -187,9 +187,6 @@ def cap(items: list[str], n: int = 20) -> list[str]:
     return items if len(items) <= n else items[:n] + [f"... and {len(items) - n} more"]
 
 
-HEADER_CAP = 200      # failing tests NAMED in one listing; the rest are counted
-
-
 def ut_fails(text: str, per_cap: int = 15, overall_cap: int = 80) -> list[str]:
     """Each unittest FAIL/ERROR as its identifier PLUS the message body that
     follows it — the lines from the FAIL:/ERROR: header through the end of that
@@ -198,11 +195,12 @@ def ut_fails(text: str, per_cap: int = 15, overall_cap: int = 80) -> list[str]:
     reaches the log without flooding it.
 
     The overall cap is for the BODIES. Which tests failed is the one thing this
-    listing must always say: a header is never dropped for it (task 166 — in CI
-    run 37743978697 seven failing tests went unnamed because the dumps of the
-    first ones had used the 80 lines). Once the budget is spent a failure shows
-    its header and one line saying its body was left out. Headers have their own
-    ceiling, `HEADER_CAP`, past which the remaining failures are counted."""
+    listing must always say: a header is never dropped, whatever their number
+    (task 166 — in CI run 37743978697 seven failing tests went unnamed because
+    the dumps of the first ones had used the 80 lines; a first version of the fix
+    kept a ceiling of 200 names, which left the 201st unnamed — impl panel r2).
+    Once the budget is spent a failure shows its header and one line saying its
+    body was left out."""
     def rule(s: str, ch: str) -> bool:                 # unittest frames blocks with ==== / ----
         s = s.strip()
         return len(s) >= 20 and set(s) == {ch}
@@ -262,23 +260,18 @@ def ut_fails(text: str, per_cap: int = 15, overall_cap: int = 80) -> list[str]:
         # line's text (an assertion message may hold a line that starts "FAIL:").
         kinds.extend("block" if ln.startswith(BLOCK_PREFIX) else "body" for ln in kept)
         kinds[first] = "head"
-    # The overall cap counts body lines only. Headers are always kept (up to
-    # their own ceiling); block lines ride along, as before, so a dozen unrelated
-    # failures cannot evict the one block that matters.
-    heads = kinds.count("head")
-    if kinds.count("body") <= overall_cap and heads <= HEADER_CAP:
+    # The overall cap counts body lines only. Headers are always kept; block
+    # lines ride along, as before, so a dozen unrelated failures cannot evict the
+    # one block that matters.
+    if kinds.count("body") <= overall_cap:
         return out
     result: list[str] = []
-    seen_heads = seen_body = left_out = 0
-    named = said = False
+    seen_body = left_out = 0
+    said = False
     for kind, ln in zip(kinds, out):
         if kind == "head":
-            seen_heads += 1
-            named, said = seen_heads <= HEADER_CAP, False
-            if named:
-                result.append(ln)
-        elif not named:
-            left_out += 1                  # a body line or a block line: counted either way
+            said = False
+            result.append(ln)
         elif kind == "block":
             result.append(ln)
         else:
@@ -293,9 +286,6 @@ def ut_fails(text: str, per_cap: int = 15, overall_cap: int = 80) -> list[str]:
                     said = True
     if left_out:
         result.append(f"... and {left_out} more lines of failure detail")
-    if heads > HEADER_CAP:
-        result.append(f"... and {heads - HEADER_CAP} more failing tests (the first "
-                      f"{HEADER_CAP} are named above)")
     return result
 
 
