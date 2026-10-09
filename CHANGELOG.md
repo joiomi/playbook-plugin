@@ -25,11 +25,24 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
-- **The sandbox keeps `.git` read-only whatever `--rw` covers** (task 169). `.claude/bin/sandbox` bound `.git`
-  read-only and then, last, every extra writable path — and the later bind won. With `--rw <project>`,
-  `--rw <a parent of the project>` or `--rw <project>/.git`, an agent in the sandbox could write `.git`: create
-  files, change its config, install a hook (measured with real bubblewrap). The read-only `.git` bind is laid
-  last now. A `--rw` path INSIDE `.git` is therefore not writable either.
+- **The sandbox keeps git metadata read-only in every layout it knows of** (task 169). Three things, each
+  measured with real bubblewrap before it was fixed. (1) `.claude/bin/sandbox` bound `.git` read-only and then,
+  last, every extra writable path — and the later bind won: with `--rw <project>`, `--rw <a parent of the
+  project>` or `--rw <project>/.git`, an agent in the sandbox could create files in `.git`, change its config,
+  install a hook. (2) Only the directory `git rev-parse --git-dir` names was bound at all: in a linked worktree
+  (Claude Code's own worktrees are such) the `.git` FILE could be rewritten to point anywhere, and the shared
+  repository's config and hooks were writable wherever a writable bind covered them. (3) A nested repository of
+  `code_roots` had a writable `.git`. Now the `.git` directory or file, the git directory and the common
+  directory — of the project and of every repository named in `code_roots` — are bound read-only AFTER all
+  writable binds. What changes for you: an agent in the sandbox can no longer commit in a `code_roots`
+  repository (it never could in the project's own), and an `--rw` path inside `.git` is not writable. Not
+  covered: a nested repository that `code_roots` does not name, and a `.git` that is a symlink (the link itself
+  can be replaced).
+- **A read-only sandbox run keeps the conversation records hidden whatever `--rw` covers** (task 169). With
+  `--ro-project --rw <project>` (or a parent of it) the extra writable bind was laid over the masks and the chat
+  log became readable. The masks are laid again after any bind that covers `.agent`; `--keep-records` is still
+  the way to show the records. With `--ro-project`, an `--rw` path that is `.agent` or contains it no longer
+  makes `.agent` writable.
 - **Six ledger rows have a Linux proof of their own** (task 169, PLAN S11 — the rows that lost their macOS and
   Windows evidence with the Linux-only decision): the sandbox's write rules, the tamper guard at a real review
   with no sandbox, session clean-up at a real `tasks` command, `init` from a packaged install, one project whose

@@ -83,6 +83,7 @@ try git-ref-delete sh -c 'rm "$PWD"/.git/refs/heads/*'
 try allowed        sh -c 'test -d "$PWD/allowed" && printf x > "$PWD/allowed/wrote"'
 """
 _GIT_TRIES = ("git-new-file", "git-config", "git-hook", "git-head", "git-ref-delete")
+_TRY = 'try() { name="$1"; shift; if "$@" 2>/dev/null; then echo "$name: WROTE"; else echo "$name: denied"; fi; }\n'
 
 
 class _SandboxedProject(unittest.TestCase):
@@ -100,12 +101,19 @@ class _SandboxedProject(unittest.TestCase):
         agent.write_text(_AGENT_TRIES, encoding="utf-8")
         agent.chmod(0o755)
 
-    def launch(self, *flags: str) -> dict:
-        """The shipped launcher, a real sandbox, the stand-in agent → {attempt: outcome}."""
+    def launch(self, *flags: str, project: "Path | None" = None, script: "str | None" = None,
+               raw: bool = False) -> dict:
+        """The shipped launcher, a real sandbox, the stand-in agent → {attempt: outcome}.
+        `script` replaces what the stand-in tries; `project` is where it is launched;
+        `raw` passes the agent's arguments through instead of a prompt (some flags are
+        refused with a prompt)."""
+        project = project or self.project
+        if script is not None:
+            (self.bindir / "claude").write_text("#!/bin/sh\n" + _TRY + script, encoding="utf-8")
         r = subprocess.run(
-            [bash_or_skip(), str(SCRIPTS / "sandbox"), "--project-root", str(self.project),
-             "--agent", "claude", *flags, "--prompt", "hello"],
-            cwd=self.project, capture_output=True, text=True, timeout=120,
+            [bash_or_skip(), str(SCRIPTS / "sandbox"), "--project-root", str(project),
+             "--agent", "claude", *flags, *(("--", "hello") if raw else ("--prompt", "hello"))],
+            cwd=project, capture_output=True, text=True, timeout=120,
             env=child_env(PATH=f"{self.bindir}{os.pathsep}{os.environ.get('PATH', '')}"))
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         got = dict(line.split(": ", 1) for line in r.stdout.splitlines() if ": " in line)
@@ -147,6 +155,119 @@ class TheSandboxKeepsGitReadOnly(_SandboxedProject):
         self.assertEqual((allowed / "wrote").read_text(encoding="utf-8"), "x")
 
 
+@unittest.skipUnless(bwrap_usable(), "no bubblewrap that can start a sandbox here")
+class GitMetadataThatIsNotADirectoryCalledDotGit(_SandboxedProject):
+    """Impl panel round 1, task 169 (opus, both codex seats, grok): the read-only bind
+    covered only the directory `git rev-parse --git-dir` names for the project root.
+    Measured before the fix: in a linked worktree the `.git` FILE was rewritten to point
+    elsewhere and the shared repository's config and hooks were written; in a nested
+    repository of `code_roots` its `.git` was written."""
+
+    def test_a_linked_worktree(self):
+        main, worktree = self.project, self.project.parent / "wt"
+        git(main, "worktree", "add", "-q", str(worktree))
+        tries = (f'try project sh -c \'printf x > "$PWD/in-project"\'\n'
+                 f'try gitfile sh -c \'printf "gitdir: /tmp/elsewhere\\n" > "$PWD/.git"\'\n'
+                 f'try gitfile-replace sh -c \'printf x > "$PWD/new" && mv "$PWD/new" "$PWD/.git"\'\n'
+                 f'try common-config sh -c \'printf x >> "{main}/.git/config"\'\n'
+                 f'try common-hook sh -c \'printf x > "{main}/.git/hooks/pre-commit"\'\n'
+                 f'try private-head sh -c \'printf x > "{main}/.git/worktrees/wt/HEAD"\'\n')
+        metadata = ("gitfile", "gitfile-replace", "common-config", "common-hook", "private-head")
+        pointer = (worktree / ".git").read_bytes()
+        for flags in ((), ("--rw", str(self.project.parent))):
+            with self.subTest(flags=flags):
+                before = tree_digest(main / ".git")
+                got = self.launch(*flags, project=worktree, script=tries)
+                self.assertEqual(got["project"], "WROTE", got)
+                self.assertEqual({k: got[k] for k in metadata}, dict.fromkeys(metadata, "denied"), flags)
+                self.assertEqual((worktree / ".git").read_bytes(), pointer)
+                self.assertEqual(tree_digest(main / ".git"), before)
+
+    def _nested(self, listed: bool) -> dict:
+        import json
+        inner = self.project / "inner"
+        os.makedirs(inner)
+        git(inner, "init", "-q")
+        git(inner, "commit", "-q", "--allow-empty", "-m", "first")
+        os.makedirs(inner / ".git" / "hooks", exist_ok=True)
+        os.makedirs(self.project / ".agent")
+        (self.project / ".agent" / "config.json").write_text(
+            json.dumps({"code_roots": ["inner"] if listed else []}), encoding="utf-8")
+        return self.launch(script=(
+            'try project sh -c \'printf x > "$PWD/inner/a-file"\'\n'
+            'try inner-git-config sh -c \'printf x >> "$PWD/inner/.git/config"\'\n'
+            'try inner-git-hook sh -c \'printf x > "$PWD/inner/.git/hooks/pre-commit"\'\n'
+            'try outer-git-config sh -c \'printf x >> "$PWD/.git/config"\'\n'))
+
+    def test_a_nested_repository_named_in_code_roots(self):
+        before = None
+        got = self._nested(listed=True)
+        self.assertEqual(got, {"project": "WROTE", "inner-git-config": "denied", "inner-git-hook": "denied",
+                               "outer-git-config": "denied"})
+        self.assertFalse((self.project / "inner" / ".git" / "hooks" / "pre-commit").exists(), before)
+
+    def test_what_the_row_admits_a_nested_repository_that_is_not_listed_stays_writable(self):
+        # NOT a protection: the bound. The sandbox learns of nested repositories from
+        # `.agent/config.json` `code_roots`; one that is not listed there is project
+        # content like any other, `.git` and all.
+        got = self._nested(listed=False)
+        self.assertEqual((got["inner-git-config"], got["outer-git-config"]), ("WROTE", "denied"), got)
+
+
+@unittest.skipUnless(bwrap_usable(), "no bubblewrap that can start a sandbox here")
+class TheRecordsStayHiddenWhateverCoversThem(_SandboxedProject):
+    """A read-only run does not read the conversation records (PB-SANDBOX-READ-NETWORK).
+    Two ways a later bind uncovered them: an extra writable path that covers `.agent`
+    (older than task 169, seen there), and — a regression of task 169's own first fix,
+    found by its impl panel (grok) — a git directory that covers it, once the `.git`
+    bind was laid after the masks."""
+    READS = ('echo "project: ran"\n'
+             'if grep -q SECRET-CHAT "$PWD/.agent/chat_log.md" 2>/dev/null; '
+             'then echo "records: READ"; else echo "records: hidden"; fi\n')
+
+    def _with_a_chat_log(self, project: Path) -> Path:
+        os.makedirs(project / ".agent", exist_ok=True)
+        (project / ".agent" / "chat_log.md").write_text("SECRET-CHAT\n", encoding="utf-8")
+        return project
+
+    def test_control_a_read_only_run_cannot_read_them(self):
+        self._with_a_chat_log(self.project)
+        self.assertEqual(self.launch("--ro-project", script=self.READS)["records"], "hidden")
+
+    def test_control_the_stand_in_reads_them_when_they_are_kept(self):
+        # so that "hidden" above is the mask, not a stand-in that cannot read
+        self._with_a_chat_log(self.project)
+        got = self.launch("--ro-project", "--keep-records", script=self.READS, raw=True)
+        self.assertEqual(got["records"], "READ")
+
+    def test_a_writable_path_that_covers_them_does_not_uncover_them(self):
+        self._with_a_chat_log(self.project)
+        for rw in (self.project, self.project.parent, self.project / ".agent"):
+            with self.subTest(rw=str(rw.relative_to(self.tmp))):
+                got = self.launch("--ro-project", "--rw", str(rw), script=self.READS)
+                self.assertEqual(got["records"], "hidden")
+
+    def test_a_git_directory_that_covers_them_does_not_uncover_them(self):
+        # a bare repository used as a project: its git directory IS the project
+        bare = self.tmp / "bare"
+        os.makedirs(bare)
+        git(bare, "init", "-q", "--bare")
+        self._with_a_chat_log(bare)
+        self.assertEqual(self.launch("--ro-project", project=bare, script=self.READS)["records"], "hidden")
+
+
+class TheLiveSandboxProofsRunOnTheCiLanes(unittest.TestCase):
+    """The tests above skip themselves where no sandbox can start. That is right on a
+    developer's machine and wrong on the lanes whose green is the evidence: there a
+    bubblewrap that stopped working must turn the lane red, not quietly remove the proofs
+    (impl panel round 1, sonnet)."""
+
+    @unittest.skipUnless(os.environ.get("GITHUB_ACTIONS") == "true", "only on the CI lanes")
+    def test_bubblewrap_can_start_a_sandbox_there(self):
+        self.assertTrue(bwrap_usable(), "bubblewrap cannot start a sandbox on this CI lane — "
+                                        "the live sandbox proofs would all be skipped")
+
+
 class TheGitBindIsLaidLast(unittest.TestCase):
     """The same rule where no sandbox can start: in the argv, the read-only `.git`
     bind comes after every writable bind, so it wins whatever they cover."""
@@ -169,6 +290,46 @@ class TheGitBindIsLaidLast(unittest.TestCase):
                     self.assertTrue(git_ro, "no read-only bind of .git at all")
                     self.assertGreater(max(git_ro), last_writable,
                                        "a writable bind is laid after .git's read-only bind")
+
+    def test_a_worktrees_pointer_and_shared_directory_are_bound_read_only_last(self):
+        from provider import sandbox
+        main = Path(tempfile.mkdtemp()).resolve() / "main"
+        os.makedirs(main)
+        self.addCleanup(shutil.rmtree, main.parent, ignore_errors=True)
+        git(main, "init", "-q")
+        git(main, "commit", "-q", "--allow-empty", "-m", "first")
+        worktree = main.parent / "wt"
+        git(main, "worktree", "add", "-q", str(worktree))
+        protected = sandbox._git_paths_to_protect(worktree)
+        for path in (worktree / ".git", main / ".git" / "worktrees" / "wt", main / ".git"):
+            self.assertIn(str(path), protected)
+        argv = sandbox.build_bwrap_argv(worktree, sandbox._git_dir_of(worktree), ["true"],
+                                        [str(main.parent)], git_readonly=protected)
+        last_writable = max(i for i, a in enumerate(argv[:-2]) if a == "--bind")
+        for path in protected:
+            where = [i for i, a in enumerate(argv[:-2]) if a == "--ro-bind" and argv[i + 1] == path]
+            self.assertTrue(where and max(where) > last_writable, path)
+
+    def test_the_record_masks_are_laid_again_after_a_bind_that_covers_them(self):
+        from provider.sandbox import build_bwrap_argv
+        project = Path(tempfile.mkdtemp()).resolve() / "proj"
+        os.makedirs(project / ".agent")
+        self.addCleanup(shutil.rmtree, project.parent, ignore_errors=True)
+        (project / ".agent" / "chat_log.md").write_text("x\n", encoding="utf-8")
+        agent = str(project / ".agent")
+
+        def last(argv, flag, path):
+            hits = [i for i, a in enumerate(argv[:-1]) if a == flag and argv[i + 1] == path]
+            return max(hits) if hits else -1
+        # a git directory that IS the project (a bare repository), read-only run
+        argv = build_bwrap_argv(project, project, ["true"], None, project_writable=False)
+        self.assertGreater(last(argv, "--tmpfs", agent), last(argv, "--ro-bind", str(project)))
+        # an extra writable path that covers .agent
+        argv = build_bwrap_argv(project, project / ".git", ["true"], [str(project)], project_writable=False)
+        self.assertGreater(last(argv, "--tmpfs", agent), last(argv, "--bind", str(project)))
+        # control: nothing covers them → the masks are laid once, as before
+        argv = build_bwrap_argv(project, project / ".git", ["true"], None, project_writable=False)
+        self.assertEqual(sum(1 for i, a in enumerate(argv[:-1]) if a == "--tmpfs" and argv[i + 1] == agent), 1)
 
 
 # --------------------------------------------------------------------------- #

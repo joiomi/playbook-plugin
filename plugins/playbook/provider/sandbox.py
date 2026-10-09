@@ -11,6 +11,7 @@ import from here; do not re-implement profile generation elsewhere.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import signal
@@ -542,9 +543,11 @@ def build_bwrap_argv(
     project_writable: bool = True,
     no_network: bool = False,
     mask_records: bool | None = None,
+    git_readonly: Iterable[str] | None = None,
 ) -> list[str]:
     """Generate the bwrap argv: read-only root, bind project + tmp + per-agent
-    home subpaths read-write, bind git_dir read-only.
+    home subpaths read-write, bind git_dir — and every other path of git metadata
+    the caller names in `git_readonly` (`_git_paths_to_protect`) — read-only.
 
     This is WRITE containment: `--ro-bind / /` leaves the whole filesystem
     READABLE (nothing outside the project is hidden), and by default there is NO
@@ -596,8 +599,10 @@ def build_bwrap_argv(
     # after the project bind so they win the overlap (`_bwrap_record_masks`). A
     # worker keeps them, and so does a read-only observer that passes
     # mask_records=False (the monitor, task 138 G3-1).
+    masks: list[str] = []
     if (not project_writable) if mask_records is None else mask_records:
-        argv += _bwrap_record_masks(project)
+        masks = _bwrap_record_masks(project)
+        argv += masks
 
     # extra_rw (the judge workspace / outdir) after the project bind: it must stay
     # writable even when it lives inside a read-only project.
@@ -605,17 +610,113 @@ def build_bwrap_argv(
         Path(rw).mkdir(parents=True, exist_ok=True)
         argv += ["--bind", rw, rw]
 
-    # .git stays read-only even when the project is writable — and its bind is
-    # laid LAST, after the project bind AND after every extra writable bind, so it
-    # wins whatever they cover. It used to come before them, and a writable path
-    # that covered `.git` — `--rw <project>`, a parent of it, `.git` itself —
-    # made it writable again (task 169; measured with real bubblewrap).
-    if git_dir:
-        git_resolved = str(Path(git_dir).resolve())
-        argv += ["--ro-bind", git_resolved, git_resolved]
+    # Git metadata stays read-only even when the project is writable — and its
+    # binds are laid after the project bind AND after every extra writable bind,
+    # so they win whatever those cover. The one bind there was used to come before
+    # them, and a writable path that covered `.git` — `--rw <project>`, a parent
+    # of it, `.git` itself — made it writable again (task 169; measured with real
+    # bubblewrap). `git_readonly` adds what `git_dir` alone leaves out: a gitfile,
+    # a shared directory, a nested repository (`_git_paths_to_protect`).
+    git_paths: list[str] = []
+    for p in ([git_dir] if git_dir else []) + list(git_readonly or []):
+        resolved = str(Path(p).resolve())
+        if resolved not in git_paths:
+            git_paths.append(resolved)
+    for g in git_paths:
+        argv += ["--ro-bind", g, g]
+
+    # The record masks once more when a bind laid after them covers `.agent`: an
+    # extra writable path (`--ro-project --rw <project>`), or a git directory that
+    # is the project itself or an ancestor of `.agent` (a bare repository) — either
+    # would bind the real records back over the masks (task 169, impl panel r1).
+    # An extra writable path INSIDE `.agent` covers nothing and is left as it is.
+    if masks:
+        agent = _agent_dir(project)
+        if agent is not None and any(_covers(p, agent) for p in [*rw_paths, *git_paths]):
+            argv += masks
 
     argv += list(target_argv)
     return argv
+
+
+def _covers(outer: "Path | str", inner: Path) -> bool:
+    """Is `inner` the path `outer`, or inside it? Both already resolved."""
+    outer = Path(outer)
+    return outer == inner or outer in inner.parents
+
+
+def _code_root_dirs(project_dir: "Path | str") -> "list[Path]":
+    """The nested repositories `.agent/config.json` names under `code_roots`, as
+    existing directories inside the project (the same shape `tasks/core.py` accepts:
+    a list of project-relative paths, no absolute path, no `..`). The provider
+    package cannot import `tasks`, so it reads the key itself — quietly: whatever
+    cannot be read, or points outside, is left out. Never raises."""
+    try:
+        project = Path(project_dir).resolve()
+        cfg = json.loads((project / ".agent" / "config.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    raw = cfg.get("code_roots") if isinstance(cfg, dict) else None
+    out: list[Path] = []
+    for entry in raw if isinstance(raw, list) else []:
+        if not isinstance(entry, str) or not entry.strip() or "\x00" in entry:
+            continue
+        rel = entry.strip()
+        if os.path.isabs(rel) or ".." in Path(rel).parts:
+            continue
+        try:
+            root = (project / rel).resolve()
+            if root.is_dir() and root != project and _covers(project, root) and root not in out:
+                out.append(root)
+        except OSError:
+            continue
+    return out
+
+
+def _git_paths_to_protect(project_dir: "Path | str") -> "list[str]":
+    """Every existing path that holds git metadata of the project, or of a
+    repository `code_roots` names: the `.git` entry itself — a directory, or the
+    FILE a linked worktree or a submodule has in its place — and the git directory
+    and common directory `git rev-parse` names from there.
+
+    `git rev-parse --git-dir` alone (`_git_dir_of`) left three layouts open, each
+    measured with real bubblewrap (task 169, impl panel r1): in a linked worktree
+    the `.git` file sits in the writable project and could be rewritten to point
+    anywhere, and the shared repository's config and hooks were writable wherever a
+    writable bind covered them (`/tmp`, an `--rw` parent); a nested repository's
+    `.git` is plain project content.
+
+    Not covered, and said in the ledger row: a `.git` that is a SYMLINK (what it
+    points at is bound, the link itself can be replaced — it is an entry of a
+    writable directory); a nested repository `code_roots` does not name. Never
+    raises; a root where git cannot answer contributes what exists on disk."""
+    out: list[str] = []
+
+    def add(path: Path) -> None:
+        try:
+            resolved = str(path.resolve())
+        except OSError:
+            return
+        if os.path.exists(resolved) and resolved not in out:
+            out.append(resolved)
+
+    try:
+        roots = [Path(project_dir).resolve(), *_code_root_dirs(project_dir)]
+    except OSError:
+        return out
+    for root in roots:
+        entry = root / ".git"
+        if os.path.lexists(entry):
+            add(entry)
+        for flag in ("--git-dir", "--git-common-dir"):
+            try:
+                answer = subprocess.run(["git", "rev-parse", flag], cwd=str(root),
+                                        capture_output=True, text=True, check=False)
+            except OSError:               # no git binary: what is on disk was added above
+                break
+            if answer.returncode == 0 and answer.stdout.strip():
+                add(root / answer.stdout.strip())
+    return out
 
 
 def _compose_agent_argv(agent: str, agent_args: list[str]) -> list[str]:
@@ -725,7 +826,8 @@ def _launch_plan(
         git_dir = _git_dir_of(project)
         argv = build_bwrap_argv(project, git_dir, inner_argv, extra_rw,
                                 project_writable=project_writable, no_network=no_network,
-                                mask_records=mask_records)
+                                mask_records=mask_records,
+                                git_readonly=_git_paths_to_protect(project))
         return [exe, *argv[1:]], True     # by absolute path: the launch runs in the project
     if require_containment:
         raise RuntimeError(launch_refusal() or (
