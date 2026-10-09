@@ -70,7 +70,7 @@ class _Launcher(unittest.TestCase):
         out, err = io.StringIO(), io.StringIO()
         with mock.patch.object(sandbox, "is_sandboxed", return_value=nested), \
                 mock.patch.object(sandbox.shutil, "which", side_effect=which), \
-                mock.patch.object(sandbox, "_bwrap_start_error", return_value=start_error, create=True), \
+                mock.patch.object(sandbox, "bwrap_start_error", return_value=start_error, create=True), \
                 mock.patch.object(sandbox, "run", side_effect=launched("run")), \
                 mock.patch.object(sandbox, "popen", side_effect=launched("popen")), \
                 mock.patch.object(subagent, "run_subagent", side_effect=launched("run_subagent")), \
@@ -172,7 +172,7 @@ def _script(path: Path, body: str) -> Path:
 
 
 class TheStartProbe(unittest.TestCase):
-    """`_bwrap_start_error(exe)`: None when the binary starts a trivial sandbox, otherwise ONE
+    """`bwrap_start_error(exe)`: None when the binary starts a trivial sandbox, otherwise ONE
     line — the binary's own last stderr line where it gave one."""
 
     def setUp(self):
@@ -180,33 +180,151 @@ class TheStartProbe(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.d, ignore_errors=True)
 
     def test_a_binary_that_starts_reports_nothing(self):
-        self.assertIsNone(sandbox._bwrap_start_error(str(_script(self.d / "bwrap", "exit 0\n"))))
+        self.assertIsNone(sandbox.bwrap_start_error(str(_script(self.d / "bwrap", "exit 0\n"))))
 
     def test_a_failing_binary_reports_its_own_last_line(self):
         exe = _script(self.d / "bwrap", "echo 'bwrap: first line' >&2\necho 'bwrap: No permissions to create new namespace' >&2\nexit 1\n")
-        self.assertEqual(sandbox._bwrap_start_error(str(exe)), "bwrap: No permissions to create new namespace")
+        self.assertEqual(sandbox.bwrap_start_error(str(exe)), "bwrap: No permissions to create new namespace")
 
     def test_a_silent_failure_reports_the_exit_code(self):
-        self.assertIn("7", sandbox._bwrap_start_error(str(_script(self.d / "bwrap", "exit 7\n"))))
+        self.assertIn("7", sandbox.bwrap_start_error(str(_script(self.d / "bwrap", "exit 7\n"))))
 
     def test_a_binary_that_cannot_be_run_is_an_error_not_a_crash(self):
-        self.assertIsInstance(sandbox._bwrap_start_error(str(self.d / "missing-bwrap")), str)
+        self.assertIsInstance(sandbox.bwrap_start_error(str(self.d / "missing-bwrap")), str)
 
     def test_the_probe_asks_for_the_mounts_every_launch_uses(self):
         # read-only root, /proc and /dev are the first mounts of build_bwrap_argv: a host that
         # refuses them refuses the real launch too
         log = self.d / "argv"
         exe = _script(self.d / "bwrap", f'printf "%s\\n" "$@" > "{log}"\nexit 0\n')
-        self.assertIsNone(sandbox._bwrap_start_error(str(exe)))
+        self.assertIsNone(sandbox.bwrap_start_error(str(exe)))
         asked = log.read_text(encoding="utf-8").split("\n")
         launch = sandbox.build_bwrap_argv(self.d, None, ["true"], None, project_writable=True)
         self.assertEqual(asked[:7], launch[1:8])
 
+    def test_the_probe_runs_a_command_given_by_absolute_path(self):
+        # a PATH without `true` must not make a working bubblewrap look broken
+        log = self.d / "argv"
+        exe = _script(self.d / "bwrap", f'printf "%s\\n" "$@" > "{log}"\nexit 0\n')
+        with mock.patch.dict(os.environ, {"PATH": str(self.d)}):
+            self.assertIsNone(sandbox.bwrap_start_error(str(exe)))
+        command = [a for a in log.read_text(encoding="utf-8").split("\n") if a][7]
+        self.assertTrue(os.path.isabs(command) and os.access(command, os.X_OK), command)
+
     @unittest.skipUnless(shutil.which("bwrap"), "bwrap not installed")
-    def test_the_real_bubblewrap_here_starts(self):
-        # LIVE. Where this fails the launcher refuses on this host — which is the feature; the
-        # message is what the user would see.
-        self.assertIsNone(sandbox._bwrap_start_error(shutil.which("bwrap")))
+    def test_the_real_bubblewrap_here_starts_or_the_launcher_refuses(self):
+        # LIVE, on whatever host this is. Where bubblewrap starts there is nothing more to say;
+        # where it cannot (user namespaces denied) the launcher must refuse with that error —
+        # the suite passes on both kinds of host.
+        real = shutil.which("bwrap")
+        why = sandbox.bwrap_start_error(real)
+        if why is None:
+            with mock.patch.dict(os.environ, {"PATH": "/nonexistent-dir-for-this-test"}):
+                self.assertIsNone(sandbox.bwrap_start_error(real),
+                                  "a working bubblewrap looked broken because PATH had no `true`")
+            return
+        with mock.patch.object(sandbox, "is_sandboxed", return_value=False):
+            self.assertIn(why, sandbox.launch_refusal() or "")
+
+
+class TheLaunchItselfFailsClosed(unittest.TestCase):
+    """`launch_refusal()` is the check that explains; the launch must not rest on it alone. If
+    bubblewrap is gone by the time the argv is built, the launcher's own launches still refuse
+    (`require_containment`) instead of exec'ing the bare agent."""
+
+    def _main(self, argv):
+        project = Path(tempfile.mkdtemp(prefix="pb-toctou-")).resolve()
+        self.addCleanup(shutil.rmtree, project, ignore_errors=True)
+
+        def never(*a, **k):
+            raise AssertionError(f"an agent was executed with no containment: {a[:1]}")
+
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(sandbox, "is_sandboxed", return_value=False), \
+                mock.patch.object(sandbox.shutil, "which",
+                                  side_effect=lambda n, *a, **k: None if n == "bwrap" else _REAL_WHICH(n, *a, **k)), \
+                mock.patch.object(sandbox, "launch_refusal", return_value=None, create=True), \
+                mock.patch.object(sandbox.subprocess, "run", side_effect=never), \
+                mock.patch.object(sandbox.subprocess, "Popen", side_effect=never), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = sandbox._main(["--project-root", str(project), *argv])
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_a_run_whose_bubblewrap_vanished_after_the_check_is_refused(self):
+        rc, out, err = self._main(["--agent", "claude", "--", "-p", "hi"])
+        self.assertEqual((rc, out), (2, ""), err)
+        self.assertIn("no containment", err)
+
+    def test_a_prompt_run_whose_bubblewrap_vanished_is_refused(self):
+        rc, out, err = self._main(["--agent", "claude", "--prompt", "hi"])
+        self.assertEqual((rc, out), (2, ""), err)
+        self.assertIn("no containment", err)
+
+    def test_a_streamed_prompt_run_whose_bubblewrap_vanished_is_refused(self):
+        rc, out, err = self._main(["--agent", "claude", "--prompt", "hi", "--stream"])
+        self.assertEqual((rc, out), (2, ""), err)
+
+    def test_the_judge_path_is_not_asked_for_it(self):
+        # run() called directly — what tasks/review.py does — keeps the uncontained path
+        with mock.patch.object(sandbox, "is_sandboxed", return_value=False), \
+                mock.patch.object(sandbox.shutil, "which",
+                                  side_effect=lambda n, *a, **k: None if n == "bwrap" else _REAL_WHICH(n, *a, **k)):
+            argv = sandbox._wrapped_argv("claude", ["-p", "hi"], Path("/proj"), None, False)
+        self.assertEqual(argv, sandbox._compose_agent_argv("claude", ["-p", "hi"]))
+
+
+class TheNestingSignalIsTrue(unittest.TestCase):
+    """`run()` used to export PLAYBOOK_SANDBOXED=1 to EVERY child — also to one it had not
+    wrapped, on a host without bubblewrap. The launcher takes that variable as "an outer
+    sandbox contains me", so an uncontained judge's own `sandbox --prompt` would not have been
+    refused. A child is told it is sandboxed only when it is."""
+
+    def _env_given_to_the_child(self, *, bwrap, nested, how="run"):
+        project = Path(tempfile.mkdtemp(prefix="pb-signal-")).resolve()
+        self.addCleanup(shutil.rmtree, project, ignore_errors=True)
+        seen = {}
+
+        def started(argv, **kw):
+            seen["env"] = dict(kw.get("env") or {})
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="", stdin=None, args=argv)
+
+        with mock.patch.object(sandbox, "is_sandboxed", return_value=nested), \
+                mock.patch.object(sandbox.shutil, "which",
+                                  side_effect=lambda n, *a, **k: bwrap if n == "bwrap" else _REAL_WHICH(n, *a, **k)), \
+                mock.patch.object(sandbox.subprocess, "run", side_effect=started), \
+                mock.patch.object(sandbox.subprocess, "Popen", side_effect=started):
+            getattr(sandbox, how)("claude", ["-p", "hi"], project,
+                                  env={"PATH": os.environ.get("PATH", ""), "HOME": str(project)})
+        return seen["env"]
+
+    def test_an_unwrapped_child_is_not_told_it_is_sandboxed(self):
+        for how in ("run", "popen"):
+            with self.subTest(how=how):
+                self.assertNotIn("PLAYBOOK_SANDBOXED", self._env_given_to_the_child(bwrap=None, nested=False, how=how))
+
+    def test_an_unwrapped_child_does_not_inherit_a_stale_signal_either(self):
+        project = Path(tempfile.mkdtemp(prefix="pb-signal-")).resolve()
+        self.addCleanup(shutil.rmtree, project, ignore_errors=True)
+        seen = {}
+        with mock.patch.object(sandbox, "is_sandboxed", return_value=False), \
+                mock.patch.object(sandbox.shutil, "which",
+                                  side_effect=lambda n, *a, **k: None if n == "bwrap" else _REAL_WHICH(n, *a, **k)), \
+                mock.patch.object(sandbox.subprocess, "run",
+                                  side_effect=lambda argv, **kw: seen.update(env=dict(kw["env"])) or
+                                  types.SimpleNamespace(returncode=0)):
+            sandbox.run("claude", ["-p", "hi"], project, env={"PATH": os.environ.get("PATH", ""),
+                                                              "HOME": str(project), "PLAYBOOK_SANDBOXED": "1"})
+        self.assertNotIn("PLAYBOOK_SANDBOXED", seen["env"])
+
+    def test_a_wrapped_child_is_told(self):
+        for how in ("run", "popen"):
+            with self.subTest(how=how):
+                env = self._env_given_to_the_child(bwrap="/usr/bin/bwrap", nested=False, how=how)
+                self.assertEqual(env.get("PLAYBOOK_SANDBOXED"), "1")
+
+    def test_a_nested_child_is_told(self):
+        env = self._env_given_to_the_child(bwrap=None, nested=True)
+        self.assertEqual(env.get("PLAYBOOK_SANDBOXED"), "1")
 
 
 class TheRealLauncherWithoutBubblewrap(unittest.TestCase):
@@ -276,9 +394,68 @@ class TheRealLauncherWithoutBubblewrap(unittest.TestCase):
         self.assertIn("bwrap: setting up uid map: Permission denied", r.stderr)
         self.assertIn("could not start", r.stderr)
 
+    def test_what_an_uncontained_run_starts_cannot_use_the_launcher_either(self):
+        # A judge on this host runs uncontained: tasks/review.py calls run() directly, and that
+        # stays. But what THAT process starts through the launcher must still be refused.
+        case = Path(tempfile.mkdtemp(prefix="chain-", dir=self.root))
+        for d in ("home", "project", "bin"):
+            (case / d).mkdir()
+        marker = case / "inner-agent-ran"
+        _script(case / "bin" / "claude",
+                'case "$*" in *inner*) printf ran > "$MARKER"; exit 0 ;; esac\n'
+                '"$BASH_EXE" "$SANDBOX" --agent claude -- inner 2> "$MARKER.err"\n'
+                'printf "%s" "$?" > "$MARKER.rc"\n')
+        env = {"PATH": f"{case / 'bin'}{os.pathsep}{self.bin}", "HOME": str(case / "home"),
+               "MARKER": str(marker), "LANG": "C.UTF-8", "BASH_EXE": self.bash,
+               "SANDBOX": str(PLUGIN / "scripts" / "sandbox")}
+        code = ("import sys; sys.path.insert(0, sys.argv[1]); from provider import sandbox; "
+                "sys.exit(sandbox.run('claude', ['outer'], sys.argv[2]).returncode)")
+        r = subprocess.run([sys.executable, "-c", code, str(PLUGIN), str(case / "project")],
+                           cwd=case / "project", env=env, stdin=subprocess.DEVNULL,
+                           capture_output=True, text=True, timeout=120)
+        rc_file = Path(str(marker) + ".rc")
+        self.assertTrue(rc_file.exists(), f"the outer (uncontained) run did not reach the fake agent: {r.stderr}")
+        self.assertFalse(marker.exists(), "an uncontained process started an agent through the launcher")
+        self.assertEqual(rc_file.read_text(encoding="utf-8"), "2")
+        self.assertIn("no containment", Path(str(marker) + ".err").read_text(encoding="utf-8"))
+
+    def test_the_monitor_is_refused_before_it_writes_anything(self):
+        case = Path(tempfile.mkdtemp(prefix="monitor-", dir=self.root))
+        (case / "home").mkdir()
+        project = case / "project"
+        (project / ".agent" / "tasks").mkdir(parents=True)
+        marker = case / "agent-ran"
+        env = {"PATH": str(self.bin), "HOME": str(case / "home"), "MARKER": str(marker),
+               "LANG": "C.UTF-8", "PLAYBOOK_PROJECT_DIR": str(project)}
+        r = subprocess.run([self.bash, str(PLUGIN / "scripts" / "monitor-lib" / "launch-monitor"),
+                            "--session-id", "pid-1"],
+                           cwd=project, env=env, stdin=subprocess.DEVNULL,
+                           capture_output=True, text=True, timeout=120)
+        self.assertFalse(marker.exists(), f"the monitor's agent was executed with no containment\n{r.stderr}")
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("no containment", r.stderr)
+        self.assertFalse((project / ".agent" / "monitor").exists(),
+                         "the refusal came after the monitor had already written its state")
+
+    def test_negative_control_the_monitor_harness_does_see_a_launch(self):
+        case = Path(tempfile.mkdtemp(prefix="monitor-", dir=self.root))
+        (case / "home").mkdir()
+        project = case / "project"
+        (project / ".agent" / "tasks").mkdir(parents=True)
+        marker = case / "agent-ran"
+        env = {"PATH": str(self.bin), "HOME": str(case / "home"), "MARKER": str(marker),
+               "LANG": "C.UTF-8", "PLAYBOOK_PROJECT_DIR": str(project), "PLAYBOOK_SANDBOXED": "1"}
+        r = subprocess.run([self.bash, str(PLUGIN / "scripts" / "monitor-lib" / "launch-monitor"),
+                            "--session-id", "pid-1"],
+                           cwd=project, env=env, stdin=subprocess.DEVNULL,
+                           capture_output=True, text=True, timeout=120)
+        self.assertTrue(marker.exists(), r.stderr)
+        self.assertTrue((project / ".agent" / "monitor").is_dir())
+
     def test_negative_control_the_same_harness_does_see_a_launch(self):
-        # inside a sandbox (the nesting guard's signal) the launcher starts the agent — so the
-        # missing marker in the tests above means "refused", not "this harness cannot launch"
+        # PLAYBOOK_SANDBOXED=1 set by hand is the operator's own statement that an outer cage
+        # exists; the launcher takes his word and starts the agent — so the missing marker in
+        # the tests above means "refused", not "this harness cannot launch"
         r, marker = self.launch("--", "-p", "hi", extra_env={"PLAYBOOK_SANDBOXED": "1"})
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue(marker.exists(), r.stderr)

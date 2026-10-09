@@ -149,8 +149,17 @@ def _sandbox_item() -> dict:
            "the sandbox refuses to start an agent, and judges run uncontained "
            "with a warning")
     if system == "Linux":
-        present = shutil.which("bwrap") is not None
-        return _item("sandbox: bubblewrap", "sandbox", present, SEV_RECOMMENDED,
+        exe = shutil.which("bwrap")
+        if exe:
+            # installed is not usable: where it cannot start a sandbox the launcher
+            # refuses (task 164), so "present" would be a wrong all-clear
+            from provider.sandbox import bwrap_start_error
+            err = bwrap_start_error(exe)
+            if err:
+                return _item("sandbox: bubblewrap", "sandbox", False, SEV_RECOMMENDED, why,
+                             f"bubblewrap is installed ({exe}) but could not start a "
+                             f"sandbox here: {err}")
+        return _item("sandbox: bubblewrap", "sandbox", bool(exe), SEV_RECOMMENDED,
                      why, _bwrap_install_hint())
     # Unknown OS: no containment primitive known.
     return _item(f"sandbox: containment ({system or 'unknown OS'})", "sandbox",

@@ -107,6 +107,18 @@ if ! echo "$SESSION_ID" | grep -Eq '^pid-[0-9]+$'; then
     exit 2
 fi
 
+# No containment → no monitor, and say so BEFORE anything is written (task 164).
+# The sandbox launcher refuses without a usable bubblewrap, but only at the exec
+# that ends this script — after the monitor dir is made and bootstrap.sh has
+# reset session.md, .offset and trace.md. Ask it now, through its preview with
+# the flags of that exec: it launches nothing and prints the reason itself.
+PREFLIGHT_ROOT="$(cd "$MONITOR_SRC/../.." && pwd -P)"
+if [ -d "$PREFLIGHT_ROOT/provider" ]; then
+    env PYTHONPATH="$PREFLIGHT_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
+        python3 -m provider.sandbox --agent claude --ro-project --keep-records \
+        --project-root "$PROJECT_DIR" --print-argv -- preflight >/dev/null || exit 2
+fi
+
 # MONITOR_DIR lives in the TARGET project's agent dir, not the plugin.
 # Flat layout (T121): single state dir, not per-pid subdirs. Lane-resolved, so
 # each user on a shared repo gets their own monitor state.

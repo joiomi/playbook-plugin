@@ -656,11 +656,18 @@ def _wrapped_argv(
     project_writable: bool,
     no_network: bool = False,
     mask_records: bool | None = None,
+    require_containment: bool = False,
 ) -> list[str]:
     """Compose bypass-flag injection + bwrap wrapping into the final
     argv. Shared by run() (blocking) and popen() (streaming) so containment is
     generated in exactly one place. If already inside a sandbox, returns the
     inner argv with bypass flags only.
+
+    require_containment=True is the LAUNCHER's contract (`_main`, and the
+    subagent runner it alone calls): with no bwrap to wrap in, raise instead of
+    returning the bare agent argv. `launch_refusal()` is asked first and explains;
+    this is what holds if bwrap is gone between that check and this one. The
+    judge paths do not pass it and keep the fall-through below.
 
     no_network=True (opt-in only, never the judge path) is honored solely on the
     bwrap backend; on any other backend it raises rather than silently emit a
@@ -676,6 +683,10 @@ def _wrapped_argv(
         return build_bwrap_argv(project, git_dir, inner_argv, extra_rw,
                                 project_writable=project_writable, no_network=no_network,
                                 mask_records=mask_records)
+    if require_containment:
+        raise RuntimeError(launch_refusal() or (
+            "no containment — bubblewrap (`bwrap`) is not available, so the agent "
+            "would run with nothing fencing its writes. Refusing to start it."))
     # No sandbox primitive available — exec directly with bypass.
     return inner_argv
 
@@ -699,7 +710,16 @@ BWRAP_INSTALL_HINT = ("install bubblewrap — e.g. `apt install bubblewrap` (Deb
                       "`dnf install bubblewrap` (Fedora), `pacman -S bubblewrap` (Arch)")
 
 
-def _bwrap_start_error(exe: str) -> "str | None":
+def _probe_command() -> str:
+    """Something to run inside the probe sandbox, by ABSOLUTE path: a `true` looked
+    up on PATH made a working bubblewrap look broken wherever PATH had none."""
+    for candidate in ("/usr/bin/true", "/bin/true"):
+        if os.access(candidate, os.X_OK):
+            return candidate
+    return sys.executable or "/bin/sh"
+
+
+def bwrap_start_error(exe: str) -> "str | None":
     """None when `exe` starts a trivial sandbox here; otherwise ONE line saying what
     happened — bwrap's own last stderr line where it printed one.
 
@@ -707,7 +727,8 @@ def _bwrap_start_error(exe: str) -> "str | None":
     read-only root, /proc, /dev), so a host that refuses them — user namespaces
     switched off, some containers — fails here the way the real launch would."""
     try:
-        r = subprocess.run([exe, "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev", "true"],
+        r = subprocess.run([exe, "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev",
+                            _probe_command()],
                            stdin=subprocess.DEVNULL, capture_output=True, text=True,
                            errors="replace", timeout=15)
     except subprocess.TimeoutExpired:
@@ -728,7 +749,11 @@ def launch_refusal() -> "str | None":
     flag: the launcher used to exec it with nothing around it and said nothing —
     the opposite of what it is for. It refuses instead, the way `--no-network`
     already does without its backend. Inside a sandbox the outer one contains us
-    (the nesting guard), so there is nothing to refuse.
+    (the nesting guard), so there is nothing to refuse. That signal is
+    PLAYBOOK_SANDBOXED=1: `run()`/`popen()` give it only to a child they wrapped
+    (or when they are nested themselves), so an unwrapped judge's own launches
+    are refused here; set by hand, it is the operator's statement that an outer
+    cage exists, and nothing checks it.
 
     NOT used by `run()`/`popen()`: the judge paths (tasks/review.py) call those
     directly and keep the uncontained path with their "UNCONTAINED" warning and the
@@ -740,7 +765,7 @@ def launch_refusal() -> "str | None":
         return ("no containment — bubblewrap (`bwrap`) is not installed, so the agent would run "
                 "with its permission prompts off and nothing fencing its writes. Refusing to "
                 f"start it. To fix: {BWRAP_INSTALL_HINT}.")
-    why = _bwrap_start_error(exe)
+    why = bwrap_start_error(exe)
     if why:
         return (f"no containment — bubblewrap is installed ({exe}) but could not start a "
                 f"sandbox here: {why}. Refusing to start the agent.")
@@ -810,11 +835,24 @@ def scrub_parent_session_env(env: dict[str, str]) -> dict[str, str]:
     return env
 
 
-def _child_env(env: dict[str, str] | None) -> dict[str, str]:
+def _child_env(env: dict[str, str] | None, contained: bool) -> dict[str, str]:
+    """The child's environment. PLAYBOOK_SANDBOXED=1 — the one signal `is_sandboxed()`
+    and the launcher's refusal read — is given only to a child that IS in a cage:
+    wrapped in bwrap by this launch, or started from inside a sandbox. It used to
+    go to every child, so on a host without bwrap an unwrapped judge's own
+    `sandbox` launches believed they were contained (task 164, panel round 1)."""
     child_env = dict(os.environ) if env is None else dict(env)
     scrub_parent_session_env(child_env)
-    child_env["PLAYBOOK_SANDBOXED"] = "1"
+    if contained:
+        child_env["PLAYBOOK_SANDBOXED"] = "1"
+    else:
+        child_env.pop("PLAYBOOK_SANDBOXED", None)
     return child_env
+
+
+def _is_contained(wrapped: list[str]) -> bool:
+    # `build_bwrap_argv` is the only producer of an argv that starts with bwrap
+    return is_sandboxed() or wrapped[:1] == ["bwrap"]
 
 
 def run(
@@ -828,6 +866,7 @@ def run(
     project_writable: bool = True,
     no_network: bool = False,
     mask_records: bool | None = None,
+    require_containment: bool = False,
     **kwargs,
 ) -> subprocess.CompletedProcess:
     """Run an agent under sandbox containment. Composes bypass-flag injection
@@ -836,12 +875,13 @@ def run(
     nest in), skips wrapping but still injects bypass flags.
 
     no_network is the opt-in bwrap network jail; it defaults off and is never set
-    by the judge path (judges need the network).
+    by the judge path (judges need the network). require_containment: see
+    `_wrapped_argv` — the launcher's launches raise rather than run unwrapped.
     """
     project = Path(project_root).resolve()
-    child_env = _child_env(env)
     wrapped = _wrapped_argv(agent, agent_args, project, extra_rw, project_writable, no_network,
-                            mask_records)
+                            mask_records, require_containment)
+    child_env = _child_env(env, _is_contained(wrapped))
 
     if kwargs.get("text") or isinstance(kwargs.get("input"), str):
         # Robustness: text-mode pipes use the locale's codec, which need not be
@@ -936,6 +976,7 @@ def popen(
     project_writable: bool = True,
     no_network: bool = False,
     mask_records: bool | None = None,
+    require_containment: bool = False,
     **kwargs,
 ) -> subprocess.Popen:
     """Non-blocking variant of run() — returns a live Popen for streaming.
@@ -949,9 +990,9 @@ def popen(
     by the judge path.
     """
     project = Path(project_root).resolve()
-    child_env = _child_env(env)
     wrapped = _wrapped_argv(agent, agent_args, project, extra_rw, project_writable, no_network,
-                            mask_records)
+                            mask_records, require_containment)
+    child_env = _child_env(env, _is_contained(wrapped))
 
     kwargs.setdefault("stdout", subprocess.PIPE)
     kwargs.setdefault("text", True)
@@ -1144,20 +1185,25 @@ def _main(argv: list[str]) -> int:
         # --print-argv is a DRY RUN and must short-circuit BEFORE the run — and
         # it has to print THIS path's argv (the adapter's headless invocation),
         # not the empty raw-passthrough one, or the inspection would be a lie.
-        if args.print_argv:
-            _inv = _subagent.build_invocation(spec, project_root=project)
-            for a in _wrapped_argv(agent, _inv.argv, project, args.rw,
-                                   project_writable=not args.ro_project):
-                print(a)
-            return 0
-        if args.stream:
-            for ev in _subagent.stream_subagent(spec, project_root=project):
-                if ev.text:
-                    sys.stdout.write(ev.text)
-                    sys.stdout.flush()
-            sys.stdout.write("\n")
-            return 0
-        res = _subagent.run_subagent(spec, project_root=project)
+        try:
+            if args.print_argv:
+                _inv = _subagent.build_invocation(spec, project_root=project)
+                for a in _wrapped_argv(agent, _inv.argv, project, args.rw,
+                                       project_writable=not args.ro_project,
+                                       require_containment=True):
+                    print(a)
+                return 0
+            if args.stream:
+                for ev in _subagent.stream_subagent(spec, project_root=project):
+                    if ev.text:
+                        sys.stdout.write(ev.text)
+                        sys.stdout.flush()
+                sys.stdout.write("\n")
+                return 0
+            res = _subagent.run_subagent(spec, project_root=project)
+        except RuntimeError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 2
         print(res.text)
         return res.returncode
 
@@ -1166,7 +1212,7 @@ def _main(argv: list[str]) -> int:
             wrapped = _wrapped_argv(agent, forwarded, project, args.rw,
                                     project_writable=not args.ro_project,
                                     mask_records=(False if args.keep_records else None),
-                                    no_network=args.no_network)
+                                    no_network=args.no_network, require_containment=True)
         except RuntimeError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 2
@@ -1178,7 +1224,7 @@ def _main(argv: list[str]) -> int:
         result = run(agent, forwarded, project, extra_rw=args.rw,
                      project_writable=not args.ro_project,
                      mask_records=(False if args.keep_records else None),
-                     no_network=args.no_network)
+                     no_network=args.no_network, require_containment=True)
     except RuntimeError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2

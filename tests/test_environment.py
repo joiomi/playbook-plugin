@@ -122,10 +122,24 @@ class SandboxItemTest(unittest.TestCase):
         self.assertIn("bubblewrap", item["hint"])
 
     def test_linux_with_bwrap_is_ok(self):
+        from provider import sandbox
         with mock.patch.object(env.platform, "system", return_value="Linux"), \
-                mock.patch.object(env.shutil, "which", side_effect=_which({"bwrap"})):
+                mock.patch.object(env.shutil, "which", side_effect=_which({"bwrap"})), \
+                mock.patch.object(sandbox, "bwrap_start_error", return_value=None, create=True):
             item = env._sandbox_item()
         self.assertTrue(item["present"])
+
+    def test_linux_with_a_bwrap_that_cannot_start_is_not_ok(self):
+        # the launcher refuses on such a host (task 164); the advice must not say "present"
+        from provider import sandbox
+        why = "bwrap: setting up uid map: Permission denied"
+        with mock.patch.object(env.platform, "system", return_value="Linux"), \
+                mock.patch.object(env.shutil, "which", side_effect=_which({"bwrap"})), \
+                mock.patch.object(sandbox, "bwrap_start_error", return_value=why, create=True):
+            item = env._sandbox_item()
+        self.assertFalse(item["present"])
+        self.assertIn(why, item["hint"])
+        self.assertNotIn("apt install", item["hint"], "it IS installed — the install hint would mislead")
 
 
     def test_unknown_os_has_no_primitive(self):

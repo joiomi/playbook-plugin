@@ -1487,7 +1487,7 @@ class SandboxUsesTheRealCredentials(unittest.TestCase):
             _out, cap = _run_judge(_cp(fx("success-pong.stdout")))
         for key, val in env.items():
             self.assertEqual(cap["kw"]["env"].get(key), val, key)
-        child = sandbox._child_env(cap["kw"]["env"])
+        child = sandbox._child_env(cap["kw"]["env"], True)
         for key, val in env.items():
             self.assertEqual(child.get(key), val, key)
 

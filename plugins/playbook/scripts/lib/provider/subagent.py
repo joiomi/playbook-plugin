@@ -72,7 +72,8 @@ class SubagentSpec:
     prompt: str = ""
     context: str = ""                           # system context; ignored when bare
     bare: bool = False
-    # Containment is always on (everything routes through sandbox.run). "repo" =
+    # Containment is always on (everything routes through sandbox.run, which this
+    # runner asks to REFUSE rather than run unwrapped — task 164). "repo" =
     # project writable (current default); "outdir" = corpus read-only, workspace
     # and any explicit extra_rw paths writable. There is no uncontained mode.
     contain: Literal["repo", "outdir"] = "repo"
@@ -136,6 +137,7 @@ def run_subagent(spec: SubagentSpec, *, project_root: Path | str) -> SubagentRes
         timeout=spec.timeout_secs,
         extra_rw=extra_rw or None,
         project_writable=project_writable,
+        require_containment=True,
     )
     stdout = result.stdout or ""
 
@@ -227,6 +229,7 @@ def stream_subagent(spec: SubagentSpec, *, project_root: Path | str) -> Iterator
         env=_isolated_subagent_env(sub_sid),
         extra_rw=extra_rw or None,
         project_writable=project_writable,
+        require_containment=True,
         **popen_kwargs,
     )
     if inv.stdin is not None and proc.stdin is not None:

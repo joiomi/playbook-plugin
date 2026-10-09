@@ -9,11 +9,15 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 - **`sandbox` refuses to start an agent without bubblewrap** (task 164, owner decision 2026-10-09). On a host where
   `bwrap` is not installed, `.claude/bin/sandbox` used to start the agent anyway — with its permission prompts off
   and no containment — and printed no warning (the 1.6.0 entry below says the sandbox "says so": that was true of
-  reviews only). It now exits 2 before anything is launched and says how to install bubblewrap. The same when
+  reviews only). It now exits 2 before the agent is started and says how to install bubblewrap. The same when
   `bwrap` is installed but cannot start a sandbox: it prints bubblewrap's own error. This covers a run, a `--prompt`
-  run, the `--print-argv` preview and `monitor start`; `--list-agents`, `--list-models` and `--help` still answer,
-  and inside a sandbox nothing changes. Reviews are not affected: a judge is not launched through that command, and
-  without bubblewrap it still runs — uncontained, with the review's warning.
+  run and the `--print-argv` preview; `monitor start` is refused before it writes its state; `--list-agents`,
+  `--list-models` and `--help` still answer. A launch nested inside a sandbox is not refused — and the sandbox now
+  tells a child it is sandboxed (`PLAYBOOK_SANDBOXED=1`) only when it wrapped it, so what an unwrapped process
+  starts through `sandbox` is refused too; set by hand, that variable is the operator's statement that an outer
+  cage exists. `tasks environment` no longer reports a bubblewrap that cannot start as present. Reviews are not
+  affected: a judge is not launched through that command, and without bubblewrap it still runs — uncontained, with
+  the review's warning.
 
 ## [1.6.0] — 2026-10-09
 

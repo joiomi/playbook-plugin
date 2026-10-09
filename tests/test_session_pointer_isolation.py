@@ -49,7 +49,7 @@ class ChildEnvStripsEnvFile(unittest.TestCase):
         with mock.patch.dict(os.environ,
                              {"CLAUDE_ENV_FILE": "/tmp/foreground-env-file"},
                              clear=False):
-            child = sandbox._child_env(None)
+            child = sandbox._child_env(None, True)
         self.assertNotIn(
             "CLAUDE_ENV_FILE", child,
             "a sandboxed child must not inherit the foreground's env file — "
@@ -62,7 +62,7 @@ class ChildEnvStripsEnvFile(unittest.TestCase):
             "PLAYBOOK_SESSION_ID": "judge",
             "PATH": "/usr/bin",
         }
-        child = sandbox._child_env(supplied)
+        child = sandbox._child_env(supplied, True)
         self.assertNotIn("CLAUDE_ENV_FILE", child)
         # The judge's own isolated identity is preserved verbatim.
         self.assertEqual(child.get("PLAYBOOK_SESSION_ID"), "judge",
@@ -87,7 +87,7 @@ class ChildEnvStripsEnvFile(unittest.TestCase):
             "CLAUDE_PID": "1112687",
             "PLAYBOOK_SESSION_ID": "judge",
         }
-        child = sandbox._child_env(supplied)
+        child = sandbox._child_env(supplied, True)
         for leaked in ("CLAUDE_ENV_FILE", "CLAUDE_CODE_SSE_PORT",
                        "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_PROJECT_DIR",
                        "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION",
@@ -102,7 +102,7 @@ class ChildEnvStripsEnvFile(unittest.TestCase):
     def test_does_not_invent_env_when_absent(self):
         """Stripping must be a delete, never a crash, when the var is absent."""
         base = {k: v for k, v in os.environ.items() if k != "CLAUDE_ENV_FILE"}
-        child = sandbox._child_env(base)
+        child = sandbox._child_env(base, True)
         self.assertNotIn("CLAUDE_ENV_FILE", child)
 
 

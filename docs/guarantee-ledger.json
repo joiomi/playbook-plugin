@@ -7440,6 +7440,55 @@
           "limitations": [
             "`_main` with the backend switched by mocks: the preview is refused like a launch (it used to print the bare agent argv with exit 0); with a bwrap it prints the wrapped argv."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_sandbox_refuses_uncontained.py",
+          "reference": "TheRealLauncherWithoutBubblewrap.test_what_an_uncontained_run_starts_cannot_use_the_launcher_either",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "`run()` called directly on a host without bwrap — the judge paths' way — starts its child unwrapped; that child's own `scripts/sandbox` launch is refused (exit 2) and the inner agent never starts. Watched red: `run()` used to give every child PLAYBOOK_SANDBOXED=1, and the launcher took it for an outer cage."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_sandbox_refuses_uncontained.py",
+          "reference": "TheNestingSignalIsTrue.test_an_unwrapped_child_is_not_told_it_is_sandboxed",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_sandbox_refuses_uncontained.py",
+            "reference": "TheNestingSignalIsTrue.test_a_wrapped_child_is_told"
+          },
+          "limitations": [
+            "The environment `run()` and `popen()` hand to the child, with the backend mocked: no PLAYBOOK_SANDBOXED for an unwrapped child (not even an inherited one), `1` for a wrapped or a nested one."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_sandbox_refuses_uncontained.py",
+          "reference": "TheRealLauncherWithoutBubblewrap.test_the_monitor_is_refused_before_it_writes_anything",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_sandbox_refuses_uncontained.py",
+            "reference": "TheRealLauncherWithoutBubblewrap.test_negative_control_the_monitor_harness_does_see_a_launch"
+          },
+          "limitations": [
+            "The real `monitor-lib/launch-monitor` with bwrap hidden: exit 2, the reason, no agent, and no `.agent/monitor` directory — the pre-flight runs before the launcher's own writes. Watched red: the refusal used to come after the monitor's state had been written."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_sandbox_refuses_uncontained.py",
+          "reference": "TheLaunchItselfFailsClosed.test_a_run_whose_bubblewrap_vanished_after_the_check_is_refused",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_sandbox_refuses_uncontained.py",
+            "reference": "TheLaunchItselfFailsClosed.test_the_judge_path_is_not_asked_for_it"
+          },
+          "limitations": [
+            "If bwrap is gone between the launcher's check and the launch, `_wrapped_argv(require_containment=True)` raises instead of returning the bare agent argv; a direct `_wrapped_argv` call without it — the judge paths — still returns the unwrapped argv."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -7452,7 +7501,7 @@
       ],
       "status": "partially_evidenced",
       "missing_evidence_or_limitation": [
-        "2026-10-09 (task 164, owner ruling): the uncontained policy is decided for the LAUNCHER — it refuses (tests/test_sandbox_refuses_uncontained.py, live, with a negative control) — and for the judge paths the owner left the fallback as it is: uncontained, with the review's warning and the tamper guard. Still without an integration test: a real review on a host with no bwrap (the warning it prints is source-read), and a real bubblewrap that cannot start (the launcher's probe is tested against a stand-in binary).",
+        "2026-10-09 (task 164, owner ruling): the uncontained policy is decided for the LAUNCHER — it refuses (tests/test_sandbox_refuses_uncontained.py, live, with negative controls), also when bwrap vanishes after its check, and the monitor is refused before it writes — and for the judge paths the owner left the fallback as it is: uncontained, with the review's warning and the tamper guard. Limits: PLAYBOOK_SANDBOXED=1 set by hand is an operator's statement that an outer cage exists and nothing verifies it. Still without an integration test: a real review on a host with no bwrap (the warning it prints is source-read), and a real bubblewrap that cannot start (the launcher's probe is tested against a stand-in binary).",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
         "Task 100 (PLAN S8 binding audit, 2026-09-27): this row cited only `test_environment.SandboxItemTest.test_unknown_os_has_no_primitive` — an advisory-text test of environment.py, not of the owner (sandbox.py). Rebound to tests/test_windows_uncontained_path.py (3 tests, cited nowhere before). Still asserted by NO test: nested-containment detection (`is_sandboxed`) and the operator-visible UNCONTAINED warning text (review.py gates it on containment_available(); source-read) — both stay in required_live_evidence.",
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
