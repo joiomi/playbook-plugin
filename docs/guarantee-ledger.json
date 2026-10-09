@@ -9254,7 +9254,7 @@
     {
       "id": "PB-RUNTIME-ISOLATED",
       "category": "compatibility-and-package",
-      "statement": "The plugin's own Python is started with the project's directory OFF its import path. The CLI launcher (`scripts/tasks`), the sandbox launcher (`scripts/sandbox`) and the monitor launcher start their module under `python3 -I`, with the plugin directory put on `sys.path` by the launch line itself; every inline program a shipped script or command runs (`python3 -c …`, or `python3 -` with the program on stdin) carries `-I`. A project file or folder named like a module they import — `json.py`, `tasks.py`, `tasks/`, `provider/` — is therefore not imported, and not run, in its place.",
+      "statement": "The plugin's launchers and inline programs are started with the project's directory off their import path. The CLI launcher (`scripts/tasks`), the sandbox launcher (`scripts/sandbox`) and the monitor launcher start their module under `python3 -I`, with the plugin directory put on `sys.path` by the launch line itself; every inline program a shipped script or command runs (`python3 -c …`, or `python3 -` with the program on stdin) carries `-I`. For these, a project file or folder named like a module they import — `json.py`, `tasks.py`, `tasks/`, `provider/` — is not imported, and not run, in its place, whatever the environment says. Helpers the hooks run as FILES are outside this statement (see the bounds).",
       "owner": [
         {
           "path": "plugins/playbook/scripts/tasks",
@@ -9364,11 +9364,34 @@
         {
           "type": "executable unit",
           "path": "tests/test_python_isolation.py",
+          "reference": "EveryShippedInlinePythonIsIsolated.test_the_sweep_sees_every_isolated_call_file_by_file",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "An exact table, file by file, of the isolated inline calls the sweep sees (55): a rule that stopped seeing some of them would otherwise still find nothing wrong. Watched failing under a rule made blind to stdin programs (impl panel r1)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_python_isolation.py",
           "reference": "EveryShippedInlinePythonIsIsolated.test_the_four_launch_lines_share_one_bootstrap",
           "boundary": "unit",
           "negative_control": null,
           "limitations": [
             "The four launch lines carry the same one-line program but for the module name; read as text."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_python_isolation.py",
+          "reference": "HelpersRunAsFilesAreNotGivenTheWorkingDirectory.test_what_the_row_admits_a_pythonpath_that_covers_the_project_still_reaches_them",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_python_isolation.py",
+            "reference": "HelpersRunAsFilesAreNotGivenTheWorkingDirectory.test_the_command_guard_is_a_file_helper_and_is_not_given_it_either"
+          },
+          "limitations": [
+            "Shows the first bound stated below, not a protection: with `PYTHONPATH=.` in the environment the destructive-command guard imports a project file and exits 1."
           ]
         }
       ],
@@ -9383,7 +9406,7 @@
       "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
         "Row added by task 167 (PLAN S11 fix batch, item 1; owner 2026-10-09: \"Repar în lotul S11 (Recomandat)\"). Until then 51 shipped calls ran inline code or a plugin module with the working directory first on sys.path; the wrapper's resolver (task 115) and the stop hook (task 072) were the only isolated ones.",
-        "Bound: helpers run as FILES (`python3 <file>`) are deliberately not isolated — for a file Python puts the file's directory first, not the working directory (control: HelpersRunAsFilesWereNeverExposed), and under `-I` they would lose the neighbours they import. They still read a PYTHONPATH the user set in the environment.",
+        "Bound: helpers the hooks run as FILES (`python3 <file>`: the payload normalizer, the status reader, the command guard, the batch-close check and others) are NOT isolated. For a file Python puts the file's directory first, not the working directory (control: HelpersRunAsFilesAreNotGivenTheWorkingDirectory), so the project's directory alone does not reach them — but they read PYTHONPATH, which comes before the standard library. Measured (impl panel r1, opus and codex-medium): with `PYTHONPATH=.` in the user's environment and a `json.py` at the project root, `command-guard-hook` exits 1 on `rm -rf /` instead of blocking it (exit 2), and `task-status.py` exits 1, on which the edit gate blocks every edit. Under `-I` these helpers would lose the neighbours they import; `python3 -E -s <file>` keeps the file's directory and drops PYTHONPATH (measured on those two). Not done in task 167: parked there for the owner's routing.",
         "Bound: the launchers still EXPORT `PYTHONPATH=<plugin dir>` to whatever the CLI or the sandbox starts (unchanged by task 167). The plugin's packages are named `tasks` and `provider`; a project command started by the CLI that imports a package of that name without its own directory first on sys.path can be handed the plugin's. Parked in task 167; not covered by this row.",
         "Bound: the sweep reads text. A call through a variable, or an interpreter spelled otherwise (`python`, `python3.12`), is not seen; a test asserts that no shipped script reaches Python through a variable today, by the variable names it knows. In Python sources only an argv list that starts with `sys.executable`, or with the interpreter's name as a literal, is read; a command handed to a shell as one string would not be (no shipped module does that).",
         "Bound: `-I` ignores every `PYTHON*` variable, not only PYTHONPATH. A PYTHONIOENCODING or PYTHONUTF8 set by the user no longer reaches the isolated calls. Measured on Linux with `LC_ALL=C`, `C.UTF-8` and the default locale: stdin and stdout are UTF-8 with and without `-I`. A non-UTF-8 locale was not installed on the measuring host and is not measured."

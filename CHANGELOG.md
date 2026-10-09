@@ -25,7 +25,7 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
-- **A project file can no longer take the place of a module the plugin imports** (task 167, PLAN S11 item 1;
+- **A project file no longer takes the place of a module in the plugin's launchers and inline programs** (task 167, PLAN S11 item 1;
   the open item of task 115's entry below). The CLI launcher started `python3 -m tasks.cli` with the project's
   directory first on the import path, and 45 inline programs in the hooks, `init`, the launchers, the monitor
   and two commands ran as `python3 -c …` / `python3 -` the same way. In a project with a `json.py` or a
@@ -33,10 +33,12 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   the session-end hook kept its session directory at every logout; a project folder `tasks/` holding a `cli.py`
   RAN in place of the CLI, with exit 0; a project folder `provider/` stopped `.claude/bin/sandbox` and the
   monitor ("No module named provider.sandbox"). All of these now run under `python3 -I` (isolated mode); the three launchers put the plugin
-  directory on the import path themselves. Helpers the hooks run as files were never exposed and are unchanged.
-  Two things to know: the isolated calls no longer read `PYTHON*` variables you set yourself
-  (`PYTHONIOENCODING`, `PYTHONUTF8`); and the launchers still export `PYTHONPATH=<plugin dir>` to the commands
-  the CLI starts, as before. New ledger row `PB-RUNTIME-ISOLATED` (128 rows, 90 verified); a test sweeps every
+  directory on the import path themselves. Three things to know. Helpers the hooks run as FILES are unchanged:
+  the project's directory alone does not reach them (for a file Python puts the file's directory first), but
+  they still read `PYTHONPATH` — if yours names the project (`PYTHONPATH=.`), a project `json.py` still breaks
+  them, the destructive-command guard among them, which then lets the command through (open item). The
+  isolated calls no longer read `PYTHON*` variables you set yourself (`PYTHONIOENCODING`, `PYTHONUTF8`). And
+  the launchers still export `PYTHONPATH=<plugin dir>` to the commands the CLI starts, as before. New ledger row `PB-RUNTIME-ISOLATED` (128 rows, 90 verified); a test sweeps every
   shipped file, so a new inline call without `-I` fails the suite. The two "local dev path" lines in
   `/playbook:freehand` and `/playbook:mindmap-optimize` now name the checkout's launcher
   (`plugins/playbook/scripts/tasks …`); the first one pointed at a `src/` directory that no longer exists.

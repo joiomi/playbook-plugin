@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shipped Python is started isolated from the project it runs in (task 167, PLAN §S11 item 1).
+"""The plugin's launchers and inline programs are started isolated from the project (task 167, PLAN §S11 item 1).
 
 Python puts the WORKING DIRECTORY first on `sys.path` for `python3 -c …`, for
 `python3 -` (a program on stdin) and for `python3 -m module`; for `python3 file.py`
@@ -23,6 +23,10 @@ Three kinds of proof here:
   2. a sweep over every shipped file: an inline program or a module is never
      started without `-I`;
   3. the sweep's own rule, on strings it must refuse and strings it must accept.
+
+What is NOT claimed: helpers the hooks run as files are not isolated — the working
+directory does not reach them, a PYTHONPATH of the user's does (a test below shows
+it at the command guard; the ledger row states it as a bound).
 
 What the sweep does NOT see (said in the ledger row too): a call through a
 variable (`"$PY" -c …`), and — in Python sources — anything but an argv list that
@@ -289,9 +293,13 @@ class AHooksInlineReadIgnoresProjectFiles(_Project):
         self.assertFalse(self._logout(self.project), "the session directory was kept")
 
 
-class HelpersRunAsFilesWereNeverExposed(_Project):
+class HelpersRunAsFilesAreNotGivenTheWorkingDirectory(_Project):
     """The control behind leaving every `python3 <file>` call as it is: for a file,
-    Python puts the FILE's directory first, not the working directory."""
+    Python puts the FILE's directory first, not the working directory.
+
+    That is ALL it shows. A helper run as a file still reads PYTHONPATH, and
+    PYTHONPATH comes before the standard library — the last test here shows what
+    that means when the user's own PYTHONPATH covers the project (impl panel r1)."""
 
     def setUp(self):
         super().setUp()
@@ -309,6 +317,27 @@ class HelpersRunAsFilesWereNeverExposed(_Project):
         task.write_text("# 001 - X\n\n## Status\nin_progress\n", encoding="utf-8")
         r = self.run_in(self.project, [sys.executable, SCRIPTS / "task-status.py", task])
         self.assertEqual((r.returncode, r.stdout.strip()), (0, "in_progress"), r.stderr)
+
+    def _guard(self, **extra):
+        payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "rm -rf /"}})
+        return self.run_in(self.project, [bash_or_skip(), SCRIPTS / "command-guard-hook"],
+                           stdin=payload, **extra)
+
+    def test_the_command_guard_is_a_file_helper_and_is_not_given_it_either(self):
+        r = self._guard()
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("BLOCKED", r.stdout + r.stderr)
+
+    def test_what_the_row_admits_a_pythonpath_that_covers_the_project_still_reaches_them(self):
+        # NOT a protection: this is the bound the ledger row states, at the entry point
+        # where it costs most. With the user's PYTHONPATH naming the project (`.`), the
+        # same trap files are imported by the destructive-command guard, which then dies
+        # with exit 1 — for a PreToolUse hook that is "not blocked". Parked in task 167
+        # (fix shape: `python3 -E -s <file>`). When that lands this test must change —
+        # and the row with it.
+        r = self._guard(PYTHONPATH=".")
+        self.assertRegex(r.stdout + r.stderr, r"the project file \w+\.py was imported")
+        self.assertNotEqual(r.returncode, 2)
 
 
 # --------------------------------------------------------------------------- #
@@ -379,16 +408,25 @@ def argv_lists_in(source: str) -> list[tuple[str, str]]:
     the interpreter's name as a literal."""
     found = []
     for m in _ARGV.finditer(source):
-        lead = []
+        mode, isolated = None, False
         for element in m.group(1).split(","):       # the flags that come straight after it
             lit = re.fullmatch(r"""["'](-[^"']*)["']""", element.strip())
             if lit is None:
                 break                                # a file, a variable: not a flag any more
-            lead.append(lit.group(1))
-        mode = next((x for x in lead if x in ("-c", "-m", "-")), None)
+            flag = lit.group(1)
+            if flag == "-":
+                mode = "-"
+                break
+            if not _SHORT_FLAGS.fullmatch(flag):
+                break                                # a long option is not a mode
+            # short flags may be bundled, and the mode flag ends its bundle: `-Bc`, `-Ic`
+            isolated = isolated or "I" in flag
+            if flag[-1] in "cm":
+                mode = "-" + flag[-1]
+                break
         if mode is None:
             found.append(("other", ""))
-        elif "-I" in lead[:lead.index(mode)]:
+        elif isolated:
             found.append(("ok-inline", mode))
         else:
             found.append(("bad", f"an argv list that starts the interpreter with {mode!r} and no '-I' before it"))
@@ -399,9 +437,10 @@ def _is_python_source(path: Path, text: str) -> bool:
     return path.suffix == ".py" or (text.startswith("#!") and "python" in text.split("\n", 1)[0])
 
 
-def sweep() -> tuple[list[str], dict[str, int]]:
-    """(problems, counts by kind) over every shipped text file."""
-    problems, counts = [], {}
+def sweep() -> tuple[list[str], dict[str, int], dict[str, int]]:
+    """(problems, counts by kind, isolated inline calls per file) over every shipped
+    text file."""
+    problems, counts, inline = [], {}, {}
     for path in sorted(PLUGIN.rglob("*")):
         if not path.is_file() or "__pycache__" in path.parts:
             continue
@@ -423,20 +462,50 @@ def sweep() -> tuple[list[str], dict[str, int]]:
             counts[kind] = counts.get(kind, 0) + 1
             if kind == "bad":
                 problems.append(f"{rel}:{n}: {detail}" if n else f"{rel}: {detail}")
-    return problems, counts
+            elif kind == "ok-inline":
+                inline[rel] = inline.get(rel, 0) + 1
+    return problems, counts, inline
 
 
 class EveryShippedInlinePythonIsIsolated(unittest.TestCase):
     def test_the_sweep_finds_nothing(self):
-        problems, _ = sweep()
+        problems, _, _ = sweep()
         self.assertEqual(problems, [], "\n" + "\n".join(problems))
 
-    def test_the_sweep_is_not_blind(self):
-        # a rule that matched nothing would pass the test above
-        _, counts = sweep()
-        self.assertGreaterEqual(counts.get("ok-inline", 0), 40, counts)
-        self.assertGreaterEqual(counts.get("other", 0), 40, counts)
-        self.assertGreaterEqual(counts.get("ok-runner", 0), 2, counts)
+    # Every isolated inline call the sweep sees, file by file — 55 when this was written.
+    # A rule that stopped SEEING some of them would still find "nothing wrong" (impl
+    # panel r1, sonnet: the first guard here asked only for "at least 40", and a rule
+    # that lost the eight stdin programs passed it). Adding or removing a call means
+    # changing this table, on purpose.
+    ISOLATED_INLINE_CALLS = {
+        "commands/init.md": 1,
+        "commands/upgrade.md": 2,
+        "hooks/monitor-nudge.sh": 2,
+        "scripts/chat-log-hook": 2,
+        "scripts/command-guard-hook": 1,
+        "scripts/gate-echo-lib.sh": 1,
+        "scripts/init": 4,
+        "scripts/monitor-lib/bootstrap.sh": 4,
+        "scripts/monitor-lib/launch-monitor": 3,
+        "scripts/playbook-agy": 1,
+        "scripts/playbook-codex": 1,
+        "scripts/playbook-grok": 1,
+        "scripts/playbook-pi": 2,
+        "scripts/sandbox": 2,
+        "scripts/session-end-hook": 1,
+        "scripts/session-start-hook": 1,
+        "scripts/state-echo-hook": 8,
+        "scripts/stop-hook": 3,
+        "scripts/task-gate-hook": 12,
+        "scripts/tasks": 2,
+        "tasks/plugin_copies.py": 1,
+    }
+
+    def test_the_sweep_sees_every_isolated_call_file_by_file(self):
+        _, counts, inline = sweep()
+        self.assertEqual(inline, self.ISOLATED_INLINE_CALLS)
+        self.assertEqual(counts.get("ok-inline"), sum(self.ISOLATED_INLINE_CALLS.values()))
+        self.assertEqual(sum(self.ISOLATED_INLINE_CALLS.values()), 55)
 
     def test_no_shipped_script_reaches_python_through_a_variable(self):
         # the sweep reads the word `python3`; a call through a variable would be unseen
@@ -523,12 +592,21 @@ class TheSweepsRule(unittest.TestCase):
                     'subprocess.run([sys.executable, "-B", "-", x])',
                     'subprocess.run([\n    sys.executable,\n    "-c", code, "-I"])',
                     'subprocess.run(["python3", "-c", code])',
-                    "subprocess.run(['python', '-m', 'tasks.cli'])"):
+                    "subprocess.run(['python', '-m', 'tasks.cli'])",
+                    # impl panel r1 (codex-high): a bundle that ENDS in the mode flag
+                    'subprocess.run([sys.executable, "-Bc", "import json"])',
+                    'subprocess.run([sys.executable, "-B", "-um", "json.tool"])'):
             self.assertEqual([k for k, _ in argv_lists_in(bad)], ["bad"], bad)
         self.assertEqual(argv_lists_in('subprocess.run([sys.executable, str(script), "-c"])'),
                          [("other", "")])
         self.assertEqual(argv_lists_in('subprocess.run(["python3", "-I", "-c", code])'),
                          [("ok-inline", "-c")])
+        for ok in ('subprocess.run([sys.executable, "-Ic", code])',
+                   'subprocess.run([sys.executable, "-IB", "-c", code])',
+                   'subprocess.run([sys.executable, "-B", "-Ic", code])'):
+            self.assertEqual(argv_lists_in(ok), [("ok-inline", "-c")], ok)
+        # a long option is not a mode, and what follows a file is the file's own
+        self.assertEqual(argv_lists_in('subprocess.run([sys.executable, "--version"])'), [("other", "")])
 
 
 if __name__ == "__main__":
