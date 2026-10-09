@@ -503,6 +503,34 @@ class GuardZeroIsAStatedGuarantee(unittest.TestCase):
         # its known bound is stated, not hidden: the guard has no project scope
         self.assertTrue(any("outside the project" in x.lower() for x in row["missing_evidence_or_limitation"]))
 
+    # Impl panel round 1 (opus): the row says `.agent[/<lane>]/tasks/…` and its proof made a
+    # task.md under `.agent/tasks/` only — the lane arm of the hook's pattern had no test.
+    def _create(self, f, *parts):
+        new = f.proj.joinpath(".agent", *parts, "task.md")
+        r = f.run_hook({"hook_event_name": "PreToolUse", "tool_name": "Write",
+                        "tool_input": {"file_path": str(new), "content": "# by hand\n"}})
+        return r, new
+
+    def test_a_task_md_in_a_lane_is_guarded_too(self):
+        f = ProjectFixture()
+        r, new = self._create(f, "alice", "tasks", "002-by-hand")
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+        self.assertIn(b"creates task.md files", r.stderr)
+        self.assertFalse(new.exists())
+
+    def test_control_the_pattern_is_one_lane_deep(self):
+        # `.agent/<a>/<b>/tasks/…` is not a task directory of any layout: not this guard's
+        f = ProjectFixture()
+        r, _new = self._create(f, "alice", "deeper", "tasks", "002-by-hand")
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+
+    def test_the_row_cites_the_lane_proof(self):
+        ledger = json.loads((_HERE.parent / "docs" / "guarantee-ledger.json").read_text(encoding="utf-8"))
+        row = next(g for g in ledger["guarantees"] if g["id"] == "PB-TASK-MD-GUARD")
+        cited = {p["reference"]: (p.get("negative_control") or {}).get("reference") for p in row["proofs"]}
+        self.assertEqual(cited.get("GuardZeroIsAStatedGuarantee.test_a_task_md_in_a_lane_is_guarded_too"),
+                         "GuardZeroIsAStatedGuarantee.test_control_the_pattern_is_one_lane_deep")
+
     def test_what_the_row_admits_is_what_the_guard_does(self):
         # a NEW task.md path outside the project is refused too — the row says so
         f = ProjectFixture()

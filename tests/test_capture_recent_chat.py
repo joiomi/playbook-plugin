@@ -87,15 +87,62 @@ class TheOwnersWordsAreNotCutMidSentence(unittest.TestCase):
         (d / ".agent" / "chat_log.md").write_text(log, encoding="utf-8")
         return _capture_recent_chat(d)
 
+    @staticmethod
+    def _text_of(block):
+        """A captured block is its header line, then the message between two fence lines."""
+        header, opener, *text, closer = block.split("\n")
+        assert opener.startswith("```") and closer == opener.rstrip("tex"), (opener, closer)
+        return "\n".join(text)
+
     def test_an_order_of_ordinary_length_is_captured_whole(self):
         self.assertGreater(len(self.ORDER), 300)
         got = self._capture(self.ORDER)
-        self.assertEqual(got[0].split("\n", 1)[1], self.ORDER)
+        self.assertEqual(self._text_of(got[0]), self.ORDER)
+
+    # Impl panel round 1 (opus, grok): the captured text went into task.md RAW, above the real
+    # gates. A checkbox, a heading or a code fence in a message became a live gate, a live
+    # section, or an unclosed fence over everything below — and a longer capture let more in.
+    def _in_a_task(self, *texts):
+        """What the task's own readers see once these messages are captured into it: the gate
+        it stands on, its status, and its text."""
+        import shutil
+        from tasks.core import _extract_head_position, _extract_status
+        from tasks.lifecycle import _inject_chat_into_task
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: shutil.rmtree(d, ignore_errors=True))
+        tf = d / "task.md"
+        tf.write_text("# 001 - T\n\n## Status\nin_progress\n\n## References\n- context\n\n---\n\n"
+                      "## Work\n- [ ] the one real gate\n", encoding="utf-8")
+        _inject_chat_into_task(tf, self._capture(*texts))
+        text = tf.read_text(encoding="utf-8")
+        return _extract_head_position(tf), _extract_status(tf), text
+
+    def test_a_checkbox_in_a_message_is_not_a_gate(self):
+        head, _status, text = self._in_a_task("please do this:\n- [ ] owner decision still open\nthanks")
+        self.assertIn("the one real gate", head)
+        self.assertIn("- [ ] owner decision still open", text)        # still there to read
+
+    def test_a_status_heading_in_a_message_does_not_become_the_tasks_status(self):
+        # the status reader takes the LAST live `## Status` of the record
+        head, status, _text = self._in_a_task("look:\n## Status\ndone\n## Parked\n- x")
+        self.assertEqual(status, "in_progress")
+        self.assertIn("the one real gate", head)
+
+    def test_a_fence_opened_in_a_message_does_not_swallow_the_task(self):
+        long = "see:\n```python\n" + "x = 1\n" * 400 + "```\nend"       # the cut falls inside the fence
+        head, status, _text = self._in_a_task(long)
+        self.assertIn("the one real gate", head)
+        self.assertEqual(status, "in_progress")
+
+    def test_a_message_that_holds_a_long_run_of_backticks_stays_inside_its_fence(self):
+        head, status, _text = self._in_a_task("a fence of five:\n`````\n- [ ] not a gate\n`````\nafter")
+        self.assertIn("the one real gate", head)
+        self.assertEqual(status, "in_progress")
 
     def test_a_very_long_message_is_cut_and_says_what_was_left_out(self):
         from tasks.lifecycle import RECENT_CHAT_CUT
         long = "word " * 600                                   # 3,000 characters, stripped to 2,999
-        body = self._capture(long)[0].split("\n", 1)[1]
+        body = self._text_of(self._capture(long)[0])
         self.assertTrue(body.startswith(long[:RECENT_CHAT_CUT]))
         self.assertLess(len(body), RECENT_CHAT_CUT + 200)
         left_out = len(long.strip()) - RECENT_CHAT_CUT

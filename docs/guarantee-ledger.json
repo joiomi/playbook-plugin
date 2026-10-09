@@ -2368,6 +2368,19 @@
         {
           "type": "executable integration",
           "path": "tests/test_batch_close_guard.py",
+          "reference": "GuardZeroIsAStatedGuarantee.test_a_task_md_in_a_lane_is_guarded_too",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_batch_close_guard.py",
+            "reference": "GuardZeroIsAStatedGuarantee.test_control_the_pattern_is_one_lane_deep"
+          },
+          "limitations": [
+            "The lane arm of the hook's pattern (`.agent/<lane>/tasks/…`), on a path whose lane directory does not exist; two directory levels between `.agent` and `tasks` are not a task directory of any layout and are not judged by this guard."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_batch_close_guard.py",
           "reference": "GuardZeroIsAStatedGuarantee.test_what_the_row_admits_is_what_the_guard_does",
           "boundary": "subprocess",
           "negative_control": null,

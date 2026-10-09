@@ -44,11 +44,12 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   judge's whole budget is still cut).
 - **A blocked task can be left without `--force`** (task 166). `tasks work <M>` refused to leave a task that was
   waiting for a decision, counting its open gates as abandoned work, and `--force` then said it was "left
-  in_progress" while its status stayed `blocked`. A blocked task is now left as it is, and the command says so and
-  how to resume it. A task with open gates that is not blocked still needs `--force`.
+  in_progress" while its status stayed `blocked`. A blocked task is now left as it is — whatever its gates — and the
+  command says so and how to resume it. A task with open gates that is not blocked still needs `--force`.
 - **`### Recent Chat` no longer cuts your messages at 200 characters** (task 166). The capture made at activation
   keeps each message whole up to 1,000 characters; a longer one is cut there and says how much was left out and
-  which message of the chat log holds the whole text.
+  which message of the chat log holds the whole text. Each message is now written inside a code fence: a checkbox,
+  a heading or a fence in a message used to become a live gate or section of the task.
 - **The batch-close guard covers `MultiEdit`** (task 166). Several gates ticked with no outcome note in one
   `MultiEdit` went through, where the same ticks in one `Edit` are refused. The guard now applies the call's edits
   to the file and judges the result like a `Write`.

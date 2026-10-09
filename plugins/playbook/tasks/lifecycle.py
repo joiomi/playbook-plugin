@@ -57,10 +57,17 @@ def _capture_recent_chat(project_path: Path, max_messages: int = 10,
     - A time gap > max_gap_seconds (default 3h) between consecutive messages
     - max_messages reached (default 10)
 
-    Returns list of message blocks (most recent last), each as:
-    "**[MNNN]** [timestamp]\\n<text>" — the text whole up to `RECENT_CHAT_CUT`
-    characters; a longer one is cut there and says how much was left out and
-    under which message id the whole text is (task 166).
+    Returns list of message blocks (most recent last), each as a header line
+    "**[MNNN]** [timestamp]" followed by the text INSIDE A CODE FENCE — whole up
+    to `RECENT_CHAT_CUT` characters; a longer one is cut there and says how much
+    was left out and under which message id the whole text is (task 166).
+
+    The fence is what keeps a message from being read as part of the task: these
+    blocks are written into task.md above its gates, and a checkbox, a heading or
+    an unclosed code fence in the owner's words used to become a live gate, a
+    live section, or a fence over everything below (impl panel r1). The fence is
+    one backtick longer than the longest run of backticks in the text, so nothing
+    in the text can close it.
     """
     import re
     from datetime import datetime
@@ -118,7 +125,8 @@ def _capture_recent_chat(project_path: Path, max_messages: int = 10,
                             f"more characters — the whole message is {msg_id} in chat_log.md]")
         else:
             display_text = text
-        captured.append(f"**[{msg_id}]** [{ts_str}]\n{display_text}")
+        fence = "`" * (max([3] + [len(run) + 1 for run in re.findall(r"`+", display_text)]))
+        captured.append(f"**[{msg_id}]** [{ts_str}]\n{fence}text\n{display_text}\n{fence}")
 
         if len(captured) >= max_messages:
             break
@@ -1244,7 +1252,19 @@ def cmd_work(cmd_args):
             prev_file = prev_matches[0]
             prev_status = _extract_status(prev_file)
             prev_head = _extract_head_position(prev_file)
-            if prev_head == "(all gates checked)" and not prev_status.startswith("done"):
+            if prev_status == "blocked":
+                # A task that is honestly waiting for the owner is not being
+                # abandoned: it is left as it is, without the override word, and
+                # the command says so (PLAN S11 item 8, task 166 — task 160 → 161
+                # needed `--force`, and `--force` then said "left in_progress"
+                # of a task whose status stayed `blocked`). The EXACT token, as
+                # `core._is_blocked` reads it — never a prefix — and asked BEFORE
+                # the all-gates bounce below: a blocked task whose gates are all
+                # checked waits for the owner about its close (impl panel r1).
+                print(f"Task {prev_task} is blocked (waiting for a decision) — it stays blocked, "
+                      f"with its reason; switching to task {task_num}. "
+                      f"Resume it with: tasks work {prev_task}")
+            elif prev_head == "(all gates checked)" and not prev_status.startswith("done"):
                 # F14 blind-judge Finding 1 (the class, not a light-only
                 # patch): this branch used to write `done` DIRECTLY — no
                 # risk check, no review evidence, no verify contract, no
@@ -1265,15 +1285,6 @@ def cmd_work(cmd_args):
                           f"Or switch anyway: tasks work {task_num} --force   "
                           f"(leaves {prev_task} open)", file=sys.stderr)
                     sys.exit(1)
-            elif prev_status.startswith("blocked"):
-                # A task that is honestly waiting for the owner is not being
-                # abandoned: it is left as it is, without the override word, and
-                # the command says so (PLAN S11 item 8, task 166 — task 160 → 161
-                # needed `--force`, and `--force` then said "left in_progress"
-                # of a task whose status stayed `blocked`).
-                print(f"Task {prev_task} is blocked (waiting for a decision) — it stays blocked, "
-                      f"with its reason; switching to task {task_num}. "
-                      f"Resume it with: tasks work {prev_task}")
             elif not prev_status.startswith("done") and not force:
                 # prev task still has open gates — don't silently abandon it.
                 _gate_bounce(prev_task, prev_file, f"switching to task {task_num}")

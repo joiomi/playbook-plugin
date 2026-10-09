@@ -1418,6 +1418,31 @@ class LeavingABlockedTask(unittest.TestCase):
             self.assertIn("blocked", ln)
         self.assertEqual(_extract_status(self.first), "blocked")
 
+    # Impl panel round 1 (codex-high, grok): a blocked task whose gates are ALL checked — it
+    # waits for the owner about its close — took the earlier exit ("all gates checked but
+    # not closed") and still needed `--force`, which then said it was "left open".
+    def test_a_blocked_task_with_every_gate_checked_is_left_without_force(self):
+        self.first.write_text(TASK.format(n="012").replace("- [ ] G2", "- [x] G2"), encoding="utf-8")
+        self.assertEqual(self._tasks("work", "012").returncode, 0)
+        self.assertEqual(self._tasks("blocked", "close it, or one more review?").returncode, 0)
+        self.assertEqual(_extract_status(self.first), "blocked")
+        r = self._tasks("work", "013")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self._pointer(), "013")
+        self.assertEqual(_extract_status(self.first), "blocked")
+        self.assertIn("tasks work 012", r.stdout + r.stderr)
+
+    # Impl panel round 1 (opus): "blocked" is an exact token everywhere else (`_is_blocked`,
+    # the stop hook) — a prefix test let `blockedness` or a hand-written status through.
+    def test_control_a_status_that_only_starts_with_the_word_is_not_blocked(self):
+        self.assertEqual(self._tasks("work", "012").returncode, 0)
+        self.first.write_text(self.first.read_text(encoding="utf-8").replace(
+            "## Status\nin_progress", "## Status\nblockedness"), encoding="utf-8")
+        self.assertEqual(_extract_status(self.first), "blockedness")
+        r = self._tasks("work", "013")
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(self._pointer(), "012")
+
     def test_the_task_that_was_left_can_be_resumed(self):
         self._block_the_first()
         self.assertEqual(self._tasks("work", "013").returncode, 0)

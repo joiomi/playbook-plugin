@@ -278,7 +278,7 @@ def ut_fails(text: str, per_cap: int = 15, overall_cap: int = 80) -> list[str]:
             if named:
                 result.append(ln)
         elif not named:
-            left_out += kind == "body"
+            left_out += 1                  # a body line or a block line: counted either way
         elif kind == "block":
             result.append(ln)
         else:
