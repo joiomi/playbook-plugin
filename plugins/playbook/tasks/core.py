@@ -4034,14 +4034,12 @@ def retro_carried_state(project_path: Path, last_retro: "int | None") -> "dict[i
 _RETRO_CARRIED_RE = re.compile(r"^<!-- retro-carried: ([0-9a-f=, ]*) -->[ \t]*$", re.M)
 
 
-def task_record_digest(task_file: Path) -> str:
-    """Sixteen hex characters of the SHA-256 of a task record as it is on disk — '' when
-    it cannot be read (which then equals no recorded digest, so it reads as moved)."""
+def record_digest(raw: bytes) -> str:
+    """Sixteen hex characters of the SHA-256 of a task record's bytes. Taken by the
+    retro's reader from the very bytes it parses (`retro.extract_tasks`), so a
+    task's table row and its digest never describe two different reads."""
     import hashlib
-    try:
-        return hashlib.sha256(Path(task_file).read_bytes()).hexdigest()[:16]
-    except OSError:
-        return ""
+    return hashlib.sha256(raw).hexdigest()[:16]
 
 
 def retro_carried_line(digests: "dict[int, str]") -> str:

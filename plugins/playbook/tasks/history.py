@@ -558,14 +558,13 @@ def cmd_retro(cmd_args):
         # (cut at seven characters, as the table cuts it) and gate count (r1). Every
         # carried task must still be there (one that is gone is a change too). An
         # explicit `--since` never comes here.
-        from tasks.core import retro_carried_digests, task_record_digest
+        from tasks.core import retro_carried_digests
         _kept = retro_carried_digests(project_path, last_retro)
 
         def _unmoved(t):
             n = t["number"]
             if n in _kept:
-                _tf = sorted(tasks_dir.glob(f"{n:03d}-*/task.md"))
-                return bool(_tf) and task_record_digest(_tf[0]) == _kept[n]
+                return t["digest"] == _kept[n]
             return (t["status"][:7].strip().lower(),
                     f"{t['checked_count']}/{t['gate_count']}") == carry[n]
         if (carried and not tasks and len(carried) == len(carry)
@@ -636,16 +635,13 @@ def cmd_retro(cmd_args):
     task_file = task_dir / "task.md"
     # when this retro was made — the next retro's chat boundary (task 145)
     _head, _sep, _rest = retro_content.partition("\n")
-    # …and a digest of every unfinished task of the window, as its record is now: the
-    # next bare retro refuses only if those records have not changed at all (task 165)
-    from tasks.core import retro_carried_line, task_record_digest as _digest
-    _open = {}
-    for _t in tasks:
-        if not _t["status"].strip().lower().startswith("done"):
-            _tf = sorted(tasks_dir.glob(f"{_t['number']:03d}-*/task.md"))
-            if _tf:
-                _open[_t["number"]] = _digest(_tf[0])
-    _carried_line = retro_carried_line(_open)
+    # …and a digest of every unfinished task of the window: the next bare retro refuses
+    # only if those records have not changed at all (task 165). The digest is the one
+    # taken with the read that built the table above — never a later read of the file.
+    from tasks.core import retro_carried_line
+    _carried_line = retro_carried_line(
+        {_t["number"]: _t["digest"] for _t in tasks
+         if not _t["status"].strip().lower().startswith("done")})
     retro_content = (f"{_head}\n<!-- retro-generated: {_stamp} -->"
                      + (f"\n{_carried_line}" if _carried_line else "") + f"{_sep}{_rest}")
     atomic_write(task_file, retro_content)

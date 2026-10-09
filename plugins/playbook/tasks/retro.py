@@ -18,11 +18,13 @@ def extract_tasks(tasks_dir: Path, since: int = 0) -> list[dict]:
 
     Returns list of dicts with keys:
         number, title, intent, why, status, gate_count, checked_count,
-        bare_checkmark_count, gate_texts, parked_items, playbook_type
+        bare_checkmark_count, gate_texts, parked_items, playbook_type,
+        digest (of the very bytes the other keys were parsed from — task 165)
     """
     if not tasks_dir.exists():
         return []
 
+    from tasks.core import record_digest
     results = []
     for task_dir in sorted(tasks_dir.iterdir()):
         if not task_dir.is_dir():
@@ -38,8 +40,13 @@ def extract_tasks(tasks_dir: Path, since: int = 0) -> list[dict]:
         if not task_file.exists():
             continue
 
-        content = task_file.read_text(encoding="utf-8", errors="replace")
-        results.append(_parse_task(num, m.group(2), content))
+        # ONE read: what the retro's table says of a task and the digest the retro
+        # keeps of it describe the same bytes (post-D6 run 1, task 165 — read
+        # apart, a task that finished in between was frozen as "unchanged")
+        raw = task_file.read_bytes()
+        record = _parse_task(num, m.group(2), raw.decode("utf-8", errors="replace"))
+        record["digest"] = record_digest(raw)
+        results.append(record)
 
     return results
 

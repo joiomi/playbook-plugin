@@ -1443,6 +1443,32 @@ class RunTailCertJudgeGuards(unittest.TestCase):
             self.assertIn("could not be started", why[0][1])
             self.assertIn(said[8:25], why[0][1])
 
+    def test_a_start_failure_that_mentions_a_timeout_is_still_a_start_failure(self):
+        # post-D6 run 1 (codex): the first classifier read the words "timed out" anywhere in
+        # an error as proof that a judge had run
+        from unittest import mock
+        R, d, snap = self._case()
+        why = []
+        said = "(error: tail-cert judge spawn failed: no such backend 'timed out')"
+        with mock.patch.object(R, "_run_tail_cert_judge_raw", return_value=said):
+            self.assertIsNone(R.run_tail_cert_judge(d, snap, ["docs/g.md"], "PANEL PASS", why=why))
+        self.assertEqual([k for k, _ in why], ["no-judge"])
+
+    def test_the_runner_marks_its_own_timeout_with_the_one_sentence_the_classifier_knows(self):
+        import subprocess
+        from unittest import mock
+        import tasks.review as R
+
+        class _Slow:
+            def __init__(self, **kw):
+                pass
+
+            def run_headless_judge(self, **kw):
+                raise subprocess.TimeoutExpired(cmd="judge", timeout=1)
+        with mock.patch("provider.subagent._adapter_class", return_value=_Slow):
+            said = R._run_tail_cert_judge_raw(Path(tempfile.mkdtemp()), "prompt", 1)
+        self.assertEqual(str(said), R._TAIL_CERT_TIMED_OUT)
+
     def test_a_judge_that_ran_and_gave_nothing_is_said_to_have_failed(self):
         from unittest import mock
         R, d, snap = self._case()

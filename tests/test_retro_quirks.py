@@ -437,6 +437,35 @@ class DefaultWindow(unittest.TestCase):
         self.assertIn("status and the gate count", r.stderr)
         self.assertNotIn("byte for byte", r.stderr)
 
+    # Post-D6 run 1 (codex): the retro's table came from one read of each task and the digest
+    # from a LATER one. A task that finished in between was recorded `blocked` in the table
+    # with the digest of its finished record — so the next bare retro found it "unchanged"
+    # and its completion never reached a default window.
+    def test_a_task_that_finishes_while_the_retro_is_made_is_not_frozen_as_unchanged(self):
+        import contextlib
+        import io
+        from unittest import mock
+        from tasks import history, retro
+        proj = self._project([(1, "a"), (2, "b"), (3, "c")])
+        self._set_status(proj, 2, "blocked")
+        real = retro.generate_retro_task
+
+        def finishes_meanwhile(**kw):
+            self._set_status(proj, 2, "done (2026-09-03)")       # between the read and the write
+            return real(**kw)
+        old = os.getcwd()
+        os.chdir(proj)
+        try:
+            with mock.patch.object(retro, "generate_retro_task", finishes_meanwhile), \
+                    mock.patch.dict(os.environ, {"PLAYBOOK_SESSION_ID": "pid-retro-window"}), \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                history.cmd_retro([])
+        finally:
+            os.chdir(old)
+        self.assertEqual(self._retros(proj), ["004-retro-001-003"])
+        r, made = self._retro(proj)              # the first retro's table says T002 was blocked
+        self.assertEqual((r.returncode, made), (0, "005-retro-002-002"), r.stderr)
+
     # Impl panel round 2 (opus): the refusal sent the user to `--since N` without saying
     # which N — and a retro made from an N above a carried task drops that task from every
     # later window (the loss task 145 fixed). It names the N that keeps them.

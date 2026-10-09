@@ -2447,12 +2447,17 @@ def _run_tail_cert_judge_raw(project_path, prompt, timeout_secs) -> str:
         _raw = getattr(_expired, "stdout", None) or getattr(_expired, "output", None) or ""
         if isinstance(_raw, bytes):
             _raw = _raw.decode("utf-8", errors="replace")
-        return _JO("(error: tail-cert judge timed out)", usage=_pu(_raw))   # spend survives (round 3)
+        return _JO(_TAIL_CERT_TIMED_OUT, usage=_pu(_raw))   # spend survives (round 3)
     except Exception as e:
         return f"(error: tail-cert judge spawn failed: {e})"
 
 
 TAIL_CERT_LOG = "tail-cert.log"
+# What `_run_tail_cert_judge_raw` returns for a judge that RAN and hit its timeout —
+# the one `(error: …)` that is not a failure to start one. `run_tail_cert_judge`
+# knows it by this exact sentence, not by its words (post-D6 run 1, task 165: a
+# start failure whose text mentioned a timeout was read as a judge that had run).
+_TAIL_CERT_TIMED_OUT = "(error: tail-cert judge timed out)"
 
 
 def run_tail_cert_judge(project_path, snapshot, non_behavioral, panel_summary,
@@ -2566,10 +2571,10 @@ def run_tail_cert_judge(project_path, snapshot, non_behavioral, panel_summary,
     _rl = (raw or "").lstrip()
     if not raw or _rl.startswith("(error:") or _rl.startswith("(FAILED"):
         _first = (_rl.splitlines() or [""])[0][:160]
-        if _rl.startswith("(error:") and "timed out" not in _first:
+        if _rl.startswith("(error:") and _rl.rstrip() != _TAIL_CERT_TIMED_OUT:
             # a resolution or spawn error (`_run_tail_cert_judge_raw`, the adapter's
-            # own `(error: …)`): NO judge ran — only the timeout carries that prefix
-            # for a judge that did (impl panel r2)
+            # own `(error: …)`): NO judge ran — only the runner's own timeout
+            # sentence carries that prefix for a judge that did (impl panel r2)
             return _none("no-judge", f"the certifying judge could not be started: {_first}")
         return _none("judge", "the judge ran and gave no verdict: " + (_first or "no output"))
     _verdict = parse_tail_cert_verdict(raw, nonce)
