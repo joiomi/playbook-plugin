@@ -526,13 +526,13 @@ def cmd_retro(cmd_args):
     )
 
     window = ""
-    carry: "set[int]" = set()
+    carry: "dict[int, str]" = {}        # task → the status the last retro recorded for it
     last_retro = None                   # set only on the default window
     if since is None:
-        from tasks.core import count_tasks_since_retro, retro_carry_over
+        from tasks.core import count_tasks_since_retro, retro_carried_statuses
         _closed, last_retro = count_tasks_since_retro(project_path)
         since = (last_retro + 1) if last_retro is not None else 0
-        carry = retro_carry_over(project_path, last_retro)
+        carry = retro_carried_statuses(project_path, last_retro)
         window = (f"Window: tasks after retro T{last_retro:03d} (the last retro) — "
                   "`tasks retro --since N` reads from task N, `--since 0` everything."
                   if last_retro is not None else
@@ -547,8 +547,20 @@ def cmd_retro(cmd_args):
     tasks = extract_tasks(tasks_dir, since=since)
     if carry:
         # still open at the last retro: theirs is this window (impl panel r2)
-        tasks = sorted([t for t in extract_tasks(tasks_dir, since=0) if t["number"] in carry] + tasks,
-                       key=lambda t: t["number"])
+        carried = [t for t in extract_tasks(tasks_dir, since=0) if t["number"] in carry]
+        # …but a window that holds ONLY such tasks, each in the status the last retro
+        # recorded, would repeat that retro: with one unfinished task every further
+        # bare `tasks retro` made one more (PLAN S11 item 2, task 165). The table
+        # holds a status cut at seven characters, so today's is cut the same way.
+        # An explicit `--since` never comes here.
+        if (carried and not tasks
+                and all(t["status"][:7].strip().lower() == carry[t["number"]] for t in carried)):
+            waits = ", ".join(f"T{t['number']:03d} ({carry[t['number']]})" for t in carried)
+            print(f"Nothing changed since retro T{last_retro:03d} (the last retro): no task after it, "
+                  f"and what it carried as unfinished is as it recorded it — {waits}. No retro made. "
+                  "`tasks retro --since N` makes one from task N whatever changed.", file=sys.stderr)
+            sys.exit(1)
+        tasks = sorted(carried + tasks, key=lambda t: t["number"])
         window += (" Also " + ", ".join(f"T{n:03d}" for n in sorted(carry))
                    + " — open at the last retro.")
     # this retro's own "made at" — taken BEFORE the chat is read, so a message that

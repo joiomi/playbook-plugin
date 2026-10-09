@@ -23,6 +23,26 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   bubblewrap on an absolute `PATH` entry it still runs — uncontained, with the review's warning — and where
   bubblewrap is found but cannot start, a judge's launch fails.
 
+### Fixed
+
+- **`tasks retro` twice no longer makes two retros** (task 165). A task the last retro recorded as unfinished is
+  carried into the next window, so with one such task every further bare `tasks retro` made one more retro of it.
+  Now, when no task follows the last retro and every carried task still has the status that retro recorded, the
+  command exits 1, names them and creates nothing; `--since N` still makes a retro whatever changed.
+- **A seat cleared with `tasks models enable` is not put back by a panel that was already running** (task 165). Such
+  a panel reported the seat's old out-of-credit failure after the clear and recorded it again. The clear now leaves
+  its time (for a day), a failure from a panel that started before it is not recorded, and the panel says so. The
+  command writes that time also when no outage was recorded.
+- **A close no longer blames a judge that never ran** (task 165). When the documentation changed since the panel
+  was too large to send to one certifying judge, the close said "tail certification did not return PASS". It now
+  says that no judge was called, with the size and the limit; a judge's FAIL and an unusable answer each have their
+  own sentence.
+- **A trimmed retro record keeps its task table** (task 165). The scaffold pins `## Structural Summary`, so a judge
+  that receives a shortened copy of a large retro record still gets the per-task table.
+- **No warning about `tasks/review.py` on newer Pythons** (task 165). A docstring held an invalid escape sequence:
+  a `SyntaxWarning` when the file is compiled on Python 3.12 (a silent `DeprecationWarning` on 3.10), which Python's
+  documentation says will become an error.
+
 ## [1.6.0] — 2026-10-09
 
 **The first Linux-only release** — owner decision 2026-10-08: playbook supports Linux only until it is stable; macOS

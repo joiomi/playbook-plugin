@@ -448,7 +448,10 @@ A task whose impl panel predates the date keeps the old rule; the date in force 
 and the one recorded with the panel, so moving or removing it later changes nothing for that task. With the rule
 on, a carrying panel that no reservation dates (a deleted run ledger) refuses. A value that is not a date refuses
 every stale close until it is fixed. The binding is checked again inside the lock the close commits under. Post-D6 runs made before 1.5.47 recorded no tree and cannot bind a close. Tail
-certification saves its judge's output as `tail-cert.log` in the task directory.
+certification saves its judge's output as `tail-cert.log` in the task directory. When it does not certify, the
+close says which of three things happened: the delta could not be put before a judge — its size against the
+98,304-byte payload one judge can be sent, or the file that could not be read — and then no judge is called;
+the judge returned FAIL; or its answer held no usable verdict. Each needs a fresh panel.
 
 ### The verify-contract guard (a change to `verify` is made visible)
 
@@ -572,7 +575,7 @@ Pinned model ids rot as providers ship and retire models, so the pins have a mai
 
 ### Failure semantics
 
-- When a panel seat fails because its provider says the account is **out of credit** — grok's `402 Payment Required … usage balance exhausted`, codex's `You've hit your usage limit … try again at <time>`, agy's quota stop, claude's `You've hit your weekly limit · resets <time>` (read only when that line is all the seat printed) — the panel records it in `<lane>/journal/seat-outages.json` (machine-local, gitignored with the journal) and later panels skip that seat with one line naming it: until the reset time the message gives (codex, agy, claude), or — sooner, for instance after you switch to another account — until you clear it with `tasks models enable <seat>` (grok gives no time). Skipping never lowers the quorum (above).
+- When a panel seat fails because its provider says the account is **out of credit** — grok's `402 Payment Required … usage balance exhausted`, codex's `You've hit your usage limit … try again at <time>`, agy's quota stop, claude's `You've hit your weekly limit · resets <time>` (read only when that line is all the seat printed) — the panel records it in `<lane>/journal/seat-outages.json` (machine-local, gitignored with the journal) and later panels skip that seat with one line naming it: until the reset time the message gives (codex, agy, claude), or — sooner, for instance after you switch to another account — until you clear it with `tasks models enable <seat>` (grok gives no time). A panel that had started before you cleared the seat does not record it again for the failure it saw. Skipping never lowers the quorum (above).
 
 - When a review judge fails **specifically because its model no longer exists** — probe-confirmed, not just pattern-matched — the review still saves its output, then prints the availability report and exits nonzero: a deliberate hard stop so you re-pin before trusting a degraded panel. Timeouts, budget caps, and other errors keep their soft behavior.
 - A judge that exhausts its budget cap is reported as **failed** with an explicit notice (raise `judge_budget_usd` or pass `--budget`) instead of masquerading as a successful empty review.

@@ -1393,7 +1393,8 @@ def cli_models(cmd_args: list[str], project_root: Path) -> int:
         if clear_outage(resolve_agent_dir(project_root), args[0]):
             print(f"{args[0]}: enabled — the next panel calls it again.")
         else:
-            print(f"{args[0]}: no outage recorded for this seat — nothing changed.")
+            print(f"{args[0]}: no outage recorded for this seat — a panel that is running "
+                  "now cannot record one for a failure from before this moment.")
         return 0
 
     if sub == "detect":

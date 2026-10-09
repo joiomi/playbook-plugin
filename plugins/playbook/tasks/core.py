@@ -2951,7 +2951,8 @@ def records_only_delta(project_path: Path, snapshot: "dict | None",
 
 def tail_cert_gate_decision(*, can_certify: bool, behavioral_nonempty: bool,
                             cert_verdict: "str | None",
-                            non_behavioral: "list[str]") -> "tuple[bool, str]":
+                            non_behavioral: "list[str]",
+                            unavailable: str = "") -> "tuple[bool, str]":
     """PURE tail-cert policy → (allowed, receipt_clause). No I/O. Reached ONLY when
     the existing freshness gate would otherwise BLOCK (stale + carrying panel +
     assertive/irreversible/unclassified + no --force/--stale-panel-ok).
@@ -2962,11 +2963,20 @@ def tail_cert_gate_decision(*, can_certify: bool, behavioral_nonempty: bool,
       * `behavioral_nonempty` (ANY code-path delta since F0, incl. a code comment)
         → BLOCK, a fresh full panel is required (owner decision A);
       * a non-behavioral-only delta certifies IFF the single judge returned PASS;
-        a FAIL or a missing/unparseable verdict (None) → BLOCK."""
+        a FAIL or a missing/unparseable verdict (None) → BLOCK.
+
+    Each block says what happened (task 165, PLAN S11 item 11): `unavailable` is
+    why the delta could not be put before a judge at all (`review.tail_cert_unavailable`
+    — over the payload cap, an unreadable file); it never certifies, whatever
+    `cert_verdict` holds. Before, that case, a judge's FAIL and an unusable answer
+    all read "tail certification did not return PASS"."""
     if not can_certify:
         return (False, "tail certification unavailable — fresh panel required")
     if behavioral_nonempty:
         return (False, "code-path delta since the panel — fresh full panel required")
+    if unavailable:
+        return (False, f"tail certification could not run — {' '.join(unavailable.split())}; "
+                       "no judge was called — fresh panel required")
     # Collapse whitespace WITHIN each filename before joining (impl-review r12b F1):
     # a git-`-z`-decoded path may legally contain NEWLINES, and this clause is
     # embedded RAW into the task.md receipt — an untracked `docs/a\n## Status\ndone\nb.md`
@@ -2978,7 +2988,12 @@ def tail_cert_gate_decision(*, can_certify: bool, behavioral_nonempty: bool,
     if cert_verdict == "PASS":
         return (True, f"non-behavioral tail certified by single judge "
                       f"(delta: {files})")
-    return (False, "tail certification did not return PASS — fresh panel required")
+    if cert_verdict == "FAIL":
+        return (False, "the tail-certifying judge returned FAIL (its reasons: tail-cert.log "
+                       "beside task.md) — fresh panel required")
+    return (False, "tail certification gave no usable verdict (the judge's answer carried no "
+                   "verdict line for this run, or the tamper guard refused it) — fresh panel "
+                   "required")
 
 
 def _tail_cert_verdict_re(nonce: "str | None") -> "re.Pattern":
@@ -3984,17 +3999,25 @@ def retro_carry_over(project_path: Path, last_retro: "int | None") -> "set[int]"
     (task 145, impl panel r2 — retro 134 here saw 14 tasks blocked that all closed
     later, and a window by number alone would never have read them). Empty when there
     is no retro or its record has no table."""
+    return set(retro_carried_statuses(project_path, last_retro))
+
+
+def retro_carried_statuses(project_path: Path, last_retro: "int | None") -> "dict[int, str]":
+    """`retro_carry_over`'s tasks, each with the status the last retro wrote for it —
+    as its table holds it (lower-cased; the table cuts a status at seven characters).
+    What `tasks retro` compares today's status with, to tell a window in which
+    something moved from one that would only repeat the last retro (task 165)."""
     if last_retro is None:
-        return set()
+        return {}
     for num, slug, tf in _iter_task_dirs(project_path):
         if num == last_retro and _is_retro_slug(slug):
             try:
                 text = tf.read_text(encoding="utf-8", errors="replace")
             except OSError:
-                return set()
-            return {int(n) for n, st in _RETRO_ROW_RE.findall(text)
+                return {}
+            return {int(n): st.strip().lower() for n, st in _RETRO_ROW_RE.findall(text)
                     if int(n) < last_retro and not st.strip().lower().startswith("done")}
-    return set()
+    return {}
 
 
 def count_tasks_since_retro(project_path: Path) -> "tuple[int, int | None]":

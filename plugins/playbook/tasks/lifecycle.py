@@ -737,7 +737,7 @@ def cmd_work(cmd_args):
                     from tasks.core import (
                         tail_cert_delta, tail_cert_gate_decision,
                     )
-                    from tasks.review import run_tail_cert_judge
+                    from tasks.review import run_tail_cert_judge, tail_cert_unavailable
                     _snap = _impl.get("snapshot") if _impl else None
                     _snap_fp = _impl["tree_state"]
                     # Task 149 (PLAN S12b): after a post-D6 PASS, certify the delta
@@ -749,7 +749,18 @@ def cmd_work(cmd_args):
                     _tc_can, _tc_beh, _tc_non = tail_cert_delta(
                         project_path, _snap, _snap_fp)
                     _tc_verdict = None
-                    if _tc_can and not _tc_beh:
+                    # Task 165 (PLAN S11 item 11): can the delta be put before a
+                    # judge at all? Asked first, so that "no judge was called" is
+                    # said as that. Closing retro 161 the delta was over the
+                    # payload cap, no judge ran, and the close answered "tail
+                    # certification did not return PASS" — a judge's FAIL in all
+                    # but name.
+                    _tc_unavail = (tail_cert_unavailable(project_path, _snap)
+                                   if (_tc_can and not _tc_beh) else "")
+                    if _tc_unavail:
+                        print(f"  … tail certification cannot run: {_tc_unavail} — "
+                              "no judge is called", file=sys.stderr, flush=True)
+                    if _tc_can and not _tc_beh and not _tc_unavail:
                         # Give the certifying judge what the panel actually
                         # reviewed (impl-panel r6 opus F1): a bare "PANEL PASS"
                         # can't tell the judge whether a docs delta CONTRADICTS an
@@ -804,7 +815,8 @@ def cmd_work(cmd_args):
                                       file=sys.stderr, flush=True)
                     _tc_allowed, _tc_clause = tail_cert_gate_decision(
                         can_certify=_tc_can, behavioral_nonempty=bool(_tc_beh),
-                        cert_verdict=_tc_verdict, non_behavioral=_tc_non)
+                        cert_verdict=_tc_verdict, non_behavioral=_tc_non,
+                        unavailable=_tc_unavail)
                     if _tc_allowed:
                         _f_allowed = True
                         _freshness = {
@@ -818,9 +830,10 @@ def cmd_work(cmd_args):
                         print(f"  ✓ tail-certified: {_tc_clause}",
                               file=sys.stderr, flush=True)
                     else:
+                        # "attempted" was said here even when no judge had been
+                        # called; the clause now says which it was (task 165)
                         _f_reason = (_f_reason
-                                     + f"\n  (tail certification attempted: "
-                                       f"{_tc_clause})")
+                                     + f"\n  (tail certification: {_tc_clause})")
                 if not _f_allowed:
                     print(f"\nBlocked: cannot close task {prev_task} — {_f_reason}",
                           file=sys.stderr, flush=True)

@@ -449,8 +449,12 @@ def generate_retro_task(
     lines.append(risk())
     lines.append("")
 
-    # Structural summary
+    # Structural summary. Pinned: the per-task table must reach every judge. A retro
+    # record is mostly gates, which `tasks compact` may not move, so it outgrows the
+    # context of a seat that takes its prompt on argv — and with nothing pinned that
+    # seat lost this table as well as Phase 2 (retro 161 round 1; task 165).
     lines.append("## Structural Summary")
+    lines.append("<!-- pin -->")
     lines.append("")
     lines.append(f"**Window:** {len(tasks)} tasks (T{first:03d}–T{last:03d}), "
                  f"{msg_count} chat messages, {len(mindmap)} mind map nodes")

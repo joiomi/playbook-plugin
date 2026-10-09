@@ -333,6 +333,104 @@ class DefaultWindow(unittest.TestCase):
         self.assertIn("after retro T002", r.stderr)
         self.assertEqual(made, "002-retro-001-001")                  # no new retro
 
+    # PLAN S11 item 2 (task 165; task 145 panel r2, codex-high). A task the last retro
+    # recorded as unfinished is carried into the next window — so with one such task
+    # EVERY further bare `tasks retro` made one more retro of it (measured on a scratch
+    # project: 005-retro-002-002, then 006-retro-002-002, with no end).
+
+    def _set_status(self, proj, num, status):
+        import re
+        tf = next((proj / ".agent" / "tasks").glob(f"{num:03d}-*/task.md"))
+        tf.write_text(re.sub(r"(## Status\n)[^\n]*", lambda m: m.group(1) + status,
+                             tf.read_text(encoding="utf-8"), count=1), encoding="utf-8")
+
+    def _retros(self, proj):
+        return sorted(p.name for p in (proj / ".agent" / "tasks").glob("*-retro-*"))
+
+    def _one_retro_with_a_blocked_task(self):
+        proj = self._project([(1, "a"), (2, "b"), (3, "c")])
+        self._set_status(proj, 2, "blocked")
+        r, made = self._retro(proj)
+        self.assertEqual((r.returncode, made), (0, "004-retro-001-003"), r.stderr)
+        return proj
+
+    def test_a_second_retro_with_nothing_changed_is_refused(self):
+        proj = self._one_retro_with_a_blocked_task()
+        r, _made = self._retro(proj)
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(self._retros(proj), ["004-retro-001-003"])      # nothing was created
+        for word in ("T004", "T002", "--since"):                         # which retro, what it waits for, the way out
+            self.assertIn(word, r.stderr)
+
+    def test_a_carried_task_whose_status_moved_is_a_change(self):
+        proj = self._one_retro_with_a_blocked_task()
+        self._set_status(proj, 2, "done (2026-09-02)")
+        r, made = self._retro(proj)
+        self.assertEqual((r.returncode, made), (0, "005-retro-002-002"), r.stderr)
+
+    def test_a_task_after_the_last_retro_is_a_change(self):
+        proj = self._one_retro_with_a_blocked_task()
+        td = proj / ".agent" / "tasks" / "005-d"
+        td.mkdir()
+        (td / "task.md").write_text("# 005 - d\n\n## Status\ndone (2026-09-02)\n\n## Risk\nreversible\n\n"
+                                    "## Work\n- [x] Do the work — did it\n", encoding="utf-8")
+        r, made = self._retro(proj)
+        self.assertEqual((r.returncode, made), (0, "006-retro-002-005"), r.stderr)   # the carried T002 and T005
+
+    def test_an_explicit_window_is_never_refused(self):
+        proj = self._one_retro_with_a_blocked_task()
+        r, _made = self._retro(proj, "--since", "1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(len(self._retros(proj)), 2)
+
+
+class ScaffoldPinsTheTaskTable(unittest.TestCase):
+    """PLAN S11 item 10 (task 165; retro 161 panel r1, codex-medium). A retro record is
+    mostly gates, which `tasks compact` may not move, so it outgrows the context of a
+    seat that takes its prompt on argv; such a seat is told which sections it lost and
+    reads the file (`_trim_clause`, since 1.5.3). But in retro 161's first round that
+    seat lost the per-task TABLE too, because nothing in the scaffold was pinned."""
+
+    def _scaffold(self, statuses):
+        import subprocess
+        proj = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, proj, True)
+        for num, status in enumerate(statuses, 1):
+            td = proj / ".agent" / "tasks" / f"{num:03d}-t{num}"
+            td.mkdir(parents=True)
+            (td / "task.md").write_text(
+                f"# {num:03d} - Task {num} of ordinary title length\n\n## Status\n{status}\n\n## Risk\nreversible\n\n"
+                "## Work\n- [x] Do the work — did it\n", encoding="utf-8")
+        env = dict(os.environ, PYTHONPATH=str(_PLUGIN), PLAYBOOK_SESSION_ID="pid-retro-pin")
+        env.pop("BASH_ENV", None)
+        r = subprocess.run([sys.executable, "-m", "tasks.cli", "retro"], cwd=proj, env=env,
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        made = sorted((proj / ".agent" / "tasks").glob("*-retro-*/task.md"))
+        return proj, made[-1]
+
+    def test_a_trimmed_record_still_carries_every_task_row(self):
+        from tasks.core import select_task_context, split_md_sections
+        _proj, scaffold = self._scaffold(["done (2026-09-01)"] * 40)
+        # the record as it looks when the retro is worked: an outcome on every gate
+        grown = "\n".join((ln + " — " + "y" * 300) if ln.lstrip().startswith("- [ ] ") else ln
+                          for ln in scaffold.read_text(encoding="utf-8").splitlines()) + "\n"
+        table = dict(split_md_sections(grown))["Structural Summary"]
+        self.assertEqual(table.count("\n| 0"), 40, "the fixture's table does not hold the 40 tasks")
+        # a budget under which the table is the section that no longer fits (the selection
+        # fills from the newest section backwards; the table is one of the oldest)
+        selected, receipt = select_task_context(grown, len(grown) - len(table) + 50)
+        self.assertTrue(receipt, "the fixture was not trimmed")
+        self.assertEqual(selected.count("\n| 0"), 40, f"task rows lost in the trim — {receipt}")
+        self.assertNotIn("Structural Summary", receipt.split("· dropped:")[1])
+
+    def test_the_pin_does_not_hide_the_table_from_the_next_retro(self):
+        # `retro_carry_over` reads the rows of that same section
+        from tasks.core import retro_carry_over
+        proj, scaffold = self._scaffold(["done (2026-09-01)", "blocked", "done (2026-09-01)"])
+        self.assertIn("<!-- pin -->", scaffold.read_text(encoding="utf-8").split("## Structural Summary")[1][:40])
+        self.assertEqual(retro_carry_over(proj, 4), {2})
+
 
 class ScaffoldRisk(unittest.TestCase):
     """PLAN S1c (task 079 finding P1-05): the retro scaffold emitted `## Status`

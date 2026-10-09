@@ -12,6 +12,10 @@ panels skip a seat whose outage is current and say so in one line.
 
 The record is written through `atomic_write` under a lock, and every write
 re-reads it inside the lock, so two panels recording at once keep both entries.
+
+A clear leaves its time behind (task 165): a panel that was already running when
+the owner cleared a seat reports that seat's failure afterwards, and without the
+time it put the seat straight back.
 """
 from __future__ import annotations
 
@@ -208,6 +212,12 @@ def _is_current(entry: dict, now: _dt.datetime) -> bool:
     return at > now
 
 
+def now() -> _dt.datetime:
+    """The clock this module reads — a panel takes its start from here, so that it
+    is compared with a clear's time on one clock."""
+    return _dt.datetime.now().astimezone()
+
+
 def current_outages(agent_dir: Path, now: Optional[_dt.datetime] = None) -> dict:
     """seat spec → its outage entry, for the outages still in force."""
     now = now or _dt.datetime.now().astimezone()
@@ -218,34 +228,97 @@ def current_outages(agent_dir: Path, now: Optional[_dt.datetime] = None) -> dict
     return {k: v for k, v in _load(text).items() if _is_current(v, now)}
 
 
+# When the owner cleared a seat (`tasks models enable`), per seat — PLAN S11 item 3,
+# task 165: two panels start, the seat fails in the first and is recorded, the owner
+# tops the account up and clears it, and the second panel then reports the same old
+# failure. The value under this key is a LIST of [seat, time] pairs, not an object:
+# `_load` — and the reader shipped in 1.6.0 — keep object values only, so no reader,
+# old or new, takes it for a seat out of credit.
+_CLEARED = "_cleared"
+# A panel lives at most its hard timeout (20 minutes unless configured), so a day
+# covers every panel that could still report a failure older than the clear.
+_CLEAR_KEPT = _dt.timedelta(days=1)
+
+
+def _aware(at: _dt.datetime, now: _dt.datetime) -> _dt.datetime:
+    return at if at.tzinfo is not None else at.replace(tzinfo=now.tzinfo)
+
+
+def _cleared(text: str, now: _dt.datetime) -> dict:
+    """seat spec → when the owner last cleared it (clears older than `_CLEAR_KEPT`
+    are forgotten; anything unreadable is skipped)."""
+    try:
+        data = json.loads(text) if text.strip() else {}
+    except ValueError:
+        return {}
+    pairs = data.get(_CLEARED) if isinstance(data, dict) else None
+    out = {}
+    for pair in pairs if isinstance(pairs, list) else ():
+        if not (isinstance(pair, list) and len(pair) == 2
+                and all(isinstance(x, str) for x in pair)):
+            continue
+        try:
+            at = _aware(_dt.datetime.fromisoformat(pair[1]), now)
+        except ValueError:
+            continue
+        if now - at <= _CLEAR_KEPT:
+            out[pair[0]] = at
+    return out
+
+
+def _dump(entries: dict, cleared: dict) -> str:
+    data = dict(entries)
+    if cleared:
+        data[_CLEARED] = sorted([seat, at.isoformat()] for seat, at in cleared.items())
+    return json.dumps(data, indent=2, sort_keys=True) + "\n"
+
+
 def record_outage(agent_dir: Path, spec: str, outage: dict,
-                  now: Optional[_dt.datetime] = None) -> None:
-    """Add or replace `spec`'s entry (expired entries are dropped on the way)."""
+                  now: Optional[_dt.datetime] = None, *,
+                  started: Optional[_dt.datetime] = None) -> bool:
+    """Add or replace `spec`'s entry (expired entries are dropped on the way).
+    True when it was recorded.
+
+    `started` is when the panel that saw the failure began. A failure seen by a
+    panel that began no later than the owner's last clear of this seat is from
+    before that clear — it is not recorded (False), and the next panel calls the
+    seat. Without `started` the entry is recorded, as it always was."""
     from tasks.atomic import rewrite
     now = now or _dt.datetime.now().astimezone()
 
-    def _t(text: str) -> str:
+    def _t(text: str) -> "str | None":
+        cleared = _cleared(text, now)
+        at = cleared.get(spec)
+        if started is not None and at is not None and _aware(started, now) <= at:
+            return None
         data = {k: v for k, v in _load(text).items() if _is_current(v, now)}
         data[spec] = {"reason": outage["reason"], "until": outage.get("until"),
                       "since": now.isoformat(timespec="minutes")}
-        return json.dumps(data, indent=2, sort_keys=True) + "\n"
+        return _dump(data, cleared)
+
+    _record(agent_dir).parent.mkdir(parents=True, exist_ok=True)
+    return rewrite(_record(agent_dir), _t) is not None
+
+
+def clear_outage(agent_dir: Path, spec: str,
+                 now: Optional[_dt.datetime] = None) -> bool:
+    """The owner's `tasks models enable`: remove `spec`'s entry and leave the time of
+    the clear, so that a panel already running cannot record the seat again for a
+    failure from before it (`record_outage`). True if an entry was there — the time
+    is left either way: "this seat works as of now" holds whether or not a panel
+    has got as far as recording its failure."""
+    from tasks.atomic import rewrite
+    now = now or _dt.datetime.now().astimezone()
+    found = []
+
+    def _t(text: str) -> str:
+        data = _load(text)
+        if spec in data:
+            found.append(data.pop(spec))
+        cleared = _cleared(text, now)
+        cleared[spec] = now
+        return _dump(data, cleared)
 
     _record(agent_dir).parent.mkdir(parents=True, exist_ok=True)
     rewrite(_record(agent_dir), _t)
-
-
-def clear_outage(agent_dir: Path, spec: str) -> bool:
-    """Remove `spec`'s entry (the owner's `tasks models enable`). True if one was there."""
-    from tasks.atomic import rewrite
-    found = []
-
-    def _t(text: str) -> "str | None":
-        data = _load(text)
-        if spec not in data:
-            return None
-        found.append(data.pop(spec))
-        return json.dumps(data, indent=2, sort_keys=True) + "\n"
-
-    if _record(agent_dir).exists():
-        rewrite(_record(agent_dir), _t)
     return bool(found)

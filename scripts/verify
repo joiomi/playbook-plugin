@@ -30,6 +30,7 @@ import sys
 import tempfile
 import threading
 import time
+import warnings
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -724,18 +725,38 @@ def _json():
     return FAIL, f"{len(bad)} invalid of {len(files)}", cap(bad)
 
 
+def py_source_problem(text: str, rel: str) -> "str | None":
+    """One Python source against the declared floor: None, or what is wrong with it.
+
+    A warning the parser raises about the SOURCE fails like a syntax error. An
+    invalid escape sequence is a DeprecationWarning at the floor, a SyntaxWarning
+    on 3.12 and an error in a later Python; `tasks/review.py` carried one for
+    months while this check passed, because a warning is not an exception
+    (task 165)."""
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            ast.parse(text, filename=rel, feature_version=PY_FLOOR)
+    except SyntaxError as exc:
+        return f"{rel}:{exc.lineno}: {exc.msg}"
+    except Exception as exc:
+        return f"{rel}: {type(exc).__name__}: {exc}"
+    return None
+
+
 @check(f"ast.parse @ py{PY_FLOOR[0]}.{PY_FLOOR[1]}", GIT)
 def _ast():
     bad = []
     files = tracked(".py")
     for rel in files:
         try:
-            ast.parse((ROOT / rel).read_text(encoding="utf-8"), filename=rel,
-                      feature_version=PY_FLOOR)
-        except SyntaxError as exc:
-            bad.append(f"{rel}:{exc.lineno}: {exc.msg}")
+            text = (ROOT / rel).read_text(encoding="utf-8")
         except Exception as exc:
             bad.append(f"{rel}: {type(exc).__name__}: {exc}")
+            continue
+        problem = py_source_problem(text, rel)
+        if problem:
+            bad.append(problem)
     if not bad:
         return PASS, f"{len(files)} files"
     return FAIL, f"{len(bad)} invalid of {len(files)}", cap(bad)

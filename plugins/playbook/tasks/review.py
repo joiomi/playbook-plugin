@@ -921,7 +921,7 @@ def _judge_log_name(backend: str) -> str:
 
 
 def _prefixed(prefix: "str | None", body: str, status: str = "..") -> "re.Pattern":
-    """A porcelain-LINE exemption regex that also matches the toplevel-relative
+    r"""A porcelain-LINE exemption regex that also matches the toplevel-relative
     form git emits for a SUBDIRECTORY project (task 059, P3): the two status
     characters (`status`, default any) then `\s+"?`, an optional `<prefix>/`,
     then `body`. The readable line itself is never parsed or rewritten — only
@@ -1705,6 +1705,10 @@ def _cmd_panel_review(cmd_args):
     # A seat whose provider said the account is out of credit is not called
     # again until its reset time, or until the owner clears it.
     from tasks import seat_outage as _seat_outage
+    # When this panel read the record. A seat the owner clears from here on
+    # (`tasks models enable`) was cleared after this panel chose its seats, so a
+    # failure it reports for that seat is from before the clear (task 165).
+    _panel_began = _seat_outage.now()
     _outages = _seat_outage.current_outages(resolve_agent_dir(project_path))
     if _outages:
         _live = []
@@ -1921,10 +1925,15 @@ def _cmd_panel_review(cmd_args):
         _o = _seat_outage.classify_outage(results[_lbl], provider=_lbl.split(":", 1)[0])
         if _o:
             try:
-                _seat_outage.record_outage(resolve_agent_dir(project_path), _lbl, _o)
-                print(f"  Recorded {_lbl} as out of credit ({_o['reason']}); later panels skip it "
-                      + (f"until {_o['until']}." if _o.get("until")
-                         else f"until `tasks models enable {_lbl}`."), flush=True)
+                if _seat_outage.record_outage(resolve_agent_dir(project_path), _lbl, _o,
+                                              started=_panel_began):
+                    print(f"  Recorded {_lbl} as out of credit ({_o['reason']}); later panels skip it "
+                          + (f"until {_o['until']}." if _o.get("until")
+                             else f"until `tasks models enable {_lbl}`."), flush=True)
+                else:
+                    print(f"  {_lbl} answered out of credit ({_o['reason']}), but it was enabled "
+                          "(`tasks models enable`) after this panel started — not recorded; "
+                          "the next panel calls it.", flush=True)
             except Exception as _e:   # noqa: BLE001 — never fail the review on it
                 print(f"  ⚠ could not record {_lbl}'s outage ({_e})", file=sys.stderr, flush=True)
     succeeded = len(results) - len(failed)
@@ -2177,7 +2186,19 @@ def _git_diff_text(repo, args, rel, exclude):
         return None
 
 
-def _tail_cert_review_diff(project_path, snapshot) -> "str | None":
+def tail_cert_unavailable(project_path, snapshot) -> str:
+    """Why the post-panel delta cannot be put before a certifying judge — '' when it
+    can. The close asks this BEFORE it calls the judge (task 165, PLAN S11 item 11):
+    a delta over the payload cap used to end in "tail certification did not return
+    PASS", the words of a judge's FAIL, although no judge had been called."""
+    why: "list[str]" = []
+    if _tail_cert_review_diff(project_path, snapshot, why) is not None:
+        return ""
+    # one line: a path in the reason may hold a newline (git's -z names)
+    return " ".join((why[0] if why else "the delta could not be read").split())
+
+
+def _tail_cert_review_diff(project_path, snapshot, why: "list | None" = None) -> "str | None":
     """The F0→final delta the certifying judge reviews, enumerated PER SCOPE from
     the snapshot (impl-panel r5 sonnet#2: no string-prefix scope re-derivation, so
     a `code_roots` entry named like a top-level dir can't misattribute a path).
@@ -2191,7 +2212,8 @@ def _tail_cert_review_diff(project_path, snapshot) -> "str | None":
     following a symlink or blocking on a FIFO — r2 codex:sol#1/grok#1). Every
     certifiable path is therefore represented (diff or content or an explicit
     REMOVED note); a path whose content cannot be captured, or a total payload
-    that would exceed the transport cap, returns None → the caller fails CLOSED."""
+    that would exceed the transport cap, returns None → the caller fails CLOSED.
+    Each such exit also says why, into `why` when a list is given (task 165)."""
     import subprocess
     from tasks.core import (
         _enumerate_scope_delta, _fingerprint_exclude_pathspecs,
@@ -2207,34 +2229,45 @@ def _tail_cert_review_diff(project_path, snapshot) -> "str | None":
     parts = []
     total = 0
 
+    def _too_large(whole: bool) -> str:
+        return (f"the delta to certify is {'' if whole else 'at least '}{total:,} bytes; one "
+                f"certifying judge can be sent {_TAIL_CERT_TOTAL_CAP:,}")
+
+    def _no(reason: str) -> None:
+        # Every fail-closed exit says why. Past the cap, the size is the reason
+        # whatever stopped the enumeration afterwards — it was true first.
+        if why is not None:
+            why.append(_too_large(False) if total > _TAIL_CERT_TOTAL_CAP else reason)
+        return None
+
     def _emit(text):
         nonlocal total
         # Count BYTES, not characters (impl-panel r11 opus F1): the transport
         # limit this protects (an argv judge's ~30 KiB cap) is bytes, so a
         # multi-byte-UTF-8 doc could otherwise exceed it while `total` stayed under.
+        # Past the cap nothing more is kept, but the count goes on: the refusal
+        # names the size of what would have been sent (task 165).
         total += len(text.encode("utf-8", "replace"))
-        if total > _TAIL_CERT_TOTAL_CAP:
-            return False                   # payload too large for the transport
-        parts.append(text)
-        return True
+        if total <= _TAIL_CERT_TOTAL_CAP:
+            parts.append(text)
 
     # sonnet#1 (r5): explicit scope-set / commit-presence check, so fail-closed
     # never rests on git's handling of a degenerate `""..HEAD` ref-range.
     if set(scopes.keys()) != set(snap_scopes.keys()):
-        return None
+        return _no("the code roots are not the ones the panel reviewed")
     for name, repo in scopes.items():
         rec = snap_scopes.get(name) or {}
         if not isinstance(rec, dict) or not (rec.get("commit") or ""):
-            return None
+            return _no(f"the panel's snapshot holds no commit for {name or 'the project'}")
         f0 = rec.get("commit") or ""
         f0_dirty = rec.get("dirty") if isinstance(rec.get("dirty"), dict) else {}
         scope_paths = _enumerate_scope_delta(repo, f0, f0_dirty, exclude)
-        if scope_paths is None:
-            return None                    # git error → fail closed
+        if scope_paths is None:            # git error → fail closed
+            return _no(f"git could not list what changed in {name or 'the project'}")
         beh, non = classify_delta_paths(sorted(scope_paths),
                                         is_outer_scope=(name == ""))
-        if beh:
-            return None                    # a behavioral path here → fail closed
+        if beh:                            # a behavioral path here → fail closed
+            return _no(f"a code path is in the delta ({beh[0]})")
         for rel in non:
             prefixed = f"{name}/{rel}" if name else rel
             # DIFF-FIRST: worktree, staged, committed-since-F0 (all restricted to
@@ -2257,41 +2290,43 @@ def _tail_cert_review_diff(project_path, snapshot) -> "str | None":
                 if dt.strip():
                     diffs.append(f"# {prefixed} — {label}\n{dt}")
             if diff_ok and diffs:
-                if not _emit("\n".join(diffs)):
-                    return None
+                _emit("\n".join(diffs))
                 continue
             # NO diff → show bounded content (worktree + index) or REMOVED.
             fpath = Path(repo) / rel
             shown = False
             if fpath.exists() or fpath.is_symlink():
                 data = _safe_read_regular(fpath, _TAIL_CERT_DIFF_CAP)
-                if data is None:
-                    return None            # non-regular / oversize / unreadable
-                if not _emit(f"--- current content of {prefixed} ---\n"
-                             + data.decode("utf-8", "replace")):
-                    return None
+                if data is None:           # non-regular / oversize / unreadable
+                    return _no(f"{prefixed} is not a regular readable file of at most "
+                               f"{_TAIL_CERT_DIFF_CAP:,} bytes")
+                _emit(f"--- current content of {prefixed} ---\n"
+                      + data.decode("utf-8", "replace"))
                 shown = True
             try:
                 in_index = subprocess.run(["git", "cat-file", "-e", f":{rel}"],
                                           cwd=repo, capture_output=True).returncode == 0
             except (OSError, subprocess.SubprocessError):
-                return None
+                return _no(f"git could not look {prefixed} up in the index")
             if in_index:
                 try:
                     gi = subprocess.run(["git", "show", f":{rel}"], cwd=repo,
                                         capture_output=True)
                 except (OSError, subprocess.SubprocessError):
-                    return None
+                    return _no(f"git could not read the staged copy of {prefixed}")
                 if gi.returncode != 0 or len(gi.stdout) > _TAIL_CERT_DIFF_CAP:
-                    return None
-                if not _emit(f"--- STAGED (index) content of {prefixed} ---\n"
-                             + gi.stdout.decode("utf-8", "replace")):
-                    return None
+                    return _no(f"the staged copy of {prefixed} could not be read, or is over "
+                               f"{_TAIL_CERT_DIFF_CAP:,} bytes")
+                _emit(f"--- STAGED (index) content of {prefixed} ---\n"
+                      + gi.stdout.decode("utf-8", "replace"))
                 shown = True
             if not shown:
-                if not _emit(f"--- {prefixed}: REMOVED/DELETED from worktree AND "
-                             f"index since F0 (a claim was withdrawn) ---"):
-                    return None
+                _emit(f"--- {prefixed}: REMOVED/DELETED from worktree AND "
+                      f"index since F0 (a claim was withdrawn) ---")
+    if total > _TAIL_CERT_TOTAL_CAP:       # payload too large for the transport
+        if why is not None:
+            why.append(_too_large(True))
+        return None
     return "\n\n".join(parts) if parts else "(no certifiable delta content)"
 
 

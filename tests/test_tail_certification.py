@@ -487,6 +487,31 @@ class TailCertGateDecision(unittest.TestCase):
             cert_verdict=None, non_behavioral=["docs/x.md"])
         self.assertFalse(allowed)
 
+    # PLAN S11 item 11 (task 165; seen closing retro 161). Three different things ended
+    # in the one sentence "tail certification did not return PASS": no judge was called
+    # (the delta was over the payload cap), the judge said FAIL, the answer was unusable.
+    COMMON = dict(can_certify=True, behavioral_nonempty=False, non_behavioral=["docs/x.md"])
+
+    def test_each_refusal_says_what_happened(self):
+        _, no_judge = tail_cert_gate_decision(
+            cert_verdict=None, unavailable="the delta to certify is 109,436 bytes", **self.COMMON)
+        _, failed = tail_cert_gate_decision(cert_verdict="FAIL", **self.COMMON)
+        _, unusable = tail_cert_gate_decision(cert_verdict=None, **self.COMMON)
+        self.assertIn("109,436 bytes", no_judge)
+        self.assertIn("no judge was called", no_judge)
+        self.assertIn("returned FAIL", failed)
+        self.assertIn("tail-cert.log", failed)                 # where the judge's reasons are
+        self.assertNotIn("no judge was called", failed)
+        self.assertNotIn("FAIL", unusable)
+        self.assertNotIn("no judge was called", unusable)
+        for clause in (no_judge, failed, unusable):
+            self.assertIn("fresh panel required", clause)
+            self.assertNotIn("\n", clause)                     # one receipt line, as before
+
+    def test_a_delta_that_could_not_be_sent_never_certifies(self):
+        allowed, _ = tail_cert_gate_decision(cert_verdict="PASS", unavailable="too large", **self.COMMON)
+        self.assertFalse(allowed)
+
 
 class TailCertVerdictParse(unittest.TestCase):
     """W6 — the structured-token parser. Fail-closed: only a SINGLE unambiguous
@@ -650,6 +675,38 @@ class ClosePathTailCert(unittest.TestCase):
 
     def _receipt(self, td):
         return (td / "task.md").read_text(encoding="utf-8")
+
+    # PLAN S11 item 11 (task 165). Closing retro 161, the delta was 109,436 bytes of
+    # mind-map diff: the certification stopped before any judge was spawned, and the
+    # close said "tail certification did not return PASS" — a judge's FAIL in all but name.
+    def test_a_delta_too_large_for_one_judge_says_so(self):
+        d, td, env = self._setup()
+        for name in ("a.md", "b.md"):           # each under the per-file ceiling, together over the total
+            (d / "docs" / name).write_text("# doc\n" + ("word " * 12 + "\n") * 1000, encoding="utf-8")
+        r = self._close(d, env)                 # a real close: nothing stands in for the judge
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("no judge was called", r.stderr)
+        self.assertRegex(r.stderr, r"\b1\d\d,\d{3} bytes")          # the size of what would have been sent
+        self.assertIn("98,304", r.stderr)                            # the limit
+        self.assertNotIn("did not return PASS", r.stderr)
+        self.assertFalse((td / "tail-cert.log").exists())
+        self.assertNotIn("\ndone", self._receipt(td).split("## Status")[1][:20])
+
+    def test_a_judges_fail_is_called_a_fail(self):
+        d, td, env = self._setup()
+        (d / "docs" / "guide.md").write_text("# new doc\n", encoding="utf-8")
+        out, err = self._close_inproc(d, "FAIL")
+        self.assertNotIn("Task 001 done.", out)
+        self.assertIn("returned FAIL", err)
+        self.assertNotIn("no judge was called", err)
+
+    def test_an_unusable_answer_is_not_called_a_fail(self):
+        d, td, env = self._setup()
+        (d / "docs" / "guide.md").write_text("# new doc\n", encoding="utf-8")
+        out, err = self._close_inproc(d, None)
+        self.assertNotIn("Task 001 done.", out)
+        self.assertIn("no usable verdict", err)
+        self.assertNotIn("returned FAIL", err)
 
     # (a) docs-only post-panel delta certifies WITHOUT --stale-panel-ok
     def test_docs_only_delta_certifies(self):

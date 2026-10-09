@@ -245,6 +245,72 @@ class OutageRecord(unittest.TestCase):
         data = json.loads(so._record(self.agent).read_text(encoding="utf-8"))
         self.assertEqual(len(data), 50, sorted(data))
 
+    # PLAN S11 item 3 (task 165; task 149 impl panel r1, codex-high). Two panels start; the
+    # seat fails in the first and is recorded; the owner tops the account up and runs
+    # `tasks models enable`; the second panel, which had started before that, then reports
+    # the same old failure — and the seat was recorded out of credit again.
+    OUT = {"reason": "grok: usage balance exhausted", "until": None}
+    MIN = dt.timedelta(minutes=1)
+
+    def test_a_failure_from_a_panel_older_than_the_owners_clear_is_not_recorded(self):
+        so.record_outage(self.agent, "grok:x", self.OUT, NOW)
+        self.assertTrue(so.clear_outage(self.agent, "grok:x", NOW + 2 * self.MIN))
+        self.assertFalse(so.record_outage(self.agent, "grok:x", self.OUT, NOW + 3 * self.MIN,
+                                          started=NOW + self.MIN))
+        self.assertEqual(so.current_outages(self.agent, NOW + 3 * self.MIN), {})
+        # a panel that started AFTER the clear is news
+        self.assertTrue(so.record_outage(self.agent, "grok:x", self.OUT, NOW + 9 * self.MIN,
+                                         started=NOW + 5 * self.MIN))
+        self.assertEqual(list(so.current_outages(self.agent, NOW + 9 * self.MIN)), ["grok:x"])
+
+    def test_a_clear_with_nothing_recorded_binds_the_older_panels_too(self):
+        # the owner's statement is "this seat works as of now" whether or not a panel
+        # has got as far as recording its failure
+        self.assertFalse(so.clear_outage(self.agent, "grok:x", NOW))           # nothing was there
+        self.assertFalse(so.record_outage(self.agent, "grok:x", self.OUT, NOW + self.MIN,
+                                          started=NOW - self.MIN))
+        self.assertEqual(so.current_outages(self.agent, NOW + self.MIN), {})
+
+    def test_a_clear_is_about_one_seat(self):
+        so.clear_outage(self.agent, "grok:x", NOW + 2 * self.MIN)
+        self.assertTrue(so.record_outage(self.agent, "codex:y", self.OUT, NOW + 3 * self.MIN,
+                                         started=NOW + self.MIN))
+        self.assertEqual(list(so.current_outages(self.agent, NOW + 3 * self.MIN)), ["codex:y"])
+
+    def test_a_caller_that_gives_no_start_time_records_as_before(self):
+        so.clear_outage(self.agent, "grok:x", NOW)
+        self.assertTrue(so.record_outage(self.agent, "grok:x", self.OUT, NOW + self.MIN))
+        self.assertEqual(list(so.current_outages(self.agent, NOW + self.MIN)), ["grok:x"])
+
+    def test_the_time_of_a_clear_is_never_listed_as_a_seat(self):
+        so.record_outage(self.agent, "grok:x", self.OUT, NOW)
+        so.clear_outage(self.agent, "grok:x", NOW + self.MIN)
+        so.record_outage(self.agent, "codex:y", self.OUT, NOW + 2 * self.MIN)
+        self.assertEqual(list(so.current_outages(self.agent, NOW + 2 * self.MIN)), ["codex:y"])
+        data = json.loads(so._record(self.agent).read_text(encoding="utf-8"))
+        extra = {k: v for k, v in data.items() if k != "codex:y"}
+        self.assertEqual(len(extra), 1, data)
+        # the reader shipped in 1.6.0 keeps OBJECT values only (`_load`): what holds the
+        # clear times must not be one, or an old reader lists it as a seat out of credit
+        self.assertNotIsInstance(next(iter(extra.values())), dict)
+        # …and the later write kept it: the older panel's failure is still refused
+        self.assertFalse(so.record_outage(self.agent, "grok:x", self.OUT, NOW + 3 * self.MIN, started=NOW))
+
+    def test_a_record_file_written_by_1_6_0_still_reads(self):
+        so._record(self.agent).parent.mkdir(parents=True, exist_ok=True)
+        so._record(self.agent).write_text(json.dumps(
+            {"grok:x": {"reason": "grok: usage balance exhausted", "until": None,
+                        "since": "2026-10-07T18:00+03:00"}}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        self.assertEqual(list(so.current_outages(self.agent, NOW)), ["grok:x"])
+        self.assertTrue(so.clear_outage(self.agent, "grok:x", NOW))
+        self.assertEqual(so.current_outages(self.agent, NOW), {})
+
+    def test_a_clear_older_than_a_day_is_forgotten(self):
+        so.clear_outage(self.agent, "grok:x", NOW)
+        so.record_outage(self.agent, "codex:y", self.OUT, NOW + dt.timedelta(days=2))
+        data = json.loads(so._record(self.agent).read_text(encoding="utf-8"))
+        self.assertEqual(list(data), ["codex:y"], "a two-day-old clear is still carried")
+
 
 class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
     """A real `cmd_panel_review` (judges faked at the adapter, the tamper guard
@@ -325,6 +391,28 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
         code, out, _ = self._panel(models, self._judge(), codex_available=True)
         self.assertNotIn("gpt-5.5", self.calls, "a seat out of credit was called again")
         self.assertIn("Skipped out of credit: codex:gpt-5.5", out)
+
+    def test_a_seat_the_owner_enabled_while_the_panel_ran_is_not_recorded_again(self):
+        # PLAN S11 item 3 (task 165): the panel that started before the owner's
+        # `tasks models enable` reports the seat's old failure after it
+        models = self.CLAUDE[:2] + ("codex:gpt-5.5",)
+        agent = self.d / ".agent"
+        inner = self._judge(outage=("gpt-5.5",))
+
+        def judge(adapter, prompt, model, system_context, **kw):
+            if "gpt-5.5" in model:          # the owner's enable lands while this panel runs
+                so.clear_outage(agent, "codex:gpt-5.5", NOW + dt.timedelta(minutes=2))
+            return inner(adapter, prompt, model, system_context, **kw)
+
+        code, out, _ = self._panel(models, judge, codex_available=True)
+        self.assertEqual(so.current_outages(agent, NOW + dt.timedelta(minutes=5)), {}, out)
+        self.assertNotIn("Recorded codex:gpt-5.5 as out of credit", out)
+        self.assertIn("codex:gpt-5.5 answered out of credit", out)       # it says what it saw …
+        self.assertIn("not recorded", out)                                # … and what it did not do
+        # the next panel calls the seat again
+        self.calls.clear()
+        self._panel(models, self._judge(), codex_available=True)
+        self.assertIn("gpt-5.5", self.calls)
 
     def test_a_claude_seat_at_its_account_limit_is_recorded_then_skipped(self):
         # Task 158: on 2026-10-08 both claude seats of a five-seat panel answered with
@@ -425,6 +513,29 @@ class ModelsEnableClearsAnOutage(unittest.TestCase):
             self.assertEqual(so.current_outages(proj / ".agent"), {})
             self.assertIn("enabled", buf.getvalue())
             self.assertIn("no outage recorded", buf.getvalue())
+
+    def test_enable_with_nothing_recorded_still_binds_a_panel_that_is_running(self):
+        # PLAN S11 item 3 (task 165): the command's second answer used to end "nothing changed"
+        import contextlib
+        import io
+        from tasks.models_check import cli_models
+        with tempfile.TemporaryDirectory() as tmp:
+            proj = Path(tmp)
+            (proj / ".agent" / "tasks").mkdir(parents=True)
+            began = dt.datetime.now().astimezone() - dt.timedelta(minutes=1)
+            buf = io.StringIO()
+            old = os.getcwd()
+            os.chdir(proj)
+            try:
+                with contextlib.redirect_stdout(buf):
+                    self.assertEqual(cli_models(["enable", "grok:grok-4.7:medium"], proj), 0)
+            finally:
+                os.chdir(old)
+            self.assertIn("no outage recorded", buf.getvalue())
+            self.assertNotIn("nothing changed", buf.getvalue())
+            self.assertFalse(so.record_outage(proj / ".agent", "grok:grok-4.7:medium",
+                                              {"reason": "r", "until": None}, started=began))
+            self.assertEqual(so.current_outages(proj / ".agent"), {})
 
 
 if __name__ == "__main__":

@@ -348,5 +348,32 @@ class ForcedS7EndToEnd(unittest.TestCase):
         self._assert_fields(got)
 
 
+class AstCheckRefusesAWarning(unittest.TestCase):
+    """PLAN S11 item 7 (task 165; retro 161). `tasks/review.py` carried `\\s` in an
+    ordinary docstring — a DeprecationWarning on Python 3.10, a SyntaxWarning on 3.12,
+    an error in a later version — and verify's `ast.parse` check let it through for
+    months, because a warning is not an exception."""
+
+    def setUp(self):
+        self.problem = _load_verify().py_source_problem
+
+    def test_an_invalid_escape_sequence_is_a_failure(self):
+        got = self.problem('def f():\n    """matches \\s+ here"""\n', "pkg/x.py")
+        self.assertIsNotNone(got, "an invalid escape sequence passed the check")
+        self.assertIn("pkg/x.py:2", got)
+        self.assertIn("invalid escape sequence", got)
+
+    def test_the_same_text_in_a_raw_string_passes(self):
+        self.assertIsNone(self.problem('def f():\n    r"""matches \\s+ here"""\n', "pkg/x.py"))
+
+    def test_a_syntax_error_is_still_reported_with_its_line(self):
+        self.assertIn("pkg/x.py:1", self.problem("def f(:\n    pass\n", "pkg/x.py"))
+
+    def test_syntax_newer_than_the_declared_floor_is_still_refused(self):
+        # the check's first job (PEP 654 `except*` arrived in 3.11; the floor is 3.10)
+        src = "try:\n    pass\nexcept* ValueError:\n    pass\n"
+        self.assertIsNotNone(self.problem(src, "pkg/x.py"))
+
+
 if __name__ == "__main__":
     unittest.main()
