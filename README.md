@@ -115,7 +115,7 @@ For hands-off execution, run in sandbox mode - `--dangerously-skip-permissions` 
 sandbox
 ```
 
-The sandbox uses Linux bubblewrap. Your project directory is writable, `.git` is read-only, and **writes** outside the project are blocked at the kernel level — reads and network access are not (this is write containment, not a read or network jail). The agent runs without permission prompts but can't escape the write containment even if it tries. You still steer by chatting.
+The sandbox uses Linux bubblewrap. Without it there is no containment, so `sandbox` refuses to start the agent and tells you how to install it. Your project directory is writable, `.git` is read-only, and **writes** outside the project are blocked at the kernel level — reads and network access are not (this is write containment, not a read or network jail). The agent runs without permission prompts but can't escape the write containment even if it tries. You still steer by chatting.
 
 When you want to drive yourself - quick experiments, exploration, no gate pressure - say so and the agent switches to freehand mode (`/playbook:freehand`); the hooks relax until the next task.
 
