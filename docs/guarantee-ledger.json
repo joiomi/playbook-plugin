@@ -7360,7 +7360,7 @@
     {
       "id": "PB-SANDBOX-DETECTION-FALLBACK",
       "category": "sandbox",
-      "statement": "Containment availability and nested containment are detected. The sandbox launcher refuses to start or preview an agent when no usable containment exists — bubblewrap missing, or installed but unable to start a sandbox — instead of launching it uncontained; the judge paths, which call `run()` directly, fall back uncontained with an observable warning rather than claiming kernel containment.",
+      "statement": "Containment availability and nested containment are detected. The sandbox launcher refuses to start or preview an agent when no usable containment exists — bubblewrap missing, or installed but unable to start a sandbox — instead of launching it uncontained, and a wrapped launch runs the bubblewrap it probed, by absolute path. The judge paths, which call `run()` directly, fall back uncontained with an observable warning when bubblewrap is not on PATH, rather than claiming kernel containment; where it is installed but cannot start, a judge's launch fails and nothing falls back.",
       "owner": [
         {
           "path": "plugins/playbook/provider/sandbox.py",
@@ -7488,6 +7488,16 @@
           },
           "limitations": [
             "If bwrap is gone between the launcher's check and the launch, `_wrapped_argv(require_containment=True)` raises instead of returning the bare agent argv; a direct `_wrapped_argv` call without it — the judge paths — still returns the unwrapped argv."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_sandbox_refuses_uncontained.py",
+          "reference": "TheRealLauncherWithoutBubblewrap.test_a_relative_path_entry_cannot_swap_bubblewrap_for_a_file_of_the_project",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "PATH starts with the relative entry `bin`; where the launcher stands `bin/bwrap` passes the probe, and the project has its own `bin/bwrap`. The launch, whose working directory is the project, runs the probed one (absolute path). Watched red: the project's file ran. The probed stand-in is not a real sandbox — the test pins WHICH binary runs."
           ]
         }
       ],

@@ -26,6 +26,8 @@ from unittest import mock
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent / "plugins/playbook"))
+sys.path.insert(0, str(_HERE.parent))
+from tests._bwrap_standin import bwrap_usable  # noqa: E402
 from provider import sandbox  # noqa: E402
 from provider.sandbox import build_bwrap_argv  # noqa: E402
 
@@ -92,7 +94,7 @@ class CliNoNetworkGuards(unittest.TestCase):
         self.assertEqual(rc, 2)
 
 
-@unittest.skipUnless(shutil.which("bwrap"), "bwrap not available")
+@unittest.skipUnless(bwrap_usable(), "no bubblewrap that can start a sandbox here")
 class LiveNetworkIsolation(unittest.TestCase):
     """Real-os: --no-network actually collapses the interface set to loopback,
     while the default leaves the host's interfaces reachable.

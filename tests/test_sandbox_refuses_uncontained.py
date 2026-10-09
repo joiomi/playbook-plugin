@@ -162,7 +162,7 @@ class WorkingBubblewrap(_Launcher):
         rc, out, err, calls = self.main(["--agent", "claude", "--print-argv", "--", "-p", "hi"],
                                         bwrap="/usr/bin/bwrap")
         self.assertEqual((rc, calls), (0, []), err)
-        self.assertEqual(out.splitlines()[0], "bwrap")
+        self.assertEqual(out.splitlines()[:4], ["/usr/bin/bwrap", "--ro-bind", "/", "/"])
 
 
 def _script(path: Path, body: str) -> Path:
@@ -271,6 +271,23 @@ class TheLaunchItselfFailsClosed(unittest.TestCase):
                                   side_effect=lambda n, *a, **k: None if n == "bwrap" else _REAL_WHICH(n, *a, **k)):
             argv = sandbox._wrapped_argv("claude", ["-p", "hi"], Path("/proj"), None, False)
         self.assertEqual(argv, sandbox._compose_agent_argv("claude", ["-p", "hi"]))
+
+
+class TheBubblewrapProbedIsTheOneLaunched(unittest.TestCase):
+    """A launch runs with the PROJECT as its working directory. A bare `bwrap`, or one found
+    through a relative PATH entry, could resolve there to another — project-controlled — file
+    than the one the launcher probed. The wrapped argv names bubblewrap by ABSOLUTE path, as
+    resolved where the launcher stands."""
+
+    def test_the_wrapped_argv_names_bubblewrap_by_absolute_path(self):
+        project = Path(tempfile.mkdtemp(prefix="pb-abs-")).resolve()
+        self.addCleanup(shutil.rmtree, project, ignore_errors=True)
+        with mock.patch.object(sandbox, "is_sandboxed", return_value=False), \
+                mock.patch.object(sandbox.shutil, "which",
+                                  side_effect=lambda n, *a, **k: "bin/bwrap" if n == "bwrap" else _REAL_WHICH(n, *a, **k)):
+            argv = sandbox._wrapped_argv("claude", ["-p", "hi"], project, None, True)
+        self.assertEqual(argv[0], os.path.abspath("bin/bwrap"))
+        self.assertEqual(argv[1:4], ["--ro-bind", "/", "/"])
 
 
 class TheNestingSignalIsTrue(unittest.TestCase):
@@ -418,6 +435,25 @@ class TheRealLauncherWithoutBubblewrap(unittest.TestCase):
         self.assertFalse(marker.exists(), "an uncontained process started an agent through the launcher")
         self.assertEqual(rc_file.read_text(encoding="utf-8"), "2")
         self.assertIn("no containment", Path(str(marker) + ".err").read_text(encoding="utf-8"))
+
+    def test_a_relative_path_entry_cannot_swap_bubblewrap_for_a_file_of_the_project(self):
+        # PATH starts with the relative entry `bin`. Where the launcher stands, bin/bwrap passes
+        # the start probe; the project has its own bin/bwrap, which is not a sandbox at all.
+        # The launch has the project as its working directory: it must still run the probed one.
+        case = Path(tempfile.mkdtemp(prefix="relpath-", dir=self.root))
+        for d in ("home", "here/bin", "project/bin"):
+            (case / d).mkdir(parents=True)
+        marker = case / "the-projects-bwrap-ran"
+        _script(case / "here" / "bin" / "bwrap", "exit 0\n")
+        _script(case / "project" / "bin" / "bwrap", 'printf ran > "$MARKER"\n')
+        env = {"PATH": f"bin{os.pathsep}{self.bin}", "HOME": str(case / "home"),
+               "MARKER": str(marker), "LANG": "C.UTF-8"}
+        r = subprocess.run([self.bash, str(PLUGIN / "scripts" / "sandbox"), "--agent", "claude",
+                            "--project-root", str(case / "project"), "--", "-p", "hi"],
+                           cwd=case / "here", env=env, stdin=subprocess.DEVNULL,
+                           capture_output=True, text=True, timeout=120)
+        self.assertFalse(marker.exists(),
+                         f"the launch ran the project's own bin/bwrap, not the probed one\n{r.stderr}")
 
     def test_the_monitor_is_refused_before_it_writes_anything(self):
         case = Path(tempfile.mkdtemp(prefix="monitor-", dir=self.root))

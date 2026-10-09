@@ -33,6 +33,8 @@ from unittest import mock
 _HERE = Path(__file__).resolve().parent
 PLUGIN = _HERE.parent / "plugins/playbook"
 sys.path.insert(0, str(PLUGIN))
+sys.path.insert(0, str(_HERE.parent))
+from tests._bwrap_standin import bwrap_usable  # noqa: E402
 
 from provider import sandbox, subagent  # noqa: E402
 
@@ -100,8 +102,8 @@ class PrintArgvNeverExecutes(unittest.TestCase):
         self.assertIn("-p", r.stdout.split(),
                       f"argv is not the headless --prompt invocation:\n{r.stdout}")
 
-    @unittest.skipUnless(shutil.which("bwrap"), "bwrap not installed")
     def test_print_argv_stays_contained(self):
+        # a preview: runs on every host (the stand-in where bubblewrap is missing or cannot start)
         r = self._run("--print-argv", "--agent", "claude", "--prompt", "hello")
         self.assertIn("bwrap", r.stdout,
                       f"dry-run argv is not wrapped in containment:\n{r.stdout}")
@@ -111,7 +113,7 @@ class PrintArgvNeverExecutes(unittest.TestCase):
         self.assertNotIn(MARKER, r.stdout + r.stderr)
         self.assertEqual(r.returncode, 0, r.stderr)
 
-    @unittest.skipUnless(shutil.which("bwrap"), "bwrap not installed")
+    @unittest.skipUnless(bwrap_usable(), "no bubblewrap that can start a sandbox here")
     def test_ro_project_prompt_denies_project_write_but_keeps_rw_exception(self):
         """Exercise the real wrapper, not only the SubagentSpec handoff."""
         allowed = self.proj / "allowed"

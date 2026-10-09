@@ -145,9 +145,9 @@ def _bwrap_install_hint() -> str:
 def _sandbox_item() -> dict:
     system = platform.system()
     why = (".claude/bin/sandbox uses it for deny-write OS containment "
-           "(blast-radius control when running --skip-permissions); without it "
-           "the sandbox refuses to start an agent, and judges run uncontained "
-           "with a warning")
+           "(blast-radius control when running --skip-permissions); where it is "
+           "not installed the sandbox refuses to start an agent, and judges run "
+           "uncontained with a warning")
     if system == "Linux":
         exe = shutil.which("bwrap")
         if exe:
@@ -156,7 +156,11 @@ def _sandbox_item() -> dict:
             from provider.sandbox import bwrap_start_error
             err = bwrap_start_error(exe)
             if err:
-                return _item("sandbox: bubblewrap", "sandbox", False, SEV_RECOMMENDED, why,
+                # its own `why`: here a judge does not run uncontained — its launch fails
+                return _item("sandbox: bubblewrap", "sandbox", False, SEV_RECOMMENDED,
+                             ".claude/bin/sandbox uses it for deny-write OS containment; it is "
+                             "installed but cannot start a sandbox here, so the sandbox refuses "
+                             "to start an agent and a judge's launch fails",
                              f"bubblewrap is installed ({exe}) but could not start a "
                              f"sandbox here: {err}")
         return _item("sandbox: bubblewrap", "sandbox", bool(exe), SEV_RECOMMENDED,

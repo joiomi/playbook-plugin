@@ -15,9 +15,11 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   `--list-models` and `--help` still answer. A launch nested inside a sandbox is not refused — and the sandbox now
   tells a child it is sandboxed (`PLAYBOOK_SANDBOXED=1`) only when it wrapped it, so what an unwrapped process
   starts through `sandbox` is refused too; set by hand, that variable is the operator's statement that an outer
-  cage exists. `tasks environment` no longer reports a bubblewrap that cannot start as present. Reviews are not
-  affected: a judge is not launched through that command, and without bubblewrap it still runs — uncontained, with
-  the review's warning.
+  cage exists. `tasks environment` no longer reports a bubblewrap that cannot start as present. Every wrapped
+  launch — a judge's too — now names bubblewrap by absolute path: with a relative `PATH` entry, the launch (whose
+  working directory is the project) could run a file of the project instead of the bubblewrap that was checked.
+  Reviews otherwise behave as before: a judge is not launched through that command, and where bubblewrap is not
+  installed it still runs — uncontained, with the review's warning.
 
 ## [1.6.0] — 2026-10-09
 

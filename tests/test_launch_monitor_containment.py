@@ -20,6 +20,7 @@ Run: python3 -m unittest tests.test_launch_monitor_containment
 """
 from __future__ import annotations
 
+import atexit
 import os
 import shutil
 import subprocess
@@ -30,6 +31,12 @@ from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
 PLUGIN = _HERE.parent / "plugins/playbook"
+sys.path.insert(0, str(_HERE.parent))
+from tests._bwrap_standin import path_with_bwrap  # noqa: E402
+
+# where a stand-in bwrap is written on a host without a usable one (see _clean_env)
+_STAND_IN_DIR = Path(tempfile.mkdtemp(prefix="pb-standin-"))
+atexit.register(shutil.rmtree, _STAND_IN_DIR, ignore_errors=True)
 LAUNCHER = PLUGIN / "scripts" / "monitor-lib" / "launch-monitor"
 
 
@@ -37,6 +44,9 @@ def _clean_env() -> dict:
     # PLAYBOOK_SANDBOXED would short-circuit wrapping (nesting guard).
     env = {k: v for k, v in os.environ.items() if k != "PLAYBOOK_SANDBOXED"}
     env["PYTHONPATH"] = str(PLUGIN)
+    # These tests read the PREVIEW, which never executes bwrap; the launcher refuses a
+    # preview without a usable bubblewrap (task 164), so a host that has none gets the stand-in.
+    env["PATH"] = path_with_bwrap(_STAND_IN_DIR, env.get("PATH", ""))
     return env
 
 
@@ -57,7 +67,6 @@ def bind_index(argv: list[str], path: str, kinds=("--bind", "--ro-bind")) -> int
     return -1
 
 
-@unittest.skipUnless(shutil.which("bwrap"), "bwrap not installed")
 class RoProjectArgvShape(unittest.TestCase):
     def setUp(self):
         self.proj = Path(tempfile.mkdtemp()).resolve()

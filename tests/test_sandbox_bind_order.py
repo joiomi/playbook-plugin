@@ -26,6 +26,8 @@ from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent / "plugins/playbook"))
+sys.path.insert(0, str(_HERE.parent))
+from tests._bwrap_standin import bwrap_usable  # noqa: E402
 from provider.sandbox import build_bwrap_argv  # noqa: E402
 
 
@@ -82,7 +84,7 @@ class BindOrder(unittest.TestCase):
                         "the judge workspace must stay writable inside a ro project")
 
 
-@unittest.skipUnless(shutil.which("bwrap"), "bwrap not available")
+@unittest.skipUnless(bwrap_usable(), "no bubblewrap that can start a sandbox here")
 class LiveNegativeControl(unittest.TestCase):
     """The spike, pinned: a /tmp-resident project must be write-blocked, while
     exec and /tmp writes (the L1 facts) keep working."""

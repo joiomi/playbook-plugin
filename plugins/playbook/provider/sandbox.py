@@ -348,8 +348,9 @@ def default_agent() -> str:
 def is_sandboxed() -> bool:
     """True if already inside our sandbox — skip re-wrapping to avoid nesting.
 
-    Sole signal: PLAYBOOK_SANDBOXED=1 in env. `run()` always exports this
-    before exec'ing the child, so any nested invocation always sees it. The
+    Sole signal: PLAYBOOK_SANDBOXED=1 in env. `run()` exports this to a child
+    it wrapped (and passes it on when nested itself), so a nested invocation
+    sees it; a child it could NOT wrap does not get it (task 164). The
     earlier cwd-prefix heuristic (`/tmp/eval-`) was dropped because it could
     skip wrapping when the launching process's cwd happened to be in the
     eval tree but the target project_root was elsewhere.
@@ -648,6 +649,16 @@ def _git_dir_of(project_dir: Path) -> Path | None:
     return None
 
 
+def _bwrap_exe() -> "str | None":
+    """The bubblewrap this process would use, as an ABSOLUTE path; None when there
+    is none on PATH. Absolute, because a launch runs with the PROJECT as its
+    working directory: a bare `bwrap`, or one found through a relative PATH entry,
+    could resolve there to another — project-controlled — file than the one the
+    launcher probed (task 164, panel round 2)."""
+    exe = shutil.which("bwrap")
+    return os.path.abspath(exe) if exe else None
+
+
 def _wrapped_argv(
     agent: str,
     agent_args: list[str],
@@ -658,10 +669,27 @@ def _wrapped_argv(
     mask_records: bool | None = None,
     require_containment: bool = False,
 ) -> list[str]:
-    """Compose bypass-flag injection + bwrap wrapping into the final
-    argv. Shared by run() (blocking) and popen() (streaming) so containment is
-    generated in exactly one place. If already inside a sandbox, returns the
-    inner argv with bypass flags only.
+    """The argv of `_launch_plan` (which see) — what a launch would exec."""
+    return _launch_plan(agent, agent_args, project, extra_rw, project_writable,
+                        no_network, mask_records, require_containment)[0]
+
+
+def _launch_plan(
+    agent: str,
+    agent_args: list[str],
+    project: Path,
+    extra_rw: Iterable[str] | None,
+    project_writable: bool,
+    no_network: bool = False,
+    mask_records: bool | None = None,
+    require_containment: bool = False,
+) -> "tuple[list[str], bool]":
+    """Compose bypass-flag injection + bwrap wrapping into the final argv, and say
+    whether the child will be in a cage (wrapped here, or we are nested). Shared
+    by run() (blocking) and popen() (streaming) so containment is generated in
+    exactly one place. If already inside a sandbox, returns the inner argv with
+    bypass flags only. A wrapped argv names bubblewrap by absolute path
+    (`_bwrap_exe`).
 
     require_containment=True is the LAUNCHER's contract (`_main`, and the
     subagent runner it alone calls): with no bwrap to wrap in, raise instead of
@@ -677,18 +705,20 @@ def _wrapped_argv(
     if no_network and not network_isolation_available():
         raise RuntimeError(_NO_NETWORK_UNSUPPORTED)
     if is_sandboxed():
-        return inner_argv
-    if shutil.which("bwrap"):
+        return inner_argv, True
+    exe = _bwrap_exe()
+    if exe:
         git_dir = _git_dir_of(project)
-        return build_bwrap_argv(project, git_dir, inner_argv, extra_rw,
+        argv = build_bwrap_argv(project, git_dir, inner_argv, extra_rw,
                                 project_writable=project_writable, no_network=no_network,
                                 mask_records=mask_records)
+        return [exe, *argv[1:]], True
     if require_containment:
         raise RuntimeError(launch_refusal() or (
             "no containment — bubblewrap (`bwrap`) is not available, so the agent "
             "would run with nothing fencing its writes. Refusing to start it."))
     # No sandbox primitive available — exec directly with bypass.
-    return inner_argv
+    return inner_argv, False
 
 
 def containment_available() -> bool:
@@ -760,7 +790,7 @@ def launch_refusal() -> "str | None":
     tamper guard — the same ruling left them as they are."""
     if is_sandboxed():
         return None
-    exe = shutil.which("bwrap")
+    exe = _bwrap_exe()
     if not exe:
         return ("no containment — bubblewrap (`bwrap`) is not installed, so the agent would run "
                 "with its permission prompts off and nothing fencing its writes. Refusing to "
@@ -850,11 +880,6 @@ def _child_env(env: dict[str, str] | None, contained: bool) -> dict[str, str]:
     return child_env
 
 
-def _is_contained(wrapped: list[str]) -> bool:
-    # `build_bwrap_argv` is the only producer of an argv that starts with bwrap
-    return is_sandboxed() or wrapped[:1] == ["bwrap"]
-
-
 def run(
     agent: str,
     agent_args: list[str],
@@ -870,18 +895,18 @@ def run(
     **kwargs,
 ) -> subprocess.CompletedProcess:
     """Run an agent under sandbox containment. Composes bypass-flag injection
-    into argv, generates bwrap wrapping, exports PLAYBOOK_SANDBOXED=1
-    in child env. If already inside a sandbox (ours OR a foreign one we can't
-    nest in), skips wrapping but still injects bypass flags.
+    into argv, generates bwrap wrapping, exports PLAYBOOK_SANDBOXED=1 to a
+    child that is in a cage (`_child_env`). If already inside a sandbox (ours OR
+    a foreign one we can't nest in), skips wrapping but still injects bypass flags.
 
     no_network is the opt-in bwrap network jail; it defaults off and is never set
     by the judge path (judges need the network). require_containment: see
     `_wrapped_argv` — the launcher's launches raise rather than run unwrapped.
     """
     project = Path(project_root).resolve()
-    wrapped = _wrapped_argv(agent, agent_args, project, extra_rw, project_writable, no_network,
-                            mask_records, require_containment)
-    child_env = _child_env(env, _is_contained(wrapped))
+    wrapped, contained = _launch_plan(agent, agent_args, project, extra_rw, project_writable,
+                                      no_network, mask_records, require_containment)
+    child_env = _child_env(env, contained)
 
     if kwargs.get("text") or isinstance(kwargs.get("input"), str):
         # Robustness: text-mode pipes use the locale's codec, which need not be
@@ -990,9 +1015,9 @@ def popen(
     by the judge path.
     """
     project = Path(project_root).resolve()
-    wrapped = _wrapped_argv(agent, agent_args, project, extra_rw, project_writable, no_network,
-                            mask_records, require_containment)
-    child_env = _child_env(env, _is_contained(wrapped))
+    wrapped, contained = _launch_plan(agent, agent_args, project, extra_rw, project_writable,
+                                      no_network, mask_records, require_containment)
+    child_env = _child_env(env, contained)
 
     kwargs.setdefault("stdout", subprocess.PIPE)
     kwargs.setdefault("text", True)
