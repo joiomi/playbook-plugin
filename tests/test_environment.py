@@ -145,7 +145,9 @@ class SandboxItemTest(unittest.TestCase):
         # the launcher does not use such a bwrap (task 164, the single judge's finding): the
         # advice follows the launcher's rule, so it cannot say "present" where a launch is refused
         from provider import sandbox
+        # is_sandboxed: inside a sandbox (a judge running this suite) the launcher refuses nothing
         with mock.patch.object(env.platform, "system", return_value="Linux"), \
+                mock.patch.object(sandbox, "is_sandboxed", return_value=False), \
                 mock.patch.object(env.shutil, "which",
                                   side_effect=lambda name: "bin/bwrap" if name == "bwrap" else None), \
                 mock.patch.object(sandbox, "bwrap_start_error", return_value=None):
