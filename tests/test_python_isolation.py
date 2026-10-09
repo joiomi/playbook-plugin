@@ -83,7 +83,13 @@ class _Project(unittest.TestCase):
     def env(self, **extra) -> dict:
         env = dict(os.environ)
         env["HOME"] = str(self.home)
-        for k in ("PYTHONPATH", "PLAYBOOK_SESSION_ID", "PLAYBOOK_PROJECT_DIR", "CLAUDE_PROJECT_DIR"):
+        # What the run must not inherit from whoever runs the suite. PLAYBOOK_SANDBOXED
+        # is the nesting signal: a reviewer's sandbox sets it, and with it the monitor
+        # launcher's pre-flight is not refused for want of bubblewrap — the test below
+        # that relies on that refusal then went on to start an agent (the tail-
+        # certification judge of this task met it; `claude` was not on the test's PATH).
+        for k in ("PYTHONPATH", "PLAYBOOK_SESSION_ID", "PLAYBOOK_PROJECT_DIR", "CLAUDE_PROJECT_DIR",
+                  "PLAYBOOK_SANDBOXED"):
             env.pop(k, None)
         env.update(extra)
         return env
