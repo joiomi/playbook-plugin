@@ -618,5 +618,137 @@ class ARealReviewWhereNothingContainsTheJudge(unittest.TestCase):
         self.assertEqual(git(self.project, "status", "--porcelain", "--untracked-files=no"), "")
 
 
+# --------------------------------------------------------------------------- #
+# PB-CLI-OUTPUT-EXIT-COMPAT — "there is no complete documented stdout/stderr/exit
+# snapshot matrix". The row promises every documented command's output STRUCTURE
+# and exit meanings; a test cannot be a structure matrix. What can be shown, and
+# shown completely, is every exit code the reference STATES. This is evidence for
+# the half of the row it covers — the row itself is the owner's to narrow or keep
+# open (plan panel, task 169).
+# --------------------------------------------------------------------------- #
+REFERENCE = _HERE.parent / "docs" / "cli.md"
+
+
+class TheExitCodesTheReferenceStates(unittest.TestCase):
+    # Every `exit` in docs/cli.md, by a phrase of its own sentence → where it is shown:
+    # a test of this class, or (file, class, method) of a test elsewhere in the tree.
+    STATED = {
+        "exits non-zero on error-severity findings": "test_audit_exits_non_zero_on_an_error_severity_finding",
+        "is refused (exit 2, nothing spent)": ("tests/test_post_d6.py", "EndToEnd", "test_protocol_end_to_end"),
+        "Exits 1 when a pin can't run as configured": "test_models_check_exits_1_when_a_pin_cannot_run",
+        "A dead pin aborts (exit 1) unless `--force` is passed":
+            ("tests/test_model_availability.py", "SetTest", "test_dead_pin_refused_unless_force"),
+        "the command exits 1, names them and creates nothing": "test_a_second_bare_retro_exits_1_and_creates_nothing",
+        'are refused before anything runs (exit 2, "Nothing changed.")':
+            "test_each_listed_command_refuses_an_unknown_option_with_exit_2",
+    }
+    REFUSING = ("status", "list", "ls", "parked", "bootstrap", "dashboard", "timeline", "mindmap-sync",
+                "retro", "freehand", "audit")
+
+    def test_every_exit_the_reference_states_is_shown_somewhere(self):
+        import ast
+        import re
+        doc = REFERENCE.read_text(encoding="utf-8")
+        hits = [m.start() for m in re.finditer(r"(?i)\bexit", doc)]       # broad on purpose
+        used = []
+        for at in hits:
+            around = doc[max(0, at - 220):at + 220]
+            mine = [phrase for phrase in self.STATED if phrase in around]
+            self.assertEqual(len(mine), 1, f"an `exit` in docs/cli.md with no scenario (or two): …{around[180:300]}…")
+            used.append(mine[0])
+        self.assertEqual(sorted(used), sorted(self.STATED), "a scenario whose sentence left the reference")
+        for where in self.STATED.values():
+            if isinstance(where, str):
+                self.assertTrue(callable(getattr(self, where, None)), where)
+                continue
+            path, cls, method = where
+            tree = ast.parse((_HERE.parent / path).read_text(encoding="utf-8"))
+            found = [n for c in tree.body if isinstance(c, ast.ClassDef) and c.name == cls
+                     for n in c.body if isinstance(n, ast.FunctionDef) and n.name == method]
+            self.assertEqual(len(found), 1, where)
+        # the sentence that lists the refusing commands names exactly the ones run below
+        sentence = doc[doc.index('are refused before anything runs (exit 2, "Nothing changed.") by'):]
+        sentence = sentence[:sentence.index("— they used to be ignored")]
+        self.assertEqual(sorted(re.findall(r"`([a-z-]+)`", sentence)), sorted(self.REFUSING))
+
+    def setUp(self):
+        from tests._fake_agent import agent_proc_root, spawn_fake_agent, stop
+        self.tmp = Path(tempfile.mkdtemp()).resolve()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.project = self.tmp / "proj"
+        for d in (self.project, self.tmp / "home", self.tmp / "agent"):
+            os.makedirs(d)
+        agent = spawn_fake_agent(self.tmp / "agent")
+        self.addCleanup(stop, agent)
+        self.env = child_env(HOME=str(self.tmp / "home"), PLAYBOOK_SESSION_ID=f"pid-{agent.pid}",
+                             PLAYBOOK_PROC_ROOT=agent_proc_root(self.tmp, agent.pid))
+        git(self.project, "init", "-q")
+        (self.project / "code.py").write_text("x = 1\n", encoding="utf-8")
+        self.assertEqual(self._tasks("new", "quick", "first", "an intent").returncode, 0)
+        self.assertEqual(self._tasks("work", "001").returncode, 0)
+        git(self.project, "add", "-A")
+        git(self.project, "commit", "-q", "-m", "first")
+
+    def _tasks(self, *args, **extra):
+        return subprocess.run([bash_or_skip(), str(SCRIPTS / "tasks"), *args], cwd=self.project,
+                              env=dict(self.env, **extra), capture_output=True, text=True, timeout=300)
+
+    def _files(self):
+        return {k: v for k, v in tree_digest(self.project).items() if not k.startswith(".git/")}
+
+    def test_each_listed_command_refuses_an_unknown_option_with_exit_2(self):
+        for command in self.REFUSING:
+            with self.subTest(command=command):
+                before = self._files()
+                r = self._tasks(command, "--bogus")
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn("Nothing changed.", r.stderr)
+                self.assertEqual(self._files(), before)
+
+    def test_audit_exits_non_zero_on_an_error_severity_finding(self):
+        clean = self._tasks("audit", "001")
+        self.assertEqual(clean.returncode, 0, clean.stdout + clean.stderr)       # the control
+        (self.project / "merged.py").write_text("<<<<<<< HEAD\na = 1\n=======\na = 2\n>>>>>>> other\n",
+                                                encoding="utf-8")
+        git(self.project, "add", "-A")
+        r = self._tasks("audit", "001")
+        self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("conflict-markers", r.stdout + r.stderr)
+
+    def test_a_second_bare_retro_exits_1_and_creates_nothing(self):
+        first = self._tasks("retro")
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)       # the control: it makes one
+        records = sorted(p.name for p in self.project.joinpath(".agent", "tasks").iterdir())
+        self.assertEqual(len(records), 2, records)
+        second = self._tasks("retro")
+        self.assertEqual(second.returncode, 1, second.stdout + second.stderr)
+        self.assertIn("T001", second.stdout + second.stderr)                     # "names them"
+        self.assertEqual(sorted(p.name for p in self.project.joinpath(".agent", "tasks").iterdir()), records)
+
+    def test_models_check_exits_1_when_a_pin_cannot_run(self):
+        import json
+        # a PATH on which the default judge's CLI exists (a stand-in: `--no-probe`
+        # calls nothing) and the panel seat's does not
+        bindir = self.tmp / "bin"
+        os.makedirs(bindir)
+        for name in _TOOLS:
+            real = shutil.which(name)
+            if real:
+                os.symlink(real, bindir / name)
+        (bindir / "python3").write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n', encoding="utf-8")
+        (bindir / "claude").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        for name in ("python3", "claude"):
+            (bindir / name).chmod(0o755)
+        models = self.project / ".agent" / "models.json"
+        models.write_text(json.dumps({"panel": [], "default_judge": "claude"}), encoding="utf-8")
+        ok = self._tasks("models", "check", "--no-probe", PATH=str(bindir))
+        self.assertEqual(ok.returncode, 0, ok.stdout + ok.stderr)                # the control
+        models.write_text(json.dumps({"panel": ["grok:grok-4.7:medium"], "default_judge": "claude"}),
+                          encoding="utf-8")
+        r = self._tasks("models", "check", "--no-probe", PATH=str(bindir))
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("cannot run as configured", r.stdout + r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
