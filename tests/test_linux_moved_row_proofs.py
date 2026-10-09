@@ -509,5 +509,114 @@ class TheBashLoggersLine(unittest.TestCase):
         self.assertEqual(self._twice_with_between(700), 2)
 
 
+# --------------------------------------------------------------------------- #
+# PB-JUDGE-TAMPER — "the unit proofs cross a `unit` boundary, and the
+# uncontained-fallback path still awaits …". Forty-one proofs, all in-process.
+# Here: a REAL single-judge review, as a subprocess, on a host with no sandbox —
+# the path where the guard is the only wall between a judge and the repository.
+# --------------------------------------------------------------------------- #
+_TOOLS = ("bash", "sh", "cat", "grep", "sed", "head", "tail", "find", "dirname", "basename", "printf",
+          "echo", "uname", "tr", "awk", "mkdir", "rm", "mv", "cp", "ls", "env", "date", "wc", "cut", "sort",
+          "ps", "chmod", "expr", "id", "touch", "readlink", "pwd", "test", "git", "stat", "sleep", "true",
+          "diff", "xargs", "tee")
+_ESSENTIAL = {"bash", "cat", "grep", "sed", "dirname", "ls", "env", "git"}
+
+# What the stand-in judge does before it answers. Each reads its prompt (stdin) to
+# the end first, like a real one.
+_JUDGES = {
+    "answers": "",
+    "writes": 'printf "changed = 1\\n" >> "$PWD/code.py"\n',
+    "commits": ('printf "changed = 2\\n" >> "$PWD/code.py"\n'
+                'git -C "$PWD" -c user.name=judge -c user.email=judge@example.invalid '
+                '-c commit.gpgsign=false commit -q -am "by the judge"\n'),
+}
+BANNER = "!! TAMPER DETECTED — the repo changed while the judges ran !!"
+
+
+class ARealReviewWhereNothingContainsTheJudge(unittest.TestCase):
+    def setUp(self):
+        import stat
+        from tests._fake_agent import agent_proc_root, spawn_fake_agent, stop
+        self.tmp = Path(tempfile.mkdtemp()).resolve()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.project, self.bindir = self.tmp / "proj", self.tmp / "bin"
+        for d in (self.project, self.bindir, self.tmp / "home", self.tmp / "agent"):
+            os.makedirs(d)
+        # a PATH of one directory: the tools the CLI uses, a python3, the stand-in
+        # judge — and NO bubblewrap, so the review runs uncontained
+        for name in _TOOLS:
+            real = shutil.which(name)
+            if real is None:
+                if name in _ESSENTIAL:
+                    self.skipTest(f"{name!r} is not on PATH")
+                continue
+            os.symlink(real, self.bindir / name)
+        py = self.bindir / "python3"
+        py.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n', encoding="utf-8")
+        py.chmod(py.stat().st_mode | stat.S_IEXEC)
+        if shutil.which("bwrap", path=str(self.bindir)) is not None:
+            self.skipTest("could not build a PATH without bubblewrap")
+        agent = spawn_fake_agent(self.tmp / "agent")
+        self.addCleanup(stop, agent)
+        self.env = child_env(HOME=str(self.tmp / "home"), PATH=str(self.bindir),
+                             PLAYBOOK_SESSION_ID=f"pid-{agent.pid}",
+                             PLAYBOOK_PROC_ROOT=agent_proc_root(self.tmp, agent.pid))
+        # a real project with a real task, made by the real CLI, all of it committed
+        git(self.project, "init", "-q")
+        (self.project / "code.py").write_text("x = 1\n", encoding="utf-8")
+        self._tasks("new", "bugfix", "a-fix", "an intent", ok=True)
+        self._tasks("work", "001", ok=True)
+        git(self.project, "add", "-A")
+        git(self.project, "commit", "-q", "-m", "first")
+        self.record = next(self.project.joinpath(".agent", "tasks").glob("001-*/task.md"))
+
+    def _tasks(self, *args, ok=False):
+        r = subprocess.run([bash_or_skip(), str(SCRIPTS / "tasks"), *args], cwd=self.project, env=self.env,
+                           capture_output=True, text=True, timeout=300)
+        if ok:
+            self.assertEqual(r.returncode, 0, r.stdout[-800:] + r.stderr[-800:])
+        return r
+
+    def _review(self, judge: str):
+        standin = self.bindir / "claude"
+        standin.write_text("#!/bin/sh\ncat >/dev/null\n" + _JUDGES[judge] +
+                           'echo "No Critical or Important findings."\n', encoding="utf-8")
+        standin.chmod(0o755)
+        before = self.record.read_bytes()
+        r = self._tasks("impl-review", "001", "--backend", "claude", "--timeout", "120")
+        said = r.stdout + r.stderr
+        # this IS the uncontained path, or the test shows nothing about it
+        self.assertIn("UNCONTAINED", said)
+        recorded = self.record.read_bytes() != before or (self.record.parent / "judge.log").exists()
+        return r.returncode, said, recorded
+
+    def test_control_a_judge_that_only_answers_is_recorded(self):
+        code, said, recorded = self._review("answers")
+        self.assertEqual(code, 0, said[-800:])
+        self.assertNotIn(BANNER, said)
+        self.assertTrue(recorded, "a clean review left no record")
+
+    def test_a_judge_that_changes_a_tracked_file_is_refused(self):
+        code, said, recorded = self._review("writes")
+        self.assertNotEqual(code, 0, said[-800:])
+        self.assertIn(BANNER, said)
+        self.assertFalse(recorded, "the review of a judge that changed the repository was recorded")
+
+    def test_a_judge_that_commits_is_refused_where_nothing_contains_it(self):
+        # plan panel, task 169 (opus): the one rule that is SPECIFIC to an uncontained
+        # host. The judge's commit leaves a clean tree; only HEAD has moved. Behind a
+        # sandbox a moved HEAD is a caution (a contained judge cannot commit — someone
+        # else did); with no sandbox it is the judge's own write.
+        head = git(self.project, "rev-parse", "HEAD")
+        code, said, recorded = self._review("commits")
+        self.assertNotEqual(git(self.project, "rev-parse", "HEAD"), head)     # the stand-in did commit
+        self.assertNotEqual(code, 0, said[-800:])
+        self.assertIn(BANNER, said)
+        self.assertIn("HEAD moved during an UNCONTAINED review", said)
+        self.assertFalse(recorded, "the review of a judge that committed was recorded")
+        # and what it left IS the case meant: nothing dirty, only a HEAD that moved
+        self.assertEqual(git(self.project, "status", "--porcelain", "--untracked-files=no"), "")
+
+
 if __name__ == "__main__":
     unittest.main()
