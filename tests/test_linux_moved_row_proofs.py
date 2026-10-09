@@ -451,5 +451,63 @@ class AProjectWhosePathHoldsASpaceAnAccentAndAQuote(unittest.TestCase):
         self.assertEqual((self.project / "written-inside").read_text(encoding="utf-8"), "contained")
 
 
+# --------------------------------------------------------------------------- #
+# PB-SHELL-ATTRIBUTION — "zsh and Windows/Git Bash logger behavior lack live
+# platform evidence." Windows is not claimed any more and zsh is not installed
+# where these tests were written, so the row speaks of the BASH logger only. Its
+# clauses were checked one by one against the tests that assert them (task 169,
+# W4); three had none, and one was not true as written.
+# --------------------------------------------------------------------------- #
+class TheBashLoggersLine(unittest.TestCase):
+    LOGGER = SCRIPTS / "bash-log.sh"
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp()).resolve()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.project = self.tmp / "proj"
+        os.makedirs(self.project.joinpath(".agent", "tasks"))
+        self.history = self.project / ".agent" / "bash_history"
+
+    def _shell(self, *argv, **extra):
+        r = subprocess.run([bash_or_skip(), *argv], cwd=self.project, capture_output=True, text=True,
+                           timeout=180, env=child_env(BASH_ENV=str(self.LOGGER), **extra))
+        self.assertEqual(r.returncode, 0, r.stderr[-400:])
+        return self.history.read_text(encoding="utf-8").splitlines() if self.history.exists() else []
+
+    def test_a_line_is_a_timestamp_the_agent_tag_and_the_command(self):
+        lines = self._shell("-c", "echo one-command >/dev/null")
+        self.assertEqual(len(lines), 1, lines)
+        self.assertRegex(lines[0], r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d \| AGENT \| echo one-command > /dev/null$")
+
+    def test_any_value_but_empty_and_zero_opts_the_shell_out(self):
+        # the statement: "installs no trap in a shell started with PLAYBOOK_NO_BASHLOG
+        # set to anything but \"\" or \"0\"" — the bound test tries 1 and 0 only
+        for value in ("yes", "false", "x", " "):
+            with self.subTest(value=value):
+                self.assertEqual(self._shell("-c", "echo opted-out >/dev/null", PLAYBOOK_NO_BASHLOG=value), [])
+        self.assertEqual(len(self._shell("-c", "echo not-opted-out >/dev/null", PLAYBOOK_NO_BASHLOG="")), 1)
+
+    def _twice_with_between(self, distinct_commands: int):
+        """A script that runs one command, then `distinct_commands` different ones, then
+        the first again → how many times the first is in the history."""
+        script = self.tmp / "many-commands.sh"
+        filler = "\n".join(f"true {i:04d}-{'x' * 96}" for i in range(distinct_commands))
+        script.write_text(f"echo the-repeated-one >/dev/null\n{filler}\necho the-repeated-one >/dev/null\n",
+                          encoding="utf-8")
+        lines = self._shell(str(script))
+        return sum(1 for ln in lines if ln.endswith("| AGENT | echo the-repeated-one > /dev/null"))
+
+    def test_a_command_is_written_once_while_the_shell_remembers_it(self):
+        self.assertEqual(self._twice_with_between(5), 1)
+
+    def test_what_the_row_admits_the_memory_is_reset_past_64_kib(self):
+        # plan panel, task 169 (codex-high): "each distinct command text once per shell
+        # process" is not the whole truth — the logger keeps what it has seen in one
+        # string and starts it afresh once that passes 65,536 characters (bash 3.2 has no
+        # associative arrays; the bound is deliberate). 700 distinct commands of 100
+        # characters pass it, and the first command, run again, is written again.
+        self.assertEqual(self._twice_with_between(700), 2)
+
+
 if __name__ == "__main__":
     unittest.main()
