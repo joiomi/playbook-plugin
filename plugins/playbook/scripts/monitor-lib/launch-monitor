@@ -112,7 +112,7 @@ if [ ! -d "$PLUGIN_ROOT/provider" ]; then
     echo "Error: provider/ module not found at $PLUGIN_ROOT (launch-monitor moved?)" >&2
     exit 1
 fi
-python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null \
+python3 -I -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null \
     || { echo "Playbook needs python3 >= 3.10 (found: $(python3 --version 2>&1))" >&2; exit 1; }
 
 # No containment → no monitor, and say so BEFORE anything is written (task 164).
@@ -122,8 +122,11 @@ python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev
 # the flags of that exec: it launches nothing and prints the reason itself.
 # (A pre-flight, not a lock: if bubblewrap breaks between here and that exec,
 # the exec still refuses — with the monitor's state already reset.)
+# Both calls run isolated, like scripts/sandbox (task 167): the program puts the plugin
+# directory on sys.path itself, so a project folder called `provider/` is not imported.
 env PYTHONPATH="$PLUGIN_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
-    python3 -m provider.sandbox --agent claude --ro-project --keep-records \
+    python3 -I -c 'import runpy, sys; sys.path.insert(0, sys.argv.pop(1)); runpy.run_module("provider.sandbox", run_name="__main__", alter_sys=True)' \
+    "$PLUGIN_ROOT" --agent claude --ro-project --keep-records \
     --project-root "$PROJECT_DIR" --print-argv -- preflight >/dev/null || exit 2
 
 # MONITOR_DIR lives in the TARGET project's agent dir, not the plugin.
@@ -176,6 +179,7 @@ That was your bootstrap output. Based on the briefing above, form your initial j
 # --keep-records (task 138): the monitor reads .agent/sessions/<id>/transcript_path,
 # which the judges' read-only sandbox hides.
 exec env PYTHONPATH="$PLUGIN_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
-    python3 -m provider.sandbox --agent claude --ro-project --keep-records \
+    python3 -I -c 'import runpy, sys; sys.path.insert(0, sys.argv.pop(1)); runpy.run_module("provider.sandbox", run_name="__main__", alter_sys=True)' \
+    "$PLUGIN_ROOT" --agent claude --ro-project --keep-records \
     --rw "$MONITOR_DIR" --project-root "$PROJECT_DIR" \
     -- --dangerously-skip-permissions --safe-mode "${ARGS[@]}" "$SEED"

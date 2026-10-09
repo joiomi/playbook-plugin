@@ -122,7 +122,7 @@ if [ -n "$PROJECT_DIR" ]; then
         # F19: bind the session to its OWN transcript from the very first
         # moment (state-echo refreshes it per tool call thereafter) — the
         # monitor reads this pointer instead of guessing newest-by-mtime.
-        TRANSCRIPT_PATH=$(echo "$INPUT" | python3 -c "
+        TRANSCRIPT_PATH=$(echo "$INPUT" | python3 -I -c "
 import sys, json
 t = json.loads(sys.stdin.read()).get('transcript_path', '')
 print(t if isinstance(t, str) and t and '\n' not in t and '\r' not in t else '')

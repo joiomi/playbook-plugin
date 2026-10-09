@@ -22,7 +22,7 @@ command -v python3 >/dev/null 2>&1 || {
 # helper below: fail OPEN, loudly, and BEFORE the exec that would otherwise
 # print a bare SyntaxError. Advisory hook → allow the call and say so; never
 # change allow/block semantics on an interpreter fault.
-python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null || {
+python3 -I -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null || {
     echo "[command-guard-hook] WARNING: python3 < 3.10 ($(python3 --version 2>&1)) —" \
          "Playbook needs python3 >= 3.10; the destructive-command guard is DISABLED" \
          "for this call (failing open). Upgrade python3 to restore it." >&2

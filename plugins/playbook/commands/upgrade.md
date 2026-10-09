@@ -26,7 +26,7 @@ Update it IN PLACE from its own source — a GitHub repository or a local direct
 A local directory is only re-read by `marketplace update`, so when that directory is a git clone (a release clone), pull it first. This block does nothing for any other source; if the pull refuses (local changes, a diverged branch), stop and tell the user — never reset their clone:
 
 ```bash
-DIR=$(python3 -c 'import json, os
+DIR=$(python3 -I -c 'import json, os
 p = os.path.join(os.path.expanduser("~"), ".claude", "plugins", "known_marketplaces.json")
 try:
     with open(p, encoding="utf-8") as fh:
@@ -37,7 +37,7 @@ if src.get("source") == "directory":
     print(src.get("path", ""))' 2>/dev/null)
 # only when the directory IS the clone's top level — not a folder inside some other repository
 TOP=$( [ -n "$DIR" ] && git -C "$DIR" rev-parse --show-toplevel 2>/dev/null )
-if [ -n "$TOP" ] && python3 -c 'import os, sys; sys.exit(0 if os.path.samefile(sys.argv[1], sys.argv[2]) else 1)' "$DIR" "$TOP" 2>/dev/null; then
+if [ -n "$TOP" ] && python3 -I -c 'import os, sys; sys.exit(0 if os.path.samefile(sys.argv[1], sys.argv[2]) else 1)' "$DIR" "$TOP" 2>/dev/null; then
     git -C "$DIR" pull --ff-only
 fi
 ```

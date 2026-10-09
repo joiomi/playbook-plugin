@@ -222,7 +222,7 @@ echo ""
 echo "## RECENT CLOSED TASKS (what got worked on lately)"
 echo ""
 # Find last 5 task.md files where Status is "done", extract Intent + Debrief
-python3 - "$AGENT_DIR" <<'PYEOF'
+python3 -I - "$AGENT_DIR" <<'PYEOF'
 import sys, re, glob, os
 # argv[1] is the RESOLVED AGENT DIR (lane-aware), not the project root — a
 # '.agent/tasks' glob off the root finds nothing in a multi-user repo.
@@ -268,7 +268,7 @@ echo ""
 echo "## ACTIVE TASK (the current struggle)"
 echo ""
 # Find the active task: most-recently-modified task.md whose Status is in_progress or pending
-ACTIVE_TASK=$(python3 - "$AGENT_DIR" <<'PYEOF'
+ACTIVE_TASK=$(python3 -I - "$AGENT_DIR" <<'PYEOF'
 import sys, re, glob, os
 # argv[1] is the RESOLVED AGENT DIR (lane-aware), not the project root — a
 # '.agent/tasks' glob off the root finds nothing in a multi-user repo.
@@ -317,7 +317,7 @@ echo ""
 LOOKBACK="${MONITOR_LOOKBACK_SECONDS:-3600}"
 if [ -n "$JSONL" ] && [ -f "$JSONL" ]; then
     RECENT_FILE=$(mktemp)
-    python3 - "$JSONL" "$LOOKBACK" > "$RECENT_FILE" <<'PYEOF'
+    python3 -I - "$JSONL" "$LOOKBACK" > "$RECENT_FILE" <<'PYEOF'
 import json, sys, datetime as dt
 path, lookback = sys.argv[1], int(sys.argv[2])
 cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=lookback)

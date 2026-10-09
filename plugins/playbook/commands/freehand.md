@@ -15,10 +15,10 @@ Run (via the project's wrapper — it resolves the same plugin copy the hooks ru
 .claude/bin/tasks freehand
 ```
 
-If that fails, try the local dev path:
+If that fails (a plugin source checkout with no installed wrapper), run the checkout's own launcher:
 
 ```bash
-PYTHONPATH=src python3 -m tasks.cli freehand
+plugins/playbook/scripts/tasks freehand
 ```
 
 This will either:

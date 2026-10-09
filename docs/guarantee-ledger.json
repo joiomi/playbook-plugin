@@ -9252,6 +9252,148 @@
       "violation_reproduction": null
     },
     {
+      "id": "PB-RUNTIME-ISOLATED",
+      "category": "compatibility-and-package",
+      "statement": "The plugin's own Python is started with the project's directory OFF its import path. The CLI launcher (`scripts/tasks`), the sandbox launcher (`scripts/sandbox`) and the monitor launcher start their module under `python3 -I`, with the plugin directory put on `sys.path` by the launch line itself; every inline program a shipped script or command runs (`python3 -c …`, or `python3 -` with the program on stdin) carries `-I`. A project file or folder named like a module they import — `json.py`, `tasks.py`, `tasks/`, `provider/` — is therefore not imported, and not run, in its place.",
+      "owner": [
+        {
+          "path": "plugins/playbook/scripts/tasks",
+          "reference": "whole-file"
+        },
+        {
+          "path": "plugins/playbook/scripts/sandbox",
+          "reference": "whole-file"
+        },
+        {
+          "path": "plugins/playbook/scripts/monitor-lib/launch-monitor",
+          "reference": "whole-file"
+        }
+      ],
+      "failure_consequence": "High",
+      "claim_kind": "mechanical",
+      "proofs": [
+        {
+          "type": "executable integration",
+          "path": "tests/test_python_isolation.py",
+          "reference": "TheCliLauncherIgnoresProjectFiles.test_a_project_package_called_tasks_does_not_run_in_place_of_the_cli",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_python_isolation.py",
+            "reference": "TheCliLauncherIgnoresProjectFiles.test_it_behaves_like_the_module_run_directly"
+          },
+          "limitations": [
+            "The real launcher run in a temp project that holds a `tasks/cli.py`; compared with its answer in a clean project (`--version`)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_python_isolation.py",
+          "reference": "TheCliLauncherIgnoresProjectFiles.test_a_json_py_at_the_project_root",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "One module name (`json`) stands for the standard library; `test_a_tasks_py_at_the_project_root` is the same run for the plugin's own package name."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_python_isolation.py",
+          "reference": "WhatTheLaunchersHandToPython.test_the_cli_launcher",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_python_isolation.py",
+            "reference": "WhatTheLaunchersHandToPython.test_the_users_own_pythonpath_is_still_passed_on"
+          },
+          "limitations": [
+            "A stand-in `python3` prints what the launcher hands it: `-I -c <program> <plugin dir> <the arguments>` and the exported PYTHONPATH. It shows the launch line, not what Python does with it."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_python_isolation.py",
+          "reference": "TheSandboxLauncherIgnoresProjectFiles.test_a_project_folder_called_provider",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "`--list-agents` only: no agent is started."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_python_isolation.py",
+          "reference": "TheMonitorLauncherIgnoresProjectFiles.test_a_project_folder_called_provider",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The monitor launcher's PRE-FLIGHT call, driven with a PATH that has no bubblewrap so that it refuses and nothing is launched. Its second call of the same module starts the monitor agent and is never executed by a test: the sweep and the shared-text test cover its wording only."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_python_isolation.py",
+          "reference": "InitIgnoresProjectFiles.test_a_json_py_at_the_project_root",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "`scripts/init` run whole in a temp project and a temp HOME; its three inline settings writers are what the trap file used to kill."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_python_isolation.py",
+          "reference": "AHooksInlineReadIgnoresProjectFiles.test_a_json_py_at_the_project_root",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "ONE hook's inline read is executed (session-end-hook, the end reason); the others are covered by the sweep, as text."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_python_isolation.py",
+          "reference": "EveryShippedInlinePythonIsIsolated.test_the_sweep_finds_nothing",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_python_isolation.py",
+            "reference": "TheSweepsRule.test_lines_it_refuses"
+          },
+          "limitations": [
+            "A text rule over every shipped file: the word `python3`, the flags after it on the same line. See the bounds below for what it cannot see."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_python_isolation.py",
+          "reference": "EveryShippedInlinePythonIsIsolated.test_the_four_launch_lines_share_one_bootstrap",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "The four launch lines carry the same one-line program but for the module name; read as text."
+          ]
+        }
+      ],
+      "applicable_platforms": [
+        "linux"
+      ],
+      "applicable_providers": [
+        "claude",
+        "codex",
+        "grok"
+      ],
+      "status": "verified_by_current_executable_evidence",
+      "missing_evidence_or_limitation": [
+        "Row added by task 167 (PLAN S11 fix batch, item 1; owner 2026-10-09: \"Repar în lotul S11 (Recomandat)\"). Until then 51 shipped calls ran inline code or a plugin module with the working directory first on sys.path; the wrapper's resolver (task 115) and the stop hook (task 072) were the only isolated ones.",
+        "Bound: helpers run as FILES (`python3 <file>`) are deliberately not isolated — for a file Python puts the file's directory first, not the working directory (control: HelpersRunAsFilesWereNeverExposed), and under `-I` they would lose the neighbours they import. They still read a PYTHONPATH the user set in the environment.",
+        "Bound: the launchers still EXPORT `PYTHONPATH=<plugin dir>` to whatever the CLI or the sandbox starts (unchanged by task 167). The plugin's packages are named `tasks` and `provider`; a project command started by the CLI that imports a package of that name without its own directory first on sys.path can be handed the plugin's. Parked in task 167; not covered by this row.",
+        "Bound: the sweep reads text. A call through a variable, or an interpreter spelled otherwise (`python`, `python3.12`), is not seen; a test asserts that no shipped script reaches Python through a variable today, by the variable names it knows. In Python sources only an argv list that starts with `sys.executable` is read.",
+        "Bound: `-I` ignores every `PYTHON*` variable, not only PYTHONPATH. A PYTHONIOENCODING or PYTHONUTF8 set by the user no longer reaches the isolated calls. Measured on Linux with `LC_ALL=C`, `C.UTF-8` and the default locale: stdin and stdout are UTF-8 with and without `-I`. A non-UTF-8 locale was not installed on the measuring host and is not measured."
+      ],
+      "follow_up_phases": [],
+      "required_live_evidence": [],
+      "semantic_protocol": null,
+      "violation_reproduction": null
+    },
+    {
       "id": "PB-CLI-DISPATCH",
       "category": "cli-contracts",
       "statement": "Every command in the CLI's COMMANDS tuple reaches its own dispatch arm and appears in the dispatch chain, and an unknown command is rejected rather than falling into another arm.",

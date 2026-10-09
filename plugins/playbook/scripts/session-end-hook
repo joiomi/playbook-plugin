@@ -59,7 +59,7 @@ SESSION_ID="$(resolve_session_id)"
 # pointer and reintroduces the reported bug. Meanwhile a missed cleanup is now
 # genuinely free: the liveness-based GC in session-start-hook reclaims the
 # directory as soon as the pid is gone. So: unknown reason ⇒ KEEP.
-END_REASON=$(printf '%s' "$INPUT" | python3 -c \
+END_REASON=$(printf '%s' "$INPUT" | python3 -I -c \
     "import sys,json; print(json.loads(sys.stdin.read()).get('reason',''))" 2>/dev/null || echo "")
 # Case-fold so `Clear`/`LOGOUT` cannot slip through on either side.
 END_REASON=$(printf '%s' "$END_REASON" | tr '[:upper:]' '[:lower:]')

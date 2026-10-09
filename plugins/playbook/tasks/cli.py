@@ -11,8 +11,9 @@ merge-doctor); shared helpers in tasks/shared.py. The trivial list/status/
 models delegates stay inline. Dispatch branches import lazily (house style;
 also keeps startup flat and cycles impossible). The if/elif chain's shape is
 load-bearing: tests/test_cli_dispatch.py parses it against COMMANDS, and the
-readme-audit skill greps it to count subcommands. `python3 -m tasks.cli` is
-the shipped entry (scripts/tasks execs it) — main() stays here forever.
+readme-audit skill greps it to count subcommands. This module run as
+`__main__` is the shipped entry (scripts/tasks runs it through runpy, under
+`python3 -I` — task 167) — main() stays here forever.
 """
 from __future__ import annotations
 

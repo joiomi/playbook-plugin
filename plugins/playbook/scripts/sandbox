@@ -28,7 +28,7 @@ set -e
 
 # Playbook runtime is stdlib-only — any python3 ≥ 3.10 works.
 # See CLAUDE.md "Runtime invariant" and memory project-stdlib-only-runtime.
-python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null \
+python3 -I -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null \
     || { echo "Playbook needs python3 >= 3.10 (found: $(python3 --version 2>&1))" >&2; exit 1; }
 
 # Find project root (where the provider/ module lives).
@@ -93,4 +93,10 @@ else
     exit 1
 fi
 
-PYTHONPATH="${PLAYBOOK_PYPATH}${PYTHONPATH:+:${PYTHONPATH}}" exec python3 -m provider.sandbox "${FWD[@]}"
+# Isolated, like scripts/tasks (task 167): a project folder called `provider/` used to
+# be imported in place of the plugin's ("No module named provider.sandbox"). The
+# program puts the plugin directory on sys.path itself; PYTHONPATH stays exported for
+# the agent this starts.
+PYTHONPATH="${PLAYBOOK_PYPATH}${PYTHONPATH:+:${PYTHONPATH}}" \
+    exec python3 -I -c 'import runpy, sys; sys.path.insert(0, sys.argv.pop(1)); runpy.run_module("provider.sandbox", run_name="__main__", alter_sys=True)' \
+    "$PLAYBOOK_PYPATH" "${FWD[@]}"

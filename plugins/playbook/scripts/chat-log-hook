@@ -152,7 +152,7 @@ else
     # grep matched only compact `"prompt":"..."` JSON, so an ordinary spaced
     # payload fell back to the raw JSON and the harness filter below saw `{`
     # (task 088, panel r1). Bytes in and out as UTF-8 whatever the locale.
-    USER_MESSAGE=$(printf '%s' "$INPUT" | python3 -c 'import json, sys
+    USER_MESSAGE=$(printf '%s' "$INPUT" | python3 -I -c 'import json, sys
 try:
     v = json.loads(sys.stdin.buffer.read().decode("utf-8")).get("prompt")
 except Exception:
@@ -209,7 +209,7 @@ USER_MESSAGE=$(echo "$USER_MESSAGE" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//'
 # so it is only the cheap pre-check; bash's cut is the fallback when python3 fails.
 MAX_LEN=50000
 if [ ${#USER_MESSAGE} -gt $MAX_LEN ]; then
-    _cut=$(printf '%s' "$USER_MESSAGE" | PB_MAX_LEN=$MAX_LEN python3 -c 'import os, sys
+    _cut=$(printf '%s' "$USER_MESSAGE" | PB_MAX_LEN=$MAX_LEN python3 -I -c 'import os, sys
 s = sys.stdin.buffer.read().decode("utf-8", "surrogateescape")
 n = int(os.environ["PB_MAX_LEN"])
 if len(s) > n:

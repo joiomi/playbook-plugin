@@ -52,7 +52,7 @@ esac
 # interpreter could not run; refuse early, before any provisioning, with a clear
 # message instead of a mid-run parser traceback. (--help above stays python-free.)
 # See CLAUDE.md "Runtime invariant" and memory project-stdlib-only-runtime.
-python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null \
+python3 -I -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null \
     || { echo "Playbook needs python3 >= 3.10 (found: $(python3 --version 2>&1))" >&2; exit 1; }
 
 PROJECT_NAME="${1:-$(basename "$PWD")}"
@@ -262,7 +262,7 @@ SETTINGS_FILE_PY="$SETTINGS_FILE"
 # truncating write — a crash mid-write must not empty a settings file.
 ATOMIC_PY="$SCRIPT_DIR/../tasks/atomic.py"
 
-SETTINGS_RESULT=$(PB_SETTINGS_PATH="$SETTINGS_FILE_PY" PB_ATOMIC_PY="$ATOMIC_PY" python3 -c "
+SETTINGS_RESULT=$(PB_SETTINGS_PATH="$SETTINGS_FILE_PY" PB_ATOMIC_PY="$ATOMIC_PY" python3 -I -c "
 import json, sys, os
 import importlib.util as _ilu
 _s = _ilu.spec_from_file_location('_pb_atomic_write', os.environ['PB_ATOMIC_PY'])
@@ -417,7 +417,7 @@ if [ -f "$BASH_LOG_SRC" ]; then
     # This is the reliable path — CC reads settings.json env key and injects vars before tool calls.
     CC_SETTINGS="$HOME/.claude/settings.json"
     CC_SETTINGS_PY="$CC_SETTINGS"
-    BASH_ENV_RESULT=$(PB_CC_SETTINGS_PATH="$CC_SETTINGS_PY" PB_ATOMIC_PY="$ATOMIC_PY" python3 -c "
+    BASH_ENV_RESULT=$(PB_CC_SETTINGS_PATH="$CC_SETTINGS_PY" PB_ATOMIC_PY="$ATOMIC_PY" python3 -I -c "
 import json, os, tempfile
 import importlib.util as _ilu
 _s = _ilu.spec_from_file_location('_pb_atomic_write', os.environ['PB_ATOMIC_PY'])
@@ -522,7 +522,7 @@ if [ -n "$MONITOR_LIB_DIR" ] && [ -d "$MONITOR_LIB_DIR" ]; then
 
     # Register PostToolUse hook for monitor-nudge in .claude/settings.json
     NUDGE_HOOK_CMD='bash "$CLAUDE_PROJECT_DIR/.claude/hooks/monitor-nudge.sh"'
-    HOOK_RESULT=$(PB_SETTINGS_PATH="$SETTINGS_FILE_PY" PB_NUDGE_CMD="$NUDGE_HOOK_CMD" PB_ATOMIC_PY="$ATOMIC_PY" python3 -c "
+    HOOK_RESULT=$(PB_SETTINGS_PATH="$SETTINGS_FILE_PY" PB_NUDGE_CMD="$NUDGE_HOOK_CMD" PB_ATOMIC_PY="$ATOMIC_PY" python3 -I -c "
 import json, os
 import importlib.util as _ilu
 _s = _ilu.spec_from_file_location('_pb_atomic_write', os.environ['PB_ATOMIC_PY'])

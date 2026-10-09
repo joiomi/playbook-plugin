@@ -19,7 +19,7 @@ Perform **every** step in order.
 Find and run the plugin's `scripts/init` script, which handles: `.claude/settings.json` permissions, `.agent/tasks/` directory, `MIND_MAP.md` stub, `.claude/bin/` wrappers, **CLAUDE.md** (created from the template, or template-owned sections merged in place — the project's own sections and `#` parts are preserved byte-for-byte; text written INSIDE a template-owned section is replaced with it, and then the previous file is first saved to `.agent/backups/CLAUDE.md.<UTC>.bak` and init's summary names the sections, the line count and the backup — tell the user), and **.gitignore** (a marker-guarded playbook runtime-state block). It also seeds `.agent/config.json` with the review knobs and the risk-gated close policy (`panel_required_for: ["assertive", "irreversible"]` — reversible work closes on verify+single-judge, only claims/data/publish need a panel; set `"all"` for max strictness). Resolve it from the install manifest first (the same copy the harness hooks run — a bare `find` can pick a stale cached version), falling back to a deterministic find:
 
 ```bash
-INIT_SCRIPT="$(python3 - "$PWD" 2>/dev/null <<'PY'
+INIT_SCRIPT="$(python3 -I - "$PWD" 2>/dev/null <<'PY'
 import glob, json, os, sys
 def vkey(v):
     return tuple(int(x) if x.isdigit() else -1 for x in str(v).split("."))

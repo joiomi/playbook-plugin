@@ -54,7 +54,7 @@ classify_tool() {
             # Reflect: editing task.md in .agent/tasks/
             local fpath
             if [ -n "$PB_FUSED" ]; then fpath="$PB_PATH"; else
-            fpath=$(echo "$input" | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('tool_input',{}).get('file_path',''))" 2>/dev/null || echo "")
+            fpath=$(echo "$input" | python3 -I -c "import sys,json; print(json.loads(sys.stdin.read()).get('tool_input',{}).get('file_path',''))" 2>/dev/null || echo "")
             fi
             if echo "$fpath" | grep -qE '\.agent(/[^/]+)?/tasks/.*/task\.md'; then
                 echo "reflect"
@@ -65,7 +65,7 @@ classify_tool() {
         Bash)
             local cmd
             if [ -n "$PB_FUSED" ]; then cmd="$PB_CMD"; else
-            cmd=$(echo "$input" | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('tool_input',{}).get('command',''))" 2>/dev/null || echo "")
+            cmd=$(echo "$input" | python3 -I -c "import sys,json; print(json.loads(sys.stdin.read()).get('tool_input',{}).get('command',''))" 2>/dev/null || echo "")
             fi
             if echo "$cmd" | grep -qE 'pytest|python.*-m\s+pytest|test_|grep\s+-c|assert'; then
                 echo "test"
@@ -141,7 +141,7 @@ else
     if [ -n "$NORMALIZED" ]; then
         INPUT="$NORMALIZED"
     fi
-    TOOL_NAME=$(echo "$INPUT" | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('tool_name',''))" 2>/dev/null || echo "")
+    TOOL_NAME=$(echo "$INPUT" | python3 -I -c "import sys,json; print(json.loads(sys.stdin.read()).get('tool_name',''))" 2>/dev/null || echo "")
 fi
 export PB_FUSED PB_PATH PB_CMD
 
@@ -158,8 +158,8 @@ fi
 EVAL_GATE_ECHO="on"
 EVAL_NUDGES="typed"
 if [ -n "$PLAYBOOK_EVAL_CONFIG" ] && [ -f "$PLAYBOOK_EVAL_CONFIG" ]; then
-    EVAL_GATE_ECHO=$(python3 -c "import sys,json; print(json.loads(open('$PLAYBOOK_EVAL_CONFIG').read()).get('gate_echo','on'))" 2>/dev/null || echo "on")
-    EVAL_NUDGES=$(python3 -c "import sys,json; print(json.loads(open('$PLAYBOOK_EVAL_CONFIG').read()).get('nudges','typed'))" 2>/dev/null || echo "typed")
+    EVAL_GATE_ECHO=$(python3 -I -c "import sys,json; print(json.loads(open('$PLAYBOOK_EVAL_CONFIG').read()).get('gate_echo','on'))" 2>/dev/null || echo "on")
+    EVAL_NUDGES=$(python3 -I -c "import sys,json; print(json.loads(open('$PLAYBOOK_EVAL_CONFIG').read()).get('nudges','typed'))" 2>/dev/null || echo "typed")
     echo "⚠ EVAL MODE: gate_echo=${EVAL_GATE_ECHO}, nudges=${EVAL_NUDGES}" >&2
     # Write file-based marker for harness verification (stream-json doesn't capture hook output)
     echo "gate_echo=${EVAL_GATE_ECHO},nudges=${EVAL_NUDGES}" > "$AGENT_DIR/eval-marker" 2>/dev/null || true
@@ -189,7 +189,7 @@ if [ -n "$PB_FUSED" ]; then
     # is dropped there, so it can never reach the one-line pointer file.
     TRANSCRIPT_PATH="$PB_TRANSCRIPT"
 else
-TRANSCRIPT_PATH=$(echo "$INPUT" | python3 -c "
+TRANSCRIPT_PATH=$(echo "$INPUT" | python3 -I -c "
 import sys, json
 t = json.loads(sys.stdin.read()).get('transcript_path', '')
 print(t if isinstance(t, str) and t and '\n' not in t and '\r' not in t else '')
@@ -240,7 +240,7 @@ TASK_FILE=$(find "$AGENT_DIR/tasks" -maxdepth 2 -name "task.md" -path "*/${TASK}
 
 if [ -z "$TASK_FILE" ]; then
     CONTEXT="# [${TASK}] — task file not found"
-    JSON_CONTEXT=$(python3 -c "import json; print(json.dumps('$CONTEXT'))" 2>/dev/null || echo "\"$CONTEXT\"")
+    JSON_CONTEXT=$(python3 -I -c "import json; print(json.dumps('$CONTEXT'))" 2>/dev/null || echo "\"$CONTEXT\"")
     echo "{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":${JSON_CONTEXT}}}"
     exit 0
 fi
@@ -481,7 +481,7 @@ fi
 # hook is advisory, so emit NOTHING (a valid empty `{}` response) rather than a
 # malformed envelope: no gate echo is strictly better than corrupt output. When
 # python3 is present the escaping is exact, exactly as before.
-JSON_CONTEXT=$(echo "$CONTEXT" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read().rstrip()))" 2>/dev/null || true)
+JSON_CONTEXT=$(echo "$CONTEXT" | python3 -I -c "import sys,json; print(json.dumps(sys.stdin.read().rstrip()))" 2>/dev/null || true)
 if [ -n "$JSON_CONTEXT" ]; then
     cat <<EOF
 {"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":${JSON_CONTEXT}}}

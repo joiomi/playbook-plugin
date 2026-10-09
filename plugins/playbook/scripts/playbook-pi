@@ -44,7 +44,7 @@ set -euo pipefail
 # out to python3 (models.json allow-list, below) and every hook the pi session
 # spawns needs it; refuse < 3.10 up front with a clear message instead of a parser
 # traceback. See CLAUDE.md "Runtime invariant" and memory project-stdlib-only-runtime.
-python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null \
+python3 -I -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null \
     || { echo "Playbook needs python3 >= 3.10 (found: $(python3 --version 2>&1))" >&2; exit 1; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -89,7 +89,7 @@ while IFS= read -r _mid; do
   # "model\r" and never match the clean requested model. Strip it.
   _mid="${_mid%$'\r'}"
   [ -n "$_mid" ] && ALLOWED_MODELS+=("$_mid")
-done < <(python3 -c '
+done < <(python3 -I -c '
 import json, sys
 d = json.load(open(sys.argv[1]))
 for m in d.get("providers", {}).get("omlx", {}).get("models", []):

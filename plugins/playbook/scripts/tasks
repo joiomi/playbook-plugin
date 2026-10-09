@@ -5,7 +5,7 @@ set -e
 
 # Playbook runtime is stdlib-only — any python3 ≥ 3.10 works.
 # See CLAUDE.md "Runtime invariant" and memory project-stdlib-only-runtime.
-python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null \
+python3 -I -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null \
     || { echo "Playbook needs python3 >= 3.10 (found: $(python3 --version 2>&1))" >&2; exit 1; }
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
@@ -23,4 +23,13 @@ else
     exit 1
 fi
 
-PYTHONPATH="${PLAYBOOK_PYPATH}${PYTHONPATH:+:${PYTHONPATH}}" exec python3 -m tasks.cli "$@"
+# The CLI runs ISOLATED (`python3 -I`, task 167). Without it Python puts the caller's
+# working directory first on sys.path, and a project file named like a module the CLI
+# imports took its place: a `json.py` or a `tasks.py` at the project root killed every
+# command, and a project folder `tasks/` holding a `cli.py` RAN instead of the CLI.
+# `-I` ignores PYTHONPATH too, so the program below puts the plugin directory on
+# sys.path itself and runs the module through runpy — which is what `-m` does.
+# PYTHONPATH is still exported, unchanged, for whatever the CLI starts.
+PYTHONPATH="${PLAYBOOK_PYPATH}${PYTHONPATH:+:${PYTHONPATH}}" \
+    exec python3 -I -c 'import runpy, sys; sys.path.insert(0, sys.argv.pop(1)); runpy.run_module("tasks.cli", run_name="__main__", alter_sys=True)' \
+    "$PLAYBOOK_PYPATH" "$@"

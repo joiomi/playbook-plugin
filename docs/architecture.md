@@ -10,10 +10,19 @@ The plugin (`plugins/playbook/` in this repo) has four user-visible parts plus t
 - `skills/` — six harness-discoverable skill bundles, each with a `SKILL.md` (playbook patterns, judge, monitor, merge, stack, testing), plus `skills/tasks/` which holds the canonical task template the `new` command copies (not a discoverable skill).
 - `hooks/hooks.json` — the lifecycle hook registrations (below).
 - `scripts/` — executable entry points: the `tasks` dispatcher, hook scripts, `sandbox`, `monitor`, `init`, the `playbook-*` provider launchers.
-- `tasks/` — the Python package behind the `tasks` CLI (dispatcher sets `PYTHONPATH` here).
+- `tasks/` — the Python package behind the `tasks` CLI. The launcher (`scripts/tasks`) runs it isolated: `python3 -I`, with the plugin directory put on `sys.path` by the launch line itself, so nothing in the project's own directory can be imported in a plugin module's place (see "How the plugin's Python is started" below).
 - `provider/` — provider adapters and judge-dispatch machinery ([providers](providers.md)).
 
 Everything is plain files — bash entry points, Python 3.10+ stdlib, markdown as the runtime language. No build step, no dependencies. Python 3.10 is the declared floor everywhere (shipped modules use 3.10-only `match` syntax): every entry point refuses an older interpreter up front, and `tasks doctor` diagnoses it.
+
+## How the plugin's Python is started
+
+The hooks and the launchers run with the PROJECT as their working directory, and Python puts the working directory first on `sys.path` for `python3 -c …`, for `python3 -` (a program on stdin) and for `python3 -m module`. A project file named like a module such a call imports would be imported in its place: a `json.py` at the project root, a `tasks.py`, a folder `tasks/` or `provider/`. So the plugin starts its own Python in two ways only:
+
+- **Inline programs and modules run isolated — `python3 -I`.** Isolated mode keeps the working directory, every `PYTHON*` variable and the user's site-packages out. The three launchers (`scripts/tasks`, `scripts/sandbox`, `scripts/monitor-lib/launch-monitor`) cannot rely on `PYTHONPATH` under it, so their launch line carries a one-line program that puts the plugin directory on `sys.path` and runs the module through `runpy` — what `-m` does. They still export `PYTHONPATH=<plugin dir>` for whatever they start; the plugin's own interpreter does not read it.
+- **Helpers run as files — `python3 <file>` — are left as they are.** For a file Python puts the FILE's directory first, not the working directory, and under `-I` a helper would lose the neighbours it imports.
+
+`tests/test_python_isolation.py` sweeps every shipped file for an inline program or a module started without `-I` (ledger row `PB-RUNTIME-ISOLATED`, with its bounds: the sweep reads the word `python3` and the flags after it — a call through a variable would not be seen). A consequence to know: a `PYTHONIOENCODING` or `PYTHONUTF8` you set yourself does not reach the isolated calls.
 
 ## Hooks & enforcement
 

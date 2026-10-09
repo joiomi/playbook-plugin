@@ -71,7 +71,7 @@ fi
 
 # Read stdin to extract hook_event_name (PostToolUse or UserPromptSubmit)
 INPUT=$(cat)
-export EVENT_NAME=$(echo "$INPUT" | python3 -c "import sys,json; print(json.loads(sys.stdin.read() or '{}').get('hook_event_name','UserPromptSubmit'))" 2>/dev/null || echo "UserPromptSubmit")
+export EVENT_NAME=$(echo "$INPUT" | python3 -I -c "import sys,json; print(json.loads(sys.stdin.read() or '{}').get('hook_event_name','UserPromptSubmit'))" 2>/dev/null || echo "UserPromptSubmit")
 
 SESSION_ID="${PLAYBOOK_SESSION_ID:-pid-$PPID}"
 NUDGE_FILE="$AGENT_DIR/monitor/nudge.md"
@@ -140,7 +140,7 @@ NUDGE_CONTENT=$(cat "$DELIVERING")
 # later session can still deliver it — a nudge is delivered at-least-once, never
 # silently lost. (stderr, not stdout, would carry any diagnostic — but here we
 # simply leave the nudge for next time.)
-if NUDGE_JSON=$(python3 -c "
+if NUDGE_JSON=$(python3 -I -c "
 import json, sys, os
 nudge = sys.stdin.read().strip()
 event = os.environ.get('EVENT_NAME', 'UserPromptSubmit')

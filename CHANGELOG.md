@@ -25,6 +25,22 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
+- **A project file can no longer take the place of a module the plugin imports** (task 167, PLAN S11 item 1;
+  the open item of task 115's entry below). The CLI launcher started `python3 -m tasks.cli` with the project's
+  directory first on the import path, and 45 inline programs in the hooks, `init`, the launchers, the monitor
+  and two commands ran as `python3 -c …` / `python3 -` the same way. In a project with a `json.py` or a
+  `tasks.py` at its root no `tasks` command ran; with a `json.py`, `/playbook:init` failed and rolled back and
+  the session-end hook kept its session directory at every logout; a project folder `tasks/` holding a `cli.py`
+  RAN in place of the CLI, with exit 0; a project folder `provider/` stopped `.claude/bin/sandbox` and the
+  monitor ("No module named provider.sandbox"). All of these now run under `python3 -I` (isolated mode); the three launchers put the plugin
+  directory on the import path themselves. Helpers the hooks run as files were never exposed and are unchanged.
+  Two things to know: the isolated calls no longer read `PYTHON*` variables you set yourself
+  (`PYTHONIOENCODING`, `PYTHONUTF8`); and the launchers still export `PYTHONPATH=<plugin dir>` to the commands
+  the CLI starts, as before. New ledger row `PB-RUNTIME-ISOLATED` (128 rows, 90 verified); a test sweeps every
+  shipped file, so a new inline call without `-I` fails the suite. The two "local dev path" lines in
+  `/playbook:freehand` and `/playbook:mindmap-optimize` now name the checkout's launcher
+  (`plugins/playbook/scripts/tasks …`); the first one pointed at a `src/` directory that no longer exists.
+
 - **`tasks retro` twice no longer makes two retros** (task 165). A task the last retro recorded as unfinished is
   carried into the next window, so with one such task every further bare `tasks retro` made one more retro of it.
   Now, when no task follows the last retro and every carried task is still there with its record unchanged — a
@@ -54,7 +70,7 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   `MultiEdit` went through, where the same ticks in one `Edit` are refused. The guard now applies the call's edits
   to the file and judges the result like a `Write`.
 - **The guard against hand-made task files is in the guarantee ledger** (task 166): `PB-TASK-MD-GUARD`, with its
-  two bounds stated (only the `Write` tool is judged; no project scope). The ledger has 127 rows, 89 verified.
+  two bounds stated (only the `Write` tool is judged; no project scope). With it the ledger had 127 rows, 89 verified (128 and 90 with the row of task 167, above).
 - **No warning about `tasks/review.py` on newer Pythons** (task 165). A docstring held an invalid escape sequence:
   a `SyntaxWarning` when the file is compiled on Python 3.12 (a silent `DeprecationWarning` on 3.10), which Python's
   documentation says will become an error.
