@@ -548,24 +548,38 @@ def cmd_retro(cmd_args):
     if carry:
         # still open at the last retro: theirs is this window (impl panel r2)
         carried = [t for t in extract_tasks(tasks_dir, since=0) if t["number"] in carry]
-        # …but a window that holds ONLY such tasks, each as the last retro recorded
-        # it, would repeat that retro: with one unfinished task every further bare
-        # `tasks retro` made one more (PLAN S11 item 2, task 165). "As recorded" is
-        # the status AND the gate count of the retro's own table (a carried task
-        # that worked without changing status has moved — impl panel r1), for
-        # EVERY carried task (one that is gone is a change too). The table holds a
-        # status cut at seven characters, so today's is cut the same way. An
+        # …but a window that holds ONLY such tasks, each as it was when the last
+        # retro was made, would repeat that retro: with one unfinished task every
+        # further bare `tasks retro` made one more (PLAN S11 item 2, task 165). "As
+        # it was" is the record BYTE FOR BYTE — the digest that retro kept
+        # (`retro-carried`; impl panel r2: a task whose text or WHICH gates are
+        # checked changed has new material, whatever its counts say). A retro made
+        # before the digests existed is compared by what its table holds: status
+        # (cut at seven characters, as the table cuts it) and gate count (r1). Every
+        # carried task must still be there (one that is gone is a change too). An
         # explicit `--since` never comes here.
-        def _now(t):
-            return (t["status"][:7].strip().lower(), f"{t['checked_count']}/{t['gate_count']}")
+        from tasks.core import retro_carried_digests, task_record_digest
+        _kept = retro_carried_digests(project_path, last_retro)
+
+        def _unmoved(t):
+            n = t["number"]
+            if n in _kept:
+                _tf = sorted(tasks_dir.glob(f"{n:03d}-*/task.md"))
+                return bool(_tf) and task_record_digest(_tf[0]) == _kept[n]
+            return (t["status"][:7].strip().lower(),
+                    f"{t['checked_count']}/{t['gate_count']}") == carry[n]
         if (carried and not tasks and len(carried) == len(carry)
-                and all(_now(t) == carry[t["number"]] for t in carried)):
+                and all(_unmoved(t) for t in carried)):
             waits = ", ".join("T{:03d} ({}, {} gates)".format(t["number"], *carry[t["number"]])
                               for t in carried)
-            print(f"Nothing moved since retro T{last_retro:03d} (the last retro): no task after it, "
-                  f"and what it carried as unfinished has the status and the gate count it "
-                  f"recorded — {waits}. No retro made. `tasks retro --since N` makes one from "
-                  "task N on, whatever moved (its own window: no carried tasks, the whole chat).",
+            how = ("is byte for byte what it was when that retro was made"
+                   if all(t["number"] in _kept for t in carried) else
+                   "has the status and the gate count it recorded (that retro kept no digest "
+                   "of the records, so their text is not compared)")
+            print(f"Nothing to review since retro T{last_retro:03d} (the last retro): no task after "
+                  f"it, and what it carried as unfinished {how} — {waits}. No retro made. "
+                  f"`tasks retro --since {min(carry)}` makes one all the same, from the oldest of "
+                  "them on (a higher N would leave them out of every later window).",
                   file=sys.stderr)
             sys.exit(1)
         tasks = sorted(carried + tasks, key=lambda t: t["number"])
@@ -622,7 +636,18 @@ def cmd_retro(cmd_args):
     task_file = task_dir / "task.md"
     # when this retro was made — the next retro's chat boundary (task 145)
     _head, _sep, _rest = retro_content.partition("\n")
-    retro_content = f"{_head}\n<!-- retro-generated: {_stamp} -->{_sep}{_rest}"
+    # …and a digest of every unfinished task of the window, as its record is now: the
+    # next bare retro refuses only if those records have not changed at all (task 165)
+    from tasks.core import retro_carried_line, task_record_digest as _digest
+    _open = {}
+    for _t in tasks:
+        if not _t["status"].strip().lower().startswith("done"):
+            _tf = sorted(tasks_dir.glob(f"{_t['number']:03d}-*/task.md"))
+            if _tf:
+                _open[_t["number"]] = _digest(_tf[0])
+    _carried_line = retro_carried_line(_open)
+    retro_content = (f"{_head}\n<!-- retro-generated: {_stamp} -->"
+                     + (f"\n{_carried_line}" if _carried_line else "") + f"{_sep}{_rest}")
     atomic_write(task_file, retro_content)
 
     print(f"Created: {task_file.relative_to(project_path)}")

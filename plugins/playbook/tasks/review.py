@@ -2469,12 +2469,12 @@ def run_tail_cert_judge(project_path, snapshot, non_behavioral, panel_summary,
     naming the task file the guard's porcelain/dirty-hash sweep never covers the
     task record a rogue judge could rewrite during certification).
 
-    A None has five causes and three are not the judge's (task 165, impl panel r1):
+    A None has six causes and three are not the judge's (task 165, impl panels r1-r2):
     each appends ONE `(kind, sentence)` pair to `why` when a list is given — kind
-    `no-judge` when no judge was called (the delta could not be read any more, the
-    tamper snapshot could not be taken), `judge` when one was (it did not answer,
-    its answer has no verdict line, or the tamper guard discarded it). A PASS or a
-    FAIL appends nothing."""
+    `no-judge` when no judge ran (the delta could not be read any more, the tamper
+    snapshot could not be taken, the judge could not be resolved or started), `judge`
+    when one did (it timed out, failed or printed nothing; its answer has no verdict
+    line; the tamper guard discarded it). A PASS or a FAIL appends nothing."""
     import secrets
     from tasks.core import parse_tail_cert_verdict
 
@@ -2483,13 +2483,12 @@ def run_tail_cert_judge(project_path, snapshot, non_behavioral, panel_summary,
             why.append((kind, " ".join(sentence.split())))
         return None
 
-    # Called as it always was — two arguments (its doubles in the spend-journal and
-    # stale-close tests are two-argument lambdas); the reason is asked separately,
-    # on the failing path only.
-    diff_text = _tail_cert_review_diff(project_path, snapshot)
+    # ONE capture, and its own reason (impl panel r2): a second reading of a tree
+    # that moved in between could say something else.
+    _dwhy: "list[str]" = []
+    diff_text = _tail_cert_review_diff(project_path, snapshot, _dwhy)
     if diff_text is None:              # could not capture the delta → fail closed
-        return _none("no-judge", tail_cert_unavailable(project_path, snapshot)
-                                 or "the delta could not be read")
+        return _none("no-judge", _dwhy[0] if _dwhy else "the delta could not be read")
     nonce = secrets.token_hex(8)
     prompt = _tail_cert_prompt(non_behavioral, panel_summary, diff_text, nonce)
     # Same uncontained-judge warning the panel/single-judge paths print (impl-panel
@@ -2521,6 +2520,9 @@ def run_tail_cert_judge(project_path, snapshot, non_behavioral, panel_summary,
     # the judge subprocess. This caller is monkeypatched wholesale in the verdict
     # tests, so the emit runs in production, not in those doubles (by design).
     _tc_t0 = time.monotonic()
+    # said here, at the launch itself: the close used to announce a running judge
+    # before the two exits above, which call none (impl panel r2)
+    print("  … calling the certifying judge", file=sys.stderr, flush=True)
     raw = _run_tail_cert_judge_raw(project_path, prompt, timeout_secs)
     try:
         _full = _detect_tamper_full(project_path, _tf, _tb)
@@ -2563,8 +2565,13 @@ def run_tail_cert_judge(project_path, snapshot, non_behavioral, panel_summary,
     # parse handles the rest.
     _rl = (raw or "").lstrip()
     if not raw or _rl.startswith("(error:") or _rl.startswith("(FAILED"):
-        return _none("judge", "the judge did not answer: "
-                              + ((_rl.splitlines() or ["no output"])[0][:160] if _rl else "no output"))
+        _first = (_rl.splitlines() or [""])[0][:160]
+        if _rl.startswith("(error:") and "timed out" not in _first:
+            # a resolution or spawn error (`_run_tail_cert_judge_raw`, the adapter's
+            # own `(error: …)`): NO judge ran — only the timeout carries that prefix
+            # for a judge that did (impl panel r2)
+            return _none("no-judge", f"the certifying judge could not be started: {_first}")
+        return _none("judge", "the judge ran and gave no verdict: " + (_first or "no output"))
     _verdict = parse_tail_cert_verdict(raw, nonce)
     if _verdict is None:
         return _none("judge", "the judge's answer has no verdict line for this run (its text: "

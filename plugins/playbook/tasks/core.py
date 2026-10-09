@@ -1113,7 +1113,8 @@ def select_task_context(text: str, budget: int) -> "tuple[str, str]":
     # so in the receipt — silence is the one thing forbidden here.
     overflowed = False
     if len(selected) > budget:
-        selected = selected[:budget] + "\n\n[... hard-truncated: orientation exceeded budget ...]"
+        selected = (selected[:budget]
+                    + "\n\n[... hard-truncated: orientation+pinned sections exceeded budget ...]")
         overflowed = True
 
     kept_names = [
@@ -4022,6 +4023,54 @@ def retro_carried_state(project_path: Path, last_retro: "int | None") -> "dict[i
                 return {}
             return {int(n): (st.strip().lower(), gates) for n, st, gates in _RETRO_ROW_RE.findall(text)
                     if int(n) < last_retro and not st.strip().lower().startswith("done")}
+    return {}
+
+
+# `<!-- retro-carried: 002=<digest>,007=<digest> -->` — the line `tasks retro` writes under
+# the retro's `retro-generated` stamp: a digest of every unfinished task of its window, as
+# its record was when the retro was made. Status and gate count are not "nothing moved"
+# (impl panel r2, task 165): a carried task whose Intent, findings or WHICH gates are
+# checked changed has new material for a retro.
+_RETRO_CARRIED_RE = re.compile(r"^<!-- retro-carried: ([0-9a-f=, ]*) -->[ \t]*$", re.M)
+
+
+def task_record_digest(task_file: Path) -> str:
+    """Sixteen hex characters of the SHA-256 of a task record as it is on disk — '' when
+    it cannot be read (which then equals no recorded digest, so it reads as moved)."""
+    import hashlib
+    try:
+        return hashlib.sha256(Path(task_file).read_bytes()).hexdigest()[:16]
+    except OSError:
+        return ""
+
+
+def retro_carried_line(digests: "dict[int, str]") -> str:
+    """The `retro-carried` line for these task → digest pairs ('' for none)."""
+    if not digests:
+        return ""
+    return ("<!-- retro-carried: "
+            + ",".join(f"{n:03d}={d}" for n, d in sorted(digests.items()) if d) + " -->")
+
+
+def retro_carried_digests(project_path: Path, last_retro: "int | None") -> "dict[int, str]":
+    """task → the digest the last retro kept of its record (`retro_carried_line`). Empty
+    for a retro made before the line existed — its carried tasks are then compared by the
+    status and the gate count of its table (`retro_carried_state`)."""
+    if last_retro is None:
+        return {}
+    for num, slug, tf in _iter_task_dirs(project_path):
+        if num == last_retro and _is_retro_slug(slug):
+            try:
+                text = tf.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                return {}
+            m = _RETRO_CARRIED_RE.search(text)
+            out: "dict[int, str]" = {}
+            for pair in (m.group(1).split(",") if m else ()):
+                n, _eq, digest = pair.strip().partition("=")
+                if n.isdigit() and digest:
+                    out[int(n)] = digest
+            return out
     return {}
 
 

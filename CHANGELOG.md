@@ -27,9 +27,9 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 - **`tasks retro` twice no longer makes two retros** (task 165). A task the last retro recorded as unfinished is
   carried into the next window, so with one such task every further bare `tasks retro` made one more retro of it.
-  Now, when no task follows the last retro and every carried task is still there with the status and the gate
-  count that retro recorded, the command exits 1, names them and creates nothing; `--since N` still makes a retro
-  whatever moved.
+  Now, when no task follows the last retro and every carried task is still there with its record unchanged — a
+  retro keeps a digest of each — the command exits 1, names them and creates nothing, and names the `--since N`
+  that makes a retro all the same without dropping them.
 - **A seat cleared with `tasks models enable` is not put back by a call that was already under way** (task 165). A
   panel that was running reported the seat's old out-of-credit failure after the clear and recorded it again. The
   clear now leaves its time, a failure of a call that began before it is not recorded, and the panel says so; a
@@ -37,8 +37,8 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   recorded.
 - **A close no longer blames a judge that never ran** (task 165). When the documentation changed since the panel
   was too large to send to one certifying judge, the close said "tail certification did not return PASS". It now
-  says that no judge was called, with the size and the limit (or the file that could not be read); a judge's FAIL
-  has its own sentence, and a missing verdict comes with its reason.
+  says that no judge ran, with the size and the limit (or the file that could not be read, or that the judge could
+  not be started); a judge's FAIL has its own sentence, and a missing verdict comes with its reason.
 - **A trimmed retro record keeps its task table** (task 165). The scaffold pins `## Structural Summary`, so a judge
   that receives a shortened copy of a large retro record still gets the per-task table (a table larger than that
   judge's whole budget is still cut).

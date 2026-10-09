@@ -449,11 +449,14 @@ and the one recorded with the panel, so moving or removing it later changes noth
 on, a carrying panel that no reservation dates (a deleted run ledger) refuses. A value that is not a date refuses
 every stale close until it is fixed. The binding is checked again inside the lock the close commits under. Post-D6 runs made before 1.5.47 recorded no tree and cannot bind a close. Tail
 certification saves its judge's output as `tail-cert.log` in the task directory. When it does not certify, the
-close says which of three things happened: no judge was called — the delta could not be put before one (its
-size against the 98,304-byte payload one judge can be sent, or the file that could not be read), or the tamper
-snapshot could not be taken; the judge returned FAIL; or there is no usable verdict, with the reason (the judge
-did not answer, its answer has no verdict line, or it was discarded because the tree changed while it ran).
-Each needs a fresh panel.
+close says why. Two refusals come before any certification: a code path in the delta, and a panel snapshot that
+can no longer be compared (it is missing, the code roots changed, git failed) — the latter is reported as
+"tail certification unavailable", without its cause. For a documentation-only delta the close says which of
+three things happened: no judge ran — the delta could not be put before one (its size against the 98,304-byte
+payload one judge can be sent, or the file that could not be read), the tamper snapshot could not be taken, or
+the judge could not be started; the judge returned FAIL; or there is no usable verdict, with the reason (the
+judge timed out or failed, its answer has no verdict line, or it was discarded because the tree changed while
+it ran). Each needs a fresh panel.
 
 ### The verify-contract guard (a change to `verify` is made visible)
 

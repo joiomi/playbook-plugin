@@ -1430,15 +1430,30 @@ class RunTailCertJudgeGuards(unittest.TestCase):
         (d / "docs" / "g.md").write_text("# d\n", encoding="utf-8")
         return R, d, snap
 
-    def test_a_judge_that_did_not_answer_is_said_to_have_not_answered(self):
+    def test_a_judge_that_could_not_be_started_was_not_called(self):
+        # impl panel round 2 (codex ×2): a resolution or spawn error is not "the judge did
+        # not answer" — no judge ran
         from unittest import mock
         R, d, snap = self._case()
-        why = []
-        with mock.patch.object(R, "_run_tail_cert_judge_raw", return_value="(error: judge not found)"):
-            self.assertIsNone(R.run_tail_cert_judge(d, snap, ["docs/g.md"], "PANEL PASS", why=why))
-        self.assertEqual([k for k, _ in why], ["judge"])
-        self.assertIn("did not answer", why[0][1])
-        self.assertIn("judge not found", why[0][1])
+        for said in ("(error: judge not found)", "(error: tail-cert judge spawn failed: [Errno 2] codex)"):
+            why = []
+            with mock.patch.object(R, "_run_tail_cert_judge_raw", return_value=said):
+                self.assertIsNone(R.run_tail_cert_judge(d, snap, ["docs/g.md"], "PANEL PASS", why=why))
+            self.assertEqual([k for k, _ in why], ["no-judge"], said)
+            self.assertIn("could not be started", why[0][1])
+            self.assertIn(said[8:25], why[0][1])
+
+    def test_a_judge_that_ran_and_gave_nothing_is_said_to_have_failed(self):
+        from unittest import mock
+        R, d, snap = self._case()
+        for said, word in (("(error: tail-cert judge timed out)", "timed out"),
+                           ("(FAILED — exit 1)\n[stdout tail]\nboom", "exit 1"),
+                           ("", "no output")):
+            why = []
+            with mock.patch.object(R, "_run_tail_cert_judge_raw", return_value=said):
+                self.assertIsNone(R.run_tail_cert_judge(d, snap, ["docs/g.md"], "PANEL PASS", why=why))
+            self.assertEqual([k for k, _ in why], ["judge"], said)
+            self.assertIn(word, why[0][1])
 
     def test_an_answer_without_a_verdict_line_is_said_to_have_none(self):
         from unittest import mock
@@ -1465,12 +1480,21 @@ class RunTailCertJudgeGuards(unittest.TestCase):
         from unittest import mock
         R, d, snap = self._case()
         (d / "docs" / "big.md").write_text("# doc\n" + ("word " * 12 + "\n") * 2000, encoding="utf-8")
-        why, called = [], []
-        with mock.patch.object(R, "_run_tail_cert_judge_raw", side_effect=lambda *a: called.append(a)):
+        why, called, captures = [], [], []
+        real = R._tail_cert_review_diff
+
+        def counted(*a, **k):
+            captures.append(1)
+            return real(*a, **k)
+        with mock.patch.object(R, "_run_tail_cert_judge_raw", side_effect=lambda *a: called.append(a)), \
+                mock.patch.object(R, "_tail_cert_review_diff", side_effect=counted):
             self.assertIsNone(R.run_tail_cert_judge(d, snap, ["docs/g.md"], "PANEL PASS", why=why))
         self.assertEqual(called, [])
         self.assertEqual([k for k, _ in why], ["no-judge"])
         self.assertIn("docs/big.md", why[0][1])
+        # the reason is the one capture's own (impl panel round 2, grok): a second reading
+        # of a tree that moved in between could have said something else
+        self.assertEqual(len(captures), 1)
 
     def test_an_answer_discarded_by_the_tamper_guard_is_said_to_be_discarded(self):
         from unittest import mock

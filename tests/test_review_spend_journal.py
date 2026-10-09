@@ -560,7 +560,7 @@ class TailCertSpendE2E(_E2EBase):
         tf = self.agent / "tasks" / "042-demo" / "task.md"
         patches = [
             mock.patch.object(review, "_tail_cert_review_diff",
-                              lambda pp, snap: "diff --git a b\n+one line\n"),
+                              lambda pp, snap, why=None: "diff --git a b\n+one line\n"),
             mock.patch.object(review, "_run_tail_cert_judge_raw",
                               lambda pp, prompt, ts: raw),
             mock.patch.object(review, "_snapshot_repo_state", lambda pp, t: {}),
@@ -683,7 +683,7 @@ class StructuredUsageE2E(_E2EBase):
         outs = [JudgeOutput("TAIL-CERT deadbeef: PASS", usage=self.GROK_USAGE),
                 "(error: tail-cert judge timed out)"]
         patches = [
-            mock.patch.object(review, "_tail_cert_review_diff", lambda pp, snap: "diff --git a b\n+x\n"),
+            mock.patch.object(review, "_tail_cert_review_diff", lambda pp, snap, why=None: "diff --git a b\n+x\n"),
             mock.patch.object(review, "_run_tail_cert_judge_raw", lambda pp, prompt, ts: outs.pop(0)),
             mock.patch.object(review, "_snapshot_repo_state", lambda pp, t: {}),
             mock.patch.object(review, "_detect_tamper_full",

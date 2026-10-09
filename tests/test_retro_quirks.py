@@ -411,6 +411,43 @@ class DefaultWindow(unittest.TestCase):
         r, _made = self._retro(proj)
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("T002 (blocked, 1/1 gates)", r.stderr)
+        self.assertIn("byte for byte", r.stderr)
+
+    # Impl panel round 2 (codex ×2, grok): status and gate count are not "nothing moved" —
+    # a carried task whose Intent, findings or WHICH gates are checked changed has new
+    # material for a retro. A retro now keeps a digest of each task it carries, and the
+    # guard refuses only when their records are byte for byte what they were.
+
+    def test_an_edit_inside_a_carried_task_is_a_change(self):
+        proj = self._one_retro_with_a_blocked_task()
+        tf = proj / ".agent" / "tasks" / "002-b" / "task.md"
+        tf.write_text(tf.read_text(encoding="utf-8").replace("did it", "did it, and found the cause"),
+                      encoding="utf-8")                                   # same status, same 1/1 gates
+        r, made = self._retro(proj)
+        self.assertEqual((r.returncode, made), (0, "005-retro-002-002"), r.stderr)
+
+    def test_a_retro_made_before_digests_existed_is_compared_by_status_and_gates(self):
+        # a retro record of an older version carries the table and no digests
+        proj = self._project([(1, "a"), (2, "b"), (3, "retro-001-002")])
+        self._set_status(proj, 2, "blocked")
+        self._with_retro_table(proj, "003-retro-001-002", [(1, "done"), (2, "blocked")])
+        r, _made = self._retro(proj)
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(self._retros(proj), ["003-retro-001-002"])
+        self.assertIn("status and the gate count", r.stderr)
+        self.assertNotIn("byte for byte", r.stderr)
+
+    # Impl panel round 2 (opus): the refusal sent the user to `--since N` without saying
+    # which N — and a retro made from an N above a carried task drops that task from every
+    # later window (the loss task 145 fixed). It names the N that keeps them.
+    def test_the_way_out_it_names_keeps_the_carried_tasks(self):
+        proj = self._one_retro_with_a_blocked_task()
+        r, _made = self._retro(proj)
+        self.assertIn("tasks retro --since 2", r.stderr)
+        r, made = self._retro(proj, "--since", "2")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        from tasks.core import retro_carry_over
+        self.assertIn(2, retro_carry_over(proj, int(made[:3])))          # still carried by the new retro
 
 
 class ScaffoldPinsTheTaskTable(unittest.TestCase):
@@ -452,6 +489,17 @@ class ScaffoldPinsTheTaskTable(unittest.TestCase):
         self.assertTrue(receipt, "the fixture was not trimmed")
         self.assertEqual(selected.count("\n| 0"), 40, f"task rows lost in the trim — {receipt}")
         self.assertNotIn("Structural Summary", receipt.split("· dropped:")[1])
+
+    def test_a_table_larger_than_the_whole_budget_is_cut_and_says_so(self):
+        # impl panel rounds 1-2 (codex-medium, sonnet): a pin is not a guarantee — past the
+        # budget the pinned section is cut too; the payload's own marker must name the pin
+        from tasks.core import select_task_context
+        _proj, scaffold = self._scaffold(["done (2026-09-01)"] * 40)
+        text = scaffold.read_text(encoding="utf-8")
+        selected, receipt = select_task_context(text, 2_000)
+        self.assertLess(selected.count("\n| 0"), 40)
+        self.assertIn("hard-truncated", receipt)
+        self.assertIn("pinned", selected[-120:])
 
     def test_the_pin_does_not_hide_the_table_from_the_next_retro(self):
         # `retro_carry_over` reads the rows of that same section

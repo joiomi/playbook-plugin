@@ -785,9 +785,8 @@ def cmd_work(cmd_args):
                             + (f"\nA post-D6 single judge then PASSED the tree {_snap_fp} "
                                f"(run {_pd6_base[2]}); the delta below is measured from that tree."
                                if _pd6_base else ""))
-                        print("  … non-behavioral post-panel delta — running "
-                              "single-judge tail certification", file=sys.stderr,
-                              flush=True)
+                        print("  … non-behavioral post-panel delta — single-judge "
+                              "tail certification", file=sys.stderr, flush=True)
                         from tasks.core import resolve_review_timeout
                         _tc_why: list = []
                         _tc_verdict = run_tail_cert_judge(
