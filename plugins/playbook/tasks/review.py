@@ -2547,12 +2547,24 @@ def run_tail_cert_judge(project_path, snapshot, non_behavioral, panel_summary,
     # before the two exits above, which call none (impl panel r2)
     print("  … calling the certifying judge", file=sys.stderr, flush=True)
     raw = _run_tail_cert_judge_raw(project_path, prompt, timeout_secs)
+    # What the runner KNOWS of the launch is read before the tamper outcome is put
+    # into words (PLAN S11 item 15, task 168): with no judge launched there was no
+    # "while the judge ran" and no answer to discard, and both exits below used to
+    # say so in a double failure. Blocked either way; only the sentence differs.
+    _not_started = getattr(raw, "started", None) is False
+    _no_start = ("the certifying judge could not be started: "
+                 + ((raw or "").lstrip().splitlines() or [""])[0][:160]) if _not_started else ""
     try:
         _full = _detect_tamper_full(project_path, _tf, _tb)
         if _full["mutations"] or _full["cautions"]:   # repo mutated OR guard degraded → no verdict
+            if _not_started:
+                return _none("no-judge", _no_start + "; the repository also changed during that "
+                                         "attempt, or the tamper guard could not check that it had not")
             return _none("judge", "the repository changed while the judge ran, or the tamper guard "
                                   "could not check that it had not — the answer was discarded")
     except Exception:                  # tamper check itself failed → fail closed
+        if _not_started:
+            return _none("no-judge", _no_start + "; the tamper check failed as well")
         return _none("judge", "the tamper check failed after the judge ran — the answer was "
                               "discarded")     # (r4 grok#3: never certify on an errored guard)
     # PLAN S12b (task 147/149): keep what the tail-cert judge said, beside the task,
@@ -2589,10 +2601,10 @@ def run_tail_cert_judge(project_path, snapshot, non_behavioral, panel_summary,
     _rl = (raw or "").lstrip()
     if not raw or _rl.startswith("(error:") or _rl.startswith("(FAILED"):
         _first = (_rl.splitlines() or [""])[0][:160]
-        if getattr(raw, "started", None) is False:
+        if _not_started:
             # the runner's own statement that nothing was launched — never inferred
             # from the words of an error (post-D6 runs 1-2: wrong both ways)
-            return _none("no-judge", f"the certifying judge could not be started: {_first}")
+            return _none("no-judge", _no_start)
         return _none("judge", "the call to the certifying judge gave no verdict: "
                               + (_first or "no output"))
     _verdict = parse_tail_cert_verdict(raw, nonce)

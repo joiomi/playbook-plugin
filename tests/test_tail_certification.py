@@ -716,7 +716,10 @@ class ClosePathTailCert(unittest.TestCase):
         self.assertRegex(r.stderr, r"\b1\d\d,\d{3} bytes")           # and that the size is over too
 
     # Impl panel round 1 (opus, codex-high): what the judge's caller knows reaches the close.
-    def _close_with(self, d, judge):
+    def _close_with(self, d, judge, target="tasks.review.run_tail_cert_judge", as_value=False):
+        """Close task 001 with `target` replaced: by default the whole certifying call
+        (`judge` is what it does); with `as_value` the object itself (an adapter factory,
+        so that the REAL runner is the one that meets it)."""
         import contextlib
         import io
         from unittest import mock
@@ -727,8 +730,8 @@ class ClosePathTailCert(unittest.TestCase):
         os.environ["PLAYBOOK_SESSION_ID"] = "pid-t036"
         os.environ["PYTHONPATH"] = PLUGIN_STR
         try:
-            with mock.patch("tasks.review.run_tail_cert_judge", side_effect=judge), \
-                    contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            patched = mock.patch(target, judge) if as_value else mock.patch(target, side_effect=judge)
+            with patched, contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
                 with contextlib.suppress(SystemExit):
                     cmd_work(["done"])
         finally:
@@ -748,6 +751,26 @@ class ClosePathTailCert(unittest.TestCase):
         self.assertNotIn("Task 001 done.", out)
         self.assertIn("the tamper snapshot could not be taken; no judge was called", err)
         self.assertNotIn("no usable verdict", err)
+
+    # PLAN S11 item 15 (task 168): both failures at once, through the real runner — the
+    # close used to say the repository changed "while the judge ran" and that "the answer
+    # was discarded", of a judge that was never launched.
+    def test_a_judge_that_could_not_start_is_not_blamed_for_a_change_in_the_tree(self):
+        d, td, env = self._setup()
+        (d / "docs" / "guide.md").write_text("# new doc\n", encoding="utf-8")
+
+        class _CannotBeBuiltAndWrites:
+            def __init__(self, session_id=None, project_root=None, **kw):
+                (Path(project_root) / "code.py").write_text("x = 999\n", encoding="utf-8")
+                raise ValueError("no such backend 'x'")
+        out, err = self._close_with(d, lambda name: _CannotBeBuiltAndWrites,
+                                    target="provider.subagent._adapter_class", as_value=True)
+        self.assertNotIn("Task 001 done.", out)
+        self.assertIn("could not be started", err)
+        self.assertIn("no judge was called", err)
+        self.assertIn("the repository also changed", err)
+        for false_claim in ("no usable verdict", "while the judge ran", "discarded"):
+            self.assertNotIn(false_claim, err)
 
     def test_what_went_wrong_with_the_judges_answer_is_said(self):
         d, td, env = self._setup()
@@ -1558,6 +1581,63 @@ class RunTailCertJudgeGuards(unittest.TestCase):
         with mock.patch.object(R, "_run_tail_cert_judge_raw", side_effect=_raw):
             self.assertIsNone(R.run_tail_cert_judge(d, snap, ["docs/g.md"], "PANEL PASS", why=why))
         self.assertEqual([k for k, _ in why], ["judge"])
+        self.assertIn("discarded", why[0][1])
+
+    # PLAN S11 item 15 (task 168; found by task 165's third single-judge run): the runner
+    # read its own "nothing was launched" mark only AFTER the tamper check. When both went
+    # wrong at once the reason blamed a judge that never existed — "the repository changed
+    # while the judge ran … the answer was discarded".
+
+    class _CannotBeBuiltAndWrites:
+        """An adapter whose construction changes the repository and then fails: a real
+        double failure, judged by the real tamper detector."""
+
+        def __init__(self, session_id=None, project_root=None, **kw):
+            (Path(project_root) / "code.py").write_text("changed = 1\n", encoding="utf-8")
+            raise ValueError("no such backend 'x'")
+
+    @staticmethod
+    def _no_such_backend(name):
+        raise ValueError("no such backend 'x'")
+
+    def _assert_no_judge_is_blamed(self, why, also):
+        self.assertEqual([k for k, _ in why], ["no-judge"])
+        said = why[0][1]
+        self.assertIn("could not be started", said)
+        self.assertIn("no such backend", said)
+        self.assertIn(also, said)
+        for false_claim in ("while the judge ran", "after the judge ran", "discarded"):
+            self.assertNotIn(false_claim, said)
+
+    def test_no_start_and_a_changed_repository_together_blame_no_judge(self):
+        why = self._through_the_real_runner(lambda name: self._CannotBeBuiltAndWrites)
+        self._assert_no_judge_is_blamed(why, "the repository also changed")
+
+    def test_no_start_and_a_tamper_guard_that_could_not_check(self):
+        from unittest import mock
+        import tasks.review as R
+        with mock.patch.object(R, "_detect_tamper_full",
+                               return_value={"mutations": [], "cautions": ["git status failed"]}):
+            why = self._through_the_real_runner(self._no_such_backend)
+        self._assert_no_judge_is_blamed(why, "could not check that it had not")
+
+    def test_no_start_and_a_tamper_check_that_fails(self):
+        from unittest import mock
+        import tasks.review as R
+        with mock.patch.object(R, "_detect_tamper_full", side_effect=RuntimeError("boom")):
+            why = self._through_the_real_runner(self._no_such_backend)
+        self._assert_no_judge_is_blamed(why, "the tamper check failed as well")
+
+    def test_control_a_tamper_check_that_fails_after_a_call_that_was_made(self):
+        # the other side: a judge WAS called — the sentence about its answer stays
+        from unittest import mock
+        R, d, snap = self._case()
+        why = []
+        with mock.patch.object(R, "_run_tail_cert_judge_raw", return_value="TAIL-CERT x: PASS\n"), \
+                mock.patch.object(R, "_detect_tamper_full", side_effect=RuntimeError("boom")):
+            self.assertIsNone(R.run_tail_cert_judge(d, snap, ["docs/g.md"], "PANEL PASS", why=why))
+        self.assertEqual([k for k, _ in why], ["judge"])
+        self.assertIn("after the judge ran", why[0][1])
         self.assertIn("discarded", why[0][1])
 
     def test_a_verdict_carries_no_reason(self):
