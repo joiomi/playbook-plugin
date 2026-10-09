@@ -2433,11 +2433,19 @@ def _run_tail_cert_judge_raw(project_path, prompt, timeout_secs) -> str:
         backend, variant = resolve_judge_spec(dj)
     except ValueError:
         backend, variant = dj, None
+    # Two steps, because they are two different facts (task 165, post-D6 run 2):
+    # an adapter that cannot be resolved or built means NOTHING was launched —
+    # the one case marked `started=False`; an error out of the call itself may
+    # come before the judge's process, during it, or after it finished (a parse
+    # error on its output), so it claims neither.
     try:
         from provider.subagent import _adapter_class
         from tasks.core import resolve_judge_budget
         adapter = _adapter_class(backend)(session_id="tail-cert",
                                           project_root=Path(project_path))
+    except Exception as e:
+        return _TailCertRaw(f"(error: tail-cert judge spawn failed: {e})", started=False)
+    try:
         return adapter.run_headless_judge(
             prompt=prompt, model=variant, system_context="",
             web_search=False, timeout_secs=timeout_secs,
@@ -2447,17 +2455,25 @@ def _run_tail_cert_judge_raw(project_path, prompt, timeout_secs) -> str:
         _raw = getattr(_expired, "stdout", None) or getattr(_expired, "output", None) or ""
         if isinstance(_raw, bytes):
             _raw = _raw.decode("utf-8", errors="replace")
-        return _JO(_TAIL_CERT_TIMED_OUT, usage=_pu(_raw))   # spend survives (round 3)
+        return _JO("(error: tail-cert judge timed out)", usage=_pu(_raw))   # spend survives (round 3)
     except Exception as e:
-        return f"(error: tail-cert judge spawn failed: {e})"
+        return f"(error: tail-cert judge call failed: {e})"
+
+
+class _TailCertRaw(str):
+    """What `_run_tail_cert_judge_raw` returned, with what the runner KNOWS of the
+    launch: `started` is False when no judge process was ever launched. A plain
+    string — every other return, and every test double — says nothing about it,
+    and is read as a call that was made."""
+    started: "bool | None"
+
+    def __new__(cls, text: str, started: "bool | None" = None):
+        obj = super().__new__(cls, text)
+        obj.started = started
+        return obj
 
 
 TAIL_CERT_LOG = "tail-cert.log"
-# What `_run_tail_cert_judge_raw` returns for a judge that RAN and hit its timeout —
-# the one `(error: …)` that is not a failure to start one. `run_tail_cert_judge`
-# knows it by this exact sentence, not by its words (post-D6 run 1, task 165: a
-# start failure whose text mentioned a timeout was read as a judge that had run).
-_TAIL_CERT_TIMED_OUT = "(error: tail-cert judge timed out)"
 
 
 def run_tail_cert_judge(project_path, snapshot, non_behavioral, panel_summary,
@@ -2474,12 +2490,14 @@ def run_tail_cert_judge(project_path, snapshot, non_behavioral, panel_summary,
     naming the task file the guard's porcelain/dirty-hash sweep never covers the
     task record a rogue judge could rewrite during certification).
 
-    A None has six causes and three are not the judge's (task 165, impl panels r1-r2):
-    each appends ONE `(kind, sentence)` pair to `why` when a list is given — kind
-    `no-judge` when no judge ran (the delta could not be read any more, the tamper
-    snapshot could not be taken, the judge could not be resolved or started), `judge`
-    when one did (it timed out, failed or printed nothing; its answer has no verdict
-    line; the tamper guard discarded it). A PASS or a FAIL appends nothing."""
+    A None has several causes and three are not the judge's (task 165, impl panels
+    r1-r2, post-D6 runs 1-2): each appends ONE `(kind, sentence)` pair to `why` when a
+    list is given. Kind `no-judge` is said only where it is KNOWN that no judge ran:
+    the delta could not be read any more, the tamper snapshot could not be taken, the
+    adapter could not be resolved or built. Kind `judge` is every call that was made
+    and left no verdict — it timed out, failed, raised, printed nothing, has no
+    verdict line, or was discarded by the tamper guard; its sentence says what came
+    back and does not claim that the judge ran. A PASS or a FAIL appends nothing."""
     import secrets
     from tasks.core import parse_tail_cert_verdict
 
@@ -2571,12 +2589,12 @@ def run_tail_cert_judge(project_path, snapshot, non_behavioral, panel_summary,
     _rl = (raw or "").lstrip()
     if not raw or _rl.startswith("(error:") or _rl.startswith("(FAILED"):
         _first = (_rl.splitlines() or [""])[0][:160]
-        if _rl.startswith("(error:") and _rl.rstrip() != _TAIL_CERT_TIMED_OUT:
-            # a resolution or spawn error (`_run_tail_cert_judge_raw`, the adapter's
-            # own `(error: …)`): NO judge ran — only the runner's own timeout
-            # sentence carries that prefix for a judge that did (impl panel r2)
+        if getattr(raw, "started", None) is False:
+            # the runner's own statement that nothing was launched — never inferred
+            # from the words of an error (post-D6 runs 1-2: wrong both ways)
             return _none("no-judge", f"the certifying judge could not be started: {_first}")
-        return _none("judge", "the judge ran and gave no verdict: " + (_first or "no output"))
+        return _none("judge", "the call to the certifying judge gave no verdict: "
+                              + (_first or "no output"))
     _verdict = parse_tail_cert_verdict(raw, nonce)
     if _verdict is None:
         return _none("judge", "the judge's answer has no verdict line for this run (its text: "

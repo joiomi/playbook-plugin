@@ -1430,44 +1430,68 @@ class RunTailCertJudgeGuards(unittest.TestCase):
         (d / "docs" / "g.md").write_text("# d\n", encoding="utf-8")
         return R, d, snap
 
-    def test_a_judge_that_could_not_be_started_was_not_called(self):
-        # impl panel round 2 (codex ×2): a resolution or spawn error is not "the judge did
-        # not answer" — no judge ran
+    # "No judge ran" is said only where the runner KNOWS it — the adapter could not be
+    # resolved or built, so nothing was ever launched (`started is False`). Impl panel
+    # round 2 asked for that case to be told apart from a judge that did not answer; the
+    # single judge then showed, twice, that telling it apart by the WORDS of an error is
+    # wrong both ways (run 1: a start failure that mentions a timeout; run 2: an error
+    # raised after the judge's process had finished, which the runner called "spawn
+    # failed"). Every other failed call says what came back and claims neither.
+
+    class _Adapter:
+        """Stands in for a provider adapter; `raises` is what its call does."""
+        raises: "BaseException | None" = None
+
+        def __init__(self, **kw):
+            pass
+
+        def run_headless_judge(self, **kw):
+            raise self.raises
+
+    def _through_the_real_runner(self, adapter_class):
+        from unittest import mock
+        R, d, snap = self._case()
+        why = []
+        with mock.patch("provider.subagent._adapter_class", adapter_class):
+            self.assertIsNone(R.run_tail_cert_judge(d, snap, ["docs/g.md"], "PANEL PASS", why=why))
+        return why
+
+    def test_an_adapter_that_cannot_be_built_means_no_judge_ran(self):
+        def no_such_backend(name):
+            raise ValueError("no such backend 'timed out'")       # its words must not matter
+        why = self._through_the_real_runner(no_such_backend)
+        self.assertEqual([k for k, _ in why], ["no-judge"])
+        self.assertIn("could not be started", why[0][1])
+        self.assertIn("no such backend", why[0][1])
+
+    def test_an_error_after_the_judges_process_finished_is_not_called_a_start_failure(self):
+        # post-D6 run 2 (codex): e.g. a RecursionError while parsing the finished judge's output
+        class _BreaksAfterTheRun(self._Adapter):
+            raises = RecursionError("maximum recursion depth exceeded while decoding a JSON object")
+        why = self._through_the_real_runner(lambda name: _BreaksAfterTheRun)
+        self.assertEqual([k for k, _ in why], ["judge"])
+        self.assertNotIn("could not be started", why[0][1])
+        self.assertIn("maximum recursion depth", why[0][1])
+
+    def test_a_timeout_is_a_call_that_was_made(self):
+        import subprocess
+
+        class _Slow(self._Adapter):
+            raises = subprocess.TimeoutExpired(cmd="judge", timeout=1)
+        why = self._through_the_real_runner(lambda name: _Slow)
+        self.assertEqual([k for k, _ in why], ["judge"])
+        self.assertIn("timed out", why[0][1])
+
+    def test_an_error_text_alone_never_proves_that_no_judge_ran(self):
         from unittest import mock
         R, d, snap = self._case()
         for said in ("(error: judge not found)", "(error: tail-cert judge spawn failed: [Errno 2] codex)"):
             why = []
-            with mock.patch.object(R, "_run_tail_cert_judge_raw", return_value=said):
+            with mock.patch.object(R, "_run_tail_cert_judge_raw", return_value=said):   # a plain string
                 self.assertIsNone(R.run_tail_cert_judge(d, snap, ["docs/g.md"], "PANEL PASS", why=why))
-            self.assertEqual([k for k, _ in why], ["no-judge"], said)
-            self.assertIn("could not be started", why[0][1])
+            self.assertEqual([k for k, _ in why], ["judge"], said)
+            self.assertNotIn("could not be started", why[0][1])
             self.assertIn(said[8:25], why[0][1])
-
-    def test_a_start_failure_that_mentions_a_timeout_is_still_a_start_failure(self):
-        # post-D6 run 1 (codex): the first classifier read the words "timed out" anywhere in
-        # an error as proof that a judge had run
-        from unittest import mock
-        R, d, snap = self._case()
-        why = []
-        said = "(error: tail-cert judge spawn failed: no such backend 'timed out')"
-        with mock.patch.object(R, "_run_tail_cert_judge_raw", return_value=said):
-            self.assertIsNone(R.run_tail_cert_judge(d, snap, ["docs/g.md"], "PANEL PASS", why=why))
-        self.assertEqual([k for k, _ in why], ["no-judge"])
-
-    def test_the_runner_marks_its_own_timeout_with_the_one_sentence_the_classifier_knows(self):
-        import subprocess
-        from unittest import mock
-        import tasks.review as R
-
-        class _Slow:
-            def __init__(self, **kw):
-                pass
-
-            def run_headless_judge(self, **kw):
-                raise subprocess.TimeoutExpired(cmd="judge", timeout=1)
-        with mock.patch("provider.subagent._adapter_class", return_value=_Slow):
-            said = R._run_tail_cert_judge_raw(Path(tempfile.mkdtemp()), "prompt", 1)
-        self.assertEqual(str(said), R._TAIL_CERT_TIMED_OUT)
 
     def test_a_judge_that_ran_and_gave_nothing_is_said_to_have_failed(self):
         from unittest import mock
