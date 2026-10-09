@@ -26,7 +26,8 @@ Three kinds of proof here:
 
 What the sweep does NOT see (said in the ledger row too): a call through a
 variable (`"$PY" -c …`), and — in Python sources — anything but an argv list that
-starts with `sys.executable`.
+starts with `sys.executable` or with the interpreter's name as a literal (a command
+handed to a shell as one string would not be read; no shipped module does that).
 
 Run: python3 -m unittest tests.test_python_isolation
 """
@@ -329,7 +330,9 @@ def calls_on(line: str) -> list[tuple[str, str]]:
     `other` (a file, `--version`, prose) or `bad` (with the reason)."""
     found = []
     for m in _PY.finditer(line):
-        toks = line[m.end():].split()
+        # `"$(command -v python3)" -c …`: what closes a substitution or a quote right
+        # after the word is not an argument
+        toks = line[m.end():].lstrip(")\"'`").split()
         isolated, i, verdict = False, 0, ("other", "")
         while i < len(toks):
             t = toks[i]
@@ -368,11 +371,12 @@ def calls_on(line: str) -> list[tuple[str, str]]:
     return found
 
 
-_ARGV = re.compile(r"\[\s*sys\.executable\s*,([^\]]*)\]", re.S)
+_ARGV = re.compile(r"""\[\s*(?:sys\.executable|["']python3?["'])\s*,([^\]]*)\]""", re.S)
 
 
 def argv_lists_in(source: str) -> list[tuple[str, str]]:
-    """Every argv list in a Python source that starts with `sys.executable`."""
+    """Every argv list in a Python source that starts with `sys.executable` or with
+    the interpreter's name as a literal."""
     found = []
     for m in _ARGV.finditer(source):
         lead = []
@@ -387,7 +391,7 @@ def argv_lists_in(source: str) -> list[tuple[str, str]]:
         elif "-I" in lead[:lead.index(mode)]:
             found.append(("ok-inline", mode))
         else:
-            found.append(("bad", f"[sys.executable, …, {mode!r}] without '-I' before it"))
+            found.append(("bad", f"an argv list that starts the interpreter with {mode!r} and no '-I' before it"))
     return found
 
 
@@ -486,6 +490,8 @@ class TheSweepsRule(unittest.TestCase):
             "python3 -X utf8 -c 'pass'",
             "FOO=$(python3 \\",
             "python3 -c 'a' && python3 -I -c 'b'",
+            '"$(command -v python3)" -c \'pass\'',
+            "python3 -E -s -c 'pass'",                  # -E and -s do not remove the working directory
         ):
             self.assertIn("bad", self._kinds(line), line)
 
@@ -515,10 +521,14 @@ class TheSweepsRule(unittest.TestCase):
         for bad in ('subprocess.run([sys.executable, "-c", code])',
                     "subprocess.run([sys.executable, '-m', 'tasks.cli', 'list'])",
                     'subprocess.run([sys.executable, "-B", "-", x])',
-                    'subprocess.run([\n    sys.executable,\n    "-c", code, "-I"])'):
+                    'subprocess.run([\n    sys.executable,\n    "-c", code, "-I"])',
+                    'subprocess.run(["python3", "-c", code])',
+                    "subprocess.run(['python', '-m', 'tasks.cli'])"):
             self.assertEqual([k for k, _ in argv_lists_in(bad)], ["bad"], bad)
         self.assertEqual(argv_lists_in('subprocess.run([sys.executable, str(script), "-c"])'),
                          [("other", "")])
+        self.assertEqual(argv_lists_in('subprocess.run(["python3", "-I", "-c", code])'),
+                         [("ok-inline", "-c")])
 
 
 if __name__ == "__main__":
