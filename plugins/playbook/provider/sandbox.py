@@ -773,6 +773,24 @@ def bwrap_start_error(exe: str) -> "str | None":
     return lines[-1] if lines else f"it exited {r.returncode} and printed nothing"
 
 
+def bwrap_state() -> "tuple[str, str, str]":
+    """The ONE answer to "is there a bubblewrap this host can use?" — for the
+    launcher's refusal below and for `tasks environment`, which must not give an
+    all-clear where a launch is then refused. Returns (state, path, detail):
+      "ok"            path = the bubblewrap that is used
+      "missing"       no `bwrap` on PATH
+      "relative"      path = what `which` found, through a relative PATH entry —
+                      not used (`_bwrap_exe`)
+      "cannot-start"  path = the bubblewrap, detail = why it could not start a
+                      sandbox (`bwrap_start_error`)"""
+    exe = _bwrap_exe()
+    if not exe:
+        found = shutil.which("bwrap")
+        return ("relative", found, "") if found else ("missing", "", "")
+    why = bwrap_start_error(exe)
+    return ("cannot-start", exe, why) if why else ("ok", exe, "")
+
+
 def launch_refusal() -> "str | None":
     """Why the LAUNCHER (`_main`) must not start an agent here; None when it may.
 
@@ -792,20 +810,18 @@ def launch_refusal() -> "str | None":
     tamper guard — the same ruling left them as they are."""
     if is_sandboxed():
         return None
-    exe = _bwrap_exe()
-    if not exe:
-        found = shutil.which("bwrap")
-        if found:
-            return (f"no containment — the only `bwrap` on PATH is reached through a relative "
-                    f"PATH entry ({found}), which the sandbox does not use: a launch runs in "
-                    "the project directory, where that entry can name another file. Refusing "
-                    "to start the agent. Put bubblewrap's directory on PATH by its absolute path.")
+    state, path, why = bwrap_state()
+    if state == "missing":
         return ("no containment — bubblewrap (`bwrap`) is not installed, so the agent would run "
                 "with its permission prompts off and nothing fencing its writes. Refusing to "
                 f"start it. To fix: {BWRAP_INSTALL_HINT}.")
-    why = bwrap_start_error(exe)
-    if why:
-        return (f"no containment — bubblewrap is installed ({exe}) but could not start a "
+    if state == "relative":
+        return (f"no containment — the only `bwrap` on PATH is reached through a relative "
+                f"PATH entry ({path}), which the sandbox does not use: a launch runs in "
+                "the project directory, where that entry can name another file. Refusing "
+                "to start the agent. Put bubblewrap's directory on PATH by its absolute path.")
+    if state == "cannot-start":
+        return (f"no containment — bubblewrap is installed ({path}) but could not start a "
                 f"sandbox here: {why}. Refusing to start the agent.")
     return None
 

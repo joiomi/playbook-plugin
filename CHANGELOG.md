@@ -12,16 +12,15 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   reviews only). It now exits 2 before the agent is started and says how to install bubblewrap. The same when
   `bwrap` is installed but cannot start a sandbox: it prints bubblewrap's own error. This covers a run, a `--prompt`
   run and the `--print-argv` preview; `monitor start` is refused by a pre-flight, before it writes its state;
-  `--list-agents`,
-  `--list-models` and `--help` still answer. A launch nested inside a sandbox is not refused — and the sandbox now
-  tells a child it is sandboxed (`PLAYBOOK_SANDBOXED=1`) only when it wrapped it, so what an unwrapped process
-  starts through `sandbox` is refused too; set by hand, that variable is the operator's statement that an outer
-  cage exists. `tasks environment` no longer reports a bubblewrap that cannot start as present. A `bwrap` reached
-  only through a relative `PATH` entry is no longer used, by the sandbox or by a review: a launch runs in the
-  project directory, where such an entry can name a file of the project instead of the bubblewrap that was
-  checked — every wrapped launch now names bubblewrap by its absolute path. Reviews otherwise behave as before: a
-  judge is not launched through that command, and where there is no usable bubblewrap on `PATH` it still runs —
-  uncontained, with the review's warning.
+  `--list-agents`, `--list-models` and `--help` still answer. A launch nested inside a sandbox is not refused — and
+  the sandbox now tells a child it is sandboxed (`PLAYBOOK_SANDBOXED=1`) only when it wrapped it, so what an
+  unwrapped process starts through `sandbox` is refused too; set by hand, that variable is the operator's statement
+  that an outer cage exists. `tasks environment` follows the same rule as the launcher, so it no longer reports a
+  bubblewrap the launcher would refuse as present. A `bwrap` reached only through a relative `PATH` entry is no
+  longer used, by the sandbox or by a review: a launch runs in the project directory, where such an entry can name a
+  file of the project instead of the bubblewrap that was checked — every wrapped launch now names bubblewrap by its
+  absolute path. Reviews otherwise behave as before: a judge is not launched through that command, and where there
+  is no usable bubblewrap on `PATH` it still runs — uncontained, with the review's warning.
 
 ## [1.6.0] — 2026-10-09
 

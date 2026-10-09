@@ -149,21 +149,24 @@ def _sandbox_item() -> dict:
            "not installed the sandbox refuses to start an agent, and judges run "
            "uncontained with a warning")
     if system == "Linux":
-        exe = shutil.which("bwrap")
-        if exe:
-            # installed is not usable: where it cannot start a sandbox the launcher
-            # refuses (task 164), so "present" would be a wrong all-clear
-            from provider.sandbox import bwrap_start_error
-            err = bwrap_start_error(exe)
-            if err:
-                # its own `why`: here a judge does not run uncontained — its launch fails
-                return _item("sandbox: bubblewrap", "sandbox", False, SEV_RECOMMENDED,
-                             ".claude/bin/sandbox uses it for deny-write OS containment; it is "
-                             "installed but cannot start a sandbox here, so the sandbox refuses "
-                             "to start an agent and a judge's launch fails",
-                             f"bubblewrap is installed ({exe}) but could not start a "
-                             f"sandbox here: {err}")
-        return _item("sandbox: bubblewrap", "sandbox", bool(exe), SEV_RECOMMENDED,
+        # the launcher's own rule (provider.sandbox.bwrap_state): "present" here must
+        # mean a launch is not refused there (task 164)
+        from provider.sandbox import bwrap_state
+        state, path, detail = bwrap_state()
+        if state == "cannot-start":
+            # its own `why`: here a judge does not run uncontained — its launch fails
+            return _item("sandbox: bubblewrap", "sandbox", False, SEV_RECOMMENDED,
+                         ".claude/bin/sandbox uses it for deny-write OS containment; it is "
+                         "installed but cannot start a sandbox here, so the sandbox refuses "
+                         "to start an agent and a judge's launch fails",
+                         f"bubblewrap is installed ({path}) but could not start a "
+                         f"sandbox here: {detail}")
+        if state == "relative":
+            return _item("sandbox: bubblewrap", "sandbox", False, SEV_RECOMMENDED, why,
+                         f"the only `bwrap` on PATH is reached through a relative PATH entry "
+                         f"({path}), which playbook does not use — put bubblewrap's directory "
+                         "on PATH by its absolute path")
+        return _item("sandbox: bubblewrap", "sandbox", state == "ok", SEV_RECOMMENDED,
                      why, _bwrap_install_hint())
     # Unknown OS: no containment primitive known.
     return _item(f"sandbox: containment ({system or 'unknown OS'})", "sandbox",

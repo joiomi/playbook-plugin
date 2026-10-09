@@ -33,7 +33,9 @@ def bwrap_usable(path: "str | None" = None) -> bool:
     sandbox here — the launcher's own probe, so the tests and the product agree."""
     from provider.sandbox import bwrap_start_error
     exe = shutil.which("bwrap", path=os.environ.get("PATH", "") if path is None else path)
-    return bool(exe) and bwrap_start_error(os.path.abspath(exe)) is None
+    # the launcher's rule (provider.sandbox.bwrap_state): only a bwrap behind an ABSOLUTE
+    # PATH entry is used, and only if it starts
+    return bool(exe) and os.path.isabs(exe) and bwrap_start_error(exe) is None
 
 
 def path_with_bwrap(bindir: Path, path: "str | None" = None) -> str:

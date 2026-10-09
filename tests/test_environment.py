@@ -141,6 +141,34 @@ class SandboxItemTest(unittest.TestCase):
         self.assertIn(why, item["hint"])
         self.assertNotIn("apt install", item["hint"], "it IS installed — the install hint would mislead")
 
+    def test_linux_with_a_bwrap_behind_a_relative_path_entry_is_not_ok(self):
+        # the launcher does not use such a bwrap (task 164, the single judge's finding): the
+        # advice follows the launcher's rule, so it cannot say "present" where a launch is refused
+        from provider import sandbox
+        with mock.patch.object(env.platform, "system", return_value="Linux"), \
+                mock.patch.object(env.shutil, "which",
+                                  side_effect=lambda name: "bin/bwrap" if name == "bwrap" else None), \
+                mock.patch.object(sandbox, "bwrap_start_error", return_value=None):
+            item = env._sandbox_item()
+            refusal = sandbox.launch_refusal()
+        self.assertFalse(item["present"])
+        self.assertIn("relative PATH entry", item["hint"])
+        self.assertIn("bin/bwrap", item["hint"])
+        self.assertIsNotNone(refusal, "the launcher refuses here — the advice must agree")
+
+    def test_the_advice_and_the_launcher_agree_in_every_state(self):
+        from provider import sandbox
+        cases = {"ok": ("/usr/bin/bwrap", None), "missing": (None, None),
+                 "relative": ("bin/bwrap", None), "cannot-start": ("/usr/bin/bwrap", "bwrap: nope")}
+        for state, (found, err) in cases.items():
+            with self.subTest(state=state), \
+                    mock.patch.object(env.platform, "system", return_value="Linux"), \
+                    mock.patch.object(sandbox, "is_sandboxed", return_value=False), \
+                    mock.patch.object(env.shutil, "which",
+                                      side_effect=lambda name, f=found: f if name == "bwrap" else None), \
+                    mock.patch.object(sandbox, "bwrap_start_error", return_value=err):
+                self.assertEqual(env._sandbox_item()["present"], sandbox.launch_refusal() is None)
+
 
     def test_unknown_os_has_no_primitive(self):
         with mock.patch.object(env.platform, "system", return_value="Plan9"):
