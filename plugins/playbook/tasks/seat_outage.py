@@ -13,9 +13,9 @@ panels skip a seat whose outage is current and say so in one line.
 The record is written through `atomic_write` under a lock, and every write
 re-reads it inside the lock, so two panels recording at once keep both entries.
 
-A clear leaves its time behind (task 165): a panel that was already running when
-the owner cleared a seat reports that seat's failure afterwards, and without the
-time it put the seat straight back.
+A clear leaves its time behind (task 165): a panel whose call to a seat was already
+under way when the owner cleared that seat reports the failure afterwards, and
+without the time it put the seat straight back.
 """
 from __future__ import annotations
 
@@ -213,8 +213,8 @@ def _is_current(entry: dict, now: _dt.datetime) -> bool:
 
 
 def now() -> _dt.datetime:
-    """The clock this module reads — a panel takes its start from here, so that it
-    is compared with a clear's time on one clock."""
+    """The clock this module reads — a panel takes each seat's call start from
+    here, so that it is compared with a clear's time on one clock."""
     return _dt.datetime.now().astimezone()
 
 
@@ -234,10 +234,9 @@ def current_outages(agent_dir: Path, now: Optional[_dt.datetime] = None) -> dict
 # failure. The value under this key is a LIST of [seat, time] pairs, not an object:
 # `_load` — and the reader shipped in 1.6.0 — keep object values only, so no reader,
 # old or new, takes it for a seat out of credit.
+# A clear is never dropped: a review's timeout may be unlimited, so no age makes it
+# safe to forget one (impl panel r1) — and there is one pair per seat ever cleared.
 _CLEARED = "_cleared"
-# A panel lives at most its hard timeout (20 minutes unless configured), so a day
-# covers every panel that could still report a failure older than the clear.
-_CLEAR_KEPT = _dt.timedelta(days=1)
 
 
 def _aware(at: _dt.datetime, now: _dt.datetime) -> _dt.datetime:
@@ -245,8 +244,8 @@ def _aware(at: _dt.datetime, now: _dt.datetime) -> _dt.datetime:
 
 
 def _cleared(text: str, now: _dt.datetime) -> dict:
-    """seat spec → when the owner last cleared it (clears older than `_CLEAR_KEPT`
-    are forgotten; anything unreadable is skipped)."""
+    """seat spec → when the owner last cleared it (anything unreadable is skipped;
+    `now` only gives a zone to a time written without one)."""
     try:
         data = json.loads(text) if text.strip() else {}
     except ValueError:
@@ -258,11 +257,9 @@ def _cleared(text: str, now: _dt.datetime) -> dict:
                 and all(isinstance(x, str) for x in pair)):
             continue
         try:
-            at = _aware(_dt.datetime.fromisoformat(pair[1]), now)
+            out[pair[0]] = _aware(_dt.datetime.fromisoformat(pair[1]), now)
         except ValueError:
             continue
-        if now - at <= _CLEAR_KEPT:
-            out[pair[0]] = at
     return out
 
 
@@ -279,10 +276,12 @@ def record_outage(agent_dir: Path, spec: str, outage: dict,
     """Add or replace `spec`'s entry (expired entries are dropped on the way).
     True when it was recorded.
 
-    `started` is when the panel that saw the failure began. A failure seen by a
-    panel that began no later than the owner's last clear of this seat is from
-    before that clear — it is not recorded (False), and the next panel calls the
-    seat. Without `started` the entry is recorded, as it always was."""
+    `started` is when the CALL that failed began — the seat's own, not the panel's
+    (impl panel r1: a seat enabled after the panel chose its seats but before it was
+    called has failed AFTER the clear, and that is news). A failure of a call that
+    began no later than the owner's last clear of this seat is from before that
+    clear — it is not recorded (False), and the next panel calls the seat. Without
+    `started` the entry is recorded, as it always was."""
     from tasks.atomic import rewrite
     now = now or _dt.datetime.now().astimezone()
 
@@ -316,7 +315,9 @@ def clear_outage(agent_dir: Path, spec: str,
         if spec in data:
             found.append(data.pop(spec))
         cleared = _cleared(text, now)
-        cleared[spec] = now
+        # the LATEST clear stands: this one took its time before it took the lock,
+        # so a later `enable` may already be written (impl panel r1)
+        cleared[spec] = max(cleared.get(spec, now), now)
         return _dump(data, cleared)
 
     _record(agent_dir).parent.mkdir(parents=True, exist_ok=True)

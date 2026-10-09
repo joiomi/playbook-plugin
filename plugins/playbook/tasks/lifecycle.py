@@ -755,6 +755,7 @@ def cmd_work(cmd_args):
                     # payload cap, no judge ran, and the close answered "tail
                     # certification did not return PASS" — a judge's FAIL in all
                     # but name.
+                    _tc_noverdict = ""
                     _tc_unavail = (tail_cert_unavailable(project_path, _snap)
                                    if (_tc_can and not _tc_beh) else "")
                     if _tc_unavail:
@@ -788,10 +789,19 @@ def cmd_work(cmd_args):
                               "single-judge tail certification", file=sys.stderr,
                               flush=True)
                         from tasks.core import resolve_review_timeout
+                        _tc_why: list = []
                         _tc_verdict = run_tail_cert_judge(
                             project_path, _snap, _tc_non, _panel_summary,
                             timeout_secs=resolve_review_timeout(project_path),
-                            task_file=task_file)
+                            task_file=task_file, why=_tc_why)
+                        # no verdict: say whose doing it was (impl panel r1) —
+                        # the runner knows whether a judge was called at all
+                        if _tc_verdict is None and _tc_why:
+                            _kind, _said = _tc_why[0]
+                            if _kind == "no-judge":
+                                _tc_unavail = _said
+                            else:
+                                _tc_noverdict = _said
                         if _tc_verdict == "PASS":
                             # Finding D (TOCTOU): the judge call is long; recompute
                             # the fingerprint and require it to equal the one the
@@ -810,13 +820,15 @@ def cmd_work(cmd_args):
                             if (_recheck_fp != _now_fp or not _r_can or _r_beh
                                     or _r_non != _tc_non):
                                 _tc_verdict = None
+                                _tc_noverdict = ("the tree or its scope changed while the "
+                                                 "judge ran — its PASS was discarded")
                                 print("  ⚠ tree/scope changed during certification "
                                       "— not certifying (fresh panel required)",
                                       file=sys.stderr, flush=True)
                     _tc_allowed, _tc_clause = tail_cert_gate_decision(
                         can_certify=_tc_can, behavioral_nonempty=bool(_tc_beh),
                         cert_verdict=_tc_verdict, non_behavioral=_tc_non,
-                        unavailable=_tc_unavail)
+                        unavailable=_tc_unavail, no_verdict=_tc_noverdict)
                     if _tc_allowed:
                         _f_allowed = True
                         _freshness = {

@@ -383,6 +383,35 @@ class DefaultWindow(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(len(self._retros(proj)), 2)
 
+    # Impl panel round 1 (opus, codex-high, grok): the first guard compared the status
+    # alone, so a carried task that had WORKED — more gates checked, still `blocked` —
+    # was refused with "is as it recorded it"; and a carried task that had been removed
+    # left the others "unchanged".
+
+    def test_a_carried_task_whose_gates_moved_is_a_change(self):
+        proj = self._one_retro_with_a_blocked_task()
+        tf = proj / ".agent" / "tasks" / "002-b" / "task.md"
+        tf.write_text(tf.read_text(encoding="utf-8") + "- [x] A second step — done since the retro\n",
+                      encoding="utf-8")                                   # 1/1 → 2/2, still blocked
+        r, made = self._retro(proj)
+        self.assertEqual((r.returncode, made), (0, "005-retro-002-002"), r.stderr)
+
+    def test_a_carried_task_that_is_gone_is_a_change(self):
+        proj = self._project([(1, "a"), (2, "b"), (3, "c")])
+        self._set_status(proj, 2, "blocked")
+        self._set_status(proj, 3, "blocked")
+        r, made = self._retro(proj)
+        self.assertEqual((r.returncode, made), (0, "004-retro-001-003"), r.stderr)
+        __import__("shutil").rmtree(proj / ".agent" / "tasks" / "003-c")
+        r, made = self._retro(proj)
+        self.assertEqual((r.returncode, made), (0, "005-retro-002-002"), r.stderr)
+
+    def test_the_refusal_says_what_it_compared(self):
+        proj = self._one_retro_with_a_blocked_task()
+        r, _made = self._retro(proj)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("T002 (blocked, 1/1 gates)", r.stderr)
+
 
 class ScaffoldPinsTheTaskTable(unittest.TestCase):
     """PLAN S11 item 10 (task 165; retro 161 panel r1, codex-medium). A retro record is

@@ -692,6 +692,87 @@ class ClosePathTailCert(unittest.TestCase):
         self.assertFalse((td / "tail-cert.log").exists())
         self.assertNotIn("\ndone", self._receipt(td).split("## Status")[1][:20])
 
+    # Impl panel round 1 (opus): ONE new file over the per-file ceiling took the other
+    # exit and was called "not a regular readable file", with no size.
+    def test_one_new_file_over_the_ceiling_is_named_with_its_size(self):
+        d, td, env = self._setup()
+        (d / "docs" / "big.md").write_text("# doc\n" + ("word " * 12 + "\n") * 2000, encoding="utf-8")
+        r = self._close(d, env)
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("no judge was called", r.stderr)
+        self.assertRegex(r.stderr, r"docs/big\.md is 1\d\d,\d{3} bytes")
+        self.assertNotIn("not a regular readable file", r.stderr)
+
+    # Impl panel round 1 (grok): past the size limit every later reason became
+    # "at least N bytes" — a file that cannot be read was reported as a size problem.
+    def test_a_file_that_cannot_be_read_is_named_even_past_the_size_limit(self):
+        d, td, env = self._setup()
+        for name in ("a.md", "b.md"):
+            (d / "docs" / name).write_text("# doc\n" + ("word " * 12 + "\n") * 1000, encoding="utf-8")
+        os.symlink("a.md", d / "docs" / "c.md")
+        r = self._close(d, env)
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("docs/c.md is not a regular readable file", r.stderr)
+        self.assertRegex(r.stderr, r"\b1\d\d,\d{3} bytes")           # and that the size is over too
+
+    # Impl panel round 1 (opus, codex-high): what the judge's caller knows reaches the close.
+    def _close_with(self, d, judge):
+        import contextlib
+        import io
+        from unittest import mock
+        from tasks.lifecycle import cmd_work
+        out, err = io.StringIO(), io.StringIO()
+        old_cwd, old_env = os.getcwd(), dict(os.environ)
+        os.chdir(d)
+        os.environ["PLAYBOOK_SESSION_ID"] = "pid-t036"
+        os.environ["PYTHONPATH"] = PLUGIN_STR
+        try:
+            with mock.patch("tasks.review.run_tail_cert_judge", side_effect=judge), \
+                    contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                with contextlib.suppress(SystemExit):
+                    cmd_work(["done"])
+        finally:
+            os.chdir(old_cwd)
+            os.environ.clear()
+            os.environ.update(old_env)
+        return out.getvalue(), err.getvalue()
+
+    def test_a_judge_that_was_never_started_is_not_blamed(self):
+        d, td, env = self._setup()
+        (d / "docs" / "guide.md").write_text("# new doc\n", encoding="utf-8")
+
+        def judge(*a, why=None, **k):
+            why.append(("no-judge", "the tamper snapshot could not be taken"))
+            return None
+        out, err = self._close_with(d, judge)
+        self.assertNotIn("Task 001 done.", out)
+        self.assertIn("the tamper snapshot could not be taken; no judge was called", err)
+        self.assertNotIn("no usable verdict", err)
+
+    def test_what_went_wrong_with_the_judges_answer_is_said(self):
+        d, td, env = self._setup()
+        (d / "docs" / "guide.md").write_text("# new doc\n", encoding="utf-8")
+
+        def judge(*a, why=None, **k):
+            why.append(("judge", "the judge did not answer: (error: judge not found)"))
+            return None
+        out, err = self._close_with(d, judge)
+        self.assertNotIn("Task 001 done.", out)
+        self.assertIn("no usable verdict — the judge did not answer: (error: judge not found)", err)
+        self.assertNotIn("no judge was called", err)
+
+    def test_a_pass_voided_because_the_tree_moved_is_said_to_be_voided(self):
+        d, td, env = self._setup()
+        (d / "docs" / "guide.md").write_text("# new doc\n", encoding="utf-8")
+
+        def judge(*a, **k):
+            (d / "code.py").write_text("x = 999\n", encoding="utf-8")
+            return "PASS"
+        out, err = self._close_with(d, judge)
+        self.assertNotIn("Task 001 done.", out)
+        self.assertIn("its PASS was discarded", err)
+        self.assertNotIn("carried no verdict line", err)
+
     def test_a_judges_fail_is_called_a_fail(self):
         d, td, env = self._setup()
         (d / "docs" / "guide.md").write_text("# new doc\n", encoding="utf-8")
@@ -1337,6 +1418,85 @@ class RunTailCertJudgeGuards(unittest.TestCase):
         with mock.patch.object(R, "_run_tail_cert_judge_raw", side_effect=_raw):
             v = R.run_tail_cert_judge(d, snap, ["docs/g.md"], "PANEL PASS")
         self.assertIsNone(v)                    # tree mutated during cert → block
+
+    # Task 165, impl panel round 1 (opus, codex-high): a missing verdict has five causes,
+    # and three of them are not the judge's — each is said (`why`), so the close can say it.
+
+    def _case(self):
+        import tasks.review as R
+        d = _repo()
+        (d / "docs").mkdir()
+        snap = build_panel_snapshot(d, tree_state_fingerprint(d))
+        (d / "docs" / "g.md").write_text("# d\n", encoding="utf-8")
+        return R, d, snap
+
+    def test_a_judge_that_did_not_answer_is_said_to_have_not_answered(self):
+        from unittest import mock
+        R, d, snap = self._case()
+        why = []
+        with mock.patch.object(R, "_run_tail_cert_judge_raw", return_value="(error: judge not found)"):
+            self.assertIsNone(R.run_tail_cert_judge(d, snap, ["docs/g.md"], "PANEL PASS", why=why))
+        self.assertEqual([k for k, _ in why], ["judge"])
+        self.assertIn("did not answer", why[0][1])
+        self.assertIn("judge not found", why[0][1])
+
+    def test_an_answer_without_a_verdict_line_is_said_to_have_none(self):
+        from unittest import mock
+        R, d, snap = self._case()
+        why = []
+        with mock.patch.object(R, "_run_tail_cert_judge_raw", return_value="It looks fine to me.\n"):
+            self.assertIsNone(R.run_tail_cert_judge(d, snap, ["docs/g.md"], "PANEL PASS", why=why))
+        self.assertEqual([k for k, _ in why], ["judge"])
+        self.assertIn("no verdict line", why[0][1])
+
+    def test_a_snapshot_that_cannot_be_taken_means_no_judge_was_called(self):
+        from unittest import mock
+        R, d, snap = self._case()
+        why, called = [], []
+        with mock.patch.object(R, "_snapshot_repo_state", side_effect=OSError("disk")), \
+                mock.patch.object(R, "_run_tail_cert_judge_raw", side_effect=lambda *a: called.append(a)):
+            self.assertIsNone(R.run_tail_cert_judge(d, snap, ["docs/g.md"], "PANEL PASS", why=why))
+        self.assertEqual(called, [])
+        self.assertEqual([k for k, _ in why], ["no-judge"])
+        self.assertIn("snapshot", why[0][1])
+
+    def test_a_delta_that_stopped_being_readable_means_no_judge_was_called(self):
+        # between the close's own check and the judge's launch (codex-high)
+        from unittest import mock
+        R, d, snap = self._case()
+        (d / "docs" / "big.md").write_text("# doc\n" + ("word " * 12 + "\n") * 2000, encoding="utf-8")
+        why, called = [], []
+        with mock.patch.object(R, "_run_tail_cert_judge_raw", side_effect=lambda *a: called.append(a)):
+            self.assertIsNone(R.run_tail_cert_judge(d, snap, ["docs/g.md"], "PANEL PASS", why=why))
+        self.assertEqual(called, [])
+        self.assertEqual([k for k, _ in why], ["no-judge"])
+        self.assertIn("docs/big.md", why[0][1])
+
+    def test_an_answer_discarded_by_the_tamper_guard_is_said_to_be_discarded(self):
+        from unittest import mock
+        R, d, snap = self._case()
+
+        def _raw(project_path, prompt, timeout_secs):
+            import re
+            (Path(project_path) / "code.py").write_text("evil = 1\n", "utf-8")
+            return f"TAIL-CERT {re.search(r'TAIL-CERT ([0-9a-f]+):', prompt).group(1)}: PASS\n"
+        why = []
+        with mock.patch.object(R, "_run_tail_cert_judge_raw", side_effect=_raw):
+            self.assertIsNone(R.run_tail_cert_judge(d, snap, ["docs/g.md"], "PANEL PASS", why=why))
+        self.assertEqual([k for k, _ in why], ["judge"])
+        self.assertIn("discarded", why[0][1])
+
+    def test_a_verdict_carries_no_reason(self):
+        from unittest import mock
+        R, d, snap = self._case()
+
+        def _raw(project_path, prompt, timeout_secs):
+            import re
+            return f"No.\nTAIL-CERT {re.search(r'TAIL-CERT ([0-9a-f]+):', prompt).group(1)}: FAIL\n"
+        why = []
+        with mock.patch.object(R, "_run_tail_cert_judge_raw", side_effect=_raw):
+            self.assertEqual(R.run_tail_cert_judge(d, snap, ["docs/g.md"], "PANEL PASS", why=why), "FAIL")
+        self.assertEqual(why, [])
 
 
 class RecordsOnlyDelta(unittest.TestCase):

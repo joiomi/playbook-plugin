@@ -1705,10 +1705,12 @@ def _cmd_panel_review(cmd_args):
     # A seat whose provider said the account is out of credit is not called
     # again until its reset time, or until the owner clears it.
     from tasks import seat_outage as _seat_outage
-    # When this panel read the record. A seat the owner clears from here on
-    # (`tasks models enable`) was cleared after this panel chose its seats, so a
-    # failure it reports for that seat is from before the clear (task 165).
-    _panel_began = _seat_outage.now()
+    # When each seat's call began (task 165): a seat the owner clears
+    # (`tasks models enable`) while its call is under way fails with news from
+    # BEFORE the clear, and must not be put back for it. Per seat, not per panel
+    # (impl panel r1): an enable that lands after the seats were chosen but before
+    # a seat is called is older than that call — its failure is news.
+    _seat_began: dict = {}
     _outages = _seat_outage.current_outages(resolve_agent_dir(project_path))
     if _outages:
         _live = []
@@ -1782,6 +1784,7 @@ def _cmd_panel_review(cmd_args):
         # `_t0` wall clock brackets the subprocess for the spend record (task
         # 042); every return path reports its own elapsed + timed-out flag.
         _t0 = time.monotonic()
+        _seat_began[label] = _seat_outage.now()
         try:
             adapter = adapter_cls(session_id="judge", project_root=project_path)
             output = adapter.run_headless_judge(
@@ -1926,13 +1929,13 @@ def _cmd_panel_review(cmd_args):
         if _o:
             try:
                 if _seat_outage.record_outage(resolve_agent_dir(project_path), _lbl, _o,
-                                              started=_panel_began):
+                                              started=_seat_began.get(_lbl)):
                     print(f"  Recorded {_lbl} as out of credit ({_o['reason']}); later panels skip it "
                           + (f"until {_o['until']}." if _o.get("until")
                              else f"until `tasks models enable {_lbl}`."), flush=True)
                 else:
                     print(f"  {_lbl} answered out of credit ({_o['reason']}), but it was enabled "
-                          "(`tasks models enable`) after this panel started — not recorded; "
+                          "(`tasks models enable`) after this call to it began — not recorded; "
                           "the next panel calls it.", flush=True)
             except Exception as _e:   # noqa: BLE001 — never fail the review on it
                 print(f"  ⚠ could not record {_lbl}'s outage ({_e})", file=sys.stderr, flush=True)
@@ -2214,6 +2217,7 @@ def _tail_cert_review_diff(project_path, snapshot, why: "list | None" = None) ->
     REMOVED note); a path whose content cannot be captured, or a total payload
     that would exceed the transport cap, returns None → the caller fails CLOSED.
     Each such exit also says why, into `why` when a list is given (task 165)."""
+    import stat
     import subprocess
     from tasks.core import (
         _enumerate_scope_delta, _fingerprint_exclude_pathspecs,
@@ -2234,11 +2238,17 @@ def _tail_cert_review_diff(project_path, snapshot, why: "list | None" = None) ->
                 f"certifying judge can be sent {_TAIL_CERT_TOTAL_CAP:,}")
 
     def _no(reason: str) -> None:
-        # Every fail-closed exit says why. Past the cap, the size is the reason
-        # whatever stopped the enumeration afterwards — it was true first.
+        # Every fail-closed exit says why. Past the cap BOTH are said (impl panel
+        # r1): the path that stopped the enumeration, and that the size is over
+        # as well — whoever fixes the one is told about the other.
         if why is not None:
-            why.append(_too_large(False) if total > _TAIL_CERT_TOTAL_CAP else reason)
+            why.append(f"{reason}; also, {_too_large(False)}"
+                       if total > _TAIL_CERT_TOTAL_CAP else reason)
         return None
+
+    def _one_file(what: str, size: int) -> str:
+        return (f"{what} is {size:,} bytes; one file's content can be sent up to "
+                f"{_TAIL_CERT_DIFF_CAP:,}")
 
     def _emit(text):
         nonlocal total
@@ -2298,8 +2308,16 @@ def _tail_cert_review_diff(project_path, snapshot, why: "list | None" = None) ->
             if fpath.exists() or fpath.is_symlink():
                 data = _safe_read_regular(fpath, _TAIL_CERT_DIFF_CAP)
                 if data is None:           # non-regular / oversize / unreadable
-                    return _no(f"{prefixed} is not a regular readable file of at most "
-                               f"{_TAIL_CERT_DIFF_CAP:,} bytes")
+                    # a plain file that is simply too large is said as that, with
+                    # its size — not folded into "cannot be read" (impl panel r1)
+                    try:
+                        _st = os.lstat(fpath)
+                    except OSError:
+                        _st = None
+                    if (_st is not None and stat.S_ISREG(_st.st_mode)
+                            and _st.st_size > _TAIL_CERT_DIFF_CAP):
+                        return _no(_one_file(prefixed, _st.st_size))
+                    return _no(f"{prefixed} is not a regular readable file")
                 _emit(f"--- current content of {prefixed} ---\n"
                       + data.decode("utf-8", "replace"))
                 shown = True
@@ -2314,9 +2332,10 @@ def _tail_cert_review_diff(project_path, snapshot, why: "list | None" = None) ->
                                         capture_output=True)
                 except (OSError, subprocess.SubprocessError):
                     return _no(f"git could not read the staged copy of {prefixed}")
-                if gi.returncode != 0 or len(gi.stdout) > _TAIL_CERT_DIFF_CAP:
-                    return _no(f"the staged copy of {prefixed} could not be read, or is over "
-                               f"{_TAIL_CERT_DIFF_CAP:,} bytes")
+                if gi.returncode != 0:
+                    return _no(f"git could not read the staged copy of {prefixed}")
+                if len(gi.stdout) > _TAIL_CERT_DIFF_CAP:
+                    return _no(_one_file(f"the staged copy of {prefixed}", len(gi.stdout)))
                 _emit(f"--- STAGED (index) content of {prefixed} ---\n"
                       + gi.stdout.decode("utf-8", "replace"))
                 shown = True
@@ -2437,7 +2456,8 @@ TAIL_CERT_LOG = "tail-cert.log"
 
 
 def run_tail_cert_judge(project_path, snapshot, non_behavioral, panel_summary,
-                        *, timeout_secs=None, task_file=None) -> "str | None":
+                        *, timeout_secs=None, task_file=None,
+                        why: "list | None" = None) -> "str | None":
     """Dedicated tail-cert judge (finding E): materialize the certifiable delta,
     build the tail-cert prompt, spawn the default single judge READ-ONLY under the
     same tamper backstop the other judge paths use, and parse its NONCED
@@ -2447,12 +2467,29 @@ def run_tail_cert_judge(project_path, snapshot, non_behavioral, panel_summary,
     `task_file` is passed to the tamper guard so it fingerprints `task.md`
     specifically (impl-panel r7 opus#2/grok#1: `.agent/` is gitignored, so without
     naming the task file the guard's porcelain/dirty-hash sweep never covers the
-    task record a rogue judge could rewrite during certification)."""
+    task record a rogue judge could rewrite during certification).
+
+    A None has five causes and three are not the judge's (task 165, impl panel r1):
+    each appends ONE `(kind, sentence)` pair to `why` when a list is given — kind
+    `no-judge` when no judge was called (the delta could not be read any more, the
+    tamper snapshot could not be taken), `judge` when one was (it did not answer,
+    its answer has no verdict line, or the tamper guard discarded it). A PASS or a
+    FAIL appends nothing."""
     import secrets
     from tasks.core import parse_tail_cert_verdict
+
+    def _none(kind: str, sentence: str) -> None:
+        if why is not None:
+            why.append((kind, " ".join(sentence.split())))
+        return None
+
+    # Called as it always was — two arguments (its doubles in the spend-journal and
+    # stale-close tests are two-argument lambdas); the reason is asked separately,
+    # on the failing path only.
     diff_text = _tail_cert_review_diff(project_path, snapshot)
-    if diff_text is None:
-        return None                    # could not capture the delta → fail closed
+    if diff_text is None:              # could not capture the delta → fail closed
+        return _none("no-judge", tail_cert_unavailable(project_path, snapshot)
+                                 or "the delta could not be read")
     nonce = secrets.token_hex(8)
     prompt = _tail_cert_prompt(non_behavioral, panel_summary, diff_text, nonce)
     # Same uncontained-judge warning the panel/single-judge paths print (impl-panel
@@ -2476,8 +2513,8 @@ def run_tail_cert_judge(project_path, snapshot, non_behavioral, panel_summary,
     _tf = Path(task_file) if task_file else None
     try:
         _tb = _snapshot_repo_state(project_path, _tf)
-    except Exception:
-        return None                    # no snapshot → no certification
+    except Exception:                  # no snapshot → no certification
+        return _none("no-judge", "the tamper snapshot of the repository could not be taken")
     # Spend record (task 042): bracket the raw tail-cert call here in the caller
     # (it has task_file + timeout in scope, and leaving the raw runner's 3-arg
     # signature untouched keeps its many test doubles valid). The elapsed spans
@@ -2487,11 +2524,12 @@ def run_tail_cert_judge(project_path, snapshot, non_behavioral, panel_summary,
     raw = _run_tail_cert_judge_raw(project_path, prompt, timeout_secs)
     try:
         _full = _detect_tamper_full(project_path, _tf, _tb)
-        if _full["mutations"] or _full["cautions"]:
-            return None                # repo mutated OR guard degraded → no verdict
-    except Exception:
-        return None                    # tamper check itself failed → fail closed
-                                       # (r4 grok#3: never certify on an errored guard)
+        if _full["mutations"] or _full["cautions"]:   # repo mutated OR guard degraded → no verdict
+            return _none("judge", "the repository changed while the judge ran, or the tamper guard "
+                                  "could not check that it had not — the answer was discarded")
+    except Exception:                  # tamper check itself failed → fail closed
+        return _none("judge", "the tamper check failed after the judge ran — the answer was "
+                              "discarded")     # (r4 grok#3: never certify on an errored guard)
     # PLAN S12b (task 147/149): keep what the tail-cert judge said, beside the task,
     # like a single-judge log — a refusal with no readable reason invited the
     # override. Past the tamper check only; best-effort (the verdict stands either way).
@@ -2525,8 +2563,13 @@ def run_tail_cert_judge(project_path, snapshot, non_behavioral, panel_summary,
     # parse handles the rest.
     _rl = (raw or "").lstrip()
     if not raw or _rl.startswith("(error:") or _rl.startswith("(FAILED"):
-        return None
-    return parse_tail_cert_verdict(raw, nonce)
+        return _none("judge", "the judge did not answer: "
+                              + ((_rl.splitlines() or ["no output"])[0][:160] if _rl else "no output"))
+    _verdict = parse_tail_cert_verdict(raw, nonce)
+    if _verdict is None:
+        return _none("judge", "the judge's answer has no verdict line for this run (its text: "
+                              f"{TAIL_CERT_LOG} beside task.md)")
+    return _verdict
 
 
 # Task 108: a post-D6 run reserved before the judge spawned and not yet finished.

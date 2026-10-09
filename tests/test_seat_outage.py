@@ -305,11 +305,23 @@ class OutageRecord(unittest.TestCase):
         self.assertTrue(so.clear_outage(self.agent, "grok:x", NOW))
         self.assertEqual(so.current_outages(self.agent, NOW), {})
 
-    def test_a_clear_older_than_a_day_is_forgotten(self):
+    def test_a_clear_is_kept_however_long_a_panel_runs(self):
+        # impl panel round 1 (codex ×2): the first version dropped a clear after a day,
+        # while a review's timeout may be unlimited — a panel that outlived the day
+        # put the seat back
         so.clear_outage(self.agent, "grok:x", NOW)
-        so.record_outage(self.agent, "codex:y", self.OUT, NOW + dt.timedelta(days=2))
-        data = json.loads(so._record(self.agent).read_text(encoding="utf-8"))
-        self.assertEqual(list(data), ["codex:y"], "a two-day-old clear is still carried")
+        so.record_outage(self.agent, "codex:y", self.OUT, NOW + dt.timedelta(days=2))   # any later write
+        self.assertFalse(so.record_outage(self.agent, "grok:x", self.OUT, NOW + dt.timedelta(days=3),
+                                          started=NOW - self.MIN))
+        self.assertEqual(list(so.current_outages(self.agent, NOW + dt.timedelta(days=3))), ["codex:y"])
+
+    def test_an_older_clear_never_replaces_a_newer_one(self):
+        # impl panel round 1 (codex ×2): a clear takes its time before it takes the lock,
+        # so two `tasks models enable` can commit out of order
+        so.clear_outage(self.agent, "grok:x", NOW + 2 * self.MIN)
+        so.clear_outage(self.agent, "grok:x", NOW + self.MIN)               # the earlier one lands last
+        self.assertFalse(so.record_outage(self.agent, "grok:x", self.OUT, NOW + 3 * self.MIN,
+                                          started=NOW + 1.5 * self.MIN))
 
 
 class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
@@ -413,6 +425,40 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
         self.calls.clear()
         self._panel(models, self._judge(), codex_available=True)
         self.assertIn("gpt-5.5", self.calls)
+
+    def test_a_seat_enabled_before_its_call_started_is_recorded_when_it_fails(self):
+        # impl panel round 1 (codex-high): the first version took ONE time for the whole
+        # panel, before it chose its seats. An enable that lands after that moment but
+        # before the seat is called is older than the call: the failure is NEW and must
+        # be recorded. The clock steps one second per reading, so the order is exact.
+        import itertools
+        import types
+        from unittest import mock
+        ticks = itertools.count()
+
+        class _Stepping(dt.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                at = NOW + dt.timedelta(seconds=next(ticks))
+                return at if tz is None else at.astimezone(tz)
+
+        shim = types.SimpleNamespace(datetime=_Stepping, timedelta=dt.timedelta, timezone=dt.timezone)
+        patcher = mock.patch.object(so, "_dt", shim)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        models = self.CLAUDE[:2] + ("codex:gpt-5.5",)
+        agent = self.d / ".agent"
+        real_current = so.current_outages
+
+        def choose_then_enable(agent_dir, now=None):
+            seen = real_current(agent_dir, now)
+            so.clear_outage(agent_dir, "codex:gpt-5.5")      # after the panel chose, before any call
+            return seen
+
+        with mock.patch.object(so, "current_outages", choose_then_enable):
+            code, out, _ = self._panel(models, self._judge(outage=("gpt-5.5",)), codex_available=True)
+        self.assertIn("Recorded codex:gpt-5.5 as out of credit", out)
+        self.assertEqual(list(real_current(agent, NOW + dt.timedelta(minutes=5))), ["codex:gpt-5.5"])
 
     def test_a_claude_seat_at_its_account_limit_is_recorded_then_skipped(self):
         # Task 158: on 2026-10-08 both claude seats of a five-seat panel answered with

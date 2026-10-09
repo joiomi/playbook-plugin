@@ -2952,7 +2952,8 @@ def records_only_delta(project_path: Path, snapshot: "dict | None",
 def tail_cert_gate_decision(*, can_certify: bool, behavioral_nonempty: bool,
                             cert_verdict: "str | None",
                             non_behavioral: "list[str]",
-                            unavailable: str = "") -> "tuple[bool, str]":
+                            unavailable: str = "",
+                            no_verdict: str = "") -> "tuple[bool, str]":
     """PURE tail-cert policy → (allowed, receipt_clause). No I/O. Reached ONLY when
     the existing freshness gate would otherwise BLOCK (stale + carrying panel +
     assertive/irreversible/unclassified + no --force/--stale-panel-ok).
@@ -2966,10 +2967,11 @@ def tail_cert_gate_decision(*, can_certify: bool, behavioral_nonempty: bool,
         a FAIL or a missing/unparseable verdict (None) → BLOCK.
 
     Each block says what happened (task 165, PLAN S11 item 11): `unavailable` is
-    why the delta could not be put before a judge at all (`review.tail_cert_unavailable`
-    — over the payload cap, an unreadable file); it never certifies, whatever
-    `cert_verdict` holds. Before, that case, a judge's FAIL and an unusable answer
-    all read "tail certification did not return PASS"."""
+    why NO judge was called (`review.tail_cert_unavailable` — over the payload cap,
+    an unreadable file — or the runner's own `no-judge` reason); it never certifies,
+    whatever `cert_verdict` holds. `no_verdict` is why a judge that WAS called left
+    no verdict (it did not answer, no verdict line, its answer discarded). Before,
+    all of these and a judge's FAIL read "tail certification did not return PASS"."""
     if not can_certify:
         return (False, "tail certification unavailable — fresh panel required")
     if behavioral_nonempty:
@@ -2991,9 +2993,10 @@ def tail_cert_gate_decision(*, can_certify: bool, behavioral_nonempty: bool,
     if cert_verdict == "FAIL":
         return (False, "the tail-certifying judge returned FAIL (its reasons: tail-cert.log "
                        "beside task.md) — fresh panel required")
-    return (False, "tail certification gave no usable verdict (the judge's answer carried no "
-                   "verdict line for this run, or the tamper guard refused it) — fresh panel "
-                   "required")
+    if no_verdict:
+        return (False, f"tail certification gave no usable verdict — {' '.join(no_verdict.split())} "
+                       "— fresh panel required")
+    return (False, "tail certification gave no usable verdict — fresh panel required")
 
 
 def _tail_cert_verdict_re(nonce: "str | None") -> "re.Pattern":
@@ -3990,7 +3993,7 @@ def _is_retro_slug(slug: str) -> bool:
     return bool(_RETRO_SLUG_RE.fullmatch(slug))
 
 
-_RETRO_ROW_RE = re.compile(r"^\|\s*(\d+)\s*\|[^|\n]*\|\s*([^|\n]*?)\s*\|\s*\d+/\d+\s*\|", re.M)
+_RETRO_ROW_RE = re.compile(r"^\|\s*(\d+)\s*\|[^|\n]*\|\s*([^|\n]*?)\s*\|\s*(\d+/\d+)\s*\|", re.M)
 
 
 def retro_carry_over(project_path: Path, last_retro: "int | None") -> "set[int]":
@@ -3999,14 +4002,16 @@ def retro_carry_over(project_path: Path, last_retro: "int | None") -> "set[int]"
     (task 145, impl panel r2 — retro 134 here saw 14 tasks blocked that all closed
     later, and a window by number alone would never have read them). Empty when there
     is no retro or its record has no table."""
-    return set(retro_carried_statuses(project_path, last_retro))
+    return set(retro_carried_state(project_path, last_retro))
 
 
-def retro_carried_statuses(project_path: Path, last_retro: "int | None") -> "dict[int, str]":
-    """`retro_carry_over`'s tasks, each with the status the last retro wrote for it —
-    as its table holds it (lower-cased; the table cuts a status at seven characters).
-    What `tasks retro` compares today's status with, to tell a window in which
-    something moved from one that would only repeat the last retro (task 165)."""
+def retro_carried_state(project_path: Path, last_retro: "int | None") -> "dict[int, tuple[str, str]]":
+    """`retro_carry_over`'s tasks, each with what the last retro wrote for it in its
+    table: `(status, gates)` — the status lower-cased and as the table holds it (cut
+    at seven characters), the gates as `checked/total`. What `tasks retro` compares
+    today's state with, to tell a window in which something moved from one that would
+    only repeat the last retro (task 165; the gates since its panel — a carried task
+    that worked without changing status had moved)."""
     if last_retro is None:
         return {}
     for num, slug, tf in _iter_task_dirs(project_path):
@@ -4015,7 +4020,7 @@ def retro_carried_statuses(project_path: Path, last_retro: "int | None") -> "dic
                 text = tf.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 return {}
-            return {int(n): st.strip().lower() for n, st in _RETRO_ROW_RE.findall(text)
+            return {int(n): (st.strip().lower(), gates) for n, st, gates in _RETRO_ROW_RE.findall(text)
                     if int(n) < last_retro and not st.strip().lower().startswith("done")}
     return {}
 

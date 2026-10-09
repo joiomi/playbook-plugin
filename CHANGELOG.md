@@ -27,18 +27,21 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 - **`tasks retro` twice no longer makes two retros** (task 165). A task the last retro recorded as unfinished is
   carried into the next window, so with one such task every further bare `tasks retro` made one more retro of it.
-  Now, when no task follows the last retro and every carried task still has the status that retro recorded, the
-  command exits 1, names them and creates nothing; `--since N` still makes a retro whatever changed.
-- **A seat cleared with `tasks models enable` is not put back by a panel that was already running** (task 165). Such
-  a panel reported the seat's old out-of-credit failure after the clear and recorded it again. The clear now leaves
-  its time (for a day), a failure from a panel that started before it is not recorded, and the panel says so. The
-  command writes that time also when no outage was recorded.
+  Now, when no task follows the last retro and every carried task is still there with the status and the gate
+  count that retro recorded, the command exits 1, names them and creates nothing; `--since N` still makes a retro
+  whatever moved.
+- **A seat cleared with `tasks models enable` is not put back by a call that was already under way** (task 165). A
+  panel that was running reported the seat's old out-of-credit failure after the clear and recorded it again. The
+  clear now leaves its time, a failure of a call that began before it is not recorded, and the panel says so; a
+  call that began after it and fails is recorded as before. The command writes that time also when no outage was
+  recorded.
 - **A close no longer blames a judge that never ran** (task 165). When the documentation changed since the panel
   was too large to send to one certifying judge, the close said "tail certification did not return PASS". It now
-  says that no judge was called, with the size and the limit; a judge's FAIL and an unusable answer each have their
-  own sentence.
+  says that no judge was called, with the size and the limit (or the file that could not be read); a judge's FAIL
+  has its own sentence, and a missing verdict comes with its reason.
 - **A trimmed retro record keeps its task table** (task 165). The scaffold pins `## Structural Summary`, so a judge
-  that receives a shortened copy of a large retro record still gets the per-task table.
+  that receives a shortened copy of a large retro record still gets the per-task table (a table larger than that
+  judge's whole budget is still cut).
 - **No warning about `tasks/review.py` on newer Pythons** (task 165). A docstring held an invalid escape sequence:
   a `SyntaxWarning` when the file is compiled on Python 3.12 (a silent `DeprecationWarning` on 3.10), which Python's
   documentation says will become an error.
