@@ -101,20 +101,24 @@ class _SandboxedProject(unittest.TestCase):
         agent.write_text(_AGENT_TRIES, encoding="utf-8")
         agent.chmod(0o755)
 
-    def launch(self, *flags: str, project: "Path | None" = None, script: "str | None" = None,
-               raw: bool = False) -> dict:
-        """The shipped launcher, a real sandbox, the stand-in agent → {attempt: outcome}.
+    def run_launcher(self, *flags: str, project: "Path | None" = None, script: "str | None" = None,
+                     raw: bool = False, env: "dict | None" = None):
+        """The shipped launcher with the stand-in agent on PATH → the finished process.
         `script` replaces what the stand-in tries; `project` is where it is launched;
         `raw` passes the agent's arguments through instead of a prompt (some flags are
-        refused with a prompt)."""
+        refused with a prompt); `env` is added to the launch's environment."""
         project = project or self.project
         if script is not None:
             (self.bindir / "claude").write_text("#!/bin/sh\n" + _TRY + script, encoding="utf-8")
-        r = subprocess.run(
+        return subprocess.run(
             [bash_or_skip(), str(SCRIPTS / "sandbox"), "--project-root", str(project),
              "--agent", "claude", *flags, *(("--", "hello") if raw else ("--prompt", "hello"))],
             cwd=project, capture_output=True, text=True, timeout=120,
-            env=child_env(PATH=f"{self.bindir}{os.pathsep}{os.environ.get('PATH', '')}"))
+            env=child_env(PATH=f"{self.bindir}{os.pathsep}{os.environ.get('PATH', '')}", **(env or {})))
+
+    def launch(self, *flags: str, **how) -> dict:
+        """A launch that must succeed, in a real sandbox → {attempt: outcome}."""
+        r = self.run_launcher(*flags, **how)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         got = dict(line.split(": ", 1) for line in r.stdout.splitlines() if ": " in line)
         self.assertIn("project", got, r.stdout + r.stderr)        # the stand-in really ran
@@ -183,6 +187,56 @@ class GitMetadataThatIsNotADirectoryCalledDotGit(_SandboxedProject):
                 self.assertEqual((worktree / ".git").read_bytes(), pointer)
                 self.assertEqual(tree_digest(main / ".git"), before)
 
+    def test_a_worktree_inside_a_bare_repository(self):
+        # impl panel round 2 (opus): `git clone --bare url repo && cd repo && git worktree
+        # add main`. From repo/main the common directory is `repo` — an ANCESTOR of the
+        # project. Round 1 bound it read-only whole, after the project's writable bind:
+        # the worker could write nothing at all.
+        repo = self.tmp / "repo"
+        git(self.tmp, "clone", "-q", "--bare", str(self.project), str(repo))
+        git(repo, "worktree", "add", "-q", "main")
+        os.makedirs(repo / "hooks", exist_ok=True)
+        got = self.launch(project=repo / "main", script=(
+            'try project sh -c \'printf x > "$PWD/in-project"\'\n'
+            'try gitfile sh -c \'printf "gitdir: /tmp/elsewhere\\n" > "$PWD/.git"\'\n'
+            f'try shared-config sh -c \'printf x >> "{repo}/config"\'\n'
+            f'try shared-hook sh -c \'printf x > "{repo}/hooks/pre-commit"\'\n'
+            f'try shared-head sh -c \'printf x > "{repo}/HEAD"\'\n'
+            f'try shared-refs sh -c \'printf x > "{repo}/refs/heads/evil"\'\n'))
+        self.assertEqual(got, {"project": "WROTE", "gitfile": "denied", "shared-config": "denied",
+                               "shared-hook": "denied", "shared-head": "denied", "shared-refs": "denied"})
+
+    def test_a_bare_repository_as_the_project(self):
+        # (sonnet) the git directory IS the project: its metadata is read-only, and what
+        # else a worker writes there is still written
+        bare = self.tmp / "bare"
+        git(self.tmp, "clone", "-q", "--bare", str(self.project), str(bare))
+        os.makedirs(bare / "hooks", exist_ok=True)
+        got = self.launch(project=bare, script=(
+            'try project sh -c \'printf x > "$PWD/a-new-file"\'\n'
+            'try config sh -c \'printf x >> "$PWD/config"\'\n'
+            'try hook sh -c \'printf x > "$PWD/hooks/pre-commit"\'\n'
+            'try head sh -c \'printf x > "$PWD/HEAD"\'\n'))
+        self.assertEqual(got, {"project": "WROTE", "config": "denied", "hook": "denied", "head": "denied"})
+
+    def test_git_variables_in_the_environment_do_not_hide_the_repository(self):
+        # (codex-medium, grok) with GIT_DIR naming ANOTHER repository, `git rev-parse` in
+        # the worktree answered for that one, and the worktree's own shared directory was
+        # left writable
+        main, worktree, other = self.project, self.project.parent / "wt", self.tmp / "other"
+        git(main, "worktree", "add", "-q", str(worktree))
+        os.makedirs(other)
+        git(other, "init", "-q")
+        tries = (f'try project sh -c \'printf x > "$PWD/in-project"\'\n'
+                 f'try shared-config sh -c \'printf x >> "{main}/.git/config"\'\n'
+                 f'try shared-hook sh -c \'printf x > "{main}/.git/hooks/pre-commit"\'\n')
+        for variables in ({"GIT_DIR": str(other / ".git")},
+                          {"GIT_DIR": str(other / ".git"), "GIT_WORK_TREE": str(other)},
+                          {"GIT_COMMON_DIR": str(other / ".git")}):
+            with self.subTest(variables=sorted(variables)):
+                got = self.launch(project=worktree, script=tries, env=variables)
+                self.assertEqual(got, {"project": "WROTE", "shared-config": "denied", "shared-hook": "denied"})
+
     def _nested(self, listed: bool) -> dict:
         import json
         inner = self.project / "inner"
@@ -240,12 +294,49 @@ class TheRecordsStayHiddenWhateverCoversThem(_SandboxedProject):
         got = self.launch("--ro-project", "--keep-records", script=self.READS, raw=True)
         self.assertEqual(got["records"], "READ")
 
-    def test_a_writable_path_that_covers_them_does_not_uncover_them(self):
+    def _assert_refused(self, *flags: str, **how):
+        r = self.run_launcher(*flags, script=self.READS, **how)
+        self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("--keep-records", r.stderr)
+        self.assertNotIn("project: ran", r.stdout, "the agent was started")
+        self.assertNotIn("records:", r.stdout)
+
+    def test_a_writable_path_that_covers_them_is_refused(self):
+        # Round 1 laid the masks again over such a path; round 2 (opus) showed what that
+        # did to the path the user had asked for: existing files read-only, new ones
+        # written to a throwaway layer and gone at exit. A launch that cannot do both
+        # things it was asked — hide the records, write there — says so and starts nothing.
         self._with_a_chat_log(self.project)
-        for rw in (self.project, self.project.parent, self.project / ".agent"):
+        for rw in (self.project, self.project.parent, self.project / ".agent",
+                   self.project / ".agent" / "chat_log.md"):
             with self.subTest(rw=str(rw.relative_to(self.tmp))):
-                got = self.launch("--ro-project", "--rw", str(rw), script=self.READS)
-                self.assertEqual(got["records"], "hidden")
+                self._assert_refused("--ro-project", "--rw", str(rw))
+
+    def test_a_writable_path_inside_agent_that_holds_no_record_is_still_allowed(self):
+        # the other side: `.agent/monitor` is such a path
+        self._with_a_chat_log(self.project)
+        inside = self.project / ".agent" / "monitor"
+        os.makedirs(inside)
+        got = self.launch("--ro-project", "--rw", str(inside), script=self.READS + (
+            'try inside sh -c \'printf x > "$PWD/.agent/monitor/wrote"\'\n'))
+        self.assertEqual((got["records"], got["inside"]), ("hidden", "WROTE"))
+        self.assertEqual((inside / "wrote").read_text(encoding="utf-8"), "x")
+
+    def test_the_real_directory_behind_a_symlinked_lane_is_covered_by_the_same_rule(self):
+        # (both codex seats, grok) the masks also hide the directory a lane LINKS to,
+        # outside `.agent`; a writable path that covered it showed the chat log at both
+        outside = self.tmp / "outside" / "alice"
+        os.makedirs(outside)
+        os.makedirs(self.project / ".agent")
+        (outside / "chat_log.md").write_text("SECRET-CHAT\n", encoding="utf-8")
+        os.symlink(outside, self.project / ".agent" / "alice")
+        reads = ('echo "project: ran"\n'
+                 f'if grep -q SECRET-CHAT "{outside}/chat_log.md" "$PWD/.agent/alice/chat_log.md" 2>/dev/null; '
+                 'then echo "records: READ"; else echo "records: hidden"; fi\n')
+        self.assertEqual(self.launch("--ro-project", script=reads)["records"], "hidden")     # the control
+        for rw in (outside, outside.parent):
+            with self.subTest(rw=str(rw.relative_to(self.tmp))):
+                self._assert_refused("--ro-project", "--rw", str(rw))
 
     def test_a_git_directory_that_covers_them_does_not_uncover_them(self):
         # a bare repository used as a project: its git directory IS the project
@@ -310,26 +401,52 @@ class TheGitBindIsLaidLast(unittest.TestCase):
             where = [i for i, a in enumerate(argv[:-2]) if a == "--ro-bind" and argv[i + 1] == path]
             self.assertTrue(where and max(where) > last_writable, path)
 
-    def test_the_record_masks_are_laid_again_after_a_bind_that_covers_them(self):
+    def test_nothing_laid_after_the_masks_covers_what_they_hide(self):
         from provider.sandbox import build_bwrap_argv
         project = Path(tempfile.mkdtemp()).resolve() / "proj"
         os.makedirs(project / ".agent")
         self.addCleanup(shutil.rmtree, project.parent, ignore_errors=True)
         (project / ".agent" / "chat_log.md").write_text("x\n", encoding="utf-8")
+        for name in ("HEAD", "config"):
+            (project / name).write_text("x\n", encoding="utf-8")
         agent = str(project / ".agent")
 
-        def last(argv, flag, path):
-            hits = [i for i, a in enumerate(argv[:-1]) if a == flag and argv[i + 1] == path]
-            return max(hits) if hits else -1
-        # a git directory that IS the project (a bare repository), read-only run
+        def binds_after_the_mask(argv):
+            at = max(i for i, a in enumerate(argv[:-1]) if a == "--tmpfs" and argv[i + 1] == agent)
+            return [argv[i + 1] for i, a in enumerate(argv[:-2]) if i > at and a in ("--bind", "--ro-bind")
+                    and argv[i + 1] == argv[i + 2]]
+        # a git directory that IS the project (a bare repository): its entries are bound,
+        # never the directory itself — so nothing laid after the masks covers `.agent`
         argv = build_bwrap_argv(project, project, ["true"], None, project_writable=False)
-        self.assertGreater(last(argv, "--tmpfs", agent), last(argv, "--ro-bind", str(project)))
-        # an extra writable path that covers .agent
-        argv = build_bwrap_argv(project, project / ".git", ["true"], [str(project)], project_writable=False)
-        self.assertGreater(last(argv, "--tmpfs", agent), last(argv, "--bind", str(project)))
-        # control: nothing covers them → the masks are laid once, as before
-        argv = build_bwrap_argv(project, project / ".git", ["true"], None, project_writable=False)
-        self.assertEqual(sum(1 for i, a in enumerate(argv[:-1]) if a == "--tmpfs" and argv[i + 1] == agent), 1)
+        later = binds_after_the_mask(argv)
+        self.assertIn(str(project / "HEAD"), later)
+        self.assertIn(str(project / "config"), later)
+        self.assertEqual([p for p in later if p == str(project) or Path(p) in Path(agent).parents], [])
+        # an extra writable path that covers a record: refused, with the way out named
+        for rw in (project, project.parent, project / ".agent", project / ".agent" / "chat_log.md"):
+            with self.subTest(rw=rw.name):
+                with self.assertRaises(RuntimeError) as refused:
+                    build_bwrap_argv(project, project / ".git", ["true"], [str(rw)], project_writable=False)
+                self.assertIn("--keep-records", str(refused.exception))
+        # controls: the same paths are fine when the records are kept, or in worker mode
+        build_bwrap_argv(project, project / ".git", ["true"], [str(project)], project_writable=False,
+                         mask_records=False)
+        build_bwrap_argv(project, project / ".git", ["true"], [str(project)], project_writable=True)
+
+    def test_a_git_directory_that_contains_the_project_does_not_take_its_writes(self):
+        from provider.sandbox import build_bwrap_argv
+        repo = Path(tempfile.mkdtemp()).resolve() / "repo"
+        project = repo / "main"
+        os.makedirs(project)
+        self.addCleanup(shutil.rmtree, repo.parent, ignore_errors=True)
+        for name in ("HEAD", "config"):
+            (repo / name).write_text("x\n", encoding="utf-8")
+        os.makedirs(repo / "hooks")
+        argv = build_bwrap_argv(project, repo, ["true"], None, project_writable=True)
+        binds = [(a, argv[i + 1]) for i, a in enumerate(argv[:-2]) if a in ("--bind", "--ro-bind")]
+        writable_at = max(i for i, (kind, src) in enumerate(binds) if (kind, src) == ("--bind", str(project)))
+        after = [src for kind, src in binds[writable_at + 1:] if kind == "--ro-bind"]
+        self.assertEqual(sorted(after), sorted(str(repo / n) for n in ("HEAD", "config", "hooks")))
 
 
 # --------------------------------------------------------------------------- #

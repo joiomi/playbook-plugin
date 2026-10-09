@@ -463,7 +463,7 @@ def _record_link_targets(agent: Path, linked: "dict[str, Path]") -> "tuple[list[
     return files, dirs
 
 
-def _bwrap_record_masks(project_dir: Path | str) -> list[str]:
+def _bwrap_record_masks(project_dir: Path | str, hidden: "list[str] | None" = None) -> list[str]:
     """bwrap args that hide the conversation records from a read-only judge (task
     125; task 138 G3-2..G3-4). `.agent`, each directory in it, and the real
     directory behind each symlinked lane become an empty tmpfs LAYER onto which
@@ -472,11 +472,23 @@ def _bwrap_record_masks(project_dir: Path | str) -> list[str]:
     detached it on Linux >= 3.18); each record present at launch gets /dev/null as
     a placeholder (opening it is refused: the read-only bind is nodev), `sessions/`
     an empty dir. A layer that cannot be listed stays empty, an entry that cannot
-    be read is left out — fail closed, never open. Never raises."""
+    be read is left out — fail closed, never open. Never raises.
+
+    `hidden`, when given, receives every path whose CONTENT these masks hide, so that
+    a caller can refuse a bind laid over one (task 169): `.agent` itself and the real
+    directory behind each symlinked lane (records may appear there later), each record
+    file and record directory present now, and a layer that could not be listed. A
+    directory in `.agent` that holds no record is not among them."""
     agent = _agent_dir(project_dir)
     if agent is None:
         return []
     args: list[str] = []
+
+    def hide(path) -> None:
+        if hidden is not None and str(path) not in hidden:
+            hidden.append(str(path))
+
+    hide(agent)
     done: set[Path] = set()
     linked = _symlinked_lanes(agent)
 
@@ -489,6 +501,7 @@ def _bwrap_record_masks(project_dir: Path | str) -> list[str]:
         try:
             entries = sorted(os.scandir(real), key=lambda e: e.name)
         except OSError:
+            hide(real)
             return []
         subs: list[Path] = []
         for e in entries:
@@ -498,8 +511,10 @@ def _bwrap_record_masks(project_dir: Path | str) -> list[str]:
                 is_dir = e.is_dir()
                 if _is_record_file(e.name) and not is_dir:
                     args.extend(["--ro-bind", "/dev/null", path])
+                    hide(path)
                 elif _is_record_dir(e.name) and (is_dir or (link and not os.path.exists(e.path))):
                     args.extend(["--dir", path])
+                    hide(path)
                 elif link and lanes and e.name in linked:
                     args.extend(["--symlink", str(linked[e.name]), path])   # the masked dir
                 elif link:
@@ -516,6 +531,7 @@ def _bwrap_record_masks(project_dir: Path | str) -> list[str]:
         layer(sub, lanes=False)
     # after every regular layer, so a bind from one of them cannot cover it
     for real in linked.values():
+        hide(real)
         layer(real, lanes=False)
     # last: a record that is itself a symlink is hidden at its real path too
     rec_files, rec_dirs = _record_link_targets(agent, linked)
@@ -529,8 +545,10 @@ def _bwrap_record_masks(project_dir: Path | str) -> list[str]:
             "or create its target, then re-run")
     for d in rec_dirs:
         args.extend(["--tmpfs", str(d)])
+        hide(d)
     for f in rec_files:
         args.extend(["--ro-bind", "/dev/null", str(f)])
+        hide(f)
     return args
 
 
@@ -592,6 +610,22 @@ def build_bwrap_argv(
         target.mkdir(parents=True, exist_ok=True)
         argv += ["--bind", str(target), str(target)]
 
+    # Git metadata, part one. Every path that holds it, resolved and in order.
+    git_all: list[str] = []
+    for p in ([git_dir] if git_dir else []) + list(git_readonly or []):
+        resolved = str(Path(p).resolve())
+        if resolved not in git_all:
+            git_all.append(resolved)
+    # A git directory that CONTAINS the project (worktrees inside a bare repository;
+    # a bare repository used as the project) cannot be bound read-only after the
+    # project: that bind would take the project's own writes with it (task 169, impl
+    # panel r2 — round 1 did exactly that). It is bound read-only BEFORE the project
+    # bind, which then wins for the project's subtree; its metadata entries are bound
+    # again, last, below.
+    containing = [g for g in git_all if _covers(g, Path(project))]
+    for g in containing:
+        argv += ["--ro-bind", g, g]
+
     project_bind = "--bind" if project_writable else "--ro-bind"
     argv += [project_bind, project, project]
 
@@ -599,10 +633,23 @@ def build_bwrap_argv(
     # after the project bind so they win the overlap (`_bwrap_record_masks`). A
     # worker keeps them, and so does a read-only observer that passes
     # mask_records=False (the monitor, task 138 G3-1).
-    masks: list[str] = []
+    hidden: list[str] = []
     if (not project_writable) if mask_records is None else mask_records:
-        masks = _bwrap_record_masks(project)
-        argv += masks
+        argv += _bwrap_record_masks(project, hidden)
+
+    # What the masks hide must stay hidden. A bind laid after them that COVERS a
+    # hidden path would bind the real records back, so such a launch is refused —
+    # before anything is prepared on the host. (Round 1 of task 169 laid the masks
+    # again instead; round 2 showed what that did to the path the user had asked
+    # for: its files read-only, new ones written to a throwaway layer.) A writable
+    # path INSIDE `.agent` that holds no record covers nothing and is unaffected.
+    for rw in rw_paths:
+        covered = next((t for t in hidden if _covers(rw, Path(t))), None)
+        if covered is not None:
+            raise RuntimeError(
+                f"`--rw {rw}` covers conversation records that a read-only run hides ({covered}) — "
+                "a writable bind there would show them. Pass --keep-records if this run may read "
+                "the records, or give a narrower --rw path. Nothing was launched.")
 
     # extra_rw (the judge workspace / outdir) after the project bind: it must stay
     # writable even when it lives inside a read-only project.
@@ -610,30 +657,31 @@ def build_bwrap_argv(
         Path(rw).mkdir(parents=True, exist_ok=True)
         argv += ["--bind", rw, rw]
 
-    # Git metadata stays read-only even when the project is writable — and its
-    # binds are laid after the project bind AND after every extra writable bind,
-    # so they win whatever those cover. The one bind there was used to come before
-    # them, and a writable path that covered `.git` — `--rw <project>`, a parent
-    # of it, `.git` itself — made it writable again (task 169; measured with real
-    # bubblewrap). `git_readonly` adds what `git_dir` alone leaves out: a gitfile,
-    # a shared directory, a nested repository (`_git_paths_to_protect`).
-    git_paths: list[str] = []
-    for p in ([git_dir] if git_dir else []) + list(git_readonly or []):
-        resolved = str(Path(p).resolve())
-        if resolved not in git_paths:
-            git_paths.append(resolved)
-    for g in git_paths:
+    # Git metadata, part two: read-only even when the project is writable, and
+    # laid after the project bind AND after every extra writable bind, so it wins
+    # whatever those cover. The one bind there was used to come before them, and a
+    # writable path that covered `.git` — `--rw <project>`, a parent of it, `.git`
+    # itself — made it writable again (task 169; measured with real bubblewrap).
+    # `git_readonly` adds what `git_dir` alone leaves out: a gitfile, a shared
+    # directory, a nested repository (`_git_paths_to_protect`). Of a git directory
+    # that contains the project, the entries git keeps there are bound, never the
+    # directory itself.
+    git_binds: list[str] = []
+    for g in git_all:
+        if g in containing:
+            for name in _GIT_DIR_ENTRIES:
+                entry = os.path.join(g, name)
+                if os.path.lexists(entry) and not _covers(entry, Path(project)) and entry not in git_binds:
+                    git_binds.append(entry)
+        elif g not in git_binds:
+            git_binds.append(g)
+    for g in git_binds:
+        covered = next((t for t in hidden if _covers(g, Path(t))), None)
+        if covered is not None:              # no layout known to do this: fail closed
+            raise RuntimeError(
+                f"git metadata at {g} covers conversation records that a read-only run hides "
+                f"({covered}); they cannot be hidden in this layout. Nothing was launched.")
         argv += ["--ro-bind", g, g]
-
-    # The record masks once more when a bind laid after them covers `.agent`: an
-    # extra writable path (`--ro-project --rw <project>`), or a git directory that
-    # is the project itself or an ancestor of `.agent` (a bare repository) — either
-    # would bind the real records back over the masks (task 169, impl panel r1).
-    # An extra writable path INSIDE `.agent` covers nothing and is left as it is.
-    if masks:
-        agent = _agent_dir(project)
-        if agent is not None and any(_covers(p, agent) for p in [*rw_paths, *git_paths]):
-            argv += masks
 
     argv += list(target_argv)
     return argv
@@ -643,6 +691,28 @@ def _covers(outer: "Path | str", inner: Path) -> bool:
     """Is `inner` the path `outer`, or inside it? Both already resolved."""
     outer = Path(outer)
     return outer == inner or outer in inner.parents
+
+
+# What git keeps at the top of a git directory. Used only for a git directory that
+# CONTAINS the project, where the directory itself cannot be bound read-only last.
+_GIT_DIR_ENTRIES = (
+    "HEAD", "config", "config.worktree", "description", "hooks", "info", "objects", "refs",
+    "packed-refs", "logs", "index", "shallow", "worktrees", "modules", "commondir", "gitdir",
+    "branches", "lfs", "FETCH_HEAD", "ORIG_HEAD", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD",
+    "BISECT_LOG", "rebase-merge", "rebase-apply", "sequencer",
+)
+
+
+# git reads these from the environment and would then answer for ANOTHER repository
+# (task 169, impl panel r2: with GIT_DIR set, a worktree's shared directory was left
+# out of the read-only binds). Discovery asks about what is on disk.
+_GIT_ENV_OVERRIDES = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+                      "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE",
+                      "GIT_CEILING_DIRECTORIES", "GIT_DISCOVERY_ACROSS_FILESYSTEM")
+
+
+def _git_env() -> dict:
+    return {k: v for k, v in os.environ.items() if k not in _GIT_ENV_OVERRIDES}
 
 
 def _code_root_dirs(project_dir: "Path | str") -> "list[Path]":
@@ -688,8 +758,10 @@ def _git_paths_to_protect(project_dir: "Path | str") -> "list[str]":
 
     Not covered, and said in the ledger row: a `.git` that is a SYMLINK (what it
     points at is bound, the link itself can be replaced — it is an entry of a
-    writable directory); a nested repository `code_roots` does not name. Never
-    raises; a root where git cannot answer contributes what exists on disk."""
+    writable directory); a nested repository `code_roots` does not name; what a
+    link INSIDE a git directory points to when that is project content. git is
+    asked with its environment overrides removed (`_git_env`). Never raises; a root
+    where git cannot answer contributes what exists on disk."""
     out: list[str] = []
 
     def add(path: Path) -> None:
@@ -711,7 +783,8 @@ def _git_paths_to_protect(project_dir: "Path | str") -> "list[str]":
         for flag in ("--git-dir", "--git-common-dir"):
             try:
                 answer = subprocess.run(["git", "rev-parse", flag], cwd=str(root),
-                                        capture_output=True, text=True, check=False)
+                                        capture_output=True, text=True, check=False,
+                                        env=_git_env())
             except OSError:               # no git binary: what is on disk was added above
                 break
             if answer.returncode == 0 and answer.stdout.strip():
@@ -745,6 +818,7 @@ def _git_dir_of(project_dir: Path) -> Path | None:
             capture_output=True,
             text=True,
             check=False,
+            env=_git_env(),
         )
         if result.returncode == 0 and result.stdout.strip():
             return (project_dir / result.stdout.strip()).resolve()

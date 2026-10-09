@@ -34,15 +34,18 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   repository's config and hooks were writable wherever a writable bind covered them. (3) A nested repository of
   `code_roots` had a writable `.git`. Now the `.git` directory or file, the git directory and the common
   directory — of the project and of every repository named in `code_roots` — are bound read-only AFTER all
-  writable binds. What changes for you: an agent in the sandbox can no longer commit in a `code_roots`
-  repository (it never could in the project's own), and an `--rw` path inside `.git` is not writable. Not
-  covered: a nested repository that `code_roots` does not name, and a `.git` that is a symlink (the link itself
-  can be replaced).
-- **A read-only sandbox run keeps the conversation records hidden whatever `--rw` covers** (task 169). With
-  `--ro-project --rw <project>` (or a parent of it) the extra writable bind was laid over the masks and the chat
-  log became readable. The masks are laid again after any bind that covers `.agent`; `--keep-records` is still
-  the way to show the records. With `--ro-project`, an `--rw` path that is `.agent` or contains it no longer
-  makes `.agent` writable.
+  writable binds; a git directory that contains the project (worktrees kept inside a bare repository) is bound
+  before the project instead, with its own entries bound last, so the project stays writable. git is asked about
+  the layout with `GIT_DIR` and its relatives removed from the environment. What changes for you: an agent in
+  the sandbox can no longer commit in a `code_roots` repository (it never could in the project's own), and an
+  `--rw` path inside `.git` is not writable. Not covered: a nested repository that `code_roots` does not name; a
+  `.git` that is a symlink (the link itself can be replaced); a `.git/config` or hooks directory that is a link
+  into the project, or a `core.hooksPath` naming a project directory — those are project files.
+- **A read-only sandbox run refuses an `--rw` path that would show the conversation records** (task 169). With
+  `--ro-project --rw <project>` (or a parent of it, or the real directory behind a symlinked lane) the extra
+  writable bind was laid over the masks and the chat log became readable. Such a launch is refused now, before
+  anything starts, and the message names `--keep-records` — the way to say that this run may read the records.
+  An `--rw` path inside `.agent` that holds no record (the monitor's directory) works as before.
 - **Six ledger rows have a Linux proof of their own** (task 169, PLAN S11 — the rows that lost their macOS and
   Windows evidence with the Linux-only decision): the sandbox's write rules, the tamper guard at a real review
   with no sandbox, session clean-up at a real `tasks` command, `init` from a packaged install, one project whose
