@@ -7654,7 +7654,7 @@
           "boundary": "real-os",
           "negative_control": {
             "path": "tests/test_linux_moved_row_proofs.py",
-            "reference": "TheRecordsStayHiddenWhateverCoversThem.test_a_writable_path_inside_agent_that_holds_no_record_is_still_allowed"
+            "reference": "TheRecordsStayHiddenWhateverCoversThem.test_control_a_writable_path_elsewhere_in_the_project_is_not_refused"
           },
           "limitations": [
             "`--ro-project --rw <project>`, `--rw <its parent>`, `--rw <project>/.agent`, `--rw <the chat log>`: the launch is REFUSED — non-zero exit, `--keep-records` named, the agent never started. (Round 1 of task 169 laid the masks again instead, which silently broke the writable path; round 2 replaced that.)"
@@ -7677,7 +7677,7 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": [
-            "Argv level: a git directory that is the project is never bound after the masks (its entries are); an extra writable path that covers a record raises, naming `--keep-records`; the same path builds when the records are kept or in worker mode."
+            "Argv level: a git directory that is the project is never bound after the masks (its entries are); an extra writable path that covers a hidden place OR lies inside one raises, naming `--keep-records`, and so does git metadata inside `.agent`; the same paths build when the records are kept or in worker mode, and a path elsewhere in the project builds with the masks on."
           ]
         },
         {
@@ -7690,7 +7690,33 @@
             "reference": "TheRecordsStayHiddenWhateverCoversThem.test_control_the_stand_in_reads_them_when_they_are_kept"
           },
           "limitations": [
-            "A lane that is a symlink to a directory outside `.agent`: hidden at both paths in a read-only run, and an `--rw` path that covers the real directory is refused. Red on round 1's code (`0 == 0`: launched, readable)."
+            "A lane that is a symlink to a directory outside `.agent`: hidden at both paths in a read-only run, and an `--rw` path that covers the real directory, or is a directory inside it (one that exists, one that does not yet), is refused. Red on round 1's code (`0 == 0`: launched, readable); the inside shapes red on round 2's."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_linux_moved_row_proofs.py",
+          "reference": "TheRecordsStayHiddenWhateverCoversThem.test_a_writable_path_inside_agent_is_refused_too",
+          "boundary": "real-os",
+          "negative_control": {
+            "path": "tests/test_linux_moved_row_proofs.py",
+            "reference": "TheRecordsStayHiddenWhateverCoversThem.test_control_with_the_records_kept_a_path_inside_agent_is_writable"
+          },
+          "limitations": [
+            "`--ro-project --rw <project>/.agent/sessions/<id>`, `…/.agent/sessions`, `…/.agent/<an empty lane>`, `…/.agent/monitor`, `…/.agent/<a path that does not exist>`, and the first of them spelled through a symlink from outside the project: the launch is REFUSED, `--keep-records` named, the agent never started, the missing path not created. Red on round 2's code (`0 == 0 : project: ran` for four of the shapes) — the single judge after round 2 found that a path INSIDE a hidden place was let through."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_linux_moved_row_proofs.py",
+          "reference": "TheRecordsStayHiddenWhateverCoversThem.test_a_writable_path_inside_a_record_directory_that_is_a_link_is_refused",
+          "boundary": "real-os",
+          "negative_control": {
+            "path": "tests/test_linux_moved_row_proofs.py",
+            "reference": "TheRecordsStayHiddenWhateverCoversThem.test_control_a_writable_path_elsewhere_in_the_project_is_not_refused"
+          },
+          "limitations": [
+            "`.agent/sessions` a symlink to a directory elsewhere: hidden at its real path, and an `--rw` path inside that directory, equal to it or covering it is refused. The inside shape red on round 2's code."
           ]
         }
       ],
@@ -7710,7 +7736,7 @@
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
         "2026-10-08 (task 155, Linux-only): the macOS seatbelt backend (build_seatbelt_profile) was deleted; bubblewrap is the only backend.",
-        "Task 169 (PLAN S11): a bind laid after the record masks must not cover what they hide. A read-only run whose `--rw` path covers `.agent`, the real directory behind a symlinked lane, or a record that exists is REFUSED before anything is launched, and the message names `--keep-records`; an `--rw` path inside `.agent` that holds no record (the monitor's directory) is unaffected. A git directory that is the project is bound before the masks, never after. (Round 1 of that task laid the masks again over a covering path; round 2 showed that this silently made the path's files read-only and dropped new ones, and replaced it with the refusal.)"
+        "Task 169 (PLAN S11): a bind laid after the record masks must not OVERLAP a place where they hide records — `.agent`, the real directory behind a symlinked lane, the real target of a record that is a symlink. A read-only run whose `--rw` path covers such a place, is it, or lies anywhere inside it is REFUSED before that path is created or anything is launched, and the message names `--keep-records`; so with the records hidden there is no writable path in `.agent` at all (the monitor, which has one, keeps the records). Git metadata is held to the same rule: a repository kept inside `.agent` and named in `code_roots` makes a read-only run refuse. A git directory that is the project is bound before the masks, never after. (History: round 1 of that task laid the masks again over a covering path, which silently made the path's files read-only and dropped new ones; round 2 replaced that with a refusal of covering paths only; the single judge after it showed that a path inside `.agent/sessions/<id>`, or equal to a lane with no record yet, still replaced the mask there.) Bound, not changed here: the check is made on the paths as they resolve at launch."
       ],
       "follow_up_phases": [
         2,

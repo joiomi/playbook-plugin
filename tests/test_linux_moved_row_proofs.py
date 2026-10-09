@@ -312,15 +312,63 @@ class TheRecordsStayHiddenWhateverCoversThem(_SandboxedProject):
             with self.subTest(rw=str(rw.relative_to(self.tmp))):
                 self._assert_refused("--ro-project", "--rw", str(rw))
 
-    def test_a_writable_path_inside_agent_that_holds_no_record_is_still_allowed(self):
-        # the other side: `.agent/monitor` is such a path
+    def test_a_writable_path_inside_agent_is_refused_too(self):
+        # The single judge after round 2 (two Critical): my rule refused a path that
+        # COVERS a hidden record and let through one INSIDE a hidden place —
+        # `--rw .agent/sessions/<id>` was mounted over the emptied `sessions` and showed
+        # that session's records; `--rw .agent/<an empty lane>` replaced the lane's mask,
+        # so a record written there during the run would be readable. The rule is now
+        # the simple one: a run that hides the records takes no writable path in or over
+        # `.agent` at all.
+        self._with_a_chat_log(self.project)
+        agent = self.project / ".agent"
+        os.makedirs(agent / "sessions" / "pid-1")
+        (agent / "sessions" / "pid-1" / "transcript_path").write_text("SECRET-CHAT\n", encoding="utf-8")
+        os.makedirs(agent / "an-empty-lane")
+        os.makedirs(agent / "monitor")
+        for rw in (agent / "sessions" / "pid-1", agent / "sessions", agent / "an-empty-lane",
+                   agent / "monitor", agent / "not-there-yet"):
+            with self.subTest(rw=str(rw.relative_to(self.project))):
+                self._assert_refused("--ro-project", "--rw", str(rw))
+        self.assertFalse((agent / "not-there-yet").exists(), "a refused launch prepared its --rw path")
+        # the same place spelled through a link from outside the project
+        os.symlink(agent / "sessions" / "pid-1", self.tmp / "a-link")
+        self._assert_refused("--ro-project", "--rw", str(self.tmp / "a-link"))
+
+    def test_a_writable_path_inside_a_record_directory_that_is_a_link_is_refused(self):
+        # `sessions` linked to a directory outside `.agent`: hidden at its real path too
+        # (task 139), so a writable path inside THAT is the same hole
+        self._with_a_chat_log(self.project)
+        real = self.tmp / "elsewhere" / "sessions"
+        os.makedirs(real / "pid-1")
+        (real / "pid-1" / "transcript_path").write_text("SECRET-CHAT\n", encoding="utf-8")
+        os.symlink(real, self.project / ".agent" / "sessions")
+        reads = ('echo "project: ran"\n'
+                 f'if grep -q SECRET-CHAT "{real}/pid-1/transcript_path" 2>/dev/null; '
+                 'then echo "records: READ"; else echo "records: hidden"; fi\n')
+        self.assertEqual(self.launch("--ro-project", script=reads)["records"], "hidden")     # the control
+        for rw in (real / "pid-1", real, real.parent):
+            with self.subTest(rw=str(rw.relative_to(self.tmp))):
+                self._assert_refused("--ro-project", "--rw", str(rw))
+
+    def test_control_with_the_records_kept_a_path_inside_agent_is_writable(self):
+        # the other side, and what the monitor does: `--keep-records` is the way in
         self._with_a_chat_log(self.project)
         inside = self.project / ".agent" / "monitor"
         os.makedirs(inside)
-        got = self.launch("--ro-project", "--rw", str(inside), script=self.READS + (
-            'try inside sh -c \'printf x > "$PWD/.agent/monitor/wrote"\'\n'))
-        self.assertEqual((got["records"], got["inside"]), ("hidden", "WROTE"))
+        got = self.launch("--ro-project", "--keep-records", "--rw", str(inside), raw=True, script=self.READS + (
+            'try inside sh -c \'printf x > "$PWD/.agent/monitor/wrote"\'\n'
+            'try project-file sh -c \'printf x > "$PWD/elsewhere"\'\n'))
+        self.assertEqual((got["records"], got["inside"], got["project-file"]), ("READ", "WROTE", "denied"))
         self.assertEqual((inside / "wrote").read_text(encoding="utf-8"), "x")
+
+    def test_control_a_writable_path_elsewhere_in_the_project_is_not_refused(self):
+        self._with_a_chat_log(self.project)
+        out = self.project / "out"
+        os.makedirs(out)
+        got = self.launch("--ro-project", "--rw", str(out), script=self.READS + (
+            'try out sh -c \'printf x > "$PWD/out/wrote"\'\n'))
+        self.assertEqual((got["records"], got["out"]), ("hidden", "WROTE"))
 
     def test_the_real_directory_behind_a_symlinked_lane_is_covered_by_the_same_rule(self):
         # (both codex seats, grok) the masks also hide the directory a lane LINKS to,
@@ -334,7 +382,8 @@ class TheRecordsStayHiddenWhateverCoversThem(_SandboxedProject):
                  f'if grep -q SECRET-CHAT "{outside}/chat_log.md" "$PWD/.agent/alice/chat_log.md" 2>/dev/null; '
                  'then echo "records: READ"; else echo "records: hidden"; fi\n')
         self.assertEqual(self.launch("--ro-project", script=reads)["records"], "hidden")     # the control
-        for rw in (outside, outside.parent):
+        os.makedirs(outside / "sessions")
+        for rw in (outside, outside.parent, outside / "sessions", outside / "a-new-directory"):
             with self.subTest(rw=str(rw.relative_to(self.tmp))):
                 self._assert_refused("--ro-project", "--rw", str(rw))
 
@@ -422,16 +471,26 @@ class TheGitBindIsLaidLast(unittest.TestCase):
         self.assertIn(str(project / "HEAD"), later)
         self.assertIn(str(project / "config"), later)
         self.assertEqual([p for p in later if p == str(project) or Path(p) in Path(agent).parents], [])
-        # an extra writable path that covers a record: refused, with the way out named
-        for rw in (project, project.parent, project / ".agent", project / ".agent" / "chat_log.md"):
+        # an extra writable path in or over `.agent`: refused, with the way out named
+        for rw in (project, project.parent, project / ".agent", project / ".agent" / "chat_log.md",
+                   project / ".agent" / "sessions" / "pid-1", project / ".agent" / "monitor"):
             with self.subTest(rw=rw.name):
                 with self.assertRaises(RuntimeError) as refused:
                     build_bwrap_argv(project, project / ".git", ["true"], [str(rw)], project_writable=False)
                 self.assertIn("--keep-records", str(refused.exception))
-        # controls: the same paths are fine when the records are kept, or in worker mode
+        # git metadata is held to the same rule: a repository kept inside `.agent`
+        with self.assertRaises(RuntimeError) as refused:
+            build_bwrap_argv(project, project / ".git", ["true"], None, project_writable=False,
+                             git_readonly=[str(project / ".agent" / "kept" / ".git")])
+        self.assertIn("--keep-records", str(refused.exception))
+        build_bwrap_argv(project, project / ".git", ["true"], None, project_writable=False, mask_records=False,
+                         git_readonly=[str(project / ".agent" / "kept" / ".git")])
+        # controls: the same paths are fine when the records are kept, or in worker mode;
+        # and a path elsewhere in the project is fine with the masks on
         build_bwrap_argv(project, project / ".git", ["true"], [str(project)], project_writable=False,
                          mask_records=False)
         build_bwrap_argv(project, project / ".git", ["true"], [str(project)], project_writable=True)
+        build_bwrap_argv(project, project / ".git", ["true"], [str(project / "out")], project_writable=False)
 
     def test_a_git_directory_that_contains_the_project_does_not_take_its_writes(self):
         from provider.sandbox import build_bwrap_argv

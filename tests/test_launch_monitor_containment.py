@@ -68,13 +68,16 @@ def bind_index(argv: list[str], path: str, kinds=("--bind", "--ro-bind")) -> int
 
 
 class RoProjectArgvShape(unittest.TestCase):
+    # the flags of the launcher's own exec (`--keep-records` since task 138)
+    MONITOR_FLAGS = ("--ro-project", "--keep-records")
+
     def setUp(self):
         self.proj = Path(tempfile.mkdtemp()).resolve()
         self.mdir = self.proj / ".agent" / "monitor"
         self.mdir.mkdir(parents=True)
 
     def test_ro_project_binds_project_read_only(self):
-        argv = _print_argv(self.proj, "--ro-project", "--rw", str(self.mdir),
+        argv = _print_argv(self.proj, *self.MONITOR_FLAGS, "--rw", str(self.mdir),
                            "--agent", "claude")
         i = bind_index(argv, str(self.proj))
         self.assertNotEqual(i, -1, f"project not bound at all: {argv}")
@@ -82,7 +85,7 @@ class RoProjectArgvShape(unittest.TestCase):
                          "--ro-project must bind the project read-only")
 
     def test_monitor_dir_binds_writable_after_project(self):
-        argv = _print_argv(self.proj, "--ro-project", "--rw", str(self.mdir),
+        argv = _print_argv(self.proj, *self.MONITOR_FLAGS, "--rw", str(self.mdir),
                            "--agent", "claude")
         ip = bind_index(argv, str(self.proj))
         im = bind_index(argv, str(self.mdir), kinds=("--bind",))
@@ -90,6 +93,18 @@ class RoProjectArgvShape(unittest.TestCase):
         self.assertGreater(im, ip,
                            "monitor dir must bind AFTER the project so it "
                            "stays writable inside the read-only project")
+
+    def test_the_monitor_dir_needs_the_records_kept(self):
+        # Task 169: a read-only run that HIDES the records takes no writable path in
+        # `.agent` (a bind there replaces the mask). The monitor's directory is one, so
+        # its launch depends on `--keep-records` — pinned here and in the launcher text.
+        r = subprocess.run(
+            [sys.executable, "-m", "provider.sandbox", "--ro-project", "--rw", str(self.mdir),
+             "--agent", "claude", "--project-root", str(self.proj), "--print-argv", "--", "echo", "hi"],
+            env=_clean_env(), capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("--keep-records", r.stderr)
+        self.assertEqual(r.stdout, "")
 
     def test_without_flag_project_stays_writable(self):
         # Negative control: --ro-project must be opt-in, not a default flip.
@@ -105,6 +120,11 @@ class LauncherDelegation(unittest.TestCase):
     def test_delegates_to_provider_sandbox(self):
         self.assertIn("provider.sandbox", self.text)
         self.assertIn("--ro-project", self.text)
+
+    def test_the_exec_keeps_the_records_and_names_the_monitor_dir(self):
+        launch = self.text[self.text.rindex("exec env "):]
+        self.assertIn('--ro-project --keep-records', launch)
+        self.assertIn('--rw "$MONITOR_DIR"', launch)
 
     def test_no_hardcoded_seatbelt_exec(self):
         self.assertNotIn("exec sandbox-exec", self.text,

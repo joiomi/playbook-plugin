@@ -474,11 +474,12 @@ def _bwrap_record_masks(project_dir: Path | str, hidden: "list[str] | None" = No
     an empty dir. A layer that cannot be listed stays empty, an entry that cannot
     be read is left out — fail closed, never open. Never raises.
 
-    `hidden`, when given, receives every path whose CONTENT these masks hide, so that
-    a caller can refuse a bind laid over one (task 169): `.agent` itself and the real
-    directory behind each symlinked lane (records may appear there later), each record
-    file and record directory present now, and a layer that could not be listed. A
-    directory in `.agent` that holds no record is not among them."""
+    `hidden`, when given, receives the places these masks hide records in, so that a
+    caller can refuse a bind laid over, at or inside one (task 169): `.agent` itself
+    and the real directory behind each symlinked lane — the two kinds of tree the
+    layers are built in, where a record may also appear later — each record file and
+    record directory present now, the real target of a record that is a symlink, and
+    a layer that could not be listed."""
     agent = _agent_dir(project_dir)
     if agent is None:
         return []
@@ -637,19 +638,23 @@ def build_bwrap_argv(
     if (not project_writable) if mask_records is None else mask_records:
         argv += _bwrap_record_masks(project, hidden)
 
-    # What the masks hide must stay hidden. A bind laid after them that COVERS a
-    # hidden path would bind the real records back, so such a launch is refused —
-    # before anything is prepared on the host. (Round 1 of task 169 laid the masks
-    # again instead; round 2 showed what that did to the path the user had asked
-    # for: its files read-only, new ones written to a throwaway layer.) A writable
-    # path INSIDE `.agent` that holds no record covers nothing and is unaffected.
+    # What the masks hide must stay hidden, and a bind laid after them replaces
+    # them wherever it lands. One that COVERS a hidden place binds the real records
+    # back (task 169, impl round 2). One INSIDE such a place does the same from the
+    # other side: `--rw .agent/sessions/<id>` shows that session's records over the
+    # emptied `sessions`, and `--rw .agent/<a lane>` replaces the lane's layer, so a
+    # record written there during the run is readable (the single judge after round
+    # 2). So a run that hides the records takes no writable path that overlaps a
+    # hidden place at all — and is refused before that path is created on the host.
+    # `--keep-records` is the way to have one (the monitor's `.agent/monitor`).
     for rw in rw_paths:
-        covered = next((t for t in hidden if _covers(rw, Path(t))), None)
-        if covered is not None:
+        touched = next((t for t in hidden if _overlaps(rw, t)), None)
+        if touched is not None:
             raise RuntimeError(
-                f"`--rw {rw}` covers conversation records that a read-only run hides ({covered}) — "
-                "a writable bind there would show them. Pass --keep-records if this run may read "
-                "the records, or give a narrower --rw path. Nothing was launched.")
+                f"`--rw {rw}` is in or over a place where a read-only run hides the conversation "
+                f"records ({touched}) — a writable bind there would show them, or the ones written "
+                "during the run. Pass --keep-records if this run may read the records, or give an "
+                "--rw path outside `.agent`. Nothing was launched.")
 
     # extra_rw (the judge workspace / outdir) after the project bind: it must stay
     # writable even when it lives inside a read-only project.
@@ -676,11 +681,15 @@ def build_bwrap_argv(
         elif g not in git_binds:
             git_binds.append(g)
     for g in git_binds:
-        covered = next((t for t in hidden if _covers(g, Path(t))), None)
-        if covered is not None:              # no layout known to do this: fail closed
+        # the same rule as for a writable path: nothing is laid over, at or inside a
+        # hidden place. No layout known to do this (a repository kept inside `.agent`
+        # and named in `code_roots` would): fail closed.
+        touched = next((t for t in hidden if _overlaps(g, t)), None)
+        if touched is not None:
             raise RuntimeError(
-                f"git metadata at {g} covers conversation records that a read-only run hides "
-                f"({covered}); they cannot be hidden in this layout. Nothing was launched.")
+                f"git metadata at {g} is in or over a place where a read-only run hides the "
+                f"conversation records ({touched}); they cannot be hidden in this layout. Pass "
+                "--keep-records if this run may read the records. Nothing was launched.")
         argv += ["--ro-bind", g, g]
 
     argv += list(target_argv)
@@ -691,6 +700,11 @@ def _covers(outer: "Path | str", inner: Path) -> bool:
     """Is `inner` the path `outer`, or inside it? Both already resolved."""
     outer = Path(outer)
     return outer == inner or outer in inner.parents
+
+
+def _overlaps(a: "Path | str", b: "Path | str") -> bool:
+    """Is one of the two paths the other, or inside it? Both already resolved."""
+    return _covers(a, Path(b)) or _covers(b, Path(a))
 
 
 # What git keeps at the top of a git directory. Used only for a git directory that
@@ -1308,7 +1322,9 @@ def _main(argv: list[str]) -> int:
     parser.add_argument("--list-models", action="store_true",
                         help="Print model alias table and exit")
     parser.add_argument("--rw", action="append", default=[],
-                        help="Extra read-write path (repeatable)")
+                        help="Extra read-write path (repeatable). With --ro-project and "
+                             "without --keep-records, a path in or over .agent is refused: "
+                             "it would show the hidden conversation records.")
     parser.add_argument("--ro-project", action="store_true",
                         help="Bind the project read-only; only --rw paths stay "
                              "writable project-side (contained-observer mode, "

@@ -43,9 +43,12 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   into the project, or a `core.hooksPath` naming a project directory — those are project files.
 - **A read-only sandbox run refuses an `--rw` path that would show the conversation records** (task 169). With
   `--ro-project --rw <project>` (or a parent of it, or the real directory behind a symlinked lane) the extra
-  writable bind was laid over the masks and the chat log became readable. Such a launch is refused now, before
-  anything starts, and the message names `--keep-records` — the way to say that this run may read the records.
-  An `--rw` path inside `.agent` that holds no record (the monitor's directory) works as before.
+  writable bind was laid over the masks and the chat log became readable; an `--rw` path INSIDE `.agent`
+  (`.agent/sessions/<id>`, a lane's directory) replaced the mask at that place in the same way. Such a launch is
+  refused now, before anything starts, and the message names `--keep-records` — the way to say that this run may
+  read the records. What changes for you: `--ro-project` without `--keep-records` no longer takes an `--rw` path
+  in or over `.agent`, whether or not it holds a record; a path elsewhere in the project works as before, and
+  the monitor (which passes `--keep-records`) is not affected.
 - **Six ledger rows have a Linux proof of their own** (task 169, PLAN S11 — the rows that lost their macOS and
   Windows evidence with the Linux-only decision): the sandbox's write rules, the tamper guard at a real review
   with no sandbox, session clean-up at a real `tasks` command, `init` from a packaged install, one project whose
