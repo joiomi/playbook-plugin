@@ -359,5 +359,97 @@ class InitFromAPackagedInstall(unittest.TestCase):
                          (self.packaged / "scripts" / "bash-log.sh").read_bytes())
 
 
+# --------------------------------------------------------------------------- #
+# PB-PLATFORM-COMPATIBILITY — "Still missing on Linux: a live capability matrix
+# (spaces/Unicode/wrappers/sessions/containment …)".
+# --------------------------------------------------------------------------- #
+class AProjectWhosePathHoldsASpaceAnAccentAndAQuote(unittest.TestCase):
+    """One project, one awkward path, the real entry points in the order a user meets
+    them: init, the generated wrapper, the session pointer, the edit gate, the sandbox."""
+    NAME = "pro iect ă'x"
+
+    def setUp(self):
+        import json
+        from tests._fake_agent import agent_proc_root, spawn_fake_agent, stop
+        self.tmp = Path(tempfile.mkdtemp()).resolve()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.home = self.tmp / "home"
+        plugins = self.home / ".claude" / "plugins"
+        os.makedirs(plugins)
+        # the wrappers find the plugin through the manifest; here it names this tree
+        (plugins / "installed_plugins.json").write_text(json.dumps({"version": 2, "plugins": {
+            "playbook@a-marketplace": [{"scope": "user", "installPath": str(PLUGIN), "version": "0"}]}}),
+            encoding="utf-8")
+        self.project = self.tmp / self.NAME
+        os.makedirs(self.project)
+        os.makedirs(self.tmp / "agent")
+        agent = spawn_fake_agent(self.tmp / "agent")
+        self.addCleanup(stop, agent)
+        self.session = f"pid-{agent.pid}"
+        self.with_agent = {"PLAYBOOK_SESSION_ID": self.session,
+                           "PLAYBOOK_PROC_ROOT": agent_proc_root(self.tmp, agent.pid)}
+        nobody = self.tmp / "proc-with-no-agent"
+        os.makedirs(nobody / "self")
+        self.without_agent = {"PLAYBOOK_PROC_ROOT": str(nobody)}
+        r = self._run([bash_or_skip(), SCRIPTS / "init", "a project"])
+        self.assertEqual(r.returncode, 0, r.stdout[-600:] + r.stderr[-600:])
+        self.tasks = self.project / ".claude" / "bin" / "tasks"
+
+    def _run(self, argv, stdin=None, **extra):
+        return subprocess.run([str(a) for a in argv], cwd=self.project, input=stdin,
+                              capture_output=True, text=True, timeout=180,
+                              env=child_env(HOME=str(self.home), **extra))
+
+    def _edit(self, **env):
+        import json
+        payload = json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Edit", "cwd": str(self.project),
+                              "tool_input": {"file_path": str(self.project / "src" / "a.py"),
+                                             "old_string": "a", "new_string": "b"}})
+        return self._run([bash_or_skip(), SCRIPTS / "task-gate-hook"], stdin=payload, **env)
+
+    def test_the_wrapper_the_session_pointer_and_the_edit_gate(self):
+        # before any task: the gate refuses a code edit under this path
+        blocked = self._edit(**self.with_agent)
+        self.assertEqual(blocked.returncode, 2, blocked.stdout + blocked.stderr)
+        # the generated wrapper creates and activates a task; its words arrive whole
+        new = self._run([self.tasks, "new", "quick", "first", "an intent, with a 'quote' and  two spaces"],
+                        **self.with_agent)
+        self.assertEqual(new.returncode, 0, new.stdout + new.stderr)
+        record = self.project.joinpath(".agent", "tasks", "001-first", "task.md")
+        self.assertIn("an intent, with a 'quote' and  two spaces", record.read_text(encoding="utf-8"))
+        work = self._run([self.tasks, "work", "001"], **self.with_agent)
+        self.assertEqual(work.returncode, 0, work.stdout + work.stderr)
+        pointer = self.project / ".agent" / "sessions" / self.session / "current_state"
+        self.assertEqual(pointer.read_text(encoding="utf-8").split()[0], "001")
+        status = self._run([self.tasks, "status"], **self.with_agent)
+        self.assertIn("001-first", status.stdout)
+        # with the task active the same edit is let through …
+        allowed = self._edit(**self.with_agent)
+        self.assertEqual(allowed.returncode, 0, allowed.stdout + allowed.stderr)
+        # … and only for the session that activated it: a hook that can find no agent
+        # at all (plan panel: the result must be shown to depend on the session) refuses
+        stranger = self._edit(**self.without_agent)
+        self.assertEqual(stranger.returncode, 2, stranger.stdout + stranger.stderr)
+
+    def test_the_sandbox_names_the_path_whole(self):
+        r = self._run([bash_or_skip(), SCRIPTS / "sandbox", "--project-root", self.project,
+                       "--print-argv", "--agent", "claude", "--", "hello"])
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(str(self.project), r.stdout.split("\n"), r.stdout)
+
+    @unittest.skipUnless(bwrap_usable(), "no bubblewrap that can start a sandbox here")
+    def test_a_contained_agent_writes_inside_it(self):
+        bindir = self.tmp / "bin"
+        os.makedirs(bindir)
+        agent = bindir / "claude"
+        agent.write_text('#!/bin/sh\nprintf contained > "$PWD/written-inside"\n', encoding="utf-8")
+        agent.chmod(0o755)
+        r = self._run([bash_or_skip(), SCRIPTS / "sandbox", "--project-root", self.project,
+                       "--agent", "claude", "--prompt", "hello"],
+                      PATH=f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual((self.project / "written-inside").read_text(encoding="utf-8"), "contained")
+
+
 if __name__ == "__main__":
     unittest.main()
