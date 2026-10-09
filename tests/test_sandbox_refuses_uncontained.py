@@ -273,21 +273,43 @@ class TheLaunchItselfFailsClosed(unittest.TestCase):
         self.assertEqual(argv, sandbox._compose_agent_argv("claude", ["-p", "hi"]))
 
 
-class TheBubblewrapProbedIsTheOneLaunched(unittest.TestCase):
-    """A launch runs with the PROJECT as its working directory. A bare `bwrap`, or one found
-    through a relative PATH entry, could resolve there to another — project-controlled — file
-    than the one the launcher probed. The wrapped argv names bubblewrap by ABSOLUTE path, as
-    resolved where the launcher stands."""
+class OnlyABubblewrapOnAnAbsolutePathIsUsed(unittest.TestCase):
+    """A relative PATH entry names a different directory in the launcher, in the monitor's
+    launcher after its `cd`, and in the launch itself, which runs in the PROJECT — so a `bwrap`
+    found through one can be a project-controlled file. Such a bwrap is not used: the wrapped
+    argv names bubblewrap by an absolute path that `which` itself returned, or there is none."""
 
-    def test_the_wrapped_argv_names_bubblewrap_by_absolute_path(self):
-        project = Path(tempfile.mkdtemp(prefix="pb-abs-")).resolve()
-        self.addCleanup(shutil.rmtree, project, ignore_errors=True)
-        with mock.patch.object(sandbox, "is_sandboxed", return_value=False), \
+    def _with(self, found):
+        return (mock.patch.object(sandbox, "is_sandboxed", return_value=False),
                 mock.patch.object(sandbox.shutil, "which",
-                                  side_effect=lambda n, *a, **k: "bin/bwrap" if n == "bwrap" else _REAL_WHICH(n, *a, **k)):
-            argv = sandbox._wrapped_argv("claude", ["-p", "hi"], project, None, True)
-        self.assertEqual(argv[0], os.path.abspath("bin/bwrap"))
-        self.assertEqual(argv[1:4], ["--ro-bind", "/", "/"])
+                                  side_effect=lambda n, *a, **k: found if n == "bwrap" else _REAL_WHICH(n, *a, **k)))
+
+    def setUp(self):
+        self.project = Path(tempfile.mkdtemp(prefix="pb-abs-")).resolve()
+        self.addCleanup(shutil.rmtree, self.project, ignore_errors=True)
+
+    def test_an_absolute_bubblewrap_is_the_first_word_of_the_wrapped_argv(self):
+        a, b = self._with("/opt/tools/bwrap")
+        with a, b:
+            argv = sandbox._wrapped_argv("claude", ["-p", "hi"], self.project, None, True)
+        self.assertEqual(argv[:4], ["/opt/tools/bwrap", "--ro-bind", "/", "/"])
+
+    def test_a_bubblewrap_behind_a_relative_path_entry_is_not_used(self):
+        for found in ("bin/bwrap", "bwrap", "./bwrap"):
+            with self.subTest(found=found):
+                a, b = self._with(found)
+                with a, b:
+                    self.assertFalse(sandbox.containment_available())
+                    self.assertFalse(sandbox.network_isolation_available())
+                    # the judge paths' way: no wrapping by an unknown file — the uncontained path, which warns
+                    self.assertEqual(sandbox._wrapped_argv("claude", ["-p", "hi"], self.project, None, True),
+                                     sandbox._compose_agent_argv("claude", ["-p", "hi"]))
+                    # the launcher's way: refused, and the reason names the relative entry
+                    with self.assertRaises(RuntimeError) as cm:
+                        sandbox._wrapped_argv("claude", ["-p", "hi"], self.project, None, True,
+                                              require_containment=True)
+                    self.assertIn("relative", str(cm.exception))
+                    self.assertIn(found, sandbox.launch_refusal() or "")
 
 
 class TheNestingSignalIsTrue(unittest.TestCase):
@@ -452,8 +474,29 @@ class TheRealLauncherWithoutBubblewrap(unittest.TestCase):
                             "--project-root", str(case / "project"), "--", "-p", "hi"],
                            cwd=case / "here", env=env, stdin=subprocess.DEVNULL,
                            capture_output=True, text=True, timeout=120)
-        self.assertFalse(marker.exists(),
-                         f"the launch ran the project's own bin/bwrap, not the probed one\n{r.stderr}")
+        self.assertFalse(marker.exists(), f"the project's own bin/bwrap was executed\n{r.stderr}")
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("relative PATH entry", r.stderr)
+
+    def test_the_monitor_does_not_use_a_bubblewrap_behind_a_relative_path_entry_either(self):
+        # launch-monitor asks its pre-flight where it is called, then changes into the project
+        # for the launch: a relative entry would name two different files.
+        case = Path(tempfile.mkdtemp(prefix="relmon-", dir=self.root))
+        project = case / "project"
+        for d in ("home", "here/bin", "project/bin", "project/.agent/tasks"):
+            (case / d).mkdir(parents=True)
+        marker = case / "the-projects-bwrap-ran"
+        _script(case / "here" / "bin" / "bwrap", "exit 0\n")
+        _script(project / "bin" / "bwrap", 'printf ran > "$MARKER"\n')
+        env = {"PATH": f"bin{os.pathsep}{self.bin}", "HOME": str(case / "home"), "MARKER": str(marker),
+               "LANG": "C.UTF-8", "PLAYBOOK_PROJECT_DIR": str(project)}
+        r = subprocess.run([self.bash, str(PLUGIN / "scripts" / "monitor-lib" / "launch-monitor"),
+                            "--session-id", "pid-1"],
+                           cwd=case / "here", env=env, stdin=subprocess.DEVNULL,
+                           capture_output=True, text=True, timeout=120)
+        self.assertFalse(marker.exists(), f"the project's own bin/bwrap was executed\n{r.stderr}")
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertFalse((project / ".agent" / "monitor").exists(), r.stderr)
 
     def test_the_monitor_is_refused_before_it_writes_anything(self):
         case = Path(tempfile.mkdtemp(prefix="monitor-", dir=self.root))

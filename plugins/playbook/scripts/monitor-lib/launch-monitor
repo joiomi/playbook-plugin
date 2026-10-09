@@ -107,17 +107,24 @@ if ! echo "$SESSION_ID" | grep -Eq '^pid-[0-9]+$'; then
     exit 2
 fi
 
+PLUGIN_ROOT="$(cd "$MONITOR_SRC/../.." && pwd -P)"
+if [ ! -d "$PLUGIN_ROOT/provider" ]; then
+    echo "Error: provider/ module not found at $PLUGIN_ROOT (launch-monitor moved?)" >&2
+    exit 1
+fi
+python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null \
+    || { echo "Playbook needs python3 >= 3.10 (found: $(python3 --version 2>&1))" >&2; exit 1; }
+
 # No containment → no monitor, and say so BEFORE anything is written (task 164).
 # The sandbox launcher refuses without a usable bubblewrap, but only at the exec
 # that ends this script — after the monitor dir is made and bootstrap.sh has
 # reset session.md, .offset and trace.md. Ask it now, through its preview with
 # the flags of that exec: it launches nothing and prints the reason itself.
-PREFLIGHT_ROOT="$(cd "$MONITOR_SRC/../.." && pwd -P)"
-if [ -d "$PREFLIGHT_ROOT/provider" ]; then
-    env PYTHONPATH="$PREFLIGHT_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
-        python3 -m provider.sandbox --agent claude --ro-project --keep-records \
-        --project-root "$PROJECT_DIR" --print-argv -- preflight >/dev/null || exit 2
-fi
+# (A pre-flight, not a lock: if bubblewrap breaks between here and that exec,
+# the exec still refuses — with the monitor's state already reset.)
+env PYTHONPATH="$PLUGIN_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
+    python3 -m provider.sandbox --agent claude --ro-project --keep-records \
+    --project-root "$PROJECT_DIR" --print-argv -- preflight >/dev/null || exit 2
 
 # MONITOR_DIR lives in the TARGET project's agent dir, not the plugin.
 # Flat layout (T121): single state dir, not per-pid subdirs. Lane-resolved, so
@@ -136,13 +143,6 @@ mkdir -p "$MONITOR_DIR"
 #                          stays writable inside the read-only project
 # System/home areas claude's UI needs stay writable via the module's own
 # allowlist (same one the judge sandbox uses).
-PLUGIN_ROOT="$(cd "$MONITOR_SRC/../.." && pwd -P)"
-if [ ! -d "$PLUGIN_ROOT/provider" ]; then
-    echo "Error: provider/ module not found at $PLUGIN_ROOT (launch-monitor moved?)" >&2
-    exit 1
-fi
-python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null \
-    || { echo "Playbook needs python3 >= 3.10 (found: $(python3 --version 2>&1))" >&2; exit 1; }
 
 echo "[launch-monitor] watching session: $SESSION_ID" >&2
 echo "[launch-monitor] writable: $MONITOR_DIR (+ system dirs)" >&2

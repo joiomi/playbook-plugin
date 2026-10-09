@@ -7360,7 +7360,7 @@
     {
       "id": "PB-SANDBOX-DETECTION-FALLBACK",
       "category": "sandbox",
-      "statement": "Containment availability and nested containment are detected. The sandbox launcher refuses to start or preview an agent when no usable containment exists — bubblewrap missing, or installed but unable to start a sandbox — instead of launching it uncontained, and a wrapped launch runs the bubblewrap it probed, by absolute path. The judge paths, which call `run()` directly, fall back uncontained with an observable warning when bubblewrap is not on PATH, rather than claiming kernel containment; where it is installed but cannot start, a judge's launch fails and nothing falls back.",
+      "statement": "Containment availability and nested containment are detected. The sandbox launcher refuses to start or preview an agent when no usable containment exists — bubblewrap missing, reached only through a relative PATH entry, or installed but unable to start a sandbox — instead of launching it uncontained, and a wrapped launch names bubblewrap by the absolute path that was checked. The judge paths, which call `run()` directly, fall back uncontained with an observable warning when there is no such bubblewrap on PATH, rather than claiming kernel containment; where it is installed but cannot start, a judge's launch fails and nothing falls back.",
       "owner": [
         {
           "path": "plugins/playbook/provider/sandbox.py",
@@ -7497,7 +7497,20 @@
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": [
-            "PATH starts with the relative entry `bin`; where the launcher stands `bin/bwrap` passes the probe, and the project has its own `bin/bwrap`. The launch, whose working directory is the project, runs the probed one (absolute path). Watched red: the project's file ran. The probed stand-in is not a real sandbox — the test pins WHICH binary runs."
+            "PATH starts with the relative entry `bin`; where the launcher stands `bin/bwrap` would pass the probe, and the project has its own `bin/bwrap`. The launcher refuses (exit 2, naming the relative entry) and neither file is used for a launch. Watched red twice: first the project's file ran (round 2); then, with absolute resolution only, the monitor's launcher — which changes into the project — still executed it (round 3)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_sandbox_refuses_uncontained.py",
+          "reference": "OnlyABubblewrapOnAnAbsolutePathIsUsed.test_a_bubblewrap_behind_a_relative_path_entry_is_not_used",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_sandbox_refuses_uncontained.py",
+            "reference": "OnlyABubblewrapOnAnAbsolutePathIsUsed.test_an_absolute_bubblewrap_is_the_first_word_of_the_wrapped_argv"
+          },
+          "limitations": [
+            "`which` answering `bin/bwrap`, `bwrap` or `./bwrap`: no containment is reported, the judge paths' argv is the unwrapped one (the path that warns), and the launcher's raises, naming the entry. An absolute answer becomes the first word of the wrapped argv."
           ]
         }
       ],
@@ -7511,7 +7524,7 @@
       ],
       "status": "partially_evidenced",
       "missing_evidence_or_limitation": [
-        "2026-10-09 (task 164, owner ruling): the uncontained policy is decided for the LAUNCHER — it refuses (tests/test_sandbox_refuses_uncontained.py, live, with negative controls), also when bwrap vanishes after its check, and the monitor is refused before it writes — and for the judge paths the owner left the fallback as it is: uncontained, with the review's warning and the tamper guard. Limits: PLAYBOOK_SANDBOXED=1 set by hand is an operator's statement that an outer cage exists and nothing verifies it. Still without an integration test: a real review on a host with no bwrap (the warning it prints is source-read), and a real bubblewrap that cannot start (the launcher's probe is tested against a stand-in binary).",
+        "2026-10-09 (task 164, owner ruling): the uncontained policy is decided for the LAUNCHER — it refuses (tests/test_sandbox_refuses_uncontained.py, live, with negative controls), also when bwrap vanishes after its check, and the monitor is refused before it writes — and for the judge paths the owner left the fallback as it is: uncontained, with the review's warning and the tamper guard. Limits: PLAYBOOK_SANDBOXED=1 set by hand is an operator's statement that an outer cage exists and nothing verifies it. The monitor's pre-flight and its launch are two checks: if bubblewrap breaks between them the launch still refuses, with the monitor's state already reset. Still without an integration test: a real review on a host with no bwrap (the warning it prints is source-read), and a real bubblewrap that cannot start (the launcher's probe is tested against a stand-in binary).",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
         "Task 100 (PLAN S8 binding audit, 2026-09-27): this row cited only `test_environment.SandboxItemTest.test_unknown_os_has_no_primitive` — an advisory-text test of environment.py, not of the owner (sandbox.py). Rebound to tests/test_windows_uncontained_path.py (3 tests, cited nowhere before). Still asserted by NO test: nested-containment detection (`is_sandboxed`) and the operator-visible UNCONTAINED warning text (review.py gates it on containment_available(); source-read) — both stay in required_live_evidence.",
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",

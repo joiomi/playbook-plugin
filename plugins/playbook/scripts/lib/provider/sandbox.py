@@ -650,13 +650,17 @@ def _git_dir_of(project_dir: Path) -> Path | None:
 
 
 def _bwrap_exe() -> "str | None":
-    """The bubblewrap this process would use, as an ABSOLUTE path; None when there
-    is none on PATH. Absolute, because a launch runs with the PROJECT as its
-    working directory: a bare `bwrap`, or one found through a relative PATH entry,
-    could resolve there to another — project-controlled — file than the one the
-    launcher probed (task 164, panel round 2)."""
+    """The bubblewrap this process uses, as an absolute path; None when there is
+    none it can use. Only a `bwrap` that `which` finds through an ABSOLUTE PATH
+    entry counts. A relative entry (or an empty one: the working directory) names
+    a different directory in the launcher, in the monitor's launcher after its
+    `cd`, and in the launch itself, which runs in the PROJECT — so what it finds
+    can be a project-controlled file, and a different one each time (task 164,
+    panel rounds 2 and 3). `which` stops at the first match, so a relative entry
+    that comes first hides a real bubblewrap behind it: that is refused too,
+    and `launch_refusal` says why."""
     exe = shutil.which("bwrap")
-    return os.path.abspath(exe) if exe else None
+    return exe if exe and os.path.isabs(exe) else None
 
 
 def _wrapped_argv(
@@ -712,7 +716,7 @@ def _launch_plan(
         argv = build_bwrap_argv(project, git_dir, inner_argv, extra_rw,
                                 project_writable=project_writable, no_network=no_network,
                                 mask_records=mask_records)
-        return [exe, *argv[1:]], True
+        return [exe, *argv[1:]], True     # by absolute path: the launch runs in the project
     if require_containment:
         raise RuntimeError(launch_refusal() or (
             "no containment — bubblewrap (`bwrap`) is not available, so the agent "
@@ -730,9 +734,7 @@ def containment_available() -> bool:
     no-op and the before/after tamper snapshot is the only defense."""
     if is_sandboxed():
         return False
-    if shutil.which("bwrap"):
-        return True
-    return False
+    return bool(_bwrap_exe())
 
 
 # One text for the launcher's refusal below and for `tasks environment`'s advice.
@@ -792,6 +794,12 @@ def launch_refusal() -> "str | None":
         return None
     exe = _bwrap_exe()
     if not exe:
+        found = shutil.which("bwrap")
+        if found:
+            return (f"no containment — the only `bwrap` on PATH is reached through a relative "
+                    f"PATH entry ({found}), which the sandbox does not use: a launch runs in "
+                    "the project directory, where that entry can name another file. Refusing "
+                    "to start the agent. Put bubblewrap's directory on PATH by its absolute path.")
         return ("no containment — bubblewrap (`bwrap`) is not installed, so the agent would run "
                 "with its permission prompts off and nothing fencing its writes. Refusing to "
                 f"start it. To fix: {BWRAP_INSTALL_HINT}.")
@@ -819,7 +827,7 @@ def network_isolation_available() -> bool:
     choice so callers can gate the opt-in before invoking it."""
     if is_sandboxed():
         return False
-    return bool(shutil.which("bwrap"))
+    return bool(_bwrap_exe())
 
 
 # Parent-session identity that a sandboxed child must never inherit. The lead
