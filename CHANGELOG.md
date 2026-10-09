@@ -25,6 +25,22 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
+- **The sandbox keeps `.git` read-only whatever `--rw` covers** (task 169). `.claude/bin/sandbox` bound `.git`
+  read-only and then, last, every extra writable path — and the later bind won. With `--rw <project>`,
+  `--rw <a parent of the project>` or `--rw <project>/.git`, an agent in the sandbox could write `.git`: create
+  files, change its config, install a hook (measured with real bubblewrap). The read-only `.git` bind is laid
+  last now. A `--rw` path INSIDE `.git` is therefore not writable either.
+- **Six ledger rows have a Linux proof of their own** (task 169, PLAN S11 — the rows that lost their macOS and
+  Windows evidence with the Linux-only decision): the sandbox's write rules, the tamper guard at a real review
+  with no sandbox, session clean-up at a real `tasks` command, `init` from a packaged install, one project whose
+  path holds a space, an accent and a quote driven through the whole chain, and the bash command logger. Each new
+  test was watched failing on a deliberate break. Three statements changed with them: the sandbox row says
+  "whatever an extra `--rw` path covers"; the init row names the `.claude/bin` wrappers again; the logger row
+  is the bash logger's only and says that its memory of commands already written starts afresh past 65,536
+  characters (after that an earlier command is written again). A seventh row — that documented commands keep
+  their output structure and exit codes — got a complete test of the exit codes the reference states and stays
+  open for the owner's decision on the other half. The ledger: 128 rows, 96 verified (was 90).
+
 - **The close no longer blames a judge that never ran for a change in the repository** (task 168, PLAN S11
   item 15). When the judge that certifies a docs-and-tests tail could not be started AND the tamper check found
   the repository changed — or could not check that it had not — the refusal read "the repository changed while
@@ -45,7 +61,7 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   they still read `PYTHONPATH` — if yours names the project (`PYTHONPATH=.`), a project `json.py` still breaks
   them, the destructive-command guard among them, which then lets the command through (open item). The
   isolated calls no longer read `PYTHON*` variables you set yourself (`PYTHONIOENCODING`, `PYTHONUTF8`). And
-  the launchers still export `PYTHONPATH=<plugin dir>` to the commands the CLI starts, as before. New ledger row `PB-RUNTIME-ISOLATED` (128 rows, 90 verified); a test sweeps every
+  the launchers still export `PYTHONPATH=<plugin dir>` to the commands the CLI starts, as before. New ledger row `PB-RUNTIME-ISOLATED` (128 rows, 90 verified with it); a test sweeps every
   shipped file, so a new inline call without `-I` fails the suite. The two "local dev path" lines in
   `/playbook:freehand` and `/playbook:mindmap-optimize` now name the checkout's launcher
   (`plugins/playbook/scripts/tasks …`); the first one pointed at a `src/` directory that no longer exists.
@@ -79,7 +95,7 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   `MultiEdit` went through, where the same ticks in one `Edit` are refused. The guard now applies the call's edits
   to the file and judges the result like a `Write`.
 - **The guard against hand-made task files is in the guarantee ledger** (task 166): `PB-TASK-MD-GUARD`, with its
-  two bounds stated (only the `Write` tool is judged; no project scope). With it the ledger had 127 rows, 89 verified (128 and 90 with the row of task 167, above).
+  two bounds stated (only the `Write` tool is judged; no project scope). With it the ledger had 127 rows, 89 verified (128 and 90 with the row of task 167; 96 verified after task 169 — both above).
 - **No warning about `tasks/review.py` on newer Pythons** (task 165). A docstring held an invalid escape sequence:
   a `SyntaxWarning` when the file is compiled on Python 3.12 (a silent `DeprecationWarning` on 3.10), which Python's
   documentation says will become an error.

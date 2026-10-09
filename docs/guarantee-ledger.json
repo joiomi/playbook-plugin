@@ -4176,6 +4176,10 @@
         {
           "path": "plugins/playbook/scripts/session-end-hook",
           "reference": "case-arm:logout"
+        },
+        {
+          "path": "plugins/playbook/scripts/session-start-hook",
+          "reference": "whole-file"
         }
       ],
       "failure_consequence": "High",
@@ -4215,6 +4219,29 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/wrapper-multiuser-fixture.sh",
+          "reference": "scenario:S18",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The real session-start-hook on a project whose path holds a space, with a stand-in agent as the own session: own / live foreign / dead / non-numeric / stale and fresh legacy names / a stray file / a symlink; A2 runs the Python sweeper on the same tree and demands the same set. The scenario carries its own mutant controls (NC1 self-exclusion, NC2 liveness, the symlink glob), each first asserting that the mutant ran to completion — so the control field is empty here. Written for task 027; bound by task 169."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_linux_moved_row_proofs.py",
+          "reference": "TheCliSweepsSessionsAtARealInvocation.test_a_listing_keeps_the_live_set_and_spares_a_links_target",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_linux_moved_row_proofs.py",
+            "reference": "TheCliSweepsSessionsAtARealInvocation.test_control_an_invocation_that_returns_before_the_sweep_removes_nothing"
+          },
+          "limitations": [
+            "The CLI's own sweep at a real invocation (`tasks list` through the shipped launcher). The only proof that the command CALLS the sweep: with the call removed it fails and every other proof of this row stays green."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -4223,9 +4250,9 @@
       "applicable_providers": [
         "claude"
       ],
-      "status": "partially_evidenced",
+      "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "No executable integration proof crosses the real SessionStart GC boundary; the policy is proved at the predicate level only.",
+        "Proved (task 169, PLAN S11): both sweepers at their real boundaries — the SessionStart hook (fixture S18, which had existed since task 027 and was never bound) and a real `tasks` invocation. Not every invocation sweeps: `--help`, `--version`, a refused invocation, `dashboard` and the dry runs return before it. The two sweepers round the 24-hour boundary of a legacy name differently (whole days against seconds); the proofs use ages far from it on purpose.",
         "Process-liveness semantics are exercised on Linux only — the only platform claimed since 2026-10-08.",
         "Up to 1.5.47 (tag `last-multiplatform`): on native Windows neither sweeper reclaimed a pid-* directory (both kept every pid-* dir, because os.kill(pid, 0) / kill -0 was neither a safe nor a reliable liveness probe there). Task 156 (2026-10-08, Linux-only) deleted that keep-all arm from tasks/shared.py and scripts/session-start-hook; on Linux both sweepers probe liveness and keep the same set (wrapper-multiuser-fixture.sh S18 A2).",
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
@@ -4608,15 +4635,11 @@
     {
       "id": "PB-SHELL-ATTRIBUTION",
       "category": "sessions-and-attribution",
-      "statement": "The Bash shell-command logger records agent shell commands with a timestamp and an AGENT tag, and suppresses hook-internal shells so implementation machinery does not enter the command history; it writes each distinct command text once per shell process and working directory (a loop body is one line, not one per iteration) except activation-shaped text (`tasks` followed by ` work` or ` new`), which is written every time, installs no trap in a shell started with PLAYBOOK_NO_BASHLOG set to anything but \"\" or \"0\", logs nothing from a script whose own file name is statusline (a directory of that name does not count), and rotates a history found past 50 MB to bash_history.archived-<date>-<pid> before the first write each shell makes to that lane — copying its `tasks work`/`tasks new` lines into the fresh file so task windows survive — so a history can overshoot 50 MB by what one shell writes (task 088, PLAN S5b).",
+      "statement": "The Bash shell-command logger records agent shell commands with a timestamp and an AGENT tag, and suppresses hook-internal shells so implementation machinery does not enter the command history; it writes each distinct command text once per shell process and working directory (a loop body is one line, not one per iteration) for as long as the shell remembers the text — what it has seen is one string, started afresh once it passes 65,536 characters, after which an earlier text is written again — except activation-shaped text (`tasks` followed by ` work` or ` new`), which is written every time, installs no trap in a shell started with PLAYBOOK_NO_BASHLOG set to anything but \"\" or \"0\", logs nothing from a script whose own file name is statusline (a directory of that name does not count), and rotates a history found past 50 MB to bash_history.archived-<date>-<pid> before the first write each shell makes to that lane — copying its `tasks work`/`tasks new` lines into the fresh file so task windows survive — so a history can overshoot 50 MB by what one shell writes (task 088, PLAN S5b).",
       "owner": [
         {
           "path": "plugins/playbook/scripts/bash-log.sh",
           "reference": "function:_cpb_log_cmd"
-        },
-        {
-          "path": "plugins/playbook/scripts/bash-log.zsh",
-          "reference": "whole-file"
         }
       ],
       "failure_consequence": "Medium",
@@ -4754,6 +4777,39 @@
           "limitations": [
             "Checks the block /playbook:init seeds; an existing project gets the entries only on re-init."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_linux_moved_row_proofs.py",
+          "reference": "TheBashLoggersLine.test_a_line_is_a_timestamp_the_agent_tag_and_the_command",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The line's whole shape. No earlier proof looked at the timestamp."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_linux_moved_row_proofs.py",
+          "reference": "TheBashLoggersLine.test_any_value_but_empty_and_zero_opts_the_shell_out",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "`yes`, `false`, `x` and a single space opt out; the empty value does not."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_linux_moved_row_proofs.py",
+          "reference": "TheBashLoggersLine.test_what_the_row_admits_the_memory_is_reset_past_64_kib",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_linux_moved_row_proofs.py",
+            "reference": "TheBashLoggersLine.test_a_command_is_written_once_while_the_shell_remembers_it"
+          },
+          "limitations": [
+            "Shows the bound the statement now carries, not a protection: after 700 distinct commands of 100 characters the first command, run again, is written a second time."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -4762,13 +4818,13 @@
       "applicable_providers": [
         "claude"
       ],
-      "status": "partially_evidenced",
+      "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
         "Lane selection is deliberately NOT claimed here. The confirmed fresh-clone root-lane violation is recorded once, authoritatively, on PB-LANE-RESOLUTION; this entry must not be read as evidence that shell commands reach the resolved lane.",
         "The copy installed at ~/.claude/bash-log.sh is deployed by /playbook:init and is not updated by a plugin refresh. Measured on this host 2026-09-24: it is byte-identical to the bundled logger BEFORE task 088 (sha256 fe1f6f01...; the earlier 7488c02c... note is superseded — that copy now has the hook guard), so until /playbook:init is re-run it lacks the task-088 dedupe, opt-out, statusline skip and rotation.",
         "Deliberate trade-off (task 088): an identical command text repeated in the same directory within ONE shell process (one Bash tool call — measured: consecutive calls run in different processes) is logged once, so `make test; make test` in one call leaves one line; activation-shaped `tasks … work|new` text is exempt. Measured on the 278-case wrapper fixture run under BASH_ENV: 1088 lines with the old logger, 443 with the new; one ~/.claude/statusline.sh render 38 -> 0. The zsh logger is unchanged (one line per `zsh -c`).",
         "Rotation is not locked or atomic: two shells that cross 50 MB at the same instant can both rotate, and the second archive then holds the few lines written between the two moves; a process killed between the move and the activation copy leaves those activations only in the archive; the copied activation lines are not size-bounded. Lines are archived, never deleted, but retro/timeline read only bash_history. The size check is a single `find -size` stat to keep the window small.",
-        "zsh and Windows/Git Bash logger behavior lack live platform evidence.",
+        "Since task 169 (PLAN S11) this row is the BASH logger's only: `bash-log.zsh` left its owners. Windows is not claimed. The zsh variant is deployed on zsh hosts (PB-INIT-SCAFFOLD, fixture I1) and CI runs it under real zsh for the lanes it writes to, but its logging rules are claimed by no row — zsh is not installed on the host where these proofs were watched failing. Also proved there, clause by clause: the line's shape (timestamp, tag, command) and every opt-out value; and the dedupe clause was completed with its memory bound.",
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
         "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21).",
         "Owner decision D4 (PLAN S6), 2026-09-24 — accepted, not fixed (S5c stays parked): the stamp is local wall-clock time with no zone offset (`date '+%Y-%m-%d %H:%M:%S'` in bash-log.sh and bash-log.zsh), and readers convert it with the zone in force when they read (tasks/retro.py `bash_history_ts_to_utc`). So in the hour repeated when daylight saving time ends two moments carry the same stamp (measured, TZ=Europe/Bucharest: 2026-10-25 00:30 UTC and 01:30 UTC both write `2026-10-25 03:30:00`, and both read back as 00:30 UTC), and after the machine's time zone changes, older lines are converted with the new zone.",
@@ -6403,6 +6459,29 @@
           "limitations": [
             "Task 100 (PLAN S8 binding audit, 2026-09-27): an unreadable HEAD is a caution — a statement clause cited by no proof until this audit."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_linux_moved_row_proofs.py",
+          "reference": "ARealReviewWhereNothingContainsTheJudge.test_a_judge_that_changes_a_tracked_file_is_refused",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_linux_moved_row_proofs.py",
+            "reference": "ARealReviewWhereNothingContainsTheJudge.test_control_a_judge_that_only_answers_is_recorded"
+          },
+          "limitations": [
+            "A real `tasks impl-review --backend claude` as a subprocess, on a PATH with no bubblewrap, with a stand-in judge that appends to a tracked file: the banner, a non-zero exit, nothing recorded."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_linux_moved_row_proofs.py",
+          "reference": "ARealReviewWhereNothingContainsTheJudge.test_a_judge_that_commits_is_refused_where_nothing_contains_it",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The rule that is specific to a host with no sandbox: the stand-in COMMITS (clean tree, moved HEAD) and the review is refused. With the guard made to believe a sandbox contains the judge this test fails and the two beside it do not."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -6413,9 +6492,9 @@
         "codex",
         "grok"
       ],
-      "status": "partially_evidenced",
+      "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "Content-hashing is capped at 5 MiB per dirty file and 200 MiB cumulative per snapshot (excess records an honest unhashed marker, never a silent skip); the unit proofs cross a `unit` boundary, and the uncontained-fallback path still awaits the Phase 8 windows-git-bash live-platform test.",
+        "Content-hashing is capped at 5 MiB per dirty file and 200 MiB cumulative per snapshot (excess records an honest unhashed marker, never a silent skip). Proved at a process boundary (task 169, PLAN S11): the uncontained path is executed on Linux by a real single-judge review with a stand-in judge — refused when the judge changes a tracked file or commits, recorded when it only answers. Not driven there: the PANEL path (a panel seat requires containment and refuses without it) and the output envelopes of the other backends; the forty-one earlier proofs are in-process.",
         "State is enumerated from `git status`, which omits gitignored paths by design (so legitimate session/hook churn does not false-positive); a rogue write to a path matching the repo's .gitignore is therefore not caught. This is an accepted design tradeoff, not a silent gap.",
         "The before/after compare is taken once the judge subprocess has RETURNED (or been killed at the timeout). A detached descendant that escapes the process-group teardown (setsid + closed pipes) can still mutate the tree AFTER that snapshot — e.g. during the up-to-~120s dead-pin availability probe — and receives no banner (panel rounds 2-4, codex:sol). This is a fundamental property of the best-effort guard shared by the panel and single-judge paths, not introduced by the exit-path wiring; the OS sandbox (PB-JUDGE-READONLY) is the real containment, and reaping all descendants before the compare is a follow-up (Phase 8). Related, same class and same follow-up: (a) an ALREADY-symlinked task.md is fingerprinted by link text, so a detached writer rewriting the CONTENT of its (ignored/external) referent is not seen; (b) the task.md fingerprint read is now hang/allocation-safe (`_safe_task_fingerprint`: lstat + O_NONBLOCK|O_NOFOLLOW fd + fstat re-validation + `_TAMPER_HASH_CAP` bound), so a TOCTOU swap-to-FIFO or a grow-to-gigabytes yields a size-bearing 'too-large:<size>' marker rather than a hang or MemoryError (a swap to a directory/FIFO/device yields the 'unreadable' sentinel).",
         "Concurrent reviews are not serialized: if one review delivers findings (a trusted parent write-back) while another review of the same repo is between its own snapshot and compare, the second can read the first's write and OVER-report it as tamper. This is a SAFE-direction false accusation (never a missed real mutation), it requires two reviews running against one working tree at once (not a normal single-review flow), and it predates and is orthogonal to the exit-path wiring. A repo-wide review lock is a follow-up (Phase 8).",
@@ -6830,7 +6909,7 @@
     {
       "id": "PB-INIT-SCAFFOLD",
       "category": "installation-and-upgrade",
-      "statement": "/playbook:init creates the project task structure, settings, config, CLAUDE.md, MIND_MAP.md, logger wiring, and gitignore runtime block.",
+      "statement": "/playbook:init creates the project task structure, settings, config, CLAUDE.md, MIND_MAP.md, logger wiring, the `.claude/bin` wrappers, and the gitignore runtime block.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/init",
@@ -6921,6 +7000,52 @@
           "limitations": [
             "MIND_MAP.md is written with the project name."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_linux_moved_row_proofs.py",
+          "reference": "InitFromAPackagedInstall.test_init_creates_everything_the_row_lists",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "init run from a PACKAGED copy (a versioned cache directory named by installed_plugins.json) in an empty project and a temp HOME: every artefact of the statement in one test, the deployed logger byte-identical to the shipped one and BASH_ENV naming it."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_linux_moved_row_proofs.py",
+          "reference": "InitFromAPackagedInstall.test_the_wrappers_exist_and_answer_from_the_installed_copy",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_linux_moved_row_proofs.py",
+            "reference": "InitFromAPackagedInstall.test_control_without_the_manifest_the_wrapper_falls_back_to_the_newest_directory"
+          },
+          "limitations": [
+            "The installed copy is the OLDER of two versions in the cache on purpose: a wrapper that scanned instead of reading the manifest would answer from the newer one."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_linux_moved_row_proofs.py",
+          "reference": "InitFromAPackagedInstall.test_a_shell_started_with_the_setting_init_wrote_reaches_the_history",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_linux_moved_row_proofs.py",
+            "reference": "InitFromAPackagedInstall.test_control_a_shell_that_opts_out_leaves_no_line"
+          },
+          "limitations": [
+            "A non-interactive bash child started with the BASH_ENV init wrote: its command is in the project's history. bash only."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_linux_moved_row_proofs.py",
+          "reference": "InitFromAPackagedInstall.test_init_replaces_an_older_logger_copy",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "An older ~/.claude/bash-log.sh is replaced by the shipped bytes when init runs."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -6931,12 +7056,12 @@
         "codex",
         "grok"
       ],
-      "status": "partially_evidenced",
+      "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "No packaged-install test and no live macOS/Windows initialization.",
-        "Logger wiring is deployed as a per-machine copy outside the plugin (~/.claude/bash-log.{sh,zsh}); the copy on this host is measurably older than the bundled script (sha256 7488c02c... on this host, against plugins/playbook/scripts/bash-log.sh), so no test establishes that an initialized machine runs the shipped logger.",
+        "Proved (task 169, PLAN S11): init from a packaged install, on Linux. macOS and Windows are not claimed.",
+        "Logger wiring is a per-machine copy outside the plugin (~/.claude/bash-log.{sh,zsh}). Proved (task 169): init deploys the shipped bytes, replaces an older copy, and a shell started with the BASH_ENV it wrote logs into the project's history. Bound: the copy is refreshed by init, NOT by a plugin update — after an update it is the older logger until init is re-run (`tasks doctor` reports a stale copy with both hashes).",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
-        "Task 100 (PLAN S8 binding audit, 2026-09-27) NARROWED: `wrappers` (`.claude/bin/tasks`, `.claude/bin/monitor`) removed from the statement — no test asserts their creation on a clean init (the rollback proofs assert their REMOVAL after a failed one). S11 gauntlet item. The task structure, config, logger wiring and MIND_MAP.md clauses were cited by no proof until this audit and are bound below; the project `.claude/settings.json` deny list is PB-INIT-DENY-LIST.",
+        "Task 100 (PLAN S8 binding audit, 2026-09-27) had removed `wrappers` from the statement — no test asserted their creation on a clean init. Task 169 (PLAN S11) restored the word with a test: `.claude/bin/tasks`, `monitor` and `sandbox` are created executable, and the tasks wrapper answers from the copy the manifest names. The project `.claude/settings.json` deny list is PB-INIT-DENY-LIST.",
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`)."
       ],
       "follow_up_phases": [
@@ -7252,7 +7377,7 @@
     {
       "id": "PB-SANDBOX-WRITE",
       "category": "sandbox",
-      "statement": "With a supported containment backend, sandbox allows project writes in worker mode, keeps .git read-only, and in --ro-project mode denies project writes except explicit --rw paths.",
+      "statement": "With a supported containment backend, sandbox allows project writes in worker mode, keeps .git read-only — whatever an extra `--rw` path covers — and in --ro-project mode denies project writes except explicit --rw paths.",
       "owner": [
         {
           "path": "plugins/playbook/provider/sandbox.py",
@@ -7301,6 +7426,39 @@
           "limitations": [
             "--rw exception: the extra workspace bind comes after the read-only project bind, so it stays writable — argv level."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_linux_moved_row_proofs.py",
+          "reference": "TheSandboxKeepsGitReadOnly.test_worker_mode_writes_the_project_and_cannot_change_git",
+          "boundary": "real-os",
+          "negative_control": {
+            "path": "tests/test_linux_moved_row_proofs.py",
+            "reference": "TheSandboxKeepsGitReadOnly.test_control_a_writable_path_beside_git_still_takes_writes"
+          },
+          "limitations": [
+            "The shipped launcher under real bubblewrap with a stand-in agent: the project is written; a new file in .git, an append to its config, a hook, a re-pointed HEAD and a deleted ref are all denied, and .git is byte-identical afterwards. Skipped where no sandbox can start."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_linux_moved_row_proofs.py",
+          "reference": "TheSandboxKeepsGitReadOnly.test_a_writable_path_that_covers_git_does_not_open_it",
+          "boundary": "real-os",
+          "negative_control": null,
+          "limitations": [
+            "The same five attempts with `--rw <project>`, `--rw <its parent>`, `--rw <project>/.git` and `--rw <project>/.git/hooks`. Red before task 169's fix for all four."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_linux_moved_row_proofs.py",
+          "reference": "TheGitBindIsLaidLast.test_git_is_bound_read_only_after_every_writable_bind",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Argv level, so it runs where no sandbox can start: the read-only .git bind comes after every writable bind, in worker and in read-only mode, for five shapes of --rw."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -7311,11 +7469,11 @@
         "codex",
         "grok"
       ],
-      "status": "partially_evidenced",
+      "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
         "Confirmed containment failure on macOS CI (run 32381370391, job 96465123480): under --ro-project a project rooted at a _SYSTEM_RW_PATHS entry (e.g. /var/folders, where macOS mktemp places dirs) was fully writable because the read-only project was expressed only as an omitted require-not exemption inside a require-all-of-require-nots deny block, which a broader exemption cancels. Corrected in build_seatbelt_profile: the read-only project is now an explicit terminal deny (the .git precedent), with each extra_rw workspace re-allowed after it.",
         "The seatbelt correction shipped up to 1.5.47 (tag `last-multiplatform`) with a profile-text proof; since task 154 (2026-10-08, Linux-only) no test in the tree exercises seatbelt, and macOS is not claimed. On Linux the claim rests on the bubblewrap argv tests (tests/test_sandbox_bind_order.py BindOrder, unconditional) and the live bubblewrap test (skipped where bwrap is not installed).",
-        "Full worker-mode .git mutation matrix under real bubblewrap is incomplete.",
+        "Proved (task 169, PLAN S11): the worker-mode .git matrix under real bubblewrap, through the shipped launcher — create, append, hook, re-point HEAD, delete a ref — alone and with an `--rw` path that covers .git. Until that task the statement was FALSE in the second case: the extra writable binds were laid after .git's read-only bind, and the later bind won, so `--rw <project>`, a parent of it, or `.git` itself made .git writable (found by the task's plan panel, measured, fixed in build_bwrap_argv: the .git bind is laid last). Consequence: an `--rw` path INSIDE .git is not writable either.",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
         "2026-10-08 (task 154, Linux-only): the seatbelt profile-text proof (RoProjectSeatbeltProfileDeniesWrites, control WorkerModeSeatbeltProfileUnchanged) was deleted with the other macOS-only tests; the bubblewrap proof stays.",
@@ -9006,6 +9164,36 @@
           "limitations": [
             "The other platforms are played by a fake `uname` first on PATH on a Linux host; no macOS or Windows machine runs the hook."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_linux_moved_row_proofs.py",
+          "reference": "AProjectWhosePathHoldsASpaceAnAccentAndAQuote.test_the_wrapper_the_session_pointer_and_the_edit_gate",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "One project named `pro iect ă'x`, the real entry points in order: init, the edit gate refusing, the generated wrapper (new, work, status), the session pointer, the gate letting the edit through — and still refusing a hook that can find no agent. The test holds both sides itself, so the control field is empty."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_linux_moved_row_proofs.py",
+          "reference": "AProjectWhosePathHoldsASpaceAnAccentAndAQuote.test_the_sandbox_names_the_path_whole",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "`sandbox --print-argv` prints that project's path as one argument."
+          ]
+        },
+        {
+          "type": "live-platform test",
+          "path": "tests/test_linux_moved_row_proofs.py",
+          "reference": "AProjectWhosePathHoldsASpaceAnAccentAndAQuote.test_a_contained_agent_writes_inside_it",
+          "boundary": "real-os",
+          "negative_control": null,
+          "limitations": [
+            "A stand-in agent under real bubblewrap writes inside that project. Skipped where no sandbox can start."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -9016,9 +9204,9 @@
         "codex",
         "grok"
       ],
-      "status": "partially_evidenced",
+      "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "CI runs the full suite on two Linux lanes (py3.10, py3.12) on every push, plus the real-zsh logger check (`.github/workflows/verify.yml`; owner decision 2026-10-08, which supersedes D1 (b)'s four lanes). The macOS and Windows/Git Bash lanes ran up to 1.5.47 (run 37755401217, green on all four lanes at 6112fe0) and are not claimed after it. Still missing on Linux: a live capability matrix (spaces/Unicode/wrappers/sessions/containment driven outside the test suite), Phase-8 work. (Task 100 (PLAN S8 binding audit, 2026-09-27) corrected the earlier `lanes are absent` wording; task 153 restated it for Linux-only.)",
+        "CI runs the full suite on two Linux lanes (py3.10, py3.12) on every push, plus the real-zsh logger check (`.github/workflows/verify.yml`; owner decision 2026-10-08). The macOS and Windows/Git Bash lanes ran up to 1.5.47 (run 37755401217) and are not claimed after it. Proved (task 169, PLAN S11): the capability matrix this row names — quoting, a path with a space and a non-ASCII letter, wrappers, session handling, containment — is driven through the real entry points in ONE such project, by the suite, on both lanes. Not claimed: a by-hand run outside the suite (the earlier wording asked for one; a test cannot be that).",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`)."
       ],
@@ -10207,6 +10395,56 @@
           "limitations": [
             "Many commands assert selected substrings/codes, but there is no complete documented stdout/stderr/exit snapshot matrix."
           ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_linux_moved_row_proofs.py",
+          "reference": "TheExitCodesTheReferenceStates.test_every_exit_the_reference_states_is_shown_somewhere",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Reads docs/cli.md: every occurrence of `exit` must sit in a sentence that is mapped to a test (four in this class, two elsewhere, checked to exist), and the list of commands that refuse wrong usage must be the list that is run."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_linux_moved_row_proofs.py",
+          "reference": "TheExitCodesTheReferenceStates.test_each_listed_command_refuses_an_unknown_option_with_exit_2",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Eleven command names, exit exactly 2, \"Nothing changed.\", the project's files byte-identical."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_linux_moved_row_proofs.py",
+          "reference": "TheExitCodesTheReferenceStates.test_audit_exits_non_zero_on_an_error_severity_finding",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "A conflict marker in a tracked file; the clean run beside it exits 0."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_linux_moved_row_proofs.py",
+          "reference": "TheExitCodesTheReferenceStates.test_a_second_bare_retro_exits_1_and_creates_nothing",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The first bare retro beside it makes one."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_linux_moved_row_proofs.py",
+          "reference": "TheExitCodesTheReferenceStates.test_models_check_exits_1_when_a_pin_cannot_run",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "`--no-probe`, a panel seat whose CLI is not on PATH; with every pin runnable it exits 0."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -10219,7 +10457,7 @@
       ],
       "status": "partially_evidenced",
       "missing_evidence_or_limitation": [
-        "No exhaustive CLI compatibility snapshots and no macOS/Windows execution.",
+        "Task 169 (PLAN S11): every exit code the CLI reference STATES is shown — six sentences, each mapped to a test, and a new one fails the suite. NOT shown: the stdout/stderr STRUCTURE of the documented commands (there is no snapshot matrix; each command's own cli-contracts row asserts its own output). Whether this statement is narrowed to exit codes, the matrix is built, or the clause is waived is the owner's decision (question S11Q-7 of task 169); until then the row stays partially evidenced. macOS and Windows are not claimed.",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`)."
       ],
