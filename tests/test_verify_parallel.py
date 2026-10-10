@@ -604,8 +604,10 @@ class GitIsToldWhereToStop(_Suite):
         for mod, env in self._children().items():
             with self.subTest(mod=mod):
                 self.assertEqual(os.path.dirname(env["TMPDIR"]), root)
-                # the root FIRST: a ceiling stops git only as a proper ancestor of where it starts,
-                # so the private directory alone leaves a command started IN it looking above
+                # the root AS WELL AS the private directory: a ceiling stops git only as a proper
+                # ancestor of where it starts, so the private directory alone leaves a command
+                # started IN it looking above. (Git does not mind the order; it is fixed so that
+                # the value is one known string.)
                 self.assertEqual(env["GIT_CEILING_DIRECTORIES"], root + os.pathsep + env["TMPDIR"])
 
     def test_what_the_caller_had_stays_in_front_exactly_as_it_was(self):

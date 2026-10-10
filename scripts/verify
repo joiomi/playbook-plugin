@@ -78,7 +78,27 @@ def env() -> dict:
         e[f"GIT_CONFIG_VALUE_{n}"] = value
         n += 1
     e["GIT_CONFIG_COUNT"] = str(n)
+    e["GIT_CEILING_DIRECTORIES"] = git_ceilings()
     return e
+
+
+def git_ceilings(*below: str) -> str:
+    """`GIT_CEILING_DIRECTORIES` for a child: what the caller had, then the temp root,
+    then `below` — the directories under it that git must not look above either.
+
+    Task 179 (PLAN S11 item 30): a file named `.git` left in the machine's temp
+    directory (a judge's experiment, 2026-10-10) changed git's answer in every temp
+    project below it — `not a git repository: (null)` for the plain "not a git
+    repository" — and six tests that build a project which is no repository failed
+    until the file was deleted. A ceiling stops git only as a PROPER ancestor of where
+    it starts, so a module is told the temp root as well as its private directory:
+    with the private directory alone, a command started IN it would still look above
+    (measured). Not covered: a project made AT the temp root itself in a run that has
+    no private directory — git always looks in the directory it starts in. The
+    caller's value stays in front exactly as it was (an empty entry there means
+    something to git); a variable that is set and empty adds no entry."""
+    had = os.environ.get("GIT_CEILING_DIRECTORIES") or ""
+    return os.pathsep.join(([had] if had else []) + [tempfile.gettempdir(), *below])
 
 
 def decode(raw: bytes) -> str:
@@ -548,7 +568,10 @@ def _run_module(mod: str, verbosity: str, root: Path, deadline: float, budget: f
         # a private temp dir: a test that looks at the shared one must not see its
         # neighbours' files (tests/test_tamper_scope.py does). HOME stays the user's.
         tmp = tempfile.mkdtemp(prefix="pb-verify-")
-        extra = {"TMPDIR": tmp, "TEMP": tmp, "TMP": tmp}
+        # … and git is told not to look above it: what lies in the shared temp
+        # directory must not change what a test's own project is (task 179)
+        extra = {"TMPDIR": tmp, "TEMP": tmp, "TMP": tmp,
+                 "GIT_CEILING_DIRECTORIES": git_ceilings(tmp)}
         child_log = None
         if log_dir:
             # tests/test_shell_fixtures.py appends to the full log from INSIDE the child;

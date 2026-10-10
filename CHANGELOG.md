@@ -51,6 +51,17 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
+- **A stray `.git` in the temp directory no longer changes what the verify contract's tests mean** (task 179,
+  PLAN S11 item 30; owner decision 2026-10-10). A file named `.git` left in `/tmp` — a judge's experiment in its
+  sandbox, where `/tmp` is writable by design — made git answer `not a git repository: (null)` in place of the
+  plain "not a git repository" in every temp project below it, and six tests that build a project which is no
+  repository failed, for the whole machine, until the file was deleted; a close's own verify would have failed
+  the same way. `scripts/verify` now tells git, for every child it starts, not to look at or above the temp
+  root, and for each test module not above its private temp directory either (`GIT_CEILING_DIRECTORIES`; a
+  value the caller already had stays in front, unchanged). Measured with such a file planted above the tests'
+  directories, in a private temp root: six failures before, none after. Not covered: a test module run by hand,
+  outside `scripts/verify`; and whether a judge should be able to write the top of `/tmp` at all is a separate
+  question, not decided here.
 - **The judge after the last panel is handed the code first, and is told what did not fit** (task 178, PLAN S11
   item 28; owner decision 2026-10-10). `tasks impl-review <N>` after an impl panel gives its judge the delta from
   the panel's saved base, within a budget. It went out in git's path order, the outer repository first, so a
