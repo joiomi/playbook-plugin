@@ -93,6 +93,13 @@ class OwnerRulings(_TmpDir):
         got = post_d6.extract_owner_rulings(TASK_WITH_RULINGS)
         self.assertNotIn("a fenced example", " ".join(got))
 
+    def test_of_two_sections_the_last_one_is_read(self):
+        # the row says the LAST unfenced section (a task that restated its rulings); the
+        # fixture above has one (task 172)
+        two = ("# 1\n\n## Owner rulings\n- 2026-09-01 an earlier ruling, since replaced.\n\n## Why\nx\n\n"
+               "## Owner rulings\n<!-- pin -->\n- 2026-09-29 the ruling that stands.\n")
+        self.assertEqual(post_d6.extract_owner_rulings(two), ["- 2026-09-29 the ruling that stands."])
+
     def test_no_section_no_rulings(self):
         self.assertEqual(post_d6.extract_owner_rulings("# 1\n\n## Why\nx\n"), [])
 
@@ -476,6 +483,17 @@ class Round1Delta(_TmpDir):
         self.assertIsNone(text)
         self.assertIn("scope", note)
 
+    def test_a_scope_whose_directory_is_another_one_refuses_the_delta(self):
+        # the row names the scope SET and a scope's DIRECTORY; the test above removes a
+        # scope — here the scope is still named and its directory is not the one the
+        # panel saw (task 172)
+        base = post_d6.worktree_tree(self.repo, [":(exclude).agent"])
+        snap = self._snap(base)
+        snap["scopes"][""]["identity"] = "the-directory-the-panel-saw"
+        text, note = post_d6.delta_text(self.repo, snap, 50_000)
+        self.assertIsNone(text)
+        self.assertIn("scope", note)
+
     def test_truncated_delta_names_untracked_files_in_its_stat(self):
         base = post_d6.worktree_tree(self.repo, [":(exclude).agent"])
         (self.repo / "big.py").write_text("x = 1\n" * 4000, encoding="utf-8")
@@ -573,6 +591,13 @@ class SingleRun2(_TmpDir):
         text, note = post_d6.delta_text(repo, snap, cap)
         self.assertIsNotNone(text, note)
         self.assertLessEqual(len(text), cap + 200, len(text))
+        # … and the stat's own share is a third of the cap, as the row says (task 172:
+        # the total above holds for other shares too)
+        marker = "[... stat truncated"
+        self.assertIn(marker, text)
+        stat = text.split("...]\n", 1)[1].split(marker, 1)[0]
+        self.assertLessEqual(len(stat), cap // 3 + 1)
+        self.assertGreater(len(stat), cap // 4)
 
 
 # ── impl panel round 2 on task 108 findings, red first ───────────────────────
@@ -931,6 +956,22 @@ class EndToEnd(unittest.TestCase):
         with mock.patch("tasks.core.resolve_review_context_chars", return_value=800):
             self._single("CAP: 0/5 reported, exhausted\n")
         self.assertIn("HEAD-CLAMPED", self.single_calls[-1])
+
+    def test_the_settled_block_comes_first_in_both_contexts(self):
+        # PB-POST-D6-PROTOCOL says both builders deliver the SETTLED block FIRST; the tests
+        # asserted that it is there, not where (task 170's binding audit; task 172). What
+        # it must precede: the delta, the mind map and the task record.
+        def first_of(context, *marks):
+            at = {m: context.find(m) for m in marks}
+            self.assertNotIn(-1, at.values(), at)
+            return min(at, key=at.get)
+
+        self._panel()
+        self.assertEqual(first_of(self.panel_contexts[0], "=== SETTLED", "MIND_MAP", "## Intent"), "=== SETTLED")
+        (self.d / "edit.py").write_text("v = 2\n", encoding="utf-8")
+        self._single("CAP: 0/5 reported, exhausted\n")
+        self.assertEqual(first_of(self.single_calls[-1], "=== SETTLED", "POST-PANEL DELTA", "MIND_MAP", "## Intent"),
+                         "=== SETTLED")
 
     def test_protocol_end_to_end(self):
         code, err, out = self._panel()

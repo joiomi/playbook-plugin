@@ -9818,6 +9818,19 @@
           "limitations": [
             "Shows the first bound stated below, not a protection: with `PYTHONPATH=.` in the environment the destructive-command guard imports a project file and exits 1."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_python_isolation.py",
+          "reference": "TheCliLauncherIgnoresProjectFiles.test_a_tasks_py_at_the_project_root",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_python_isolation.py",
+            "reference": "TheCliLauncherIgnoresProjectFiles.test_it_behaves_like_the_module_run_directly"
+          },
+          "limitations": [
+            "The real launcher (`scripts/tasks --version`) in a project that holds a `tasks.py` which raises when imported: exit code, stdout and stderr equal those of a clean project. The statement names `tasks.py` among its examples and no cited proof covered it until task 172 (task 170's binding audit) — the test itself dates from task 167."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -15537,7 +15550,7 @@
     {
       "id": "PB-POST-D6-PROTOCOL",
       "category": "judges-and-reviews",
-      "statement": "The post-D6 review protocol (task 108): both context builders (panel and single judge) deliver FIRST a SETTLED block — the task's last unfenced `## Owner rulings` lines verbatim plus the judge.md/judge-archive.md triage bullets whose VERDICT is `REJECT` (right after the bullet, after its bold title, or ending inside the bold title — not a mention in prose) — under a header that says a ruling closes a design choice, never a correctness defect; every impl panel round's header carries a unique `**Round-id:**` and its Panel-snapshot records per scope a `base` tree of the working state (staged, unstaged, untracked) built in a temporary GIT_INDEX_FILE without changing the real index or `git status`; `impl-review` after an impl panel delivers the diff base → current working tree, refusing to send anything when a tree, the scope set or a scope's directory moves between building the delta and the tamper baseline, and giving task.md only the budget left after SETTLED + delta + map (a head-clamp tells the judge) (an unchanged file absent, an untracked file present; a scope set or scope directory changed since the panel refuses the delta; over budget, the stat of the same two trees — itself bounded to a third of the cap — and the exact diff commands), computes POST-D6 VERDICT (PASS = no counted Critical or Important; a tag counts only right after the severity marker; [SETTLED] is not counted, [SETTLED-CONTRADICTED] is, and [PRE-EXISTING] is not counted only when a delta was delivered and the finding (its whole text) cites no file the FULL delta changed — the file set is taken before any truncation and holds both paths of a rename; the check is deliberately at FILE level (owner amendment 2026-09-30: judges often cite wrong lines, and file level errs toward more review); the response's last non-empty line must BE a whole, bare (not code-spanned) CAP line whose count equals the recognised findings, and `more remain` is incomplete — otherwise the verdict fails closed), and RESERVES each run under the task lock before any judge is spawned: runs 1-2 after a panel are free, run 3 needs a counted Critical in run 2, run 4+ always needs `--owner-ok --reason`; a refused run exits 2 with nothing spent, one review at a time per task — a panel reserves before its tamper snapshot too, so a panel and a single judge exclude each other (a live reservation — while its owning process runs (POSIX, same host; recorded pid + host), otherwise by its OWN recorded expiry — refuses a second one without writing — its append would void the first run by tamper; a reservation older than the hard timeout + 10 min counts as spent), a corrupt ledger line refuses every new reservation until repaired (or `--owner-ok`), a run killed at its hard timeout counts (verdict TIMEOUT), a run that produced no review releases its reservation, and every owner-ok reason is recorded and named in the close receipt.",
+      "statement": "The post-D6 review protocol (task 108): both context builders (panel and single judge) deliver FIRST a SETTLED block — the task's last unfenced `## Owner rulings` lines verbatim plus the judge.md/judge-archive.md triage bullets whose VERDICT is `REJECT` (right after the bullet, after its bold title, or ending inside the bold title — not a mention in prose) — under a header that says a ruling closes a design choice, never a correctness defect; every impl panel round's header carries a unique `**Round-id:**` and its Panel-snapshot records per scope a `base` tree of the working state (staged, unstaged, untracked) built in a temporary GIT_INDEX_FILE without changing the real index or `git status`; `impl-review` after an impl panel delivers the diff base → current working tree, refusing to send anything when a tree or the scope set moves between building the delta and the tamper baseline, and giving task.md only the budget left after SETTLED + delta + map (a head-clamp tells the judge) (an unchanged file absent, an untracked file present; a scope set or scope directory changed since the panel refuses the delta; over budget, the stat of the same two trees — itself bounded to a third of the cap — and the exact diff commands), computes POST-D6 VERDICT (PASS = no counted Critical or Important; a tag counts only right after the severity marker; [SETTLED] is not counted, [SETTLED-CONTRADICTED] is, and [PRE-EXISTING] is not counted only when a delta was delivered and the finding (its whole text) cites no file the FULL delta changed — the file set is taken before any truncation and holds both paths of a rename; the check is deliberately at FILE level (owner amendment 2026-09-30: judges often cite wrong lines, and file level errs toward more review); the response's last non-empty line must BE a whole, bare (not code-spanned) CAP line whose count equals the recognised findings, and `more remain` is incomplete — otherwise the verdict fails closed), and RESERVES each run under the task lock before any judge is spawned: runs 1-2 after a panel are free, run 3 needs a counted Critical in run 2, run 4+ always needs `--owner-ok --reason`; a refused run exits 2 with nothing spent, one review at a time per task — a panel reserves before its tamper snapshot too, so a panel and a single judge exclude each other (a live reservation — while its owning process runs (POSIX, same host; recorded pid + host), otherwise by its OWN recorded expiry — refuses a second one without writing — its append would void the first run by tamper; a reservation older than the hard timeout + 10 min counts as spent), a corrupt ledger line refuses every new reservation until repaired (or `--owner-ok`), a run killed at its hard timeout counts (verdict TIMEOUT), a run that produced no review releases its reservation, and every owner-ok reason is recorded and named in the close receipt.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/post_d6.py",
@@ -15641,6 +15654,376 @@
           "limitations": [
             "Mutation-checked in task 108 (removing the refusal turns it red)."
           ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "OwnerRulings.test_rulings_extracted_verbatim_pin_and_blanks_dropped",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`## Owner rulings` lines verbatim (the pin marker and blank lines dropped): the extractor's exact output is asserted."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "OwnerRulings.test_fenced_example_is_not_a_ruling",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`unfenced`: a `## Owner rulings` heading inside a code fence is not read."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "OwnerRulings.test_of_two_sections_the_last_one_is_read",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`the LAST … section`: of two unfenced sections only the second is returned. New in task 172; red in a copy where the first match wins (`['- 2026-09-01 an earlier ruling, since replaced.'] != ['- 2026-09-29 the ruling that stands.']`)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "RejectedFindings.test_reject_lines_from_judge_md_and_archive",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "REJECT triage bullets are read from judge.md AND judge-archive.md."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "RejectedFindings.test_accept_lines_and_prose_are_not_extracted",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "An ACCEPT bullet and a mention of the word in prose are not extracted."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "Round1Rejects.test_reject_must_be_in_the_verdict_position",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "The VERDICT positions: right after the bullet, after the bold title (with or without a dash) — and not an ACCEPT bullet whose text mentions REJECT."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "SingleRun2.test_reject_inside_the_bold_title_is_a_verdict",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "The third position: REJECT ending inside the bold title (the real shape of task 051's judge.md)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "SettledBlock.test_block_carries_header_rulings_and_rejects",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "The block's header says a ruling is \"never a correctness defect\" and names SETTLED-CONTRADICTED; the block holds the ruling and the REJECT line."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_post_d6.py",
+          "reference": "EndToEnd.test_the_settled_block_comes_first_in_both_contexts",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "`deliver FIRST`: in the panel's context and in the single judge's, the SETTLED block precedes the delta, the mind map and the task record. New in task 172 (presence was asserted, not place); red in a copy that puts the block after the map (`'MIND_MAP' != '=== SETTLED'`)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "Round1Cap.test_round_id_separates_two_panels_on_the_same_tree",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`a unique **Round-id:**`: two rounds on one tree are told apart by it; a legacy round without one falls back to its tree state."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_post_d6.py",
+          "reference": "EndToEnd.test_a_scope_added_between_delta_and_tamper_baseline_sends_nothing",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "`the scope set … moves between building the delta and the tamper baseline`: a scope added in between → exit 1, no judge spawned."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "Round1Delta.test_a_scope_removed_after_the_panel_refuses_the_delta",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`a scope set … changed since the panel refuses the delta`."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "Round1Delta.test_a_scope_whose_directory_is_another_one_refuses_the_delta",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`a scope's directory`: the scope is still named but its directory is not the one the panel recorded → no delta. New in task 172; red in a copy that does not compare the directory (a delta is returned)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_post_d6.py",
+          "reference": "EndToEnd.test_a_head_clamp_tells_the_judge",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "`a head-clamp tells the judge`: with a tiny context budget the delivered text carries HEAD-CLAMPED."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "Round1Delta.test_truncated_delta_names_untracked_files_in_its_stat",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`over budget, the stat of the same two trees … and the exact diff commands`: the truncated text names an untracked file in its stat and carries the base tree of the diff command."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "SingleRun2.test_the_stat_is_bounded_by_the_cap_too",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`itself bounded to a third of the cap`: with 600 untracked files the whole text stays within the cap and the stat's own share is at most a third of it. The share was asserted by task 172 (the total alone held for other shares); red in a copy with the share at a half (`4001 not less than or equal to 2667`)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "Round1Verdict.test_tag_counts_only_right_after_the_severity",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`a tag counts only right after the severity marker`: a literal [SETTLED] later on the line is not a tag."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "Verdict.test_pre_existing_is_parked_not_counted",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "[PRE-EXISTING] is not counted when a delta was delivered and the finding cites no file of it."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "Round2.test_pre_existing_counts_when_no_delta_was_delivered",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "… and IS counted when no delta was delivered."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "Round2.test_pre_existing_counts_when_it_cites_a_file_the_delta_changed",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "… and when the finding cites a file the delta changed."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "DeltaRun1.test_a_citation_on_the_findings_next_line_counts",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`the finding (its whole text)`: a citation on the finding's next line counts."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "DeltaRun3.test_an_extensionless_delta_file_is_matched",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "File level: a file with no extension (`Makefile:8`) is matched."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "DeltaRun1.test_delta_files_come_from_the_full_diff_even_when_truncated",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`the file set is taken before any truncation`."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "DeltaRun2.test_both_rename_paths_are_delta_files",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`holds both paths of a rename`."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "DeltaRun3.test_a_failed_file_enumeration_refuses_the_delta",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "A file list that could not be taken whole refuses the delta (a partial set never feeds the verdict)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "SingleRun1.test_the_final_cap_line_decides_and_must_match",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`a CAP line whose count equals the recognised findings`: an earlier quoted CAP line does not hide the final one, and a mismatch fails closed."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "SingleRun2.test_the_cap_line_must_end_the_response",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`the response's last non-empty line must BE a … CAP line`."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "Round2.test_the_last_line_must_be_a_whole_cap_line",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`a whole … CAP line`: a sentence that ends with the CAP text is not one."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "DeltaRun1.test_a_backticked_cap_line_is_an_example_not_a_verdict",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`bare (not code-spanned)`."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "Round2.test_more_remain_is_incomplete",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`more remain is incomplete`."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "Round1Cap.test_run_four_needs_the_owner_even_after_a_critical",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`run 4+ always needs --owner-ok --reason`."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "DeltaRun2.test_a_reservation_of_a_live_process_blocks_past_its_expiry",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`a live reservation — while its owning process runs`: an expired reservation of a live process on this host still blocks."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "DeltaRun2.test_a_reservation_of_a_dead_process_does_not_block",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "… and one of a dead process does not."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "DeltaRun1.test_a_reservation_keeps_its_own_expiry",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`otherwise by its OWN recorded expiry`: a later caller's shorter horizon does not make it stale."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "DeltaRun3.test_the_recorded_horizon_wins_over_a_longer_caller_timeout",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "… nor does a later caller's longer one keep it alive, where liveness cannot be judged."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "RunCap.test_receipt_line_names_runs_and_owner_ok",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`every owner-ok reason is recorded`: the receipt line names the runs and the reason."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "RunCap.test_close_receipt_carries_the_post_d6_line",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`… and named in the close receipt`."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -15660,7 +16043,9 @@
         "A run whose process is killed outright (SIGKILL, power loss) keeps its reservation and is counted: the spend happened.",
         "A judge run that produced NO review (a 402 / out-of-credits failure, a budget-cap exit, a tamper stop) releases its reservation although it may have spent tokens — the owner's rule for the cap is to err toward one more review (2026-09-29); every such run is still in the review-spend journal.",
         "The cap's key (`**Round-id:**` in judge.md) and its count (post-panel-reviews.jsonl) live in the agent-writable task directory with no integrity check: editing the Round-id or deleting the ledger resets the count. The protocol bounds an honest agent's spend; it is not a control against a hostile one (owner ruling (a) framing).",
-        "Reservation liveness uses os.kill(pid, 0) (the Windows guard — signal 0 terminates there — went with task 156, Linux-only); a reused pid can make a dead reservation look live until the pid is gone."
+        "Reservation liveness uses os.kill(pid, 0) (the Windows guard — signal 0 terminates there — went with task 156, Linux-only); a reused pid can make a dead reservation look live until the pid is gone.",
+        "Task 172 (PLAN S11 item 13; task 170's binding audit): until then this row cited 7 tests for a statement of about 30 clauses. The tests that carry the others were in the same module, uncited; each was read against its clause and is cited now (37 references), and four clauses that no test reached got an assertion, each watched red on one deliberate break in a throwaway copy: the SETTLED block's place (`FIRST`), the LAST rulings section, a scope whose directory changed, the stat's third of the cap.",
+        "Narrowed by task 172: the statement said the single-judge run also refuses when a scope's DIRECTORY moves between building the delta and the tamper baseline. The comparison is in the code (`tasks/review.py`, the identity check beside the scope-set check) and has no test — its two neighbours do (a tree edit, a scope added in between) — so the clause is out of the statement until one is written. A scope whose directory changed SINCE THE PANEL is tested, and stays."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],
@@ -15859,6 +16244,42 @@
           },
           "limitations": [
             "cmd_panel_review in-process, the judges faked at the adapter and the tamper guard stubbed clean; seat_outage's clock pinned."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_seat_outage.py",
+          "reference": "OutageRecord.test_the_record_is_a_file_of_the_lanes_journal",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_seat_outage.py",
+            "reference": "OutageRecord.test_record_current_expiry_and_clear"
+          },
+          "limitations": [
+            "After one recorded outage the lane holds `journal/seat-outages.json`, and nothing of it lies outside `journal/`. The statement says where the record is; every older test reached it through the module's own `_record()` (task 170's binding audit). Watched red in a throwaway copy with the record moved out of `journal/` (`'journal/seat-outages.json' not found in ['seat-outages.json', 'task.md.lock']`)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_init_claude_md.py",
+          "reference": "MergeGitignore.test_created_when_absent",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`gitignored`: init's block holds `.agent/journal/` and `.agent/*/journal/` — the directory the record is a file of (the test above). An older test of another module, cited here since task 172."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_seat_outage.py",
+          "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_the_configured_panel_is_counted_like_a_models_selection",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_seat_outage.py",
+            "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_enough_live_seats_still_pass"
+          },
+          "limitations": [
+            "The REQUESTED seats when they come from the configured panel (no `--models`): six configured, three unable to run → `only 3 of the 6 requested seats can run, and the quorum is 4`, no judge called. Every older quorum test passed `--models`. Watched red in a throwaway copy that counted only a `--models` selection (`None != 1`: the panel went on)."
           ]
         }
       ],
@@ -16225,6 +16646,58 @@
           "limitations": [
             "Added after the post-D6 run 2 (task 149)."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "TheRiskAndTheVerdictsTheRowNames.test_an_irreversible_task_is_held_to_the_same_bar",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_stale_close_bound.py",
+            "reference": "StaleCloseBound.test_without_the_opt_in_nothing_changes"
+          },
+          "limitations": [
+            "The real close on an `irreversible` task: refused with `--stale-panel-ok` and with `--force` while no post-D6 run follows the panel, done once a bound PASS exists. The statement names the risk; until task 172 no test set it. Red in a copy that leaves irreversible tasks out of the bound (the close went through)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "TheRiskAndTheVerdictsTheRowNames.test_an_unstamped_round_is_held",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_stale_close_bound.py",
+            "reference": "TheRiskAndTheVerdictsTheRowNames.test_control_a_fresh_panel_closes_with_no_hatch_at_all"
+          },
+          "limitations": [
+            "On a tree that is otherwise FRESH, a round with no `**Tree-state:**`: the plain close is blocked for NO STAMP, and both hatches meet the bound. Red, with the two below, in a copy whose bound lists only STALE and tamper-degraded (each close went through)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "TheRiskAndTheVerdictsTheRowNames.test_an_exclude_that_hides_code_is_held",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_stale_close_bound.py",
+            "reference": "TheRiskAndTheVerdictsTheRowNames.test_control_a_fresh_panel_closes_with_no_hatch_at_all"
+          },
+          "limitations": [
+            "The same for a `fingerprint_exclude` that hides a source file: blocked for EXCLUDE-COVERS-CODE, both hatches held."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "TheRiskAndTheVerdictsTheRowNames.test_an_unreadable_tree_is_held",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_stale_close_bound.py",
+            "reference": "TheRiskAndTheVerdictsTheRowNames.test_control_a_fresh_panel_closes_with_no_hatch_at_all"
+          },
+          "limitations": [
+            "The same for a tree git cannot fingerprint (a corrupt index): blocked as UNREADABLE, both hatches held."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -16240,7 +16713,8 @@
         "Added by task 149 (PLAN S12b); the plugin default stays off (PLAN B2b decides it after task 146's value check).",
         "`--owner-ok` is an accountability marker an agent can type, not an authentication.",
         "A post-D6 run recorded before task 149 carries no reviewed tree and cannot bind a close.",
-        "The carrying impl round is dated by its OWN reservation (a panel's Round-id is its reservation id since task 149); a round from before, or a deleted ledger, cannot be dated and refuses while the rule is on — `--owner-ok` is the way through. Times are compared in local time."
+        "The carrying impl round is dated by its OWN reservation (a panel's Round-id is its reservation id since task 149); a round from before, or a deleted ledger, cannot be dated and refuses while the rule is on — `--owner-ok` is the way through. Times are compared in local time.",
+        "Task 172 (PLAN S11 item 13; task 170's binding audit): the statement named an `irreversible` task and five overridable verdicts; the tests set assertive and unclassified tasks and drove STALE and tamper-degraded. The other risk and the other three verdicts each have a test now — all four clauses held when driven for real, none had to be cut."
       ],
       "follow_up_phases": [
         8

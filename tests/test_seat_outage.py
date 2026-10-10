@@ -225,6 +225,18 @@ class OutageRecord(unittest.TestCase):
         self.assertFalse(so.clear_outage(self.agent, "grok:grok-4.7:medium"))
         self.assertEqual(so.current_outages(self.agent, after), {})
 
+    def test_the_record_is_a_file_of_the_lanes_journal(self):
+        # PB-PANEL-SEAT-OUTAGE says WHERE the record is — `<lane>/journal/seat-outages.json`
+        # — and that it is machine-local: the journal directory is in init's gitignore
+        # block (tests/test_init_claude_md.py, MergeGitignore). Every other test here
+        # reaches the file through the module's own `_record()`, so the place itself was
+        # asserted nowhere (task 170's binding audit; task 172).
+        so.record_outage(self.agent, "grok:grok-4.7:medium", so.classify_outage(GROK, NOW), NOW)
+        written = sorted(p.relative_to(self.agent).as_posix() for p in self.agent.rglob("*") if p.is_file())
+        self.assertIn("journal/seat-outages.json", written)
+        # and nothing of it lands outside that directory (the lock file is in it too)
+        self.assertEqual([p for p in written if not p.startswith("journal/")], [])
+
     def test_an_unreadable_record_reads_as_no_outage(self):
         so._record(self.agent).parent.mkdir(parents=True, exist_ok=True)
         so._record(self.agent).write_text("{not json", encoding="utf-8")
@@ -369,7 +381,8 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
             os.chdir(self.d)
             try:
                 with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-                    self.R.cmd_panel_review(["042", "--mode", "impl", "--models", ",".join(models)])
+                    self.R.cmd_panel_review(["042", "--mode", "impl"]
+                                            + (["--models", ",".join(models)] if models is not None else []))
             except SystemExit as e:
                 code = e.code
             finally:
@@ -527,6 +540,19 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("only 0 of the 2 requested seats can run", err)
         self.assertEqual(self.calls, [])
+
+    def test_the_configured_panel_is_counted_like_a_models_selection(self):
+        # The row names two sources of the REQUESTED seats — the configured panel, or the
+        # --models selection — and every test above passes --models (task 170's binding
+        # audit; task 172). The same six seats, three of them unable to run, this time
+        # as the panel `.agent/models.json` configures: the same refusal, nothing spent.
+        from unittest import mock
+        seats = list(self.CLAUDE[:3]) + ["codex:gpt-5.5", "codex:gpt-5.4", "codex:gpt-5.3-codex"]
+        with mock.patch("provider.sandbox.load_judge_config", return_value={"panel": seats}):
+            code, out, err = self._panel(None, self._judge())
+        self.assertEqual(code, 1, out + err)
+        self.assertIn("only 3 of the 6 requested seats can run, and the quorum is 4", err)
+        self.assertEqual(self.calls, [], "judges were spent on a panel that cannot reach quorum")
 
     def test_enough_live_seats_still_pass(self):
         # Negative control: the same six-seat request, every launched seat
