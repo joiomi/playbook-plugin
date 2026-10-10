@@ -628,6 +628,46 @@ class GuardZeroIsAStatedGuarantee(unittest.TestCase):
         self.assertEqual(r.returncode, 2, r.stderr.decode())
         self.assertIn(b"born-checked", r.stderr)
 
+    def _in_a_project_named_like_a_task(self):
+        """The fixture's project, moved to a directory called `001-project` (its active
+        task is 001), with a second task record 002 beside the active one."""
+        f = ProjectFixture()
+        named = f.proj.parent / "001-project"
+        os.rename(f.proj, named)
+        f.proj = named
+        f.task_file = named / ".agent" / "tasks" / "001-thing" / "task.md"
+        f.session_dir = named / ".agent" / "sessions" / SESSION
+        other = named / ".agent" / "tasks" / "002-other"
+        os.makedirs(other)
+        (other / "task.md").write_text("# 002 - Other\n\n## Status\npending\n\n## Work Plan\n"
+                                       + "\n".join(G) + "\n", encoding="utf-8")
+        return f, other / "task.md"
+
+    def test_another_task_of_this_project_is_not_the_active_one_whatever_the_projects_name(self):
+        # the single judge's run 2: "is it the active task's record?" was asked by looking
+        # for `/<number>-` ANYWHERE in the path. In a project directory called `001-project`
+        # every task record of the project passed for task 001's, and a bare batch in task
+        # 002's record was judged by the batch rule of the active task.
+        f, other = self._in_a_project_named_like_a_task()
+        text = other.read_text(encoding="utf-8")
+        ticked = text
+        for g in G[:3]:
+            ticked = ticked.replace(g, checked(g), 1)
+        self.assertNotEqual(ticked, text)
+        r = self._write(f, other, ticked)
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        self.assertNotIn(b"outcome note", r.stderr)
+
+    def test_control_the_active_tasks_record_is_still_judged_there(self):
+        f, _other = self._in_a_project_named_like_a_task()
+        text = f.task_file.read_text(encoding="utf-8")
+        ticked = text
+        for g in G[:3]:
+            ticked = ticked.replace(g, checked(g), 1)
+        r = self._write(f, f.task_file, ticked)
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+        self.assertIn(b"outcome note", r.stderr)
+
     def test_without_its_helper_the_guard_keeps_refusing(self):
         # "could not tell" is not "outside": a hook whose helper is missing or broken
         # refuses the creation, as it did before it had a scope at all
