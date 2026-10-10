@@ -36,8 +36,10 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   directory — of the project and of every repository named in `code_roots` — are bound read-only AFTER all
   writable binds; a git directory that contains the project (worktrees kept inside a bare repository) is bound
   before the project instead, with the entries git keeps in it bound last — recognised by name, from git's
-  repository layout (`rr-cache`, `remotes`, the `MERGE_*`/`BISECT_*`/`*_HEAD` state files and the like; a name
-  git does not use is project content there) — so the project stays writable. git is asked about
+  repository layout (`rr-cache`, `remotes`, and the state files beside `HEAD` in the syntax git itself writes
+  them in: `ORIG_HEAD`, `MERGE_MSG`, `BISECT_LOG` and the like, capitals only — a project file named
+  `draft_HEAD` is the project's; a name git does not use is project content there) — so the project stays
+  writable. If such a directory cannot be listed, the sandbox refuses to start rather than guess. git is asked about
   the layout with `GIT_DIR` and its relatives removed from the environment. What changes for you: an agent in
   the sandbox can no longer commit in a `code_roots` repository (it never could in the project's own), and an
   `--rw` path inside `.git` is not writable. Not covered: a nested repository that `code_roots` does not name; a

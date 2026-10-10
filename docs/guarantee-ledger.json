@@ -7555,6 +7555,52 @@
           "limitations": [
             "A bare repository used as the project, with 13 directories and 11 files of git's own planted at its top (`rr-cache`, `remotes`, `logs`, `svn`, `lfs`, `reftable`, `MERGE_MSG`, `REBASE_HEAD`, `BISECT_START`, `sharedindex.*`, `git-daemon-export-ok`, …): none takes a write, while a file of the project's own and a new file do. Red on the code before it for 16 of the 24 (the list of names then held 27 and missed `rr-cache`; the single judge's run 2)."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_linux_moved_row_proofs.py",
+          "reference": "GitMetadataThatIsNotADirectoryCalledDotGit.test_a_containing_git_directory_that_cannot_be_listed_refuses_the_launch",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_linux_moved_row_proofs.py",
+            "reference": "GitMetadataThatIsNotADirectoryCalledDotGit.test_a_bare_repository_as_the_project_every_entry_git_keeps_there"
+          },
+          "limitations": [
+            "The shipped launcher over a bare repository used as the project, its directory at mode 0300: no launch (non-zero exit, `cannot be listed`, `Nothing was launched.`), the stand-in agent never ran, ORIG_HEAD and a project file are as they were. On the tree the single judge read (nested `80e78a4`): `0 == 0 : orig-head: WROTE`. Skipped for root, who lists any directory."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_linux_moved_row_proofs.py",
+          "reference": "GitMetadataThatIsNotADirectoryCalledDotGit.test_a_project_file_that_only_looks_like_one_of_gits_stays_writable",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_linux_moved_row_proofs.py",
+            "reference": "GitMetadataThatIsNotADirectoryCalledDotGit.test_a_bare_repository_as_the_project_every_entry_git_keeps_there"
+          },
+          "limitations": [
+            "Real bubblewrap, a bare repository used as the project: seven files of the project's (`draft_HEAD`, `notes_EDITMSG`, `MERGE_notes.txt`, `BISECT_results.csv`, `Merge_HEAD`, `sharedindex.backup`, `notes.txt`) take a write; eleven of git's (`ORIG_HEAD`, `FETCH_HEAD`, a tool's `MY-TOOLS_HEAD`, `COMMIT_EDITMSG`, `TAG_EDITMSG`, `MERGE_MSG`, `MERGE_AUTOSTASH`, `BISECT_LOG`, `BISECT_EXPECTED_REV`, `NOTES_MERGE_PARTIAL`, `sharedindex.0a1b2c`) are denied. On nested `80e78a4` six of the seven project files were denied."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_linux_moved_row_proofs.py",
+          "reference": "WhatCountsAsGitsOwnAtTheTopOfItsDirectory.test_the_names",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "The rule itself, without bubblewrap (it runs wherever the suite runs): 33 names that are git's and 20 that are not — among them `_HEAD`, `MERGE_`, `sharedindex.` with nothing after, lower-case and mixed-case look-alikes."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_linux_moved_row_proofs.py",
+          "reference": "WhatCountsAsGitsOwnAtTheTopOfItsDirectory.test_a_directory_that_cannot_be_listed_is_refused_not_guessed",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`_git_dir_entries` on a directory at mode 0300 raises the refusal; the same directory, listable, gives its two entries. Skipped for root."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -7571,7 +7617,7 @@
         "The seatbelt correction shipped up to 1.5.47 (tag `last-multiplatform`) with a profile-text proof; since task 154 (2026-10-08, Linux-only) no test in the tree exercises seatbelt, and macOS is not claimed. On Linux the claim rests on the bubblewrap argv tests (tests/test_sandbox_bind_order.py BindOrder, unconditional) and the live bubblewrap test (skipped where bwrap is not installed).",
         "Proved (task 169, PLAN S11): the worker-mode .git matrix under real bubblewrap, through the shipped launcher — create, append, hook, re-point HEAD, delete a ref — alone and with an `--rw` path that covers .git. Until that task the statement was FALSE in the second case: the extra writable binds were laid after .git's read-only bind, and the later bind won, so `--rw <project>`, a parent of it, or `.git` itself made .git writable (found by the task's plan panel, measured, fixed in build_bwrap_argv: the .git bind is laid last). Consequence: an `--rw` path INSIDE .git is not writable either. The same task's impl panel then showed three more layouts open, each measured: in a linked worktree the `.git` FILE was rewritten to point elsewhere and the shared repository's config and hooks were written; a nested repository's `.git` was written. Fixed there too (`_git_paths_to_protect`): the gitfile, the git directory and the common directory of the project and of each `code_roots` repository are bound read-only, last.",
         "Bound: a nested repository that `.agent/config.json` does NOT name under `code_roots` is project content like any other — its `.git` is writable in worker mode (pinned by a test). A `.git` that is a SYMLINK is protected at what it points to, but the link itself is an entry of a writable directory and can be replaced. A repository found only through the GIT_DIR environment variable is not looked for. What a link INSIDE a git directory points to is protected only if that target is itself git metadata: a `.git/config` or a hooks directory that is a symlink into the project (or a `core.hooksPath` that names a project directory) is project content, and writable (measured, task 169 impl round 2).",
-        "Task 169, impl round 2: a git directory that CONTAINS the project (worktrees inside a bare repository; a bare repository used as the project) is bound read-only BEFORE the project's bind — so the project stays writable — and the entries git keeps in it are bound read-only again after every writable bind. Those entries are recognised BY NAME, read from the directory at launch (`_is_git_dir_entry`): the names of gitrepository-layout(5) and of the shared paths in git's `path.c`, the state files git writes beside HEAD (`*_HEAD`, `*_EDITMSG`, `MERGE_*`, `BISECT_*`, `NOTES_MERGE_*`, `sharedindex.*`, `AUTO_MERGE`, `SQUASH_MSG`, `gc.log`, `gc.pid`), and the directories of git-lfs, git-svn, git-annex and git-filter-repo. Bounds, both of this by-name rule and both only where the directory itself is writable — a bare repository used as the project, or an `--rw` path that covers the shared directory: (1) an entry under a name that is not on that list (another tool's data kept at the top of a git directory) is project content there; (2) an entry that does not exist at launch (a `packed-refs` git has not written yet) can be created. git is asked about the layout with GIT_DIR, GIT_WORK_TREE, GIT_COMMON_DIR and the like removed from its environment. (History: the first list held 27 fixed names and missed `rr-cache`; the single judge after round 2, run 2.)",
+        "Task 169, impl round 2: a git directory that CONTAINS the project (worktrees inside a bare repository; a bare repository used as the project) is bound read-only BEFORE the project's bind — so the project stays writable — and the entries git keeps in it are bound read-only again after every writable bind. Those entries are recognised BY NAME, read from the directory at launch (`_is_git_dir_entry`): the names of gitrepository-layout(5) and of the shared paths in git's `path.c`, the state files git writes beside HEAD — in the syntax git itself holds a pseudoref's name to, capital letters, `_` and `-`: `<NAME>_HEAD`, `<NAME>_EDITMSG`, `BISECT_<NAME>`, `MERGE_<NAME>`, `NOTES_MERGE_<NAME>`; `sharedindex.<hex>`; and `AUTO_MERGE`, `SQUASH_MSG`, `gc.log`, `gc.pid` — and the directories of git-lfs, git-svn, git-annex and git-filter-repo. A containing git directory that cannot be LISTED refuses the launch: what cannot be listed cannot be told apart. Bounds, both of this by-name rule and both only where the directory itself is writable — a bare repository used as the project, or an `--rw` path that covers the shared directory: (1) an entry under a name that is not on that list (another tool's data kept at the top of a git directory) is project content there; (2) an entry that does not exist at launch (a `packed-refs` git has not written yet) can be created. git is asked about the layout with GIT_DIR, GIT_WORK_TREE, GIT_COMMON_DIR and the like removed from its environment. (History: the first list held 27 fixed names and missed `rr-cache`; the single judge after round 2, run 2. Run 3, allowed by the owner on 2026-10-10, found the two edges of run 2's fix, both then measured with real bubblewrap on that tree: with the directory traversable and writable but not listable (mode 0300) the code fell back to the fixed names it knew, and ORIG_HEAD — git's by pattern only — took a write from inside (Critical); and the patterns were wider than git's own names — `draft_HEAD`, a project file, was read-only with them (Important). A further bound of the by-name rule, said once: a file of the project's whose name is in git's syntax (`DRAFT_HEAD`, in capitals) is git's as far as this rule and git itself can tell.)",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
         "2026-10-08 (task 154, Linux-only): the seatbelt profile-text proof (RoProjectSeatbeltProfileDeniesWrites, control WorkerModeSeatbeltProfileUnchanged) was deleted with the other macOS-only tests; the bubblewrap proof stays.",
@@ -10554,7 +10600,7 @@
     {
       "id": "PB-CLI-OUTPUT-EXIT-COMPAT",
       "category": "cli-contracts",
-      "statement": "Documented tasks CLI commands preserve their user-visible stdout/stderr structure and exit-code meanings across supported platforms.",
+      "statement": "Every exit code the tasks CLI reference (`docs/cli.md`) states is the code the command returns: each sentence of the reference that names an exit is mapped to a test that runs the command, and a sentence that states one without such a test fails the suite.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/cli.py",
@@ -10640,9 +10686,9 @@
         "codex",
         "grok"
       ],
-      "status": "partially_evidenced",
+      "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "Task 169 (PLAN S11): every exit code the CLI reference STATES is shown — six sentences, each mapped to a test, and a new one fails the suite. NOT shown: the stdout/stderr STRUCTURE of the documented commands (there is no snapshot matrix; each command's own cli-contracts row asserts its own output). Whether this statement is narrowed to exit codes, the matrix is built, or the clause is waived is the owner's decision (question S11Q-7 of task 169); until then the row stays partially evidenced. macOS and Windows are not claimed.",
+        "NARROWED on 2026-10-10 by the owner's decision (options dialog, 12:34, his choice verbatim: \"Îngustez promisiunea (Recomandat)\"; question S11Q-7 of task 169). Until then the statement read: \"Documented tasks CLI commands preserve their user-visible stdout/stderr structure and exit-code meanings across supported platforms.\" CUT, and named here as cut: (1) the stdout/stderr STRUCTURE clause — nothing ever proved it (there is no snapshot matrix of the commands' output); where the shape of a command's output is promised, that command's own `cli-contracts` row says so and proves it; (2) \"across supported platforms\" — one platform since 2026-10-08. What the row now claims is what task 169 built: the test `TheExitCodesTheReferenceStates.test_every_exit_the_reference_states_is_shown_somewhere` reads every occurrence of `exit` in the reference and demands exactly one test for its sentence, and fails for a sentence without one (it did so on 2026-10-10 for a sentence task 173 added, in the copy-verify beside that task's panel). NOT claimed: that the reference states every exit code a command CAN return — only that what it states is true.",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`)."
       ],

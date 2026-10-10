@@ -247,6 +247,52 @@ class GitMetadataThatIsNotADirectoryCalledDotGit(_SandboxedProject):
         self.assertEqual({k: v for k, v in got.items() if v != "denied"}, {}, got)
         self.assertEqual(len(got), len(dirs) + len(files))
 
+    def test_a_containing_git_directory_that_cannot_be_listed_refuses_the_launch(self):
+        # The single judge's run 3 (Critical). A bare repository used as the project,
+        # its directory traversable and writable but NOT listable (mode 0300): what git
+        # keeps there could not be read off the directory, the fallback bound only the
+        # fixed names it knew, and a state file beside HEAD — ORIG_HEAD — took a write
+        # from inside. What cannot be listed cannot be told apart: no launch.
+        if os.geteuid() == 0:
+            self.skipTest("root lists any directory")
+        bare = self.tmp / "bare"
+        git(self.tmp, "clone", "-q", "--bare", str(self.project), str(bare))
+        (bare / "ORIG_HEAD").write_text("original\n", encoding="utf-8")
+        (bare / "notes.txt").write_text("original\n", encoding="utf-8")
+        script = ('try orig-head sh -c \'printf x >> "$PWD/ORIG_HEAD"\'\n'
+                  'try project sh -c \'printf x >> "$PWD/notes.txt"\'\n')
+        os.chmod(bare, 0o300)
+        try:
+            r = self.run_launcher(project=bare, script=script)
+        finally:
+            os.chmod(bare, 0o755)
+        self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("cannot be listed", r.stderr)
+        self.assertIn("Nothing was launched.", r.stderr)
+        self.assertNotIn("WROTE", r.stdout)
+        self.assertEqual(((bare / "ORIG_HEAD").read_text(encoding="utf-8"),
+                          (bare / "notes.txt").read_text(encoding="utf-8")), ("original\n", "original\n"))
+
+    def test_a_project_file_that_only_looks_like_one_of_gits_stays_writable(self):
+        # The single judge's run 3 (Important): "anything that ends in _HEAD" made a
+        # project file named `draft_HEAD` read-only in a bare repository used as the
+        # project. Git's own state files beside HEAD are written in its pseudoref
+        # syntax — capital letters, `_`, `-` — and that is the line now: the same for
+        # the `BISECT_` / `MERGE_` / `NOTES_MERGE_` families and for `…_EDITMSG`.
+        bare = self.tmp / "bare"
+        git(self.tmp, "clone", "-q", "--bare", str(self.project), str(bare))
+        the_projects = ("draft_HEAD", "notes_EDITMSG", "MERGE_notes.txt", "BISECT_results.csv",
+                        "Merge_HEAD", "sharedindex.backup", "notes.txt")
+        gits = ("ORIG_HEAD", "FETCH_HEAD", "MY-TOOLS_HEAD", "COMMIT_EDITMSG", "TAG_EDITMSG", "MERGE_MSG",
+                "MERGE_AUTOSTASH", "BISECT_LOG", "BISECT_EXPECTED_REV", "NOTES_MERGE_PARTIAL", "sharedindex.0a1b2c")
+        for name in the_projects + gits:
+            (bare / name).write_text("original\n", encoding="utf-8")
+        script = "".join(f'try {n} sh -c \'printf x >> "$PWD/{n}"\'\n' for n in the_projects + gits)
+        script += 'try project sh -c \'printf x > "$PWD/a-new-file"\'\n'
+        got = self.launch(project=bare, script=script)
+        self.assertEqual({n: got[n] for n in the_projects}, dict.fromkeys(the_projects, "WROTE"))
+        self.assertEqual({n: got[n] for n in gits}, dict.fromkeys(gits, "denied"))
+
     def test_git_variables_in_the_environment_do_not_hide_the_repository(self):
         # (codex-medium, grok) with GIT_DIR naming ANOTHER repository, `git rev-parse` in
         # the worktree answered for that one, and the worktree's own shared directory was
@@ -579,6 +625,45 @@ class TheGitBindIsLaidLast(unittest.TestCase):
 # sweeper at ITS real boundary: that an actual `tasks` invocation runs the policy
 # over the project's tree. A2 of S18 and the unit tests call the function.
 # --------------------------------------------------------------------------- #
+class WhatCountsAsGitsOwnAtTheTopOfItsDirectory(unittest.TestCase):
+    """The rule by NAME that is all a git directory containing the project leaves (task
+    169): here without bubblewrap, so that it runs wherever the suite runs."""
+
+    def test_the_names(self):
+        from provider.sandbox import _is_git_dir_entry
+        gits = ("HEAD", "config", "objects", "refs", "hooks", "rr-cache", "packed-refs", "AUTO_MERGE",
+                "ORIG_HEAD", "FETCH_HEAD", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "REBASE_HEAD",
+                "BISECT_HEAD", "MY-TOOLS_HEAD", "COMMIT_EDITMSG", "TAG_EDITMSG", "NOTES_EDITMSG",
+                "MERGE_MSG", "MERGE_MODE", "MERGE_RR", "MERGE_AUTOSTASH", "BISECT_LOG", "BISECT_START",
+                "BISECT_TERMS", "BISECT_EXPECTED_REV", "NOTES_MERGE_REF", "NOTES_MERGE_PARTIAL",
+                "NOTES_MERGE_WORKTREE", "sharedindex.0a1b2c3d", "fsmonitor--daemon.ipc", "gc.log")
+        the_projects = ("draft_HEAD", "Merge_HEAD", "orig_head", "my_HEAD.txt", "_HEAD", "notes_EDITMSG",
+                        "_EDITMSG", "MERGE_notes.txt", "MERGE_", "BISECT_results.csv", "BISECT_",
+                        "NOTES_MERGE_", "NOTES_MERGE_draft.md", "sharedindex.backup", "sharedindex.",
+                        "notes.txt", "README.md", "src", "HEAD.bak", "config.yaml")
+        self.assertEqual([n for n in gits if not _is_git_dir_entry(n)], [])
+        self.assertEqual([n for n in the_projects if _is_git_dir_entry(n)], [])
+
+    def test_a_directory_that_cannot_be_listed_is_refused_not_guessed(self):
+        from provider import sandbox
+        with tempfile.TemporaryDirectory() as tmp:
+            hidden = Path(tmp) / "repo.git"
+            hidden.mkdir()
+            (hidden / "ORIG_HEAD").write_text("x\n", encoding="utf-8")
+            (hidden / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+            self.assertEqual(sandbox._git_dir_entries(hidden), ["HEAD", "ORIG_HEAD"])      # control: listable
+            if os.geteuid() == 0:
+                self.skipTest("root lists any directory")
+            os.chmod(hidden, 0o300)
+            try:
+                with self.assertRaises(RuntimeError) as cm:
+                    sandbox._git_dir_entries(hidden)
+            finally:
+                os.chmod(hidden, 0o755)
+            self.assertIn("cannot be listed", str(cm.exception))
+            self.assertIn("Nothing was launched.", str(cm.exception))
+
+
 class TheCliSweepsSessionsAtARealInvocation(unittest.TestCase):
     STALE = 1577836800          # 2020-01-01: far from the 24 h boundary on purpose
 

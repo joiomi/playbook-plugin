@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -730,22 +731,41 @@ _GIT_DIR_NAMES = frozenset((
     "rebase-merge", "rebase-apply", "sequencer", "AUTO_MERGE", "SQUASH_MSG",
     "gc.log", "gc.pid", "git-daemon-export-ok", "lfs", "svn", "annex", "filter-repo",
 ))
-_GIT_DIR_PREFIXES = ("sharedindex.", "BISECT_", "MERGE_", "NOTES_MERGE_", "fsmonitor--daemon")
-_GIT_DIR_SUFFIXES = ("_HEAD", "_EDITMSG")
+_GIT_DIR_PREFIXES = ("fsmonitor--daemon",)
+# The state files git writes beside HEAD, in the syntax git itself holds them to
+# (refs.c: a pseudoref's name is capital letters, `_` and `-`): `<NAME>_HEAD` —
+# ORIG_HEAD, FETCH_HEAD, MERGE_HEAD, CHERRY_PICK_HEAD, REVERT_HEAD, REBASE_HEAD,
+# BISECT_HEAD, and any pseudoref a tool makes — `<NAME>_EDITMSG`, the `BISECT_…`,
+# `MERGE_…` and `NOTES_MERGE_…` families, and `sharedindex.<hex>`. The first form of
+# this rule was "ends in `_HEAD`" and "starts with `MERGE_`": a project file named
+# `draft_HEAD` or `MERGE_notes.txt`, in a bare repository used as the project, was
+# made read-only with git's own (the single judge's run 3, task 169).
+_GIT_STATE_NAME = re.compile(
+    r"(?:[A-Z_-]+_HEAD|[A-Z_-]+_EDITMSG|(?:BISECT|MERGE|NOTES_MERGE)_[A-Z_-]+|sharedindex\.[0-9a-fA-F]+)\Z")
 
 
 def _is_git_dir_entry(name: str) -> bool:
     return (name in _GIT_DIR_NAMES or name.startswith(_GIT_DIR_PREFIXES)
-            or name.endswith(_GIT_DIR_SUFFIXES))
+            or _GIT_STATE_NAME.match(name) is not None)
 
 
 def _git_dir_entries(git_dir: "Path | str") -> "list[str]":
     """The entries present at the top of `git_dir` that are git's, by name, sorted.
-    A directory that cannot be listed gives the fixed names that exist."""
+
+    A directory that cannot be LISTED is refused, not guessed at (the single judge's
+    run 3, task 169 — Critical): the first form fell back to the fixed names it knew,
+    and in a bare repository whose directory could be traversed and written but not
+    listed, a state file that exists only by pattern — ORIG_HEAD — was left writable
+    (measured with real bubblewrap). What cannot be listed cannot be told apart."""
     try:
-        return sorted(n for n in os.listdir(git_dir) if _is_git_dir_entry(n))
-    except OSError:
-        return sorted(n for n in _GIT_DIR_NAMES if os.path.lexists(os.path.join(git_dir, n)))
+        names = os.listdir(git_dir)
+    except OSError as exc:
+        raise RuntimeError(
+            f"the git directory {git_dir} contains the project and cannot be listed "
+            f"({exc.strerror or exc}) — what git keeps in it cannot be told from the project's own "
+            "files, so it could not be kept read-only. Make that directory readable for this user, "
+            "or launch from a project that is not inside a git directory. Nothing was launched.")
+    return sorted(n for n in names if _is_git_dir_entry(n))
 
 
 # git reads these from the environment and would then answer for ANOTHER repository
