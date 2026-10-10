@@ -431,6 +431,104 @@ exit $rc
                                      "a write landed during the notification and the stop was released")
 
 
+class ANotificationAndAUserPromptAtOnce(_Session):
+    """Impl panel round 2 (codex-high, codex-medium). The notification's hook reads the
+    mark, and only later writes its baseline; a USER prompt whose hook ran in between
+    reset the counters and removed both marks — and the baseline written after it
+    then stood in the user's own turn, which could end on it. Two things keep the
+    user's prompt the last word: one lock of the session around the reset and the
+    note, and — where the lock cannot serialise them — the mark read once more right
+    before the baseline is written. Each has the test only it can pass."""
+
+    def _notify_while_the_user_speaks(self, shimmed, no_flock=False):
+        """Run the notification's hook with `shimmed` (an external command it calls)
+        replaced by a shim that, on its first call for a file of this session, starts
+        the USER's prompt hook beside it and gives it up to 1.5 s to finish before
+        doing its own work. The other hook is detached from the shim's output and
+        from the lock's descriptor: the notification's hook reads the shim through a
+        pipe and would wait for anything still holding it (the first version of this
+        test deadlocked itself that way until the lock's own 5 s limit)."""
+        import shutil
+        import time
+        bindir = Path(self._tmp.name) / "shims"
+        bindir.mkdir()
+        done = Path(self._tmp.name) / "user-prompt-done"
+        payload = Path(self._tmp.name) / "user-prompt.json"
+        payload.write_text(json.dumps({"prompt": "the user speaks while the notification is handled"}),
+                           encoding="utf-8")
+        hook = SCRIPTS / "chat-log-hook"
+        (bindir / shimmed).write_text(f"""#!/bin/bash
+for a in "$@"; do
+    case "$a" in "{self.session_dir}"/*)
+        if [ ! -e "{done}.started" ]; then
+            : > "{done}.started"
+            ( PATH="$PB_REAL_PATH" "{bash_or_skip()}" "{hook}" < "{payload}"; : > "{done}" ) 204>&- >/dev/null 2>&1 &
+            for _ in $(seq 1 30); do [ -e "{done}" ] && break; "$PB_REAL_SLEEP" 0.05; done
+        fi ;;
+    esac
+done
+exec "{shutil.which(shimmed)}" "$@"
+""", encoding="utf-8")
+        (bindir / shimmed).chmod(0o755)
+        env = dict(os.environ, PLAYBOOK_SESSION_ID=SID, HOME=self._tmp.name, PB_REAL_PATH=os.environ["PATH"],
+                   PB_REAL_SLEEP=shutil.which("sleep"), PATH=f"{bindir}{os.pathsep}{os.environ['PATH']}")
+        for k in ("BASH_ENV", "PLAYBOOK_ROLE", "PLAYBOOK_EVAL_CONFIG"):
+            env.pop(k, None)
+        if no_flock:
+            # a host without `flock`: every `command -v flock` of the hooks answers no
+            rc = Path(self._tmp.name) / "no-flock.sh"
+            rc.write_text('command() { if [ "$1" = -v ] && [ "$2" = flock ]; then return 1; fi; '
+                          'builtin command "$@"; }\n', encoding="utf-8")
+            env["BASH_ENV"] = str(rc)
+        r = subprocess.run([bash_or_skip(), str(hook)], cwd=self.project, env=env, text=True,
+                           capture_output=True, timeout=60, input=json.dumps({"prompt": NOTIFICATIONS[0]}))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        for _ in range(200):
+            if done.exists():
+                break
+            time.sleep(0.05)
+        self.assertTrue(done.exists(), "the user's prompt hook never finished")
+        self.assertIn("the user speaks while the notification is handled",
+                      (self.project / ".agent" / "chat_log.md").read_text(encoding="utf-8"))
+
+    def _a_turn_that_ended_without_a_write(self):
+        # mark: 0 tools — a later baseline of 0 would release any read-only turn
+        self.prompt()
+        self.assertEqual(self.stop().returncode, 0)
+        self.assertTrue(self.turn_end.exists())
+
+    def _the_users_turn_is_its_own(self):
+        self.assertFalse(self.notif_start.exists(), "a notification's baseline stands in the user's own turn")
+        self.assertFalse(self.turn_end.exists())
+        self.tools(*["Read"] * 6)
+        self.assertEqual(self.stop().returncode, 2)
+
+    def test_the_users_prompt_waits_for_a_note_in_progress_and_then_removes_it(self):
+        # THE LOCK. The user's prompt arrives at the last instant: the notification's
+        # hook has read the mark, re-read it, and is renaming its baseline into place
+        # (`mv`). Unlocked, the reset would finish first and the rename would publish
+        # a baseline after it; locked, the reset waits and removes what was published.
+        self._a_turn_that_ended_without_a_write()
+        self._notify_while_the_user_speaks("mv")
+        self._the_users_turn_is_its_own()
+
+    def test_without_flock_a_mark_removed_meanwhile_still_stops_the_baseline(self):
+        # THE SECOND READ OF THE MARK. No `flock` on the host, so nothing serialises
+        # the two; the user's prompt runs to its end while the notification's hook
+        # reads the counters (`cat`) — after it read the mark. The baseline is not
+        # written, because the mark is read again first and is gone.
+        self._a_turn_that_ended_without_a_write()
+        self._notify_while_the_user_speaks("cat", no_flock=True)
+        self._the_users_turn_is_its_own()
+
+    def test_control_with_no_user_prompt_in_between_the_notification_starts_its_turn(self):
+        self._a_turn_that_ended_without_a_write()
+        self.prompt(NOTIFICATIONS[0])
+        self.assertEqual(self.notif_start.read_text(encoding="utf-8"), "0\n")
+        self.tools(*["Read"] * 6)
+        self.assertEqual(self.stop().returncode, 0)
+
+
 class AFailureWhileMarkingDoesNotChangeTheVerdict(_Session):
     """Under `set -e` a command that fails inside a plain EXIT trap replaces bash's
     exit status with 1, whatever it was (measured, bash 5.1). The mark is written

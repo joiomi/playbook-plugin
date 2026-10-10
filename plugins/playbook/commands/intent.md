@@ -31,13 +31,14 @@ to the user and wait for their answer. Only when they agree, re-run it with the
 flag the line ends with — it names exactly what was quoted:
 
 ```bash
-.claude/bin/tasks intent $ARGUMENTS --yes '<calls>@<judge>'
+.claude/bin/tasks intent $ARGUMENTS --yes <id>
 ```
 
-If that prints a new line instead of running, the evidence or the default judge
-changed since the quote (the user's own answer can add a chat layer): what they
-agreed to is no longer what a run would spend. Put the NEW line to them — never
-edit the number yourself.
+The id names that one line — its number of calls, judge, time limit and budget
+cap. If the command prints a new line instead of running, one of them changed
+since the quote (the user's own answer can add a chat layer): what they agreed to
+is no longer what a run would spend. Put the NEW line to them, and pass the id it
+ends with only when they agree to it — never an id the command did not print.
 
 This fans out up to 4 isolated judge calls (default judge model, evidence-only
 sandbox per layer) and writes `.agent/tasks/NNN-*/intent/<run-id>/` containing

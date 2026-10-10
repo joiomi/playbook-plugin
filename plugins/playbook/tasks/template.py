@@ -965,7 +965,7 @@ Commands:
   retro [--since N]   Project retrospective
                       Collect Playbook artifacts for a global retro archive
   context <N>         Extract chat messages for a task
-  intent <N>          Vertical retro of one finished task → INTENT.md (says what it would spend; `--yes <quote>` runs it)
+  intent <N>          Vertical retro of one finished task → INTENT.md (says what it would spend; `--yes <id>` runs exactly that)
   timeline            Internal retro-support: chronological tasks + messages
   tagger              Internal retro-support: tag tasks for retro analysis
   tag                 Internal retro-support: apply a retro tag

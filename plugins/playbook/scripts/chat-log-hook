@@ -176,13 +176,30 @@ fi
 # (tagged `no-session`), but no session counters are touched.
 SESSION_ID="$(resolve_session_id)"
 [ -z "$SESSION_ID" ] && session_unresolved_notice
+# The reset a user's prompt performs and the note a notification leaves run under
+# ONE lock of the session, `marks.lock` (task 173, impl panel r2): the note reads
+# the stop hook's mark and only later writes its baseline, and a user's prompt
+# whose hook ran in between had already removed both — the baseline written after
+# it then stood in the user's own turn, which could end on it. Whichever comes
+# first now, the user's prompt has the last word. With no `flock` on the host both
+# run unlocked, as the chat log's own append does. A lock that cannot be had within
+# 5 s (a holder that hangs) is not waited for: the reset runs anyway — a prompt
+# must reset — and the note writes nothing, the stricter side.
+_reset_session() {
+    reset_counters "$1/counters"
+    # The user's prompt ends whatever a notification began.
+    rm -f "$1/turn_end" "$1/notif_start" 2>/dev/null || true
+}
 reset_session_counters() {
     [ -n "$SESSION_ID" ] || return 0
     local session_dir="$AGENT_DIR/sessions/$SESSION_ID"
     mkdir -p "$session_dir"
-    reset_counters "$session_dir/counters"
-    # The user's prompt ends whatever a notification began (task 173).
-    rm -f "$session_dir/turn_end" "$session_dir/notif_start" 2>/dev/null || true
+    if command -v flock &>/dev/null; then
+        { ( flock -w 5 -x 204 || true; _reset_session "$session_dir" ) 204>"$session_dir/marks.lock"; } 2>/dev/null \
+            || _reset_session "$session_dir"
+    else
+        _reset_session "$session_dir"
+    fi
 }
 # Owner's Q1 (2026-09-24; PLAN S11, task 173): an AUTOMATIC notification does not
 # reset the counters the stop hook's bypass reads. It is not the user's prompt and
@@ -201,9 +218,8 @@ reset_session_counters() {
 # place, so one read is one consistent picture — it cannot show the old `tools`
 # beside the new `writes` — and nothing here can rename a stale copy over an
 # increment.
-note_notification() {
-    [ -n "$SESSION_ID" ] || return 0
-    local dir="$AGENT_DIR/sessions/$SESSION_ID"
+_note_notification() {
+    local dir="$1"
     [ -f "$dir/counters" ] || return 0
     local ended snapshot tools writes
     ended=$(read_session_mark "$dir/turn_end")
@@ -213,7 +229,23 @@ note_notification() {
     writes=$(printf '%s\n' "$snapshot" | sed -n 's/^writes=//p' | head -1)
     [ "$ended" = "$tools" ] || return 0
     case "$writes" in ''|*[!0-9]*) return 0 ;; esac
+    # The mark once more, right before the baseline is published: where the lock
+    # could not serialise the two (no `flock`, or a reset that stopped waiting for
+    # it), a user's prompt that removed the mark meanwhile still wins.
+    [ "$(read_session_mark "$dir/turn_end")" = "$ended" ] || return 0
     write_session_mark "$dir/notif_start" "$writes"
+}
+note_notification() {
+    [ -n "$SESSION_ID" ] || return 0
+    local dir="$AGENT_DIR/sessions/$SESSION_ID"
+    # Nothing to note without a counters file and a mark — and then no lock file
+    # is made either. Both are read again under the lock.
+    [ -f "$dir/counters" ] && [ -f "$dir/turn_end" ] || return 0
+    if command -v flock &>/dev/null; then
+        { ( flock -w 5 -x 204 || exit 0; _note_notification "$dir" ) 204>"$dir/marks.lock"; } 2>/dev/null || true
+    else
+        _note_notification "$dir"
+    fi
 }
 _lead="${USER_MESSAGE#"${USER_MESSAGE%%[![:space:]]*}"}"
 case "$_lead" in

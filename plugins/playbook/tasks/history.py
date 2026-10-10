@@ -155,7 +155,7 @@ def cmd_intent(cmd_args):
     # Vertical retro: 4 blind intent extractions over one task's layers.
     if not cmd_args:
         print("Error: 'intent' requires a task number", file=sys.stderr)
-        print("Usage: tasks intent <number> [--yes <calls>@<seat>] [--chat-file P] [--base REF --head REF] "
+        print("Usage: tasks intent <number> [--yes <id>] [--chat-file P] [--base REF --head REF] "
               "[--collect-only] [--timeout S]", file=sys.stderr)
         sys.exit(1)
 
@@ -166,12 +166,12 @@ def cmd_intent(cmd_args):
     collect_only = False
     # Task 173 (owner's D3-C4, 2026-09-24): the extractions are judge calls, and the
     # command made them unasked. Bare, it now says what it would spend and stops;
-    # --collect-only never spent and is not asked. The approval is the QUOTE the
-    # bare command printed — `--yes <calls>@<seat>` — not a bare yes: the evidence is
-    # collected again on the re-run and can have grown in between (the user's own
+    # --collect-only never spent and is not asked. The approval is the LINE the bare
+    # command printed, named by its id — `--yes <id>` — not a bare yes: the evidence
+    # is collected again on the re-run and can have grown in between (the user's own
     # "yes" in the chat can make a task's chat layer available), so a bare yes given
     # for one call could start two (impl panel r1, codex-high). None = not given;
-    # "" = given without a quote.
+    # "" = given without an id.
     approved = None
     # None = not yet resolved; the real default comes from tasks.core so
     # `tasks intent` honours the same review knobs as plan/impl review
@@ -234,24 +234,31 @@ def cmd_intent(cmd_args):
     if not collect_only:
         from tasks.intent import resolve_default_seat
         provider, _variant, seat = resolve_default_seat(project_path)
-        quote = f"{len(avail)}@{seat}"
+        limit = format_timeout_label(timeout_secs)
+        cap = ""
+        if provider == "claude":   # the one judge CLI with a budget knob
+            from tasks.core import resolve_judge_budget
+            cap = str(resolve_judge_budget(project_path))
+        # The id names the line as printed: every figure in it. An approval of calls
+        # and seat alone ran after `--timeout` or the budget was raised (impl panel
+        # r2, codex-high and codex-medium).
+        import hashlib
+        import json
+        quote = hashlib.sha256(json.dumps([len(avail), seat, limit, cap]).encode("utf-8")).hexdigest()[:8]
         if approved != quote:
-            import shlex   # a seat can carry shell characters (`opus-5-5[1m]`): print the flag ready to paste
-            cap = ""
-            if provider == "claude":   # the one judge CLI with a budget knob
-                from tasks.core import resolve_judge_budget
-                cap = f", each capped at ${resolve_judge_budget(project_path)}"
             if approved == "":
-                print("\ntasks intent: `--yes` needs the quote it approves (`--yes <calls>@<seat>`).",
+                print("\ntasks intent: `--yes` needs the id of the line it approves (`--yes <id>`).",
                       file=sys.stderr)
             elif approved is not None:
-                print(f"\ntasks intent: `--yes {shlex.quote(approved)}` is not what a run would spend now — the "
-                      "evidence or the default judge changed since that was quoted.", file=sys.stderr)
+                print(f"\ntasks intent: `--yes {approved}` does not approve what a run would spend now — "
+                      "the evidence, the default judge, the time limit or the budget cap changed since "
+                      "that line was printed, or it is not an id this command printed.", file=sys.stderr)
+            capped = f", each capped at ${cap}" if cap else ""
             print(f"\ntasks intent: this would run {len(avail)} judge call(s) on {seat} — "
-                  f"time limit {format_timeout_label(timeout_secs)} each{cap}. "
+                  f"time limit {limit} each{capped}. "
                   "Nothing was spent and nothing was written.\n"
-                  f"Re-run with `--yes {shlex.quote(quote)}` to spend them, or with --collect-only to write the "
-                  "prompts with no model call.", file=sys.stderr)
+                  f"Re-run with `--yes {quote}` to spend exactly that, or with --collect-only to write "
+                  "the prompts with no model call.", file=sys.stderr)
             sys.exit(2)
 
     run_id = new_run_id()
