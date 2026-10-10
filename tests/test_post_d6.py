@@ -883,7 +883,7 @@ class EndToEnd(unittest.TestCase):
             os.chdir(cwd)
         return code, err.getvalue(), out.getvalue()
 
-    def _panel(self):
+    def _panel(self, *extra):
         from unittest import mock
         from provider.adapters.claude import ClaudeAdapter
         cap = self.panel_contexts
@@ -894,7 +894,7 @@ class EndToEnd(unittest.TestCase):
         with mock.patch.object(ClaudeAdapter, "is_available", classmethod(lambda cls: True)), \
              mock.patch.object(ClaudeAdapter, "run_headless_judge", judge):
             return self._in_project(lambda: self.R.cmd_panel_review(
-                ["001", "--mode", "impl", "--models", "claude:opus,claude:sonnet"]))
+                ["001", "--mode", "impl", "--models", "claude:opus,claude:sonnet", *extra]))
 
     def _single(self, output, *extra, rc=0):
         from unittest import mock
@@ -1003,6 +1003,18 @@ class EndToEnd(unittest.TestCase):
         panel = next(r for r in reserved if r.get("kind") == "panel")
         single = next(r for r in reserved if r.get("kind") != "panel")
         self.assertEqual((panel["expires_after"], single["expires_after"]), (hard + 900, hard + 600))
+
+    def test_without_a_hard_timeout_the_horizon_is_two_hours(self):
+        # the tail-certification judge of task 172: "the hard timeout plus a margin" says
+        # nothing of a review run with `--timeout unlimited` — there is no hard timeout
+        # then, and both entry points record 7,200 seconds
+        self._panel("--timeout", "unlimited")
+        (self.d / "edit.py").write_text("v = 2\n", encoding="utf-8")
+        self._single("CAP: 0/5 reported, exhausted\n", "--timeout", "unlimited")
+        lines = [json.loads(ln) for ln in (self.tf.parent / post_d6.RUNS_NAME).read_text(encoding="utf-8").splitlines()]
+        reserved = [r for r in lines if r.get("status") == "reserved"]
+        self.assertEqual(len(reserved), 2, reserved)
+        self.assertEqual([r["expires_after"] for r in reserved], [7200, 7200])
 
     def test_a_head_clamp_tells_the_judge(self):
         self._panel()
