@@ -486,6 +486,23 @@ fi""")
         self.assertLess(self.hist.stat().st_size, self.BOUND + 1024 * 1024)
         self._settled()
 
+    def test_a_bound_that_cannot_be_looked_at_stops_the_carry(self):
+        # impl panel round 2 of task 176 (codex-high): whether the carried lines are
+        # past the bound is asked of `find`, and an empty answer was taken for "they
+        # fit" without asking how `find` had fared — more than the bound went through.
+        self._history_of_wide_activations(6000, width=1000)
+        size = self.hist.stat().st_size
+        asked = Path(self._tmp.name) / "asked"
+        self._shim("find", f'case "$*" in *+5242880c*) : > "{asked}"; exit 1 ;; esac')
+        r = self._bash("set -e; echo while-it-failed >/dev/null; echo still-alive", shims=True)
+        self.assertTrue(asked.exists(), "the case under test: `find` was never asked for the bound")
+        self.assertIn("still-alive", r.stdout)
+        self.assertEqual(r.stderr, "")
+        self.assertEqual(self._archives(), [], "the history was rotated with more than the bound carried")
+        self.assertGreaterEqual(self.hist.stat().st_size, size)
+        self.assertEqual(self._leftovers(), [])
+        self.assertFalse(self.owes.exists())
+
     # -- (2b) … and what it had not given back yet, the next shell gives ---------------------
     def _dies_reading_an_archive(self):
         """`grep` dies whenever it is asked to read an ARCHIVE — which is how the lines
@@ -1252,6 +1269,68 @@ exec "{real}" "$@"
         self._bash("echo the-next-shell >/dev/null")
         self.assertIn(whole, self.hist.read_text(encoding="utf-8").split("\n"))
         self.assertFalse(marker.exists())
+
+    def _unfinished(self, tail=b""):
+        """A live file that ends inside a line (and, if asked, in one more byte), with
+        the whole line owed by an archive. Returns the marker and the whole line."""
+        whole = "2026-09-20 10:00:00 | AGENT | .claude/bin/tasks work 7"
+        archive = self.hist.parent / "bash_history.archived-20260101-000000-1"
+        archive.write_text(whole + "\n", encoding="utf-8")
+        self.hist.write_bytes(b"2026-10-10 10:00:00 | AGENT | echo earlier\n" + whole[:-12].encode() + tail)
+        marker = self.hist.parent / "bash_history.archived-owes"
+        marker.write_text(archive.name + "\n", encoding="utf-8")
+        return marker, whole
+
+    def test_where_the_end_of_the_live_file_cannot_be_looked_at_nothing_is_given(self):
+        # impl panel round 2 (opus): the look at how the live file ends asked `tail`
+        # and did not ask how `tail` had fared — one that fails answers nothing, and
+        # nothing read as "it ends on a line".
+        marker, whole = self._unfinished()
+        self._stand_in("tail", '[ "$1 $2" = "-c 1" ] && exit 1')
+        r = self._bash("set -e; echo a-line >/dev/null; echo still-alive")
+        self.assertEqual(r.stdout.strip(), "still-alive", r.stderr)
+        self.assertEqual(r.stderr, "")
+        text = self.hist.read_text(encoding="utf-8")
+        self.assertNotIn(whole[:-12] + whole[:10], text, "the whole line was glued to the piece")
+        self.assertTrue(marker.exists(), "the marker went although the line could not be given on a line of its own")
+        (self.bindir / "tail").unlink()
+        self._bash("echo the-next-shell >/dev/null")
+        self.assertIn(whole, self.hist.read_text(encoding="utf-8").split("\n"))
+        self.assertFalse(marker.exists())
+
+    def test_a_live_file_that_ends_in_a_nul_byte_does_not_end_on_a_line(self):
+        # … and a last byte that is NUL read as nothing, too.
+        marker, whole = self._unfinished(tail=b"\x00")
+        r = self._bash("_cpb_rotate \"$PWD/.agent\"; :")
+        self.assertEqual(r.stderr, "")
+        self.assertIn(whole.encode(), self.hist.read_bytes().split(b"\n"), "the whole line is not a line of its own")
+
+    def test_a_marker_that_cannot_be_ours_is_removed_without_being_read(self):
+        # impl panel round 2 (opus, codex-high): the marker was read whole, and
+        # through a link — a shipped one can point at a very large file, or carry a
+        # payload after a first line that reads well. A marker of ours is a regular
+        # file holding one short name; anything else is removed, and nothing is given
+        # on its word. (Each shape here names a real archive that holds a line.)
+        for shape in ("a link", "too long"):
+            with self.subTest(marker=shape):
+                self.setUp()
+                archive = self.hist.parent / "bash_history.archived-20260101-000000-1"
+                archive.write_text("2026-09-20 11:11:11 | AGENT | .claude/bin/tasks work 666\n", encoding="utf-8")
+                self.hist.write_text("2026-10-10 10:00:00 | AGENT | echo earlier\n", encoding="utf-8")
+                marker = self.hist.parent / "bash_history.archived-owes"
+                behind = Path(self._tmp.name) / "behind"
+                if shape == "a link":
+                    behind.write_text(archive.name + "\n", encoding="utf-8")
+                    marker.symlink_to(behind)
+                else:
+                    marker.write_text(archive.name + "\n" + "x" * (1024 * 1024), encoding="utf-8")
+                r = self._bash("set -e; echo a-line >/dev/null; echo still-alive")
+                self.assertEqual(r.stdout.strip(), "still-alive", r.stderr)
+                self.assertEqual(r.stderr, "")
+                self.assertEqual(self._given(), [], "something was given on the word of a marker that cannot be ours")
+                self.assertFalse(marker.exists() or marker.is_symlink(), "it was left for every later shell to meet")
+                if shape == "a link":
+                    self.assertEqual(behind.read_text(encoding="utf-8"), archive.name + "\n")
 
     def test_a_marker_that_was_not_written_whole_stops_the_rotation(self):
         # … and where the marker cannot be written as it should read, nothing is moved:
