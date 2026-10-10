@@ -18,10 +18,19 @@ reconciler, not the judge. Independent axis = (chat + task.md) ↔ (code + tests
 
 ## Steps
 
-### 1. Run the blind extractions
+### 1. Say what it will spend, then run the blind extractions
 
 ```bash
 .claude/bin/tasks intent $ARGUMENTS
+```
+
+Without `--yes` this spends nothing: it prints which layers have evidence and one
+line saying how many judge calls a run would make, on which judge, and the time
+limit of each, then exits 2 — that exit is the question, not a failure. Put that
+line to the user and wait for their answer. Only when they agree:
+
+```bash
+.claude/bin/tasks intent $ARGUMENTS --yes
 ```
 
 This fans out up to 4 isolated judge calls (default judge model, evidence-only

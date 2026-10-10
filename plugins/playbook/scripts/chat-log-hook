@@ -169,9 +169,8 @@ fi
 # words; on 2026-09-23, 498 of 833 entries began with <task-notification>, and
 # attribution / intent / retro read them as the user. Skipped (no consumer needs
 # them). Only the START counts: a user prompt that merely mentions one is logged.
-# The skip is about the LOG only: it performs the same counter reset a logged
-# prompt does (read by the stop hook's conversational bypass). The two older
-# exits below (empty after filtering, same-second duplicate) predate task 088.
+# The two older exits below (empty after filtering, same-second duplicate)
+# predate task 088.
 # Task 105: resolved ONCE here; "" = unresolved (under the Claude Code
 # background daemon, no PLAYBOOK_SESSION_ID) — the prompt is still logged
 # (tagged `no-session`), but no session counters are touched.
@@ -183,9 +182,37 @@ reset_session_counters() {
     mkdir -p "$session_dir"
     reset_counters "$session_dir/counters"
 }
+# Owner's Q1 (2026-09-24; PLAN S11, task 173): an AUTOMATIC notification does not
+# reset the counters the stop hook's bypass reads. It is not the user's prompt and
+# it can land in the middle of a turn — measured live on 2026-10-10: a background
+# command's notification took a turn's `tools=20 writes=20` to `0 0` between two
+# of its tool calls, and a stop right after it would have been released with every
+# gate open. The one exception he made: a turn STARTED by a notification may end
+# if it made no write. A turn started by one is told from a turn one landed in by
+# the stop hook's mark: `turn_end_tools` is the tool count at the last stop it
+# let through, so it equals `tools` only while no tool has run since. Then, and
+# only then, the write count of this moment is noted (`notif_writes`) for the
+# stop hook to compare. Otherwise nothing is written; no counters file, nothing
+# is created. A user prompt's reset drops both keys (it keeps only `gate_*`).
+note_notification() {
+    [ -n "$SESSION_ID" ] || return 0
+    local counters="$AGENT_DIR/sessions/$SESSION_ID/counters"
+    [ -f "$counters" ] || return 0
+    local ended
+    ended=$(read_counter "$counters" turn_end_tools)
+    case "$ended" in ''|*[!0-9]*) return 0 ;; esac
+    [ "$ended" = "$(read_counter "$counters" tools)" ] || return 0
+    write_counter "$counters" notif_writes "$(read_counter_int "$counters" writes)"
+}
 _lead="${USER_MESSAGE#"${USER_MESSAGE%%[![:space:]]*}"}"
 case "$_lead" in
-    "<task-notification>"*|"<local-command-caveat>"*|"<command-name>"*|"[SYSTEM NOTIFICATION"*)
+    "<task-notification>"*|"[SYSTEM NOTIFICATION"*)
+        note_notification
+        exit 0 ;;
+    "<local-command-caveat>"*|"<command-name>"*)
+        # The echo of a command the USER ran (a slash command, a `!` command):
+        # skipped from the log like a notification, but it is their act and
+        # starts a fresh count, as any prompt of theirs does.
         reset_session_counters
         exit 0 ;;
 esac

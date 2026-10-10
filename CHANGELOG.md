@@ -6,6 +6,24 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ### Changed
 
+- **A background notification no longer wipes the stop hook's work count** (task 173; owner decision Q1 of
+  2026-09-24). The stop hook lets a turn end with gates open when the session's counters say it was a chat reply: no
+  write and fewer than five tool calls since the last prompt. Those counters were reset by every prompt — also by an
+  automatic notification (a background command finishing), which is not your prompt and can arrive in the middle of
+  a turn. Measured on a live session: a notification took a turn from 20 tool calls to 0 between two of its calls,
+  so a stop right after it would have been let through with every gate open. Now a prompt that begins with
+  `<task-notification>` or `[SYSTEM NOTIFICATION` changes no count. One exception, as decided: a turn that a
+  notification *started* — the previous turn had ended — may end if it made no write (no `Edit`, `Write` or `Bash`
+  call), however many read-only calls it made; with one write it is held like any other. The echo of a command you
+  ran yourself (a slash command, a `!` command) still starts a fresh count. The same reset also let a notification
+  between two batch ticks of gates free the second one; that is closed by the same change. (Claude Code only — the
+  experimental codex hook path has no notification handling and is unchanged.)
+- **`tasks intent` asks before it spends** (task 173; owner decision D3-C4 of 2026-09-24). Each of its blind
+  extractions is a call to the default judge, up to four per run, and the command started them at once. The bare
+  command now prints which layers have evidence and one line — how many judge calls, on which judge, the time limit
+  of each (and the budget cap of each on a Claude judge) — spends nothing, writes nothing, and exits 2.
+  `tasks intent <N> --yes` runs it; `--collect-only` is unchanged. `/playbook:intent` puts the number to you before
+  it passes `--yes`. **If you script `tasks intent`, add `--yes`.**
 - **`sandbox` refuses to start an agent without bubblewrap** (task 164, owner decision 2026-10-09). On a host where
   `bwrap` is not installed, `.claude/bin/sandbox` used to start the agent anyway — with its permission prompts off
   and no containment — and printed no warning (the 1.6.0 entry below says the sandbox "says so": that was true of

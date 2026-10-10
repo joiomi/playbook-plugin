@@ -315,6 +315,36 @@ def build_prompt(s: Slice) -> str:
     )
 
 
+def resolve_default_seat(project_path: Path) -> "tuple[str, str | None, str]":
+    """(provider, variant, seat label) of the judge every extraction runs on.
+
+    One resolver for the runner below and for the line `tasks intent` prints before
+    it spends anything (task 173, owner's D3-C4): the line cannot name another judge
+    than the one that would run.
+    """
+    from provider.sandbox import load_judge_config, resolve_judge_spec
+    # Anchor the judge spec to the project root the caller resolved.
+    # load_judge_config() with no root walks up from cwd — which, when the
+    # runner is exercised from a checkout nested under a playbook-managed
+    # ancestor `.agent/`, resolves the ANCESTOR's models.json instead of this
+    # project's. Its own docstring says callers that know the root must pass it;
+    # omitting it let the intent runner (and its tests) escape into an ancestor
+    # judge panel, silently building a non-default adapter — and, when that
+    # judge's CLI was installed, launching a real judge on the ancestor's
+    # budget. Passing project_path preserves the intended ancestor walk-up for
+    # genuine nested checkouts (project_path is still the checkout root) while
+    # closing the cwd/project divergence.
+    cfg = load_judge_config(project_path)
+    # F13 (panel finding): align the unset-config fallback with the all-Claude
+    # default the 1.5.12 flip established (review.py falls back to "claude").
+    # Only reached if a project nulls default_judge; the shipped models.json
+    # pins "opus", but the divergent codex fallback here re-exposed the codex
+    # adapter on that edge path.
+    provider, variant = resolve_judge_spec(cfg.get("default_judge") or "opus")
+    from tasks import review as _review
+    return provider, variant, _review._seat_with_effort(provider, variant)
+
+
 def make_default_runner(project_path: Path, *, timeout_secs: int = 300,
                         task: "str | None" = None):
     """Production runner: default judge model, blindness via an evidence-only dir.
@@ -333,7 +363,6 @@ def make_default_runner(project_path: Path, *, timeout_secs: int = 300,
     """
     import tempfile
 
-    from provider.sandbox import load_judge_config, resolve_judge_spec
     from provider.adapters.claude import ClaudeAdapter
     from provider.adapters.codex import CodexAdapter
     from provider.adapters.antigravity import AntigravityAdapter
@@ -347,28 +376,12 @@ def make_default_runner(project_path: Path, *, timeout_secs: int = 300,
     # this, `tasks intent` would silently ignore judge_budget_usd.
     from tasks.core import resolve_judge_budget
     budget_usd = resolve_judge_budget(project_path)
-    # Anchor the judge spec to the SAME project root as the budget above.
-    # load_judge_config() with no root walks up from cwd — which, when this
-    # runner is exercised from a checkout nested under a playbook-managed
-    # ancestor `.agent/`, resolves the ANCESTOR's models.json instead of this
-    # project's. Its own docstring says callers that know the root must pass it;
-    # omitting it let the intent runner (and its tests) escape into an ancestor
-    # judge panel, silently building a non-default adapter — and, when that
-    # judge's CLI was installed, launching a real judge on the ancestor's
-    # budget. Passing project_path preserves the intended ancestor walk-up for
-    # genuine nested checkouts (project_path is still the checkout root) while
-    # closing the cwd/project divergence.
-    cfg = load_judge_config(project_path)
-    # F13 (panel finding): align the unset-config fallback with the all-Claude
-    # default the 1.5.12 flip established (review.py falls back to "claude").
-    # Only reached if a project nulls default_judge; the shipped models.json
-    # pins "opus", but the divergent codex fallback here re-exposed the codex
-    # adapter on that edge path.
-    provider, variant = resolve_judge_spec(cfg.get("default_judge") or "opus")
+    # The judge spec is anchored to the SAME project root as the budget above
+    # (why: resolve_default_seat).
+    provider, variant, seat = resolve_default_seat(project_path)
     adapter_cls = adapters.get(provider, ClaudeAdapter)
 
     from tasks import review as _review
-    seat = _review._seat_with_effort(provider, variant)
 
     def _spend(t0: float, status: str, output: str = "", error: str = "", usage=None) -> None:
         _review._journal_review_spend(

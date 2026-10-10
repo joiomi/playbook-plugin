@@ -1108,7 +1108,7 @@ class IntentSpendE2E(_E2EBase):
         from tasks import history
         calls = self._stub("# Intent inferred\n- x\n")
         with _chdir(self.project), contextlib.redirect_stdout(io.StringIO()):
-            history.cmd_intent(["42"])
+            history.cmd_intent(["42", "--yes"])      # task 173: it spends only when told to
         recs = self._intent_records()
         self.assertTrue(calls)
         self.assertEqual(len(recs), len(calls), recs)

@@ -155,7 +155,7 @@ def cmd_intent(cmd_args):
     # Vertical retro: 4 blind intent extractions over one task's layers.
     if not cmd_args:
         print("Error: 'intent' requires a task number", file=sys.stderr)
-        print("Usage: tasks intent <number> [--chat-file P] [--base REF --head REF] "
+        print("Usage: tasks intent <number> [--yes] [--chat-file P] [--base REF --head REF] "
               "[--collect-only] [--timeout S]", file=sys.stderr)
         sys.exit(1)
 
@@ -164,6 +164,10 @@ def cmd_intent(cmd_args):
         task_num = task_num.zfill(3)
     chat_file = base = head = None
     collect_only = False
+    # Task 173 (owner's D3-C4, 2026-09-24): the extractions are judge calls, and the
+    # command made them unasked. Without --yes it now says what it would spend and
+    # stops; --collect-only never spent and is not asked.
+    yes = False
     # None = not yet resolved; the real default comes from tasks.core so
     # `tasks intent` honours the same review knobs as plan/impl review
     # instead of pinning its own 300s. --timeout still overrides.
@@ -179,6 +183,8 @@ def cmd_intent(cmd_args):
             head = cmd_args[i + 1]; i += 2
         elif a == "--collect-only":
             collect_only = True; i += 1
+        elif a == "--yes":
+            yes = True; i += 1
         elif a == "--timeout" and i + 1 < len(cmd_args):
             timeout_secs = int(cmd_args[i + 1]); i += 2
         else:
@@ -216,6 +222,20 @@ def cmd_intent(cmd_args):
         print("Error: no available evidence on any layer — nothing to infer. "
               "Pass --chat-file and/or --base/--head.", file=sys.stderr)
         sys.exit(1)
+
+    if not collect_only and not yes:
+        from tasks.intent import resolve_default_seat
+        provider, _variant, seat = resolve_default_seat(project_path)
+        cap = ""
+        if provider == "claude":   # the one judge CLI with a budget knob
+            from tasks.core import resolve_judge_budget
+            cap = f", each capped at ${resolve_judge_budget(project_path)}"
+        print(f"\ntasks intent: this would run {len(avail)} judge call(s) on {seat} — "
+              f"time limit {format_timeout_label(timeout_secs)} each{cap}. "
+              "Nothing was spent and nothing was written.\n"
+              "Re-run with --yes to spend them, or with --collect-only to write the prompts "
+              "with no model call.", file=sys.stderr)
+        sys.exit(2)
 
     run_id = new_run_id()
     if collect_only:
