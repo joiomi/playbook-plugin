@@ -15550,7 +15550,7 @@
     {
       "id": "PB-POST-D6-PROTOCOL",
       "category": "judges-and-reviews",
-      "statement": "The post-D6 review protocol (task 108): both context builders (panel and single judge) deliver FIRST a SETTLED block — the task's last unfenced `## Owner rulings` lines verbatim plus the judge.md/judge-archive.md triage bullets whose VERDICT is `REJECT` (right after the bullet, after its bold title, or ending inside the bold title — not a mention in prose) — under a header that says a ruling closes a design choice, never a correctness defect; every impl panel round's header carries a unique `**Round-id:**` and its Panel-snapshot records per scope a `base` tree of the working state (staged, unstaged, untracked) built in a temporary GIT_INDEX_FILE without changing the real index or `git status`; `impl-review` after an impl panel delivers the diff base → current working tree, refusing to send anything when a tree or the scope set moves between building the delta and the tamper baseline, and giving task.md only the budget left after SETTLED + delta + map (a head-clamp tells the judge) (an unchanged file absent, an untracked file present; a scope set or scope directory changed since the panel refuses the delta; over budget, the stat of the same two trees — itself bounded to a third of the cap — and the exact diff commands), computes POST-D6 VERDICT (PASS = no counted Critical or Important; a tag counts only right after the severity marker; [SETTLED] is not counted, [SETTLED-CONTRADICTED] is, and [PRE-EXISTING] is not counted only when a delta was delivered and the finding (its whole text) cites no file the FULL delta changed — the file set is taken before any truncation and holds both paths of a rename; the check is deliberately at FILE level (owner amendment 2026-09-30: judges often cite wrong lines, and file level errs toward more review); the response's last non-empty line must BE a whole, bare (not code-spanned) CAP line whose count equals the recognised findings, and `more remain` is incomplete — otherwise the verdict fails closed), and RESERVES each run under the task lock before any judge is spawned: runs 1-2 after a panel are free, run 3 needs a counted Critical in run 2, run 4+ always needs `--owner-ok --reason`; a refused run exits 2 with nothing spent, one review at a time per task — a panel reserves before its tamper snapshot too, so a panel and a single judge exclude each other (a live reservation — while its owning process runs (POSIX, same host; recorded pid + host), otherwise by its OWN recorded expiry — refuses a second one without writing — its append would void the first run by tamper; a reservation older than the hard timeout + 10 min counts as spent), a corrupt ledger line refuses every new reservation until repaired (or `--owner-ok`), a run killed at its hard timeout counts (verdict TIMEOUT), a run that produced no review releases its reservation, and every owner-ok reason is recorded and named in the close receipt.",
+      "statement": "The post-D6 review protocol (task 108): both context builders (panel and single judge) deliver FIRST a SETTLED block — the task's last unfenced `## Owner rulings` lines verbatim plus the judge.md/judge-archive.md triage bullets whose VERDICT is `REJECT` (right after the bullet, after its bold title, or ending inside the bold title — not a mention in prose) — under a header that says a ruling closes a design choice, never a correctness defect; every impl panel round's header carries a unique `**Round-id:**` and its Panel-snapshot records per scope a `base` tree of the working state (staged, unstaged, untracked) built in a temporary GIT_INDEX_FILE without changing the real index or `git status`; `impl-review` after an impl panel delivers the diff base → current working tree, refusing to send anything when a tree, the scope set or a scope's directory moves between building the delta and the tamper baseline, and giving task.md only the budget left after SETTLED + delta + map (a head-clamp tells the judge) (an unchanged file absent, an untracked file present; a scope set or scope directory changed since the panel refuses the delta; over budget, the stat of the same two trees — its listing cut at a third of the cap, with one line saying so — and the exact diff commands), computes POST-D6 VERDICT (PASS = no counted Critical or Important; a tag counts only right after the severity marker; [SETTLED] is not counted, [SETTLED-CONTRADICTED] is, and [PRE-EXISTING] is not counted only when a delta was delivered and the finding (its whole text) cites no file the FULL delta changed — the file set is taken before any truncation and holds both paths of a rename; the check is deliberately at FILE level (owner amendment 2026-09-30: judges often cite wrong lines, and file level errs toward more review); the response's last non-empty line must BE a whole, bare (not code-spanned) CAP line whose count equals the recognised findings, and `more remain` is incomplete — otherwise the verdict fails closed), and RESERVES each run under the task lock before any judge is spawned: runs 1-2 after a panel are free, run 3 needs a counted Critical in run 2, run 4+ always needs `--owner-ok --reason`; a refused run exits 2 with nothing spent, one review at a time per task — a panel reserves before its tamper snapshot too, so a panel and a single judge exclude each other (a live reservation — while its owning process runs (POSIX, same host; recorded pid + host), otherwise by its OWN recorded expiry — refuses a second one without writing — its append would void the first run by tamper; a reservation past the horizon it recorded — the hard review timeout plus 10 minutes for a single judge, plus 15 for a panel — counts as spent), a corrupt ledger line refuses every new reservation until repaired (or `--owner-ok`), a run killed at its hard timeout counts (verdict TIMEOUT), a run that produced no review releases its reservation, and every owner-ok reason is recorded and named in the close receipt.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/post_d6.py",
@@ -15812,7 +15812,7 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": [
-            "`itself bounded to a third of the cap`: with 600 untracked files the whole text stays within the cap and the stat's own share is at most a third of it. The share was asserted by task 172 (the total alone held for other shares); red in a copy with the share at a half (`4001 not less than or equal to 2667`)."
+            "With 600 untracked files the whole text stays within the cap; the stat's LISTING is cut at a third of the cap and one short line saying so follows the cut (so the stat part as a whole is a third plus that line — the statement first said the stat itself was bounded to a third, which the marker line exceeded: task 172's impl panel, codex-medium). The share was asserted by task 172; red in a copy with the share at a half (`4001 not less than or equal to 2667`)."
           ]
         },
         {
@@ -16024,6 +16024,36 @@
           "limitations": [
             "`… and named in the close receipt`."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_post_d6.py",
+          "reference": "EndToEnd.test_a_scope_repointed_between_delta_and_tamper_baseline_sends_nothing",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "`… or a scope's directory moves between building the delta and the tamper baseline`: the code root is a link, repointed in between to a clone with the SAME tree — the scope set and every tree are unchanged — and the run exits 1 with no judge spawned. Written after task 172's impl panel (opus, sonnet), which would not accept the clause being cut while the behaviour is there; red in a copy whose re-check does not compare the directory (`0 != 1`: a judge was spawned)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_post_d6.py",
+          "reference": "EndToEnd.test_each_reservation_records_its_own_horizon",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The horizon each entry point records: the hard review timeout + 900 s for the panel's reservation, + 600 s for the single judge's. The statement said `+ 10 min` for both — true of the single judge only (task 172's impl panel, opus); corrected. Red in a copy with the single judge's margin at one minute (`(2100.0, 1260.0) != (2100, 1800)`)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "RunCap.test_third_run_allowed_after_a_critical_in_run_two",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`run 3 needs a counted Critical in run 2` — the ALLOWING side: with a Critical counted in run 2, run 3 is permitted. Left out of task 172's first list of citations (its impl panel, opus: without it no cited proof failed if a Critical stopped opening run 3)."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -16044,8 +16074,8 @@
         "A judge run that produced NO review (a 402 / out-of-credits failure, a budget-cap exit, a tamper stop) releases its reservation although it may have spent tokens — the owner's rule for the cap is to err toward one more review (2026-09-29); every such run is still in the review-spend journal.",
         "The cap's key (`**Round-id:**` in judge.md) and its count (post-panel-reviews.jsonl) live in the agent-writable task directory with no integrity check: editing the Round-id or deleting the ledger resets the count. The protocol bounds an honest agent's spend; it is not a control against a hostile one (owner ruling (a) framing).",
         "Reservation liveness uses os.kill(pid, 0) (the Windows guard — signal 0 terminates there — went with task 156, Linux-only); a reused pid can make a dead reservation look live until the pid is gone.",
-        "Task 172 (PLAN S11 item 13; task 170's binding audit): until then this row cited 7 tests for a statement of about 30 clauses. The tests that carry the others were in the same module, uncited; each was read against its clause and is cited now (37 references), and four clauses that no test reached got an assertion, each watched red on one deliberate break in a throwaway copy: the SETTLED block's place (`FIRST`), the LAST rulings section, a scope whose directory changed, the stat's third of the cap.",
-        "Narrowed by task 172: the statement said the single-judge run also refuses when a scope's DIRECTORY moves between building the delta and the tamper baseline. The comparison is in the code (`tasks/review.py`, the identity check beside the scope-set check) and has no test — its two neighbours do (a tree edit, a scope added in between) — so the clause is out of the statement until one is written. A scope whose directory changed SINCE THE PANEL is tested, and stays."
+        "Task 172 (PLAN S11 item 13; task 170's binding audit): until then this row cited 7 tests for a statement of about 30 clauses. The tests that carry the others were in the same module, uncited; each was read against its clause and is cited now, and the clauses that no test reached got an assertion, each watched red on one deliberate break in a throwaway copy: the SETTLED block's place (`FIRST`), the LAST rulings section, a scope whose directory changed, the stat's third of the cap.",
+        "Task 172, after its impl panel: the clause about a scope's DIRECTORY moving between the delta and the tamper baseline, which that task had first cut for want of a test, is back in the statement with its test; the reservation horizon reads as the code has it (10 minutes of margin for a single judge, 15 for a panel — the statement had said 10 for both); the stat's bound is worded as what is cut (its listing), not as the size of the whole stat part."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],
@@ -16273,13 +16303,13 @@
           "type": "executable integration",
           "path": "tests/test_seat_outage.py",
           "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_the_configured_panel_is_counted_like_a_models_selection",
-          "boundary": "subprocess",
+          "boundary": "unit",
           "negative_control": {
             "path": "tests/test_seat_outage.py",
             "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_enough_live_seats_still_pass"
           },
           "limitations": [
-            "The REQUESTED seats when they come from the configured panel (no `--models`): six configured, three unable to run → `only 3 of the 6 requested seats can run, and the quorum is 4`, no judge called. Every older quorum test passed `--models`. Watched red in a throwaway copy that counted only a `--models` selection (`None != 1`: the panel went on)."
+            "cmd_panel_review in-process, the judges faked at the adapter and the tamper guard stubbed clean — as its sibling proofs. The REQUESTED seats when they come from the configured panel: six seats written to the project's `.agent/models.json` and read by the real loader (no `--models`), three unable to run → `only 3 of the 6 requested seats can run, and the quorum is 4`, no judge called. Every older quorum test passed `--models`. Watched red in two throwaway copies: one that counts only a `--models` selection, one that does not read the configured panel. (Its first version handed the panel in through a mocked loader and was recorded with the wrong boundary — task 172's impl panel, opus and codex-high.)"
           ]
         }
       ],

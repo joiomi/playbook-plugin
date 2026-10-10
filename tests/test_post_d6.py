@@ -591,13 +591,17 @@ class SingleRun2(_TmpDir):
         text, note = post_d6.delta_text(repo, snap, cap)
         self.assertIsNotNone(text, note)
         self.assertLessEqual(len(text), cap + 200, len(text))
-        # … and the stat's own share is a third of the cap, as the row says (task 172:
-        # the total above holds for other shares too)
+        # … and the stat's LISTING is cut at a third of the cap (task 172: the total above
+        # holds for other shares too); one line saying so follows the cut, so the stat
+        # part as a whole is a third plus that line (impl panel r1, codex-medium)
         marker = "[... stat truncated"
         self.assertIn(marker, text)
-        stat = text.split("...]\n", 1)[1].split(marker, 1)[0]
-        self.assertLessEqual(len(stat), cap // 3 + 1)
-        self.assertGreater(len(stat), cap // 4)
+        after_notice = text.split("...]\n", 1)[1]
+        listing = after_notice.split(marker, 1)[0]
+        self.assertLessEqual(len(listing), cap // 3 + 1)
+        self.assertGreater(len(listing), cap // 4)
+        said = marker + after_notice.split(marker, 1)[1].split("\n", 1)[0]
+        self.assertLess(len(said), 80)
 
 
 # ── impl panel round 2 on task 108 findings, red first ───────────────────────
@@ -948,6 +952,57 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(code, 1, err)
         self.assertIn("changed while the delta was being built", err)
         self.assertEqual(len(self.single_calls), n)
+
+    def test_a_scope_repointed_between_delta_and_tamper_baseline_sends_nothing(self):
+        # The third thing the re-check compares, beside the trees and the scope SET: each
+        # scope's DIRECTORY. Task 172 first cut this clause from the row for want of a test;
+        # its impl panel (opus, sonnet) pointed at the test above as the way to write one.
+        # The code root `lib` is a link; in between it is repointed to a clone with the SAME
+        # tree — the set and every tree are unchanged, only where `lib` leads is not.
+        from unittest import mock
+        for name in ("lib_a", "lib_b"):
+            repo = self.d / name
+            repo.mkdir()
+            _git(repo, "init", "-q")
+            _git(repo, "config", "user.email", "t@t")
+            _git(repo, "config", "user.name", "t")
+            (repo / "m.py").write_text("m = 1\n", encoding="utf-8")
+            _git(repo, "add", "-A")
+            _git(repo, "commit", "-q", "-m", "c0")
+        os.symlink("lib_a", self.d / "lib")
+        with open(self.d / ".git" / "info" / "exclude", "a", encoding="utf-8") as f:
+            f.write("lib\nlib_a/\nlib_b/\n")
+        (self.d / ".agent" / "config.json").write_text(json.dumps({"code_roots": ["lib"]}), encoding="utf-8")
+        self._panel()
+        (self.d / "edit.py").write_text("v = 2\n", encoding="utf-8")
+        real = self.R._snapshot_repo_state
+
+        def repoint_then_snapshot(*a, **k):
+            os.remove(self.d / "lib")
+            os.symlink("lib_b", self.d / "lib")
+            return real(*a, **k)
+        n = len(self.single_calls)
+        with mock.patch.object(self.R, "_snapshot_repo_state", repoint_then_snapshot):
+            code, err, out = self._single("CAP: 0/5 reported, exhausted\n")
+        self.assertEqual(code, 1, err)
+        self.assertIn("changed while the delta was being built", err)
+        self.assertEqual(len(self.single_calls), n, "a judge was spawned on a scope that points elsewhere")
+
+    def test_each_reservation_records_its_own_horizon(self):
+        # "a reservation past its horizon counts as spent" — and the horizon is what the
+        # entry point wrote: the hard review timeout plus 15 minutes for a panel, plus 10
+        # for a single judge (impl panel r1, opus: the row said "+ 10 min" for both and no
+        # test pinned either number)
+        from tasks.core import resolve_review_timeout
+        hard = resolve_review_timeout(self.d)
+        self._panel()
+        (self.d / "edit.py").write_text("v = 2\n", encoding="utf-8")
+        self._single("CAP: 0/5 reported, exhausted\n")
+        lines = [json.loads(ln) for ln in (self.tf.parent / post_d6.RUNS_NAME).read_text(encoding="utf-8").splitlines()]
+        reserved = [r for r in lines if r.get("status") == "reserved"]
+        panel = next(r for r in reserved if r.get("kind") == "panel")
+        single = next(r for r in reserved if r.get("kind") != "panel")
+        self.assertEqual((panel["expires_after"], single["expires_after"]), (hard + 900, hard + 600))
 
     def test_a_head_clamp_tells_the_judge(self):
         self._panel()

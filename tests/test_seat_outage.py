@@ -546,10 +546,12 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
         # --models selection — and every test above passes --models (task 170's binding
         # audit; task 172). The same six seats, three of them unable to run, this time
         # as the panel `.agent/models.json` configures: the same refusal, nothing spent.
-        from unittest import mock
+        # Read by the real loader from the project's `.agent/models.json` (impl panel r1,
+        # opus and codex-high: the first version handed the panel in through a mocked
+        # loader, so it proved nothing about where the configured seats come from).
         seats = list(self.CLAUDE[:3]) + ["codex:gpt-5.5", "codex:gpt-5.4", "codex:gpt-5.3-codex"]
-        with mock.patch("provider.sandbox.load_judge_config", return_value={"panel": seats}):
-            code, out, err = self._panel(None, self._judge())
+        (self.d / ".agent" / "models.json").write_text(json.dumps({"panel": seats}), encoding="utf-8")
+        code, out, err = self._panel(None, self._judge())
         self.assertEqual(code, 1, out + err)
         self.assertIn("only 3 of the 6 requested seats can run, and the quorum is 4", err)
         self.assertEqual(self.calls, [], "judges were spent on a panel that cannot reach quorum")
