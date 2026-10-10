@@ -97,7 +97,9 @@ _cpb_rotate() {
             _carried() {
                 command grep -a -E "$_re" "$1" > "$2" 2>/dev/null
                 [[ $? -le 1 && -f "$2" ]] || return 1
-                if [[ -n "$(command find "$2" -prune -size +5242880c 2>/dev/null)" ]]; then
+                # (a `find` that fails has not said "they fit": no carry)
+                _past=$(command find "$2" -prune -size +5242880c 2>/dev/null) || return 1
+                if [[ -n "$_past" ]]; then
                     command tail -c 5242881 "$2" 2>/dev/null | command tail -n +2 > "$2.cut.new" 2>/dev/null
                     _st=("${PIPESTATUS[@]}")
                     if [[ "${_st[0]}" -ne 0 || "${_st[1]}" -ne 0 ]] || ! command mv -f "$2.cut.new" "$2" 2>/dev/null; then
@@ -106,6 +108,19 @@ _cpb_rotate() {
                     fi
                 fi
                 return 0
+            }
+
+            # Does FILE end on a line? 0: yes, or it is empty. 1: no — it ends
+            # inside one. 2: it could not be looked at. The last byte goes to a
+            # file and `wc -l` counts it: a NUL is then a byte like any other
+            # (a command substitution drops it and would read "nothing"), and
+            # either tool failing is an answer of its own (impl panel r2).
+            _ends_on_a_line() {
+                [[ -s "$1" ]] || return 0
+                command tail -c 1 "$1" > "$_tmp/last" 2>/dev/null || return 2
+                [[ -s "$_tmp/last" ]] || return 2
+                _nl=$(command wc -l < "$_tmp/last" 2>/dev/null) || return 2
+                [[ "${_nl//[!0-9]/}" == 1 ]]
             }
 
             # Every carried line of ARCHIVE that the live file does not hold yet,
@@ -129,13 +144,19 @@ _cpb_rotate() {
                 fi
                 # a live file that ends inside a line (a writer was killed in it):
                 # closed first, so that what is given back starts on a line of its own
-                if [[ -s "$_hist" && -n "$(command tail -c 1 "$_hist" 2>/dev/null)" ]]; then
+                _ends_on_a_line "$_hist"
+                _rc=$?
+                if [[ "$_rc" -eq 1 ]]; then
                     command cat <<< '' >> "$_hist" 2>/dev/null
                     # looked at again, not taken on `cat`'s word
-                    if [[ -n "$(command tail -c 1 "$_hist" 2>/dev/null)" ]]; then
-                        command rm -rf "$_tmp" 2>/dev/null
-                        return 1
-                    fi
+                    _ends_on_a_line "$_hist"
+                    _rc=$?
+                fi
+                if [[ "$_rc" -ne 0 ]]; then
+                    # it does not end on a line, or that could not be told:
+                    # nothing is given, and the marker stays
+                    command rm -rf "$_tmp" 2>/dev/null
+                    return 1
                 fi
                 command grep -a -F -x -v -f "$_tmp/held" "$_tmp/owed" >> "$_hist" 2>/dev/null
                 _rc=$?
@@ -168,12 +189,27 @@ _cpb_rotate() {
             # A rotation that has not been closed: one that died, or one that
             # lived and left this second giving-back to us. The marker's one line
             # is read as the NAME of an archive in this lane, and as nothing else.
-            if [[ -f "$_owes" ]]; then
-                # read by bash itself: no program whose failing, and no builtin
-                # whose absence, could empty the name and have the marker
-                # removed with nothing given
-                _name=$(<"$_owes")
-                _name="${_name%%$'\n'*}"
+            # A marker of OURS is a regular file that holds one short name. One
+            # that is a symbolic link, or longer than a name can be, was put
+            # there by somebody else (a project can ship it — a link to a very
+            # large file, a payload after a first line that reads well): it is
+            # removed WITHOUT being read, and nothing is given on its word
+            # (impl panel r2). Whether it is too long is asked of `find`; if
+            # that cannot be asked, the marker is left for the next shell.
+            if [[ -L "$_owes" ]]; then
+                command rm -f "$_owes" 2>/dev/null
+            elif [[ -f "$_owes" ]]; then
+                _long=$(command find "$_owes" -prune -size +255c 2>/dev/null) || exit 0
+                if [[ -n "$_long" ]]; then
+                    command rm -f "$_owes" 2>/dev/null
+                    _name=""
+                else
+                    # read by bash itself: no program whose failing, and no
+                    # builtin whose absence, could empty the name and have the
+                    # marker removed with nothing given
+                    _name=$(<"$_owes")
+                    _name="${_name%%$'\n'*}"
+                fi
                 case "$_name" in
                     */*) _name="" ;;
                     bash_history.archived-owes) _name="" ;;
