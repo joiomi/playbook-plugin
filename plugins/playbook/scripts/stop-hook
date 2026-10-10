@@ -76,10 +76,12 @@ SESSION_ID="$(resolve_session_id)"
 # the session's counters, and a turn STARTED by one may end if it made no write.
 # For the chat-log hook to tell a notification that starts a turn from one that
 # lands in the middle of one, every stop this hook lets through (exit 0, on any
-# path below) leaves the tool count of that moment in the counters file,
-# `turn_end_tools`; it equals `tools` only while no tool has run since. A blocked
-# stop (exit 2) leaves nothing. Written only into a counters file that already
-# exists, for a resolved session and a readable lane. It never changes the exit
+# path below) leaves the tool count of that moment in a one-line file beside the
+# counters, `turn_end`; it equals `tools` only while no tool has run since. A
+# blocked stop (exit 2) leaves nothing. Written only where a counters file
+# already exists, for a resolved session and a readable lane — and never INTO the
+# counters file, which a tool call's hook may be updating (impl panel r1; see
+# write_session_mark). It never changes the exit
 # status: the trap calls it as `… || true`, because under `set -e` a command
 # that fails inside a plain EXIT trap replaces the shell's exit status with 1,
 # whatever it was (measured on bash 5.1, for 0 and for 2). The only write below
@@ -91,9 +93,9 @@ SESSION_ID="$(resolve_session_id)"
 pb_note_turn_end() {
     local rc=$?
     if [ "$rc" -eq 0 ] && [ -n "${SESSION_ID:-}" ] && [ "${MARKER_INVALID:-false}" != true ]; then
-        local counters="$AGENT_DIR/sessions/$SESSION_ID/counters"
-        if [ -f "$counters" ]; then
-            write_counter "$counters" turn_end_tools "$(read_counter_int "$counters" tools)"
+        local dir="$AGENT_DIR/sessions/$SESSION_ID"
+        if [ -f "$dir/counters" ]; then
+            write_session_mark "$dir/turn_end" "$(read_counter_int "$dir/counters" tools)"
         fi
     fi
     return 0
@@ -294,18 +296,14 @@ if [ -f "$COUNTER_FILE" ] && [ "${PB_GREP_RC:-0}" -le 1 ]; then
     # Owner's Q1 (task 173): the counters above run from the last USER prompt — a
     # notification no longer resets them. His one exception: a turn that a
     # notification STARTED may end if it made no write. The chat-log hook noted
-    # the write count at that start (`notif_writes`); equal now = none since.
+    # the write count at that start (file `notif_start`); equal now = none since.
     # No tool-count limit: his sentence has none. Only a plain number counts — a
-    # missing, empty or malformed value releases nothing (the bytes are
-    # `.agent/`-resident; `_safe_int` would read garbage as 0).
-    NOTIF_WRITES=$(read_counter "$COUNTER_FILE" notif_writes)
-    case "$NOTIF_WRITES" in
-        ''|*[!0-9]*) ;;
-        *)
-            if [ "${#NOTIF_WRITES}" -le 18 ] && [ "$WRITES" -eq "$((10#$NOTIF_WRITES))" ]; then
-                exit 0
-            fi ;;
-    esac
+    # missing, empty or malformed value releases nothing (read_session_mark; the
+    # bytes are `.agent/`-resident, and `_safe_int` would read garbage as 0).
+    NOTIF_WRITES=$(read_session_mark "$SESSION_DIR/notif_start")
+    if [ -n "$NOTIF_WRITES" ] && [ "$WRITES" -eq "$((10#$NOTIF_WRITES))" ]; then
+        exit 0
+    fi
 fi
 
 # Freehand mode: don't block when the Python reader says the block may be

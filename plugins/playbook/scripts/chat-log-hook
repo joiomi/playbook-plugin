@@ -181,6 +181,8 @@ reset_session_counters() {
     local session_dir="$AGENT_DIR/sessions/$SESSION_ID"
     mkdir -p "$session_dir"
     reset_counters "$session_dir/counters"
+    # The user's prompt ends whatever a notification began (task 173).
+    rm -f "$session_dir/turn_end" "$session_dir/notif_start" 2>/dev/null || true
 }
 # Owner's Q1 (2026-09-24; PLAN S11, task 173): an AUTOMATIC notification does not
 # reset the counters the stop hook's bypass reads. It is not the user's prompt and
@@ -189,20 +191,29 @@ reset_session_counters() {
 # of its tool calls, and a stop right after it would have been released with every
 # gate open. The one exception he made: a turn STARTED by a notification may end
 # if it made no write. A turn started by one is told from a turn one landed in by
-# the stop hook's mark: `turn_end_tools` is the tool count at the last stop it
-# let through, so it equals `tools` only while no tool has run since. Then, and
-# only then, the write count of this moment is noted (`notif_writes`) for the
+# the stop hook's mark: the file `turn_end` holds the tool count at the last stop
+# it let through, so it equals `tools` only while no tool has run since. Then, and
+# only then, the write count of this moment is noted (file `notif_start`) for the
 # stop hook to compare. Otherwise nothing is written; no counters file, nothing
-# is created. A user prompt's reset drops both keys (it keeps only `gate_*`).
+# is created. A user prompt's reset removes both files.
+# The counters file is READ ONCE and never written here (impl panel r1): a tool
+# call's hook bumps `tools` and then `writes`, each by renaming a new file into
+# place, so one read is one consistent picture — it cannot show the old `tools`
+# beside the new `writes` — and nothing here can rename a stale copy over an
+# increment.
 note_notification() {
     [ -n "$SESSION_ID" ] || return 0
-    local counters="$AGENT_DIR/sessions/$SESSION_ID/counters"
-    [ -f "$counters" ] || return 0
-    local ended
-    ended=$(read_counter "$counters" turn_end_tools)
-    case "$ended" in ''|*[!0-9]*) return 0 ;; esac
-    [ "$ended" = "$(read_counter "$counters" tools)" ] || return 0
-    write_counter "$counters" notif_writes "$(read_counter_int "$counters" writes)"
+    local dir="$AGENT_DIR/sessions/$SESSION_ID"
+    [ -f "$dir/counters" ] || return 0
+    local ended snapshot tools writes
+    ended=$(read_session_mark "$dir/turn_end")
+    [ -n "$ended" ] || return 0
+    snapshot=$(cat "$dir/counters" 2>/dev/null) || return 0
+    tools=$(printf '%s\n' "$snapshot" | sed -n 's/^tools=//p' | head -1)
+    writes=$(printf '%s\n' "$snapshot" | sed -n 's/^writes=//p' | head -1)
+    [ "$ended" = "$tools" ] || return 0
+    case "$writes" in ''|*[!0-9]*) return 0 ;; esac
+    write_session_mark "$dir/notif_start" "$writes"
 }
 _lead="${USER_MESSAGE#"${USER_MESSAGE%%[![:space:]]*}"}"
 case "$_lead" in

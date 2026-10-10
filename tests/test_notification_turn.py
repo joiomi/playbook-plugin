@@ -16,6 +16,15 @@ zero writes."
 These tests run the three REAL hooks as subprocesses, in the order the events happen:
 `chat-log-hook` for a prompt, `state-echo-hook` for a tool call, `stop-hook` for a
 stop. The rule is about an order of events; one hook alone cannot show it.
+
+What the two hooks keep for it are two one-line files beside the session's `counters`:
+`turn_end` (the tool count at the last stop the stop hook let through) and
+`notif_start` (the write count when a notification started a turn). They are files of
+their own, not keys of `counters`, since impl panel round 1 (opus, codex-high,
+codex-medium): a key is set by copying the whole counters file and renaming the copy
+over it, so a notification's hook that overlapped a tool call's hook could rename a
+stale copy over that call's increment — and the write it lost was the one the stop
+hook needed to see.
 """
 
 from __future__ import annotations
@@ -64,6 +73,8 @@ class _Session(unittest.TestCase):
         self.session_dir.mkdir(parents=True)
         (self.session_dir / "current_state").write_text("001\n", encoding="utf-8")
         self.counters_file = self.session_dir / "counters"
+        self.turn_end = self.session_dir / "turn_end"
+        self.notif_start = self.session_dir / "notif_start"
 
     def _hook(self, name, payload):
         env = dict(os.environ)
@@ -229,16 +240,34 @@ class AStopAfterANotification(_Session):
         self.prompt()
         self.tools("Bash", "Bash")
         self.assertEqual(self.stop().returncode, 2)
-        self.assertNotIn("turn_end_tools", self.counters())
+        self.assertFalse(self.turn_end.exists())
         self.prompt(NOTIFICATIONS[0])                # the turn goes on after the block
-        self.assertNotIn("notif_writes", self.counters())
+        self.assertFalse(self.notif_start.exists())
+        self.assertEqual(self.stop().returncode, 2)
+
+    def test_a_notification_right_after_a_user_prompt_is_not_a_start(self):
+        # A reply with no tool call ends (mark: 0 tools). The USER speaks — and a
+        # notification lands in their turn before its first tool call, when the tool
+        # count is 0 again. The user's prompt must have taken the old mark away, or
+        # this turn would pass for one a notification started.
+        self.prompt()
+        self.assertEqual(self.stop().returncode, 0)
+        self.assertTrue(self.turn_end.exists())
+        self.prompt("now do the real thing")
+        self.assertFalse(self.turn_end.exists())
+        self.prompt(NOTIFICATIONS[0])
+        self.assertFalse(self.notif_start.exists())
+        self.tools(*["Read"] * 6)
         self.assertEqual(self.stop().returncode, 2)
 
     def test_a_baseline_that_is_not_a_number_releases_nothing(self):
         for junk in ("abc", "", "-0", "0x0", "9" * 30, "0 ", "$(touch pwned)"):
             with self.subTest(junk):
-                self.counters_file.write_text(f"tools=9\nwrites=0\nnotif_writes={junk}\n", encoding="utf-8")
+                self.counters_file.write_text("tools=9\nwrites=0\n", encoding="utf-8")
+                self.notif_start.write_text(f"{junk}\n", encoding="utf-8")
                 self.assertEqual(self.stop().returncode, 2)
+        self.notif_start.write_text("0\n", encoding="utf-8")       # control: a plain 0 does release
+        self.assertEqual(self.stop().returncode, 0)
         self.assertFalse((self.project / "pwned").exists())
 
     def test_every_tool_that_edits_a_file_is_a_write(self):
@@ -267,7 +296,7 @@ class TheStopHookMarksOnlyAStopItLetThrough(_Session):
     hook's own verdict — its exit status, its message — comes out as before."""
 
     def _mark(self):
-        return self.counters().get("turn_end_tools")
+        return self.turn_end.read_text(encoding="utf-8").strip() if self.turn_end.exists() else None
 
     def test_a_blocked_stop_leaves_no_mark_and_says_what_it_said(self):
         self.prompt()
@@ -324,6 +353,82 @@ class TheStopHookMarksOnlyAStopItLetThrough(_Session):
         (self.session_dir / "current_state").unlink()
         self.assertEqual(self.stop().returncode, 0)             # no active task
         self.assertFalse(self.counters_file.exists())
+        self.assertFalse(self.turn_end.exists())
+
+
+class TheCountersFileIsNeverRewrittenByTheRule(_Session):
+    """Impl panel round 1 (opus, codex-high, codex-medium). A counter key is set by
+    copying the whole file and renaming the copy over it; done by a hook that overlaps
+    a tool call's hook, that rename can put a stale copy over the call's increment.
+    Neither of the rule's two writers touches the counters file, and the notification
+    hook reads it ONCE — one consistent picture of `tools` and `writes`."""
+
+    def _identity(self):
+        st = os.stat(self.counters_file)
+        return st.st_ino, self.counters_file.read_bytes()
+
+    def test_a_stop_let_through_and_a_notification_leave_the_file_as_it_was(self):
+        self.prompt()
+        self.tools("Bash", "Read")
+        before = self._identity()
+        self.assertEqual(self.stop().returncode, 2)
+        self.assertEqual(self.stop(active=True).returncode, 0)       # writes the mark
+        self.assertEqual(self._identity(), before, "the stop hook rewrote the counters file")
+        self.prompt(NOTIFICATIONS[0])                                # notes the baseline
+        self.assertTrue(self.notif_start.exists())
+        self.assertEqual(self._identity(), before, "the notification's hook rewrote the counters file")
+
+    def _shims(self, bump_after_read):
+        """`cat` and `sed` first on PATH: they count each read OF THE COUNTERS FILE and,
+        after the Nth, do what a tool call's hook does — `tools` then `writes`, +1 each."""
+        import shutil
+        bindir = Path(self._tmp.name) / "shims"
+        bindir.mkdir()
+        count = Path(self._tmp.name) / "reads"
+        for tool in ("cat", "sed"):
+            real = shutil.which(tool)
+            (bindir / tool).write_text(f"""#!/bin/bash
+"{real}" "$@"; rc=$?
+for a in "$@"; do
+    if [ "$a" = "{self.counters_file}" ]; then
+        n=$(( $("{shutil.which('cat')}" "{count}" 2>/dev/null || echo 0) + 1 )); echo "$n" > "{count}"
+        if [ "$n" -eq {bump_after_read} ]; then
+            "{shutil.which('sed')}" -i -E 's/^tools=(.*)$/tools=3/; s/^writes=(.*)$/writes=3/' "{self.counters_file}"
+        fi
+    fi
+done
+exit $rc
+""", encoding="utf-8")
+            (bindir / tool).chmod(0o755)
+        return bindir, count
+
+    def _notify_through_shims(self, bindir):
+        env = dict(os.environ, PLAYBOOK_SESSION_ID=SID, HOME=self._tmp.name,
+                   PATH=f"{bindir}{os.pathsep}{os.environ['PATH']}")
+        for k in ("BASH_ENV", "PLAYBOOK_ROLE", "PLAYBOOK_EVAL_CONFIG"):
+            env.pop(k, None)
+        r = subprocess.run([bash_or_skip(), str(SCRIPTS / "chat-log-hook")], cwd=self.project, env=env,
+                           text=True, capture_output=True, timeout=60,
+                           input=json.dumps({"prompt": NOTIFICATIONS[0]}))
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_a_write_that_lands_while_the_notification_is_read_still_holds_the_stop(self):
+        # tools=2 writes=2 at the mark; a tool call's hook lands during the
+        # notification's hook (3 and 3). Whichever read it lands after, the stop that
+        # follows must be held: the turn has written since the notification.
+        for nth in (1, 2, 3):
+            with self.subTest(after_read=nth):
+                self.setUp()
+                self.a_turn_that_ended()
+                self.assertEqual(self.counts(), (2, 2))
+                bindir, count = self._shims(nth)
+                self._notify_through_shims(bindir)
+                reads = int(count.read_text(encoding="utf-8")) if count.exists() else 0
+                self.assertEqual(reads, 1, "the notification's hook read the counters file more than once")
+                self.assertEqual(self.counts(), (3, 3) if nth == 1 else (2, 2))
+                if nth == 1:
+                    self.assertEqual(self.stop().returncode, 2,
+                                     "a write landed during the notification and the stop was released")
 
 
 class AFailureWhileMarkingDoesNotChangeTheVerdict(_Session):
@@ -331,7 +436,7 @@ class AFailureWhileMarkingDoesNotChangeTheVerdict(_Session):
     exit status with 1, whatever it was (measured, bash 5.1). The mark is written
     only for an exit 0 and its writer does not fail today; this pins that the hook's
     verdict would come out unchanged if it did. The hook is run from a copy of the
-    plugin whose `write_counter` fails — with the trap unguarded, the allowed stop
+    plugin whose mark writer fails — with the trap unguarded, the allowed stop
     below comes out 1."""
 
     def setUp(self):
@@ -342,7 +447,7 @@ class AFailureWhileMarkingDoesNotChangeTheVerdict(_Session):
                         ignore=shutil.ignore_patterns("__pycache__"))
         lib = self.plugin_copy / "scripts" / "gate-echo-lib.sh"
         with open(lib, "a", encoding="utf-8") as f:
-            f.write("\nwrite_counter() { echo 'write_counter: forced failure' >&2; return 1; }\n")
+            f.write("\nwrite_session_mark() { echo 'write_session_mark: forced failure' >&2; return 1; }\n")
 
     def _stop_from_copy(self, active=False):
         env = dict(os.environ, PLAYBOOK_SESSION_ID=SID, HOME=self._tmp.name)

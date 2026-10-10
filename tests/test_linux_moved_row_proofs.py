@@ -1039,6 +1039,10 @@ class TheExitCodesTheReferenceStates(unittest.TestCase):
         "the command exits 1, names them and creates nothing": "test_a_second_bare_retro_exits_1_and_creates_nothing",
         'are refused before anything runs (exit 2, "Nothing changed.")':
             "test_each_listed_command_refuses_an_unknown_option_with_exit_2",
+        # task 173: `tasks intent <N>` without the approval of what it quotes
+        "and exits 2. The same line ends with the flag that approves exactly that":
+            ("tests/test_intent_cost_question.py", "ThroughTheCommandLine",
+             "test_the_bare_command_exits_2_and_starts_no_judge"),
     }
     REFUSING = ("status", "list", "ls", "parked", "bootstrap", "dashboard", "timeline", "mindmap-sync",
                 "retro", "freehand", "audit")

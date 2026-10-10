@@ -667,6 +667,37 @@ reset_counters() {
     fi
 }
 
+# Owner's Q1 (task 173): two one-line files beside a session's `counters` —
+# `turn_end`, the tool count at the last stop the stop hook let through, and
+# `notif_start`, the write count when a notification started a turn. Files of
+# their own, NOT keys of `counters`: write_counter sets a key by copying the
+# whole file and renaming the copy over it, so a hook that overlaps a tool
+# call's hook can rename a stale copy over that call's increment (impl panel
+# r1). Nothing that serves the rule rewrites `counters`.
+#
+# write_session_mark FILE VALUE — temp file + rename in the same directory.
+# Never fails the caller; a mark that cannot be written is simply not there.
+write_session_mark() {
+    local file="$1" value="$2"
+    local tmp="${file}.tmp.$$"
+    if ! { printf '%s\n' "$value" > "$tmp" 2>/dev/null && mv "$tmp" "$file" 2>/dev/null; }; then
+        rm -f "$tmp" 2>/dev/null || true
+    fi
+    return 0
+}
+
+# read_session_mark FILE — its first line when that is a plain number of at
+# most 18 digits; nothing otherwise (missing, empty, signed, spaced, anything
+# else: the bytes are `.agent/`-resident and untrusted, like the counters).
+read_session_mark() {
+    local value=""
+    [ -f "$1" ] || return 0
+    IFS= read -r value < "$1" 2>/dev/null || true
+    case "$value" in ''|*[!0-9]*) return 0 ;; esac
+    [ "${#value}" -le 18 ] || return 0
+    printf '%s' "$value"
+}
+
 # format_context TASK_NUM DONE TOTAL GATE_TEXT GATE_LINE REL_PATH
 # Outputs the formatted context string for the hook
 format_context() {

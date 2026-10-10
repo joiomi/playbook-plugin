@@ -11489,7 +11489,7 @@
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": [
-            "A blocked stop (exit 2) leaves no `turn_end_tools`; a notification after it notes no baseline; the next stop is blocked. Red in a copy that marks every stop, and in one where a notification is a start with no mark at all."
+            "A blocked stop (exit 2) leaves no `turn_end` file; a notification after it notes no baseline; the next stop is blocked. Red in a copy that marks every stop, and in one where a notification is a start with no mark at all."
           ]
         },
         {
@@ -11499,7 +11499,7 @@
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": [
-            "A notification's baseline of 0 does not survive the user's next prompt: six Read calls after it and the stop is blocked. Red in a copy whose reset keeps the two keys (`0 != 2`)."
+            "A notification's baseline of 0 does not survive the user's next prompt: six Read calls after it and the stop is blocked. Red in a copy whose reset keeps the two files (`0 != 2`)."
           ]
         },
         {
@@ -11509,7 +11509,7 @@
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": [
-            "`notif_writes` empty, non-numeric, signed, hex, 30 digits, with a trailing space or carrying a command substitution, beside writes=0 and tools=9 → exit 2 each, and nothing is executed. Red in a copy that reads it through `_safe_int` (garbage reads as 0 = writes)."
+            "`notif_start` empty, non-numeric, signed, hex, 30 digits, with a trailing space or carrying a command substitution, beside writes=0 and tools=9 → exit 2 each, and nothing is executed; the control in the same test, a plain `0`, releases. Red in a copy that reads the file through `_safe_int` (garbage reads as 0 = writes)."
           ]
         },
         {
@@ -11522,7 +11522,7 @@
             "reference": "TheStopHookMarksOnlyAStopItLetThrough.test_a_blocked_stop_leaves_no_mark_and_says_what_it_said"
           },
           "limitations": [
-            "The valve, all gates done, a blocked status, no active task: each exits 0 and leaves `turn_end_tools` = the tool count; the counts themselves are unchanged. Unfixed tree: `None != '3'`."
+            "The valve, all gates done, a blocked status, no active task: each exits 0 and leaves `turn_end` = the tool count; the counts themselves are unchanged. Unfixed tree: `None != '3'`."
           ]
         },
         {
@@ -11532,7 +11532,7 @@
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": [
-            "No counters file: a blocked stop, the valve and a stop with no active task create none. Red in a copy whose mark is written without the file test. (Its first version drove only the blocked stop and passed that break — rewritten.)"
+            "No counters file: a blocked stop, the valve and a stop with no active task create neither it nor a mark. Red in a copy whose mark is written without the file test. (Its first version drove only the blocked stop and passed that break — rewritten.)"
           ]
         },
         {
@@ -11542,7 +11542,7 @@
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": [
-            "The hook run from a copy of the plugin whose `write_counter` fails: exit 2 stays 2, exit 0 stays 0, and the failing write is seen to have been reached. Red with the trap unguarded (`1 != 0`): under `set -e` a failing command inside a plain EXIT trap replaces the exit status with 1 (measured on bash 5.1 for 0 and for 2)."
+            "The hook run from a copy of the plugin whose mark writer fails: exit 2 stays 2, exit 0 stays 0, and the failing write is seen to have been reached. Red with the trap unguarded (`1 != 0`): under `set -e` a failing command inside a plain EXIT trap replaces the exit status with 1 (measured on bash 5.1 for 0 and for 2)."
           ]
         },
         {
@@ -11556,6 +11556,36 @@
           },
           "limitations": [
             "A prompt, then ONE MultiEdit (or NotebookEdit) through the real state-echo-hook: the counters read tools=1 writes=1 and the stop is blocked. Before the count was widened: `(1, 0) != (1, 1)` — the turn was released as a chat reply."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_notification_turn.py",
+          "reference": "TheCountersFileIsNeverRewrittenByTheRule.test_a_stop_let_through_and_a_notification_leave_the_file_as_it_was",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "After a stop that is let through (which writes the mark) and a notification that starts a turn (which notes the baseline), the counters file is the same inode with the same bytes. On the first version (nested `978ff38`, the marks as keys of that file): `(17767222, b'…') != (17767223, b'…')`."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_notification_turn.py",
+          "reference": "TheCountersFileIsNeverRewrittenByTheRule.test_a_write_that_lands_while_the_notification_is_read_still_holds_the_stop",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "`cat` and `sed` shimmed first on PATH count each read OF THE COUNTERS FILE by the real chat-log-hook and, after the Nth, do what a tool call's hook does (tools and writes +1): the hook reads the file exactly once, and when the write lands right after that read the stop that follows is held. On the first version: `2 != 1` / `3 != 1 : the notification's hook read the counters file more than once`. A deterministic stand-in for the overlap the panel described; two real hook processes racing are not run against each other."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_notification_turn.py",
+          "reference": "AStopAfterANotification.test_a_notification_right_after_a_user_prompt_is_not_a_start",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "A reply with no tool call ends (mark: 0 tools); the USER speaks; a notification lands before the first tool call of their turn (tools is 0 again); six Read calls; stop → exit 2: the user's prompt removed the mark. Red in a copy whose reset keeps the two files."
           ]
         }
       ],
@@ -11573,10 +11603,11 @@
         "Task 043 (V7): the status read depends on python3 >= 3.10 being on PATH (already required by task-gate-hook and the CLI); its absence makes a genuinely blocked task unable to end the turn via the blocked release (the one-shot stop_hook_active valve still ends a re-issued stop). Cost: one python spawn per Stop event (~30 ms import of tasks.core), not on the per-tool PreToolUse path. Task 055: the same spawn now also carries the gate count and first gate (`--fields`, 4 LF-only lines: status, count, first gate, `release`/`hold`; a partial, non-numeric or unknown-valued frame is unreadable → fail closed); still one spawn per Stop event, not on the per-tool path. [SUPERSEDED in part by task 072: the `stop_hook_active` valve no longer needs python3 (bash `=~`), so a blocked task CAN end its re-issued stop without python3; what still needs python3 is the `blocked`-status release and gate precision.]",
         "CLOSED in task 055 (043 round-5 panel vector): gate discovery no longer greps — status, live unchecked count, first live gate and the Freehand waiver come from ONE python spawn (`task-status.py --fields` → core._status_from_lines / _live_gate_state / _freehand_release_allowed over ONE read of the file, physical `\\n` lines only). The 055 impl panels (rounds 1-2) then closed: a blank-text first gate hiding a later Freehand gate, unclosed-fenced and indented Freehand decoys (the waiver is decided in Python: Freehand-prefixed, not `Freehand log`, indent < 4, no unclosed fence), `splitlines()` vs grep on U+0085/U+2028 (physical lines for gates AND the status reader/writers — a `prose\\x85## Status\\x85blocked` line can no longer mint a status), and a two-read snapshot in `--fields`. RESIDUAL, disclosed: when the reader cannot run the grep fallback counts fence-blind (over-counts only) and never releases; the other task.md scanners (risk, section spans, handoff, receipts, compact) still use `splitlines()` — not on the stop/F3 release path, parked as an engine-wide line-model vector alongside the HTML-comment item. [SUPERSEDED wording, task 072: 'never releases' was overbroad — the fallback never UNDER-counts and never releases on a count it could not take; the counter-gated conversational bypass (writes=0, tools<5) is the documented release for a COUNTED tree on both arms, and the valve ends a re-issued stop. See the current statement.]",
         "CLOSED in task 072 (070 release panel, codex-high #2 / codex-medium #3): the no-python fallback was NOT fail-closed as the 1.5.43 entry stated — `|| UNCHECKED=0` mapped a grep FAILURE to zero gates (released the stop) and the `^[[:space:]]*` anchor missed BOM-prefixed gates the Python reader counts (under-count → release). Now: exit code read (0/1 = count taken, else >= 1 + loud), pattern `^(U+FEFF)*[[:space:]]*- \\[ \\]` under LC_ALL=C via printf-built bytes (bash 3.2 / BSD grep safe). Residual, disclosed: the fallback is still fence-blind and HTML-comment-blind (over-counts only — a hidden line is never added); it is reached only when python3 is missing or import-broken, in which case the CLI itself is unusable, so the arm's job is to block, not to be precise; a grep whose ERE lacks `(…)*` support fails through the error arm (blocks), never silently. Impl panel (opus / codex-high / grok): the first re-statement said 'a first stop with work open is never released' — overbroad, the conversational bypass (writes=0, tools<5) releases on both arms; narrowed above and pinned. grok found the valve itself was python-parsed, so a no-python block was PERMANENT (no CLI to check gates, no valve to end the turn) — fixed with a byte-wise `\"stop_hook_active\": true` read when python3 cannot run, watched red. Round 2 (codex-medium): the valve's grep read still depended on grep — now a bash `=~` builtin, pinned with python3 AND grep shimmed out; (codex-high) the bypass is disarmed when the count failed (grep exit >= 2 or garbled output), pinned with low counters; (opus) every BOM shape is also driven through the hook's real inline-argv grep in test_blocked_state, not only the parity `-f` route. Disclosed bound (codex-high #2, not fixed): the shell valve cannot tell JSON nesting depth, so a NESTED object carrying `\"stop_hook_active\": true` would read as the valve — the Stop payload is produced by the host, not by the agent, so this is documented rather than parsed. Round 4 (codex-medium): the shell valve regex applied to ANY python parse failure, so a malformed payload (`{\"stop_hook_active\": true` unclosed) released with python3 present — now the regex runs only when `python3 -c pass` itself fails; with python3 present a malformed payload reads as not-active (pinned with three malformed shapes). The 043-V7 and 055 limitation bullets above are annotated as superseded rather than deleted (history stays readable).",
-        "Task 173 (owner's Q1 of 2026-09-24, PLAN S11): until then EVERY prompt reset the session's tools/writes counters, a harness notification included — measured live on 2026-10-10: a background command's `<task-notification>` took a turn from `tools=20 writes=20` to `0 0` between two of its tool calls, so a stop within four read-only calls after it was released with every gate open. Mechanism now: the stop hook, on every exit 0 with a resolved session, a readable lane and an existing counters file, writes `turn_end_tools=<tools>`; the chat-log hook, on a notification, writes `notif_writes=<writes>` only when `turn_end_tools` equals the current `tools`; the stop hook releases when `notif_writes` is a plain number equal to `writes`. A user prompt's reset drops both keys.",
-        "Task 173, three readings of the owner's sentence that are the builder's, not his (put to him on 2026-10-10): (1) `automatic notification` = the two markers above, not the echo of a user's own command; (2) `a turn started by a notification` is told from a notification landing mid-turn by the mark, and a turn that ended WITHOUT a Stop event (an interrupt) leaves no mark, so a notification after it is read as mid-turn — the stricter side; (3) `zero writes` is the hook's own counter, which counts Edit, Write, MultiEdit, NotebookEdit and Bash calls — a sub-agent call or an MCP tool is not a write for it — and the exception carries NO tool-count limit, because his sentence has none, whereas the chat-reply bypass bounds such calls by tools<5.",
+        "Task 173 (owner's Q1 of 2026-09-24, PLAN S11): until then EVERY prompt reset the session's tools/writes counters, a harness notification included — measured live on 2026-10-10: a background command's `<task-notification>` took a turn from `tools=20 writes=20` to `0 0` between two of its tool calls, so a stop within four read-only calls after it was released with every gate open. Mechanism now, two one-line files beside the session's `counters`: the stop hook, on every exit 0 with a resolved session, a readable lane and an existing counters file, writes `turn_end` (the tool count); the chat-log hook, on a notification, writes `notif_start` (the write count) only when `turn_end` equals the current `tools`; the stop hook releases when `notif_start` is a plain number equal to `writes`. A user prompt's reset removes both files. They were keys of the counters file in the first version; the impl panel (opus, codex-high, codex-medium) showed why they must not be: a key is set by copying the whole file and renaming the copy over it, so a notification's hook overlapping a tool call's hook could rename a stale copy over that call's increment — and the write it lost was the one the stop needed to see. Nothing that serves the rule rewrites the counters file now, and the notification's hook reads it ONCE (a tool call's hook bumps `tools`, then `writes`, each by a rename, so one read cannot show the old `tools` beside the new `writes`).",
+        "Task 173, three readings of the owner's sentence that are the builder's, not his (put to him on 2026-10-10): (1) `automatic notification` = the two markers above, not the echo of a user's own command; (2) `a turn started by a notification` is told from a notification landing mid-turn by the mark, and a turn that ended WITHOUT a Stop event (an interrupt) leaves no mark, so a notification after it is read as mid-turn — the stricter side, and so does any tool call that runs in the session between that stop and the notification: if a background sub-agent's own tool calls reach this session's PostToolUse hook, the notice of its completion is read as landing mid-turn and its turn is held once (the valve ends a re-issued stop) — NOT measured: the session that built this had no sub-agent tool, and the repo does not show whether such calls reach the hook (impl panel, opus); a background shell command makes no tool call while it runs, which is the case measured; (3) `zero writes` is the hook's own counter, which counts Edit, Write, MultiEdit, NotebookEdit and Bash calls — a sub-agent call or an MCP tool is not a write for it — and the exception carries NO tool-count limit, because his sentence has none, whereas the chat-reply bypass bounds such calls by tools<5.",
         "Task 173: the two keys live in the session's counters file, which is `.agent/`-resident and writable by the agent, exactly as `tools` and `writes` are — a session that edits that file could already release its own stop by writing `writes=0`; the keys add no new trust. The codex hook path (experimental, no support claim) has no notification handling: every codex prompt is logged and resets; unchanged.",
-        "Task 173: until then the `writes` counter counted Edit, Write and Bash only — a MultiEdit or a NotebookEdit was a tool call but not a write, so a turn whose only act was one of them (fewer than five calls) was released by the chat-reply bypass with gates open. Found while reading what `zero writes` rests on; both are counted now (red first: `(1, 0) != (1, 1)`)."
+        "Task 173: until then the `writes` counter counted Edit, Write and Bash only — a MultiEdit or a NotebookEdit was a tool call but not a write, so a turn whose only act was one of them (fewer than five calls) was released by the chat-reply bypass with gates open. Found while reading what `zero writes` rests on; both are counted now (red first: `(1, 0) != (1, 1)`).",
+        "Task 173, NOT closed by it and older than it — MEASURED 2026-10-10 with the real state-echo-hook started as overlapping processes against one fixture session: `write_counter` is an unlocked copy-and-rename, so PostToolUse hooks that overlap lose increments. 20 rounds of 2 overlapping Bash calls (40 calls) left `tools=20 writes=20`; 10 rounds of 6 (60 calls) left `tools=10 writes=15`; 20 calls one after another left 20 and 20. The host runs tool calls of one message in parallel, so both counters under-count in ordinary use, and an under-counted `writes` is the RELEASING side of the chat-reply bypass and of the notification exception alike (a Read and a Bash that overlap can lose the Bash's write entirely). The rule's own two writers no longer take part in it (they do not touch the file). Serialising the counters under a per-session lock changes the hook that runs on every tool call — its own fix, routed to the owner with the S11 list (task 173, parked)."
       ],
       "follow_up_phases": [
         8
@@ -13025,7 +13056,7 @@
     {
       "id": "PB-CLI-INTENT",
       "category": "cli-contracts",
-      "statement": "tasks intent runs blind per-layer extractions over a finished task and distils the reconciled result into INTENT.md, defaulting its extraction judge to the all-Claude default rather than codex. It spends nothing unasked (task 173, owner's D3-C4 of 2026-09-24): without `--yes` it prints which layers have evidence and one line — how many judge calls a run would make, on which seat, the time limit of each and, for a claude seat, the budget cap of each — makes no judge call, writes no run directory and no spend record, and exits 2; with `--yes` it runs; `--collect-only`, which never spent, is not asked. The seat in that line is resolved by the function the runner itself uses.",
+      "statement": "tasks intent runs blind per-layer extractions over a finished task and distils the reconciled result into INTENT.md, defaulting its extraction judge to the all-Claude default rather than codex. It spends nothing unasked (task 173, owner's D3-C4 of 2026-09-24): without `--yes` it prints which layers have evidence and one line — how many judge calls a run would make, on which seat, the time limit of each and, for a claude seat, the budget cap of each — makes no judge call, writes no run directory and no spend record, and exits 2; that line ends with the flag that approves exactly what it quotes, `--yes <calls>@<seat>`, and the command runs only when the approval given equals what a run would spend at that moment — a bare `--yes`, another number or another seat prints the line again and spends nothing; `--collect-only`, which never spent, is not asked. The seat in that line is resolved by the function the runner itself uses.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/history.py",
@@ -13067,7 +13098,7 @@
             "reference": "WithYesItRuns.test_it_makes_the_calls_it_announced"
           },
           "limitations": [
-            "cmd_intent in-process with the claude adapter's judge call faked and counted: exit 2, zero calls, the line names 2 judge calls (two of four layers have evidence in the fixture) and the seat. Unfixed tree: `0 != 2` — it ran. Proves what is started, not what a live judge answers."
+            "cmd_intent in-process with the claude adapter's judge call faked and counted: exit 2, zero calls, the line names 2 judge calls (two of four layers have evidence in the fixture), the seat, and the flag `--yes 2@claude:opus:high`. Unfixed tree: `0 != 2` — it ran. Proves what is started, not what a live judge answers."
           ]
         },
         {
@@ -13087,7 +13118,7 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": [
-            "With `--yes`: two calls, one run directory, two spend records on the announced seat. Unfixed tree: `Error: unknown option for intent: --yes`."
+            "With `--yes 2@claude:opus:high`, the quote the bare command printed: two calls, one run directory, two spend records on that seat. Unfixed tree: `Error: unknown option for intent: --yes`."
           ]
         },
         {
@@ -13097,7 +13128,7 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": [
-            "With `default_judge` set to claude:sonnet the line names `claude:sonnet:high`, and the `--yes` run's spend records and model argument are that seat. Red in a copy whose line names a fixed judge."
+            "With `default_judge` set to claude:sonnet the line names `claude:sonnet:high`, and the approved run's spend records and model argument are that seat. Red in a copy whose line names a fixed judge."
           ]
         },
         {
@@ -13142,6 +13173,69 @@
           "limitations": [
             "The real CLI in a subprocess with a `claude` first on PATH that would leave a file behind if it were ever started: exit 2, the line on stderr, no such file, no run directory. Unfixed tree: `0 != 2`."
           ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_intent_cost_question.py",
+          "reference": "TheApprovalIsTheQuote.test_evidence_that_grew_since_the_quote_is_asked_about_again",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_intent_cost_question.py",
+            "reference": "TheApprovalIsTheQuote.test_the_same_quote_runs_when_nothing_changed"
+          },
+          "limitations": [
+            "Quoted with one layer available (`1@claude:opus:high`); a second layer appears; the same approval → exit 2, zero calls, no run directory, the new line (2 calls). The impl panel's scenario (codex-high): the evidence is collected again on the re-run, and the user's own answer in the chat can be what adds a layer. On the first version, where a bare `--yes` ran whatever was there: `0 != 2`."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_intent_cost_question.py",
+          "reference": "TheApprovalIsTheQuote.test_an_approval_of_fewer_calls_spends_nothing",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`--yes 1@…` when a run would be two calls: refused, and the line says the approval is not what a run would spend now."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_intent_cost_question.py",
+          "reference": "TheApprovalIsTheQuote.test_an_approval_of_another_seat_spends_nothing",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`--yes 2@claude:sonnet:high` when the default judge is claude:opus: refused."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_intent_cost_question.py",
+          "reference": "TheApprovalIsTheQuote.test_a_bare_yes_approves_nothing",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`--yes` with no quote: exit 2, zero calls, `needs the quote`. On the first version a bare `--yes` ran (`0 != 2`)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_intent_cost_question.py",
+          "reference": "TheApprovalIsTheQuote.test_a_yes_followed_by_another_option_approves_nothing",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`--yes --timeout 77`: the option after it is not taken for the quote, and is still honoured in the line."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_intent_cost_question.py",
+          "reference": "ASeatWithShellCharactersIsQuotedInTheLine.test_the_flag_is_printed_ready_to_paste",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "A seat with shell characters (`claude:claude-opus-5-5[1m]`) is printed single-quoted in the flag, and the token a shell hands over from that runs. Red in a copy that prints it unquoted."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -13157,7 +13251,7 @@
         "No executable test drives the layer collection, the blind extraction run, the reconciliation, or the INTENT.md write.",
         "The extraction step needs a live judge provider, so its behavior is unproved offline.",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
-        "Task 173 (owner's D3-C4): the cost question is a refusal with the flag to pass, not an interactive prompt — the CLI is run by an agent, and `commands/intent.md` tells that agent to put the line to the user before passing `--yes`; whether an agent does so is a prompt-file instruction, not something a test can hold. The line states calls, seat, time limit and (claude) budget cap; it does not estimate tokens or money actually spent."
+        "Task 173 (owner's D3-C4): the cost question is a refusal with the flag to pass, not an interactive prompt — the CLI is run by an agent, and `commands/intent.md` tells that agent to put the line to the user before passing the flag; whether an agent does so is a prompt-file instruction, not something a test can hold. What the flag DOES hold: the approval names the number of calls and the seat, so what runs is what was quoted or nothing. The quote does not cover the time limit or the budget cap (configuration; a change of either between the two commands is not detected), and the line does not estimate tokens or money actually spent."
       ],
       "follow_up_phases": [
         3,

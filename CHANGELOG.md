@@ -23,9 +23,12 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 - **`tasks intent` asks before it spends** (task 173; owner decision D3-C4 of 2026-09-24). Each of its blind
   extractions is a call to the default judge, up to four per run, and the command started them at once. The bare
   command now prints which layers have evidence and one line — how many judge calls, on which judge, the time limit
-  of each (and the budget cap of each on a Claude judge) — spends nothing, writes nothing, and exits 2.
-  `tasks intent <N> --yes` runs it; `--collect-only` is unchanged. `/playbook:intent` puts the number to you before
-  it passes `--yes`. **If you script `tasks intent`, add `--yes`.**
+  of each (and the budget cap of each on a Claude judge) — spends nothing, writes nothing, and exits 2. The line
+  ends with the flag that approves exactly that, `--yes <calls>@<judge>`; with it the command runs — unless a run
+  would by then be a different number of calls or another judge (the evidence is read again, and your own "yes" in
+  the chat can add a layer), in which case it prints the new line and again spends nothing. A bare `--yes` approves
+  nothing. `--collect-only` is unchanged. `/playbook:intent` puts the line to you before it passes the flag.
+  **If you script `tasks intent`, it now needs that flag.**
 - **`sandbox` refuses to start an agent without bubblewrap** (task 164, owner decision 2026-10-09). On a host where
   `bwrap` is not installed, `.claude/bin/sandbox` used to start the agent anyway — with its permission prompts off
   and no containment — and printed no warning (the 1.6.0 entry below says the sandbox "says so": that was true of

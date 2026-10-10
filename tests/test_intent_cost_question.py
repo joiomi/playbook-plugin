@@ -8,9 +8,16 @@ could stop it, short of knowing `--collect-only` beforehand.
 
 Now the bare command prints what it would spend — how many calls, on which seat, the
 time limit of each — spends nothing, writes nothing and exits 2; the same command with
-`--yes` runs. (The CLI is run by an agent, not at a terminal: it asks the way it asks
-elsewhere, by refusing with the flag to pass. `commands/intent.md` tells the agent to
-put the number to the user first.)
+the `--yes <calls>@<seat>` it printed runs. (The CLI is run by an agent, not at a
+terminal: it asks the way it asks elsewhere, by refusing with the flag to pass.
+`commands/intent.md` tells the agent to put the number to the user first.)
+
+The approval is the QUOTE, not a bare yes (impl panel r1, codex-high): the evidence is
+collected again when the command is re-run, and it can have grown in between — the
+user's own "yes" in the chat can be what makes a task's chat layer available — so a
+bare `--yes` given for one call could start two. `--yes 1@claude:opus:high` runs only
+if a run would still be one call on that seat; otherwise the new line is printed and
+nothing is spent.
 """
 
 from __future__ import annotations
@@ -106,7 +113,7 @@ class TheBareCommandSpendsNothing(_Project):
         self.assertEqual(self.calls, [], "a judge was called before anything was asked")
         self.assertIn("this would run 2 judge call(s) on claude:opus:high", err)
         self.assertIn("Nothing was spent and nothing was written.", err)
-        self.assertIn("--yes", err)
+        self.assertIn("Re-run with `--yes 2@claude:opus:high` to spend them", err)
         self.assertIn("--collect-only", err)
 
     def test_it_leaves_no_run_directory_and_no_spend_record(self):
@@ -132,8 +139,10 @@ class TheBareCommandSpendsNothing(_Project):
 
 
 class WithYesItRuns(_Project):
+    QUOTE = "2@claude:opus:high"
+
     def test_it_makes_the_calls_it_announced(self):
-        code, out, err = self._intent("--yes")
+        code, out, err = self._intent("--yes", self.QUOTE)
         self.assertEqual(code, 0, err)
         self.assertEqual(len(self.calls), 2)
         self.assertEqual(len(self._runs()), 1)
@@ -143,7 +152,55 @@ class WithYesItRuns(_Project):
     def test_the_flag_may_come_before_the_other_options(self):
         out, err = io.StringIO(), io.StringIO()
         with _chdir(self.project), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            history.cmd_intent(["42", "--yes", "--chat-file", str(self.chat)])
+            history.cmd_intent(["42", "--yes", self.QUOTE, "--chat-file", str(self.chat)])
+        self.assertEqual(len(self.calls), 2)
+
+
+class TheApprovalIsTheQuote(_Project):
+    """`--yes` carries what was approved — `<calls>@<seat>` — and runs only if that is
+    still what a run would spend."""
+
+    def _refused(self, *args):
+        code, out, err = self._intent(*args)
+        self.assertEqual(code, 2, err)
+        self.assertEqual(self.calls, [], "a judge was called on an approval that does not match")
+        self.assertEqual(self._runs(), [])
+        self.assertEqual(self._spend_records(), [])
+        self.assertIn("Re-run with `--yes 2@claude:opus:high` to spend them", err)
+        return err
+
+    def test_an_approval_of_fewer_calls_spends_nothing(self):
+        err = self._refused("--yes", "1@claude:opus:high")
+        self.assertIn("`--yes 1@claude:opus:high` is not what a run would spend now", err)
+
+    def test_an_approval_of_another_seat_spends_nothing(self):
+        self._refused("--yes", "2@claude:sonnet:high")
+
+    def test_a_bare_yes_approves_nothing(self):
+        err = self._refused("--yes")
+        self.assertIn("`--yes` needs the quote", err)
+
+    def test_a_yes_followed_by_another_option_approves_nothing(self):
+        # `--yes --timeout 77`: the option after it is not taken for the quote
+        err = self._refused("--yes", "--timeout", "77")
+        self.assertIn("time limit 77s each", err)
+
+    def test_evidence_that_grew_since_the_quote_is_asked_about_again(self):
+        # the judge's scenario: quoted with one layer available, re-run after a second
+        # one became available (here the chat file appears in between)
+        chat = self.chat
+        text = chat.read_text(encoding="utf-8")
+        chat.unlink()
+        code, out, err = self._intent()
+        self.assertIn("this would run 1 judge call(s) on claude:opus:high", err)
+        self.assertIn("Re-run with `--yes 1@claude:opus:high`", err)
+        chat.write_text(text, encoding="utf-8")
+        err = self._refused("--yes", "1@claude:opus:high")
+        self.assertIn("this would run 2 judge call(s)", err)
+
+    def test_the_same_quote_runs_when_nothing_changed(self):
+        code, out, err = self._intent("--yes", "2@claude:opus:high")
+        self.assertEqual(code, 0, err)
         self.assertEqual(len(self.calls), 2)
 
 
@@ -153,9 +210,23 @@ class TheSeatInTheLineIsTheSeatThatRuns(_Project):
     def test_another_default_judge(self):
         code, out, err = self._intent()
         self.assertIn("judge call(s) on claude:sonnet:high", err)
-        self._intent("--yes")
+        self._intent("--yes", "2@claude:sonnet:high")
         self.assertEqual({r["seat"] for r in self._spend_records()}, {"claude:sonnet:high"})
         self.assertEqual({c["model"] for c in self.calls}, {"sonnet"})
+
+
+class ASeatWithShellCharactersIsQuotedInTheLine(_Project):
+    # the owner's opus seat is `claude:claude-opus-5-5[1m]` — `[1m]` is a glob to a
+    # shell (zsh refuses the command outright when nothing matches)
+    DEFAULT_JUDGE = "claude:claude-opus-5-5[1m]"
+
+    def test_the_flag_is_printed_ready_to_paste(self):
+        code, out, err = self._intent()
+        self.assertEqual(code, 2)
+        self.assertIn("Re-run with `--yes '2@claude:claude-opus-5-5[1m]:high'` to spend them", err)
+        code, out, err = self._intent("--yes", "2@claude:claude-opus-5-5[1m]:high")   # as the shell hands it over
+        self.assertEqual(code, 0, err)
+        self.assertEqual(len(self.calls), 2)
 
 
 class WhatNeverSpentIsNotAsked(_Project):
@@ -203,7 +274,7 @@ class ThroughTheCommandLine(_Project):
     def test_the_usage_names_the_flag(self):
         r = self._cli()
         self.assertEqual(r.returncode, 1)
-        self.assertIn("[--yes]", r.stderr)
+        self.assertIn("[--yes <calls>@<seat>]", r.stderr)
 
 
 if __name__ == "__main__":

@@ -24,14 +24,20 @@ reconciler, not the judge. Independent axis = (chat + task.md) ↔ (code + tests
 .claude/bin/tasks intent $ARGUMENTS
 ```
 
-Without `--yes` this spends nothing: it prints which layers have evidence and one
-line saying how many judge calls a run would make, on which judge, and the time
-limit of each, then exits 2 — that exit is the question, not a failure. Put that
-line to the user and wait for their answer. Only when they agree:
+Bare, this spends nothing: it prints which layers have evidence and one line
+saying how many judge calls a run would make, on which judge, and the time limit
+of each, then exits 2 — that exit is the question, not a failure. Put that line
+to the user and wait for their answer. Only when they agree, re-run it with the
+flag the line ends with — it names exactly what was quoted:
 
 ```bash
-.claude/bin/tasks intent $ARGUMENTS --yes
+.claude/bin/tasks intent $ARGUMENTS --yes '<calls>@<judge>'
 ```
+
+If that prints a new line instead of running, the evidence or the default judge
+changed since the quote (the user's own answer can add a chat layer): what they
+agreed to is no longer what a run would spend. Put the NEW line to them — never
+edit the number yourself.
 
 This fans out up to 4 isolated judge calls (default judge model, evidence-only
 sandbox per layer) and writes `.agent/tasks/NNN-*/intent/<run-id>/` containing
