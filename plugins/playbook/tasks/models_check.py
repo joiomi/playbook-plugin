@@ -469,9 +469,6 @@ def probe_agy_model(variant: Optional[str], timeout: int = PROBE_TIMEOUT_SECS) -
 # `--effort/--reasoning-effort: unknown effort level 'x'; use one of: …` (exit 1;
 # captured from grok 1.0.50, 2026-10-10)
 _GROK_BAD_EFFORT = "unknown effort level"
-# How the CLI words a provider-side failure when it reports it as an event rather than
-# by its exit code alone (the 402 of 2026-09-29, as the judge path captured it).
-_GROK_ERROR_MARKS = ('"type":"error"', '"type": "error"', "API error (status ")
 
 def parse_grok_models(text: str) -> list[str]:
     """`grok models` stdout → model-id list.
@@ -534,10 +531,12 @@ def probe_grok_model(model: str, effort: Optional[str] = None,
     `--reasoning-effort` the judge path sends (grok.py), so an effort the CLI
     rejects is BAD_EFFORT here (exit 1 + `unknown effort level`, captured from
     grok 1.0.50) instead of a failure at review time. And it READS its answer:
-    OK needs exit 0 AND a reply that is not an error event — the list of
-    entitled models cannot see spent credit, so a 402 must not read OK
-    whichever way the CLI reports it (the judge path saw it as an error event,
-    2026-09-29); an exit 0 with nothing printed is not an answer either.
+    the prompt asks for one word, and OK is exit 0 AND that word (`ok`, in the
+    spellings a model gives it). The list of entitled models cannot see spent
+    credit, so a 402 must not read OK however the CLI words it — and how this
+    plain `-p` mode words one was never captured, which is why the rule names
+    the one good answer instead of a list of bad ones (impl panel r2: the first
+    version matched the judge path's event shape and let other wordings through).
     """
     # --disable-web-search: grok's web tools are default-ON; without this a
     # probe turn can wander into a web search, blow PROBE_TIMEOUT_SECS, and
@@ -559,12 +558,12 @@ def probe_grok_model(model: str, effort: Optional[str] = None,
             return UNKNOWN, f"probe failed to launch: {e}"
     combined = (result.stdout or "") + (result.stderr or "")
     first = combined.strip().splitlines()[0][:160] if combined.strip() else f"exit {result.returncode}"
-    if any(mark in combined for mark in _GROK_ERROR_MARKS):
-        # an error the CLI reports as an event — with any exit code
-        return UNKNOWN, f"probe answered with an error: {first}"
     if result.returncode == 0:
-        if not (result.stdout or "").strip():
-            return UNKNOWN, "probe exited 0 with no answer"
+        said = (result.stdout or "").strip()
+        if not said:                     # what it printed elsewhere, if anything, says why
+            return UNKNOWN, "probe exited 0 with no answer" + (f": {first}" if combined.strip() else "")
+        if "".join(ch for ch in said.lower() if ch.isalnum()) != "ok":
+            return UNKNOWN, f"probe exited 0 without the answer it asked for: {first}"
         return OK, "responds"
     if _GROK_MODEL_GONE in combined and _GROK_MODEL_GONE_2 in combined:
         return GONE, "grok rejects this model id for this account"

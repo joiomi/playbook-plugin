@@ -257,16 +257,18 @@ def activations(history_text: str):
     command once, hid every second genuine activation: `work 7`, `work 8`, `work 7`
     showed two entries (retro 107 R12; fixed in task 171). An echo is recognised as
     exactly what it was: a `SCRIPT` line whose command and timestamp are those of the
-    `AGENT` activation line directly before it. Nothing else is dropped — the same
+    `AGENT` activation on the line directly above it IN THE FILE (any line in between
+    ends the pairing — impl panel round 2). Nothing else is dropped — the same
     command twice in one second, by the agent, is two activations (the first version
     of this rule looked only at the text and the second, and lost them: impl panel
     round 1). The shipped loggers write `AGENT` lines only; measured on this
     workspace's archived history (2026-08-22 … 09-25): 542 activation lines, all
     `AGENT`, no two alike in one second."""
-    previous = None                      # (timestamp, kind, command) of the last activation line
+    previous = None                      # (timestamp, kind, command) when the line above was an activation
     for line in history_text.splitlines():
         m = _ACTIVATION_RE.match(line)
         if not m:
+            previous = None
             continue
         stamp, kind, cmd = m.group(1), m.group(2), m.group(3)
         echo = kind == "SCRIPT" and previous == (stamp, "AGENT", cmd)

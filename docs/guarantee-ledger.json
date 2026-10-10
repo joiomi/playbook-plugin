@@ -1957,7 +1957,7 @@
     {
       "id": "PB-BATCH-CLOSE",
       "category": "hook-payload-and-paths",
-      "statement": "The gate hook blocks two or more unannotated gate closures in one edit — an `Edit`, a `Write`, or a `MultiEdit`, the last judged on the file before and after all its edits — annotated batches beyond the five-gate ceiling, born-checked gate lines, and a second batch with no intervening work, while an annotated batch within the limit and a single bare close remain allowed — whatever lexical spelling names the active task.md (a `/./` segment, a doubled slash, an `x/..` hop): the guard judges the normalised path.",
+      "statement": "The gate hook blocks two or more unannotated gate closures in one edit — an `Edit`, a `Write`, or a `MultiEdit`, the last judged on the file before and after all its edits — annotated batches beyond the five-gate ceiling, born-checked gate lines, and a second batch with no intervening work, while an annotated batch within the limit and a single bare close remain allowed — whatever lexical spelling names the active task.md (a `/./` segment, a doubled slash, an `x/..` hop): the guard judges the normalised path. It judges THIS project's active task record only: a task.md of another project whose directory carries the same task number is not its subject (task 171).",
       "owner": [
         {
           "path": "plugins/playbook/scripts/gate-batch-check.py",
@@ -2049,6 +2049,19 @@
           },
           "limitations": [
             "The Claude Code version this was built on (2.1.295) offers no `MultiEdit` tool: the payload is the documented shape (`file_path` + `edits`), not one captured from a live session."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_batch_close_guard.py",
+          "reference": "GuardZeroIsAStatedGuarantee.test_the_batch_close_guard_is_about_this_projects_records_too",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_batch_close_guard.py",
+            "reference": "GuardZeroIsAStatedGuarantee.test_control_the_batch_close_guard_still_holds_for_this_projects_active_task"
+          },
+          "limitations": [
+            "A new task.md of another project, three gates born checked, in a directory with this project's active task number: passes (exit 0). Red on the round-1 code (`2 != 0 : BLOCKED: this batch mints gate line(s) already checked`; impl panel round 2). The control: the same born-checked lines added to THIS project's active task.md are still refused."
           ]
         }
       ],
@@ -2342,7 +2355,7 @@
     {
       "id": "PB-TASK-MD-GUARD",
       "category": "hook-payload-and-paths",
-      "statement": "task-gate-hook refuses a `Write` that would CREATE a task record of this project by hand — a `file_path` naming `.agent[/<lane>]/tasks/<dir>/task.md` inside this project where no such file exists — whatever lexical spelling names it (a `/./` segment, a doubled slash, an `x/..` hop: the guard judges the normalised path), and answers that only `tasks new` creates task.md files. A `Write` over a task.md that already exists is not a creation and is not refused by this guard. Nor is a `Write` that creates a task.md of ANOTHER project: the path AS WRITTEN is placed by the task-directory guard's own inside test (`task-dir-target.py --path`: lexically or physically inside the project; a relative or `~` path counts as inside), and when that helper is missing or fails the refusal stands.",
+      "statement": "task-gate-hook refuses a `Write` that would CREATE a task record of this project by hand — a `file_path` naming `.agent[/<lane>]/tasks/<dir>/task.md` inside this project where no such file exists — whatever lexical spelling names it (a `/./` segment, a doubled slash, an `x/..` hop: the guard judges the normalised path), and answers that only `tasks new` creates task.md files. A `Write` over a task.md that already exists is not a creation and is not refused by this guard. Nor is a `Write` that creates a task.md of ANOTHER project. Whether a `Write` would create a file inside this project is decided on the path AS WRITTEN, read both as the kernel reads it (links first, then `..`) and as text (collapsed first): a creation inside the project under either reading is refused, a file that already exists under a reading is a rewrite under it (`task-dir-target.py --creates`, with the two inside helpers the task-directory guard uses; a relative or `~` path is judged on existence alone). When that helper does not run, the guard decides as it did before it had a scope: any creation that matches the pattern is refused.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/task-gate-hook",
@@ -2399,6 +2412,19 @@
           "negative_control": null,
           "limitations": [
             "A copy of the hook's directory with the helper removed, and one with a helper that exits with an error: the out-of-project creation is refused in both — the guard fails closed."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_batch_close_guard.py",
+          "reference": "GuardZeroIsAStatedGuarantee.test_what_exists_is_asked_of_the_path_as_written_too",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_batch_close_guard.py",
+            "reference": "GuardZeroIsAStatedGuarantee.test_a_task_md_of_another_project_is_not_this_guards"
+          },
+          "limitations": [
+            "`<link into the project>/../.agent/tasks/004-x/task.md` with a decoy file where its TEXT collapses to: refused (the kernel would create the project's file). Red on the round-1 code (`0 != 2`: \"exists already\" was asked of the collapsed path alone; impl panel round 2). The other side in the same test: the project's file exists and only the kernel's reading finds it — a rewrite, exit 0."
           ]
         }
       ],
@@ -11590,7 +11616,7 @@
             "reference": "AListedGrokPinIsNotOkWithoutACall.test_control_the_bare_seat_is_as_before"
           },
           "limitations": [
-            "With no probing (`--no-probe`, doctor, the dashboard) a listed grok pin reads LISTED, and nothing is called."
+            "With no probing a listed grok pin reads LISTED, and nothing is called. Where that shows: `tasks models check --no-probe`, and the report a review prints when it stops on a dead pin (`check_pins(probe=False)` in review.py). NOT in `tasks doctor` (it prints only pins that cannot run) nor in the dashboard (it does not run this check) — the first wording of this line named both, wrongly (impl panel round 2)."
           ]
         },
         {
@@ -11603,7 +11629,7 @@
             "reference": "TheGrokProbeReadsItsAnswer.test_an_answer_is_ok"
           },
           "limitations": [
-            "`probe_grok_model` with the CLI replaced by its captured outputs: the 402 event (as the judge path captured it on 2026-09-29), on stdout or stderr, with exit 1 or exit 0 → UNKNOWN carrying the 402 line. How the plain `-p` mode itself prints a 402 was never captured (the account had credit when this was written); the rule does not depend on it — an error event is not an answer, and neither is a non-zero exit."
+            "`probe_grok_model` with the CLI replaced by its captured outputs: the 402 event (as the judge path captured it on 2026-09-29), on stdout or stderr, with exit 1 or exit 0 → UNKNOWN carrying the 402 line. How the plain `-p` mode itself prints a 402 was never captured (the account had credit when this was written); the rule does not depend on it — OK is exit 0 AND the one word the probe asks for; anything else is not."
           ]
         },
         {
@@ -11641,6 +11667,19 @@
           "limitations": [
             "Two pins of one model with different efforts are probed separately and can get different verdicts (the probe was of the model alone: impl panel round 1, both codex seats)."
           ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_model_availability.py",
+          "reference": "TheGrokProbeReadsItsAnswer.test_exit_zero_with_anything_but_the_answer_asked_for_is_not_ok",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_model_availability.py",
+            "reference": "TheGrokProbeReadsItsAnswer.test_control_the_answer_in_the_spellings_a_model_gives_it"
+          },
+          "limitations": [
+            "Exit 0 with the 402 phrase as plain text, with an error object spaced differently, with a refusal, with `ok, but …`: UNKNOWN carrying what was said. Red on the round-1 code (`'OK' != 'UNKNOWN'`), which matched the judge path's event shape only. The control: `ok` in six spellings a model gives it is OK."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -11656,7 +11695,7 @@
         "No live provider availability/error-classification evidence in CI. Task 111 (2026-10-05): Antigravity is no longer unprobeable — agy 1.2.17 takes a model pin, so `tasks models check` runs one real turn for an agy pin; an id agy does not know is GONE, a missing or contradicted effort is BAD_EFFORT (a spec error, never a dead pin), and a missing sign-in or an exhausted quota is UNKNOWN with the cause. agy is an experimental judge seat and is not in applicable_providers; its proof replays output captured from agy 1.2.17 on one Linux account.",
         "Owner decision 2026-08-21: judge-seat is supported on claude, grok, and codex; antigravity and pi are experimental and removed from applicable_providers.",
         "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending.",
-        "Task 171 (PLAN S11; retro 107 R17): a grok pin found in `grok models` used to read OK with no call — the list is the account's entitlements and cannot see that its credit ran out (2026-09-29: every call 402 while the check said OK). A listed pin now gets one live turn — of the seat as pinned, with its effort — or LISTED where nothing is probed; the probe reads its answer (exit 0 with an error event, or with nothing, is not OK) and an effort the CLI rejects is BAD_EFFORT. Bound: `probe_codex_model` still takes exit 0 as the answer without reading it. Bound, unchanged: a BARE `grok`, `codex:` or `claude` seat (the provider's default model) still reads OK without a call; only a bare `agy` seat is probed (task 111). The live half of this row — recorded responses from the real providers — is still PLAN S11's gauntlet."
+        "Task 171 (PLAN S11; retro 107 R17): a grok pin found in `grok models` used to read OK with no call — the list is the account's entitlements and cannot see that its credit ran out (2026-09-29: every call 402 while the check said OK). A listed pin now gets one live turn — of the seat as pinned, with its effort — or LISTED where nothing is probed; the probe reads its answer (OK is exit 0 AND the one word it asked for; anything else printed, or nothing, is not OK) and an effort the CLI rejects is BAD_EFFORT. Bound: `probe_codex_model` still takes exit 0 as the answer without reading it. Bound, unchanged: a BARE `grok`, `codex:` or `claude` seat (the provider's default model) still reads OK without a call; only a bare `agy` seat is probed (task 111). The live half of this row — recorded responses from the real providers — is still PLAN S11's gauntlet."
       ],
       "follow_up_phases": [
         8
@@ -12853,7 +12892,7 @@
     {
       "id": "PB-CLI-TIMELINE-TAGGER",
       "category": "cli-contracts",
-      "statement": "tasks timeline and tasks tagger fail with an explicit exit-1 message naming the missing input file, and in a multi-user repo that message names the resolved lane path. Both, and `tasks tag`, read every `tasks work` / `tasks new` line of the shell history as an activation: a command run again is a new activation — also within the same second — and only the echo of an older logger is not: a `SCRIPT` line whose command and timestamp are those of the `AGENT` activation line directly before it.",
+      "statement": "tasks timeline and tasks tagger fail with an explicit exit-1 message naming the missing input file, and in a multi-user repo that message names the resolved lane path. Both, and `tasks tag`, read every `tasks work` / `tasks new` line of the shell history as an activation: a command run again is a new activation — also within the same second — and only the echo of an older logger is not: a `SCRIPT` line whose command and timestamp are those of an `AGENT` activation on the line directly above it in the file.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/history.py",
@@ -12973,7 +13012,7 @@
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": [
-            "`SCRIPT` lines that repeat nothing directly above them are activations."
+            "`SCRIPT` lines that repeat nothing directly above them are activations — also when the line they would repeat is two lines up with another command in between (the round-1 code compared with the previous ACTIVATION line and dropped that one: `['tasks work 7'] != ['tasks work 7', 'tasks work 7']`; impl panel round 2)."
           ]
         },
         {

@@ -47,6 +47,12 @@ A_SCRIPT_LINE_THAT_ECHOES_NOTHING = (
     "2026-10-01 12:00:00 | AGENT | .claude/bin/tasks work 7\n"
     "2026-10-01 12:00:00 | SCRIPT | .claude/bin/tasks work 8\n"
     "2026-10-01 12:00:00 | SCRIPT | .claude/bin/tasks work 7\n")
+# impl panel round 2 (sonnet, codex-medium): "directly before it" was the previous
+# ACTIVATION line, not the previous line — a command in between did not end the pairing
+A_SCRIPT_LINE_WITH_A_COMMAND_IN_BETWEEN = (
+    "2026-10-01 12:00:00 | AGENT | .claude/bin/tasks work 7\n"
+    "2026-10-01 12:00:00 | AGENT | ls\n"
+    "2026-10-01 12:00:00 | SCRIPT | .claude/bin/tasks work 7\n")
 CHAT = ("**[M001]** [2026-10-01 07:00:01 UTC] `HOST` (claude/pid-1)\n\nfirst message\n\n---\n\n")
 
 
@@ -99,6 +105,9 @@ class TimelineShowsEveryActivation(_Project):
         # SCRIPT lines that repeat nothing directly above them are activations
         self.assertEqual([ln.split("  ", 1)[1] for ln in self.lines(A_SCRIPT_LINE_THAT_ECHOES_NOTHING)],
                          ["tasks work 7", "tasks work 8", "tasks work 7"])
+        # … and "directly above" is the line above in the FILE: any line in between ends it
+        self.assertEqual([ln.split("  ", 1)[1] for ln in self.lines(A_SCRIPT_LINE_WITH_A_COMMAND_IN_BETWEEN)],
+                         ["tasks work 7", "tasks work 7"])
 
 
 class TaggerShowsEveryActivation(_Project):

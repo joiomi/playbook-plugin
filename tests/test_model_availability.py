@@ -385,6 +385,25 @@ class TheGrokProbeReadsItsAnswer(unittest.TestCase):
         self.assertEqual(verdict, mc.UNKNOWN)
         self.assertIn("no answer", detail)
 
+    def test_exit_zero_with_anything_but_the_answer_asked_for_is_not_ok(self):
+        # impl panel round 2 (codex-medium, grok): my marks were the JUDGE path's event
+        # shape; this probe runs plain `-p`, and any other wording of a failure — the 402
+        # phrase as text, an error object spaced differently — read OK at exit 0. The probe
+        # asks for one word; OK is that word.
+        for said in ("402 Payment Required: Grok Build usage balance exhausted\n",
+                     '{ "type" : "error", "message": "quota exceeded" }\n',
+                     "I'm sorry, I can't help with that.\n",
+                     "ok, but your credit is exhausted\n"):
+            with self.subTest(said=said.strip()[:40]):
+                verdict, detail = self._probe(said, "", 0)
+                self.assertEqual(verdict, mc.UNKNOWN)
+                self.assertIn(said.strip()[:30], detail)
+
+    def test_control_the_answer_in_the_spellings_a_model_gives_it(self):
+        for said in ("ok\n", "OK", " Ok.\n", "ok!\n", "`ok`\n", '"ok"\n'):
+            with self.subTest(said=said.strip()):
+                self.assertEqual(self._probe(said, "", 0), (mc.OK, "responds"))
+
 
 class CheckPinsTest(unittest.TestCase):
     """Verdict cross-check with all provider I/O monkeypatched (no network)."""

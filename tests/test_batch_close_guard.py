@@ -582,6 +582,52 @@ class GuardZeroIsAStatedGuarantee(unittest.TestCase):
                 self.assertEqual(r.returncode, 2, name + ": " + r.stderr.decode())
                 self.assertIn(b"creates task.md files", r.stderr)
 
+    def test_what_exists_is_asked_of_the_path_as_written_too(self):
+        # impl panel round 2 (grok): the guard asked "does it exist already?" of the
+        # COLLAPSED path and "is it inside?" of the path as written. With a file planted at
+        # the collapsed path, a creation inside this project passed as a rewrite.
+        f = ProjectFixture()
+        outside = Path(tempfile.mkdtemp()).resolve()
+        os.makedirs(f.proj / "src")
+        os.symlink(f.proj / "src", outside / "a-link-into-it")
+        written = str(outside / "a-link-into-it") + "/../.agent/tasks/004-x/task.md"
+        decoy = outside / ".agent" / "tasks" / "004-x" / "task.md"          # where the TEXT collapses to
+        os.makedirs(decoy.parent)
+        decoy.write_text("# a decoy\n", encoding="utf-8")
+        r = self._write_new(f, written)
+        self.assertEqual(r.returncode, 2, "a creation in this project passed as a rewrite: " + r.stderr.decode())
+        self.assertIn(b"creates task.md files", r.stderr)
+        # the other side: the project's file exists (only the kernel's reading finds it) —
+        # writing over it is a rewrite, not a creation
+        shutil.rmtree(outside / ".agent")
+        real = f.proj / ".agent" / "tasks" / "004-x"
+        os.makedirs(real)
+        (real / "task.md").write_text("# 004\n", encoding="utf-8")
+        r = self._write_new(f, written)
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+
+    BORN_CHECKED = "# 001 - theirs\n\n## Work Plan\n- [x] one\n- [x] two\n- [x] three\n"
+
+    def _write(self, f, path, content):
+        return f.run_hook({"hook_event_name": "PreToolUse", "tool_name": "Write",
+                           "tool_input": {"file_path": str(path), "content": content}})
+
+    def test_the_batch_close_guard_is_about_this_projects_records_too(self):
+        # impl panel round 2 (opus): one guard further down, the Write this task released
+        # was refused again — a new task.md of ANOTHER project, born with ticked gates,
+        # whose directory carries this project's active task number (001)
+        f = ProjectFixture()
+        elsewhere = Path(tempfile.mkdtemp()).resolve()
+        r = self._write(f, elsewhere / ".agent" / "tasks" / "001-theirs" / "task.md", self.BORN_CHECKED)
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        self.assertNotIn(b"born-checked", r.stderr)
+
+    def test_control_the_batch_close_guard_still_holds_for_this_projects_active_task(self):
+        f = ProjectFixture()
+        r = self._write(f, f.task_file, f.task_file.read_text(encoding="utf-8") + "- [x] born one\n- [x] born two\n")
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+        self.assertIn(b"born-checked", r.stderr)
+
     def test_without_its_helper_the_guard_keeps_refusing(self):
         # "could not tell" is not "outside": a hook whose helper is missing or broken
         # refuses the creation, as it did before it had a scope at all

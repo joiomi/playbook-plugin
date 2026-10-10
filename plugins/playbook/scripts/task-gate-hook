@@ -266,15 +266,22 @@ if [ "$TOOL_NAME" = "Write" ]; then
     if echo "$TASK_MD_PATH" | grep -qE '\.agent(/[^/]+)?/tasks/[^/]+/task\.md$'; then
         # Task 171 (retro 107 R6): only a task record of THIS project is `tasks new`'s
         # to create — the pattern alone also refused a task.md of another project,
-        # where this project's CLI creates nothing. The inside test is the
-        # task-directory guard's own (Guard 2). Its exit 0 says "outside"; anything
-        # else — exit 1, a missing helper, a crash — keeps the guard: could not tell
-        # is not outside. The helper gets the path AS WRITTEN, not the collapsed one
-        # the pattern read (impl panel r1): `<link into the project>/../.agent/…`
-        # collapses, as text, to a path outside it, and the kernel follows the link
-        # first — the helper weighs both readings, and can only if it sees the first.
-        if [ ! -f "$TASK_MD_PATH" ] \
-           && ! printf '%s' "$FILE_PATH" | PB_PROJECT="$PROJECT_DIR" python3 "$HOOK_DIR/task-dir-target.py" --path 2>/dev/null; then
+        # where this project's CLI creates nothing. `task-dir-target.py --creates`
+        # answers the whole question — would this Write create a file inside the
+        # project? — with the two inside helpers the task-directory guard uses
+        # (lexical, physical). It gets the path AS WRITTEN (impl panel r1: `<link into
+        # the project>/../.agent/…` collapses, as text, to a path outside it, and the
+        # kernel follows the link first) and decides "exists already" for each reading
+        # of it (impl panel r2: asked of the collapsed path alone, a decoy there made a
+        # creation in this project pass as a rewrite). Exit 0 = creates nothing here;
+        # 1 = it does, or may. Any other exit means the helper did not run (missing,
+        # unreadable): the guard then decides as it did before it had a scope.
+        if printf '%s' "$FILE_PATH" | PB_PROJECT="$PROJECT_DIR" python3 "$HOOK_DIR/task-dir-target.py" --creates 2>/dev/null; then
+            PB_CREATES=0
+        else
+            PB_CREATES=$?
+        fi
+        if [ "$PB_CREATES" -eq 1 ] || { [ "$PB_CREATES" -ne 0 ] && [ ! -f "$TASK_MD_PATH" ]; }; then
             journal_enforcement "$PB_JOURNAL_DIR" task-gate block "manual task.md creation" \
                 "$SESSION_ID" "$TOOL_NAME" "$FILE_PATH"
             cat >&2 <<'MSG'
@@ -313,7 +320,13 @@ if [ "$TOOL_NAME" = "Edit" ] || [ "$TOOL_NAME" = "Write" ] || [ "$TOOL_NAME" = "
     TASK_MD_PATH="${NORM_PATH:-$FILE_PATH}"
     if [ -f "$STATE_FILE" ] && echo "$TASK_MD_PATH" | grep -qE '\.agent(/[^/]+)?/tasks/[^/]+/task\.md$'; then
         ACTIVE_TASK=$(head -1 "$STATE_FILE" | tr -d '[:space:]')
-        if [ -n "$ACTIVE_TASK" ] && echo "$TASK_MD_PATH" | grep -q "/${ACTIVE_TASK}-"; then
+        # … and it is THIS project's record (task 171, impl panel r2): another project's
+        # `…/tasks/<the same number>-x/task.md` matched too, and a new one born with ticked
+        # gates was refused here after Guard 0 had let it through. `--path` exits 0 only
+        # for a path that is outside under every reading; a helper that does not run
+        # leaves the guard on, as before.
+        if [ -n "$ACTIVE_TASK" ] && echo "$TASK_MD_PATH" | grep -q "/${ACTIVE_TASK}-" \
+           && ! printf '%s' "$FILE_PATH" | PB_PROJECT="$PROJECT_DIR" python3 "$HOOK_DIR/task-dir-target.py" --path 2>/dev/null; then
             # "The guard could not run" => fail OPEN, loudly (uniform policy).
             # `python3 <missing-file>` exits 2, which is INDISTINGUISHABLE from
             # gate-batch-check's own legitimate block-with-exit-2 — so a missing
