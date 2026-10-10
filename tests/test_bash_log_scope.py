@@ -440,8 +440,7 @@ fi""")
     def test_a_rotation_that_dies_at_any_step_leaves_the_activations_in_the_live_file(self):
         # gone, as a killed process is, having done nothing but leave word that it was here
         dies = 'case "$*" in *{mark}*) : > "{died}"; exit 137 ;; esac'
-        for tool, mark in (("grep", "tasks"), ("tail", "5242881"), ("ln", "bash_history.archived-"),
-                           ("mv", "bash_history.archived-")):
+        for tool, mark in (("grep", "tasks"), ("ln", "bash_history.archived-"), ("mv", "bash_history.archived-")):
             with self.subTest(dies_at=tool):
                 self.setUp()
                 self._big_history()
@@ -460,6 +459,32 @@ fi""")
                 self.assertEqual(self._live_activations(), ["7", "8"])
                 self.assertLess(self.hist.stat().st_size, 1024 * 1024)
                 self._settled()
+
+    def test_a_cut_that_dies_leaves_the_history_as_it_was(self):
+        # `tail` is called only where the activation lines are past the bound and have
+        # to be cut (task 176: where they fit, nothing is cut and nothing dropped). A
+        # history that needs the cut, and a `tail` that dies in it.
+        self._history_of_wide_activations(6000, width=1000)
+        size = self.hist.stat().st_size
+        died = Path(self._tmp.name) / "died"
+        self._shim("tail", f'case "$*" in *5242881*) : > "{died}"; exit 137 ;; esac')
+        r = self._bash("set -e; echo while-it-died >/dev/null; echo still-alive", shims=True)
+        self.assertTrue(died.exists(), "the case under test: `tail` was never asked for the cut")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("still-alive", r.stdout)
+        self.assertEqual(r.stderr, "")
+        self.assertEqual(self._archives(), [])
+        self.assertGreaterEqual(self.hist.stat().st_size, size)
+        self.assertEqual(len(self._live_activations()), 6000)
+        self.assertEqual(self._leftovers(), [])
+        self.assertFalse(self.owes.exists())
+        # … and the next shell, with nothing in its way, rotates
+        self._bash("echo after-it >/dev/null")
+        self.assertEqual(len(self._archives()), 1)
+        numbers = [int(n) for n in self._live_activations()]
+        self.assertEqual(numbers, list(range(numbers[0], 6001)))
+        self.assertLess(self.hist.stat().st_size, self.BOUND + 1024 * 1024)
+        self._settled()
 
     # -- (2b) … and what it had not given back yet, the next shell gives ---------------------
     def _dies_reading_an_archive(self):
@@ -1206,6 +1231,27 @@ exec "{real}" "$@"
                 self.assertEqual(r.stderr, "")
                 self.assertEqual(self._given(), [".claude/bin/tasks work 7", ".claude/bin/tasks work 8"])
                 self.assertFalse(marker.exists())
+
+    def test_an_unfinished_line_that_could_not_be_closed_gets_nothing_glued_to_it(self):
+        # The live file ends inside a line; the newline that closes it comes from
+        # `cat`. A `cat` that says yes and writes nothing: the giving-back looks at
+        # the file again instead of believing it, gives nothing, and the marker stays.
+        whole = "2026-09-20 10:00:00 | AGENT | .claude/bin/tasks work 7"
+        archive = self.hist.parent / "bash_history.archived-20260101-000000-1"
+        archive.write_text(whole + "\n", encoding="utf-8")
+        self.hist.write_text("2026-10-10 10:00:00 | AGENT | echo earlier\n" + whole[:-12], encoding="utf-8")
+        marker = self.hist.parent / "bash_history.archived-owes"
+        marker.write_text(archive.name + "\n", encoding="utf-8")
+        self._stand_in("cat", '[ "$#" -eq 0 ] && exit 0')
+        r = self._bash("set -e; echo a-line >/dev/null; echo still-alive")
+        self.assertIn("still-alive", r.stdout)
+        text = self.hist.read_text(encoding="utf-8")
+        self.assertNotIn(whole[:-12] + whole[:10], text, "the whole line was glued to the piece")
+        self.assertTrue(marker.exists(), "the marker went although the line was not given on a line of its own")
+        (self.bindir / "cat").unlink()
+        self._bash("echo the-next-shell >/dev/null")
+        self.assertIn(whole, self.hist.read_text(encoding="utf-8").split("\n"))
+        self.assertFalse(marker.exists())
 
     def test_a_marker_that_was_not_written_whole_stops_the_rotation(self):
         # … and where the marker cannot be written as it should read, nothing is moved:

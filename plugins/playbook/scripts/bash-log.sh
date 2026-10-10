@@ -73,12 +73,13 @@ _cpb_rotate() {
             # command of the rotation that turns out to be a bash script (a
             # wrapper on PATH) starts unlogged — it would otherwise be a logged
             # shell that finds the same big file. `command` below: a FUNCTION
-            # of the host's script named like one of these is not ours. And no
-            # builtin a script can switch off (`enable -n printf`, `… read`) is
-            # leaned on: the one line put in front of what is carried, the
-            # marker's line and its reading come from `cat` and `head` (task
-            # 176 — with printf off the line in front was missing, and the
-            # line dropped for it was the first one owed).
+            # of the host's script named like one of these is not ours. Task
+            # 176: bash's `printf` and `read`, which a script can switch off
+            # (`enable -n`), are not used in here — and what stood in for them
+            # is not believed on its word either: the marker is read by bash
+            # itself (`$(<file)`) and read back after it is written, and
+            # nothing is put in front of what is carried for a later step to
+            # drop (a line in front that was missing cost the first line owed).
             set +e +u +C
             trap - DEBUG
             export PLAYBOOK_NO_BASHLOG=1
@@ -86,18 +87,25 @@ _cpb_rotate() {
             _owes="$_lane/bash_history.archived-owes"
             _re=' [|] [A-Za-z0-9_]+ [|] .*tasks[[:space:]]+(work|new)'
 
-            # FILE's newest activation lines, whole, of at most 5 MiB. The newline
-            # put in front is a line for the second `tail` to drop, and the first
-            # one is asked for the bound plus that one byte: where nothing had to
-            # be cut it is that empty line that goes, and where something had,
-            # the line that was cut (or the one line too many). `-a`: a history
-            # can hold stray binary bytes. Fails unless the file was read whole
-            # (`grep`: 0 = lines found, 1 = none) — and unless that line in front
-            # could be made: without it the line dropped would be a carried one.
+            # FROM's newest activation lines, whole, of at most 5 MiB, written
+            # to the file TO. All of them where they fit — nothing is cut, so
+            # nothing is dropped. Only where they are past the bound: the last
+            # 5 MiB and one byte of them, without the first line of that — the
+            # line that was cut, or the one line too many. `-a`: a history can
+            # hold stray binary bytes. Fails unless FROM was read whole (`grep`:
+            # 0 = lines found, 1 = none).
             _carried() {
-                { command cat <<< '' || exit 98; command grep -a -E "$_re" "$1"; } | command tail -c 5242881 | command tail -n +2
-                _st=("${PIPESTATUS[@]}")
-                [[ "${_st[0]}" -le 1 && "${_st[1]}" -eq 0 && "${_st[2]}" -eq 0 ]]
+                command grep -a -E "$_re" "$1" > "$2" 2>/dev/null
+                [[ $? -le 1 && -f "$2" ]] || return 1
+                if [[ -n "$(command find "$2" -prune -size +5242880c 2>/dev/null)" ]]; then
+                    command tail -c 5242881 "$2" 2>/dev/null | command tail -n +2 > "$2.cut.new" 2>/dev/null
+                    _st=("${PIPESTATUS[@]}")
+                    if [[ "${_st[0]}" -ne 0 || "${_st[1]}" -ne 0 ]] || ! command mv -f "$2.cut.new" "$2" 2>/dev/null; then
+                        command rm -f "$2.cut.new" 2>/dev/null
+                        return 1
+                    fi
+                fi
+                return 0
             }
 
             # Every carried line of ARCHIVE that the live file does not hold yet,
@@ -109,7 +117,7 @@ _cpb_rotate() {
                 # with a link under either name
                 _tmp=$(command mktemp -d 2>/dev/null) || return 1
                 [[ -n "$_tmp" && -d "$_tmp" ]] || return 1
-                if ! _carried "$1" > "$_tmp/owed" 2>/dev/null; then
+                if ! _carried "$1" "$_tmp/owed"; then
                     command rm -rf "$_tmp" 2>/dev/null
                     return 1
                 fi
@@ -122,7 +130,12 @@ _cpb_rotate() {
                 # a live file that ends inside a line (a writer was killed in it):
                 # closed first, so that what is given back starts on a line of its own
                 if [[ -s "$_hist" && -n "$(command tail -c 1 "$_hist" 2>/dev/null)" ]]; then
-                    command cat <<< '' >> "$_hist" 2>/dev/null || { command rm -rf "$_tmp" 2>/dev/null; return 1; }
+                    command cat <<< '' >> "$_hist" 2>/dev/null
+                    # looked at again, not taken on `cat`'s word
+                    if [[ -n "$(command tail -c 1 "$_hist" 2>/dev/null)" ]]; then
+                        command rm -rf "$_tmp" 2>/dev/null
+                        return 1
+                    fi
                 fi
                 command grep -a -F -x -v -f "$_tmp/held" "$_tmp/owed" >> "$_hist" 2>/dev/null
                 _rc=$?
@@ -156,7 +169,11 @@ _cpb_rotate() {
             # lived and left this second giving-back to us. The marker's one line
             # is read as the NAME of an archive in this lane, and as nothing else.
             if [[ -f "$_owes" ]]; then
-                _name=$(command head -n 1 "$_owes" 2>/dev/null)
+                # read by bash itself: no program whose failing, and no builtin
+                # whose absence, could empty the name and have the marker
+                # removed with nothing given
+                _name=$(<"$_owes")
+                _name="${_name%%$'\n'*}"
                 case "$_name" in
                     */*) _name="" ;;
                     bash_history.archived-owes) _name="" ;;
@@ -187,8 +204,15 @@ _cpb_rotate() {
             # — it never opens what a link under that name points to
             command rm -f "$_owes" "$_new" 2>/dev/null
             set -C
-            command cat <<< "${_arch##*/}" > "$_owes" 2>/dev/null || exit 0
-            _carried "$_hist" > "$_new" 2>/dev/null
+            command cat <<< "${_arch##*/}" > "$_owes" 2>/dev/null
+            # … and read back: a marker that does not say what was written —
+            # nothing, or something else — is how a later shell would lose
+            # track of what this archive owes. Nothing has been moved yet.
+            if [[ "$(<"$_owes")" != "${_arch##*/}" ]]; then
+                command rm -f "$_owes" 2>/dev/null
+                exit 0
+            fi
+            _carried "$_hist" "$_new"
             _rc=$?
             set +C
             if [[ "$_rc" -ne 0 ]]; then
@@ -332,6 +356,13 @@ _cpb_log_cmd() {
                     *[!a-zA-Z0-9_.-]*) return 0 ;;
                 esac
                 _lane="$_dir/.agent/$_u"
+                # Task 176 (impl panel r1): a user lane that is a symbolic link
+                # is not logged to — a project can ship `current_user` and the
+                # lane as a link to a directory elsewhere, and the user's
+                # commands were written there. (The root `.agent` as a link
+                # is the user's own business: a shipped one is followed only
+                # to a directory that already holds `tasks/` or the marker.)
+                [[ ! -L "$_lane" ]] || return 0
             elif [[ -d "$_dir/.agent/tasks" ]]; then
                 # No marker, but root .agent/tasks/ means the root IS itself a
                 # legitimate lane (the legacy and mixed layouts). Refusing it
@@ -346,12 +377,6 @@ _cpb_log_cmd() {
                 return 0
             fi
             [[ -d "$_lane" ]] || return 0
-            # PLAN S11 item 26 (task 176). `.agent/` comes with the project: a
-            # `bash_history` that is a symbolic link was written THROUGH — the
-            # user's commands went wherever a shipped link pointed, and a
-            # dangling one made the file. Such a lane is not logged to at all
-            # (nor looked at, nor rotated). A builtin test: no fork.
-            [[ ! -L "$_lane/bash_history" ]] || return 0
             local _cmd="${BASH_COMMAND//$'\n'/\\n}"
             # `|| return 0`: an append failure (perms, disk, history path
             # replaced by a directory) is a failing simple command inside the
@@ -410,6 +435,17 @@ _cpb_log_cmd() {
                || [[ "$_now" != [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\ [0-9][0-9]:[0-9][0-9]:[0-9][0-9] ]]; then
                 _now=$(PLAYBOOK_NO_BASHLOG=1 command date '+%Y-%m-%d %H:%M:%S' 2>/dev/null) || _now=""
             fi
+            # PLAN S11 item 26 (task 176). `.agent/` comes with the project: a
+            # `bash_history` that is a symbolic link was written THROUGH — the
+            # user's commands went wherever a shipped link pointed, and a
+            # dangling one made the file. Such a lane is not logged to. The
+            # look is made HERE, right before the name is opened, and nowhere
+            # earlier: a look made before `find` ran left that whole run
+            # between it and the append (impl panel r1). A shell redirection
+            # cannot open without following; one builtin test and the open
+            # after it are as close as it gets. (The rotation refuses a linked
+            # history by itself, in `_take`.)
+            [[ ! -L "$_lane/bash_history" ]] || return 0
             { echo "$_now | AGENT | $_cmd" >> "$_lane/bash_history"; } 2>/dev/null || return 0
             if [[ -n "$_key" ]]; then
                 _CPB_SEEN="${_CPB_SEEN:-}$_key"
