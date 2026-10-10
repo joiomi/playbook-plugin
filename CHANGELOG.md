@@ -51,18 +51,21 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
-- **The shell history's rotation: one shell at a time, and killed half-way it no longer strands the task
-  activations in the archive** (task 174; PLAN S11). Past 50 MB `.agent/bash_history` is moved aside and a fresh file started with the `tasks work` / `tasks new` lines carried
-  over — `tasks retro` and `tasks timeline` find each task by those lines, in the live file only. That was a plain
-  move followed by an append: two shells that found the file big at the same moment both rotated (the second moved
-  away the first one's fresh file), a shell killed between the two steps left the activations in the archive only,
-  and every rotation carried every activation line ever written. Now one shell rotates at a time, the fresh file is
-  prepared first and renamed into place — the history's name never disappears and never holds less than the carried
-  lines — an activation written by another shell meanwhile is picked up afterwards, and the newest 5,000 are
-  carried. Still true, and stated on the ledger row (PB-SHELL-ATTRIBUTION): where `flock` is not a command on PATH,
-  or the filesystem has no hard links, the old order runs, with its old limit; an activation another shell writes at the
-  very moment of the rename (or just before a rotation that then dies) stays in the archive; activations older than the newest 5,000 are in archives
-  only. Reaches a machine when `/playbook:init` is run again (the logger in use is the copy it installs).
+- **The shell history's rotation: one shell at a time, and a rotation that dies half-way is finished by the next
+  shell** (task 174; PLAN S11). Past 50 MB `.agent/bash_history` is moved aside and a fresh file started with the
+  `tasks work` / `tasks new` lines carried over — `tasks retro` and `tasks timeline` find each task by those lines,
+  in the live file only. That was a plain move followed by an append: two shells that found the file big at the same
+  moment both rotated (the second moved away the first one's fresh file), a shell killed between the two steps left
+  the activations in the archive only, and every rotation carried every activation line ever written. Now one shell
+  rotates at a time; before anything is moved a small marker (`bash_history.archived-owes`) names the archive about
+  to be made, and it goes only when that archive's lines are in the live file — a shell that finds it finishes the
+  job first; the fresh file is prepared and renamed into place where the host has `flock` and hard links (elsewhere
+  the history is moved away and the lines given back, as before, but now recoverably); and what is carried is the
+  newest 5 MiB of those lines. Still true, and stated on the ledger row (PB-SHELL-ATTRIBUTION): where no lock can be
+  had two shells can still rotate at once; an activation another shell writes at the very moment of the rename can
+  stay in the archive; activations older than the newest 5 MiB are in archives only, which `tasks timeline` and
+  `tasks tag` do not read. Reaches a machine when `/playbook:init` is run again (the logger in use is the copy it
+  installs).
 - **Five small fixes from PLAN S11's list** (task 171) — each was routed to this batch weeks ago and never built.
   **`tasks models check` no longer says OK for a grok pin it never called.** `grok models` lists what your account
   is entitled to; it cannot see that the credit ran out, and on 2026-09-29 the check printed OK while every call

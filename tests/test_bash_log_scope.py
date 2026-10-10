@@ -518,7 +518,8 @@ esac""")
 [ "$(wc -l < "{count}")" -ge 2 ] && exit 1""")                 # the second lock: held by another shell
         r = self._bash("set -e; echo rotating >/dev/null; echo still-alive", shims=True)
         self.assertIn("still-alive", r.stdout)
-        self.assertEqual(len(count.read_text().splitlines()), 2, "the case under test: the lock was asked for twice")
+        asked = len(count.read_text().splitlines()) if count.exists() else 0
+        self.assertEqual(asked, 2, "the case under test: the lock was asked for twice")
         self.assertEqual(self._live_activations(), ["7", "8"])
         self.assertTrue(self.owes.exists(), "what is owed must stay written down for the shell that has the lock")
         self._bash("echo the-shell-with-the-lock >/dev/null")
@@ -596,6 +597,8 @@ esac""")
         self.assertIn("still-alive", r.stdout)
         self.assertEqual(self._live_activations(), ["7", "8"])
         self.assertEqual(len(self._leftovers()), 1, "the case under test: a prepared file was left behind")
+        self.assertTrue(self.owes.exists(), "the case under test: it had written down what it was about to do")
+        self.assertEqual(len(self._archives()), 1, "the case under test: the archive's name is on the live file")
         self._bash("echo after-it >/dev/null")
         self.assertEqual(self._live_activations(), ["7", "8"])
         self.assertLess(self.hist.stat().st_size, 1024 * 1024)
@@ -685,14 +688,17 @@ esac""")
         # workspace an activation-shaped line is 583 bytes on average and 42,680 at
         # the longest — a bound in LINES bounds neither the fresh file nor how far
         # back it reaches. The newest 5 MiB of them, whole lines.
-        width = 1024
+        width = 1000                 # not a divisor of the bound: the cut falls inside a line
         with open(self.hist, "wb") as fh:
-            for n in range(1, 6001):                                    # 6,144,000 bytes of activations
+            for n in range(1, 6001):                                    # 6,000,000 bytes of activations
                 head = f"2026-09-20 10:00:00{self.ACTIVATION}{n} #".encode()
                 fh.write(head + b"p" * (width - len(head) - 1) + b"\n")
             filler = b"2026-09-20 10:00:02 | AGENT | echo filler " + b"x" * 950 + b"\n"
             fh.write(filler * (self.BIG // len(filler) + 1))
         self._bash("echo rotate >/dev/null")
+        first = self.hist.read_bytes().split(b"\n", 1)[0]
+        self.assertTrue(len(first) + 1 == width and first.startswith(b"2026-09-20 10:00:00 | AGENT | "),
+                        f"the fresh file starts with a piece of a line: {first[:40]!r}… ({len(first)} bytes)")
         lines = [ln for ln in self.hist.read_bytes().split(b"\n") if self.ACTIVATION.encode() in ln]
         size = sum(len(ln) + 1 for ln in lines)
         self.assertLessEqual(size, self.BOUND)

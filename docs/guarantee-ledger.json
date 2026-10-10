@@ -4685,7 +4685,7 @@
     {
       "id": "PB-SHELL-ATTRIBUTION",
       "category": "sessions-and-attribution",
-      "statement": "The Bash shell-command logger records agent shell commands with a timestamp and an AGENT tag, and suppresses hook-internal shells so implementation machinery does not enter the command history; it writes each distinct command text once per shell process and working directory (a loop body is one line, not one per iteration) for as long as the shell remembers the text — what it has seen is one string, started afresh once it passes 65,536 characters, after which an earlier text is written again — except activation-shaped text (`tasks` followed by ` work` or ` new`), which is written every time, installs no trap in a shell started with PLAYBOOK_NO_BASHLOG set to anything but \"\" or \"0\", logs nothing from a script whose own file name is statusline (a directory of that name does not count), and rotates a history found past 50 MB to bash_history.archived-<date>-<pid> before the first write each shell makes to that lane, so a history can overshoot 50 MB by what one shell writes (task 088, PLAN S5b). The rotation is done by one shell at a time and keeps the activation lines in the live file (task 174, PLAN S11): where `flock` is a command on PATH and the filesystem has hard links, a shell that finds another one rotating skips it, and one that takes the lock after another has finished looks again and finds nothing to do; the newest 5,000 `tasks work`/`tasks new` lines are read out first, the archive is made as a second name of the history, and one rename puts the prepared file under the live name — which therefore never ceases to exist and holds either the whole old history or the carried lines, whatever step the rotation dies at; an activation line another shell appends between that read and the rename is appended to the fresh file afterwards, by a second read of the archive.",
+      "statement": "The Bash shell-command logger records agent shell commands with a timestamp and an AGENT tag, and suppresses hook-internal shells so implementation machinery does not enter the command history; it writes each distinct command text once per shell process and working directory (a loop body is one line, not one per iteration) for as long as the shell remembers the text — what it has seen is one string, started afresh once it passes 65,536 characters, after which an earlier text is written again — except activation-shaped text (`tasks` followed by ` work` or ` new`), which is written every time, installs no trap in a shell started with PLAYBOOK_NO_BASHLOG set to anything but \"\" or \"0\", logs nothing from a script whose own file name is statusline (a directory of that name does not count), and rotates a history found past 50 MB to bash_history.archived-<date>-<pid> before the first write each shell makes to that lane, so a history can overshoot 50 MB by what one shell writes (task 088, PLAN S5b). The rotation is done by one shell at a time, and a death at any step of it leaves either the history as it was or an archive the next shell collects from (task 174, PLAN S11): the lock is `flock -n` on the file that has the live name, taken again on the new file before anything is given back; before anything is moved a marker beside the history (`bash_history.archived-owes`) names the archive about to be made, it is removed once every carried line of that archive is in the live file, and a shell that finds it finishes that first; the carried lines are the newest 5 MiB of whole `tasks work`/`tasks new` lines; where `flock` can lock and the filesystem has hard links the fresh file is prepared and renamed into place with the archive made as a second name of the old one — on that path the live name never ceases to exist and never holds less than the carried lines — and elsewhere the history is moved away and the lines are given back, by this shell or, after a death, by the next.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/bash-log.sh",
@@ -4881,7 +4881,7 @@
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": [
-            "Shell A is held just before it takes the lock (a `flock` stand-in) while B rotates start to end; A then gets the lock and must look again by name: one archive. Red ONLY in a copy without that second look (`2 != 1`); six shells at once do not show it — written after that break had stayed green. (The old logger never called `flock`: its red there is of the set-up.)"
+            "Shell A is held right after its first look said the file was big (a `find` stand-in that answers, then waits) while B rotates start to end; A then opens the live name — the fresh file — locks it and must look again, by name: one archive, nothing owed. Red ONLY in a copy without that second look (`2 != 1`); six shells at once do not show it — written after that break had stayed green."
           ]
         },
         {
@@ -4901,7 +4901,7 @@
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": [
-            "A stand-in for `grep`, `ln`, `mv` or `cat` exits 137 having done nothing, as a killed process: after each, the live file still has both activation lines, the host shell (under `set -e`) lives and prints nothing on stderr, and the next shell rotates cleanly. On the old logger the `grep` case: `[] != ['7', '8']`. Red in a copy that moves the history away first (the `cat` case) and in one that takes a dead `grep` for \"no activations\"."
+            "A stand-in for `grep`, `tail`, `ln` or `mv` exits 137 having done nothing, as a killed process: after each, the live file still has both activation lines, the host shell (under `set -e`) lives and prints nothing on stderr, and after the next shell there is an archive, a small live file with both lines, nothing in preparation and nothing owed. On the old logger the `grep` case: `[] != ['7', '8']`. Red in a copy that goes on after a read that died (`[] != ['7', '8']` at `grep` and at `tail`)."
           ]
         },
         {
@@ -4911,7 +4911,7 @@
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": [
-            "SIGKILL of the rotating subshell at the rename: the host shell goes on, the live file keeps the activations, one prepared file is left; the next shell rotates and removes it; every archive name holds the old history. Red in a copy that never removes leftovers. (On the old logger the same stand-in kills the host shell itself — there was no subshell — so its red there is of the set-up, not of this property.)"
+            "SIGKILL of the rotating subshell at the rename: the host shell goes on, the live file keeps the activations, a prepared file is left (and the marker, and the archive's name on the file still in use); the next shell removes the first, takes that name back and rotates — ONE archive, holding the old history, nothing owed. Red in a copy that never removes leftovers, and in one that leaves the second name (`2 != 1`); on this task's first build: `2 != 1`."
           ]
         },
         {
@@ -4921,17 +4921,7 @@
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": [
-            "A stand-in for `ln` appends an activation line to the history at that instant — after the lines were read out, before the rename: the live file ends with activations 7, 8 and 99. Red in a copy without the second read of the archive (`['7', '8'] != ['7', '8', '99']`). (The old logger never called `ln`: its red there is of the set-up.)"
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_only_the_newest_5000_activations_are_carried",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "6,000 activation lines in a history past 50 MB: 5,000 carried, numbers 1001 to 6000. On the old logger: `6000 != 5000`."
+            "A stand-in for `ln` appends an activation line to the history at that instant — after the lines were read out, before the rename: the live file ends with activations 7, 8 and 99, each once, nothing owed. Red in a copy that gives nothing back after the rename (`['7', '8'] != ['7', '8', '99']`) and in one that gives back without looking at what the live file holds (`['7', '8', '7', '8', '99']`)."
           ]
         },
         {
@@ -4941,7 +4931,7 @@
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": [
-            "The host script defines functions `mv`, `grep`, `ln`, `tail`, `cat`, `rm`, `wc`, `flock` that print and return 0: the rotation is whole and none of them ran. Red in a copy that calls the tools bare (`hijacked-flock`, `hijacked-rm`, `hijacked-ln`, `hijacked-mv` printed)."
+            "The host script defines functions `mv`, `grep`, `ln`, `tail`, `cat`, `rm`, `wc`, `flock`, `find`, `printf`, `read` that print and return 0: the rotation is whole and none of them ran. Red in a copy that calls them bare (`hijacked-flock`, `hijacked-find`, … printed)."
           ]
         },
         {
@@ -4961,7 +4951,7 @@
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": [
-            "PATH holds every command of the real one except `flock`, and the host script defines a FUNCTION called `flock`: one archive holding the old history, activations carried, a `set -e` host alive, the function not called, nothing on stderr. Red in a copy that asks `command -v flock` (the function counts as the tool and nothing rotates: `0 != 1`) and in one whose no-flock branch does nothing. Holds on the old logger too — the old order is what this branch keeps; its limit is limitation (1)."
+            "PATH holds every command of the real one except `flock`, and the host script defines a FUNCTION called `flock`: one archive holding the old history, activations given back, a `set -e` host alive, the function not called, nothing on stderr. Red in a copy that takes a `flock` that cannot be run for a lock that is held (`0 != 1`: nothing ever rotates) and in one whose moved-away order does nothing. Holds on the old logger too — its limit is limitation (1)."
           ]
         },
         {
@@ -4971,7 +4961,7 @@
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": [
-            "A stand-in `ln` fails as on a filesystem without hard links: one archive holding the old history, activations in the live file, nothing left behind, nothing on stderr. Red in a copy whose fallback does nothing (`0 != 1`); holds on the old logger, which never called `ln`."
+            "A stand-in `ln` fails as on a filesystem without hard links: one archive holding the old history, activations in the live file, nothing left behind, nothing on stderr. Red in a copy whose moved-away order does nothing (`0 != 1`); holds on the old logger, which never called `ln`."
           ]
         },
         {
@@ -4981,7 +4971,133 @@
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": [
-            "A `date` stand-in fixes the archive's stamp and the script itself takes that archive name (its own pid) before it enters the project: the older archive is what it was, the history is not rotated this time and keeps its activations, a `set -e` host lives; the next shell rotates under another name. On the old logger and in a copy without the guard the older archive is replaced by the 51 MB history."
+            "A `date` stand-in fixes the archive's stamp and the script itself takes that archive name (its own pid) before it enters the project: the older archive is what it was, the history is not rotated this time and keeps its activations, a `set -e` host lives, nothing is owed; the next shell rotates under another name. On the old logger and in a copy without the guard the older archive is replaced by the 51 MB history."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_bash_log_scope.py",
+          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_a_lock_on_a_file_that_is_no_longer_the_history_is_no_lock",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Shell A has opened the history and is held just before it takes the lock (a `flock` stand-in) while B rotates start to end; the test then plants what a death would leave — the marker, and one more activation in the archive — and holds the live file's lock itself. A gets a lock, on the OLD file: it settles nothing (marker still there, the line not given). With the lock free the next shell gives it: activations 7, 8, 55. Red in a copy where a lock on the old file counts."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_bash_log_scope.py",
+          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_a_death_after_the_rename_is_finished_by_the_next_shell",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Impl panel round 1 (codex-high, codex-medium). Another shell writes activation 99 between the read and the rename (a stand-in for `ln`), and every `grep` that reads an archive dies: after the first shell the live file has 7 and 8 — renamed, the late line not given back; after the next shell 7, 8, 99, one archive, nothing owed. On this task's first build: `['7', '8'] != ['7', '8', '99']`. Red in a copy that writes nothing down, in one whose callback does not look for the marker, in one that drops the marker without giving back, and in one that moves the history away first (`[] != ['7', '8']` after the first shell)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_bash_log_scope.py",
+          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_a_death_after_the_move_where_no_hard_link_can_be_made_is_finished_by_the_next_shell",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Impl panel round 1 (sonnet, codex-medium). `ln` fails as where hard links cannot be made, and what gives the lines back dies: after the first shell the live file has NO activation — the stated window of limitation (2); after the next shell 7 and 8, one archive holding the old history, nothing owed. On this task's first build: `[] != ['7', '8']`. Red in the three copies named on the proof above."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_bash_log_scope.py",
+          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_a_death_after_the_move_on_a_host_without_flock_is_finished_by_the_next_shell",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The same on a PATH without `flock`: no activation after the first shell, 7 and 8 after the next, nothing owed. On this task's first build and on the old logger: `[] != ['7', '8']`. Red in the same three copies."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_bash_log_scope.py",
+          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_nothing_is_given_back_without_the_lock_of_the_new_live_file",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "A `flock` stand-in answers 1 — held by another shell — the SECOND time it is asked, i.e. for the file that has the live name after the rename: the rotator gives nothing back (7, 8; the line written meanwhile not there) and leaves the marker; the next shell gives it (7, 8, 99). Red in a copy that gives back without asking for that lock."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_bash_log_scope.py",
+          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_a_marker_that_names_no_archive_of_this_lane_is_dropped",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The marker says, in turn, `../../outside`, `../outside`, `/etc/hostname`, `bash_history`, `not-an-archive`, an archive name that is no file, its own name, nothing: each time it is removed, the live file is as it was (a planted file outside the lane with an activation-shaped line gives nothing), no archive appears, a `set -e` host lives, nothing on stderr. Red in a copy that does not check the name: `['7', '666'] != ['7']` for `../outside`, and for `bash_history` the live history itself is deleted (`[] != ['7']`)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_bash_log_scope.py",
+          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_a_marker_that_names_a_link_is_dropped",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The marker names a well-formed archive name that is a symbolic link to a file outside the lane: nothing is read through it, the link and its target are untouched, the marker is removed. Red in a copy that reads a link as an archive (`['7', '666'] != ['7']`)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_bash_log_scope.py",
+          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_a_flock_that_cannot_lock_is_a_host_without_one",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Impl panel round 1 (opus). A `flock` stand-in exits 71 — it cannot lock at all: the history is still rotated (one archive holding it, activations in the live file, nothing owed, nothing on stderr). On this task's first build: `0 != 1` — nothing ever rotated there. Red in a copy that takes that answer for a held lock."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_bash_log_scope.py",
+          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_a_rename_that_happened_but_reported_failure_does_not_cost_the_archive",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Impl panel round 1 (opus). A `mv` stand-in renames the prepared file into place and then exits 1: one archive, holding the old history; the live file small, with the activations; nothing owed. On this task's first build the archive — by then the only name of the old history — was deleted (`0 != 1 : []`). Red in a copy that goes by `mv`'s status."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_bash_log_scope.py",
+          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_the_same_on_a_host_without_flock",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_bash_log_scope.py",
+            "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_a_tool_that_is_itself_a_bash_script_is_not_a_logged_shell"
+          },
+          "limitations": [
+            "Impl panel round 1 (opus). PATH without `flock`, `grep` a bash wrapper script, the host under `set -u` and `set -e`: the rotation completes and no command of the wrapper is in the history or the archive. On this task's first build the wrapper's two commands were logged. No deliberate break is run for this one: with the rotation's tools logged and no lock, the wrapper finds the marker, gives back, and calls itself — a fork storm, which is why they start unlogged."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_bash_log_scope.py",
+          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_the_carried_lines_are_bounded_by_size_and_are_the_newest_whole_ones",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_bash_log_scope.py",
+            "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_six_thousand_short_activation_lines_are_all_carried"
+          },
+          "limitations": [
+            "6,000 activation lines of 1,000 bytes (6 MB) in a history past 50 MB: what is carried is at most 5 MiB and within two lines of it, the fresh file starts with a whole line, every carried line is whole, and they are the newest, none missing. On this task's first build (5,000 lines): `5120000 not greater than 5240832`. Red in a copy with no bound (`6000000 not less than or equal to 5242880`) and in one that keeps the line that was cut (`the fresh file starts with a piece of a line … (879 bytes)`)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_bash_log_scope.py",
+          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_six_thousand_short_activation_lines_are_all_carried",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "6,000 activation lines of about 50 bytes: all 6,000 carried, in order. On this task's first build: `5000 != 6000`."
           ]
         }
       ],
@@ -4996,7 +5112,7 @@
         "Lane selection is deliberately NOT claimed here. The confirmed fresh-clone root-lane violation is recorded once, authoritatively, on PB-LANE-RESOLUTION; this entry must not be read as evidence that shell commands reach the resolved lane.",
         "The copy installed at ~/.claude/bash-log.sh is deployed by /playbook:init and is not updated by a plugin refresh. Measured on this host 2026-09-24: it is byte-identical to the bundled logger BEFORE task 088 (sha256 fe1f6f01...; the earlier 7488c02c... note is superseded — that copy now has the hook guard), so until /playbook:init is re-run it lacks the task-088 dedupe, opt-out, statusline skip and rotation.",
         "Deliberate trade-off (task 088): an identical command text repeated in the same directory within ONE shell process (one Bash tool call — measured: consecutive calls run in different processes) is logged once, so `make test; make test` in one call leaves one line; activation-shaped `tasks … work|new` text is exempt. Measured on the 278-case wrapper fixture run under BASH_ENV: 1088 lines with the old logger, 443 with the new; one ~/.claude/statusline.sh render 38 -> 0. The zsh logger is unchanged (one line per `zsh -c`).",
-        "Task 174 (PLAN S11; retro 107 R13) replaced the limitation that stood here — \"Rotation is not locked or atomic: two shells that cross 50 MB at the same instant can both rotate …; a process killed between the move and the activation copy leaves those activations only in the archive; the copied activation lines are not size-bounded.\" All three were reproduced red on the old logger first (two archives for two shells, `2 != 1`; the activations gone from the live file after a death between the two steps, `[] != ['7', '8']`; `6000 != 5000`). What is LEFT, stated: (1) where `flock` is not a command on PATH, and on a filesystem that cannot hard-link, the OLD order runs — move, then append — with the old limit for a death between the two steps and, without `flock`, for a second rotator as well (the bound of 5,000 lines holds there too); (2) a line that is not an activation, written by another shell while a rotation is under way, lands in the archive, not in the live file — archived, never deleted; (3) an activation line another shell appended during the rotation stays in the archive only in two cases, neither exercised by a test: its append was already under way across the rename and reached the old file after the second read (a window of one write), or the rotation died between the rename and that second read; (4) a rotator killed outright leaves the files it was preparing (`<archive>.new`, `<archive>.all.new` — activation lines only), which the next rotation of that lane deletes, and, if it died between the hard link and the rename, an archive name that is a second name of the history still in use: the next rotation archives that same file under one more name (two names, one file), and neither name is removed; (5) the carried lines are the NEWEST 5,000: an activation older than that is in an archive only; (6) a rotation whose archive name is already taken (the same second and the same shell pid) does not rotate — the next shell does; (7) the lock is `flock` on a descriptor opened on the history for appending, because over NFS an exclusive `flock` needs a descriptor open for writing (flock(2), \"NFS details\") — taken from the manual, NOT run on NFS: no test here has one. The files a rotation makes all begin with `bash_history.archived-`: the seeded ignore block covers them (tested, `.new` names included) and the judges' read mask matches any name that starts `bash_history.` (`provider/sandbox.py::_is_record_file`; tested for an archive's name in tests/test_judge_read_mask.py, not for the `.new` names). The rotation runs in a subshell with the host's `set -e`/`-u`/noclobber and its DEBUG trap switched off, calls its tools through `command` (a function of the host script named `mv` or `grep` is not called) and starts them with PLAYBOOK_NO_BASHLOG=1 (a tool that is a bash wrapper script is not a logged shell — on the old logger such a wrapper's own commands were logged, and in this task's first test harness bash stand-ins for the rotation's tools each rotated again until the machine ran out of processes). NOT examined here: the two tools the logger calls OUTSIDE the rotation, for every shell and every line — `find` for the first look, `date` for the stamp. A bash wrapper script on PATH for either would be a logged shell that calls it again; not measured, parked on the task's record.",
+        "Task 174 (PLAN S11; retro 107 R13) replaced the limitation that stood here — \"Rotation is not locked or atomic: two shells that cross 50 MB at the same instant can both rotate …; a process killed between the move and the activation copy leaves those activations only in the archive; the copied activation lines are not size-bounded.\" All three were reproduced red on the old logger first (`2 != 1` archives; `[] != ['7', '8']`; `6000 != 5000`). The first build stated two limits of its own — a death in either fallback, a death between the rename and the second read — and its impl panel (round 1) read the ruling as not allowing them; they were rebuilt with the marker, red first on that build. What is LEFT, stated: (1) where no lock can be had — `flock` is not a command on PATH, or cannot lock on that mount — two shells can still rotate at once (two archives), and the marker names only the later of them: of two rotations that BOTH die there, only that one is finished by the next shell. A host that has the lock but no hard links has none of this; (2) wherever the history is moved away rather than replaced (no lock, or no hard link), the live file lacks the carried lines from the move until they are given back — milliseconds in a rotation that lives, until the next shell's first logged command in that lane in one that dies; (3) a line that is not an activation, written by another shell while a rotation is under way, lands in the archive, not in the live file — archived, never deleted; (4) an activation line whose append was already under way across the rename and reached the old file after it was read for the giving-back stays in the archive only — a window of one write, not exercised by a test; (5) the carried lines are the NEWEST 5 MiB: an activation older than that is in an archive only, where `tasks retro`, `tasks timeline` and `tasks tag` do not read — and `tasks tag` then gives a chat message older than the oldest carried activation to the oldest carried task (its first-task rule, `history.py`). Measured on this plugin's own workspace on 2026-10-10: the 5,096 activation-shaped lines of a 52 MB history are 2.97 MB (583 bytes on average, 42,680 the longest), and one 50 MB period added about 4,300 of them — 5 MiB reaches back about two such periods there. Readers that read archives are not built (parked; the owner's to route); (6) lines given back after newer ones were written follow them in the file: `tasks timeline` prints in file order (retro and tag go by the stamp). A giving-back never gives a line the live file already holds, so where it is repeated after a death, of two identical activation lines (same second, same text) one can remain; (7) a rotation whose archive name is already taken (the same second and the same shell pid) does not rotate — the next shell does; (8) the lock's descriptor is opened for appending because over NFS an exclusive `flock` needs a descriptor open for writing (flock(2), \"NFS details\") — taken from the manual, NOT run on NFS: no test here has one; (9) a giving-back that keeps failing (an unreadable archive, a full disk) leaves the marker, and every new shell in that lane tries again at its first logged command; (10) cost, measured against the logger before this task (scratch run of 2026-10-10): a shell's start with one logged line 4.75 → 5.05 ms; one rotation of a 51 MB history 14-17 → 33-36 ms; one rotation of a history holding 70,000 activation lines (6.2 MB of them) 0.31 → 1.27 s, its fresh file 7.2 MB before and 5.24 MB now — once per 50 MB of history, and no shell waits for it (the lock is asked for without blocking). The files a rotation makes all begin with `bash_history.archived-` (the marker; `<archive>.new`, `.owed.new`, `.held.new` while in preparation): the seeded ignore block covers them (tested) and the judges' read mask matches any name that starts `bash_history.` (`provider/sandbox.py::_is_record_file`; tested for an archive's name in tests/test_judge_read_mask.py, not for these). The whole rotation, on every path, runs in one subshell with the host's `set -e`/`-u`/noclobber and its DEBUG trap switched off, calls its tools through `command`/`builtin` (a function of the host script named `mv` or `grep` is not called) and starts them with PLAYBOOK_NO_BASHLOG=1 (a tool that is a bash wrapper script is not a logged shell). NOT examined here: the two tools the logger calls OUTSIDE the rotation, for every shell and every line — `find` for the first look, `date` for the stamp. A bash wrapper script on PATH for either would be a logged shell that calls it again; not measured, parked on the task's record.",
         "Since task 169 (PLAN S11) this row is the BASH logger's only: `bash-log.zsh` left its owners. Windows is not claimed. The zsh variant is deployed on zsh hosts (PB-INIT-SCAFFOLD, fixture I1) and CI runs it under real zsh for the lanes it writes to, but its logging rules are claimed by no row — zsh is not installed on the host where these proofs were watched failing. Also proved there, clause by clause: the line's shape (timestamp, tag, command) and every opt-out value; and the dedupe clause was completed with its memory bound.",
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
         "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21).",

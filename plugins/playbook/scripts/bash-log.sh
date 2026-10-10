@@ -22,98 +22,180 @@ esac
 # left the activations only in the archive — and `tasks retro` / `tasks timeline`
 # read only the live file — and every rotation carried every activation line ever
 # written. Now:
-#   * ONE rotator: `flock -n` on a descriptor opened on the history file itself (no
-#     lock file to leave behind). A shell that does not get it skips the rotation
-#     and just logs. A shell that gets it after the holder finished finds, by name,
-#     a file that is small again.
-#   * PREPARED, then renamed into place: the activation lines are read out of the
-#     history first (the newest 5,000 are carried — the bound), the archive is made
-#     as a second NAME of the history (a hard link), and one `mv` puts the prepared
-#     file under the live name. The live name never ceases to exist, and holds
-#     either the whole old history or the carried lines: a rotation that dies at
-#     any step loses nothing of them.
-#   * CAUGHT UP: an activation another shell appends after the lines were read and
-#     before the rename lands in the old file, i.e. in the archive; the archive is
-#     read once more past the lines already counted, and those are appended.
-#     (Left: a line whose append was under way across the rename and landed after
-#     this second read stays in the archive only.)
-# Files it makes carry the archive's own name (`….new` after it), which the judges'
-# read mask and the seeded ignore block already cover. Where it cannot run as above
-# the old order is kept, with the old limit: no `flock` on the host (a second
-# rotator cannot be excluded, and this sequence run twice at once would be worse
-# than the old one — the second rename would replace the first's fresh file), and a
-# filesystem that cannot hard-link. Nothing here may fail the caller or print: it
-# runs in the DEBUG trap of every shell (see the callback below).
+#   * ONE shell at a time. `flock -n` on a descriptor opened on the history file
+#     itself (no lock file to leave behind); a shell that does not get it leaves
+#     the lane alone and just logs. The lock that counts is the one on the file that
+#     has the live name NOW: a rotation gives that name to another file, so a lock
+#     taken on what turns out to be the old one is no lock, and the rotator itself
+#     takes the new file's lock before it gives anything back.
+#   * WRITTEN DOWN first. Before anything is moved, a marker beside the history
+#     (`bash_history.archived-owes`) names the archive about to be made; it goes
+#     when that archive's activation lines are in the live file. A shell that
+#     finds it — one `[[ -f ]]` where the size is looked at — finishes the job. So
+#     a rotation that dies at ANY step leaves either the history as it was or an
+#     archive the next shell collects from (impl panel round 1).
+#   * GIVEN BACK, repeatably: every carried line of the archive that the live file
+#     does not hold yet is appended to it. "Carried" is the newest 5 MiB of whole
+#     activation lines — the bound. That one operation is the second read after a
+#     rename (a line another shell wrote meanwhile), the whole carry where the
+#     history had to be moved away, and the recovery.
+#   * Where it can — `flock` there, hard links there — the fresh file is PREPARED
+#     and renamed into place, with the archive made as a second name of the old
+#     one: on that path, and only on it, the live name never ceases to exist and
+#     never holds less than the carried lines. Where it cannot (no hard link; no
+#     `flock` on PATH, or one that cannot lock here), the history is moved away
+#     and the lines given back: between the two the live file lacks them — until
+#     this shell, or after a death the next one, gives them back. Without a lock
+#     two shells can also still rotate at once (two archives, as before).
+# Left: a line whose append was under way across the rename and landed in the old
+# file after it was read for the giving-back stays in the archive only; so does an
+# activation older than the bound.
+# Files it makes all begin `bash_history.archived-` (`….new` while in preparation),
+# which the judges' read mask and the seeded ignore block already cover. Nothing
+# here may fail the caller or print: it runs in the DEBUG trap of every shell (see
+# the callback below).
 _cpb_rotate() {
-    local _lane="$1" _hist="$1/bash_history"
-    local _re=' [|] [A-Za-z0-9_]+ [|] .*tasks[[:space:]]+(work|new)'
-    # a FILE on PATH (`type -P`): a function or alias of the host's script that
-    # happens to be called `flock` is not the tool
-    if ! builtin type -P flock >/dev/null 2>&1; then
-        local _old
-        _old="$_lane/bash_history.archived-$(command date '+%Y%m%d-%H%M%S')-$$" || _old="$_lane/bash_history.archived-$$"
-        if command mv -f "$_hist" "$_old" 2>/dev/null; then
-            { command grep -a -E "$_re" "$_old" | command tail -n 5000 >> "$_hist"; } 2>/dev/null || true
-        fi
-        return 0
-    fi
+    local _lane="$1"
     {
         (
-            # this subshell is the rotation: the host's options and its DEBUG trap
-            # do not apply in here, nothing in here reaches the host, and a
+            # This subshell is the whole of it: the host's options and its DEBUG
+            # trap do not apply in here, nothing in here reaches the host, and a
             # command of the rotation that turns out to be a bash script (a
             # wrapper on PATH) starts unlogged — it would otherwise be a logged
-            # shell that finds the same big file. `command` below: a FUNCTION
-            # of the host's script named like one of these tools is not ours.
+            # shell that finds the same big file. `command` / `builtin` below: a
+            # FUNCTION of the host's script named like one of these is not ours.
             set +e +u +C
             trap - DEBUG
             export PLAYBOOK_NO_BASHLOG=1
-            command flock -n 9 || exit 0
-            # under the lock, by NAME: is it still past the limit?
+            _hist="$_lane/bash_history"
+            _owes="$_lane/bash_history.archived-owes"
+            _re=' [|] [A-Za-z0-9_]+ [|] .*tasks[[:space:]]+(work|new)'
+
+            # FILE's newest activation lines, whole, within 5 MiB. The newline put
+            # in front is a line for the second `tail` to drop: where the first
+            # one cut, what gets dropped is the line that was cut. `-a`: a history
+            # can hold stray binary bytes. Fails unless the file was read whole
+            # (`grep`: 0 = lines found, 1 = none).
+            _carried() {
+                { builtin printf '\n'; command grep -a -E "$_re" "$1"; } | command tail -c 5242880 | command tail -n +2
+                _st=("${PIPESTATUS[@]}")
+                [[ "${_st[0]}" -le 1 && "${_st[1]}" -eq 0 && "${_st[2]}" -eq 0 ]]
+            }
+
+            # Every carried line of ARCHIVE that the live file does not hold yet,
+            # appended to it. May be run again after any death: it gives only
+            # what is missing. Fails (and the marker stays) unless it got through.
+            _deliver() {
+                _carried "$1" > "$1.owed.new" 2>/dev/null || { command rm -f "$1.owed.new" 2>/dev/null; return 1; }
+                if [[ -f "$_hist" ]]; then
+                    command grep -a -E "$_re" "$_hist" > "$1.held.new" 2>/dev/null
+                    [[ $? -le 1 ]] || { command rm -f "$1.owed.new" "$1.held.new" 2>/dev/null; return 1; }
+                else
+                    : > "$1.held.new"
+                fi
+                command grep -a -F -x -v -f "$1.held.new" "$1.owed.new" >> "$_hist" 2>/dev/null
+                _rc=$?
+                command rm -f "$1.owed.new" "$1.held.new" 2>/dev/null
+                [[ "$_rc" -le 1 ]]
+            }
+
+            # The lock, on whatever file has the live name now. Fails when another
+            # shell holds it, and when the file it was taken on is no longer the
+            # live one (a rotation went by between the open and the lock). For
+            # appending, never truncating: over NFS an exclusive flock needs a
+            # descriptor open for WRITING (flock(2), "NFS details"). flock(1)
+            # answers 1 for a lock that is held; anything else — it cannot lock
+            # here, or there is no such command on PATH (127) — is a host without
+            # a lock from then on.
+            _take() {
+                [[ "$_flock" -eq 1 ]] || return 0
+                # (a plain `exec`: through `builtin` the descriptor would be open
+                # for that one command only — measured: flock then answers 65)
+                exec 9>>"$_hist" || return 1
+                command flock -n 9
+                case $? in
+                    0) [[ /dev/fd/9 -ef "$_hist" ]] ;;
+                    1) return 1 ;;
+                    *) _flock=0; return 0 ;;
+                esac
+            }
+
+            _flock=1
+            _take || exit 0
+            if [[ "$_flock" -eq 1 ]]; then
+                # what a rotator that was killed left in preparation — under the
+                # lock nobody else is preparing anything
+                command find "$_lane" -maxdepth 1 -type f -name 'bash_history.archived-*.new' -delete 2>/dev/null
+            fi
+
+            # A rotation that did not get to its end. The marker's one line is
+            # read as the NAME of an archive in this lane, and as nothing else.
+            if [[ -f "$_owes" ]]; then
+                _name=""
+                IFS= builtin read -r _name < "$_owes" 2>/dev/null
+                case "$_name" in
+                    */*) _name="" ;;
+                    bash_history.archived-owes) _name="" ;;
+                    bash_history.archived-?*) ;;
+                    *) _name="" ;;
+                esac
+                if [[ -n "$_name" && -f "$_lane/$_name" && ! -L "$_lane/$_name" ]]; then
+                    if [[ "$_hist" -ef "$_lane/$_name" ]]; then
+                        # named, linked, never renamed: it is a second name of
+                        # the file still in use, and nothing is owed
+                        command rm -f "$_lane/$_name" 2>/dev/null
+                    else
+                        _deliver "$_lane/$_name" || exit 0
+                    fi
+                fi
+                command rm -f "$_owes" 2>/dev/null
+            fi
+
+            # by NAME, and now: is it (still) past the limit?
             [[ -n "$(command find "$_hist" -prune -size +52428800c 2>/dev/null)" ]] || exit 0
-            # what a rotator that was killed left behind — nobody else is rotating now
-            command find "$_lane" -maxdepth 1 -type f -name 'bash_history.archived-*.new' -delete 2>/dev/null
             _arch="$_lane/bash_history.archived-$(command date '+%Y%m%d-%H%M%S')-$$" || _arch="$_lane/bash_history.archived-$$"
-            _all="$_arch.all.new"
             _new="$_arch.new"
-            # never over an archive that exists (same shell, same second): where the
-            # hard link below fails for THAT reason the fallback's `mv -f` would
-            # replace it. The next shell rotates, under another name.
+            # never over an archive that exists (same shell, same second): the
+            # next shell rotates, under another name
             [[ ! -e "$_arch" ]] || exit 0
-            # `-a`: a history can hold stray binary bytes. 0 = lines found, 1 = none;
-            # anything else — the history could not be read whole: leave it as it is.
-            command grep -a -E "$_re" "$_hist" > "$_all" 2>/dev/null
-            _rc=$?
-            if [[ "$_rc" -gt 1 ]] || [[ ! -f "$_all" ]]; then
-                command rm -f "$_all" 2>/dev/null
-                exit 0
-            fi
-            _n=$(command wc -l < "$_all" 2>/dev/null)
-            _n="${_n//[!0-9]/}"
-            [[ -n "$_n" ]] || _n=0
-            if ! command tail -n 5000 "$_all" > "$_new" 2>/dev/null; then
-                command rm -f "$_all" "$_new" 2>/dev/null
-                exit 0
-            fi
-            command rm -f "$_all" 2>/dev/null
-            if command ln "$_hist" "$_arch" 2>/dev/null; then
-                if ! command mv -f "$_new" "$_hist" 2>/dev/null; then
-                    command rm -f "$_new" "$_arch" 2>/dev/null      # the history is untouched under its name
+            builtin printf '%s\n' "${_arch##*/}" > "$_owes" 2>/dev/null || exit 0
+
+            _renamed=0
+            if [[ "$_flock" -eq 1 ]]; then
+                if ! _carried "$_hist" > "$_new" 2>/dev/null; then
+                    # the lines could not be read out whole: the history stays as it is
+                    command rm -f "$_new" "$_owes" 2>/dev/null
                     exit 0
                 fi
-            else
-                # no hard link on this filesystem: the old order, under the lock
-                if command mv -f "$_hist" "$_arch" 2>/dev/null; then
-                    command cat "$_new" >> "$_hist" 2>/dev/null
+                if command ln "$_hist" "$_arch" 2>/dev/null; then
+                    command mv -f "$_new" "$_hist" 2>/dev/null
+                    # read off the files, not off `mv`: a rename that happened and
+                    # then reported failure has left the archive as the ONLY name
+                    # of the old history
+                    if [[ "$_hist" -ef "$_arch" ]]; then
+                        command rm -f "$_new" "$_arch" "$_owes" 2>/dev/null
+                        exit 0
+                    fi
+                    _renamed=1
                 fi
-                command rm -f "$_new" 2>/dev/null
-                [[ -f "$_arch" ]] || exit 0
             fi
-            # the activations that reached the old file after they were read out
-            command grep -a -E "$_re" "$_arch" 2>/dev/null | command tail -n +"$((_n + 1))" >> "$_hist" 2>/dev/null
+            if [[ "$_renamed" -ne 1 ]]; then
+                # no hard link on this filesystem, or no lock to be had: moved
+                # away, then given back — the marker is what makes a death
+                # between the two something the next shell repairs
+                command rm -f "$_new" 2>/dev/null
+                command mv -f "$_hist" "$_arch" 2>/dev/null
+                if [[ ! -f "$_arch" ]]; then
+                    command rm -f "$_owes" 2>/dev/null
+                    exit 0
+                fi
+            fi
+            # the live name is another file now: its lock, before anything is
+            # given back. If another shell has it, it has seen the marker.
+            _take || exit 0
+            _deliver "$_arch" && command rm -f "$_owes" 2>/dev/null
             exit 0
-        ) 9>>"$_hist"      # for appending, never truncating: over NFS an exclusive flock
-                           # needs a descriptor open for WRITING (flock(2), "NFS details")
+        )
     } 2>/dev/null || true
     return 0
 }
@@ -265,8 +347,12 @@ _cpb_log_cmd() {
                 # (panel r2): retro opens each task's window at its EARLIEST
                 # activation and reads only the live file, so archiving the
                 # active task's activation made its window vanish.
+                # The marker of a rotation that did not get to its end (a
+                # builtin test, no fork) sends this shell to finish it.
                 local _big=""
-                if [[ -f "$_lane/bash_history" ]]; then
+                if [[ -f "$_lane/bash_history.archived-owes" ]]; then
+                    _big=owed
+                elif [[ -f "$_lane/bash_history" ]]; then
                     _big=$(command find "$_lane/bash_history" -prune -size +52428800c 2>/dev/null) || _big=""
                 fi
                 if [[ -n "$_big" ]]; then
