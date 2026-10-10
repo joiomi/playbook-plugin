@@ -13,6 +13,7 @@ import importlib.machinery
 import importlib.util
 import os
 import subprocess
+import sys
 import tempfile
 import textwrap
 import threading
@@ -568,6 +569,145 @@ class RealProcesses(unittest.TestCase):
         self.assertIn("timed out", detail)
         self.assertIn("Ran 3 tests in ", out)                            # the green module's result is kept
 
+
+# ── task 179 (PLAN S11 item 30): what lies ABOVE the tests' temp projects ───────────────────────────────
+
+class GitIsToldWhereToStop(_Suite):
+    """A file named `.git` left in the machine's temp directory (a judge's experiment, 2026-10-10 01:45)
+    changed git's answer in every temp project below it — `not a git repository: (null)` in place of the
+    plain "not a git repository" — and six tests that build a project which is NO repository failed, for
+    the whole machine, until the file was deleted. Every child of the contract is told not to look at or
+    above the temp root, and each test module not above its own private directory either
+    (`GIT_CEILING_DIRECTORIES`). Here: what each child is told."""
+
+    def _without(self, inherited):
+        env = {k: v for k, v in os.environ.items() if k != "GIT_CEILING_DIRECTORIES"}
+        if inherited is not None:
+            env["GIT_CEILING_DIRECTORIES"] = inherited
+        return mock.patch.dict(os.environ, env, clear=True)
+
+    def _children(self, inherited=None):
+        self.modules("test_a", "test_b")
+        seen = {}
+
+        def note(cmd, timeout, kw):
+            seen[cmd[cmd.index("-p") + 1][:-3]] = dict(kw["extra_env"])
+            return 0, OK_1
+        with self._without(inherited), self.fake({}, default=note):
+            rc, _ = self.suite(jobs=2)
+        self.assertEqual(rc, 0)
+        self.assertEqual(sorted(seen), ["test_a", "test_b"])
+        return seen
+
+    def test_each_module_is_told_the_temp_root_and_then_its_own_directory(self):
+        root = tempfile.gettempdir()
+        for mod, env in self._children().items():
+            with self.subTest(mod=mod):
+                self.assertEqual(os.path.dirname(env["TMPDIR"]), root)
+                # the root FIRST: a ceiling stops git only as a proper ancestor of where it starts,
+                # so the private directory alone leaves a command started IN it looking above
+                self.assertEqual(env["GIT_CEILING_DIRECTORIES"], root + os.pathsep + env["TMPDIR"])
+
+    def test_what_the_caller_had_stays_in_front_exactly_as_it_was(self):
+        root = tempfile.gettempdir()
+        # an EMPTY entry means something to git (the entries after it are not resolved through
+        # links): it must neither be dropped nor gain a neighbour in front
+        for inherited in ("/somewhere/else", "/a" + os.pathsep + "/b", os.pathsep + "/after/an/empty/entry"):
+            with self.subTest(inherited=inherited):
+                for env in self._children(inherited).values():
+                    self.assertEqual(env["GIT_CEILING_DIRECTORIES"],
+                                     inherited + os.pathsep + root + os.pathsep + env["TMPDIR"])
+                self.setUp()                                             # a fresh suite for the next value
+
+    def test_a_variable_that_is_set_and_empty_adds_no_empty_entry(self):
+        root = tempfile.gettempdir()
+        for env in self._children("").values():
+            self.assertEqual(env["GIT_CEILING_DIRECTORIES"], root + os.pathsep + env["TMPDIR"])
+
+    def test_every_other_child_is_told_the_temp_root(self):
+        # the single-process run, the two shell fixtures, the ledger's tests: no private directory there
+        root = tempfile.gettempdir()
+        for inherited, want in ((None, root), ("", root), ("/a" + os.pathsep + "/b", "/a" + os.pathsep + "/b" + os.pathsep + root)):
+            with self.subTest(inherited=inherited), self._without(inherited):
+                self.assertEqual(V.env()["GIT_CEILING_DIRECTORIES"], want)
+
+    def test_the_callers_own_environment_is_not_changed(self):
+        with self._without("/mine"):
+            V.env()
+            self._children("/mine")
+            self.assertEqual(os.environ["GIT_CEILING_DIRECTORIES"], "/mine")
+
+
+class AStrayRepositoryPointerAboveTheTempDirs(unittest.TestCase):
+    """The thing itself, through real children: a `.git` file like the one that was left in `/tmp` lies in
+    the temp root the contract works in (a private one here — the machine's is not touched)."""
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.addCleanup(self._td.cleanup)
+        base = Path(self._td.name)
+        self.root = base / "project"
+        (self.root / "tests").mkdir(parents=True)
+        self.temp_root = base / "the-temp-root"
+        self.temp_root.mkdir()
+        (self.temp_root / ".git").write_text(f"gitdir: {self.temp_root}/evil\n", encoding="utf-8")
+        (self.root / "tests" / "test_git.py").write_text(textwrap.dedent('''
+            import os, subprocess, tempfile, unittest
+            def git(cwd, *args):
+                return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+            class T(unittest.TestCase):
+                def test_a_project_that_is_no_repository_is_plainly_none(self):
+                    r = git(tempfile.mkdtemp(), "rev-parse", "--git-dir")
+                    self.assertNotEqual(r.returncode, 0)
+                    self.assertIn("not a git repository (or any", r.stderr, r.stderr)
+                def test_neither_is_the_private_directory_itself(self):
+                    r = git(tempfile.gettempdir(), "status", "--porcelain")
+                    self.assertNotEqual(r.returncode, 0)
+                    self.assertIn("not a git repository (or any", r.stderr, r.stderr)
+                def test_a_repository_made_in_it_is_still_found_from_below(self):
+                    d = tempfile.mkdtemp()
+                    self.assertEqual(git(d, "init", "-q").returncode, 0)
+                    os.makedirs(os.path.join(d, "a", "b"))
+                    r = git(os.path.join(d, "a", "b"), "rev-parse", "--show-toplevel")
+                    self.assertEqual(os.path.realpath(r.stdout.strip()), os.path.realpath(d), r.stderr)
+        '''), encoding="utf-8")
+
+    def _suite(self):
+        with mock.patch.object(tempfile, "tempdir", str(self.temp_root)):
+            return V.run_suite(2, "-q", root=self.root)
+
+    def test_the_file_is_what_this_test_thinks_it_is(self):
+        # CONTROL: without a ceiling, git in a directory below the file gives the OTHER answer
+        d = self.temp_root / "below"
+        d.mkdir()
+        env = {k: v for k, v in os.environ.items() if k != "GIT_CEILING_DIRECTORIES"}
+        r = subprocess.run(["git", "rev-parse", "--git-dir"], cwd=d, env=env, capture_output=True, text=True)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("not a git repository: ", r.stderr)
+        self.assertNotIn("(or any", r.stderr)
+
+    def test_a_module_run_by_the_contract_does_not_see_it(self):
+        rc, out = self._suite()
+        self.assertEqual(rc, 0, out)
+        self.assertIn("Ran 3 tests in ", out)
+        self.assertEqual(out.strip().splitlines()[-1], "OK")
+
+    def test_the_single_process_run_does_not_see_it_either(self):
+        # `PLAYBOOK_VERIFY_JOBS=1`, or a suite that binds `load_tests`: ONE child that works in the
+        # shared temp root itself, with the child environment every other step gets. (No private
+        # directory there, so the test that starts git IN its temp directory has no place in this
+        # run: the stray file would be in the very directory git starts in, which no ceiling excludes.)
+        mod = self.root / "tests" / "test_git.py"
+        text = mod.read_text(encoding="utf-8")
+        a = text.index("    def test_neither_is_the_private_directory_itself(self):")
+        b = text.index("    def test_a_repository_made_in_it_is_still_found_from_below(self):")
+        mod.write_text(text[:a] + text[b:], encoding="utf-8")
+        here = {k: str(self.temp_root) for k in ("TMPDIR", "TEMP", "TMP")}      # verify started with this temp root
+        with mock.patch.object(tempfile, "tempdir", str(self.temp_root)):
+            rc, out = V.run([sys.executable, "-m", "unittest", "discover", "-s", "tests", "-q"],
+                            cwd=self.root, extra_env=here, log=False)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("Ran 2 tests in ", out)
 
 if __name__ == "__main__":
     unittest.main()
