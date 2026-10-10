@@ -308,7 +308,10 @@ def scope_delta(repo: Path, base: str, exclude: "list[str]", with_tree: bool = F
         cur = worktree_tree(repo, exclude)
         if not cur:
             return out(None, "could not build the current working-tree object")
+        # the prefixes are asked for: a user's `diff.noprefix` changes every file's
+        # header line, which is what the patch is cut into files by (task 178)
         d = _git(repo, ["diff", "--text", "--no-ext-diff", "--no-color", "-M",
+                        "--src-prefix=a/", "--dst-prefix=b/",
                         base, cur, "--", ".", *exclude])
         if d.returncode != 0:
             return out(None, "git diff failed")
@@ -317,13 +320,118 @@ def scope_delta(repo: Path, base: str, exclude: "list[str]", with_tree: bool = F
         return out(None, "git error")
 
 
+# The order the delta is handed over in (task 178, PLAN S11 item 28). Git lists a
+# scope's files by path, and the outer scope came first: a rewritten ledger row used
+# the judge's budget up before the first line of code (task 174 — one line of the
+# logger's diff was handed over, none of the tests').
+_CLASS_TITLES = ("code", "tests", "docs, the ledger and records")
+
+
+def _file_class(path: str, outer: bool) -> int:
+    """0 code, 1 tests, 2 docs/ledger/records — the file classes of
+    `core.classify_delta_paths`, its non-behavioral class split at `tests/`."""
+    from tasks.core import classify_delta_paths
+    if classify_delta_paths([path], is_outer_scope=outer)[0]:
+        return 0
+    return 1 if "tests" in path.split("/")[:-1] else 2
+
+
+def _name_status_entries(repo: Path, base: str, cur: str, exclude: "list[str]"):
+    """The delta's files in git's own order — the order of its patch too — one
+    entry per changed file: `(path,)`, or `(old, new)` for a rename or a copy.
+    None when git could not say."""
+    try:
+        nm = subprocess.run(["git", "diff", "--name-status", "-z", "-M", base, cur,
+                             "--", ".", *exclude], cwd=str(repo), capture_output=True,
+                            timeout=_GIT_TIMEOUT)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    if nm.returncode != 0:
+        return None
+    toks = nm.stdout.split(b"\0")
+    out, i = [], 0
+    while i < len(toks):
+        status = toks[i]
+        i += 1
+        if not status:
+            continue
+        take = 2 if status[:1] in (b"R", b"C") else 1
+        paths = tuple(os.fsdecode(t) for t in toks[i:i + take] if t)
+        i += take
+        if paths:
+            out.append(paths)
+    return out
+
+
+def _split_patch(text: str) -> "list[str]":
+    """A patch cut into its per-file parts. A part begins at a line that starts with
+    `diff --git ` — a line of a file's CONTENT never does, it carries `+`, `-` or a
+    space in front. The parts always join back to the text."""
+    starts = [m.start() for m in re.finditer(r"^diff --git ", text, re.MULTILINE)]
+    if not starts:
+        return [text] if text else []
+    starts[0] = 0
+    return [text[a:b] for a, b in zip(starts, starts[1:] + [len(text)])]
+
+
+def _pair_parts(entries, parts: "list[str]") -> "list[tuple[tuple, str]] | None":
+    """Each file of the list with its part of the patch, or None when the two do not
+    pair one to one. Two parts in a row under the SAME header line are one file — a
+    type change, which git writes as a deletion and a creation and lists once. Where
+    a name needs no quoting the header is compared with it, so a pairing that
+    drifted is refused, never believed."""
+    out, j = [], 0
+    for paths in entries:
+        if j >= len(parts):
+            return None
+        part = parts[j]
+        j += 1
+        head = part.split("\n", 1)[0]
+        if j < len(parts) and parts[j].split("\n", 1)[0] == head:
+            part += parts[j]
+            j += 1
+        if all(re.fullmatch(r"[A-Za-z0-9_./+@=,~^%-]+", p) for p in paths):
+            if head != f"diff --git a/{paths[0]} b/{paths[-1]}":
+                return None
+        out.append((paths, part))
+    return out if j == len(parts) else None
+
+
+def _listing(label: str, names: "list[str]", budget: int) -> str:
+    """`label (N): a, b … and K more` — every name counted, as many written as fit."""
+    if not names:
+        return f"{label} (0)\n"
+    line = f"{label} ({len(names)}): "
+    shown = 0
+    for nm in names:
+        rest = len(names) - shown - 1
+        more = f" … and {rest} more" if rest else ""
+        piece = (", " if shown else "") + nm
+        if len(line) + len(piece) + len(more) > budget and shown:
+            break
+        if len(line) + len(piece) + len(more) > budget:
+            piece = piece[:max(8, budget - len(line) - len(more) - 1)] + "…"
+        line += piece
+        shown += 1
+    if shown < len(names):
+        line += f" … and {len(names) - shown} more"
+    return line + "\n"
+
+
 def delta_text(project_path: Path, snapshot: "dict | None", cap: int,
                trees_out: "dict | None" = None,
                files_out: "set | None" = None) -> "tuple[str | None, str]":
     """The `=== POST-PANEL DELTA ===` part for the newest impl panel's snapshot:
     (text, note). None when any scope lacks a usable base — the caller then falls
-    back to the whole-task review and says so. Over `cap`, the part carries each
-    scope's `--stat`, the head of the diff and the commands to see the rest."""
+    back to the whole-task review and says so.
+
+    The delta goes out FILE BY FILE (task 178): code first, then tests, then docs,
+    the ledger and records, over all scopes; inside a class the smaller diff first,
+    each run of files under a line that names its class and scope. Over `cap` the part carries, in this order: what was handed whole,
+    which file is cut part-way and which are left out — by name — each scope's
+    `--stat`, and as much of the ordered diff as fits; the note says the same in
+    short, for the line the CLI prints. A scope whose file list cannot be paired
+    with its patch is handed in git's own order, first, and the text says so."""
     from tasks.core import _tail_cert_scopes, load_config
     if not isinstance(snapshot, dict) or not isinstance(snapshot.get("scopes"), dict):
         return None, "the newest impl panel recorded no snapshot"
@@ -341,8 +449,9 @@ def delta_text(project_path: Path, snapshot: "dict | None", cap: int,
         return None, ("scope set changed since the panel (panel: "
                       + ", ".join(sorted(n or "." for n in snap_names)) + "; now: "
                       + ", ".join(sorted(n or "." for n in live_names)) + ")")
-    chunks, stats = [], []
-    for name, repo in live.items():
+    scope_lines, stats, units = [], [], []      # units: (class, scope no., size, file no., name, text)
+    unsorted = []                               # (scope no., label, patch) — handed in git's order
+    for scope_no, (name, repo) in enumerate(live.items()):
         rec = snapshot["scopes"].get(name)
         base = rec.get("base") if isinstance(rec, dict) else None
         label = name or "."
@@ -357,38 +466,98 @@ def delta_text(project_path: Path, snapshot: "dict | None", cap: int,
             return None, f"scope {label}: {why}"
         if trees_out is not None:
             trees_out[name] = cur
+        # The file list: from the FULL diff, before any truncation (the verdict's
+        # PRE-EXISTING check); --name-status -z gives BOTH paths of a rename/copy
+        # (task 108 D2-4). It is also what the patch is sorted by (task 178).
+        entries = _name_status_entries(repo, base, cur, exclude)
         if files_out is not None:
-            # from the FULL diff, before any truncation (the verdict's PRE-EXISTING check)
-            # --name-status -z: BOTH paths of a rename/copy (task 108 D2-4)
-            nm = subprocess.run(["git", "diff", "--name-status", "-z", "-M", base, cur,
-                                 "--", ".", *exclude], cwd=str(repo), capture_output=True,
-                                timeout=_GIT_TIMEOUT)
-            if nm.returncode != 0:
+            if entries is None:
                 # D3-3: a partial delta-file set must never feed the verdict
                 return None, f"scope {label}: could not build the delta's file list (git diff --name-status failed)"
-            from tasks.core import _parse_name_status_z
-            files_out.update(_parse_name_status_z(nm.stdout))
-        chunks.append(f"### scope {label} — git -C {label} diff {base} {cur}\n"
-                      + (text if text.strip() else "(no change in this scope)\n"))
+            files_out.update(p for paths in entries for p in paths)
+        scope_lines.append(f"### scope {label} — git -C {label} diff {base} {cur}"
+                           + ("" if text.strip() else " — no change in this scope") + "\n")
+        paired = _pair_parts(entries, _split_patch(text)) if entries is not None else None
+        if paired is None:
+            if text.strip():
+                unsorted.append((scope_no, label, text))
+        else:
+            for file_no, (paths, part) in enumerate(paired):
+                units.append((min(_file_class(p, name == "") for p in paths), scope_no,
+                              len(part), file_no,
+                              paths[-1] if name == "" else f"{name}/{paths[-1]}", part))
         # stat of the SAME two trees (untracked files included — codex r1)
         st = _git(repo, ["diff", "--stat=200", "-M", base, cur, "--", ".", *exclude])
         stats.append(f"scope {label} — git -C {label} diff --stat {base} {cur}:\n"
                      + (st.stdout if st.returncode == 0 else "(stat unavailable)\n"))
     head = ("=== POST-PANEL DELTA (the newest impl panel's base → the current working "
             "tree; staged, unstaged and untracked) ===\n")
-    body = "\n".join(chunks)
+    labels = [name or "." for name in live]
+    # The body: each scope's two trees, then the files — and where every file's part
+    # begins and ends in it, which is what the cut is named from.
+    body = "".join(scope_lines)
+    spans = []                                  # (name, start, end) in handing order
+    for scope_no, label, patch in unsorted:
+        body += (f"#### in git's own order (its file list could not be paired with the patch) — "
+                 f"scope {label}\n")
+        spans.append((f"scope {label}, unsorted", len(body), len(body) + len(patch)))
+        body += patch
+    last = None
+    # … a class at a time over ALL scopes; inside a class the smaller diff first, so that
+    # as many files as possible go whole — whichever scope they are in
+    for cls, scope_no, _size, _file_no, shown, part in sorted(
+            units, key=lambda u: (u[0], u[2], u[1], u[3])):
+        if (cls, scope_no) != last:
+            body += f"#### {_CLASS_TITLES[cls]} — scope {labels[scope_no]}\n"
+            last = (cls, scope_no)
+        spans.append((shown, len(body), len(body) + len(part)))
+        body += part
     if len(head) + len(body) <= cap:
         return head + body, ""
-    notice = (f"[... delta is {len(body):,} chars, over the {cap:,} budget: stat of every "
-              "scope (base → captured working tree, untracked files included), then the head "
-              "of the diff. For the rest run the `git -C <scope> diff <base> <tree>` command each "
-              "scope names — both trees are in the object store ...]\n")
+    intro = (f"[... delta is {len(body):,} chars, over the {cap:,} budget. Handed in this order: "
+             "code, then tests, then docs, the ledger and records; inside each, the smaller diff "
+             "first.\n")
+    outro = ("Below: the stat of every scope (base → captured working tree, untracked files "
+             "included), then the diff as far as it fits. For what is cut or left out run "
+             "`git -C <scope> diff <base> <tree> -- <path>` with the two trees each scope names — "
+             "both are in the object store ...]\n")
     stat_txt = "\n".join(stats)
     stat_cap = cap // 3                     # the stat is bounded too (codex, task 108 run 2)
     if len(stat_txt) > stat_cap:
         stat_txt = stat_txt[:stat_cap] + "\n[... stat truncated — run the stat command above ...]"
-    room = max(0, cap - len(head) - len(notice) - len(stat_txt) - 2)
-    return head + notice + stat_txt + "\n" + body[:room], "delta truncated to the budget"
+    # … and so are the names of what was cut (task 178): at most a sixth of the cap.
+    # What the diff may take depends on how long those lines are, and the lines on
+    # where the diff is cut — so: once with the whole sixth held back, then with
+    # what the lines needed plus a margin, which is all the room that is given up.
+    fixed = len(head) + len(intro) + len(outro) + len(stat_txt) + 2
+    said, *_ = _cut_lines(spans, max(0, cap - fixed - cap // 6), cap // 6)
+    held = min(cap // 6, len(said) + 300)
+    room = max(0, cap - fixed - held)
+    said, whole, part, left = _cut_lines(spans, room, held)
+    note = f"delta truncated to the budget: {len(whole)} of {len(spans)} files handed whole"
+    if part:
+        note += f"; cut part-way: {part[0][:120]}"
+    if left:
+        note += f"; left out: {len(left)} ({', '.join(n[:60] for n in left[:3])}" \
+                + (", …" if len(left) > 3 else "") + ")"
+    return head + intro + said + outro + stat_txt + "\n" + body[:room], note
+
+
+def _cut_lines(spans, room: int, budget: int):
+    """What a cut at `room` characters of the body does to its files, in words —
+    (the lines, whole, part, left). The file cut part-way and the names of the ones
+    left out come first in the budget: they are what a reader has to go and fetch."""
+    whole = [nm for nm, _a, b in spans if b <= room]
+    part = [(nm, room - a, b - a) for nm, a, b in spans if a < room < b]
+    left = [nm for nm, a, _b in spans if a >= room]
+    part_line = (f"cut part-way (1): {part[0][0][:200]} — {part[0][1]:,} of {part[0][2]:,} "
+                 "chars handed\n") if part else ""
+    left_line = _listing("left out", left, max(40, budget - len(part_line) - 60)) if left else ""
+    whole_line = _listing("handed whole", whole, max(40, budget - len(part_line) - len(left_line)))
+    said = whole_line + part_line + left_line
+    if len(said) > budget:                  # a cap too small for even the shortest lines
+        said = said[:max(0, budget - 1)] + "\n"
+    return said, whole, part[0] if part else None, left
 
 
 def newest_impl_round(task_dir: Path) -> "dict | None":

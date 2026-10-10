@@ -709,7 +709,8 @@ class DeltaRun1(_TmpDir):
         from tasks.core import _scope_identity
         base = post_d6.worktree_tree(repo, [":(exclude).agent"])
         (repo / "aa_big.py").write_text("x = 1\n" * 3000, encoding="utf-8")
-        (repo / "zz_late.py").write_text("late = 1\n", encoding="utf-8")
+        # (task 178: the smaller diff is handed first now, so the file that falls outside is the bigger one)
+        (repo / "zz_late.py").write_text("late = 1\n" * 5000, encoding="utf-8")
         snap = {"scopes": {"": {"base": base, "identity": _scope_identity(repo, repo)}},
                 "exclude": [":(exclude).agent"]}
         files = set()
@@ -1121,6 +1122,7 @@ class DeltaOrder(_TmpDir):
     handed over, none of the tests'. Every test compares against the per-file diff git
     itself gives for that path."""
     EXC = [":(exclude).agent"]
+    DIFF = ["git", "diff", "--text", "--no-ext-diff", "--no-color", "-M", "--src-prefix=a/", "--dst-prefix=b/"]
     FILES = {"CHANGELOG.md": "# log\n", "docs/ledger.json": "{}\n",
              "plugins/code.py": "a = 1\n", "tests/test_code.py": "t = 1\n"}
 
@@ -1155,8 +1157,8 @@ class DeltaOrder(_TmpDir):
     def _one(self, repo, base, rel):
         """Git's own diff of ONE path, base → the working tree as it is now."""
         cur = post_d6.worktree_tree(repo, self.EXC)
-        out = subprocess.run(["git", "diff", "--text", "--no-ext-diff", "--no-color", "-M", base, cur,
-                              "--", rel], cwd=repo, capture_output=True, text=True, check=True).stdout
+        out = subprocess.run([*self.DIFF, base, cur, "--", rel], cwd=repo, capture_output=True, text=True,
+                             check=True).stdout
         self.assertTrue(out.startswith("diff --git "), rel)
         return out
 
@@ -1263,11 +1265,183 @@ class DeltaOrder(_TmpDir):
         for tree in (b0, b1):
             self.assertIn(tree, text)
 
+    def _two_scopes(self, lib_files):
+        lib = self.repo / "lib"
+        self._init(lib, lib_files)
+        with open(self.repo / ".git" / "info" / "exclude", "a", encoding="utf-8") as f:
+            f.write("lib/\n")
+        (self.repo / ".agent").mkdir()
+        (self.repo / ".agent" / "config.json").write_text(json.dumps({"code_roots": ["lib"]}), encoding="utf-8")
+        return lib, post_d6.worktree_tree(self.repo, self.EXC), post_d6.worktree_tree(lib, self.EXC)
+
+    def test_inside_a_class_the_smaller_diff_goes_first_across_scopes_too(self):
+        # the first scope's big code file must not stand in front of the second scope's small one
+        lib, b0, b1 = self._two_scopes({"m.py": "m = 1\n"})
+        self._write(self.repo, {"plugins/code.py": "a = 2\n" * 4000})
+        self._write(lib, {"m.py": "m = 2\n"})
+        text, note = post_d6.delta_text(self.repo, self._snap({"": (self.repo, b0), "lib": (lib, b1)}), 5000)
+        small = self._one(lib, b1, "m.py")
+        self.assertIn(small, text, "the second scope's small code file was not handed over")
+        self.assertLess(text.index(small), text.index("diff --git a/plugins/code.py"))
+        self.assertIn("handed whole (1): lib/m.py", text)
+        self.assertIn("cut part-way (1): plugins/code.py — ", text)
+        # each run of files says whose they are
+        self.assertLess(text.index("#### code — scope lib\n"), text.index(small))
+        self.assertLess(text.index("#### code — scope .\n"), text.index("diff --git a/plugins/code.py"))
+
+    def test_a_type_change_is_one_file_and_both_its_parts_stay_together(self):
+        # git writes a file that became a link as TWO parts under one header line, and
+        # lists it ONCE: the pairing must not take that for a drift
+        base = post_d6.worktree_tree(self.repo, self.EXC)
+        os.remove(self.repo / "plugins/code.py")
+        os.symlink("../CHANGELOG.md", self.repo / "plugins/code.py")
+        self._write(self.repo, {"tests/test_code.py": "t = 2\n"})
+        cur = post_d6.worktree_tree(self.repo, self.EXC)
+        both = subprocess.run([*self.DIFF, base, cur, "--", "plugins/code.py"], cwd=self.repo,
+                              capture_output=True, text=True, check=True).stdout
+        self.assertEqual(both.count("diff --git a/plugins/code.py b/plugins/code.py\n"), 2, both)
+        files = set()
+        text, note = post_d6.delta_text(self.repo, self._snap({"": (self.repo, base)}), 500_000, files_out=files)
+        self.assertNotIn("in git's own order", text)
+        self.assertEqual(text.count(both), 1, "the two parts of a type change were separated or doubled")
+        self.assertLess(text.index(both), text.index("diff --git a/tests/test_code.py"))
+        self.assertEqual(files, {"plugins/code.py", "tests/test_code.py"})
+
+    def test_a_scope_with_no_change_says_so_and_has_no_files(self):
+        lib, b0, b1 = self._two_scopes({"m.py": "m = 1\n"})
+        self._write(lib, {"m.py": "m = 2\n"})
+        text, note = post_d6.delta_text(self.repo, self._snap({"": (self.repo, b0), "lib": (lib, b1)}), 500_000)
+        self.assertIn(f"### scope . — git -C . diff {b0} {b0} — no change in this scope\n", text)
+        self.assertNotIn("scope .\n", text.split("#### ", 1)[1])
+        self.assertNotIn("no change", [ln for ln in text.splitlines() if ln.startswith("### scope lib")][0])
+
+    def test_a_nested_scopes_own_root_markdown_is_classed_as_the_close_classes_it(self):
+        # the classifier calls a root `*.md` a doc in the OUTER scope only (owner H): in a
+        # nested checkout `NOTES.md` is code, and the order follows the same file classes
+        lib, b0, b1 = self._two_scopes({"NOTES.md": "n\n", "tests/test_m.py": "t = 1\n", "docs/x.md": "d\n"})
+        self._write(lib, {"NOTES.md": "n\nmore\n", "tests/test_m.py": "t = 2\n", "docs/x.md": "d\nmore\n"})
+        self._write(self.repo, {"NOTES.md": "outer\n"})
+        text, note = post_d6.delta_text(self.repo, self._snap({"": (self.repo, b0), "lib": (lib, b1)}), 500_000)
+        at = [text.index(self._one(lib, b1, "NOTES.md")), text.index(self._one(lib, b1, "tests/test_m.py")),
+              text.index(self._one(lib, b1, "docs/x.md"))]
+        self.assertEqual(at, sorted(at), "a nested scope's root .md is code: before its tests, before its docs")
+        self.assertGreater(text.index(self._one(self.repo, b0, "NOTES.md")), at[1])    # the outer one is a doc
+
+    def test_a_file_renamed_out_of_the_code_is_still_handed_with_the_code(self):
+        # both names count: code that left `plugins/` for `docs/` is a change of code
+        body = "".join(f"line {i} of a module that moves\n" for i in range(40))
+        self._write(self.repo, {"plugins/moved.py": body})
+        _git(self.repo, "add", "-A")
+        _git(self.repo, "commit", "-q", "-m", "c1")
+        base = post_d6.worktree_tree(self.repo, self.EXC)
+        (self.repo / "docs").mkdir(exist_ok=True)
+        os.rename(self.repo / "plugins/moved.py", self.repo / "docs/moved.md")
+        self._write(self.repo, {"tests/test_code.py": "t = 2\n", "docs/big.json": "z\n" * 6000})
+        snap = self._snap({"": (self.repo, base)})
+        text, note = post_d6.delta_text(self.repo, snap, 500_000)
+        self.assertIn("rename from plugins/moved.py\nrename to docs/moved.md\n", text)
+        self.assertLess(text.index("rename to docs/moved.md"), text.index("diff --git a/tests/test_code.py"))
+        # … and where files are named, a renamed one goes by its NEW name
+        text, note = post_d6.delta_text(self.repo, snap, 4000)
+        whole = [ln for ln in text.splitlines() if ln.startswith("handed whole (")][0]
+        self.assertTrue(whole.startswith("handed whole (2): docs/moved.md, tests/test_code.py"), whole)
+        self.assertNotIn("plugins/moved.py", whole)
+
+    def test_a_file_list_that_does_not_fit_the_patch_is_not_believed(self):
+        # the list and the patch are paired by position; a list that is shorter, longer or in
+        # another order must lose its say — never drop a file's diff or name it wrongly
+        from unittest import mock
+        base = self._ledger_case()
+        cur = post_d6.worktree_tree(self.repo, self.EXC)
+        real = post_d6._name_status_entries(self.repo, base, cur, self.EXC)
+        self.assertEqual(real, [("CHANGELOG.md",), ("docs/ledger.json",), ("plugins/code.py",),
+                                ("tests/test_code.py",)])
+        full = subprocess.run([*self.DIFF, base, cur, "--", ".", *self.EXC], cwd=self.repo,
+                              capture_output=True, text=True, check=True).stdout
+        for what, entries in (("shorter", real[:-1]), ("longer", real + [("zz.py",)]),
+                              ("another order", real[::-1]), ("empty", [])):
+            with self.subTest(what=what):
+                with mock.patch.object(post_d6, "_name_status_entries", return_value=entries):
+                    text, note = post_d6.delta_text(self.repo, self._snap({"": (self.repo, base)}), 500_000)
+                self.assertIn("in git's own order", text)
+                self.assertEqual(text.count(full), 1, "the patch did not go out whole and once")
+                self.assertNotIn("#### code", text)
+
+    def test_a_delta_that_fits_exactly_is_not_cut(self):
+        base = self._ledger_case()
+        snap = self._snap({"": (self.repo, base)})
+        whole, note = post_d6.delta_text(self.repo, snap, 500_000)
+        text, note = post_d6.delta_text(self.repo, snap, len(whole))
+        self.assertEqual((text, note), (whole, ""))
+        text, note = post_d6.delta_text(self.repo, snap, len(whole) - 1)
+        self.assertIn("truncated", note)
+        self.assertLessEqual(len(text), len(whole) - 1)
+
+    def test_the_budget_is_used_and_never_passed(self):
+        # the lines that name the cut are bounded by a sixth of the cap, but only what they
+        # need (and a margin) is taken from the diff's room
+        base = self._ledger_case()
+        for cap in (6000, 20_000, 50_000):
+            with self.subTest(cap=cap):
+                text, note = post_d6.delta_text(self.repo, self._snap({"": (self.repo, base)}), cap)
+                self.assertLessEqual(len(text), cap)
+                self.assertGreater(len(text), cap - 400)
+
+    def test_the_parts_of_a_patch_always_join_back_to_it(self):
+        one = "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+diff --git a/q b/q\n"
+        two = "diff --git a/y z b/y z\nold mode 100644\nnew mode 100755\n"
+        for text, n in (("", 0), ("no header at all\n", 1), (one, 1), (one + two, 2),
+                        ("something before\n" + one + two, 2)):
+            with self.subTest(text=text[:20]):
+                parts = post_d6._split_patch(text)
+                self.assertEqual(len(parts), n)
+                self.assertEqual("".join(parts), text)
+        self.assertEqual(post_d6._split_patch(one + two), [one, two])
+
+    def test_what_a_cut_does_to_the_files_at_and_between_their_ends(self):
+        spans = [("a", 10, 20), ("b", 20, 30), ("c", 30, 40)]
+        for room, whole, part, left in ((0, [], None, ["a", "b", "c"]), (10, [], None, ["a", "b", "c"]),
+                                        (11, [], ("a", 1, 10), ["b", "c"]), (20, ["a"], None, ["b", "c"]),
+                                        (25, ["a"], ("b", 5, 10), ["c"]), (30, ["a", "b"], None, ["c"]),
+                                        (39, ["a", "b"], ("c", 9, 10), []), (40, ["a", "b", "c"], None, [])):
+            with self.subTest(room=room):
+                said, w, p, lf = post_d6._cut_lines(spans, room, 1000)
+                self.assertEqual((w, p, lf), (whole, part, left))
+                self.assertEqual(said.count("cut part-way (1): "), 1 if part else 0)
+                self.assertEqual(said.count("left out ("), 1 if left else 0)
+                self.assertTrue(said.startswith(f"handed whole ({len(whole)})"), said)
+        self.assertEqual(post_d6._cut_lines(spans, 25, 1000)[0],
+                         "handed whole (1): a\ncut part-way (1): b — 5 of 10 chars handed\nleft out (1): c\n")
+
+    def test_the_lines_that_name_the_cut_keep_to_their_budget(self):
+        names = [f"a/rather/long/path/to/a/file_number_{i:03d}.py" for i in range(60)]
+        spans = [(nm, 100 * i, 100 * i + 100) for i, nm in enumerate(names)]
+        for budget in (120, 400, 1500):
+            with self.subTest(budget=budget):
+                said, whole, part, left = post_d6._cut_lines(spans, 2950, budget)
+                self.assertLessEqual(len(said), budget)
+                self.assertTrue(said.endswith("\n"))
+                self.assertEqual((len(whole), part[0], len(left)), (29, names[29], 30))
+        said = post_d6._cut_lines(spans, 2950, 900)[0]
+        lines = {ln.split(" (", 1)[0]: ln for ln in said.splitlines()}
+        for label, total in (("handed whole", 29), ("left out", 30)):
+            self.assertRegex(lines[label], rf"^{label} \({total}\): .* … and \d+ more$")
+            more = int(lines[label].rsplit(" … and ", 1)[1].split()[0])
+            self.assertEqual(lines[label].count("file_number_") + more, total, lines[label])   # every one counted
+        # the names left out are what a reader has to fetch: they get the larger share
+        self.assertGreater(len(lines["left out"]), 3 * len(lines["handed whole"]))
+        # … and with room for all of them, all of them are named
+        said = post_d6._cut_lines(spans, 2950, 3000)[0]
+        self.assertEqual(said.count("file_number_"), 60)
+        self.assertNotIn("more", said)
+        self.assertEqual(post_d6._listing("left out", [], 100), "left out (0)\n")
+        self.assertEqual(post_d6._listing("left out", ["a", "b"], 100), "left out (2): a, b\n")
+
     def test_the_reorder_is_a_permutation_of_gits_own_diff(self):
         # CONTROL (green before task 178 too): nothing is lost, doubled or cut in two by the
         # reordering, whatever the shape of a file's header
         self._write(self.repo, {"old name.py": "v = 1\n" * 30, "gone.py": "g = 1\n", "run.sh": "#!/bin/sh\n",
-                                "notes/quote.md": "q\n"})
+                                "docs/quote.md": "q\n"})
         _git(self.repo, "add", "-A")
         _git(self.repo, "commit", "-q", "-m", "c1")
         base = post_d6.worktree_tree(self.repo, self.EXC)
@@ -1276,12 +1450,11 @@ class DeltaOrder(_TmpDir):
             f.write("w = 2\n")
         os.remove(self.repo / "gone.py")
         os.chmod(self.repo / "run.sh", 0o755)
-        self._write(self.repo, {"notes/quote.md": "q\ndiff --git a/x b/y\n+++ b/y\n",
+        self._write(self.repo, {"docs/quote.md": "q\ndiff --git a/x b/y\n+++ b/y\n",
                                 "tests/new one_test.py": "n = 1\n", "plugins/code.py": "a = 5\n"})
         cur = post_d6.worktree_tree(self.repo, self.EXC)
-        full = subprocess.run(["git", "diff", "--text", "--no-ext-diff", "--no-color", "-M", base, cur,
-                               "--", ".", *self.EXC], cwd=self.repo, capture_output=True, text=True,
-                              check=True).stdout
+        full = subprocess.run([*self.DIFF, base, cur, "--", ".", *self.EXC], cwd=self.repo,
+                              capture_output=True, text=True, check=True).stdout
         starts = [i for i in range(len(full)) if full.startswith("diff --git ", i) and (i == 0 or full[i - 1] == "\n")]
         chunks = [full[a:b] for a, b in zip(starts, starts[1:] + [len(full)])]
         self.assertEqual(len(chunks), 6, [c.splitlines()[0] for c in chunks])
@@ -1291,11 +1464,28 @@ class DeltaOrder(_TmpDir):
         for c in chunks:
             self.assertEqual(text.count(c), 1, c.splitlines()[0])
         self.assertEqual(sum(1 for ln in text.splitlines() if ln.startswith("diff --git ")), 6)
-        self.assertEqual(files, {"old name.py", "new name.py", "gone.py", "run.sh", "notes/quote.md",
+        self.assertEqual(files, {"old name.py", "new name.py", "gone.py", "run.sh", "docs/quote.md",
                                  "tests/new one_test.py", "plugins/code.py"})
         # the renamed file is code, the quote is a doc: the line INSIDE it is not a header
-        self.assertLess(text.index("rename to new name.py"), text.index("diff --git a/notes/quote.md"))
-        self.assertLess(text.index("diff --git a/tests/new one_test.py"), text.index("diff --git a/notes/quote.md"))
+        self.assertLess(text.index("rename to new name.py"), text.index("diff --git a/docs/quote.md"))
+        self.assertLess(text.index("diff --git a/tests/new one_test.py"), text.index("diff --git a/docs/quote.md"))
+
+    def _with_git_config(self, key):
+        # `diff.noprefix` / `diff.mnemonicPrefix` change the header line of every file; the
+        # plugin asks git for `a/` and `b/` itself, so the pairing with the file list holds
+        base = self._ledger_case()
+        _git(self.repo, "config", key, "true")
+        text, note = post_d6.delta_text(self.repo, self._snap({"": (self.repo, base)}), 6000)
+        self.assertNotIn("in git's own order", text)
+        self.assertIn(self._one(self.repo, base, "plugins/code.py"), text)
+        self.assertIn("cut part-way (1): docs/ledger.json — ", text)
+        self.assertGreaterEqual(post_d6.delta_files(text), {"plugins/code.py", "tests/test_code.py"})
+
+    def test_a_users_diff_noprefix_setting_does_not_unsort_the_delta(self):
+        self._with_git_config("diff.noprefix")
+
+    def test_a_users_diff_mnemonicprefix_setting_does_not_unsort_the_delta(self):
+        self._with_git_config("diff.mnemonicPrefix")
 
     def test_the_names_of_what_was_cut_are_bounded_too(self):
         base = post_d6.worktree_tree(self.repo, self.EXC)

@@ -448,7 +448,9 @@ A task whose impl panel predates the date keeps the old rule; the date in force 
 and the one recorded with the panel, so moving or removing it later changes nothing for that task. With the rule
 on, a carrying panel that no reservation dates (a deleted run ledger) refuses. A value that is not a date refuses
 every stale close until it is fixed. The binding is checked again inside the lock the close commits under. Post-D6 runs made before 1.5.47 recorded no tree and cannot bind a close. Tail
-certification saves its judge's output as `tail-cert.log` in the task directory. When it does not certify, the
+certification saves its judge's output as `tail-cert.log` in the task directory; when no judge could be started
+(the default judge's adapter cannot be built) the file holds the reason under a first line that says `NO JUDGE
+RAN`, and no spend record is written (task 178). When it does not certify, the
 close says why. Two refusals come before any certification: a code path in the delta, and a panel snapshot that
 can no longer be compared (it is missing, the code roots changed, git failed) — the latter is reported as
 "tail certification unavailable", without its cause. For a documentation-only delta the close says which of

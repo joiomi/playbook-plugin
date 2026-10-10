@@ -2445,6 +2445,9 @@ def _run_tail_cert_judge_raw(project_path, prompt, timeout_secs) -> str:
                                           project_root=Path(project_path))
     except Exception as e:
         return _TailCertRaw(f"(error: tail-cert judge spawn failed: {e})", started=False)
+    # said only now that there is something to call (task 178): the caller used to
+    # say it before this function had tried to build the adapter
+    print("  … calling the certifying judge", file=sys.stderr, flush=True)
     try:
         return adapter.run_headless_judge(
             prompt=prompt, model=variant, system_context="",
@@ -2543,9 +2546,10 @@ def run_tail_cert_judge(project_path, snapshot, non_behavioral, panel_summary,
     # the judge subprocess. This caller is monkeypatched wholesale in the verdict
     # tests, so the emit runs in production, not in those doubles (by design).
     _tc_t0 = time.monotonic()
-    # said here, at the launch itself: the close used to announce a running judge
-    # before the two exits above, which call none (impl panel r2)
-    print("  … calling the certifying judge", file=sys.stderr, flush=True)
+    # "… calling the certifying judge" is said by the raw runner, once it has an
+    # adapter to call: the close used to announce a running judge before the two
+    # exits above, which call none (impl panel r2), and then here, before the
+    # adapter was built — where it may turn out that none can be (task 178)
     raw = _run_tail_cert_judge_raw(project_path, prompt, timeout_secs)
     # What the runner KNOWS of the launch is read before the tamper outcome is put
     # into words (PLAN S11 item 15, task 168): with no judge launched there was no
@@ -2572,13 +2576,26 @@ def run_tail_cert_judge(project_path, snapshot, non_behavioral, panel_summary,
     # override. Past the tamper check only; best-effort (the verdict stands either way).
     if task_file:
         try:
-            atomic_write(Path(task_file).parent / TAIL_CERT_LOG,
-                         f"# tail certification {time.strftime('%Y-%m-%dT%H:%M:%S%z')} "
-                         f"(nonce {nonce})\n\n{raw or '(no output)'}\n")
-            print(f"  tail-cert judge output saved: {Path(task_file).parent / TAIL_CERT_LOG}",
-                  file=sys.stderr, flush=True)
+            _log = Path(task_file).parent / TAIL_CERT_LOG
+            _stamp = (f"# tail certification {time.strftime('%Y-%m-%dT%H:%M:%S%z')} "
+                      f"(nonce {nonce})")
+            if _not_started:
+                # nothing was launched: what is kept is the runner's reason, and the
+                # file and the line both say so — it used to be saved and announced
+                # as a judge's output (task 178; task 168's parked note)
+                atomic_write(_log, f"{_stamp} — NO JUDGE RAN\n\n{raw or '(no output)'}\n")
+                print(f"  tail-cert: no judge was started — the reason is saved: {_log}",
+                      file=sys.stderr, flush=True)
+            else:
+                atomic_write(_log, f"{_stamp}\n\n{raw or '(no output)'}\n")
+                print(f"  tail-cert judge output saved: {_log}", file=sys.stderr, flush=True)
         except Exception:   # noqa: BLE001
             pass
+    if _not_started:
+        # the runner's own statement that nothing was launched — never inferred from
+        # the words of an error (post-D6 runs 1-2: wrong both ways). And no spend
+        # record: no call was made (task 178).
+        return _none("no-judge", _no_start)
     # Emit the spend record only PAST the tamper check (clean tree) — consistent
     # with the panel/single paths, and so the journal write can never precede /
     # hang and suppress a tamper stop. A FAILED/errored judge is still recorded
@@ -2601,10 +2618,6 @@ def run_tail_cert_judge(project_path, snapshot, non_behavioral, panel_summary,
     _rl = (raw or "").lstrip()
     if not raw or _rl.startswith("(error:") or _rl.startswith("(FAILED"):
         _first = (_rl.splitlines() or [""])[0][:160]
-        if _not_started:
-            # the runner's own statement that nothing was launched — never inferred
-            # from the words of an error (post-D6 runs 1-2: wrong both ways)
-            return _none("no-judge", _no_start)
         return _none("judge", "the call to the certifying judge gave no verdict: "
                               + (_first or "no output"))
     _verdict = parse_tail_cert_verdict(raw, nonce)
