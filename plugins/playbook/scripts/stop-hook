@@ -93,12 +93,32 @@ SESSION_ID="$(resolve_session_id)"
 # turn a BLOCK (2) into 1, which the host reads as a non-blocking error. A mark
 # that cannot be written is the stricter case: no mark, and a later notification
 # is read as landing mid-turn.
+# Two fences since post-D6 run 2. (1) Only the session's OWN agent ends its turn:
+# every agent in a process chain resolves to the root agent's session
+# (resolve_session_id), so a `claude -p` the agent runs fires this hook into the
+# same session when it finishes — and, run as a background command, its mark and
+# its completion notice read together as "a notification started a turn" in the
+# middle of the user's. The walk lists the agents of this hook's chain: one is
+# the session's own (measured on a live session), two or more is a nested one,
+# which leaves no mark. (2) The nonce begins with the prompt generation this
+# hook saw when it STARTED (PB_PROMPT_GEN, read right here, before any
+# decision): a hook that a user's prompt overtakes publishes a mark of the
+# generation before that prompt, which starts nothing.
+PB_PROMPT_GEN=none
+[ -z "$SESSION_ID" ] || PB_PROMPT_GEN=$(read_prompt_generation "$AGENT_DIR/sessions/$SESSION_ID")
 pb_note_turn_end() {
     local rc=$?
     if [ "$rc" -eq 0 ] && [ -n "${SESSION_ID:-}" ] && [ "${MARKER_INVALID:-false}" != true ]; then
         local dir="$AGENT_DIR/sessions/$SESSION_ID"
         if [ -f "$dir/counters" ]; then
-            write_session_mark "$dir/turn_end" "$(read_counter_int "$dir/counters" tools) $(new_session_nonce)"
+            local agents
+            agents=$(_agent_walk all)
+            # shellcheck disable=SC2086  # word-splitting is the count
+            set -- $agents
+            if [ "$#" -le 1 ]; then
+                write_session_mark "$dir/turn_end" \
+                    "$(read_counter_int "$dir/counters" tools) ${PB_PROMPT_GEN:-none}-$(new_session_nonce)"
+            fi
         fi
     fi
     return 0
@@ -307,10 +327,15 @@ if [ -f "$COUNTER_FILE" ] && [ "${PB_GREP_RC:-0}" -le 1 ]; then
     # nonce of `turn_end` as it stands now. A user's prompt removes that mark and
     # a later stop replaces it, so a baseline written late — by a notification's
     # hook that a user's prompt overtook — releases nothing (post-D6 run 1).
+    # And the mark itself must be of the session's CURRENT prompt generation (the
+    # head of its nonce): one made before the user's last prompt is not this
+    # turn's, whenever it reached the disk (post-D6 run 2).
     PB_NOTIF_START=$(read_session_mark "$SESSION_DIR/notif_start")
     PB_TURN_END=$(read_session_mark "$SESSION_DIR/turn_end")
+    PB_TURN_NONCE="${PB_TURN_END#* }"
     if [ -n "$PB_NOTIF_START" ] && [ -n "$PB_TURN_END" ] \
-       && [ "${PB_NOTIF_START#* }" = "${PB_TURN_END#* }" ] \
+       && [ "${PB_NOTIF_START#* }" = "$PB_TURN_NONCE" ] \
+       && [ "${PB_TURN_NONCE%%-*}" = "$(read_prompt_generation "$SESSION_DIR")" ] \
        && [ "$WRITES" -eq "$((10#${PB_NOTIF_START%% *}))" ]; then
         exit 0
     fi

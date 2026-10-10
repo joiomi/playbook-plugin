@@ -18,8 +18,9 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   `Bash` call — the middle two were not counted until now, so a turn whose only act was one of them passed for a
   chat reply. The echo of a command you ran yourself (a slash command, a `!` command) still starts a fresh count.
   The same reset also let a notification between two batch ticks of gates free the second one; that is closed by
-  the same change. (Claude Code only — the experimental codex hook path has no notification handling and is
-  unchanged.)
+  the same change. A turn counts as ended only when the session's own agent stops: an agent it started itself (a
+  `claude -p` in a command) shares the session, and its stop is not the end of your turn. (Claude Code only — the
+  experimental codex hook path has no notification handling and is unchanged.)
 - **`tasks intent` asks before it spends** (task 173; owner decision D3-C4 of 2026-09-24). Each of its blind
   extractions is a call to the default judge, up to four per run, and the command started them at once. The bare
   command now prints which layers have evidence and one line — how many judge calls, on which judge, the time limit

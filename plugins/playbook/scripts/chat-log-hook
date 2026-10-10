@@ -176,12 +176,17 @@ fi
 # (tagged `no-session`), but no session counters are touched.
 SESSION_ID="$(resolve_session_id)"
 [ -z "$SESSION_ID" ] && session_unresolved_notice
-# A user's prompt ends whatever a notification began (task 173): the stop hook's
-# mark and the notification's baseline go. Every prompt of the user's does this,
-# also the two the hook logs nothing for further down.
+# A user's prompt ends whatever a notification began (task 173): it begins a new
+# prompt generation — FIRST, so that a mark published by a stop hook still in
+# flight is already of an older one — and the stop hook's mark and the
+# notification's baseline go. Every prompt of the user's does this, also the two
+# the hook logs nothing for further down.
 drop_notification_marks() {
     [ -n "$SESSION_ID" ] || return 0
-    rm -f "$AGENT_DIR/sessions/$SESSION_ID/turn_end" "$AGENT_DIR/sessions/$SESSION_ID/notif_start" 2>/dev/null || true
+    local dir="$AGENT_DIR/sessions/$SESSION_ID"
+    [ -d "$dir" ] || return 0
+    new_prompt_generation "$dir"
+    rm -f "$dir/turn_end" "$dir/notif_start" 2>/dev/null || true
 }
 reset_session_counters() {
     [ -n "$SESSION_ID" ] || return 0
@@ -210,7 +215,10 @@ reset_session_counters() {
 # No lock, and no order to rely on (post-D6 run 1; round 2 had a lock with a time
 # limit, and the limit was the hole): if a user's prompt removes the mark while
 # this runs, the baseline written afterwards names a mark that is gone, and the
-# stop hook honours a baseline only beside the mark with its nonce.
+# stop hook honours a baseline only beside the mark with its nonce. The same for
+# the other direction — a stop hook still running when the user's prompt arrives
+# (run 2): its mark carries the prompt generation it started in, the prompt began
+# a new one, and a mark of another generation is not taken for a start.
 note_notification() {
     [ -n "$SESSION_ID" ] || return 0
     local dir="$AGENT_DIR/sessions/$SESSION_ID"
@@ -220,6 +228,9 @@ note_notification() {
     [ -n "$mark" ] || return 0
     ended="${mark%% *}"
     nonce="${mark#* }"
+    # A mark of another prompt generation is not this turn's: the stop hook that
+    # wrote it started before the user's last prompt (post-D6 run 2).
+    [ "${nonce%%-*}" = "$(read_prompt_generation "$dir")" ] || return 0
     snapshot=$(cat "$dir/counters" 2>/dev/null) || return 0
     tools=$(printf '%s\n' "$snapshot" | sed -n 's/^tools=//p' | head -1)
     writes=$(printf '%s\n' "$snapshot" | sed -n 's/^writes=//p' | head -1)

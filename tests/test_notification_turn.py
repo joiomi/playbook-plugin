@@ -79,11 +79,31 @@ class _Session(unittest.TestCase):
         self.counters_file = self.session_dir / "counters"
         self.turn_end = self.session_dir / "turn_end"
         self.notif_start = self.session_dir / "notif_start"
+        self.prompt_gen = self.session_dir / "prompt_gen"
+        # The stop hook asks the process chain whether the agent that stops is the
+        # session's own. What a real chain holds depends on where the suite runs (CI:
+        # no agent; a developer's session: one; a reviewer's sandbox: one or two), so
+        # every hook here walks a fixture instead: a /proc with no agent in it.
+        self.proc_root = Path(self._tmp.name) / "proc-no-agent"
+        (self.proc_root / "self").mkdir(parents=True)
 
-    def _hook(self, name, payload):
+    def _nested_proc_root(self):
+        """A /proc in which the process that starts the hooks (this test) is an agent
+        whose PARENT is an agent too — the chain a nested `claude -p` leaves."""
+        root = Path(self._tmp.name) / "proc-nested"
+        (root / "self").mkdir(parents=True, exist_ok=True)
+        for pid, parent in ((os.getpid(), 4242), (4242, 1)):
+            d = root / str(pid)
+            d.mkdir(exist_ok=True)
+            (d / "status").write_text(f"Name:\tclaude\nState:\tS (sleeping)\nPPid:\t{parent}\n", encoding="utf-8")
+            (d / "cmdline").write_bytes(b"claude\0-p\0do the thing\0")
+        return root
+
+    def _hook(self, name, payload, proc_root=None):
         env = dict(os.environ)
         env["PLAYBOOK_SESSION_ID"] = SID
         env["HOME"] = self._tmp.name
+        env["PLAYBOOK_PROC_ROOT"] = str(proc_root or self.proc_root)
         for k in ("BASH_ENV", "PLAYBOOK_ROLE", "PLAYBOOK_EVAL_CONFIG"):
             env.pop(k, None)
         return subprocess.run(
@@ -106,8 +126,8 @@ class _Session(unittest.TestCase):
             r = self._hook("state-echo-hook", {"tool_name": name, "tool_input": {"command": "true"}})
             self.assertEqual(r.returncode, 0, r.stderr)
 
-    def stop(self, active=False):
-        return self._hook("stop-hook", {"stop_hook_active": active})
+    def stop(self, active=False, proc_root=None):
+        return self._hook("stop-hook", {"stop_hook_active": active}, proc_root=proc_root)
 
     def counters(self) -> "dict[str, str]":
         if not self.counters_file.exists():
@@ -268,36 +288,42 @@ class AStopAfterANotification(_Session):
         for junk in ("abc", "", "-0", "0x0", "9" * 30, "$(touch pwned)"):
             with self.subTest(junk):
                 self.counters_file.write_text("tools=9\nwrites=0\n", encoding="utf-8")
-                self.turn_end.write_text("9 nonce-1\n", encoding="utf-8")
-                self.notif_start.write_text(f"{junk} nonce-1\n", encoding="utf-8")
+                self.turn_end.write_text("9 none-1\n", encoding="utf-8")
+                self.notif_start.write_text(f"{junk} none-1\n", encoding="utf-8")
                 self.assertEqual(self.stop().returncode, 2)
-        self.turn_end.write_text("9 nonce-1\n", encoding="utf-8")
-        self.notif_start.write_text("0 nonce-1\n", encoding="utf-8")   # control: a plain 0 does release
+        self.turn_end.write_text("9 none-1\n", encoding="utf-8")
+        self.notif_start.write_text("0 none-1\n", encoding="utf-8")   # control: a plain 0 does release
         self.assertEqual(self.stop().returncode, 0)
 
     def test_a_baseline_counts_only_beside_the_mark_it_was_taken_from(self):
         # writes=0 and nine tool calls: only the notification rule could release this
-        def stop_with(turn_end, notif_start):
+        def stop_with(turn_end, notif_start, prompt_gen=None):
             self.counters_file.write_text("tools=9\nwrites=0\n", encoding="utf-8")
-            for path, text in ((self.turn_end, turn_end), (self.notif_start, notif_start)):
+            for path, text in ((self.turn_end, turn_end), (self.notif_start, notif_start),
+                               (self.prompt_gen, prompt_gen)):
                 if text is None:
                     path.unlink(missing_ok=True)
                 else:
                     path.write_text(text, encoding="utf-8")
             return self.stop().returncode
 
-        self.assertEqual(stop_with("9 A\n", "0 A\n"), 0)                 # control
-        for name, turn_end, notif_start in (
-                ("the mark is gone (a user's prompt removed it)", None, "0 A\n"),
-                ("the mark is a later stop's", "9 B\n", "0 A\n"),
-                ("the baseline has no nonce", "9 A\n", "0\n"),
-                ("the mark has no nonce", "9\n", "0 A\n"),
-                ("neither has one", "9\n", "0\n"),
-                ("a third word on the baseline", "9 A\n", "0 A x\n"),
-                ("a nonce that is not a plain word", "9 $(touch pwned)\n", "0 $(touch pwned)\n"),
-                ("a nonce of 65 characters", "9 " + "a" * 65 + "\n", "0 " + "a" * 65 + "\n")):
+        # a nonce begins with the prompt generation it was made in: `none` while the
+        # session has seen no prompt of the user's, else the word in `prompt_gen`
+        self.assertEqual(stop_with("9 none-A\n", "0 none-A\n"), 0)                       # control
+        self.assertEqual(stop_with("9 g7-A\n", "0 g7-A\n", prompt_gen="0 g7\n"), 0)       # control
+        for name, turn_end, notif_start, prompt_gen in (
+                ("the mark is gone (a user's prompt removed it)", None, "0 none-A\n", None),
+                ("the mark is a later stop's", "9 none-B\n", "0 none-A\n", None),
+                ("the mark is of an older prompt generation", "9 g7-A\n", "0 g7-A\n", "0 g8\n"),
+                ("the mark was made before any prompt, and there has been one since", "9 none-A\n", "0 none-A\n", "0 g8\n"),
+                ("the baseline has no nonce", "9 none-A\n", "0\n", None),
+                ("the mark has no nonce", "9\n", "0 none-A\n", None),
+                ("neither has one", "9\n", "0\n", None),
+                ("a third word on the baseline", "9 none-A\n", "0 none-A x\n", None),
+                ("a nonce that is not a plain word", "9 $(touch pwned)\n", "0 $(touch pwned)\n", None),
+                ("a nonce of 65 characters", "9 none-" + "a" * 60 + "\n", "0 none-" + "a" * 60 + "\n", None)):
             with self.subTest(name):
-                self.assertEqual(stop_with(turn_end, notif_start), 2)
+                self.assertEqual(stop_with(turn_end, notif_start, prompt_gen), 2)
         self.assertFalse((self.project / "pwned").exists())
 
     def test_each_stop_let_through_makes_a_new_nonce(self):
@@ -308,6 +334,8 @@ class AStopAfterANotification(_Session):
             number, nonce = self.turn_end.read_text(encoding="utf-8").split()
             self.assertEqual(number, "0")
             self.assertRegex(nonce, r"^[A-Za-z0-9-]{8,64}$")
+            # … and it begins with the generation of the prompt that turn answered
+            self.assertEqual(nonce.split("-")[0], self.prompt_gen.read_text(encoding="utf-8").split()[1])
             seen.add(nonce)
         self.assertEqual(len(seen), 3)
         self.assertFalse((self.project / "pwned").exists())
@@ -513,7 +541,8 @@ exec "{shutil.which(shimmed)}" "$@"
 """, encoding="utf-8")
         (bindir / shimmed).chmod(0o755)
         env = dict(os.environ, PLAYBOOK_SESSION_ID=SID, HOME=self._tmp.name, PB_REAL_PATH=os.environ["PATH"],
-                   PB_REAL_SLEEP=shutil.which("sleep"), PATH=f"{bindir}{os.pathsep}{os.environ['PATH']}")
+                   PB_REAL_SLEEP=shutil.which("sleep"), PLAYBOOK_PROC_ROOT=str(self.proc_root),
+                   PATH=f"{bindir}{os.pathsep}{os.environ['PATH']}")
         for k in ("BASH_ENV", "PLAYBOOK_ROLE", "PLAYBOOK_EVAL_CONFIG"):
             env.pop(k, None)
         r = subprocess.run([bash_or_skip(), str(hook)], cwd=self.project, env=env, text=True,
@@ -573,6 +602,115 @@ exec "{shutil.which(shimmed)}" "$@"
                 self.assertFalse(self.turn_end.exists())
 
 
+class ANestedAgentsStopIsNotTheSessionsTurnEnd(_Session):
+    """Post-D6 run 2. Every agent in a process chain resolves to the ROOT agent's
+    session, so a `claude -p` that the session's agent runs fires this stop hook into
+    the same session when it ends. Run as a background command, its stop left the
+    mark, its completion notice followed with no tool call in between — and the
+    notice was read as the start of a turn in the middle of the user's own. The stop
+    hook marks a turn end only when the agent that stops is the session's own: one
+    agent in its chain, not two."""
+
+    def test_a_nested_agents_stop_leaves_no_mark(self):
+        nested = self._nested_proc_root()
+        self.prompt()
+        self.tools("Bash", "Bash")                              # the user's turn has worked
+        self.assertEqual(self.stop(proc_root=nested).returncode, 2)             # the nested agent's stop: held
+        self.assertEqual(self.stop(active=True, proc_root=nested).returncode, 0)   # … and let through
+        self.assertFalse(self.turn_end.exists(), "a nested agent's stop marked the session's turn end")
+        self.prompt(NOTIFICATIONS[0])                           # its completion notice
+        self.assertFalse(self.notif_start.exists())
+        self.tools("Read")
+        self.assertEqual(self.stop().returncode, 2, "the user's turn ended on a nested agent's notice")
+
+    def test_control_the_sessions_own_stop_does(self):
+        self.prompt()
+        self.tools("Bash", "Bash")
+        self.assertEqual(self.stop().returncode, 2)
+        self.assertEqual(self.stop(active=True).returncode, 0)
+        self.assertTrue(self.turn_end.exists())
+
+    def test_a_nested_stop_does_not_take_away_a_mark_that_is_there(self):
+        # the session's own turn ended; a nested agent that stops afterwards (a
+        # leftover background one) neither renews nor removes the mark
+        self.prompt()
+        self.assertEqual(self.stop().returncode, 0)
+        before = self.turn_end.read_text(encoding="utf-8")
+        self.assertEqual(self.stop(active=True, proc_root=self._nested_proc_root()).returncode, 0)
+        self.assertEqual(self.turn_end.read_text(encoding="utf-8"), before)
+
+
+class AStopHookOvertakenByAUsersPrompt(_Session):
+    """Post-D6 run 2, the judge's ordering: a stop hook that is still running when the
+    user's next prompt arrives publishes its mark AFTER that prompt removed the old
+    ones — and a notification in the user's turn would take it for a start. The mark
+    carries the prompt generation the stop hook saw when it STARTED; every prompt of
+    the user's begins a new one; a mark of another generation starts nothing."""
+
+    def test_a_mark_published_after_the_users_prompt_starts_nothing(self):
+        # The user's next prompt hook runs to its END while the stop hook of the turn
+        # before it is still at work — at the instant it renames its mark into place
+        # (`mv`), and earlier, while it is still deciding (`head`, its first read of a
+        # file of the session). Either way the mark that comes out is of the
+        # generation the stop hook STARTED in. (The second case is the one that tells
+        # "read when it starts" from "read when it ends": a break that read the
+        # generation at the end passed the first.)
+        import shutil
+        for shimmed in ("mv", "head"):
+            with self.subTest(the_users_prompt_lands_during=shimmed):
+                self.setUp()
+                self.prompt()                                   # a turn with no tool call
+                bindir = Path(self._tmp.name) / "shims"
+                bindir.mkdir()
+                done = Path(self._tmp.name) / "user-prompt-done"
+                payload = Path(self._tmp.name) / "user-prompt.json"
+                payload.write_text(json.dumps({"prompt": "the user speaks while the stop hook is at work"}),
+                                   encoding="utf-8")
+                hook = SCRIPTS / "chat-log-hook"
+                (bindir / shimmed).write_text(f"""#!/bin/bash
+for a in "$@"; do
+    case "$a" in "{self.session_dir}"/*)
+        if [ ! -e "{done}.started" ]; then
+            : > "{done}.started"
+            ( PATH="$PB_REAL_PATH" "{bash_or_skip()}" "{hook}" < "{payload}"; : > "{done}" ) >/dev/null 2>&1 &
+            for _ in $(seq 1 160); do [ -e "{done}" ] && break; "$PB_REAL_SLEEP" 0.05; done
+        fi ;;
+    esac
+done
+exec "{shutil.which(shimmed)}" "$@"
+""", encoding="utf-8")
+                (bindir / shimmed).chmod(0o755)
+                env = dict(os.environ, PLAYBOOK_SESSION_ID=SID, HOME=self._tmp.name,
+                           PB_REAL_PATH=os.environ["PATH"], PB_REAL_SLEEP=shutil.which("sleep"),
+                           PLAYBOOK_PROC_ROOT=str(self.proc_root),
+                           PATH=f"{bindir}{os.pathsep}{os.environ['PATH']}")
+                for k in ("BASH_ENV", "PLAYBOOK_ROLE", "PLAYBOOK_EVAL_CONFIG"):
+                    env.pop(k, None)
+                r = subprocess.run([bash_or_skip(), str(SCRIPTS / "stop-hook")], cwd=self.project, env=env,
+                                   text=True, capture_output=True, timeout=60,
+                                   input=json.dumps({"stop_hook_active": False}))
+                self.assertEqual(r.returncode, 0, r.stderr)     # a chat reply: let through
+                self.assertTrue(done.exists(), "the user's prompt hook never finished")
+                self.assertTrue(self.turn_end.exists(),
+                                "the overtaken stop hook did publish its mark — the case under test")
+                self.assertEqual(self.counts(), (0, 0))
+                self.prompt(NOTIFICATIONS[0])                   # in the user's turn, before any tool call
+                self.assertFalse(self.notif_start.exists(),
+                                 "a mark of the turn BEFORE the user's prompt was taken for a start")
+                self.tools(*["Read"] * 6)
+                self.assertEqual(self.stop().returncode, 2)
+
+    def test_every_prompt_of_the_users_begins_a_new_generation(self):
+        seen = []
+        for text in (None, None, "<command-name>/x</command-name>",
+                     "<ide_opened_file>the user opened x.py</ide_opened_file>"):
+            self.prompt(text)
+            seen.append(self.prompt_gen.read_text(encoding="utf-8").split()[1])
+        self.assertEqual(len(set(seen)), 4, seen)
+        self.prompt(NOTIFICATIONS[0])                           # … and a notification does not
+        self.assertEqual(self.prompt_gen.read_text(encoding="utf-8").split()[1], seen[-1])
+
+
 class AFailureWhileMarkingDoesNotChangeTheVerdict(_Session):
     """Under `set -e` a command that fails inside a plain EXIT trap replaces bash's
     exit status with 1, whatever it was (measured, bash 5.1). The mark is written
@@ -592,7 +730,7 @@ class AFailureWhileMarkingDoesNotChangeTheVerdict(_Session):
             f.write("\nwrite_session_mark() { echo 'write_session_mark: forced failure' >&2; return 1; }\n")
 
     def _stop_from_copy(self, active=False):
-        env = dict(os.environ, PLAYBOOK_SESSION_ID=SID, HOME=self._tmp.name)
+        env = dict(os.environ, PLAYBOOK_SESSION_ID=SID, HOME=self._tmp.name, PLAYBOOK_PROC_ROOT=str(self.proc_root))
         for k in ("BASH_ENV", "PLAYBOOK_ROLE", "PLAYBOOK_EVAL_CONFIG"):
             env.pop(k, None)
         return subprocess.run([bash_or_skip(), str(self.plugin_copy / "scripts" / "stop-hook")],

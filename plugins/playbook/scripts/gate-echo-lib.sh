@@ -709,6 +709,36 @@ read_session_mark() {
     printf '%s %s' "$number" "$nonce"
 }
 
+# The PROMPT GENERATION of a session (task 173, post-D6 run 2): one word in the
+# file `prompt_gen`, renewed by every prompt of the user's. The stop hook puts
+# the generation it saw when it STARTED at the head of the nonce it makes, and a
+# mark counts — for the notification's hook and for the stop hook's bypass —
+# only while that is still the session's generation. So a stop hook that a
+# user's prompt overtook publishes a mark that starts nothing. `none` = the
+# session has seen no prompt of the user's yet.
+#
+# read_prompt_generation SESSION_DIR — the word, or `none`.
+read_prompt_generation() {
+    local mark
+    mark=$(read_session_mark "$1/prompt_gen")
+    if [ -n "$mark" ]; then
+        printf '%s' "${mark#* }"
+    else
+        printf 'none'
+    fi
+}
+
+# new_prompt_generation SESSION_DIR — begin a new one: twelve characters of a
+# fresh nonce, letters and digits only (its tail — the random end of either
+# form new_session_nonce gives). The file's shape is a mark's, `0 <word>`.
+new_prompt_generation() {
+    local word
+    word=$(new_session_nonce)
+    word="${word//-/}"
+    [ "${#word}" -le 12 ] || word="${word: -12}"
+    write_session_mark "$1/prompt_gen" "0 $word"
+}
+
 # new_session_nonce — a value that does not repeat from one mark to the next:
 # the kernel's random UUID (one builtin read, no process); where that file
 # cannot be read, the pid, the clock in nanoseconds and three draws of $RANDOM.

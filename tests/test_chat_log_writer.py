@@ -186,7 +186,8 @@ class HarnessPromptsAreNotUserWords(_ChatLogFixture):
         # `<command-name>` / `<local-command-caveat>`: skipped from the log like a
         # notification, but the user's own act — a fresh count, gate fields kept.
         # … and it ends whatever a notification began: the two one-line files of that
-        # rule (the last stop let through, the notification's baseline) go with it.
+        # rule (the last stop let through, the notification's baseline) go with it,
+        # and a new prompt generation begins (the one file it leaves beside counters).
         counters = self.project / ".agent" / "sessions" / SID / "counters"
         counters.parent.mkdir(parents=True)
         for marker in ("<command-name>", "<local-command-caveat>"):
@@ -198,7 +199,7 @@ class HarnessPromptsAreNotUserWords(_ChatLogFixture):
                 self.assertEqual(r.returncode, 0, r.stderr)
                 self.assertNotIn("probe-command-echo", self._logged())
                 self.assertEqual(counters.read_text(encoding="utf-8"), "tools=0\nwrites=0\ngate_x=1\n")
-                self.assertEqual(sorted(p.name for p in counters.parent.iterdir()), ["counters"])
+                self.assertEqual(sorted(p.name for p in counters.parent.iterdir()), ["counters", "prompt_gen"])
 
     def test_a_user_prompt_that_merely_mentions_a_marker_is_logged(self):
         self._run("why do I see <task-notification> lines? probe-user-2")
