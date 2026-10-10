@@ -277,6 +277,66 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   a `SyntaxWarning` when the file is compiled on Python 3.12 (a silent `DeprecationWarning` on 3.10), which Python's
   documentation says will become an error.
 
+### Known limitations
+
+Known before this release, each measured or read in the code, and left out of it by the owner's decision of
+2026-10-11 (PLAN S11, the cut); they are taken up again after it. What each one costs you today:
+
+- **A directory whose name holds a backslash can be taken for part of your project** (PLAN S11 item 16;
+  measured). The helper that decides whether a path is a task directory of the project rewrites `\` to `/`. On
+  Linux a backslash is a character of a name, so a directory called `proj\other` beside the project `proj` is
+  judged to be inside it, and the guard against hand-made task records blocks a new one there.
+- **A prompt of yours that arrives while the stop hook is starting can be counted to the turn before it** (item
+  18; a race a reviewer found by reading the hook, stated as a bound). The stop hook reads the prompt generation
+  only after it has read its input and resolved the session. A prompt that completes in that window gives the stop
+  of the PREVIOUS turn the new generation; a notification early in your turn is then taken for the start of a
+  turn, and such a turn may end with gates open if it makes no write.
+- **A turn that a notification started is still judged by a rule of its own** (item 21; decided, not built).
+  Such a turn may end with gates open if it made no write, however many other tool calls it made. The owner has
+  decided on one rule for every turn — no write and fewer than five tool calls, each turn counted from a fresh
+  start — and it is not built. Two notes go with it: whether a background sub-agent's completion notice is read
+  as starting a turn is not measured; and a prompt that is empty once the IDE's tags are removed, or the same
+  message twice within a second, starts a turn that is judged on the counts of the turn before it.
+- **A commit that changes only records, made after the last single-judge PASS, makes the close refuse** (item
+  22; met on task 166). `tasks work done --stale-panel-ok` then answers that the delta since that PASS "cannot be
+  computed exactly". Do not commit between that PASS and the close; if you did and have not pushed, undoing that
+  commit with a soft reset (the files stay as they are) lets the close run, and you commit again after it.
+- **In a project whose own directory is named like a task, the hooks can read another task's record** (item
+  23). Three hooks find the active task's record with `find -path "*/<N>-*/*"`, which also matches the PROJECT
+  directory when its name begins with that number and a dash. And the guard against hand-made task records judges
+  a path by its text: one that reaches `.agent` through a link with another name is not seen (measured; it takes
+  an agent that makes such a link first).
+- **Re-activating a task replaces its `### Recent Chat` block** (item 25; seen on task 165). `tasks work N` on a
+  task that already has that section captures the recent chat again and writes it over the old block — a note
+  written there at the chat-review gate is lost, and up to ten messages return under a gate already ticked.
+- **After the shell history is rotated, the commands that read it see the live file only** (item 27; measured).
+  A rotation carries the newest 5 MiB of task activations; the older ones are in the archives. `tasks timeline`
+  does not show those, and `tasks tag`, which re-writes every tag at each run, gives a chat message older than the
+  oldest carried activation to the oldest carried task. Also: one activation can appear twice in the timeline,
+  with two texts, when the logged line was a compound command.
+- **`sandbox --print-argv` is not free of side effects** (item 29; measured). Building the command line creates
+  every extra writable path on the host, the write-log directory and the agents' home sub-directories — one of
+  them, in the measurement, inside `.git`.
+- **Lines the shell logger gives back in bulk can be torn** (item 32; seen in a real history, measured on the
+  construct alone — the logger's own path end to end is not measured). After a rotation where no hard link can be
+  made, the lines that are owed are appended in one piece under the rotation's lock, which a shell that only logs
+  a line does not take: a line another shell logs at that moment can land in the middle of a carried line.
+- **Audit receipts and long task records** (task 170's group C). The receipt of `tasks audit` reads STALE as soon
+  as the receipt itself is committed, so the audit has to be run after the commit, right before a review. And
+  every superseded `## Pre-Panel Audit` receipt stays in the task record: `tasks compact` refuses to move them,
+  and on a long record the judges' reading window drops sections (seen on a record of 111 KB with seven receipts).
+- **The review path after the last panel** (task 170's group E). A judge's own output can be read as a new
+  round: `judge.md` separates rounds by headings a judge can write — measured, a judge block that holds the line
+  `# Panel Impl Review` and a verdict line is parsed as a second round. Which finding of the single judge belongs
+  to the change under review is inferred by a pattern over the judge's prose, not read from a field. The change
+  handed to that judge is capped at a fixed quarter of the seat's context budget (50,000 characters on a seat fed
+  through stdin), not at what its context has left (since task 178, above, code and tests come first and what was
+  cut is named). For a research
+  task that change is always empty — its record lies outside the compared scope — and an empty change can end in
+  PASS.
+- **37 possible defects from a Gemini model's examination of the code are not verified** (task 111). None has
+  been reproduced on real code: they are a list of candidates, not of bugs.
+
 ## [1.6.0] — 2026-10-09
 
 **The first Linux-only release** — owner decision 2026-10-08: playbook supports Linux only until it is stable; macOS
