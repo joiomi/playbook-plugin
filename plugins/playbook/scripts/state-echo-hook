@@ -203,6 +203,10 @@ fi
 if [ "$AGENT_WRITABLE" = true ]; then
     # read_counter_int (not read_counter): the counter bytes are untrusted and
     # `$(( ))` executes command substitution embedded in an operand (C5).
+    # Read and write under ONE hold of the counters lock (task 182): the hooks of
+    # tool calls the host ran side by side each read the same number and wrote
+    # the same number plus one — 40 calls two at a time were counted as 20.
+    counters_lock "$COUNTER_FILE"
     TOOLS_VAL=$(read_counter_int "$COUNTER_FILE" tools)
     write_counter "$COUNTER_FILE" tools $(( TOOLS_VAL + 1 ))
     # A write is every tool that edits a file, and Bash. MultiEdit and
@@ -215,6 +219,7 @@ if [ "$AGENT_WRITABLE" = true ]; then
             write_counter "$COUNTER_FILE" writes $(( WRITES_VAL + 1 ))
             ;;
     esac
+    counters_unlock
     # Write log: persist file content after Write/Edit
     case "$TOOL_NAME" in
         Edit|Write)
@@ -294,6 +299,15 @@ REL_PATH="${TASK_FILE#$PROJECT_DIR/}"
 GATE_LOG="$AGENT_DIR/chat_log.md"
 TRANSITION_MSG=""
 SKIP_MSG=""
+# The whole step — read the previous gate, decide, log, write the new one — under
+# one hold of the counters lock (task 182). Side by side, six calls after a ticked
+# gate each read the OLD gate and each logged its completion (measured: six
+# entries for one gate), and the repeat count lost steps as the tool count did.
+# Order of locks: the counters lock first, the chat log's lock inside it; nothing
+# takes them the other way round.
+if [ "$AGENT_WRITABLE" = true ]; then
+    counters_lock "$COUNTER_FILE"
+fi
 if [ -n "$GATE_LINE" ] && [ "$IS_FREEHAND" = true ]; then
     # Freehand mode: no counter increment, no repeat warning, no transition logging
     NEW_COUNT=0
@@ -410,6 +424,7 @@ else
         write_counter "$COUNTER_FILE" gate_text ""
     fi
 fi
+counters_unlock
 
 # --- Build output (guarded by eval flags — state logic above always runs) ---
 # Eval verification marker — harness checks for this in claude-raw.jsonl
@@ -477,6 +492,14 @@ fi
 if [ "$PLAYBOOK_WRITE_FAILED" = true ] && [ "${PLAYBOOK_SANDBOXED:-}" != "1" ]; then
     CONTEXT="${CONTEXT}
 # ⚠ gate-logging write FAILED — session state / gate history not updated (retro attribution will degrade). Run \`tasks doctor\` and check .agent dir writability + AV locks."
+fi
+
+# The counters lock was not given in time (task 182): the call was counted without
+# it, as every call was before — say so, a stuck holder is otherwise invisible.
+# Not inside a sandboxed judge, as for the warning above.
+if [ "$PLAYBOOK_COUNTERS_UNLOCKED" = true ] && [ "${PLAYBOOK_SANDBOXED:-}" != "1" ]; then
+    CONTEXT="${CONTEXT}
+# ⚠ the session's counters lock could not be taken within ${PLAYBOOK_COUNTERS_WAITED}s — this call was counted without it (a count can be lost when tool calls overlap)."
 fi
 
 # Format as hook JSON. The old fallback `|| echo "\"$CONTEXT\""` did NOT escape

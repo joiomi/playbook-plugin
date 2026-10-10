@@ -199,7 +199,10 @@ class HarnessPromptsAreNotUserWords(_ChatLogFixture):
                 self.assertEqual(r.returncode, 0, r.stderr)
                 self.assertNotIn("probe-command-echo", self._logged())
                 self.assertEqual(counters.read_text(encoding="utf-8"), "tools=0\nwrites=0\ngate_x=1\n")
-                self.assertEqual(sorted(p.name for p in counters.parent.iterdir()), ["counters", "prompt_gen"])
+                # (`counters.lock` is the lock the reset is made under since task 182 —
+                # there where the host has `flock`)
+                self.assertEqual(sorted(p.name for p in counters.parent.iterdir() if p.name != "counters.lock"),
+                                 ["counters", "prompt_gen"])
 
     def test_a_user_prompt_that_merely_mentions_a_marker_is_logged(self):
         self._run("why do I see <task-notification> lines? probe-user-2")

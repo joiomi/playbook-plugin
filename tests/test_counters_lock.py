@@ -96,6 +96,22 @@ class _Counters(_Session):
             self.assertNotIn(NOTICE, out)
         return done
 
+    def _flock_shim(self, refuse=True):
+        """A `flock` that notes how the counters lock (descriptor 204) was asked for —
+        and refuses it, or hands the request to the real program; every other lock is
+        the real program's."""
+        d = Path(self._tmp.name) / "shim"
+        d.mkdir()
+        self.asked = Path(self._tmp.name) / "flock-asked"
+        shim = d / "flock"
+        shim.write_text(f'#!/bin/sh\ncase " $* " in *" 204 "*) echo "$*" >> "{self.asked}"; {"exit 1" if refuse else ":"} ;; esac\n'
+                        f'exec "{shutil.which("flock")}" "$@"\n', encoding="utf-8")
+        shim.chmod(0o755)
+        return str(d) + os.pathsep + os.environ["PATH"]
+
+    def _asked(self):
+        return self.asked.read_text(encoding="utf-8").splitlines() if self.asked.exists() else []
+
     @contextlib.contextmanager
     def held(self):
         """The session's lock, held by this test as another hook would hold it."""
@@ -246,26 +262,61 @@ class EveryWriterWaitsForTheLock(_Counters):
         self.assertEqual(self.counters(), {"tools": "3", "writes": "0", "gate_key": "001:7"})
         self.assertLess(time.monotonic() - started, 3, "a step waited the whole limit for its own lock")
 
+    def test_a_tool_call_asks_for_the_lock_twice(self):
+        # once for the count, once for the gate — however many keys each of the two
+        # steps writes: a write inside a held lock does not let go of it and take it again
+        rc, out, err = self.finish(self.start_tool(PATH=self._flock_shim(refuse=False)))
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(self._asked(), ["-w 60 204", "-w 60 204"])
+        self.assertEqual(self.counts(), (1, 1))
+        self.assertEqual(self.counters()["gate_count"], "1")
+        self.assertNotIn(NOTICE, out)
+
+
+@_needs_flock
+class TheLockIsHeldOnlyForItsTwoSteps(_Counters):
+    """The hook does more than count: it reads the payload, finds the task, builds its
+    answer. None of that is done with the lock held — the other calls' hooks wait for
+    the two short steps only. Seen through the helper the hook starts before, between
+    and after them: a `python3` in front of the real one that first looks at the lock."""
+
+    def _python_shim(self):
+        d = Path(self._tmp.name) / "py-shim"
+        d.mkdir()
+        self.seen = Path(self._tmp.name) / "lock-seen"
+        shim = d / "python3"
+        shim.write_text(
+            f'#!/bin/sh\nif [ ! -e "{self.lock_file}" ] || flock -n "{self.lock_file}" true 2>/dev/null; then\n'
+            f'    echo free >> "{self.seen}"\nelse\n    echo held >> "{self.seen}"\nfi\n'
+            f'exec "{shutil.which("python3")}" "$@"\n', encoding="utf-8")
+        shim.chmod(0o755)
+        return str(d) + os.pathsep + os.environ["PATH"]
+
+    def _seen(self):
+        return self.seen.read_text(encoding="utf-8").split() if self.seen.exists() else []
+
+    def test_every_helper_the_hook_starts_finds_the_lock_free(self):
+        path = self._python_shim()
+        for _ in range(2):          # the second call has a lock file from the start
+            rc, _, err = self.finish(self.start_tool(PATH=path))
+            self.assertEqual(rc, 0, err)
+        seen = self._seen()
+        self.assertGreaterEqual(len(seen), 4, "the hook starts python3 for its payload and for its answer")
+        self.assertEqual(set(seen), {"free"})
+        self.assertEqual(self.counts(), (2, 2))
+
+    def test_control_the_same_look_sees_a_lock_that_is_held(self):
+        path = self._python_shim()
+        with self.held():
+            rc, _, err = self.finish(self.start_tool(PATH=path, PLAYBOOK_COUNTERS_LOCK_WAIT="1"))
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(set(self._seen()), {"held"})
+
 
 @_needs_flock
 class TheLockHasATimeLimit(_Counters):
     """A lock that is never let go must not hold a tool call: after the limit the call is
     counted WITHOUT the lock, as every call was before, and the hook says so."""
-
-    def _flock_shim(self):
-        """A `flock` that refuses the counters lock (descriptor 204) and notes how it was
-        asked; every other lock is the real program's."""
-        d = Path(self._tmp.name) / "shim"
-        d.mkdir()
-        self.asked = Path(self._tmp.name) / "flock-asked"
-        shim = d / "flock"
-        shim.write_text(f'#!/bin/sh\ncase " $* " in *" 204 "*) echo "$*" >> "{self.asked}"; exit 1 ;; esac\n'
-                        f'exec "{shutil.which("flock")}" "$@"\n', encoding="utf-8")
-        shim.chmod(0o755)
-        return str(d) + os.pathsep + os.environ["PATH"]
-
-    def _asked(self):
-        return self.asked.read_text(encoding="utf-8").splitlines() if self.asked.exists() else []
 
     def test_a_lock_that_is_never_let_go(self):
         with self.held():
@@ -337,6 +388,19 @@ class WhereNoLockCanBeHad(_Counters):
             self.assertNotIn(NOTICE, out)
         self.assertEqual(self.counts(), (3, 3))
         self.assertFalse(self.lock_file.exists(), "a lock file was made on a host that cannot lock")
+
+    @unittest.skipIf(os.geteuid() == 0, "root writes a read-only directory")
+    def test_a_session_the_hook_must_not_write_gets_no_lock_file(self):
+        # the hook writes nothing where the agent directory is read-only (a judge's
+        # project) — whatever the session directory under it would allow
+        agent = self.project / ".agent"
+        os.chmod(agent, 0o555)
+        self.addCleanup(os.chmod, agent, 0o755)
+        rc, out, err = self.finish(self.start_tool())
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(self.counts(), (0, 0))
+        self.assertEqual(sorted(p.name for p in self.session_dir.iterdir()), ["counters", "current_state"])
+        self.assertNotIn(NOTICE, out)
 
     @unittest.skipIf(os.geteuid() == 0, "root writes a read-only directory")
     def test_a_session_directory_that_cannot_be_written(self):

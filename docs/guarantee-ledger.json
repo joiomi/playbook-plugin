@@ -12116,7 +12116,7 @@
     {
       "id": "PB-HOOK-STATE-ECHO",
       "category": "task-lifecycle",
-      "statement": "After applicable tool calls, state echo reports the current active gate and records transcript binding without allowing malformed payloads to corrupt session state.",
+      "statement": "After applicable tool calls, state echo reports the current active gate and records transcript binding without allowing malformed payloads to corrupt session state. The step that notices a ticked gate — read the previous gate from the session's counters, log its completion, write the new one — is one hold of the session's counters lock, so tool calls whose hooks overlap log a gate's completion ONCE and each add one to its repeat count (task 182; where that lock cannot be had the step runs without it, as before).",
       "owner": [
         {
           "path": "plugins/playbook/scripts/state-echo-hook",
@@ -12129,6 +12129,10 @@
         {
           "path": "plugins/playbook/scripts/gate-echo-lib.sh",
           "reference": "function:format_context"
+        },
+        {
+          "path": "plugins/playbook/scripts/gate-echo-lib.sh",
+          "reference": "function:counters_lock"
         }
       ],
       "failure_consequence": "Medium",
@@ -12166,6 +12170,29 @@
           "limitations": [
             "Task 100 (PLAN S8 binding audit, 2026-09-27): a transcript_path carrying a newline is refused, no pointer written — the `malformed payloads cannot corrupt session state` clause."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_counters_lock.py",
+          "reference": "AGatesCompletionIsLoggedOnce.test_overlapping_calls_after_a_gate_is_ticked",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_counters_lock.py",
+            "reference": "AGatesCompletionIsLoggedOnce.test_control_one_call_logs_it"
+          },
+          "limitations": [
+            "The real `state-echo-hook`, started as processes that overlap on one fixture session. Six calls after a gate is ticked: one entry in `chat_log.md`, the completion told to one call, the new gate's count 6. Task 182, red first on the unfixed scripts: \"6 != 1\" — six entries for one gate."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_counters_lock.py",
+          "reference": "OverlappingToolCallsAreAllCounted.test_the_gates_repeat_count",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The real `state-echo-hook`, started as processes that overlap on one fixture session. Fifteen calls, five at a time, on one gate. Task 182, red first on the unfixed scripts: \"'3' != '15'\"."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -12199,7 +12226,7 @@
     {
       "id": "PB-HOOK-STOP-CLOSE",
       "category": "risk-and-close",
-      "statement": "Stop enforcement blocks a first stop while task completion requirements remain, fails closed on an unknowable lane, and uses its one-shot valve to avoid permanently trapping the session. The blocked-task release reads `## Status`, and the gate count + first unchecked gate are read, through the CLI's own fence-aware Python readers in ONE spawn (scripts/task-status.py --fields → core._extract_status + core._live_gate_state + core._freehand_release_allowed as a 4-line frame), never an independent awk/grep rule — the Freehand waiver is decided in Python, not by a bash prefix test on the gate text; when that reader cannot run the status is unreadable, the Freehand release is disabled, and gates are counted by a fence-blind LINE grep that is BOM-tolerant like the Python reader (`^(U+FEFF)*[[:space:]]*- \\[ \\]`, byte-wise under LC_ALL=C) and whose exit code is read — a grep failure (exit >= 2, unreadable file, unsupported regex, missing binary) counts as at least one open gate — so over the fixture table the fallback count is >= the Python count and the arm never releases on a count it could not take or under-counts the CLI (fail closed, loud). The one-shot `stop_hook_active` valve is read with a bash-builtin regex when python3 cannot run (no python3, no grep), so a no-python session blocked by this arm can still end its re-issued stop. BOUND, on both arms: the counter-gated conversational bypass (session writes=0 and tools<5, counted from the last USER prompt) releases a low-activity turn of a COUNTED tree regardless of open gates — it is a release for chat replies, not a fail-closed path — and it is disarmed when the fallback count itself failed. An automatic notification — a prompt that begins with `<task-notification>` or `[SYSTEM NOTIFICATION` — does not reset those counters (owner's Q1, 2026-09-24; task 173): one that lands in the middle of a turn changes nothing, so the work of that turn still holds its stop. The same block releases one more turn, by the owner's exception: a turn that a notification STARTED — no tool call had run since the last stop this hook let through for the session's OWN agent (an agent nested under it shares the session, and its stop ends no turn), in the same prompt generation — and that has made no write since — no Edit, Write, MultiEdit, NotebookEdit or Bash call — however many other tool calls it made; one such write and it is held like any other turn. The echo of a command the user ran (`<command-name>`, `<local-command-caveat>`) still resets the counters, as a prompt of theirs does.",
+      "statement": "Stop enforcement blocks a first stop while task completion requirements remain, fails closed on an unknowable lane, and uses its one-shot valve to avoid permanently trapping the session. The blocked-task release reads `## Status`, and the gate count + first unchecked gate are read, through the CLI's own fence-aware Python readers in ONE spawn (scripts/task-status.py --fields → core._extract_status + core._live_gate_state + core._freehand_release_allowed as a 4-line frame), never an independent awk/grep rule — the Freehand waiver is decided in Python, not by a bash prefix test on the gate text; when that reader cannot run the status is unreadable, the Freehand release is disabled, and gates are counted by a fence-blind LINE grep that is BOM-tolerant like the Python reader (`^(U+FEFF)*[[:space:]]*- \\[ \\]`, byte-wise under LC_ALL=C) and whose exit code is read — a grep failure (exit >= 2, unreadable file, unsupported regex, missing binary) counts as at least one open gate — so over the fixture table the fallback count is >= the Python count and the arm never releases on a count it could not take or under-counts the CLI (fail closed, loud). The one-shot `stop_hook_active` valve is read with a bash-builtin regex when python3 cannot run (no python3, no grep), so a no-python session blocked by this arm can still end its re-issued stop. BOUND, on both arms: the counter-gated conversational bypass (session writes=0 and tools<5, counted from the last USER prompt) releases a low-activity turn of a COUNTED tree regardless of open gates — it is a release for chat replies, not a fail-closed path — and it is disarmed when the fallback count itself failed. An automatic notification — a prompt that begins with `<task-notification>` or `[SYSTEM NOTIFICATION` — does not reset those counters (owner's Q1, 2026-09-24; task 173): one that lands in the middle of a turn changes nothing, so the work of that turn still holds its stop. The same block releases one more turn, by the owner's exception: a turn that a notification STARTED — no tool call had run since the last stop this hook let through for the session's OWN agent (an agent nested under it shares the session, and its stop ends no turn), in the same prompt generation — and that has made no write since — no Edit, Write, MultiEdit, NotebookEdit or Bash call — however many other tool calls it made; one such write and it is held like any other turn. The echo of a command the user ran (`<command-name>`, `<local-command-caveat>`) still resets the counters, as a prompt of theirs does. The counters are written under ONE lock per session (`counters.lock`, flock): a tool call's count, the reset at a prompt and every single write of a key are each one hold of it, so tool calls whose hooks the host runs side by side are each counted (task 182, PLAN S11 item 17). BOUND: the lock has a time limit (2 seconds, `PLAYBOOK_COUNTERS_LOCK_WAIT`); where it is not given in time, or the host has no `flock`, a call is counted WITHOUT it and a count can be lost, as before.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/stop-hook",
@@ -12534,6 +12561,161 @@
           "limitations": [
             "Four prompts of the user's — two plain, a slash-command echo, one that is empty once the IDE tags are filtered out — leave four different generations; a notification leaves the last one as it was."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_counters_lock.py",
+          "reference": "OverlappingToolCallsAreAllCounted.test_two_at_a_time",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_counters_lock.py",
+            "reference": "OverlappingToolCallsAreAllCounted.test_control_one_at_a_time"
+          },
+          "limitations": [
+            "The real `state-echo-hook`, started as processes that overlap on one fixture session. Task 182, red first on the unfixed scripts: \"(10, 10) != (20, 20)\"."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_counters_lock.py",
+          "reference": "OverlappingToolCallsAreAllCounted.test_six_at_a_time",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The real `state-echo-hook`, started as processes that overlap on one fixture session. Task 182, red first on the unfixed scripts: \"(6, 5) != (24, 24)\"."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_counters_lock.py",
+          "reference": "OverlappingToolCallsAreAllCounted.test_a_write_beside_calls_that_do_not_write",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The real `state-echo-hook`, started as processes that overlap on one fixture session. Reads, a Grep and one Bash side by side, six rounds: 24 tool calls, 6 writes. Task 182, red first on the unfixed scripts: \"(6, 6) != (24, 6)\"."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_counters_lock.py",
+          "reference": "OverlappingToolCallsAreAllCounted.test_every_kind_of_writing_tool",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The real `state-echo-hook`, started as processes that overlap on one fixture session. Task 182, red first on the unfixed scripts: \"(1, 1) != (6, 5)\"."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_counters_lock.py",
+          "reference": "EveryWriterWaitsForTheLock.test_a_tool_calls_count",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_counters_lock.py",
+            "reference": "OverlappingToolCallsAreAllCounted.test_control_one_at_a_time"
+          },
+          "limitations": [
+            "The test holds the session's lock as another hook would, starts the writer, gives it a second to end if it does not wait, changes the file and lets go. The count is built on what the file holds when the hook is let in (101 and 101 after the test wrote 100 and 100). Does not depend on a race: with only the single writes locked the result is 1 and 101. Task 182, red first on the unfixed scripts: \"the hook counted the call while another writer held the lock\"."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_counters_lock.py",
+          "reference": "EveryWriterWaitsForTheLock.test_a_single_write",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "The test holds the session's lock as another hook would, starts the writer, gives it a second to end if it does not wait, changes the file and lets go. Task 182, red first on the unfixed scripts: \"write_counter rewrote the file while another writer held the lock\"."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_counters_lock.py",
+          "reference": "EveryWriterWaitsForTheLock.test_the_reset_at_a_prompt",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The test holds the session's lock as another hook would, starts the writer, gives it a second to end if it does not wait, changes the file and lets go. The real `chat-log-hook`, a user's prompt. Task 182, red first on the unfixed scripts: \"the reset rewrote the file while another writer held the lock\"."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_counters_lock.py",
+          "reference": "EveryWriterWaitsForTheLock.test_a_tool_call_asks_for_the_lock_twice",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_counters_lock.py",
+            "reference": "EveryWriterWaitsForTheLock.test_a_step_under_the_lock_does_not_wait_for_itself"
+          },
+          "limitations": [
+            "A `flock` in front of the real one notes each request for descriptor 204: one tool call asks twice — the count, the gate — however many keys the two steps write."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_counters_lock.py",
+          "reference": "TheLockHasATimeLimit.test_a_lock_that_is_never_let_go",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_counters_lock.py",
+            "reference": "TheLockHasATimeLimit.test_a_judges_run_is_not_told"
+          },
+          "limitations": [
+            "The test holds the lock for the whole call, limit 1 second: the call ends, is counted (1 and 1), took at least the limit, and the hook's answer says the lock could not be taken. Task 182, red first on the unfixed scripts: \"… not greater than or equal to 0.9 : the hook did not wait for the lock at all\"."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_counters_lock.py",
+          "reference": "TheLockHasATimeLimit.test_the_limit_is_waited_once_for_a_whole_call",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "A `flock` that refuses the counters lock: one request for a whole tool call, not one per step or per write. Task 182, red first on the unfixed scripts: \"[] != ['-w 1 204']\"."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_counters_lock.py",
+          "reference": "TheLockHasATimeLimit.test_two_seconds_unless_told_otherwise",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Ten values of the setting, the unset one first: 2 unless it is a whole number 1 to 99; a value with a command in it runs nothing."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_counters_lock.py",
+          "reference": "WhereNoLockCanBeHad.test_without_flock_on_the_host",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_counters_lock.py",
+            "reference": "WhereNoLockCanBeHad.test_a_session_the_hook_must_not_write_gets_no_lock_file"
+          },
+          "limitations": [
+            "A PATH without `flock`: three calls counted as three, no lock file, nothing said. The control: an agent directory that is read-only — the hook writes nothing there, a lock file included."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_counters_lock.py",
+          "reference": "WhereNoLockCanBeHad.test_a_session_directory_that_cannot_be_written",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Under `set -e`, as the hooks run: the write fails and says so as it did before; the lock adds no line of its own and does not report a wait that did not happen."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_counters_lock.py",
+          "reference": "OnCodexNothingCountsToolCalls.test_the_reset_is_the_only_python_writer_of_the_file",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "A pin on the Codex bound, by reading the source: one function builds the path of a session's counters and one function uses it. It proves nothing about Codex at run time."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -12554,7 +12736,7 @@
         "Task 173, three readings of the owner's sentence that are the builder's, not his (put to him on 2026-10-10): (1) `automatic notification` = the two markers above, not the echo of a user's own command; (2) `a turn started by a notification` is told from a notification landing mid-turn by the mark, and a turn that ended WITHOUT a Stop event (an interrupt) leaves no mark, so a notification after it is read as mid-turn — the stricter side, and so does any tool call that runs in the session between that stop and the notification: if a background sub-agent's own tool calls reach this session's PostToolUse hook, the notice of its completion is read as landing mid-turn and its turn is held once (the valve ends a re-issued stop) — NOT measured: the session that built this had no sub-agent tool, and the repo does not show whether such calls reach the hook (impl panel, opus); a background shell command makes no tool call while it runs, which is the case measured; (3) `zero writes` is the hook's own counter, which counts Edit, Write, MultiEdit, NotebookEdit and Bash calls — a sub-agent call or an MCP tool is not a write for it — and the exception carries NO tool-count limit, because his sentence has none, whereas the chat-reply bypass bounds such calls by tools<5.",
         "Task 173: the two one-line files (`turn_end`, `notif_start`) sit beside the session's counters file in `.agent/`, writable by the agent exactly as `tools` and `writes` are — a session that edits them (a matching nonce in both is all it takes) can release its own stop, as it already could by writing `writes=0`; they add no new trust — the nonce is against a baseline written LATE, not against a session forging its own files. (This note spoke of two KEYS of the counters file until the impl panel's second round, opus: the row contradicted itself.) The codex hook path (experimental, no support claim) has no notification handling: every codex prompt is logged and resets; unchanged.",
         "Task 173: until then the `writes` counter counted Edit, Write and Bash only — a MultiEdit or a NotebookEdit was a tool call but not a write, so a turn whose only act was one of them (fewer than five calls) was released by the chat-reply bypass with gates open. Found while reading what `zero writes` rests on; both are counted now (red first: `(1, 0) != (1, 1)`).",
-        "Task 173, NOT closed by it and older than it — MEASURED 2026-10-10 with the real state-echo-hook started as overlapping processes against one fixture session: `write_counter` is an unlocked copy-and-rename, so PostToolUse hooks that overlap lose increments. 20 rounds of 2 overlapping Bash calls (40 calls) left `tools=20 writes=20`; 10 rounds of 6 (60 calls) left `tools=10 writes=15`; 20 calls one after another left 20 and 20. The host runs tool calls of one message in parallel, so both counters under-count in ordinary use, and an under-counted `writes` is the RELEASING side of the chat-reply bypass and of the notification exception alike (a Read and a Bash that overlap can lose the Bash's write entirely). The rule's own two writers no longer take part in it (they do not touch the file). Serialising the counters under a per-session lock changes the hook that runs on every tool call — its own fix, routed to the owner with the S11 list (task 173, parked).",
+        "CLOSED in task 182 (PLAN S11 item 17; owner 2026-10-10: \"Îl repar în S11 (Recomandat)\"). What stood here: Task 173, NOT closed by it and older than it — MEASURED 2026-10-10 with the real state-echo-hook started as overlapping processes against one fixture session: `write_counter` is an unlocked copy-and-rename, so PostToolUse hooks that overlap lose increments. 20 rounds of 2 overlapping Bash calls (40 calls) left `tools=20 writes=20`; 10 rounds of 6 (60 calls) left `tools=10 writes=15`; 20 calls one after another left 20 and 20. The host runs tool calls of one message in parallel, so both counters under-count in ordinary use, and an under-counted `writes` is the RELEASING side of the chat-reply bypass and of the notification exception alike (a Read and a Bash that overlap can lose the Bash's write entirely). The rule's own two writers no longer take part in it (they do not touch the file). NOW: every read-modify-write of the counters file is made under one lock per session — `<counters>.lock`, `flock -w` on a descriptor opened in the hook's own shell; the pair `counters_lock`/`counters_unlock` nests, so a write inside a held lock neither waits for itself nor lets go of it. Re-measured 2026-10-11 with the same probe: 40 of 40 two at a time, 60 of 60 six at a time, 60 of 60 twelve at a time (before, the same day: 20 of 40 and 10 of 60). BOUNDS, stated: (1) the time limit — the BUILDER's reading of the plan's \"with a time limit\": after 2 seconds (1 to 99 by `PLAYBOOK_COUNTERS_LOCK_WAIT`; the hooks' own limit is 5) the call is counted without the lock and the hook's answer says so — a lost count is the smaller harm beside a hook that hangs every tool call; the wait is spent once per hook process; (2) a host without `flock`, or a lock file that cannot be opened: counted as before, and nothing says so; (3) a reader — the stop hook, the notification rule — takes no lock: the file is replaced by a rename, and `tools` and `writes` are still two reads; (4) the reset at a prompt writes the file in place (the limitation of PB-CONFIG-ATOMIC-DURABILITY stands), under the lock; (5) the chat hook does not say that its reset went on without the lock — what it prints would become part of the prompt; (6) the Codex lane: nothing there counts a tool call, the Python reset at a prompt is the only writer of a Codex session's file and does not take the lock (pinned by a test that fails when a second Python writer appears); (7) the lock file sits in `.agent/` beside the counters, writable by the agent as they are — it adds no trust and takes none away: a session that holds the lock itself gets the old, unlocked count and the notice at every call; (8) the step that logs a gate's completion still waits for the chat log's lock WITHOUT a limit, as before, now with the counters lock held — a long holder of the chat log's lock makes the other calls' hooks reach their limit; (9) a `flock` that fails for another reason than time is reported in the same words; (10) the notice is a line of the hook's ordinary answer — the answers it gives before it looks for a gate (no active task, no task file) do not carry it. COST, measured 2026-10-11 (the real hook from both trees, turn about, twice): one call 78.0 → 80.9 ms and 79.0 → 82.3 ms (medians of 40); six calls at once 93.0 → 197.7 ms and 92.3 → 198.2 ms for the batch (medians of 15) — the six now take turns for the two steps, about 18 ms of holding each.",
         "Task 173: `one agent in the chain = the session's own stop` was MEASURED on one live session (Claude Code 2.1.296, Linux, 2026-10-10: a command the session runs walks up to exactly one agent, the session's). A host that started its hooks from a helper process of its own that is also named `claude` would make every stop look nested, and the owner's exception would then never apply — the stricter side, and not seen. The walk stops at the Claude Code daemon and reads `/proc` (or `PLAYBOOK_PROC_ROOT`, which the tests use to pin it).",
         "Task 173, BOUND left open at its close (the single judge's third run, 2026-10-10; PLAN S11 item (18)): the stop hook reads the prompt generation only after it has read its input, parsed it and resolved the session. A user's prompt whose hook runs to its end in that window — after the stop hook of the turn before it has started, before it reaches that read — gives that stop the NEW generation; its mark then counts in the user's turn, and a notification before the first tool call of that turn is taken for a start, so a read-only turn of the user's could end with gates open. Not reproduced by a test here (the tested orderings are the prompt landing at the mark's rename and while the hook decides after that read). Reading the generation first thing would shrink the window, not close it; a turn identity from the host in both payloads would close it."
       ],

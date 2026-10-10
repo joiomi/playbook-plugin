@@ -51,6 +51,24 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
+- **Tool calls that run side by side are all counted** (task 182, PLAN S11 item 17; owner decision
+  2026-10-10). The stop hook lets a turn end with gates open when the session's counters say it was a chat
+  reply: no write and fewer than five tool calls. The hook that counts runs after every tool call, the host runs
+  the tool calls of one message side by side, and every writer of the counters file rewrote it whole from what
+  it had read a moment before. Measured with the real hook: 40 Bash calls two at a time were counted as 20, 60
+  calls six at a time as 10 — and a write that overlapped a Read could drop out of the count, which is the side
+  that RELEASES a stop. The same construct wrote a ticked gate's completion into `chat_log.md` once per
+  overlapping call (measured: six entries for one gate). Every read-modify-write of that file — a call's count,
+  the step that notices a ticked gate, a single write, the reset at your prompt — now happens under one lock
+  per session (`counters.lock` beside the file, `flock`). The same measurement now: 40 of 40, 60 of 60, and 60
+  of 60 twelve at a time. The lock has a time limit: if it is not given within 2 seconds
+  (`PLAYBOOK_COUNTERS_LOCK_WAIT`, whole seconds, 1 to 99) the call is counted without it, as every call was
+  before, and the hook's answer says so; that wait is spent once per tool call, not once per write. What it
+  costs, measured: about 3 ms more per tool call (78 to 81 ms for the hook); six calls side by side now take
+  turns for the two short steps and are all done about 0.1 s later than before (93 to 198 ms). Not
+  covered: a host without `flock` (counted as before, and nothing says so); the Codex lane, where nothing
+  counts tool calls and the reset at a prompt is the file's only writer (it does not take the lock); the stop
+  hook itself, which only reads — the file is replaced by a rename, so it sees one whole state or the next.
 - **What git runs by itself can no longer be changed from inside the sandbox** (task 181, PLAN S11 item 31;
   owner decision 2026-10-10). The sandbox kept the git directory read-only, but git can be told to take its
   hooks and its settings from somewhere else, and where that is the project's own content an agent could write

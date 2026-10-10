@@ -629,13 +629,70 @@ is_code_file_path() {
     return 1
 }
 
+# ── The counters lock (task 182, PLAN S11 item 17) ──────────────────────────
+# A session's `counters` file is rewritten WHOLE by every writer — write_counter
+# copies the other keys and renames the copy over it, reset_counters writes it
+# anew — and the host runs the hooks of one message's tool calls side by side.
+# Measured with the real state-echo-hook: 40 Bash calls two at a time were
+# counted as tools=20 writes=20; each pair read the same file and the second
+# rename dropped the first's increment. A `writes` that is too low is the
+# releasing side of the stop hook. So every read-modify-write of the file
+# happens under ONE lock per session: `<counters>.lock`, flock, descriptor 204,
+# taken in the CALLING shell, so that what a step sets stays set.
+#
+# counters_lock FILE / counters_unlock — a pair. They nest: write_counter
+# inside a caller's lock does not wait for itself. They never fail the caller.
+# Where no lock can be had the step goes on WITHOUT one, as every step did
+# before:
+#   - no `flock` on the host, or the lock file cannot be opened (a session
+#     directory that cannot be written — the write itself then says so);
+#   - the lock is not given within PLAYBOOK_COUNTERS_LOCK_WAIT seconds (a whole
+#     number, 1 to 99; anything else means 2 — the hooks have 5). That is waited
+#     for ONCE per process: a later step of the same hook does not wait again,
+#     and PLAYBOOK_COUNTERS_UNLOCKED=true lets the hook say it.
+# A reader does not take the lock: the file is replaced by a rename.
+PLAYBOOK_COUNTERS_UNLOCKED=false
+PLAYBOOK_COUNTERS_WAITED=""
+_PB_COUNTERS_DEPTH=0
+_PB_COUNTERS_FD=false
+
+counters_lock() {
+    _PB_COUNTERS_DEPTH=$(( _PB_COUNTERS_DEPTH + 1 ))
+    [ "$_PB_COUNTERS_DEPTH" -eq 1 ] || return 0
+    [ "$PLAYBOOK_COUNTERS_UNLOCKED" != true ] || return 0
+    command -v flock &>/dev/null || return 0
+    { exec 204>>"$1.lock"; } 2>/dev/null || return 0
+    _PB_COUNTERS_FD=true
+    local wait="${PLAYBOOK_COUNTERS_LOCK_WAIT:-}"
+    case "$wait" in [1-9]|[1-9][0-9]) ;; *) wait=2 ;; esac
+    if ! flock -w "$wait" 204 2>/dev/null; then
+        PLAYBOOK_COUNTERS_UNLOCKED=true
+        PLAYBOOK_COUNTERS_WAITED="$wait"
+    fi
+    return 0
+}
+
+counters_unlock() {
+    [ "$_PB_COUNTERS_DEPTH" -gt 0 ] || return 0
+    _PB_COUNTERS_DEPTH=$(( _PB_COUNTERS_DEPTH - 1 ))
+    [ "$_PB_COUNTERS_DEPTH" -eq 0 ] || return 0
+    if [ "$_PB_COUNTERS_FD" = true ]; then
+        { exec 204>&-; } 2>/dev/null || true
+        _PB_COUNTERS_FD=false
+    fi
+    return 0
+}
+
 # write_counter FILE KEY VALUE
 # Set a key=value in the counter file. Creates file if missing, updates in-place if key exists.
 # Uses grep-filter-append instead of sed to avoid delimiter collisions with gate text
 # containing |, backticks, or other special characters.
+# The copy is made and renamed under the counters lock (task 182): a caller that
+# reads a value and writes one built on it takes the lock around BOTH.
 write_counter() {
     local file="$1" key="$2" value="$3"
     local tmp="${file}.tmp.$$"
+    counters_lock "$file"
     if [ -f "$file" ]; then
         grep -v "^${key}=" "$file" > "$tmp" 2>/dev/null || true
     fi
@@ -647,13 +704,17 @@ write_counter() {
         rm -f "$tmp" 2>/dev/null || true
         PLAYBOOK_WRITE_FAILED=true
     fi
+    counters_unlock
     return 0
 }
 
 # reset_counters FILE
 # Reset tools=0 and writes=0, preserving gate_* fields. Creates file if missing.
+# Under the counters lock (task 182): the gate's lines it keeps are the ones the
+# file holds when it is let in, and no tool call's count is renamed over the zeros.
 reset_counters() {
     local file="$1"
+    counters_lock "$file"
     if [ -f "$file" ]; then
         # Preserve gate_* lines, reset tools/writes
         local gate_lines
@@ -665,6 +726,7 @@ reset_counters() {
     else
         printf 'tools=0\nwrites=0\n' > "$file"
     fi
+    counters_unlock
 }
 
 # Owner's Q1 (task 173): two one-line files beside a session's `counters` —
@@ -673,7 +735,9 @@ reset_counters() {
 # their own, NOT keys of `counters`: write_counter sets a key by copying the
 # whole file and renaming the copy over it, so a hook that overlaps a tool
 # call's hook can rename a stale copy over that call's increment (impl panel
-# r1). Nothing that serves the rule rewrites `counters`.
+# r1). Nothing that serves the rule rewrites `counters`. (Since task 182 the
+# writers of `counters` take a lock; these two stay files of their own — that
+# lock has a time limit, and the rule must not hang on it.)
 # Each holds `<number> <nonce>`: the stop hook makes a new nonce for every stop
 # it lets through, the notification's baseline carries the nonce of the mark it
 # was taken from, and the baseline counts only beside the mark with that nonce
