@@ -22,38 +22,48 @@ esac
 # left the activations only in the archive — and `tasks retro` / `tasks timeline`
 # read only the live file — and every rotation carried every activation line ever
 # written. Now:
-#   * ONE shell at a time. `flock -n` on a descriptor opened on the history file
-#     itself (no lock file to leave behind); a shell that does not get it leaves
-#     the lane alone and just logs. The lock that counts is the one on the file that
-#     has the live name NOW: a rotation gives that name to another file, so a lock
-#     taken on what turns out to be the old one is no lock, and the rotator itself
-#     takes the new file's lock before it gives anything back.
+#   * UNDER A LOCK, or not at all. `flock -n` on a descriptor opened on the history
+#     file itself (no lock file to leave behind); a shell that does not get it
+#     leaves the lane alone and just logs. Where no lock can be had — no `flock`
+#     on PATH, or one that cannot lock on this mount — the history is NOT rotated:
+#     it grows, and nothing in it is lost (owner, 2026-10-10; an order without a
+#     lock let one shell undo what another had written down).
+#   * The lock that counts is the one on the file that has the live name NOW: a
+#     rotation gives that name to another file, so a lock taken on what turns out
+#     to be the old one is no lock, and the rotator itself takes the new file's
+#     lock before it gives anything back.
 #   * WRITTEN DOWN first. Before anything is moved, a marker beside the history
-#     (`bash_history.archived-owes`) names the archive about to be made; it goes
-#     when that archive's activation lines are in the live file. A shell that
-#     finds it — one `[[ -f ]]` where the size is looked at — finishes the job. So
-#     a rotation that dies at ANY step leaves either the history as it was or an
-#     archive the next shell collects from (impl panel round 1).
+#     (`bash_history.archived-owes`) names the archive about to be made. A shell
+#     that finds it — one `[[ -f ]]` where the size is looked at — gives back what
+#     that archive still owes and removes it. So a rotation that dies at ANY step
+#     leaves either the history as it was or an archive the next shell collects
+#     from (impl panel round 1).
 #   * GIVEN BACK, repeatably: every carried line of the archive that the live file
 #     does not hold yet is appended to it. "Carried" is the newest 5 MiB of whole
-#     activation lines — the bound. That one operation is the second read after a
-#     rename (a line another shell wrote meanwhile), the whole carry where the
-#     history had to be moved away, and the recovery.
-#   * Where it can — `flock` there, hard links there — the fresh file is PREPARED
-#     and renamed into place, with the archive made as a second name of the old
-#     one: on that path, and only on it, the live name never ceases to exist and
-#     never holds less than the carried lines. Where it cannot (no hard link; no
-#     `flock` on PATH, or one that cannot lock here), the history is moved away
-#     and the lines given back: between the two the live file lacks them — until
-#     this shell, or after a death the next one, gives them back. Without a lock
-#     two shells can also still rotate at once (two archives, as before).
-# Left: a line whose append was under way across the rename and landed in the old
-# file after it was read for the giving-back stays in the archive only; so does an
-# activation older than the bound.
-# Files it makes all begin `bash_history.archived-` (`….new` while in preparation),
-# which the judges' read mask and the seeded ignore block already cover. Nothing
-# here may fail the caller or print: it runs in the DEBUG trap of every shell (see
-# the callback below).
+#     activation lines — the bound.
+#   * TWICE: by the shell that rotated, at once, and once more by the NEXT shell,
+#     which is the one that removes the marker. A shell that had the old file open
+#     at the rename writes its line into the archive after the first giving-back;
+#     the second is for that line (owner, 2026-10-10 — a lock taken by every
+#     logged command would cost each of them a process).
+#   * The fresh file is PREPARED and renamed into place, with the archive made as
+#     a second name of the old one: the live name never ceases to exist and never
+#     holds less than the carried lines. Only where a hard link cannot be made is
+#     the history moved away and the lines given back — between the two the live
+#     file lacks them, until this shell, or after a death the next one, gives
+#     them back.
+# Left: a process that keeps the old file open past the next shell's giving-back
+# and writes an activation then; an activation older than the bound.
+# The lane is a directory that comes with the project: a marker, an archive and
+# symbolic links can be SHIPPED in it, and the marker makes the first shell that
+# logs there act. So nothing is written through a name somebody else may have
+# put there: a history that is a link is left alone altogether, the marker and
+# the prepared file are made anew (removed first, then created only if absent),
+# and what a giving-back works with is kept outside the lane (`mktemp -d`).
+# Files it makes in the lane all begin `bash_history.archived-` (`….new` while in
+# preparation), which the judges' read mask and the seeded ignore block already
+# cover. Nothing here may fail the caller or print: it runs in the DEBUG trap of
+# every shell (see the callback below).
 _cpb_rotate() {
     local _lane="$1"
     {
@@ -71,13 +81,15 @@ _cpb_rotate() {
             _owes="$_lane/bash_history.archived-owes"
             _re=' [|] [A-Za-z0-9_]+ [|] .*tasks[[:space:]]+(work|new)'
 
-            # FILE's newest activation lines, whole, within 5 MiB. The newline put
-            # in front is a line for the second `tail` to drop: where the first
-            # one cut, what gets dropped is the line that was cut. `-a`: a history
+            # FILE's newest activation lines, whole, of at most 5 MiB. The newline
+            # put in front is a line for the second `tail` to drop, and the first
+            # one is asked for the bound plus that one byte: where nothing had to
+            # be cut it is that empty line that goes, and where something had,
+            # the line that was cut (or the one line too many). `-a`: a history
             # can hold stray binary bytes. Fails unless the file was read whole
             # (`grep`: 0 = lines found, 1 = none).
             _carried() {
-                { builtin printf '\n'; command grep -a -E "$_re" "$1"; } | command tail -c 5242880 | command tail -n +2
+                { builtin printf '\n'; command grep -a -E "$_re" "$1"; } | command tail -c 5242881 | command tail -n +2
                 _st=("${PIPESTATUS[@]}")
                 [[ "${_st[0]}" -le 1 && "${_st[1]}" -eq 0 && "${_st[2]}" -eq 0 ]]
             }
@@ -86,50 +98,57 @@ _cpb_rotate() {
             # appended to it. May be run again after any death: it gives only
             # what is missing. Fails (and the marker stays) unless it got through.
             _deliver() {
-                _carried "$1" > "$1.owed.new" 2>/dev/null || { command rm -f "$1.owed.new" 2>/dev/null; return 1; }
-                if [[ -f "$_hist" ]]; then
-                    command grep -a -E "$_re" "$_hist" > "$1.held.new" 2>/dev/null
-                    [[ $? -le 1 ]] || { command rm -f "$1.owed.new" "$1.held.new" 2>/dev/null; return 1; }
-                else
-                    : > "$1.held.new"
+                # its two working files are NOT in the lane: their names there
+                # would follow from the marker, which the project can ship —
+                # with a link under either name
+                _tmp=$(command mktemp -d 2>/dev/null) || return 1
+                [[ -n "$_tmp" && -d "$_tmp" ]] || return 1
+                if ! _carried "$1" > "$_tmp/owed" 2>/dev/null; then
+                    command rm -rf "$_tmp" 2>/dev/null
+                    return 1
                 fi
-                command grep -a -F -x -v -f "$1.held.new" "$1.owed.new" >> "$_hist" 2>/dev/null
+                if [[ -f "$_hist" ]]; then
+                    command grep -a -E "$_re" "$_hist" > "$_tmp/held" 2>/dev/null
+                    [[ $? -le 1 ]] || { command rm -rf "$_tmp" 2>/dev/null; return 1; }
+                else
+                    : > "$_tmp/held"
+                fi
+                # a live file that ends inside a line (a writer was killed in it):
+                # closed first, so that what is given back starts on a line of its own
+                if [[ -s "$_hist" && -n "$(command tail -c 1 "$_hist" 2>/dev/null)" ]]; then
+                    builtin printf '\n' >> "$_hist" 2>/dev/null
+                fi
+                command grep -a -F -x -v -f "$_tmp/held" "$_tmp/owed" >> "$_hist" 2>/dev/null
                 _rc=$?
-                command rm -f "$1.owed.new" "$1.held.new" 2>/dev/null
+                command rm -rf "$_tmp" 2>/dev/null
                 [[ "$_rc" -le 1 ]]
             }
 
             # The lock, on whatever file has the live name now. Fails when another
-            # shell holds it, and when the file it was taken on is no longer the
-            # live one (a rotation went by between the open and the lock). For
-            # appending, never truncating: over NFS an exclusive flock needs a
-            # descriptor open for WRITING (flock(2), "NFS details"). flock(1)
-            # answers 1 for a lock that is held; anything else — it cannot lock
-            # here, or there is no such command on PATH (127) — is a host without
-            # a lock from then on.
+            # shell holds it, when no lock can be had here at all, and when the
+            # file it was taken on is no longer the live one (a rotation went by
+            # between the open and the lock). For appending, never truncating:
+            # over NFS an exclusive flock needs a descriptor open for WRITING
+            # (flock(2), "NFS details"). And never on a history that is a
+            # symbolic link: opening it would make, and everything after it would
+            # write, a file somewhere else.
             _take() {
-                [[ "$_flock" -eq 1 ]] || return 0
+                [[ ! -L "$_hist" ]] || return 1
                 # (a plain `exec`: through `builtin` the descriptor would be open
                 # for that one command only — measured: flock then answers 65)
                 exec 9>>"$_hist" || return 1
-                command flock -n 9
-                case $? in
-                    0) [[ /dev/fd/9 -ef "$_hist" ]] ;;
-                    1) return 1 ;;
-                    *) _flock=0; return 0 ;;
-                esac
+                command flock -n 9 || return 1
+                [[ ! -L "$_hist" && /dev/fd/9 -ef "$_hist" ]]
             }
 
-            _flock=1
             _take || exit 0
-            if [[ "$_flock" -eq 1 ]]; then
-                # what a rotator that was killed left in preparation — under the
-                # lock nobody else is preparing anything
-                command find "$_lane" -maxdepth 1 -type f -name 'bash_history.archived-*.new' -delete 2>/dev/null
-            fi
+            # what a rotator that was killed left in preparation — under the lock
+            # nobody else is preparing anything
+            command find "$_lane" -maxdepth 1 -type f -name 'bash_history.archived-*.new' -delete 2>/dev/null
 
-            # A rotation that did not get to its end. The marker's one line is
-            # read as the NAME of an archive in this lane, and as nothing else.
+            # A rotation that has not been closed: one that died, or one that
+            # lived and left this second giving-back to us. The marker's one line
+            # is read as the NAME of an archive in this lane, and as nothing else.
             if [[ -f "$_owes" ]]; then
                 _name=""
                 IFS= builtin read -r _name < "$_owes" 2>/dev/null
@@ -158,31 +177,33 @@ _cpb_rotate() {
             # never over an archive that exists (same shell, same second): the
             # next shell rotates, under another name
             [[ ! -e "$_arch" ]] || exit 0
+            # the marker and the prepared file are made ANEW: whatever has that
+            # name is removed, and under noclobber `>` creates only what is absent
+            # — it never opens what a link under that name points to
+            command rm -f "$_owes" "$_new" 2>/dev/null
+            set -C
             builtin printf '%s\n' "${_arch##*/}" > "$_owes" 2>/dev/null || exit 0
-
-            _renamed=0
-            if [[ "$_flock" -eq 1 ]]; then
-                if ! _carried "$_hist" > "$_new" 2>/dev/null; then
-                    # the lines could not be read out whole: the history stays as it is
-                    command rm -f "$_new" "$_owes" 2>/dev/null
+            _carried "$_hist" > "$_new" 2>/dev/null
+            _rc=$?
+            set +C
+            if [[ "$_rc" -ne 0 ]]; then
+                # the lines could not be read out whole: the history stays as it is
+                command rm -f "$_new" "$_owes" 2>/dev/null
+                exit 0
+            fi
+            if command ln "$_hist" "$_arch" 2>/dev/null; then
+                command mv -f "$_new" "$_hist" 2>/dev/null
+                # read off the files, not off `mv`: a rename that happened and
+                # then reported failure has left the archive as the ONLY name of
+                # the old history
+                if [[ "$_hist" -ef "$_arch" ]]; then
+                    command rm -f "$_new" "$_arch" "$_owes" 2>/dev/null
                     exit 0
                 fi
-                if command ln "$_hist" "$_arch" 2>/dev/null; then
-                    command mv -f "$_new" "$_hist" 2>/dev/null
-                    # read off the files, not off `mv`: a rename that happened and
-                    # then reported failure has left the archive as the ONLY name
-                    # of the old history
-                    if [[ "$_hist" -ef "$_arch" ]]; then
-                        command rm -f "$_new" "$_arch" "$_owes" 2>/dev/null
-                        exit 0
-                    fi
-                    _renamed=1
-                fi
-            fi
-            if [[ "$_renamed" -ne 1 ]]; then
-                # no hard link on this filesystem, or no lock to be had: moved
-                # away, then given back — the marker is what makes a death
-                # between the two something the next shell repairs
+            else
+                # no hard link on this filesystem: moved away, then given back —
+                # the marker is what makes a death between the two something the
+                # next shell repairs
                 command rm -f "$_new" 2>/dev/null
                 command mv -f "$_hist" "$_arch" 2>/dev/null
                 if [[ ! -f "$_arch" ]]; then
@@ -193,7 +214,9 @@ _cpb_rotate() {
             # the live name is another file now: its lock, before anything is
             # given back. If another shell has it, it has seen the marker.
             _take || exit 0
-            _deliver "$_arch" && command rm -f "$_owes" 2>/dev/null
+            _deliver "$_arch"
+            # … and the marker stays: the next shell gives back once more (a
+            # line that was in flight at the rename) and is the one to remove it
             exit 0
         )
     } 2>/dev/null || true
@@ -347,8 +370,9 @@ _cpb_log_cmd() {
                 # (panel r2): retro opens each task's window at its EARLIEST
                 # activation and reads only the live file, so archiving the
                 # active task's activation made its window vanish.
-                # The marker of a rotation that did not get to its end (a
-                # builtin test, no fork) sends this shell to finish it.
+                # The marker of a rotation that has not been closed — one that
+                # died, or the one before this shell, which leaves it a second
+                # giving-back — sends this shell there (a builtin test, no fork).
                 local _big=""
                 if [[ -f "$_lane/bash_history.archived-owes" ]]; then
                     _big=owed

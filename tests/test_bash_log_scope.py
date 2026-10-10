@@ -24,6 +24,15 @@ from tests._bashcheck import bash_or_skip
 BL = Path(__file__).resolve().parent.parent / "plugins" / "playbook" / "scripts" / "bash-log.sh"
 
 
+def _archives_in(lane):
+    """The archives of a lane. Not the marker a rotation leaves for the next shell
+    (`bash_history.archived-owes` — it carries an archive's prefix so that the
+    seeded ignore block and the judges' read mask cover it), and not a file still
+    in preparation (`….new`)."""
+    return sorted(p for p in lane.iterdir() if p.name.startswith("bash_history.archived-")
+                  and p.name != "bash_history.archived-owes" and not p.name.endswith(".new"))
+
+
 class BashLogScope(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -148,7 +157,7 @@ class BashLogScope(unittest.TestCase):
         with open(other_hist, "wb") as fh:
             fh.truncate(51 * 1024 * 1024)
         self._bash('echo here >/dev/null; cd "$O"; echo there >/dev/null', {"O": str(other)})
-        self.assertTrue([p for p in other_hist.parent.iterdir() if p.name.startswith("bash_history.archived-")])
+        self.assertTrue(_archives_in(other_hist.parent))
         self.assertLess(other_hist.stat().st_size, 1024 * 1024)
 
     def test_rotation_carries_the_task_activations_forward(self):
@@ -175,13 +184,13 @@ class BashLogScope(unittest.TestCase):
         r = self._bash("set -euo pipefail; echo rotate-errexit >/dev/null; echo still-alive")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("still-alive", r.stdout)
-        self.assertTrue([p for p in self.hist.parent.iterdir() if p.name.startswith("bash_history.archived-")])
+        self.assertTrue(_archives_in(self.hist.parent))
 
     def test_a_history_past_50_mb_is_rotated(self):
         with open(self.hist, "wb") as fh:
             fh.truncate(51 * 1024 * 1024)
         self._bash("echo rotate >/dev/null")
-        archived = [p.name for p in self.hist.parent.iterdir() if p.name.startswith("bash_history.archived-")]
+        archived = [p.name for p in _archives_in(self.hist.parent)]
         self.assertEqual(len(archived), 1, archived)
         # The archive IS the old history (panel r1 P9), not an empty stand-in.
         self.assertEqual((self.hist.parent / archived[0]).stat().st_size, 51 * 1024 * 1024)
@@ -246,9 +255,7 @@ class RotationIsOneAtATimeAndLosesNoActivation(unittest.TestCase):
         self.assertGreater(self.hist.stat().st_size, 50 * 1024 * 1024)
 
     def _archives(self):
-        return sorted(p for p in self.hist.parent.iterdir()
-                      if p.name.startswith("bash_history.archived-") and not p.name.endswith(".new")
-                      and p.name != "bash_history.archived-owes")
+        return _archives_in(self.hist.parent)
 
     def _leftovers(self):
         return sorted(p.name for p in self.hist.parent.iterdir() if p.name.endswith(".new"))
@@ -430,14 +437,17 @@ fi""")
 
     # -- (2) a rotation that dies ---------------------------------------------------------
     def test_a_rotation_that_dies_at_any_step_leaves_the_activations_in_the_live_file(self):
-        dies = 'case "$*" in *{mark}*) exit 137 ;; esac'       # gone, as a killed process is, having done nothing
-        for tool, mark in (("grep", "tasks"), ("tail", "5242880"), ("ln", "bash_history.archived-"),
+        # gone, as a killed process is, having done nothing but leave word that it was here
+        dies = 'case "$*" in *{mark}*) : > "{died}"; exit 137 ;; esac'
+        for tool, mark in (("grep", "tasks"), ("tail", "5242881"), ("ln", "bash_history.archived-"),
                            ("mv", "bash_history.archived-")):
             with self.subTest(dies_at=tool):
                 self.setUp()
                 self._big_history()
-                self._shim(tool, dies.format(mark=mark))
+                died = Path(self._tmp.name) / "died"
+                self._shim(tool, dies.format(mark=mark, died=died))
                 r = self._bash("set -e; echo while-it-died >/dev/null; echo still-alive", shims=True)
+                self.assertTrue(died.exists(), f"the case under test: `{tool}` was never called that way")
                 self.assertEqual(r.returncode, 0, r.stderr)
                 self.assertIn("still-alive", r.stdout)
                 self.assertEqual(r.stderr, "")
@@ -631,7 +641,8 @@ esac""")
         # and that script may define functions called `mv`, `grep`, `rm` …
         self._big_history()
         hijack = "; ".join(f"{t}() {{ echo hijacked-{t}; return 0; }}" for t in
-                           ("mv", "grep", "ln", "tail", "cat", "rm", "wc", "flock", "find", "printf", "read"))
+                           ("mv", "grep", "ln", "tail", "cat", "rm", "wc", "flock", "find", "printf", "read",
+                            "mktemp"))
         r = self._bash(hijack + "; echo first >/dev/null; echo still-alive")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stdout.strip(), "still-alive")            # none of them ran, nothing printed
@@ -769,6 +780,86 @@ esac""")
         self.assertIn(whole[:-12], lines)                              # the piece stays, on its own line
         self.assertFalse(self.owes.exists())
 
+    # -- the lane is a directory a cloned repository can fill ---------------------------------
+    # `.agent/` comes with the project. A marker, an archive and symbolic links can be
+    # shipped in it; the first shell that logs there acts on the marker. Nothing it
+    # writes may go through a link to somewhere else. (Found by the builder after
+    # impl panel round 2, before the single judge: with the marker, the names the
+    # rotation writes to are names somebody else can have chosen.)
+    def _planted(self, line="666"):
+        """A marker and the archive it names, as a hostile checkout would ship them;
+        and a file outside the lane that must stay as it is."""
+        victim = Path(self._tmp.name) / "victim"
+        victim.write_text("keep\n", encoding="utf-8")
+        archive = self.hist.parent / "bash_history.archived-20260101-000000-1"
+        archive.write_text(f"echo planted-by-the-repository # | AGENT | tasks work {line}\n", encoding="utf-8")
+        self.owes.write_text(archive.name + "\n", encoding="utf-8")
+        return victim, archive
+
+    def test_what_is_given_back_is_not_written_through_a_planted_link(self):
+        victim, archive = self._planted()
+        self.hist.write_text(f"2026-09-20 10:00:00{self.ACTIVATION}7\n", encoding="utf-8")
+        for suffix in (".owed.new", ".held.new", ".new"):
+            (self.hist.parent / (archive.name + suffix)).symlink_to(victim)
+        r = self._bash("set -e; echo a-line >/dev/null; echo still-alive")
+        self.assertIn("still-alive", r.stdout)
+        self.assertEqual(victim.read_text(encoding="utf-8"), "keep\n", "a file outside the lane was written to")
+
+    def test_a_history_that_is_a_link_is_neither_rotated_nor_given_to(self):
+        victim, archive = self._planted()
+        self.hist.symlink_to(victim)
+        r = self._bash("set -e; echo a-line >/dev/null; echo still-alive")
+        self.assertIn("still-alive", r.stdout)
+        self.assertNotIn("planted-by-the-repository", victim.read_text(encoding="utf-8"),
+                         "the planted archive's lines were appended through the link")
+        self.assertTrue(self.owes.exists())                      # nothing was settled
+        self.assertTrue(archive.exists())
+        self.assertTrue(self.hist.is_symlink())
+
+    def test_a_history_that_is_a_dangling_link_makes_no_file_elsewhere(self):
+        elsewhere = Path(self._tmp.name) / "not-there"
+        self._planted()
+        self.hist.symlink_to(elsewhere)
+        r = self._bash("set -e; echo still-alive")              # nothing logged: only the rotation's doing
+        self.assertIn("still-alive", r.stdout)
+        if elsewhere.exists():                                   # the logger's own line (older than this task) may
+            self.assertNotIn("planted-by-the-repository", elsewhere.read_text(encoding="utf-8"))   # make it; the archive's must not be in it
+        self.assertTrue(self.owes.exists())
+
+    def test_the_marker_is_not_written_through_a_planted_link(self):
+        elsewhere = Path(self._tmp.name) / "not-there"
+        self._big_history()
+        self.owes.symlink_to(elsewhere)                          # dangling: not a file, so nothing to settle
+        r = self._bash("set -e; echo rotate >/dev/null; echo still-alive")
+        self.assertIn("still-alive", r.stdout)
+        self.assertFalse(elsewhere.exists(), "the marker was written through the link")
+        (archive,) = self._archives()
+        self.assertFalse(self.owes.is_symlink())
+        self.assertEqual(self.owes.read_text(encoding="utf-8"), archive.name + "\n")
+        self.assertEqual(self._live_activations(), ["7", "8"])
+        self._settled()
+
+    def test_the_prepared_file_is_not_written_through_a_planted_link(self):
+        # the prepared file's name is the second and the shell's pid — made known here
+        # the way the archive-exists test does it
+        victim = Path(self._tmp.name) / "victim"
+        victim.write_text("keep\n", encoding="utf-8")
+        self._big_history()
+        self._shim("date", 'case "$*" in *%Y%m%d-%H%M%S*) echo 20260101-000000; exit 0 ;; esac')
+        elsewhere = Path(self._tmp.name) / "elsewhere"
+        elsewhere.mkdir()
+        planted = f'"{self.hist.parent}/bash_history.archived-20260101-000000-$$.new"'
+        r = subprocess.run([bash_or_skip(), "-c",
+                            f"ln -s '{victim}' {planted}; cd '{self.proj}'; set -e; "
+                            "echo in-the-project >/dev/null; echo still-alive"],
+                           cwd=elsewhere, env=self._env(shims=True), capture_output=True, text=True, timeout=120)
+        self.assertIn("still-alive", r.stdout)
+        self.assertEqual(victim.read_text(encoding="utf-8"), "keep\n", "a file outside the lane was written to")
+        self.assertFalse(self.hist.is_symlink(), "the live history became a link to it")
+        self.assertEqual(self._live_activations(), ["7", "8"])
+        self.assertEqual(len(self._archives()), 1)
+        self._settled()
+
     # -- where the new sequence cannot run ------------------------------------------------------
     def _path_without(self, tool):
         """A PATH holding every command of the real one except `tool`."""
@@ -869,10 +960,8 @@ class RotationArchiveIsIgnored(unittest.TestCase):
                         # the file a rotation prepares beside the history (task 174)
                         ".agent/bash_history.archived-20260924-101010-42.new",
                         ".agent/alice/bash_history.archived-20260924-101010-42.new",
-                        # … what it reads out while it gives lines back, and the marker
-                        # that says an archive still owes some (impl panel round 1)
-                        ".agent/bash_history.archived-20260924-101010-42.owed.new",
-                        ".agent/bash_history.archived-20260924-101010-42.held.new",
+                        # … and the marker that says an archive still owes some
+                        # (impl panel round 1)
                         ".agent/bash_history.archived-owes",
                         ".agent/alice/bash_history.archived-owes"):
                 r = subprocess.run([git, "-C", str(repo), "check-ignore", "-q", rel])
