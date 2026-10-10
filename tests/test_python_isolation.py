@@ -40,6 +40,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -180,19 +181,81 @@ class WhatTheLaunchersHandToPython(_Project):
         self.assertEqual(args[:2], ["-I", "-c"])
         self.assertIn('runpy.run_module("tasks.cli"', args[2])
         self.assertEqual(args[3:], [str(PLUGIN), "work", "two words", "--flag"])
-        # still exported, for whatever the CLI starts — the CLI itself no longer reads it
-        self.assertEqual(pypath, f"PYTHONPATH={PLUGIN}")
+        # NOT exported any more (task 180, PLAN S11 item 20): the plugin's packages are
+        # called `tasks` and `provider`, and everything the CLI starts — a project's own
+        # verify command among them — was handed them in front of its own
+        self.assertEqual(pypath, "PYTHONPATH=<unset>")
 
-    def test_the_users_own_pythonpath_is_still_passed_on(self):
-        pypath, _ = self._given(SCRIPTS / "tasks", "list", PYTHONPATH="/somewhere/else")
-        self.assertEqual(pypath, f"PYTHONPATH={PLUGIN}{os.pathsep}/somewhere/else")
+    def test_the_users_own_pythonpath_is_passed_on_as_it_was(self):
+        for launcher, arg in ((SCRIPTS / "tasks", "list"), (SCRIPTS / "sandbox", "--list-agents")):
+            for mine in ("/somewhere/else", f"/a{os.pathsep}/b", ""):
+                with self.subTest(launcher=launcher.name, mine=mine):
+                    try:
+                        pypath, _ = self._given(launcher, arg, PYTHONPATH=mine)
+                    finally:
+                        shutil.rmtree(self.base / "fakebin", ignore_errors=True)
+                    self.assertEqual(pypath, f"PYTHONPATH={mine}")
 
     def test_the_sandbox_launcher(self):
         pypath, args = self._given(SCRIPTS / "sandbox", "--list-agents")
         self.assertEqual(args[:2], ["-I", "-c"])
         self.assertIn('runpy.run_module("provider.sandbox"', args[2])
         self.assertEqual(args[3:], [str(PLUGIN), "--list-agents"])
-        self.assertEqual(pypath, f"PYTHONPATH={PLUGIN}")
+        self.assertEqual(pypath, "PYTHONPATH=<unset>")
+
+    def test_the_monitor_launcher_exports_nothing_either(self):
+        # its two launch lines would start an agent; what they say is read from the file
+        text = (SCRIPTS / "monitor-lib" / "launch-monitor").read_text(encoding="utf-8")
+        self.assertEqual(text.count("python3 -I -c 'import runpy"), 2)
+        self.assertNotIn("PYTHONPATH=", "\n".join(ln for ln in text.split("\n") if not ln.lstrip().startswith("#")))
+
+
+class WhatTheCliStartsIsNotHandedThePluginsPackages(_Project):
+    """Item (20), through the real launcher: a project with its OWN package called `tasks`,
+    which its verify command reaches through the user's PYTHONPATH. The launcher used to
+    put the plugin's directory in FRONT of that path for every child, so the project's
+    check imported the plugin's `tasks` and the close failed — or, with a check that only
+    imports, passed against the wrong code."""
+
+    def setUp(self):
+        super().setUp()
+        p = self.project
+        subprocess.run(["git", "init", "-q", str(p)], check=True)
+        (p / "tasks").mkdir()
+        (p / "tasks" / "__init__.py").write_text('WHO = "the project"\n', encoding="utf-8")
+        (p / "tools").mkdir()
+        (p / "tools" / "check.py").write_text(
+            "import sys\nimport tasks\n"
+            'print("imported:", getattr(tasks, "WHO", tasks.__file__))\n'
+            'sys.exit(0 if getattr(tasks, "WHO", None) == "the project" else 1)\n', encoding="utf-8")
+        (p / ".agent" / "tasks" / "001-t").mkdir(parents=True)
+        (p / ".agent" / "config.json").write_text(
+            json.dumps({"verify": "python3 tools/check.py", "panel_required_for": []}), encoding="utf-8")
+        (p / ".agent" / "tasks" / "001-t" / "task.md").write_text(
+            "# 001 - T\n\n## Status\npending\n\n## Risk\nreversible\n\n## Work Plan\n- [x] G1: do it\n",
+            encoding="utf-8")
+
+    def _cli(self, *args, **extra):
+        return self.run_in(self.project, [bash_or_skip(), SCRIPTS / "tasks", *args],
+                           PLAYBOOK_SESSION_ID="pid-180", **extra)
+
+    def test_the_check_is_what_this_test_thinks_it_is(self):
+        # CONTROL, outside the CLI: with the user's path the project's package is found;
+        # with the plugin's directory in front of it — what the launcher did — it is not
+        mine = self.run_in(self.project, [sys.executable, "tools/check.py"], PYTHONPATH=str(self.project))
+        self.assertEqual((mine.returncode, mine.stdout.strip()), (0, "imported: the project"), mine.stderr)
+        theirs = self.run_in(self.project, [sys.executable, "tools/check.py"],
+                             PYTHONPATH=f"{PLUGIN}{os.pathsep}{self.project}")
+        self.assertEqual(theirs.returncode, 1, theirs.stdout)
+        self.assertIn(str(PLUGIN / "tasks" / "__init__.py"), theirs.stdout)
+
+    def test_a_close_runs_the_projects_check_against_the_projects_package(self):
+        r = self._cli("work", "1", PYTHONPATH=str(self.project))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r = self._cli("work", "done", PYTHONPATH=str(self.project))
+        self.assertIn("Task 001 done.", r.stdout, r.stdout[-800:] + r.stderr[-800:])
+        receipt = (self.project / ".agent" / "tasks" / "001-t" / "task.md").read_text(encoding="utf-8")
+        self.assertIn("python3 tools/check.py", receipt)
 
 
 # --------------------------------------------------------------------------- #
@@ -300,12 +363,9 @@ class AHooksInlineReadIgnoresProjectFiles(_Project):
 
 
 class HelpersRunAsFilesAreNotGivenTheWorkingDirectory(_Project):
-    """The control behind leaving every `python3 <file>` call as it is: for a file,
-    Python puts the FILE's directory first, not the working directory.
-
-    That is ALL it shows. A helper run as a file still reads PYTHONPATH, and
-    PYTHONPATH comes before the standard library — the last test here shows what
-    that means when the user's own PYTHONPATH covers the project (impl panel r1)."""
+    """For a file, Python puts the FILE's directory first, not the working directory —
+    the reason task 167 left every `python3 <file>` call as it was. What that left open
+    is in the next class."""
 
     def setUp(self):
         super().setUp()
@@ -324,26 +384,110 @@ class HelpersRunAsFilesAreNotGivenTheWorkingDirectory(_Project):
         r = self.run_in(self.project, [sys.executable, SCRIPTS / "task-status.py", task])
         self.assertEqual((r.returncode, r.stdout.strip()), (0, "in_progress"), r.stderr)
 
-    def _guard(self, **extra):
-        payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": "rm -rf /"}})
-        return self.run_in(self.project, [bash_or_skip(), SCRIPTS / "command-guard-hook"],
-                           stdin=payload, **extra)
 
-    def test_the_command_guard_is_a_file_helper_and_is_not_given_it_either(self):
-        r = self._guard()
-        self.assertEqual(r.returncode, 2, r.stderr)
-        self.assertIn("BLOCKED", r.stdout + r.stderr)
+class AUsersPythonpathDoesNotReachTheHelpers(_Project):
+    """Item (19). A helper run as a file still read PYTHONPATH, and PYTHONPATH comes
+    before the standard library: with the user's own path covering the project (`.` —
+    direnv, an IDE's run configuration) a project file named like a module a helper
+    imports was imported in its place. At the destructive-command guard that meant
+    exit 1, which a PreToolUse hook does not take for a block. Task 167 stated it as the
+    first bound of its ledger row and pinned it here the other way round; every helper
+    is started `python3 -E -s <file>` now. Each entry point beside a control run
+    WITHOUT the variable."""
+    TRAPS = ("json.py", "os.py", "re.py", "tasks.py", "pathlib.py", "subprocess.py", "provider.py")
+    SID = "pid-180"
 
-    def test_what_the_row_admits_a_pythonpath_that_covers_the_project_still_reaches_them(self):
-        # NOT a protection: this is the bound the ledger row states, at the entry point
-        # where it costs most. With the user's PYTHONPATH naming the project (`.`), the
-        # same trap files are imported by the destructive-command guard, which then dies
-        # with exit 1 — for a PreToolUse hook that is "not blocked". Parked in task 167
-        # (fix shape: `python3 -E -s <file>`). When that lands this test must change —
-        # and the row with it.
-        r = self._guard(PYTHONPATH=".")
-        self.assertRegex(r.stdout + r.stderr, r"the project file \w+\.py was imported")
-        self.assertNotEqual(r.returncode, 2)
+    def setUp(self):
+        super().setUp()
+        self.clean = self.new_project("clean")
+        for p in (self.project, self.clean):
+            task = p / ".agent" / "tasks" / "001-real" / "task.md"
+            task.parent.mkdir(parents=True)
+            task.write_text("# 001 - real\n## Status\nin_progress\n## Work Plan\n- [ ] first gate\n", encoding="utf-8")
+            (p / ".agent" / "sessions" / self.SID).mkdir(parents=True)
+            (p / ".agent" / "sessions" / self.SID / "current_state").write_text("001\n", encoding="utf-8")
+            # activity, so that the stop hook does not leave by its conversational exit
+            # (no write and under five tool calls) before it reads the task
+            (p / ".agent" / "sessions" / self.SID / "counters").write_text("writes=9\ntools=40\n", encoding="utf-8")
+        for name in self.TRAPS:
+            _trap(self.project, name)
+
+    def _paths(self):
+        return (".", str(self.project), f"/nowhere{os.pathsep}{self.project}")
+
+    def _hook(self, project, name, payload, **extra):
+        return self.run_in(project, [bash_or_skip(), SCRIPTS / name], stdin=json.dumps(payload),
+                           PLAYBOOK_SESSION_ID=self.SID, **extra)
+
+    def test_the_command_guard_still_blocks(self):
+        payload = {"tool_name": "Bash", "tool_input": {"command": "rm -rf /"}}
+        clean = self._hook(self.clean, "command-guard-hook", payload)
+        self.assertEqual(clean.returncode, 2, clean.stderr)                    # the control
+        self.assertIn("BLOCKED", clean.stdout + clean.stderr)
+        for path in self._paths():
+            with self.subTest(PYTHONPATH=path):
+                r = self._hook(self.project, "command-guard-hook", payload, PYTHONPATH=path)
+                self.assertNotIn("was imported", r.stdout + r.stderr)
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn("BLOCKED", r.stdout + r.stderr)
+
+    def test_the_edit_gate_lets_an_authorized_edit_through(self):
+        # it failed CLOSED here: the status reader died and every edit was refused
+        def edit(project, **extra):
+            return self._hook(project, "task-gate-hook",
+                              {"tool_name": "Edit", "tool_input": {"file_path": str(project / "src" / "main.py")}},
+                              **extra)
+        clean = edit(self.clean)
+        self.assertEqual(clean.returncode, 0, clean.stderr)                    # the control
+        for path in self._paths():
+            with self.subTest(PYTHONPATH=path):
+                r = edit(self.project, PYTHONPATH=path)
+                self.assertEqual((r.returncode, r.stderr), (0, clean.stderr), r.stdout)
+
+    def test_the_stop_hook_reads_the_task_as_it_does_without_it(self):
+        clean = self._hook(self.clean, "stop-hook", {"stop_hook_active": False})
+        self.assertEqual(clean.returncode, 2, clean.stderr)                    # the control: an open gate blocks
+        self.assertIn("first gate", clean.stdout + clean.stderr)
+        self.assertNotIn("could not read the task state", clean.stderr)
+        for path in self._paths():
+            with self.subTest(PYTHONPATH=path):
+                r = self._hook(self.project, "stop-hook", {"stop_hook_active": False}, PYTHONPATH=path)
+                self.assertNotIn("could not read the task state", r.stderr)
+                self.assertEqual((r.returncode, r.stdout, r.stderr.replace(str(self.project), "<P>")),
+                                 (clean.returncode, clean.stdout, clean.stderr.replace(str(self.clean), "<P>")))
+
+    def test_init_initialises_the_project(self):
+        fresh = self.new_project("fresh")
+        for name in self.TRAPS:
+            _trap(fresh, name)
+        r = self.run_in(fresh, [bash_or_skip(), SCRIPTS / "init", "proj"], PYTHONPATH=".")
+        self.assertEqual(r.returncode, 0, r.stdout[-600:] + r.stderr[-600:])
+        self.assertNotIn("was imported", r.stdout + r.stderr)
+        self.assertIn("TodoWrite", (fresh / ".claude" / "settings.json").read_text(encoding="utf-8"))
+        self.assertFalse((fresh / "__pycache__").exists(), "a project file was imported (and compiled) by init")
+
+    def test_the_command_the_codex_adapter_writes_into_a_configuration(self):
+        if str(PLUGIN) not in sys.path:
+            sys.path.insert(0, str(PLUGIN))
+        from provider import codex_hooks
+        for script in ("codex-stop-hook", "codex-user-prompt-hook", "codex-apply-patch-hook"):
+            with self.subTest(script=script):
+                cmd = codex_hooks._command_for(script)
+                self.assertEqual(cmd, f"python3 -E -s {shlex.quote(str(SCRIPTS / script))}")
+                r = self.run_in(self.project, [bash_or_skip(), "-c", cmd], stdin="{}",
+                                PYTHONPATH=".", PLAYBOOK_SESSION_ID=self.SID)
+                self.assertNotIn("was imported", r.stdout + r.stderr)
+
+    def test_the_flags_take_the_variable_away_from_one_interpreter_only(self):
+        # the merge skill's helper runs the PROJECT's commands: they must still get the
+        # user's environment — `-E` is a flag of that one interpreter, not an `env -u`
+        probe = self.base / "probe.py"
+        probe.write_text("import os, subprocess, sys\n"
+                         "print(os.environ.get('PYTHONPATH'))\n"
+                         "print(subprocess.run([sys.executable, '-c', 'import os; print(os.environ.get(\"PYTHONPATH\"))'],"
+                         " capture_output=True, text=True).stdout.strip())\n", encoding="utf-8")
+        r = self.run_in(self.clean, [sys.executable, "-E", "-s", probe], PYTHONPATH="/mine")
+        self.assertEqual(r.stdout.split(), ["/mine", "/mine"], r.stderr)
 
 
 # --------------------------------------------------------------------------- #
@@ -357,18 +501,25 @@ PLUGIN_PACKAGES = {"tasks", "provider"}
 
 _PY = re.compile(r"(?<![\w.-])python3(?![\w.-])")
 _SHORT_FLAGS = re.compile(r"-[A-Za-z]+")
+# What the interpreter is handed when it is started on a FILE of the plugin's: a
+# variable, an absolute or a dotted path, or the skill's `<…-dir>/` placeholder. A bare
+# relative path (`scripts/verify`) is a PROJECT's own file in the texts that suggest a
+# command, and is not this rule's.
+_FILE_START = re.compile(r"""["']?(?:\$|/|\./|\.\./|~/|<[\w-]+>/)""")
 
 
 def calls_on(line: str) -> list[tuple[str, str]]:
     """Every `python3` on one line of shell or markdown, as (kind, detail):
-    `ok-inline` (inline code or a module, isolated), `ok-runner` (a project runner),
-    `other` (a file, `--version`, prose) or `bad` (with the reason)."""
+    `ok-inline` (inline code or a module, isolated), `ok-file` (a file of the plugin's,
+    started with -E and -s, or -I), `ok-runner` (a project runner), `other` (`--version`,
+    a project's own file, prose) or `bad` (with the reason)."""
     found = []
     for m in _PY.finditer(line):
         # `"$(command -v python3)" -c …`: what closes a substitution or a quote right
         # after the word is not an argument
-        toks = line[m.end():].lstrip(")\"'`").split()
-        isolated, i, verdict = False, 0, ("other", "")
+        after = line[m.end():].lstrip(")\"'`")
+        toks = after.split()
+        isolated, no_env, no_user_site, i, verdict = False, False, False, 0, ("other", "")
         while i < len(toks):
             t = toks[i]
             if t == "\\":
@@ -380,9 +531,18 @@ def calls_on(line: str) -> list[tuple[str, str]]:
                     ("bad", "a program on stdin (`python3 -`) without -I")
                 break
             if not _SHORT_FLAGS.fullmatch(t):
-                break                                   # a file, a long option, prose
+                # a file, a long option, prose. It is a call only after whitespace
+                # (`python3/the hook scripts` is prose) and a file of the plugin's only
+                # when it begins like one (task 180)
+                if after[:1].isspace() and _FILE_START.match(t):
+                    verdict = ("ok-file", t) if isolated or (no_env and no_user_site) else \
+                        ("bad", "a file started without -E -s: the user's PYTHONPATH and site-packages "
+                                "come before the standard library for it")
+                break
             flags = t[1:]
             isolated = isolated or "I" in flags
+            no_env = no_env or "E" in flags
+            no_user_site = no_user_site or "s" in flags
             if flags[-1] == "c":
                 verdict = ("ok-inline", "-c") if isolated else ("bad", "inline code (`-c`) without -I")
                 break
@@ -443,10 +603,10 @@ def _is_python_source(path: Path, text: str) -> bool:
     return path.suffix == ".py" or (text.startswith("#!") and "python" in text.split("\n", 1)[0])
 
 
-def sweep() -> tuple[list[str], dict[str, int], dict[str, int]]:
-    """(problems, counts by kind, isolated inline calls per file) over every shipped
-    text file."""
-    problems, counts, inline = [], {}, {}
+def sweep() -> tuple[list[str], dict[str, int], dict[str, int], dict[str, int]]:
+    """(problems, counts by kind, isolated inline calls per file, isolated file calls
+    per file) over every shipped text file."""
+    problems, counts, inline, files = [], {}, {}, {}
     for path in sorted(PLUGIN.rglob("*")):
         if not path.is_file() or "__pycache__" in path.parts:
             continue
@@ -470,12 +630,14 @@ def sweep() -> tuple[list[str], dict[str, int], dict[str, int]]:
                 problems.append(f"{rel}:{n}: {detail}" if n else f"{rel}: {detail}")
             elif kind == "ok-inline":
                 inline[rel] = inline.get(rel, 0) + 1
-    return problems, counts, inline
+            elif kind == "ok-file":
+                files[rel] = files.get(rel, 0) + 1
+    return problems, counts, inline, files
 
 
 class EveryShippedInlinePythonIsIsolated(unittest.TestCase):
     def test_the_sweep_finds_nothing(self):
-        problems, _, _ = sweep()
+        problems, _, _, _ = sweep()
         self.assertEqual(problems, [], "\n" + "\n".join(problems))
 
     # Every isolated inline call the sweep sees, file by file — 55 when this was written.
@@ -508,10 +670,48 @@ class EveryShippedInlinePythonIsIsolated(unittest.TestCase):
     }
 
     def test_the_sweep_sees_every_isolated_call_file_by_file(self):
-        _, counts, inline = sweep()
+        _, counts, inline, _ = sweep()
         self.assertEqual(inline, self.ISOLATED_INLINE_CALLS)
         self.assertEqual(counts.get("ok-inline"), sum(self.ISOLATED_INLINE_CALLS.values()))
         self.assertEqual(sum(self.ISOLATED_INLINE_CALLS.values()), 55)
+
+    # Every call that starts a FILE of the plugin's, file by file — 22 when task 180
+    # isolated them (18 in the hooks and scripts, 4 that the merge skill gives the agent).
+    # The same reason as above: a rule that stopped SEEING a call would find nothing wrong.
+    ISOLATED_FILE_CALLS = {
+        "scripts/chat-log-hook": 1,
+        "scripts/command-guard-hook": 1,
+        "scripts/gate-echo-lib.sh": 1,
+        "scripts/init": 3,
+        "scripts/monitor-lib/bootstrap.sh": 2,
+        "scripts/state-echo-hook": 2,
+        "scripts/stop-hook": 1,
+        "scripts/task-gate-hook": 7,
+        "skills/merge/SKILL.md": 4,
+    }
+
+    def test_the_sweep_sees_every_file_call_file_by_file(self):
+        _, counts, _, files = sweep()
+        self.assertEqual(files, self.ISOLATED_FILE_CALLS)
+        self.assertEqual(counts.get("ok-file"), sum(self.ISOLATED_FILE_CALLS.values()))
+        self.assertEqual(sum(self.ISOLATED_FILE_CALLS.values()), 22)
+
+    def test_no_shipped_python_source_starts_a_file_through_an_argv_list(self):
+        # the sweep reads an argv list only for its mode flag; a list that hands the
+        # interpreter a FILE would be `other` and unjudged. There is none — one command is
+        # built as a string instead (`provider/codex_hooks._command_for`, tested above).
+        seen = []
+        for path in sorted(PLUGIN.rglob("*")):
+            if not path.is_file() or "__pycache__" in path.parts:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue
+            if _is_python_source(path, text):
+                seen += [f"{path.relative_to(PLUGIN).as_posix()}: {' '.join(m.group(0).split())[:90]}"
+                         for m in _ARGV.finditer(text) if argv_lists_in(m.group(0)) == [("other", "")]]
+        self.assertEqual(seen, [])
 
     def test_no_shipped_script_reaches_python_through_a_variable(self):
         # the sweep reads the word `python3`; a call through a variable would be unseen
@@ -567,6 +767,16 @@ class TheSweepsRule(unittest.TestCase):
             "python3 -c 'a' && python3 -I -c 'b'",
             '"$(command -v python3)" -c \'pass\'',
             "python3 -E -s -c 'pass'",                  # -E and -s do not remove the working directory
+            # task 180: a FILE of the plugin's without -E and -s
+            'python3 "$HOOK_DIR/task-status.py" "$RESOLVED"',
+            'exec python3 "$GUARD"',
+            "python3 $MONITOR_SRC/sensor.py $JSONL --wait-once",
+            "> running it: `python3 <this-skill-dir>/merge-verify.py --plan` — exit 4 means",
+            'python3 -E "$HOOK_DIR/task-status.py"',    # one of the two is not enough
+            'python3 -s "$HOOK_DIR/task-status.py"',
+            'python3 -B /opt/playbook/scripts/write_log.py',
+            "python3 ./helper.py",
+            'X=$(printf %s "$IN" | PB_PROJECT="$P" python3 "$HOOK_DIR/task-dir-target.py" --creates)',
         ):
             self.assertIn("bad", self._kinds(line), line)
 
@@ -578,8 +788,17 @@ class TheSweepsRule(unittest.TestCase):
             ("python3 -Ic 'pass'", ["ok-inline"]),
             ("python3 -I -X utf8 -c 'pass'", ["ok-inline"]),
             ("python3 -I -m json.tool", ["ok-inline"]),
-            ('python3 "$HOOK_DIR/task-status.py" "$RESOLVED"', ["other"]),
-            ('exec python3 "$GUARD"', ["other"]),
+            ('python3 -E -s "$HOOK_DIR/task-status.py" "$RESOLVED"', ["ok-file"]),
+            ('exec python3 -E -s "$GUARD"', ["ok-file"]),
+            ('python3 -Es "$HOOK_DIR/task-status.py"', ["ok-file"]),
+            ('python3 -s -B -E $MONITOR_SRC/sensor.py $JSONL', ["ok-file"]),
+            ('python3 -I "$HOOK_DIR/task-status.py"', ["ok-file"]),
+            ("( python3 -E -s <this-skill-dir>/merge-verify.py; echo x )", ["ok-file"]),
+            # prose that names the interpreter beside something path-like is not a call
+            ("Retry the tool call after restoring python3/the Playbook hook scripts.", ["other"]),
+            ("could not read the task state via python3 ($HOOK_DIR/task-status.py --fields) — treating", ["other"]),
+            # a PROJECT's own script, in a text that suggests a command: not the plugin's to isolate
+            ('cmd = "python3 scripts/verify"', ["other"]),
             ("echo \"found: $(python3 --version 2>&1)\"", ["other"]),
             ("Playbook needs python3 >= 3.10 — python3 is missing", ["other", "other"]),
             ("where `python3 -m pytest --version` succeeds", ["ok-runner"]),
