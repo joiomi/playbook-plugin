@@ -14,6 +14,7 @@ Run: python3 -m unittest tests.test_bash_log_scope
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -934,6 +935,176 @@ esac""")
         self.assertEqual(self._live_activations(), ["7", "8"])
         self.assertLess(self.hist.stat().st_size, 1024 * 1024)
         self._settled()
+
+
+class WhatTheLoggerStartsForEveryShellAndLine(unittest.TestCase):
+    """PLAN S11 item 26 (task 176; both found by task 174, both older than it).
+
+    The callback called two programs for its own needs — `date` for every line's stamp,
+    `find` once per shell and lane for the history's size — and a program on PATH can
+    be a bash script: a bash started with BASH_ENV inherited, i.e. a LOGGED shell,
+    whose first logged line asks for the same program. Measured on 2026-10-10 with
+    the guard these wrappers carry: 30 runs for `date`, 4 for `find`, each to the
+    guard's depth; without a guard the chain has no end.
+
+    And its append, `>> bash_history`, followed a symbolic link: `.agent/` comes with
+    the project, and the user's commands went wherever a shipped link pointed.
+
+    The wrappers below stop themselves past depth 4 using only commands the logger
+    FILTERS (`PATH=…`, `export PATH…`, `[[`, `trap …`), so the guard is never logged
+    and a red run on an unfixed logger ends by itself."""
+
+    GUARDED = """#!/bin/bash
+PATH=$PATH DEPTH=$(( ${{DEPTH:-0}} + 1 ))
+export PATH DEPTH
+[[ $DEPTH -le 4 ]] || trap - DEBUG
+[[ $DEPTH -le 4 ]] || exit 0
+echo "{tool} wrapper at depth $DEPTH" >> "{seen}"
+exec "{real}" "$@"
+"""
+    STAMPED = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \| AGENT \| (.*)$")
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.proj = Path(self._tmp.name) / "proj"
+        (self.proj / ".agent" / "tasks").mkdir(parents=True)
+        self.hist = self.proj / ".agent" / "bash_history"
+        self.bindir = Path(self._tmp.name) / "shims"
+        self.bindir.mkdir()
+        self.seen = Path(self._tmp.name) / "seen"
+
+    def _bash(self, script, **extra):
+        env = dict(os.environ, BASH_ENV=str(BL), PATH=f"{self.bindir}{os.pathsep}{os.environ['PATH']}")
+        for name in ("PLAYBOOK_NO_BASHLOG", "DEPTH"):
+            env.pop(name, None)
+        env.update(extra)
+        return subprocess.run([bash_or_skip(), "-c", script], cwd=self.proj, env=env,
+                              capture_output=True, text=True, timeout=120)
+
+    def _wrapper(self, tool):
+        import shutil
+        real = shutil.which(tool)
+        self.assertTrue(real, tool)
+        (self.bindir / tool).write_text(self.GUARDED.format(tool=tool, seen=self.seen, real=real), encoding="utf-8")
+        (self.bindir / tool).chmod(0o755)
+
+    def _depths(self):
+        lines = self.seen.read_text(encoding="utf-8").splitlines() if self.seen.exists() else []
+        return [int(ln.rsplit(" ", 1)[1]) for ln in lines]
+
+    def _logged(self):
+        text = self.hist.read_text(encoding="utf-8", errors="replace") if self.hist.exists() else ""
+        return [self.STAMPED.match(ln) for ln in text.splitlines()]
+
+    # -- the stamp ------------------------------------------------------------------------
+    def test_a_line_is_stamped_without_starting_date(self):
+        import shutil
+        from datetime import datetime
+        calls = Path(self._tmp.name) / "date-calls"
+        (self.bindir / "date").write_text(
+            f'#!/bin/sh\necho called >> "{calls}"\nexec "{shutil.which("date")}" "$@"\n', encoding="utf-8")
+        (self.bindir / "date").chmod(0o755)
+        before = datetime.now().replace(microsecond=0)
+        r = self._bash("set -e; echo one >/dev/null; echo two >/dev/null; echo still-alive")
+        self.assertEqual(r.stdout.strip(), "still-alive", r.stderr)
+        self.assertEqual(r.stderr, "")
+        self.assertFalse(calls.exists(), "a `date` program was started for a stamp")
+        logged = self._logged()
+        self.assertTrue(logged and all(logged), self.hist.read_text(encoding="utf-8"))
+        self.assertEqual([m.group(2) for m in logged][-3:],
+                         ["echo one > /dev/null", "echo two > /dev/null", "echo still-alive"])
+        for m in logged:
+            stamp = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")
+            self.assertLessEqual(abs((stamp - before).total_seconds()), 10, m.group(1))
+
+    def test_the_stamp_is_local_time_and_follows_tz(self):
+        # a control: what the stamp SAYS did not change (owner D4: local time). It
+        # holds on the logger that called `date`, too.
+        from datetime import datetime
+        try:
+            from zoneinfo import ZoneInfo
+            far = ZoneInfo("Pacific/Kiritimati")                     # UTC+14: never the host's hour by chance
+        except Exception as exc:                                     # no tz database on this host
+            self.skipTest(f"zoneinfo: {exc}")
+        now = datetime.now(far).replace(tzinfo=None, microsecond=0)
+        self._bash("echo set-outside >/dev/null", TZ="Pacific/Kiritimati")
+        self._bash("export TZ=Pacific/Kiritimati; echo set-inside >/dev/null", TZ="UTC")
+        stamps = {m.group(2): datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S") for m in self._logged() if m}
+        for command in ("echo set-outside > /dev/null", "echo set-inside > /dev/null"):
+            self.assertIn(command, stamps)
+            self.assertLessEqual(abs((stamps[command] - now).total_seconds()), 10, (command, stamps[command], now))
+
+    def test_where_bash_cannot_stamp_date_is_started_unlogged(self):
+        # A shell where bash's own printf is not to be had — a bash older than 4.2, or,
+        # as here, a script that switched the builtin off — still gets its stamp from
+        # `date`. Started with logging off: a wrapper runs once for a line, and is
+        # not a logged shell.
+        self._wrapper("date")
+        r = self._bash("enable -n printf; echo one >/dev/null; echo two >/dev/null; echo still-alive")
+        self.assertEqual(r.stdout.strip(), "still-alive", r.stderr)
+        self.assertEqual(self._depths(), [1, 1, 1], "one run for each of the three lines after the builtin went")
+        logged = self._logged()
+        self.assertTrue(logged and all(logged), self.hist.read_text(encoding="utf-8"))
+        self.assertEqual([m.group(2) for m in logged],
+                         ["enable -n printf", "echo one > /dev/null", "echo two > /dev/null", "echo still-alive"])
+
+    # -- the first look -------------------------------------------------------------------
+    def test_a_bash_wrapper_for_find_is_started_once_and_unlogged(self):
+        self.hist.write_text("2026-10-10 10:00:00 | AGENT | echo earlier\n", encoding="utf-8")   # a look needs a history
+        self._wrapper("find")
+        r = self._bash("set -e; echo one >/dev/null; echo two >/dev/null; echo still-alive")
+        self.assertEqual(r.stdout.strip(), "still-alive", r.stderr)
+        self.assertEqual(self._depths(), [1], "once for this shell and lane, and never from inside itself")
+        self.assertEqual([m.group(2) for m in self._logged()],
+                         ["echo earlier", "set -e", "echo one > /dev/null", "echo two > /dev/null", "echo still-alive"])
+
+    # -- the append -----------------------------------------------------------------------
+    def test_nothing_is_appended_through_a_history_that_is_a_link(self):
+        victim = Path(self._tmp.name) / "victim"
+        victim.write_text("keep\n", encoding="utf-8")
+        self.hist.symlink_to(victim)
+        r = self._bash("set -e; echo a-line >/dev/null; echo still-alive")
+        self.assertEqual(r.stdout.strip(), "still-alive", r.stderr)
+        self.assertEqual(r.stderr, "")
+        self.assertEqual(victim.read_text(encoding="utf-8"), "keep\n", "the user's commands were written through the link")
+        self.assertTrue(self.hist.is_symlink())
+
+    def test_a_history_that_is_a_dangling_link_makes_no_file(self):
+        elsewhere = Path(self._tmp.name) / "not-there"
+        self.hist.symlink_to(elsewhere)
+        r = self._bash("set -e; echo a-line >/dev/null; echo still-alive")
+        self.assertEqual(r.stdout.strip(), "still-alive", r.stderr)
+        self.assertEqual(r.stderr, "")
+        self.assertFalse(elsewhere.exists(), "the append made the file the link points to")
+
+    def test_a_lane_that_is_a_real_file_is_logged_as_ever(self):
+        # the control of the two above: the same commands, an ordinary history
+        self.hist.write_text("", encoding="utf-8")
+        self._bash("set -e; echo a-line >/dev/null; echo still-alive")
+        self.assertEqual([m.group(2) for m in self._logged()], ["set -e", "echo a-line > /dev/null", "echo still-alive"])
+
+    # -- a builtin the rotation leans on, switched off by the host's script -----------------
+    def test_what_is_owed_is_given_whole_where_the_script_switched_printf_off(self):
+        # Found while writing the test above: the giving-back puts a line of its own in
+        # front of what it reads (bash's printf) for the second `tail` to drop. With
+        # the builtin off nothing was put there — and the line dropped was the first
+        # one owed.
+        archive = self.hist.parent / "bash_history.archived-20260101-000000-1"
+        archive.write_text("2026-09-20 10:00:00 | AGENT | .claude/bin/tasks work 7\n"
+                           "2026-09-20 10:00:01 | AGENT | .claude/bin/tasks work 8\n", encoding="utf-8")
+        self.hist.write_text("2026-10-10 10:00:00 | AGENT | echo earlier\n", encoding="utf-8")
+        (self.hist.parent / "bash_history.archived-owes").write_text(archive.name + "\n", encoding="utf-8")
+        elsewhere = Path(self._tmp.name) / "elsewhere"
+        elsewhere.mkdir()
+        env = dict(os.environ, BASH_ENV=str(BL))
+        env.pop("PLAYBOOK_NO_BASHLOG", None)
+        r = subprocess.run([bash_or_skip(), "-c", f"enable -n printf; cd '{self.proj}'; echo in-the-project >/dev/null; echo still-alive"],
+                           cwd=elsewhere, env=env, capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.stdout.strip(), "still-alive", r.stderr)
+        given = [m.group(2) for m in self._logged() if m and "tasks work" in m.group(2)]
+        self.assertEqual(given, [".claude/bin/tasks work 7", ".claude/bin/tasks work 8"])
+        self.assertFalse((self.hist.parent / "bash_history.archived-owes").exists())
 
 
 class RotationArchiveIsIgnored(unittest.TestCase):
