@@ -13,11 +13,13 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   a turn. Measured on a live session: a notification took a turn from 20 tool calls to 0 between two of its calls,
   so a stop right after it would have been let through with every gate open. Now a prompt that begins with
   `<task-notification>` or `[SYSTEM NOTIFICATION` changes no count. One exception, as decided: a turn that a
-  notification *started* — the previous turn had ended — may end if it made no write (no `Edit`, `Write` or `Bash`
-  call), however many read-only calls it made; with one write it is held like any other. The echo of a command you
-  ran yourself (a slash command, a `!` command) still starts a fresh count. The same reset also let a notification
-  between two batch ticks of gates free the second one; that is closed by the same change. (Claude Code only — the
-  experimental codex hook path has no notification handling and is unchanged.)
+  notification *started* — the previous turn had ended — may end if it made no write, however many read-only calls
+  it made; with one write it is held like any other. A write is an `Edit`, `Write`, `MultiEdit`, `NotebookEdit` or
+  `Bash` call — the middle two were not counted until now, so a turn whose only act was one of them passed for a
+  chat reply. The echo of a command you ran yourself (a slash command, a `!` command) still starts a fresh count.
+  The same reset also let a notification between two batch ticks of gates free the second one; that is closed by
+  the same change. (Claude Code only — the experimental codex hook path has no notification handling and is
+  unchanged.)
 - **`tasks intent` asks before it spends** (task 173; owner decision D3-C4 of 2026-09-24). Each of its blind
   extractions is a call to the default judge, up to four per run, and the command started them at once. The bare
   command now prints which layers have evidence and one line — how many judge calls, on which judge, the time limit

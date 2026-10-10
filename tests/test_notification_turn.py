@@ -181,7 +181,7 @@ class AStopAfterANotification(_Session):
         self.assertEqual(self.stop().returncode, 0)
 
     def test_one_write_in_that_turn_and_the_stop_is_blocked(self):
-        for write in ("Bash", "Edit", "Write"):
+        for write in ("Bash", "Edit", "Write", "MultiEdit", "NotebookEdit"):
             with self.subTest(write):
                 self.a_turn_that_ended()
                 self.prompt(NOTIFICATIONS[0])
@@ -240,6 +240,18 @@ class AStopAfterANotification(_Session):
                 self.counters_file.write_text(f"tools=9\nwrites=0\nnotif_writes={junk}\n", encoding="utf-8")
                 self.assertEqual(self.stop().returncode, 2)
         self.assertFalse((self.project / "pwned").exists())
+
+    def test_every_tool_that_edits_a_file_is_a_write(self):
+        # "Zero writes" is the hook's own count. It counted Edit, Write and Bash; a
+        # MultiEdit or a NotebookEdit was a tool call but not a write, so a turn whose
+        # only act was one of them read as a chat reply and was released (task 173:
+        # the owner's exception rests on that count, so it has to count them).
+        for edit in ("MultiEdit", "NotebookEdit"):
+            with self.subTest(edit):
+                self.prompt()
+                self.tools(edit)
+                self.assertEqual(self.counts(), (1, 1))
+                self.assertEqual(self.stop().returncode, 2)
 
     def test_control_the_chat_reply_bypass_is_unchanged(self):
         self.prompt()
