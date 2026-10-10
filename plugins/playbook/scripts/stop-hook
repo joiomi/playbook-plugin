@@ -77,8 +77,11 @@ SESSION_ID="$(resolve_session_id)"
 # For the chat-log hook to tell a notification that starts a turn from one that
 # lands in the middle of one, every stop this hook lets through (exit 0, on any
 # path below) leaves the tool count of that moment in a one-line file beside the
-# counters, `turn_end`; it equals `tools` only while no tool has run since. A
-# blocked stop (exit 2) leaves nothing. Written only where a counters file
+# counters, `turn_end`; it equals `tools` only while no tool has run since. With
+# it goes a nonce made for this stop: a notification's baseline carries the nonce
+# of the mark it was taken from, and counts only beside that mark (see the
+# bypass below, and read_session_mark).
+# A blocked stop (exit 2) leaves nothing. Written only where a counters file
 # already exists, for a resolved session and a readable lane — and never INTO the
 # counters file, which a tool call's hook may be updating (impl panel r1; see
 # write_session_mark). It never changes the exit
@@ -95,7 +98,7 @@ pb_note_turn_end() {
     if [ "$rc" -eq 0 ] && [ -n "${SESSION_ID:-}" ] && [ "${MARKER_INVALID:-false}" != true ]; then
         local dir="$AGENT_DIR/sessions/$SESSION_ID"
         if [ -f "$dir/counters" ]; then
-            write_session_mark "$dir/turn_end" "$(read_counter_int "$dir/counters" tools)"
+            write_session_mark "$dir/turn_end" "$(read_counter_int "$dir/counters" tools) $(new_session_nonce)"
         fi
     fi
     return 0
@@ -300,8 +303,15 @@ if [ -f "$COUNTER_FILE" ] && [ "${PB_GREP_RC:-0}" -le 1 ]; then
     # No tool-count limit: his sentence has none. Only a plain number counts — a
     # missing, empty or malformed value releases nothing (read_session_mark; the
     # bytes are `.agent/`-resident, and `_safe_int` would read garbage as 0).
-    NOTIF_WRITES=$(read_session_mark "$SESSION_DIR/notif_start")
-    if [ -n "$NOTIF_WRITES" ] && [ "$WRITES" -eq "$((10#$NOTIF_WRITES))" ]; then
+    # And only beside the mark it was taken from: the baseline's nonce must be the
+    # nonce of `turn_end` as it stands now. A user's prompt removes that mark and
+    # a later stop replaces it, so a baseline written late — by a notification's
+    # hook that a user's prompt overtook — releases nothing (post-D6 run 1).
+    PB_NOTIF_START=$(read_session_mark "$SESSION_DIR/notif_start")
+    PB_TURN_END=$(read_session_mark "$SESSION_DIR/turn_end")
+    if [ -n "$PB_NOTIF_START" ] && [ -n "$PB_TURN_END" ] \
+       && [ "${PB_NOTIF_START#* }" = "${PB_TURN_END#* }" ] \
+       && [ "$WRITES" -eq "$((10#${PB_NOTIF_START%% *}))" ]; then
         exit 0
     fi
 fi

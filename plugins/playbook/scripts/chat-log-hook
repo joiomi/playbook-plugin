@@ -176,30 +176,19 @@ fi
 # (tagged `no-session`), but no session counters are touched.
 SESSION_ID="$(resolve_session_id)"
 [ -z "$SESSION_ID" ] && session_unresolved_notice
-# The reset a user's prompt performs and the note a notification leaves run under
-# ONE lock of the session, `marks.lock` (task 173, impl panel r2): the note reads
-# the stop hook's mark and only later writes its baseline, and a user's prompt
-# whose hook ran in between had already removed both — the baseline written after
-# it then stood in the user's own turn, which could end on it. Whichever comes
-# first now, the user's prompt has the last word. With no `flock` on the host both
-# run unlocked, as the chat log's own append does. A lock that cannot be had within
-# 5 s (a holder that hangs) is not waited for: the reset runs anyway — a prompt
-# must reset — and the note writes nothing, the stricter side.
-_reset_session() {
-    reset_counters "$1/counters"
-    # The user's prompt ends whatever a notification began.
-    rm -f "$1/turn_end" "$1/notif_start" 2>/dev/null || true
+# A user's prompt ends whatever a notification began (task 173): the stop hook's
+# mark and the notification's baseline go. Every prompt of the user's does this,
+# also the two the hook logs nothing for further down.
+drop_notification_marks() {
+    [ -n "$SESSION_ID" ] || return 0
+    rm -f "$AGENT_DIR/sessions/$SESSION_ID/turn_end" "$AGENT_DIR/sessions/$SESSION_ID/notif_start" 2>/dev/null || true
 }
 reset_session_counters() {
     [ -n "$SESSION_ID" ] || return 0
     local session_dir="$AGENT_DIR/sessions/$SESSION_ID"
     mkdir -p "$session_dir"
-    if command -v flock &>/dev/null; then
-        { ( flock -w 5 -x 204 || true; _reset_session "$session_dir" ) 204>"$session_dir/marks.lock"; } 2>/dev/null \
-            || _reset_session "$session_dir"
-    else
-        _reset_session "$session_dir"
-    fi
+    reset_counters "$session_dir/counters"
+    drop_notification_marks
 }
 # Owner's Q1 (2026-09-24; PLAN S11, task 173): an AUTOMATIC notification does not
 # reset the counters the stop hook's bypass reads. It is not the user's prompt and
@@ -209,43 +198,35 @@ reset_session_counters() {
 # gate open. The one exception he made: a turn STARTED by a notification may end
 # if it made no write. A turn started by one is told from a turn one landed in by
 # the stop hook's mark: the file `turn_end` holds the tool count at the last stop
-# it let through, so it equals `tools` only while no tool has run since. Then, and
-# only then, the write count of this moment is noted (file `notif_start`) for the
-# stop hook to compare. Otherwise nothing is written; no counters file, nothing
-# is created. A user prompt's reset removes both files.
+# it let through — it equals `tools` only while no tool has run since — and a
+# nonce made for that stop. Then, and only then, the write count of this moment
+# is noted (file `notif_start`) WITH THAT NONCE, for the stop hook to compare.
+# Otherwise nothing is written; no counters file, nothing is created.
 # The counters file is READ ONCE and never written here (impl panel r1): a tool
 # call's hook bumps `tools` and then `writes`, each by renaming a new file into
 # place, so one read is one consistent picture — it cannot show the old `tools`
 # beside the new `writes` — and nothing here can rename a stale copy over an
 # increment.
-_note_notification() {
-    local dir="$1"
+# No lock, and no order to rely on (post-D6 run 1; round 2 had a lock with a time
+# limit, and the limit was the hole): if a user's prompt removes the mark while
+# this runs, the baseline written afterwards names a mark that is gone, and the
+# stop hook honours a baseline only beside the mark with its nonce.
+note_notification() {
+    [ -n "$SESSION_ID" ] || return 0
+    local dir="$AGENT_DIR/sessions/$SESSION_ID"
     [ -f "$dir/counters" ] || return 0
-    local ended snapshot tools writes
-    ended=$(read_session_mark "$dir/turn_end")
-    [ -n "$ended" ] || return 0
+    local mark ended nonce snapshot tools writes
+    mark=$(read_session_mark "$dir/turn_end")
+    [ -n "$mark" ] || return 0
+    ended="${mark%% *}"
+    nonce="${mark#* }"
     snapshot=$(cat "$dir/counters" 2>/dev/null) || return 0
     tools=$(printf '%s\n' "$snapshot" | sed -n 's/^tools=//p' | head -1)
     writes=$(printf '%s\n' "$snapshot" | sed -n 's/^writes=//p' | head -1)
     [ "$ended" = "$tools" ] || return 0
     case "$writes" in ''|*[!0-9]*) return 0 ;; esac
-    # The mark once more, right before the baseline is published: where the lock
-    # could not serialise the two (no `flock`, or a reset that stopped waiting for
-    # it), a user's prompt that removed the mark meanwhile still wins.
-    [ "$(read_session_mark "$dir/turn_end")" = "$ended" ] || return 0
-    write_session_mark "$dir/notif_start" "$writes"
-}
-note_notification() {
-    [ -n "$SESSION_ID" ] || return 0
-    local dir="$AGENT_DIR/sessions/$SESSION_ID"
-    # Nothing to note without a counters file and a mark — and then no lock file
-    # is made either. Both are read again under the lock.
-    [ -f "$dir/counters" ] && [ -f "$dir/turn_end" ] || return 0
-    if command -v flock &>/dev/null; then
-        { ( flock -w 5 -x 204 || exit 0; _note_notification "$dir" ) 204>"$dir/marks.lock"; } 2>/dev/null || true
-    else
-        _note_notification "$dir"
-    fi
+    [ "${#writes}" -le 18 ] || return 0
+    write_session_mark "$dir/notif_start" "$writes $nonce"
 }
 _lead="${USER_MESSAGE#"${USER_MESSAGE%%[![:space:]]*}"}"
 case "$_lead" in
@@ -290,8 +271,10 @@ sys.stdout.buffer.write(s.encode("utf-8", "surrogateescape"))' 2>/dev/null) && U
     }
 fi
 
-# Skip logging if message is empty after filtering
+# Skip logging if message is empty after filtering. No count is reset for it (as
+# before task 088) — but it is the user's prompt: what a notification began ends.
 if [ -z "$USER_MESSAGE" ]; then
+    drop_notification_marks
     exit 0
 fi
 
@@ -310,6 +293,7 @@ migrate_if_needed "$LOCAL_LOG" "$COUNTER_FILE"
 LAST_TS=$(tail -10 "$LOCAL_LOG" 2>/dev/null | grep -o '\[[0-9-]* [0-9:]* UTC\]' | tail -1)
 LAST_MSG=$(tail -3 "$LOCAL_LOG" 2>/dev/null | grep -v '^$' | grep -v '^\*\*\[' | grep -v '^---' | tail -1)
 if [ "[$TIMESTAMP]" = "$LAST_TS" ] && [ "$USER_MESSAGE" = "$LAST_MSG" ]; then
+    drop_notification_marks     # the user's prompt all the same (task 173)
     exit 0
 fi
 

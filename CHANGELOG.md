@@ -24,11 +24,12 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   extractions is a call to the default judge, up to four per run, and the command started them at once. The bare
   command now prints which layers have evidence and one line — how many judge calls, on which judge, the time limit
   of each (and the budget cap of each on a Claude judge) — spends nothing, writes nothing, and exits 2. The line
-  ends with the flag that approves exactly that, `--yes <id>` (eight hex digits naming the line as printed); with
-  it the command runs — unless a run would by then be quoted differently: another number of calls (the evidence is
-  read again, and your own "yes" in the chat can add a layer), another judge, a longer time limit or a higher
-  budget cap. Then it prints the new line and again spends nothing. A bare `--yes` approves nothing.
-  `--collect-only` is unchanged. `/playbook:intent` puts the line to you before it passes the flag.
+  ends with the flag that approves exactly that, `--yes <calls>@<judge>@<limit>@<cap>` (the line's four figures);
+  with it the command runs — unless a run would by then be quoted differently: another number of calls (the
+  evidence is read again, and your own "yes" in the chat can add a layer), another judge, a longer time limit or a
+  higher budget cap. Then it prints the new line and again spends nothing. The judge and the cap that were approved
+  are the ones the run uses. A bare `--yes` approves nothing. `--collect-only` is unchanged. `/playbook:intent`
+  puts the line to you before it passes the flag.
   **If you script `tasks intent`, it now needs that flag.**
 - **`sandbox` refuses to start an agent without bubblewrap** (task 164, owner decision 2026-10-09). On a host where
   `bwrap` is not installed, `.claude/bin/sandbox` used to start the agent anyway — with its permission prompts off

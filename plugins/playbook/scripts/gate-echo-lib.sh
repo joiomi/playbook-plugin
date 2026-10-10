@@ -674,6 +674,12 @@ reset_counters() {
 # whole file and renaming the copy over it, so a hook that overlaps a tool
 # call's hook can rename a stale copy over that call's increment (impl panel
 # r1). Nothing that serves the rule rewrites `counters`.
+# Each holds `<number> <nonce>`: the stop hook makes a new nonce for every stop
+# it lets through, the notification's baseline carries the nonce of the mark it
+# was taken from, and the baseline counts only beside the mark with that nonce
+# (post-D6 run 1). So a baseline that reaches the disk LATE — after a user's
+# prompt removed the mark, or after a later stop replaced it — is a dead letter,
+# in whatever order the two hooks ran; nothing here depends on a lock.
 #
 # write_session_mark FILE VALUE — temp file + rename in the same directory.
 # Never fails the caller; a mark that cannot be written is simply not there.
@@ -686,16 +692,33 @@ write_session_mark() {
     return 0
 }
 
-# read_session_mark FILE — its first line when that is a plain number of at
-# most 18 digits; nothing otherwise (missing, empty, signed, spaced, anything
-# else: the bytes are `.agent/`-resident and untrusted, like the counters).
+# read_session_mark FILE — prints `<number> <nonce>` when the file's first line
+# is exactly that: a plain number of at most 18 digits, one space-separated
+# word of letters, digits and dashes (at most 64), nothing more. Nothing
+# otherwise — missing, empty, signed, a third word, anything else: the bytes
+# are `.agent/`-resident and untrusted, like the counters.
 read_session_mark() {
-    local value=""
+    local number="" nonce="" rest=""
     [ -f "$1" ] || return 0
-    IFS= read -r value < "$1" 2>/dev/null || true
-    case "$value" in ''|*[!0-9]*) return 0 ;; esac
-    [ "${#value}" -le 18 ] || return 0
-    printf '%s' "$value"
+    read -r number nonce rest < "$1" 2>/dev/null || true
+    case "$number" in ''|*[!0-9]*) return 0 ;; esac
+    [ "${#number}" -le 18 ] || return 0
+    case "$nonce" in ''|*[!A-Za-z0-9-]*) return 0 ;; esac
+    [ "${#nonce}" -le 64 ] || return 0
+    [ -z "$rest" ] || return 0
+    printf '%s %s' "$number" "$nonce"
+}
+
+# new_session_nonce — a value that does not repeat from one mark to the next:
+# the kernel's random UUID (one builtin read, no process); where that file
+# cannot be read, the pid, the clock in nanoseconds and three draws of $RANDOM.
+new_session_nonce() {
+    local nonce=""
+    IFS= read -r nonce < /proc/sys/kernel/random/uuid 2>/dev/null || true
+    case "$nonce" in
+        ''|*[!A-Za-z0-9-]*) nonce="$$-$(date '+%s%N' 2>/dev/null || echo 0)-$RANDOM$RANDOM$RANDOM" ;;
+    esac
+    printf '%s' "$nonce"
 }
 
 # format_context TASK_NUM DONE TOTAL GATE_TEXT GATE_LINE REL_PATH

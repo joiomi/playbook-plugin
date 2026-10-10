@@ -18,8 +18,12 @@ These tests run the three REAL hooks as subprocesses, in the order the events ha
 stop. The rule is about an order of events; one hook alone cannot show it.
 
 What the two hooks keep for it are two one-line files beside the session's `counters`:
-`turn_end` (the tool count at the last stop the stop hook let through) and
-`notif_start` (the write count when a notification started a turn). They are files of
+`turn_end` (the tool count at the last stop the stop hook let through, and a nonce
+made for that stop) and `notif_start` (the write count when a notification started a
+turn, and the nonce of the mark it was taken from). A baseline counts only beside the
+mark with ITS nonce — so one written late, after a user's prompt removed the mark or
+after a later stop replaced it, is a dead letter whatever the order of the two hooks
+(post-D6 run 1: a lock with a time limit had left a window). They are files of
 their own, not keys of `counters`, since impl panel round 1 (opus, codex-high,
 codex-medium): a key is set by copying the whole counters file and renaming the copy
 over it, so a notification's hook that overlapped a tool call's hook could rename a
@@ -261,13 +265,51 @@ class AStopAfterANotification(_Session):
         self.assertEqual(self.stop().returncode, 2)
 
     def test_a_baseline_that_is_not_a_number_releases_nothing(self):
-        for junk in ("abc", "", "-0", "0x0", "9" * 30, "0 ", "$(touch pwned)"):
+        for junk in ("abc", "", "-0", "0x0", "9" * 30, "$(touch pwned)"):
             with self.subTest(junk):
                 self.counters_file.write_text("tools=9\nwrites=0\n", encoding="utf-8")
-                self.notif_start.write_text(f"{junk}\n", encoding="utf-8")
+                self.turn_end.write_text("9 nonce-1\n", encoding="utf-8")
+                self.notif_start.write_text(f"{junk} nonce-1\n", encoding="utf-8")
                 self.assertEqual(self.stop().returncode, 2)
-        self.notif_start.write_text("0\n", encoding="utf-8")       # control: a plain 0 does release
+        self.turn_end.write_text("9 nonce-1\n", encoding="utf-8")
+        self.notif_start.write_text("0 nonce-1\n", encoding="utf-8")   # control: a plain 0 does release
         self.assertEqual(self.stop().returncode, 0)
+
+    def test_a_baseline_counts_only_beside_the_mark_it_was_taken_from(self):
+        # writes=0 and nine tool calls: only the notification rule could release this
+        def stop_with(turn_end, notif_start):
+            self.counters_file.write_text("tools=9\nwrites=0\n", encoding="utf-8")
+            for path, text in ((self.turn_end, turn_end), (self.notif_start, notif_start)):
+                if text is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    path.write_text(text, encoding="utf-8")
+            return self.stop().returncode
+
+        self.assertEqual(stop_with("9 A\n", "0 A\n"), 0)                 # control
+        for name, turn_end, notif_start in (
+                ("the mark is gone (a user's prompt removed it)", None, "0 A\n"),
+                ("the mark is a later stop's", "9 B\n", "0 A\n"),
+                ("the baseline has no nonce", "9 A\n", "0\n"),
+                ("the mark has no nonce", "9\n", "0 A\n"),
+                ("neither has one", "9\n", "0\n"),
+                ("a third word on the baseline", "9 A\n", "0 A x\n"),
+                ("a nonce that is not a plain word", "9 $(touch pwned)\n", "0 $(touch pwned)\n"),
+                ("a nonce of 65 characters", "9 " + "a" * 65 + "\n", "0 " + "a" * 65 + "\n")):
+            with self.subTest(name):
+                self.assertEqual(stop_with(turn_end, notif_start), 2)
+        self.assertFalse((self.project / "pwned").exists())
+
+    def test_each_stop_let_through_makes_a_new_nonce(self):
+        seen = set()
+        for _ in range(3):
+            self.prompt()
+            self.assertEqual(self.stop().returncode, 0)
+            number, nonce = self.turn_end.read_text(encoding="utf-8").split()
+            self.assertEqual(number, "0")
+            self.assertRegex(nonce, r"^[A-Za-z0-9-]{8,64}$")
+            seen.add(nonce)
+        self.assertEqual(len(seen), 3)
         self.assertFalse((self.project / "pwned").exists())
 
     def test_every_tool_that_edits_a_file_is_a_write(self):
@@ -296,7 +338,8 @@ class TheStopHookMarksOnlyAStopItLetThrough(_Session):
     hook's own verdict — its exit status, its message — comes out as before."""
 
     def _mark(self):
-        return self.turn_end.read_text(encoding="utf-8").strip() if self.turn_end.exists() else None
+        """The tool count the mark holds (its first word; the second is its nonce)."""
+        return self.turn_end.read_text(encoding="utf-8").split()[0] if self.turn_end.exists() else None
 
     def test_a_blocked_stop_leaves_no_mark_and_says_what_it_said(self):
         self.prompt()
@@ -432,24 +475,23 @@ exit $rc
 
 
 class ANotificationAndAUserPromptAtOnce(_Session):
-    """Impl panel round 2 (codex-high, codex-medium). The notification's hook reads the
-    mark, and only later writes its baseline; a USER prompt whose hook ran in between
-    reset the counters and removed both marks — and the baseline written after it
-    then stood in the user's own turn, which could end on it. Two things keep the
-    user's prompt the last word: one lock of the session around the reset and the
-    note, and — where the lock cannot serialise them — the mark read once more right
-    before the baseline is written. Each has the test only it can pass."""
+    """Impl panel round 2 (codex-high, codex-medium), then post-D6 run 1. The
+    notification's hook reads the mark, and only later writes its baseline; a USER
+    prompt whose hook ran in between reset the counters and removed both marks — and
+    the baseline written after it then stood in the user's own turn, which could end
+    on it. Round 2's answer was a lock with a 5 s limit; the single judge pointed at
+    the limit (a reset that stopped waiting ran unlocked, and the baseline was
+    published after it). No ordering is relied on now: the baseline carries the nonce
+    of the mark it was taken from, and the stop hook honours it only beside that very
+    mark — which the user's prompt removed."""
 
-    def _notify_while_the_user_speaks(self, shimmed, no_flock=False):
+    def _notify_while_the_user_speaks(self, shimmed):
         """Run the notification's hook with `shimmed` (an external command it calls)
-        replaced by a shim that, on its first call for a file of this session, starts
-        the USER's prompt hook beside it and gives it up to 1.5 s to finish before
-        doing its own work. The other hook is detached from the shim's output and
-        from the lock's descriptor: the notification's hook reads the shim through a
-        pipe and would wait for anything still holding it (the first version of this
-        test deadlocked itself that way until the lock's own 5 s limit)."""
+        replaced by a shim that, on its first call for a file of this session, runs
+        the USER's prompt hook to its END (bounded at 8 s) before doing its own work.
+        The other hook is detached from the shim's output: the notification's hook
+        reads the shim through a pipe and would wait for anything still holding it."""
         import shutil
-        import time
         bindir = Path(self._tmp.name) / "shims"
         bindir.mkdir()
         done = Path(self._tmp.name) / "user-prompt-done"
@@ -463,7 +505,7 @@ for a in "$@"; do
         if [ ! -e "{done}.started" ]; then
             : > "{done}.started"
             ( PATH="$PB_REAL_PATH" "{bash_or_skip()}" "{hook}" < "{payload}"; : > "{done}" ) 204>&- >/dev/null 2>&1 &
-            for _ in $(seq 1 30); do [ -e "{done}" ] && break; "$PB_REAL_SLEEP" 0.05; done
+            for _ in $(seq 1 160); do [ -e "{done}" ] && break; "$PB_REAL_SLEEP" 0.05; done
         fi ;;
     esac
 done
@@ -474,19 +516,9 @@ exec "{shutil.which(shimmed)}" "$@"
                    PB_REAL_SLEEP=shutil.which("sleep"), PATH=f"{bindir}{os.pathsep}{os.environ['PATH']}")
         for k in ("BASH_ENV", "PLAYBOOK_ROLE", "PLAYBOOK_EVAL_CONFIG"):
             env.pop(k, None)
-        if no_flock:
-            # a host without `flock`: every `command -v flock` of the hooks answers no
-            rc = Path(self._tmp.name) / "no-flock.sh"
-            rc.write_text('command() { if [ "$1" = -v ] && [ "$2" = flock ]; then return 1; fi; '
-                          'builtin command "$@"; }\n', encoding="utf-8")
-            env["BASH_ENV"] = str(rc)
         r = subprocess.run([bash_or_skip(), str(hook)], cwd=self.project, env=env, text=True,
                            capture_output=True, timeout=60, input=json.dumps({"prompt": NOTIFICATIONS[0]}))
         self.assertEqual(r.returncode, 0, r.stderr)
-        for _ in range(200):
-            if done.exists():
-                break
-            time.sleep(0.05)
         self.assertTrue(done.exists(), "the user's prompt hook never finished")
         self.assertIn("the user speaks while the notification is handled",
                       (self.project / ".agent" / "chat_log.md").read_text(encoding="utf-8"))
@@ -497,36 +529,48 @@ exec "{shutil.which(shimmed)}" "$@"
         self.assertEqual(self.stop().returncode, 0)
         self.assertTrue(self.turn_end.exists())
 
-    def _the_users_turn_is_its_own(self):
-        self.assertFalse(self.notif_start.exists(), "a notification's baseline stands in the user's own turn")
-        self.assertFalse(self.turn_end.exists())
-        self.tools(*["Read"] * 6)
-        self.assertEqual(self.stop().returncode, 2)
-
-    def test_the_users_prompt_waits_for_a_note_in_progress_and_then_removes_it(self):
-        # THE LOCK. The user's prompt arrives at the last instant: the notification's
-        # hook has read the mark, re-read it, and is renaming its baseline into place
-        # (`mv`). Unlocked, the reset would finish first and the rename would publish
-        # a baseline after it; locked, the reset waits and removes what was published.
-        self._a_turn_that_ended_without_a_write()
-        self._notify_while_the_user_speaks("mv")
-        self._the_users_turn_is_its_own()
-
-    def test_without_flock_a_mark_removed_meanwhile_still_stops_the_baseline(self):
-        # THE SECOND READ OF THE MARK. No `flock` on the host, so nothing serialises
-        # the two; the user's prompt runs to its end while the notification's hook
-        # reads the counters (`cat`) — after it read the mark. The baseline is not
-        # written, because the mark is read again first and is gone.
-        self._a_turn_that_ended_without_a_write()
-        self._notify_while_the_user_speaks("cat", no_flock=True)
-        self._the_users_turn_is_its_own()
+    def test_a_baseline_published_after_the_users_prompt_does_not_release_their_turn(self):
+        # The last instant: the notification's hook is renaming its baseline into
+        # place (`mv`) when the user's prompt hook runs — to its END, whatever it
+        # waits for — and only then is the baseline published. It is there, and it is
+        # a dead letter: the mark it names is gone.
+        for shimmed in ("mv", "cat"):
+            with self.subTest(the_users_prompt_lands_during=shimmed):
+                self.setUp()
+                self._a_turn_that_ended_without_a_write()
+                self._notify_while_the_user_speaks(shimmed)
+                self.assertFalse(self.turn_end.exists())
+                self.tools(*["Read"] * 6)
+                self.assertEqual(self.stop().returncode, 2,
+                                 "the user's own turn ended on a notification's baseline")
 
     def test_control_with_no_user_prompt_in_between_the_notification_starts_its_turn(self):
         self._a_turn_that_ended_without_a_write()
         self.prompt(NOTIFICATIONS[0])
-        self.assertEqual(self.notif_start.read_text(encoding="utf-8"), "0\n")
+        self.assertEqual(self.notif_start.read_text(encoding="utf-8").split(),
+                         ["0", self.turn_end.read_text(encoding="utf-8").split()[1]])
         self.tools(*["Read"] * 6)
         self.assertEqual(self.stop().returncode, 0)
+
+    def test_the_two_exits_that_log_nothing_end_it_too(self):
+        # A prompt that is empty once the IDE tags are filtered out, and the same
+        # message twice within a second: the hook logs neither and — as before task
+        # 088 — resets no count for them. They are still the USER's prompts: what a
+        # notification began ends with them.
+        for name, prompts in (
+                ("empty after filtering", ["<ide_opened_file>the user opened x.py</ide_opened_file>"]),
+                ("the same message twice in a second", ["say it once", "say it once"])):
+            with self.subTest(name):
+                self.setUp()
+                self._a_turn_that_ended_without_a_write()
+                if len(prompts) == 2:
+                    self.prompt(prompts[0])
+                    self.assertEqual(self.stop().returncode, 0)          # a reply; a new mark
+                self.prompt(NOTIFICATIONS[0])
+                self.assertTrue(self.notif_start.exists())
+                self.prompt(prompts[-1])
+                self.assertFalse(self.notif_start.exists())
+                self.assertFalse(self.turn_end.exists())
 
 
 class AFailureWhileMarkingDoesNotChangeTheVerdict(_Session):

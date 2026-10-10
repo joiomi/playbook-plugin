@@ -1115,7 +1115,7 @@ class IntentSpendE2E(_E2EBase):
             with contextlib.redirect_stderr(quoted), contextlib.suppress(SystemExit):
                 history.cmd_intent(["42"])
             self.assertEqual(calls, [])
-            quote = re.search(r"`--yes ([0-9a-f]{8})`", quoted.getvalue()).group(1)
+            quote = re.search(r"`--yes (\S+)`", quoted.getvalue()).group(1)
             history.cmd_intent(["42", "--yes", quote])
         recs = self._intent_records()
         self.assertTrue(calls)

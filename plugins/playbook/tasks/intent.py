@@ -346,7 +346,9 @@ def resolve_default_seat(project_path: Path) -> "tuple[str, str | None, str]":
 
 
 def make_default_runner(project_path: Path, *, timeout_secs: int = 300,
-                        task: "str | None" = None):
+                        task: "str | None" = None,
+                        judge: "tuple[str, str | None, str] | None" = None,
+                        budget_usd: "str | None" = None):
     """Production runner: default judge model, blindness via an evidence-only dir.
 
     Each call constructs the default-judge adapter with `project_root` pointed at
@@ -355,6 +357,13 @@ def make_default_runner(project_path: Path, *, timeout_secs: int = 300,
     see — blindness is enforced by construction, not just by instruction.
     Guarantee level: strong (cwd is the evidence dir; no repo pointer) but not a
     formal jail — see task 141 OUT-of-scope (full FS isolation deferred).
+
+    `judge` (what resolve_default_seat returned) and `budget_usd`: when the caller
+    has ALREADY resolved them — `tasks intent` checks the user's approval against
+    them — they are used as given and not resolved again here: a configuration
+    that changed between two reads would otherwise run another judge, or another
+    cap, than the one approved (task 173, post-D6 run 1). Left out, each is
+    resolved here, as before.
 
     Every extraction is a judge call, so each writes one review-spend record
     (kind "intent", round 0 = unknown) to the project's journal, the way the
@@ -374,11 +383,12 @@ def make_default_runner(project_path: Path, *, timeout_secs: int = 300,
     # Resolve the install's configured judge budget instead of relying on an
     # adapter-side default (there no longer is one — see adapter.py). Without
     # this, `tasks intent` would silently ignore judge_budget_usd.
-    from tasks.core import resolve_judge_budget
-    budget_usd = resolve_judge_budget(project_path)
+    if budget_usd is None:
+        from tasks.core import resolve_judge_budget
+        budget_usd = resolve_judge_budget(project_path)
     # The judge spec is anchored to the SAME project root as the budget above
     # (why: resolve_default_seat).
-    provider, variant, seat = resolve_default_seat(project_path)
+    provider, variant, seat = judge if judge is not None else resolve_default_seat(project_path)
     adapter_cls = adapters.get(provider, ClaudeAdapter)
 
     from tasks import review as _review

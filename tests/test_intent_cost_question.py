@@ -8,7 +8,7 @@ could stop it, short of knowing `--collect-only` beforehand.
 
 Now the bare command prints what it would spend — how many calls, on which seat, the
 time limit of each — spends nothing, writes nothing and exits 2; the same command with
-the `--yes <id>` it printed runs. (The CLI is run by an agent, not at a
+the `--yes …` it printed runs. (The CLI is run by an agent, not at a
 terminal: it asks the way it asks elsewhere, by refusing with the flag to pass.
 `commands/intent.md` tells the agent to put the number to the user first.)
 
@@ -18,9 +18,12 @@ user's own "yes" in the chat can be what makes a task's chat layer available —
 bare `--yes` given for one call could start two. And it is the WHOLE quote (round 2,
 codex-high and codex-medium): the line also states a time limit and a budget cap, and
 an approval of calls and seat alone would have run after either was raised. The flag
-is `--yes <id>`, eight hex digits that name the line as printed — calls, seat, time
-limit, cap; if a run would by then be quoted differently in any of the four, the new
-line is printed and nothing is spent.
+is `--yes <calls>@<seat>@<limit>@<cap>` — the four figures themselves, so that two
+different lines cannot share an approval (post-D6 run 1: an eight-digit digest of
+them did, the judge found two time limits with one id); if a run would by then be
+quoted differently in any of the four, the new line is printed and nothing is spent.
+And what was approved is what runs: the judge and the cap that were checked are
+handed to the runner, which no longer resolves them a second time.
 """
 
 from __future__ import annotations
@@ -30,6 +33,7 @@ import io
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -102,9 +106,10 @@ class _Project(unittest.TestCase):
         """The id the bare command prints for these arguments (and that it spent nothing)."""
         code, out, err = self._intent(*args)
         self.assertEqual(code, 2, err)
-        m = re.search(r"Re-run with `--yes ([0-9a-f]{8})` to spend exactly that", err)
+        m = re.search(r"Re-run with `--yes (.+?)` to spend exactly that", err)
         self.assertIsNotNone(m, err)
-        return m.group(1)
+        (token,) = shlex.split(m.group(1))        # as a shell would hand it over
+        return token
 
     def _spend_records(self):
         p = self.agent / "journal" / "enforcement.jsonl"
@@ -125,7 +130,7 @@ class TheBareCommandSpendsNothing(_Project):
         self.assertEqual(self.calls, [], "a judge was called before anything was asked")
         self.assertIn("this would run 2 judge call(s) on claude:opus:high", err)
         self.assertIn("Nothing was spent and nothing was written.", err)
-        self.assertRegex(err, r"Re-run with `--yes [0-9a-f]{8}` to spend exactly that")
+        self.assertIn("Re-run with `--yes 2@claude:opus:high@1200s@10` to spend exactly that", err)
         self.assertIn("--collect-only", err)
 
     def test_it_leaves_no_run_directory_and_no_spend_record(self):
@@ -178,7 +183,7 @@ class TheApprovalIsTheQuote(_Project):
         self.assertEqual(self.calls, [], "a judge was called on an approval that does not match")
         self.assertEqual(self._runs(), [])
         self.assertEqual(self._spend_records(), [])
-        self.assertRegex(err, r"Re-run with `--yes [0-9a-f]{8}` to spend exactly that")
+        self.assertRegex(err, r"Re-run with `--yes .+` to spend exactly that")
         return err
 
     def test_the_same_quote_runs_when_nothing_changed(self):
@@ -228,17 +233,76 @@ class TheApprovalIsTheQuote(_Project):
 
     def test_a_bare_yes_approves_nothing(self):
         err = self._refused("--yes")
-        self.assertIn("`--yes` needs the id of the line it approves", err)
+        self.assertIn("`--yes` needs what it approves", err)
 
     def test_a_yes_followed_by_another_option_approves_nothing(self):
         # `--yes --timeout 77`: the option after it is not taken for the id
         err = self._refused("--yes", "--timeout", "77")
         self.assertIn("time limit 77s each", err)
 
-    def test_an_id_that_was_never_printed_approves_nothing(self):
-        for made_up in ("yes", "2", "00000000", "2@claude:opus:high"):
+    def test_an_approval_that_was_never_printed_approves_nothing(self):
+        for made_up in ("yes", "2", "00000000", "2@claude:opus:high", "2@claude:opus:high@1200s",
+                        "2@claude:opus:high@1200s@10@", " 2@claude:opus:high@1200s@10"):
             with self.subTest(made_up):
                 self._refused("--yes", made_up)
+
+    def test_two_different_lines_never_share_an_approval(self):
+        # post-D6 run 1: with an eight-digit digest, time limits of 23069s and 30214s
+        # (two calls on claude:opus:high, cap $2) had the same id, so the approval of
+        # one ran the other. The approval is the figures themselves now.
+        with mock.patch.dict(os.environ, {"PLAYBOOK_JUDGE_BUDGET_USD": "2"}):
+            first = self._quote("--timeout", "23069")
+            second = self._quote("--timeout", "30214")
+            self.assertNotEqual(first, second)
+            self.assertEqual(first, "2@claude:opus:high@23069s@2")
+            err = self._refused("--yes", first, "--timeout", "30214")
+        self.assertIn("time limit 30214s each", err)
+
+    def test_the_approval_is_one_to_one_with_the_four_figures(self):
+        # even a seat that holds the separator: the last two fields have a fixed shape
+        from tasks.history import intent_approval
+        figures = [(calls, seat, limit, cap)
+                   for calls in (1, 2, 12)
+                   for seat in ("claude:opus:high", "codex:gpt-6-sol:high", "x@1200s", "x@1200s@5", "x")
+                   for limit in ("1200s", "5s", "unlimited")
+                   for cap in ("", "5", "10", "2.5")]
+        tokens = {intent_approval(*f) for f in figures}
+        self.assertEqual(len(tokens), len(figures))
+
+
+class WhatWasApprovedIsWhatRuns(_Project):
+    """Post-D6 run 1. The command checked the approval against a seat and a cap it had
+    resolved — and the runner then resolved both again, on its own: a change of the
+    configuration between the two reads ran another judge, or another cap, under the
+    approval. The runner is handed what was checked."""
+
+    def test_a_judge_that_changes_after_the_check_is_not_the_one_that_runs(self):
+        from tasks import intent as intent_mod
+        quote = self._quote()
+        real = intent_mod.resolve_default_seat
+        answers = iter([real(self.project)])           # the command's one read
+
+        def changed_since(project_path):
+            return next(answers, ("claude", "sonnet", "claude:sonnet:high"))   # any later read
+        with mock.patch.object(intent_mod, "resolve_default_seat", changed_since):
+            code, out, err = self._intent("--yes", quote)
+        self.assertEqual(code, 0, err)
+        self.assertEqual({c["model"] for c in self.calls}, {"opus"})
+        self.assertEqual({r["seat"] for r in self._spend_records()}, {"claude:opus:high"})
+
+    def test_a_cap_that_changes_after_the_check_is_not_the_one_that_runs(self):
+        from tasks import core
+        quote = self._quote()
+        self.assertTrue(quote.endswith("@10"), quote)
+        real = core.resolve_judge_budget
+        answers = iter([real(self.project)])
+
+        def raised_since(project_path, cli_value=None):
+            return next(answers, "500")
+        with mock.patch.object(core, "resolve_judge_budget", raised_since):
+            code, out, err = self._intent("--yes", quote)
+        self.assertEqual(code, 0, err)
+        self.assertEqual({c["budget_usd"] for c in self.calls}, {"10"})
 
 
 class TheSeatInTheLineIsTheSeatThatRuns(_Project):
@@ -254,13 +318,13 @@ class TheSeatInTheLineIsTheSeatThatRuns(_Project):
 
 class TheFlagIsSafeToPasteWhateverTheSeat(_Project):
     # the owner's opus seat is `claude:claude-opus-5-5[1m]` — `[1m]` is a glob to a
-    # shell (zsh refuses the command outright when nothing matches). The id is eight
-    # hex digits whatever the seat's name holds.
+    # shell (zsh refuses the command outright when nothing matches)
     DEFAULT_JUDGE = "claude:claude-opus-5-5[1m]"
 
-    def test_the_id_is_plain_hex_and_runs(self):
+    def test_the_flag_is_printed_quoted_for_a_shell_and_runs(self):
         code, out, err = self._intent()
-        self.assertIn("judge call(s) on claude:claude-opus-5-5[1m]:high", err)
+        self.assertEqual(code, 2)
+        self.assertIn("Re-run with `--yes '2@claude:claude-opus-5-5[1m]:high@1200s@10'` to spend exactly that", err)
         code, out, err = self._intent("--yes", self._quote())
         self.assertEqual(code, 0, err)
         self.assertEqual(len(self.calls), 2)
@@ -311,7 +375,7 @@ class ThroughTheCommandLine(_Project):
     def test_the_usage_names_the_flag(self):
         r = self._cli()
         self.assertEqual(r.returncode, 1)
-        self.assertIn("[--yes <id>]", r.stderr)
+        self.assertIn("[--yes <calls>@<seat>@<limit>@<cap>]", r.stderr)
 
 
 if __name__ == "__main__":
