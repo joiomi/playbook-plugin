@@ -257,11 +257,17 @@ class RotationIsOneAtATimeAndLosesNoActivation(unittest.TestCase):
         return [ln.split(self.ACTIVATION, 1)[1] for ln in text.splitlines() if self.ACTIVATION in ln]
 
     def _shim(self, tool, body):
-        """`tool` first on PATH: `body` (bash) runs with REAL=<the real binary>; it decides."""
+        """`tool` first on PATH: `body` (POSIX sh) runs with REAL=<the real binary>; it
+        decides. A `/bin/sh` script on purpose, never a bash one: a bash script started
+        from the logger is itself a logged shell (BASH_ENV is inherited), finds the same
+        oversized history and starts a rotation of its own — which calls this script
+        again. The first version of these tests did exactly that and ran the machine out
+        of processes (`BlockingIOError: Resource temporarily unavailable` in the tests
+        that came after)."""
         import shutil
         real = shutil.which(tool)
         self.assertTrue(real, tool)
-        (self.bindir / tool).write_text(f'#!/bin/bash\nREAL="{real}"\n{body}\nexec "$REAL" "$@"\n', encoding="utf-8")
+        (self.bindir / tool).write_text(f'#!/bin/sh\nREAL="{real}"\n{body}\nexec "$REAL" "$@"\n', encoding="utf-8")
         (self.bindir / tool).chmod(0o755)
 
     # -- (1) one rotator at a time ------------------------------------------------------
@@ -299,6 +305,43 @@ esac""")
             self.assertIn(line, everything)                                   # logged, in one or the other
         self.assertEqual(self._leftovers(), [])
 
+    def test_a_shell_that_looked_before_another_rotated_does_not_rotate_again(self):
+        # The second look, under the lock. Shell A has seen the history big and is
+        # about to take the lock; shell B takes it first and rotates completely; A
+        # then gets the lock — and must look again, by name, or it would rotate the
+        # fresh, small file B just made. (Six shells at once do not show this: the
+        # ones that lose the non-blocking lock simply skip. A break without the second
+        # look passed that test, which is why this one exists.)
+        import time
+        self._big_history()
+        hold, release = Path(self._tmp.name) / "hold", Path(self._tmp.name) / "release"
+        self._shim("flock", f"""if [ ! -e "{hold}" ]; then
+    : > "{hold}"
+    for _ in $(seq 1 400); do [ -e "{release}" ] && break; /bin/sleep 0.05; done
+fi""")
+        a = subprocess.Popen([bash_or_skip(), "-c", "echo from-A >/dev/null"], cwd=self.proj,
+                             env=self._env(shims=True), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            for _ in range(400):
+                if hold.exists():
+                    break
+                time.sleep(0.05)
+            self.assertTrue(hold.exists(), "the first shell never reached the lock")
+            b = self._bash("echo from-B >/dev/null", shims=True)       # rotates, start to end
+            self.assertEqual(b.returncode, 0, b.stderr)
+            self.assertEqual(len(self._archives()), 1, "the case under test: B has rotated")
+        finally:
+            release.write_text("", encoding="utf-8")
+            a.communicate(timeout=60)
+        archives = self._archives()
+        self.assertEqual(len(archives), 1, [p.name for p in archives])
+        self.assertGreater(archives[0].stat().st_size, 50 * 1024 * 1024)
+        self.assertEqual(self._live_activations(), ["7", "8"])
+        live = self.hist.read_text(encoding="utf-8", errors="replace")
+        self.assertIn("echo from-A", live)
+        self.assertIn("echo from-B", live)
+        self.assertEqual(self._leftovers(), [])
+
     def test_six_shells_at_once_make_one_archive(self):
         # not the proof (the test above is) — the same thing with no script in the way
         self._big_history()
@@ -316,7 +359,11 @@ esac""")
     # -- (2) a rotation that dies ---------------------------------------------------------
     def test_a_rotation_that_dies_at_any_step_leaves_the_activations_in_the_live_file(self):
         dies = 'case "$*" in *{mark}*) exit 137 ;; esac'       # gone, as a killed process is, having done nothing
-        for tool, mark in (("grep", "tasks"), ("ln", "bash_history.archived-"), ("mv", "bash_history.archived-")):
+        # (`cat` is called only where a hard link cannot be made; it is in the list so
+        # that an order which moves the history away FIRST shows here: its window is
+        # between that move and the append of the carried lines.)
+        for tool, mark in (("grep", "tasks"), ("ln", "bash_history.archived-"), ("mv", "bash_history.archived-"),
+                           ("cat", "bash_history.archived-")):
             with self.subTest(dies_at=tool):
                 self.setUp()
                 self._big_history()
@@ -349,6 +396,41 @@ esac""")
         for arch in self._archives():                           # every archive name holds the old history
             self.assertGreater(arch.stat().st_size, 50 * 1024 * 1024)
 
+    # -- the shell it runs in is somebody's script -----------------------------------------
+    def test_functions_of_the_host_script_named_like_its_tools_are_not_called(self):
+        # The rotation runs inside the DEBUG trap of whatever script the shell runs —
+        # and that script may define functions called `mv`, `grep`, `rm` …
+        self._big_history()
+        hijack = "; ".join(f"{t}() {{ echo hijacked-{t}; return 0; }}" for t in
+                           ("mv", "grep", "ln", "tail", "cat", "rm", "wc", "flock"))
+        r = self._bash(hijack + "; echo first >/dev/null; echo still-alive")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), "still-alive")            # none of them ran, nothing printed
+        archives = self._archives()
+        self.assertEqual(len(archives), 1, [p.name for p in archives])
+        self.assertGreater(archives[0].stat().st_size, 50 * 1024 * 1024)
+        self.assertLess(self.hist.stat().st_size, 1024 * 1024)
+        self.assertEqual(self._live_activations(), ["7", "8"])
+        self.assertEqual(self._leftovers(), [])
+
+    def test_a_tool_that_is_itself_a_bash_script_is_not_a_logged_shell(self):
+        # A wrapper on PATH written in bash is a shell started from inside the
+        # rotation: with BASH_ENV inherited it would be logged like any other, and
+        # look at the same oversized history. It starts with logging off.
+        import shutil
+        self._big_history()
+        real = shutil.which("grep")
+        (self.bindir / "grep").write_text(
+            f'#!/bin/bash\n: wrapper-marker-7f3a\nexec "{real}" "$@"\n', encoding="utf-8")
+        (self.bindir / "grep").chmod(0o755)
+        r = self._bash("echo rotating >/dev/null; echo still-alive", shims=True)
+        self.assertIn("still-alive", r.stdout)
+        archives = self._archives()
+        self.assertEqual(len(archives), 1, [p.name for p in archives])
+        self.assertEqual(self._live_activations(), ["7", "8"])
+        logged = self.hist.read_bytes() + archives[0].read_bytes()[-65536:]
+        self.assertNotIn(b"wrapper-marker-7f3a", logged, "a command of the wrapper itself was logged")
+
     # -- an activation written while the rotation is under way ------------------------------
     def test_an_activation_written_during_the_rotation_reaches_the_live_file(self):
         self._big_history()
@@ -372,16 +454,61 @@ esac""")
         self.assertEqual((carried[0], carried[-1]), ("1001", "6000"))
 
     # -- where the new sequence cannot run ------------------------------------------------------
+    def _path_without(self, tool):
+        """A PATH holding every command of the real one except `tool`."""
+        d = Path(self._tmp.name) / f"path-without-{tool}"
+        d.mkdir()
+        for src in os.environ["PATH"].split(os.pathsep):
+            try:
+                names = os.listdir(src)
+            except OSError:
+                continue
+            for name in names:
+                if name != tool and not os.path.lexists(d / name):
+                    os.symlink(os.path.join(src, name), d / name)
+        return str(d)
+
     def test_without_flock_on_the_host_it_still_rotates_the_old_way(self):
-        wrapper = Path(self._tmp.name) / "no-flock.sh"
-        wrapper.write_text('command() { if [ "$1" = -v ] && [ "$2" = flock ]; then return 1; fi; '
-                           f'builtin command "$@"; }}\n. "{BL}"\n', encoding="utf-8")
+        env = self._env()
+        env["PATH"] = self._path_without("flock")
         self._big_history()
-        r = self._bash("set -e; echo rotate >/dev/null; echo still-alive", bash_env=wrapper)
-        self.assertIn("still-alive", r.stdout)
+        # … and a FUNCTION of the host's script called `flock` is not the tool
+        r = subprocess.run([bash_or_skip(), "-c", "flock() { echo hijacked-flock; }; set -e; "
+                            "echo rotate >/dev/null; echo still-alive"],
+                           cwd=self.proj, env=env, capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.stdout.strip(), "still-alive", r.stderr)
+        self.assertEqual(r.stderr, "")
         self.assertEqual(len(self._archives()), 1)
+        self.assertGreater(self._archives()[0].stat().st_size, 50 * 1024 * 1024)
         self.assertEqual(self._live_activations(), ["7", "8"])
         self.assertLess(self.hist.stat().st_size, 1024 * 1024)
+
+    def test_an_archive_that_already_exists_is_never_replaced(self):
+        # The archive's name is the second and the shell's pid. Should that name be
+        # taken already, the hard link fails — and that failure must not be read as
+        # "no hard links here": the fallback's `mv -f` would replace the archive.
+        self._big_history()
+        self._shim("date", 'case "$*" in *%Y%m%d-%H%M%S*) echo 20260101-000000; exit 0 ;; esac')
+        elsewhere = Path(self._tmp.name) / "elsewhere"
+        elsewhere.mkdir()
+        taken = f'"{self.hist.parent}/bash_history.archived-20260101-000000-$$"'
+        r = subprocess.run([bash_or_skip(), "-c",
+                            f"echo an-older-archive > {taken}; cd '{self.proj}'; set -e; "
+                            "echo in-the-project >/dev/null; echo still-alive"],
+                           cwd=elsewhere, env=self._env(shims=True), capture_output=True, text=True, timeout=120)
+        self.assertIn("still-alive", r.stdout)
+        self.assertEqual(r.stderr, "")
+        archives = self._archives()
+        self.assertEqual(len(archives), 1, [p.name for p in archives])
+        self.assertEqual(archives[0].read_text(encoding="utf-8"), "an-older-archive\n")
+        self.assertGreater(self.hist.stat().st_size, 50 * 1024 * 1024)      # not rotated this time
+        self.assertEqual(self._live_activations(), ["7", "8"])
+        self.assertEqual(self._leftovers(), [])
+        # the next shell — another name — rotates
+        self._bash("echo after-it >/dev/null")
+        self.assertEqual(len(self._archives()), 2)
+        self.assertLess(self.hist.stat().st_size, 1024 * 1024)
+        self.assertEqual(self._live_activations(), ["7", "8"])
 
     def test_where_a_hard_link_cannot_be_made_it_still_rotates(self):
         self._big_history()

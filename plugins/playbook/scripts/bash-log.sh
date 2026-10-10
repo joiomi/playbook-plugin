@@ -15,6 +15,109 @@ case "${PLAYBOOK_NO_BASHLOG:-}" in
     *) return 0 ;;
 esac
 
+# PLAN S11, task 174 (retro 107 R13: "lock + prepared-temp replace"). The rotation of
+# a history past 50 MB used to be `mv` it away, then append its `tasks work|new`
+# lines to a new file: two shells that found it big together both rotated (the
+# second moved away the first's fresh file), a shell killed between the two steps
+# left the activations only in the archive — and `tasks retro` / `tasks timeline`
+# read only the live file — and every rotation carried every activation line ever
+# written. Now:
+#   * ONE rotator: `flock -n` on a descriptor opened on the history file itself (no
+#     lock file to leave behind). A shell that does not get it skips the rotation
+#     and just logs. A shell that gets it after the holder finished finds, by name,
+#     a file that is small again.
+#   * PREPARED, then renamed into place: the activation lines are read out of the
+#     history first (the newest 5,000 are carried — the bound), the archive is made
+#     as a second NAME of the history (a hard link), and one `mv` puts the prepared
+#     file under the live name. The live name never ceases to exist, and holds
+#     either the whole old history or the carried lines: a rotation that dies at
+#     any step loses nothing of them.
+#   * CAUGHT UP: an activation another shell appends after the lines were read and
+#     before the rename lands in the old file, i.e. in the archive; the archive is
+#     read once more past the lines already counted, and those are appended.
+#     (Left: a line whose append was under way across the rename and landed after
+#     this second read stays in the archive only.)
+# Files it makes carry the archive's own name (`….new` after it), which the judges'
+# read mask and the seeded ignore block already cover. Where it cannot run as above
+# the old order is kept, with the old limit: no `flock` on the host (a second
+# rotator cannot be excluded, and this sequence run twice at once would be worse
+# than the old one — the second rename would replace the first's fresh file), and a
+# filesystem that cannot hard-link. Nothing here may fail the caller or print: it
+# runs in the DEBUG trap of every shell (see the callback below).
+_cpb_rotate() {
+    local _lane="$1" _hist="$1/bash_history"
+    local _re=' [|] [A-Za-z0-9_]+ [|] .*tasks[[:space:]]+(work|new)'
+    # a FILE on PATH (`type -P`): a function or alias of the host's script that
+    # happens to be called `flock` is not the tool
+    if ! builtin type -P flock >/dev/null 2>&1; then
+        local _old
+        _old="$_lane/bash_history.archived-$(command date '+%Y%m%d-%H%M%S')-$$" || _old="$_lane/bash_history.archived-$$"
+        if command mv -f "$_hist" "$_old" 2>/dev/null; then
+            { command grep -a -E "$_re" "$_old" | command tail -n 5000 >> "$_hist"; } 2>/dev/null || true
+        fi
+        return 0
+    fi
+    {
+        (
+            # this subshell is the rotation: the host's options and its DEBUG trap
+            # do not apply in here, nothing in here reaches the host, and a
+            # command of the rotation that turns out to be a bash script (a
+            # wrapper on PATH) starts unlogged — it would otherwise be a logged
+            # shell that finds the same big file. `command` below: a FUNCTION
+            # of the host's script named like one of these tools is not ours.
+            set +e +u +C
+            trap - DEBUG
+            export PLAYBOOK_NO_BASHLOG=1
+            command flock -n 9 || exit 0
+            # under the lock, by NAME: is it still past the limit?
+            [[ -n "$(command find "$_hist" -prune -size +52428800c 2>/dev/null)" ]] || exit 0
+            # what a rotator that was killed left behind — nobody else is rotating now
+            command find "$_lane" -maxdepth 1 -type f -name 'bash_history.archived-*.new' -delete 2>/dev/null
+            _arch="$_lane/bash_history.archived-$(command date '+%Y%m%d-%H%M%S')-$$" || _arch="$_lane/bash_history.archived-$$"
+            _all="$_arch.all.new"
+            _new="$_arch.new"
+            # never over an archive that exists (same shell, same second): where the
+            # hard link below fails for THAT reason the fallback's `mv -f` would
+            # replace it. The next shell rotates, under another name.
+            [[ ! -e "$_arch" ]] || exit 0
+            # `-a`: a history can hold stray binary bytes. 0 = lines found, 1 = none;
+            # anything else — the history could not be read whole: leave it as it is.
+            command grep -a -E "$_re" "$_hist" > "$_all" 2>/dev/null
+            _rc=$?
+            if [[ "$_rc" -gt 1 ]] || [[ ! -f "$_all" ]]; then
+                command rm -f "$_all" 2>/dev/null
+                exit 0
+            fi
+            _n=$(command wc -l < "$_all" 2>/dev/null)
+            _n="${_n//[!0-9]/}"
+            [[ -n "$_n" ]] || _n=0
+            if ! command tail -n 5000 "$_all" > "$_new" 2>/dev/null; then
+                command rm -f "$_all" "$_new" 2>/dev/null
+                exit 0
+            fi
+            command rm -f "$_all" 2>/dev/null
+            if command ln "$_hist" "$_arch" 2>/dev/null; then
+                if ! command mv -f "$_new" "$_hist" 2>/dev/null; then
+                    command rm -f "$_new" "$_arch" 2>/dev/null      # the history is untouched under its name
+                    exit 0
+                fi
+            else
+                # no hard link on this filesystem: the old order, under the lock
+                if command mv -f "$_hist" "$_arch" 2>/dev/null; then
+                    command cat "$_new" >> "$_hist" 2>/dev/null
+                fi
+                command rm -f "$_new" 2>/dev/null
+                [[ -f "$_arch" ]] || exit 0
+            fi
+            # the activations that reached the old file after they were read out
+            command grep -a -E "$_re" "$_arch" 2>/dev/null | command tail -n +"$((_n + 1))" >> "$_hist" 2>/dev/null
+            exit 0
+        ) 9>>"$_hist"      # for appending, never truncating: over NFS an exclusive flock
+                           # needs a descriptor open for WRITING (flock(2), "NFS details")
+    } 2>/dev/null || true
+    return 0
+}
+
 _cpb_log_cmd() {
     # Hook shells are implementation machinery, not user/agent Bash tool calls.
     # BASH_ENV is sourced before bash assigns the script name to $0, so this
@@ -154,26 +257,20 @@ _cpb_log_cmd() {
                 *"$_rk"*) ;;
                 *)
                 _CPB_ROTATE_CHECKED="${_CPB_ROTATE_CHECKED:-}$_rk"
-                # `find -size +Nc` is one stat on every platform (a `wc -c`
-                # may read the whole file), so the check-to-move window stays
-                # small. Two shells crossing 50 MB at the same instant can
-                # still both rotate; the second archive then holds the few
-                # lines written in between — archived, not lost (disclosed).
+                # `find -size +Nc` is one stat (a `wc -c` may read the whole
+                # file). It is only the cheap first look: the rotation looks
+                # again under its lock (`_cpb_rotate`, task 174), so two shells
+                # that both see a big file here still make one archive.
+                # The `tasks work|new` lines are carried into the fresh file
+                # (panel r2): retro opens each task's window at its EARLIEST
+                # activation and reads only the live file, so archiving the
+                # active task's activation made its window vanish.
                 local _big=""
                 if [[ -f "$_lane/bash_history" ]]; then
-                    _big=$(find "$_lane/bash_history" -prune -size +52428800c 2>/dev/null) || _big=""
+                    _big=$(command find "$_lane/bash_history" -prune -size +52428800c 2>/dev/null) || _big=""
                 fi
                 if [[ -n "$_big" ]]; then
-                    local _arch
-                    _arch="$_lane/bash_history.archived-$(date '+%Y%m%d-%H%M%S')-$$" || _arch="$_lane/bash_history.archived-$$"
-                    # The `tasks work|new` lines are carried into the fresh file
-                    # (panel r2): retro opens each task's window at its EARLIEST
-                    # activation and reads only the live file, so archiving the
-                    # active task's activation made its window vanish. `-a`: a
-                    # history can hold stray binary bytes.
-                    if mv -f "$_lane/bash_history" "$_arch" 2>/dev/null; then
-                        { grep -a -E ' [|] [A-Za-z0-9_]+ [|] .*tasks[[:space:]]+(work|new)' "$_arch" >> "$_lane/bash_history"; } 2>/dev/null || true
-                    fi
+                    _cpb_rotate "$_lane" || true
                 fi
                 ;;
             esac
