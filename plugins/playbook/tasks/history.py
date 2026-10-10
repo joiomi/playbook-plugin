@@ -242,7 +242,7 @@ def cmd_intent(cmd_args):
 
 # timestamp | AGENT/SCRIPT | [path/]tasks work|new …
 _ACTIVATION_RE = re.compile(
-    r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \| \w+ \| '
+    r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \| (\w+) \| '
     r'(?:.*/)?(tasks (?:work|new) .+)$'
 )
 
@@ -251,24 +251,28 @@ def activations(history_text: str):
     """(timestamp, command) for each `tasks work` / `tasks new` line of a bash_history,
     in file order — the one reader `tasks timeline` and `tasks tagger` share.
 
-    The logger once wrote a command twice: the agent's line and the script's echo, in
-    the same second, one under the other. Both readers hid that by dropping every
-    SECOND sight of a command. Since task 088 the logger writes a command once, and
-    that rule hid every second genuine activation — `work 7`, `work 8`, `work 7`
-    showed two entries (retro 107 R12; fixed in task 171). An echo is now recognised
-    as what it was: the same command, with the same timestamp, within two lines of the
-    sight it repeats. Everything else is an activation."""
-    last: "dict[str, tuple[int, str]]" = {}
-    for i, line in enumerate(history_text.splitlines()):
+    An older logger wrote a command twice: the agent's line (`AGENT`) and, right under
+    it, the script's echo (`SCRIPT`), in the same second. The readers hid that by
+    dropping every SECOND sight of a command — which, with a logger that writes a
+    command once, hid every second genuine activation: `work 7`, `work 8`, `work 7`
+    showed two entries (retro 107 R12; fixed in task 171). An echo is recognised as
+    exactly what it was: a `SCRIPT` line whose command and timestamp are those of the
+    `AGENT` activation line directly before it. Nothing else is dropped — the same
+    command twice in one second, by the agent, is two activations (the first version
+    of this rule looked only at the text and the second, and lost them: impl panel
+    round 1). The shipped loggers write `AGENT` lines only; measured on this
+    workspace's archived history (2026-08-22 … 09-25): 542 activation lines, all
+    `AGENT`, no two alike in one second."""
+    previous = None                      # (timestamp, kind, command) of the last activation line
+    for line in history_text.splitlines():
         m = _ACTIVATION_RE.match(line)
         if not m:
             continue
-        stamp, cmd = m.group(1), m.group(2)
-        seen = last.get(cmd)
-        last[cmd] = (i, stamp)
-        if seen is not None and i - seen[0] <= 2 and seen[1] == stamp:
-            continue
-        yield stamp, cmd
+        stamp, kind, cmd = m.group(1), m.group(2), m.group(3)
+        echo = kind == "SCRIPT" and previous == (stamp, "AGENT", cmd)
+        previous = (stamp, kind, cmd)
+        if not echo:
+            yield stamp, cmd
 
 
 def cmd_timeline(cmd_args):

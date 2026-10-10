@@ -28,7 +28,8 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 - **Five small fixes from PLAN S11's list** (task 171) — each was routed to this batch weeks ago and never built.
   **`tasks models check` no longer says OK for a grok pin it never called.** `grok models` lists what your account
   is entitled to; it cannot see that the credit ran out, and on 2026-09-29 the check printed OK while every call
-  answered 402. A listed pin now gets one tiny live turn (as a codex or agy pin already did); under `--no-probe`, in
+  answered 402. A listed pin now gets one tiny live turn, run with the pin's own effort (as a codex or agy pin
+  already did), and an effort the CLI rejects reads `BAD_EFFORT`; under `--no-probe`, in
   `tasks doctor` and in the dashboard it reads `LISTED` instead of `OK`. What changes for you: the check spends one
   grok turn per pinned grok model. **The history commands show every activation.** `tasks timeline`, `tasks tagger`
   and `tasks tag` dropped every second identical line of the shell history — a rule from when the logger wrote each
@@ -40,7 +41,7 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   template-owned CLAUDE.md section written with closing hashes was not recognised: the stale section stayed and a
   second one was inserted on every `init`. **`scripts/verify` prints its report on any console.** Where the output
   stream could not be switched to UTF-8 the report crashed on its first line (a dash); it now writes UTF-8 to the
-  stream's byte buffer, or replaces the character.
+  stream's byte buffer, or replaces the character where the stream names a codec that lacks it.
 - **The sandbox keeps git metadata read-only in every layout it knows of** (task 169). Three things, each
   measured with real bubblewrap before it was fixed. (1) `.claude/bin/sandbox` bound `.git` read-only and then,
   last, every extra writable path — and the later bind won: with `--rw <project>`, `--rw <a parent of the

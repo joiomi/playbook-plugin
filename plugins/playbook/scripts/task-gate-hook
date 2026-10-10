@@ -269,9 +269,12 @@ if [ "$TOOL_NAME" = "Write" ]; then
         # where this project's CLI creates nothing. The inside test is the
         # task-directory guard's own (Guard 2). Its exit 0 says "outside"; anything
         # else — exit 1, a missing helper, a crash — keeps the guard: could not tell
-        # is not outside.
+        # is not outside. The helper gets the path AS WRITTEN, not the collapsed one
+        # the pattern read (impl panel r1): `<link into the project>/../.agent/…`
+        # collapses, as text, to a path outside it, and the kernel follows the link
+        # first — the helper weighs both readings, and can only if it sees the first.
         if [ ! -f "$TASK_MD_PATH" ] \
-           && ! printf '%s' "$TASK_MD_PATH" | PB_PROJECT="$PROJECT_DIR" python3 "$HOOK_DIR/task-dir-target.py" --path 2>/dev/null; then
+           && ! printf '%s' "$FILE_PATH" | PB_PROJECT="$PROJECT_DIR" python3 "$HOOK_DIR/task-dir-target.py" --path 2>/dev/null; then
             journal_enforcement "$PB_JOURNAL_DIR" task-gate block "manual task.md creation" \
                 "$SESSION_ID" "$TOOL_NAME" "$FILE_PATH"
             cat >&2 <<'MSG'

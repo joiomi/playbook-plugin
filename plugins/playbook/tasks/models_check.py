@@ -466,6 +466,13 @@ def probe_agy_model(variant: Optional[str], timeout: int = PROBE_TIMEOUT_SECS) -
 
 # ── grok ─────────────────────────────────────────────────────────────────────
 
+# `--effort/--reasoning-effort: unknown effort level 'x'; use one of: …` (exit 1;
+# captured from grok 1.0.50, 2026-10-10)
+_GROK_BAD_EFFORT = "unknown effort level"
+# How the CLI words a provider-side failure when it reports it as an event rather than
+# by its exit code alone (the 402 of 2026-09-29, as the judge path captured it).
+_GROK_ERROR_MARKS = ('"type":"error"', '"type": "error"', "API error (status ")
+
 def parse_grok_models(text: str) -> list[str]:
     """`grok models` stdout → model-id list.
 
@@ -494,9 +501,10 @@ def parse_grok_models(text: str) -> list[str]:
 def list_grok_models() -> Optional[list[str]]:
     """Run `grok models`; None when the CLI is missing or errors.
 
-    Unlike the codex models cache (a catalog), this list is login-aware —
-    what it lists IS what the account can run, so a listed pin earns OK
-    without a live turn.
+    Unlike the codex models cache (a catalog), this list is login-aware: what
+    it lists is what the account is ENTITLED to. That is not "can run now" — it
+    cannot see spent credit — so `check_pins` gives a listed pin a live turn, or
+    LISTED where nothing is probed (task 171); a pin that is not listed is GONE.
     """
     if not shutil.which("grok"):
         return None
@@ -512,19 +520,32 @@ def list_grok_models() -> Optional[list[str]]:
     return parse_grok_models(result.stdout or "")
 
 
-def probe_grok_model(model: str, timeout: int = PROBE_TIMEOUT_SECS) -> tuple[str, str]:
-    """Live-probe one grok model id → (verdict, detail).
+def probe_grok_model(model: str, effort: Optional[str] = None,
+                     timeout: int = PROBE_TIMEOUT_SECS) -> tuple[str, str]:
+    """Live-probe one grok seat — a model id and, when the pin carries one, its
+    effort → (verdict, detail).
 
     A bad `-m` fails BEFORE any turn runs (exit 1 + the stderr signature —
     verified live on 0.2.99), so a GONE probe costs nothing; a good model
     answers one tiny turn. Runs from a throwaway temp cwd so the probe
     session can't attach to a playbook project.
+
+    The probe is of the seat AS PINNED (task 171, impl panel r1): it sends the
+    `--reasoning-effort` the judge path sends (grok.py), so an effort the CLI
+    rejects is BAD_EFFORT here (exit 1 + `unknown effort level`, captured from
+    grok 1.0.50) instead of a failure at review time. And it READS its answer:
+    OK needs exit 0 AND a reply that is not an error event — the list of
+    entitled models cannot see spent credit, so a 402 must not read OK
+    whichever way the CLI reports it (the judge path saw it as an error event,
+    2026-09-29); an exit 0 with nothing printed is not an answer either.
     """
     # --disable-web-search: grok's web tools are default-ON; without this a
     # probe turn can wander into a web search, blow PROBE_TIMEOUT_SECS, and
     # misclassify a live pin as UNKNOWN (probes gate the hard-stop path).
     argv = ["grok", "-p", "reply with exactly: ok", "-m", model,
             "--max-turns", "1", "--disable-web-search"]
+    if effort:
+        argv += ["--reasoning-effort", effort]
     with tempfile.TemporaryDirectory(prefix="playbook-models-probe-") as td:
         try:
             result = subprocess.run(
@@ -536,12 +557,19 @@ def probe_grok_model(model: str, timeout: int = PROBE_TIMEOUT_SECS) -> tuple[str
             return UNKNOWN, f"probe timed out after {timeout}s"
         except OSError as e:
             return UNKNOWN, f"probe failed to launch: {e}"
-    if result.returncode == 0:
-        return OK, "responds"
     combined = (result.stdout or "") + (result.stderr or "")
+    first = combined.strip().splitlines()[0][:160] if combined.strip() else f"exit {result.returncode}"
+    if any(mark in combined for mark in _GROK_ERROR_MARKS):
+        # an error the CLI reports as an event — with any exit code
+        return UNKNOWN, f"probe answered with an error: {first}"
+    if result.returncode == 0:
+        if not (result.stdout or "").strip():
+            return UNKNOWN, "probe exited 0 with no answer"
+        return OK, "responds"
     if _GROK_MODEL_GONE in combined and _GROK_MODEL_GONE_2 in combined:
         return GONE, "grok rejects this model id for this account"
-    first = combined.strip().splitlines()[0][:160] if combined.strip() else f"exit {result.returncode}"
+    if _GROK_BAD_EFFORT in combined:
+        return BAD_EFFORT, f"grok rejects this effort: {first}"
     return UNKNOWN, f"probe failed for another reason: {first}"
 
 
@@ -716,7 +744,7 @@ def check_pins(project_root: Path, probe: bool = True,
             if provider == "claude":
                 probed[key] = probe_claude_model(model)
             elif provider == "grok":
-                probed[key] = probe_grok_model(model)
+                probed[key] = probe_grok_model(model, effort=effort)
             elif provider == "agy":
                 probed[key] = probe_agy_model(model)      # `model` is the whole pin here
             else:
@@ -828,7 +856,7 @@ def check_pins(project_root: Path, probe: bool = True,
                     # CLI present but `grok models` failed (logged out?) —
                     # fall back to a live probe when allowed.
                     if probe:
-                        verdict, detail = _probe("grok", model_id)
+                        verdict, detail = _probe("grok", model_id, effort)
                     else:
                         verdict, detail = UNKNOWN, "`grok models` unavailable (logged out?); re-run without --no-probe"
                 elif model_id not in grok_models:
@@ -838,8 +866,9 @@ def check_pins(project_root: Path, probe: bool = True,
                     # Listed is not enough (retro 107 R17, task 171): the list is the
                     # account's ENTITLEMENTS and cannot see that its credit ran out —
                     # on 2026-09-29 every grok call answered 402 while this line said
-                    # OK. One real turn decides, as for a codex or an agy pin.
-                    verdict, detail = _probe("grok", model_id)
+                    # OK. One real turn decides, as for a codex or an agy pin — of the
+                    # seat as pinned: the effort goes with it (impl panel r1).
+                    verdict, detail = _probe("grok", model_id, effort)
                 else:
                     verdict, detail = LISTED, ("in `grok models` (not live-verified — an entitled "
                                                "model can still be out of credit)")

@@ -264,10 +264,12 @@ class AListedGrokPinIsNotOkWithoutACall(unittest.TestCase):
         avail = mock.MagicMock()
         avail.is_available.return_value = True
         self.probed = []
+        self.efforts = []
         self.answer = (mc.OK, "responds")
 
-        def probe(model, timeout=0):
+        def probe(model, effort=None, timeout=0):
             self.probed.append(model)
+            self.efforts.append((model, effort))
             return self.answer
         for patch in (
                 mock.patch.object(mc, "load_codex_cache", return_value=None),
@@ -305,6 +307,23 @@ class AListedGrokPinIsNotOkWithoutACall(unittest.TestCase):
             self.assertIn("not live-verified", got[spec][1])
         self.assertEqual(self.probed, [])
 
+    def test_the_probe_is_of_the_seat_as_pinned_effort_and_all(self):
+        # impl panel round 1 (both codex seats): the pin's effort was parsed and then
+        # dropped — the judge runs `--reasoning-effort medium`, the probe ran the default
+        self._by_spec(probe=True)
+        self.assertIn(("grok-4.7", "medium"), self.efforts)
+        self.assertIn(("grok-build", None), self.efforts)
+
+    def test_two_efforts_of_one_model_are_two_seats(self):
+        answers = {"low": (mc.OK, "responds"), "high": (mc.BAD_EFFORT, "grok rejects this effort")}
+        with mock.patch.object(mc, "probe_grok_model",
+                               side_effect=lambda m, effort=None, timeout=0: answers[effort]), \
+                mock.patch("provider.sandbox.load_judge_config", return_value={
+                    "default_judge": "grok:grok-4.7:low", "panel": ["grok:grok-4.7:low", "grok:grok-4.7:high"]}):
+            got = self._by_spec(probe=True)
+        self.assertEqual(got["grok:grok-4.7:low"][0], mc.OK)
+        self.assertEqual(got["grok:grok-4.7:high"][0], mc.BAD_EFFORT)
+
     def test_control_a_pin_that_is_not_listed_is_gone_without_a_call(self):
         for probe in (True, False):
             self.probed.clear()
@@ -315,6 +334,56 @@ class AListedGrokPinIsNotOkWithoutACall(unittest.TestCase):
     def test_control_the_bare_seat_is_as_before(self):
         # the provider's default model, no pin to verify: unchanged by this task
         self.assertEqual(self._by_spec(probe=False)["grok"], (mc.OK, "uses the grok default model"))
+
+
+class TheGrokProbeReadsItsAnswer(unittest.TestCase):
+    """Impl panel round 1 of task 171 (opus): the claim "an out-of-credit pin does not read
+    OK" rests on `probe_grok_model`, which had no test and answered OK for any exit 0. The
+    shapes below are the CLI's own: `ok` and the bad-effort line captured from grok 1.0.50 on
+    2026-10-10; the 402 event as the judge path captured it on 2026-09-29."""
+
+    OK_REPLY = ("ok\n", "", 0)
+    BAD_EFFORT = ("", "--effort/--reasoning-effort: unknown effort level 'bogus-effort'; use one of: "
+                      "xhigh, high, medium, low\nError: --effort/--reasoning-effort: unknown effort level "
+                      "'bogus-effort'; use one of: xhigh, high, medium, low\n", 1)
+    OUT_OF_CREDIT = ('{"type":"error","message":"Internal error: {\\n  \\"message\\": \\"API error (status 402 '
+                     'Payment Required): Grok Build usage balance exhausted\\",\\n  \\"http_status\\": 402\\n}"}\n')
+
+    def _probe(self, stdout, stderr, rc, effort=None):
+        self.argv = None
+
+        def run(argv, **kw):
+            self.argv = argv
+            return mock.Mock(returncode=rc, stdout=stdout, stderr=stderr)
+        with mock.patch.object(mc.subprocess, "run", side_effect=run):
+            return mc.probe_grok_model("grok-4.7", effort=effort)
+
+    def test_an_answer_is_ok(self):
+        self.assertEqual(self._probe(*self.OK_REPLY), (mc.OK, "responds"))
+
+    def test_the_pinned_effort_is_what_the_probe_runs(self):
+        self._probe(*self.OK_REPLY, effort="medium")
+        self.assertEqual(self.argv[self.argv.index("--reasoning-effort") + 1], "medium")
+        self._probe(*self.OK_REPLY)
+        self.assertNotIn("--reasoning-effort", self.argv)
+
+    def test_an_effort_the_cli_rejects_is_a_bad_effort(self):
+        verdict, detail = self._probe(*self.BAD_EFFORT, effort="bogus-effort")
+        self.assertEqual(verdict, mc.BAD_EFFORT)
+        self.assertIn("unknown effort level", detail)
+
+    def test_out_of_credit_is_not_ok_whatever_the_exit_code(self):
+        for rc in (1, 0):
+            for stdout, stderr in ((self.OUT_OF_CREDIT, ""), ("", self.OUT_OF_CREDIT)):
+                with self.subTest(rc=rc, on="stdout" if stdout else "stderr"):
+                    verdict, detail = self._probe(stdout, stderr, rc)
+                    self.assertEqual(verdict, mc.UNKNOWN)
+                    self.assertIn("402", detail)
+
+    def test_exit_zero_with_no_answer_is_not_ok(self):
+        verdict, detail = self._probe("", "", 0)
+        self.assertEqual(verdict, mc.UNKNOWN)
+        self.assertIn("no answer", detail)
 
 
 class CheckPinsTest(unittest.TestCase):

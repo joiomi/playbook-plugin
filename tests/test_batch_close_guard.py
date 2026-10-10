@@ -565,8 +565,14 @@ class GuardZeroIsAStatedGuarantee(unittest.TestCase):
         f = ProjectFixture()
         outside = Path(tempfile.mkdtemp()).resolve()
         os.symlink(f.proj, outside / "a-link-to-the-project")
+        os.makedirs(f.proj / "src")
+        os.symlink(f.proj / "src", outside / "a-link-into-it")
         shapes = {
             "through a link to the project": outside / "a-link-to-the-project" / ".agent" / "tasks" / "004-x" / "task.md",
+            # impl panel round 1 (opus): collapsed as TEXT this is `<outside>/.agent/…`; the
+            # kernel follows the link first and lands in this project. The guard handed its
+            # helper the collapsed path, so the helper never saw the path as written.
+            "up and out of a link into it": Path(str(outside / "a-link-into-it") + "/../.agent/tasks/004-x/task.md"),
             "relative": Path(".agent/tasks/004-x/task.md"),
             "home-relative": Path("~/.agent/tasks/004-x/task.md"),
         }

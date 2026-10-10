@@ -285,6 +285,28 @@ class AConsoleThatCannotBeReconfigured(unittest.TestCase):
         self.assertIn("AssertionError: 1 ? 2", console.text)
         self.assertIn("0 passed, 1 failed, 0 skipped", console.text)
 
+    def test_no_stream_at_all_stays_no_stream(self):
+        # impl panel round 1 (opus): with fd 1 closed (`verify >&-`) Python sets stdout to
+        # None and `print` is a no-op; my wrapper turned that into an AttributeError after
+        # the whole run, and the exit code into 1
+        self.assertIsNone(V.utf8_console(None))
+
+        def fake_checks():
+            V.record("fake check", V.PASS, "fine", None)
+
+        with mock.patch.object(V, "run_checks", side_effect=fake_checks), \
+                mock.patch.object(V, "results", []), \
+                mock.patch.object(sys, "argv", ["verify"]), \
+                mock.patch.object(sys, "stdout", None):
+            self.assertEqual(V.main(), 0)
+
+    def test_a_stream_that_names_no_codec_is_left_as_it_is(self):
+        # a StringIO holds any character; replacing them was a loss, not a rescue
+        held = io.StringIO()
+        self.assertIs(V.utf8_console(held), held)
+        self.assertEqual(self._report(held), 1)
+        self.assertIn("AssertionError: 1 ≠ 2", held.getvalue())
+
     def test_control_a_stream_that_reconfigures_is_left_as_it_is(self):
         raw = io.BytesIO()
         console = io.TextIOWrapper(raw, encoding="cp1252")

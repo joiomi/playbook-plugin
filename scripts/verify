@@ -840,12 +840,19 @@ def utf8_console(stream):
     U+2260 and cut the failure list short. Re-encode as UTF-8, replacing what cannot be
     written. A stream that cannot be reconfigured (not a TextIOWrapper, one that refuses)
     used to be left as it was, and the report then crashed the same way — on its own
-    first line, which holds a dash (task 096 impl r2; task 171): it is wrapped instead.
-    The caller must USE what this returns."""
+    first line, which holds a dash (task 096 impl r2; task 171): it is wrapped instead,
+    when it has a byte buffer or names a codec. No stream (None) and a stream that names
+    no codec are returned as they are. The caller must USE what this returns."""
+    if stream is None:                   # fd closed (`verify >&-`): print is a no-op, and stays one
+        return None
     try:
         stream.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
-        return _CannotFailOnACharacter(stream)
+        # Only where a character CAN fail: a byte buffer to write UTF-8 onto, or a
+        # codec the stream names. A stream with neither (an io.StringIO) holds any
+        # character as it is — wrapping it lost them (impl panel r1).
+        if getattr(stream, "buffer", None) is not None or isinstance(getattr(stream, "encoding", None), str):
+            return _CannotFailOnACharacter(stream)
     return stream
 
 

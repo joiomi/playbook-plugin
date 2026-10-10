@@ -2342,7 +2342,7 @@
     {
       "id": "PB-TASK-MD-GUARD",
       "category": "hook-payload-and-paths",
-      "statement": "task-gate-hook refuses a `Write` that would CREATE a task record of this project by hand — a `file_path` naming `.agent[/<lane>]/tasks/<dir>/task.md` inside this project where no such file exists — whatever lexical spelling names it (a `/./` segment, a doubled slash, an `x/..` hop: the guard judges the normalised path), and answers that only `tasks new` creates task.md files. A `Write` over a task.md that already exists is not a creation and is not refused by this guard. Nor is a `Write` that creates a task.md of ANOTHER project: the path is placed by the task-directory guard's own inside test (`task-dir-target.py --path`: lexically or physically inside the project; a relative or `~` path counts as inside), and when that helper is missing or fails the refusal stands.",
+      "statement": "task-gate-hook refuses a `Write` that would CREATE a task record of this project by hand — a `file_path` naming `.agent[/<lane>]/tasks/<dir>/task.md` inside this project where no such file exists — whatever lexical spelling names it (a `/./` segment, a doubled slash, an `x/..` hop: the guard judges the normalised path), and answers that only `tasks new` creates task.md files. A `Write` over a task.md that already exists is not a creation and is not refused by this guard. Nor is a `Write` that creates a task.md of ANOTHER project: the path AS WRITTEN is placed by the task-directory guard's own inside test (`task-dir-target.py --path`: lexically or physically inside the project; a relative or `~` path counts as inside), and when that helper is missing or fails the refusal stands.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/task-gate-hook",
@@ -2388,7 +2388,7 @@
             "reference": "GuardZeroIsAStatedGuarantee.test_a_path_that_reaches_this_project_another_way_is_still_refused"
           },
           "limitations": [
-            "The real hook, a real `Write` payload: a new task.md under another directory's `.agent/tasks/` and `.agent/<lane>/tasks/` passes (exit 0, no refusal text). Red before task 171 (`2 != 0`). The control: the same creation reached through a symlink to the project, by a relative path and by a `~` path is still refused."
+            "The real hook, a real `Write` payload: a new task.md under another directory's `.agent/tasks/` and `.agent/<lane>/tasks/` passes (exit 0, no refusal text). Red before task 171 (`2 != 0`). The control: the same creation reached through a symlink to the project, up and out of a symlink INTO it (`<link>/../.agent/…`: outside as text, inside for the kernel — the first version handed the helper the collapsed path and let this one through; impl panel round 1), by a relative path and by a `~` path is still refused."
           ]
         },
         {
@@ -11592,6 +11592,55 @@
           "limitations": [
             "With no probing (`--no-probe`, doctor, the dashboard) a listed grok pin reads LISTED, and nothing is called."
           ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_model_availability.py",
+          "reference": "TheGrokProbeReadsItsAnswer.test_out_of_credit_is_not_ok_whatever_the_exit_code",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_model_availability.py",
+            "reference": "TheGrokProbeReadsItsAnswer.test_an_answer_is_ok"
+          },
+          "limitations": [
+            "`probe_grok_model` with the CLI replaced by its captured outputs: the 402 event (as the judge path captured it on 2026-09-29), on stdout or stderr, with exit 1 or exit 0 → UNKNOWN carrying the 402 line. How the plain `-p` mode itself prints a 402 was never captured (the account had credit when this was written); the rule does not depend on it — an error event is not an answer, and neither is a non-zero exit."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_model_availability.py",
+          "reference": "TheGrokProbeReadsItsAnswer.test_exit_zero_with_no_answer_is_not_ok",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Exit 0 with nothing printed is UNKNOWN, not OK."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_model_availability.py",
+          "reference": "TheGrokProbeReadsItsAnswer.test_an_effort_the_cli_rejects_is_a_bad_effort",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_model_availability.py",
+            "reference": "TheGrokProbeReadsItsAnswer.test_the_pinned_effort_is_what_the_probe_runs"
+          },
+          "limitations": [
+            "The CLI's own line for an effort it does not accept (exit 1, captured from grok 1.0.50 on 2026-10-10) → BAD_EFFORT."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_model_availability.py",
+          "reference": "AListedGrokPinIsNotOkWithoutACall.test_two_efforts_of_one_model_are_two_seats",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_model_availability.py",
+            "reference": "AListedGrokPinIsNotOkWithoutACall.test_the_probe_is_of_the_seat_as_pinned_effort_and_all"
+          },
+          "limitations": [
+            "Two pins of one model with different efforts are probed separately and can get different verdicts (the probe was of the model alone: impl panel round 1, both codex seats)."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -11607,7 +11656,7 @@
         "No live provider availability/error-classification evidence in CI. Task 111 (2026-10-05): Antigravity is no longer unprobeable — agy 1.2.17 takes a model pin, so `tasks models check` runs one real turn for an agy pin; an id agy does not know is GONE, a missing or contradicted effort is BAD_EFFORT (a spec error, never a dead pin), and a missing sign-in or an exhausted quota is UNKNOWN with the cause. agy is an experimental judge seat and is not in applicable_providers; its proof replays output captured from agy 1.2.17 on one Linux account.",
         "Owner decision 2026-08-21: judge-seat is supported on claude, grok, and codex; antigravity and pi are experimental and removed from applicable_providers.",
         "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending.",
-        "Task 171 (PLAN S11; retro 107 R17): a grok pin found in `grok models` used to read OK with no call — the list is the account's entitlements and cannot see that its credit ran out (2026-09-29: every call 402 while the check said OK). A listed pin now gets one live turn, or LISTED where nothing is probed. Bound, unchanged: a BARE `grok`, `codex:` or `claude` seat (the provider's default model) still reads OK without a call; only a bare `agy` seat is probed (task 111). The live half of this row — recorded responses from the real providers — is still PLAN S11's gauntlet."
+        "Task 171 (PLAN S11; retro 107 R17): a grok pin found in `grok models` used to read OK with no call — the list is the account's entitlements and cannot see that its credit ran out (2026-09-29: every call 402 while the check said OK). A listed pin now gets one live turn — of the seat as pinned, with its effort — or LISTED where nothing is probed; the probe reads its answer (exit 0 with an error event, or with nothing, is not OK) and an effort the CLI rejects is BAD_EFFORT. Bound: `probe_codex_model` still takes exit 0 as the answer without reading it. Bound, unchanged: a BARE `grok`, `codex:` or `claude` seat (the provider's default model) still reads OK without a call; only a bare `agy` seat is probed (task 111). The live half of this row — recorded responses from the real providers — is still PLAN S11's gauntlet."
       ],
       "follow_up_phases": [
         8
@@ -12804,7 +12853,7 @@
     {
       "id": "PB-CLI-TIMELINE-TAGGER",
       "category": "cli-contracts",
-      "statement": "tasks timeline and tasks tagger fail with an explicit exit-1 message naming the missing input file, and in a multi-user repo that message names the resolved lane path. Both, and `tasks tag`, read every `tasks work` / `tasks new` line of the shell history as an activation: a command run again later is a new activation, and only an echo of the old logger — the same command with the same timestamp within two lines — is not.",
+      "statement": "tasks timeline and tasks tagger fail with an explicit exit-1 message naming the missing input file, and in a multi-user repo that message names the resolved lane path. Both, and `tasks tag`, read every `tasks work` / `tasks new` line of the shell history as an activation: a command run again is a new activation — also within the same second — and only the echo of an older logger is not: a `SCRIPT` line whose command and timestamp are those of the `AGENT` activation line directly before it.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/history.py",
@@ -12903,6 +12952,39 @@
           "limitations": [
             "`tasks tag` rewrites the chat log's spans from the same lines: after `work 7 / work done / work 8 / work done / work 7` the five messages are attributed 007, none, 008, none, 007. Red before task 171: the last two were attributed to 008 — the second `work done` never closed its task."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_history_activations.py",
+          "reference": "TimelineShowsEveryActivation.test_commands_of_one_second_are_all_shown",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_history_activations.py",
+            "reference": "TimelineShowsEveryActivation.test_control_an_old_echo_pair_is_still_one_entry"
+          },
+          "limitations": [
+            "`work 7`, `work 8`, `work 7` written in ONE second print three transitions, and the same command twice in one second prints two. Red on this task's first rule, which called any same-second repeat within two lines an echo (impl panel round 1, three judges)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_history_activations.py",
+          "reference": "TimelineShowsEveryActivation.test_only_a_script_line_right_under_its_agent_line_is_an_echo",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "`SCRIPT` lines that repeat nothing directly above them are activations."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_history_activations.py",
+          "reference": "TagAttributesEveryActivation.test_a_history_written_within_one_second_closes_its_tasks_too",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "`tasks tag` on work 7 / done / work 8 / done written in one second: no message is attributed to a task. Red on the first rule (all five messages attributed to 008)."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -12915,7 +12997,7 @@
       ],
       "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "Proved: the absent-input behaviour (single-user and multi-user, including tagger's second check — task 148, PLAN S12) and, since task 171 (PLAN S11; retro 107 R12), how the three commands read ACTIVATIONS from the shell history. Not proved, and not claimed: the rest of the reconstruction — how messages and transitions are merged and ordered, the text of a tag. Bound, measured in task 171 and older than it: today's logger also records the whole compound command line beside each of its commands, so one activation can appear as two lines with two different texts.",
+        "Proved: the absent-input behaviour (single-user and multi-user, including tagger's second check — task 148, PLAN S12) and, since task 171 (PLAN S11; retro 107 R12), how the three commands read ACTIVATIONS from the shell history. Not proved, and not claimed: the rest of the reconstruction — how messages and transitions are merged and ordered, the text of a tag. Bound, measured in task 171 and older than it: today's logger also records the whole compound command line beside each of its commands, so one activation can appear as two lines with two different texts. Measured for the echo rule (task 171): this workspace's archived history of 2026-08-22 … 09-25 holds 542 activation lines, all of kind `AGENT`, no two alike in one second, and the shipped loggers write `AGENT` only — a `SCRIPT` echo is the trace of an older logger.",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
       ],
       "follow_up_phases": [

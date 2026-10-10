@@ -34,6 +34,19 @@ A_LEGACY_ECHO = (
     "2026-10-01 11:00:00 | SCRIPT | .claude/bin/tasks work 9\n"
     "2026-10-01 11:20:00 | AGENT | .claude/bin/tasks new quick x\n"
     "2026-10-01 11:20:00 | SCRIPT | /home/u/.claude/plugins/cache/p/scripts/tasks new quick x\n")
+# impl panel round 1 (both codex seats, grok): my first rule called any repeat of a command
+# within two lines and the same second an echo — these are real, written by one fast script
+ALL_IN_ONE_SECOND = (
+    "2026-10-01 12:00:00 | AGENT | .claude/bin/tasks work 7\n"
+    "2026-10-01 12:00:00 | AGENT | .claude/bin/tasks work 8\n"
+    "2026-10-01 12:00:00 | AGENT | .claude/bin/tasks work 7\n")
+THE_SAME_COMMAND_TWICE_IN_ONE_SECOND = (
+    "2026-10-01 12:00:00 | AGENT | .claude/bin/tasks work 7\n"
+    "2026-10-01 12:00:00 | AGENT | .claude/bin/tasks work 7\n")
+A_SCRIPT_LINE_THAT_ECHOES_NOTHING = (
+    "2026-10-01 12:00:00 | AGENT | .claude/bin/tasks work 7\n"
+    "2026-10-01 12:00:00 | SCRIPT | .claude/bin/tasks work 8\n"
+    "2026-10-01 12:00:00 | SCRIPT | .claude/bin/tasks work 7\n")
 CHAT = ("**[M001]** [2026-10-01 07:00:01 UTC] `HOST` (claude/pid-1)\n\nfirst message\n\n---\n\n")
 
 
@@ -71,11 +84,21 @@ class TimelineShowsEveryActivation(_Project):
         self.assertEqual(len(self.lines(THE_SAME_TASK_AGAIN)), 2)
 
     def test_control_an_old_echo_pair_is_still_one_entry(self):
-        # a history written before task 088: the same command twice in the same second,
-        # on adjacent lines — one activation, then and now
+        # a history of the old logger: the agent's line, and right under it the SCRIPT
+        # line of the same command in the same second — one activation, then and now
         self.assertEqual(self.lines(A_LEGACY_ECHO),
                          ["2026-10-01 11:00:00  tasks work 9",
                           "2026-10-01 11:20:00  tasks new quick x"])
+
+    def test_commands_of_one_second_are_all_shown(self):
+        self.assertEqual([ln.split("  ", 1)[1] for ln in self.lines(ALL_IN_ONE_SECOND)],
+                         ["tasks work 7", "tasks work 8", "tasks work 7"])
+        self.assertEqual(len(self.lines(THE_SAME_COMMAND_TWICE_IN_ONE_SECOND)), 2)
+
+    def test_only_a_script_line_right_under_its_agent_line_is_an_echo(self):
+        # SCRIPT lines that repeat nothing directly above them are activations
+        self.assertEqual([ln.split("  ", 1)[1] for ln in self.lines(A_SCRIPT_LINE_THAT_ECHOES_NOTHING)],
+                         ["tasks work 7", "tasks work 8", "tasks work 7"])
 
 
 class TaggerShowsEveryActivation(_Project):
@@ -127,6 +150,14 @@ class TagAttributesEveryActivation(_Project):
     def test_a_second_close_ends_its_task_and_a_return_is_seen(self):
         self.assertEqual(self.attribution(),
                          {"M001": "007", "M002": None, "M003": "008", "M004": None, "M005": "007"})
+
+    def test_a_history_written_within_one_second_closes_its_tasks_too(self):
+        # (codex-high, grok) work 7 / done / work 8 / done, all in one second: the second
+        # close was dropped again by my first rule, and task 8 stayed open
+        self.HISTORY = "".join(ln[:11] + "10:00:00" + ln[19:] for ln in self.HISTORY.splitlines(keepends=True)[:4])
+        self.assertEqual(self.HISTORY.count("10:00:00"), 4)
+        self.assertEqual(self.attribution(),
+                         {"M001": None, "M002": None, "M003": None, "M004": None, "M005": None})
 
     def test_control_one_task_opened_and_closed(self):
         self.HISTORY = "".join(self.HISTORY.splitlines(keepends=True)[:2])
