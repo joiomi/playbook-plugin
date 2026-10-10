@@ -247,14 +247,26 @@ class RotationIsOneAtATimeAndLosesNoActivation(unittest.TestCase):
 
     def _archives(self):
         return sorted(p for p in self.hist.parent.iterdir()
-                      if p.name.startswith("bash_history.archived-") and not p.name.endswith(".new"))
+                      if p.name.startswith("bash_history.archived-") and not p.name.endswith(".new")
+                      and p.name != "bash_history.archived-owes")
 
     def _leftovers(self):
         return sorted(p.name for p in self.hist.parent.iterdir() if p.name.endswith(".new"))
 
+    @property
+    def owes(self):
+        """The marker: the name of the archive that still owes the live file its
+        activation lines. There from before anything is moved until they are back."""
+        return self.hist.parent / "bash_history.archived-owes"
+
+    def _settled(self):
+        """Nothing of a rotation is left: no file in preparation, nothing owed."""
+        self.assertEqual(self._leftovers(), [])
+        self.assertFalse(self.owes.exists(), "a rotation that finished still says something is owed")
+
     def _live_activations(self):
         text = self.hist.read_text(encoding="utf-8", errors="replace") if self.hist.exists() else ""
-        return [ln.split(self.ACTIVATION, 1)[1] for ln in text.splitlines() if self.ACTIVATION in ln]
+        return [ln.split(self.ACTIVATION, 1)[1].split()[0] for ln in text.splitlines() if self.ACTIVATION in ln]
 
     def _shim(self, tool, body):
         """`tool` first on PATH: `body` (POSIX sh) runs with REAL=<the real binary>; it
@@ -303,15 +315,61 @@ esac""")
         everything = self.hist.read_bytes() + archives[0].read_bytes()[-4096:]
         for line in (b"echo from-A", b"echo from-B"):
             self.assertIn(line, everything)                                   # logged, in one or the other
-        self.assertEqual(self._leftovers(), [])
+        self._settled()
 
     def test_a_shell_that_looked_before_another_rotated_does_not_rotate_again(self):
-        # The second look, under the lock. Shell A has seen the history big and is
-        # about to take the lock; shell B takes it first and rotates completely; A
-        # then gets the lock — and must look again, by name, or it would rotate the
-        # fresh, small file B just made. (Six shells at once do not show this: the
-        # ones that lose the non-blocking lock simply skip. A break without the second
-        # look passed that test, which is why this one exists.)
+        # The second look, under the lock. Shell A has seen the history big — its
+        # first look has answered — and is held right there; shell B rotates
+        # completely; A then opens the live name (the fresh, small file), gets its
+        # lock, and must look again, by name, or it would rotate the file B just
+        # made. (Six shells at once do not show this: the ones that lose the
+        # non-blocking lock simply skip. A break without the second look passed that
+        # test, which is why this one exists.)
+        import time
+        self._big_history()
+        hold, release = Path(self._tmp.name) / "hold", Path(self._tmp.name) / "release"
+        import shutil
+        real_find = shutil.which("find")
+        (self.bindir / "find").write_text(f"""#!/bin/sh
+if [ ! -e "{hold}" ]; then
+    : > "{hold}"
+    "{real_find}" "$@"
+    for _ in $(seq 1 400); do [ -e "{release}" ] && break; /bin/sleep 0.05; done
+    exit 0
+fi
+exec "{real_find}" "$@"
+""", encoding="utf-8")
+        (self.bindir / "find").chmod(0o755)
+        a = subprocess.Popen([bash_or_skip(), "-c", "echo from-A >/dev/null"], cwd=self.proj,
+                             env=self._env(shims=True), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            for _ in range(400):
+                if hold.exists():
+                    break
+                time.sleep(0.05)
+            self.assertTrue(hold.exists(), "the first shell never looked")
+            b = self._bash("echo from-B >/dev/null", shims=True)       # rotates, start to end
+            self.assertEqual(b.returncode, 0, b.stderr)
+            self.assertEqual(len(self._archives()), 1, "the case under test: B has rotated")
+        finally:
+            release.write_text("", encoding="utf-8")
+            a.communicate(timeout=60)
+        archives = self._archives()
+        self.assertEqual(len(archives), 1, [p.name for p in archives])
+        self.assertGreater(archives[0].stat().st_size, 50 * 1024 * 1024)
+        self.assertEqual(self._live_activations(), ["7", "8"])
+        live = self.hist.read_text(encoding="utf-8", errors="replace")
+        self.assertIn("echo from-A", live)
+        self.assertIn("echo from-B", live)
+        self._settled()
+
+    def test_a_lock_on_a_file_that_is_no_longer_the_history_is_no_lock(self):
+        # Shell A opened the history and is held just before it takes the lock; B
+        # rotates completely. The lock A then gets is on the OLD file — the archive.
+        # Whatever is to be done in this lane is done under the lock of the file that
+        # has the live name, and that is not what A holds: here something is owed
+        # (planted) and another shell (this test) holds the live file's lock.
+        import fcntl
         import time
         self._big_history()
         hold, release = Path(self._tmp.name) / "hold", Path(self._tmp.name) / "release"
@@ -327,20 +385,26 @@ fi""")
                     break
                 time.sleep(0.05)
             self.assertTrue(hold.exists(), "the first shell never reached the lock")
-            b = self._bash("echo from-B >/dev/null", shims=True)       # rotates, start to end
+            b = self._bash("echo from-B >/dev/null")                   # rotates, start to end
             self.assertEqual(b.returncode, 0, b.stderr)
-            self.assertEqual(len(self._archives()), 1, "the case under test: B has rotated")
+            (archive,) = self._archives()
+            with open(archive, "ab") as fh:                            # … and the archive owes one line
+                fh.write(f"2026-09-20 11:11:11{self.ACTIVATION}55\n".encode())
+            self.owes.write_text(archive.name + "\n", encoding="utf-8")
+            with open(self.hist, "ab") as holder:
+                fcntl.flock(holder, fcntl.LOCK_EX)                     # the live file's lock is taken
+                release.write_text("", encoding="utf-8")
+                a.communicate(timeout=60)
+                self.assertTrue(self.owes.exists(), "a shell holding the OLD file's lock settled what is owed")
+                self.assertNotIn("55", self._live_activations())
         finally:
             release.write_text("", encoding="utf-8")
-            a.communicate(timeout=60)
-        archives = self._archives()
-        self.assertEqual(len(archives), 1, [p.name for p in archives])
-        self.assertGreater(archives[0].stat().st_size, 50 * 1024 * 1024)
-        self.assertEqual(self._live_activations(), ["7", "8"])
-        live = self.hist.read_text(encoding="utf-8", errors="replace")
-        self.assertIn("echo from-A", live)
-        self.assertIn("echo from-B", live)
-        self.assertEqual(self._leftovers(), [])
+            if a.poll() is None:
+                a.communicate(timeout=60)
+        self._bash("echo after-them >/dev/null")                       # nobody holds it now
+        self.assertEqual(sorted(self._live_activations()), ["55", "7", "8"])
+        self.assertEqual(len(self._archives()), 1)
+        self._settled()
 
     def test_six_shells_at_once_make_one_archive(self):
         # not the proof (the test above is) — the same thing with no script in the way
@@ -354,16 +418,13 @@ fi""")
             self.assertEqual(err, "")
         self.assertEqual(len(self._archives()), 1, [p.name for p in self._archives()])
         self.assertEqual(self._live_activations(), ["7", "8"])
-        self.assertEqual(self._leftovers(), [])
+        self._settled()
 
     # -- (2) a rotation that dies ---------------------------------------------------------
     def test_a_rotation_that_dies_at_any_step_leaves_the_activations_in_the_live_file(self):
         dies = 'case "$*" in *{mark}*) exit 137 ;; esac'       # gone, as a killed process is, having done nothing
-        # (`cat` is called only where a hard link cannot be made; it is in the list so
-        # that an order which moves the history away FIRST shows here: its window is
-        # between that move and the append of the carried lines.)
-        for tool, mark in (("grep", "tasks"), ("ln", "bash_history.archived-"), ("mv", "bash_history.archived-"),
-                           ("cat", "bash_history.archived-")):
+        for tool, mark in (("grep", "tasks"), ("tail", "5242880"), ("ln", "bash_history.archived-"),
+                           ("mv", "bash_history.archived-")):
             with self.subTest(dies_at=tool):
                 self.setUp()
                 self._big_history()
@@ -379,7 +440,153 @@ fi""")
                 self.assertTrue(self._archives())
                 self.assertEqual(self._live_activations(), ["7", "8"])
                 self.assertLess(self.hist.stat().st_size, 1024 * 1024)
-                self.assertEqual(self._leftovers(), [])
+                self._settled()
+
+    # -- (2b) … and what it had not given back yet, the next shell gives ---------------------
+    def _dies_reading_an_archive(self):
+        """`grep` dies whenever it is asked to read an ARCHIVE — which is how the lines
+        a rotation carried, or that were written meanwhile, get back into the live file."""
+        self._shim("grep", 'case "$*" in *bash_history.archived-*) exit 137 ;; esac')
+
+    def test_a_death_after_the_rename_is_finished_by_the_next_shell(self):
+        # impl panel round 1 (codex-high, codex-medium): another shell writes an
+        # activation after the lines were read out, the rename happens, and the
+        # rotator dies before it has given that line back. It is in the archive only.
+        self._big_history()
+        line = f"2026-09-20 11:11:11{self.ACTIVATION}99"
+        self._shim("ln", f"""case "$*" in *bash_history.archived-*)
+    [ -e "{self._tmp.name}/wrote" ] || {{ : > "{self._tmp.name}/wrote"; echo '{line}' >> "{self.hist}"; }} ;;
+esac""")
+        self._dies_reading_an_archive()
+        r = self._bash("set -e; echo while-it-died >/dev/null; echo still-alive", shims=True)
+        self.assertIn("still-alive", r.stdout)
+        self.assertEqual(r.stderr, "")
+        # the case under test: renamed (the carried lines are there), the late one is not
+        self.assertEqual(self._live_activations(), ["7", "8"])
+        self.assertEqual(len(self._archives()), 1)
+        self._bash("echo the-next-shell >/dev/null")
+        self.assertEqual(self._live_activations(), ["7", "8", "99"])
+        self.assertEqual(len(self._archives()), 1)
+        self._settled()
+
+    def test_a_death_after_the_move_where_no_hard_link_can_be_made_is_finished_by_the_next_shell(self):
+        # impl panel round 1 (sonnet, codex-medium): the fallback moves the history
+        # away and then gives the lines back — a death between the two left every
+        # activation in the archive, the defect this task exists for.
+        self._big_history()
+        self._shim("ln", 'case "$*" in *bash_history.archived-*) exit 1 ;; esac')
+        self._dies_reading_an_archive()
+        self._shim("cat", 'case "$*" in *bash_history.archived-*) exit 137 ;; esac')
+        r = self._bash("set -e; echo while-it-died >/dev/null; echo still-alive", shims=True)
+        self.assertIn("still-alive", r.stdout)
+        self.assertEqual(self._live_activations(), [], "the case under test: moved away, nothing given back")
+        self.assertEqual(len(self._archives()), 1)
+        self._bash("echo the-next-shell >/dev/null")
+        self.assertEqual(self._live_activations(), ["7", "8"])
+        self.assertEqual(len(self._archives()), 1)
+        self.assertGreater(self._archives()[0].stat().st_size, 50 * 1024 * 1024)
+        self._settled()
+
+    def test_a_death_after_the_move_on_a_host_without_flock_is_finished_by_the_next_shell(self):
+        env = self._env()
+        without = self._path_without("flock")
+        self._big_history()
+        self._dies_reading_an_archive()
+        env["PATH"] = f"{self.bindir}{os.pathsep}{without}"
+        r = subprocess.run([bash_or_skip(), "-c", "set -e; echo while-it-died >/dev/null; echo still-alive"],
+                           cwd=self.proj, env=env, capture_output=True, text=True, timeout=120)
+        self.assertIn("still-alive", r.stdout)
+        self.assertEqual(self._live_activations(), [], "the case under test: moved away, nothing given back")
+        env["PATH"] = without
+        subprocess.run([bash_or_skip(), "-c", "echo the-next-shell >/dev/null"], cwd=self.proj, env=env,
+                       capture_output=True, text=True, timeout=120)
+        self.assertEqual(self._live_activations(), ["7", "8"])
+        self.assertEqual(len(self._archives()), 1)
+        self._settled()
+
+    def test_nothing_is_given_back_without_the_lock_of_the_new_live_file(self):
+        # After the rename the live name is another file, and the lock the rotator
+        # holds is on the old one. It takes the new file's lock before it gives
+        # anything back; if another shell has it, that shell sees what is owed.
+        self._big_history()
+        line = f"2026-09-20 11:11:11{self.ACTIVATION}99"
+        self._shim("ln", f"""case "$*" in *bash_history.archived-*)
+    [ -e "{self._tmp.name}/wrote" ] || {{ : > "{self._tmp.name}/wrote"; echo '{line}' >> "{self.hist}"; }} ;;
+esac""")
+        count = Path(self._tmp.name) / "flock-calls"
+        self._shim("flock", f"""echo x >> "{count}"
+[ "$(wc -l < "{count}")" -ge 2 ] && exit 1""")                 # the second lock: held by another shell
+        r = self._bash("set -e; echo rotating >/dev/null; echo still-alive", shims=True)
+        self.assertIn("still-alive", r.stdout)
+        self.assertEqual(len(count.read_text().splitlines()), 2, "the case under test: the lock was asked for twice")
+        self.assertEqual(self._live_activations(), ["7", "8"])
+        self.assertTrue(self.owes.exists(), "what is owed must stay written down for the shell that has the lock")
+        self._bash("echo the-shell-with-the-lock >/dev/null")
+        self.assertEqual(self._live_activations(), ["7", "8", "99"])
+        self._settled()
+
+    def test_a_marker_that_names_no_archive_of_this_lane_is_dropped(self):
+        # The marker is a file in a directory the project's user writes; what it
+        # says is read as a NAME in this lane and nothing else.
+        for said in ("../../outside", "../outside", "/etc/hostname", "bash_history", "not-an-archive",
+                     "bash_history.archived-20260101-000000-1", "bash_history.archived-owes", ""):
+            with self.subTest(said=said):
+                self.setUp()
+                outside = self.proj / "outside"
+                outside.write_text(f"2026-09-20 11:11:11{self.ACTIVATION}666\n", encoding="utf-8")
+                self.hist.write_text(f"2026-09-20 10:00:00{self.ACTIVATION}7\n", encoding="utf-8")
+                self.owes.write_text(said + "\n", encoding="utf-8")
+                r = self._bash("set -e; echo a-line >/dev/null; echo still-alive")
+                self.assertIn("still-alive", r.stdout)
+                self.assertEqual(r.stderr, "")
+                self.assertFalse(self.owes.exists(), "a marker nothing can come of stays for ever")
+                self.assertEqual(self._live_activations(), ["7"])
+                self.assertEqual(outside.read_text(encoding="utf-8"), f"2026-09-20 11:11:11{self.ACTIVATION}666\n")
+                self.assertEqual(self._archives(), [])
+
+    def test_a_marker_that_names_a_link_is_dropped(self):
+        outside = self.proj / "outside"
+        outside.write_text(f"2026-09-20 11:11:11{self.ACTIVATION}666\n", encoding="utf-8")
+        self.hist.write_text(f"2026-09-20 10:00:00{self.ACTIVATION}7\n", encoding="utf-8")
+        link = self.hist.parent / "bash_history.archived-20260101-000000-1"
+        link.symlink_to(outside)
+        self.owes.write_text(link.name + "\n", encoding="utf-8")
+        r = self._bash("set -e; echo a-line >/dev/null; echo still-alive")
+        self.assertIn("still-alive", r.stdout)
+        self.assertFalse(self.owes.exists())
+        self.assertEqual(self._live_activations(), ["7"])
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(outside.read_text(encoding="utf-8"), f"2026-09-20 11:11:11{self.ACTIVATION}666\n")
+
+    def test_a_flock_that_cannot_lock_is_a_host_without_one(self):
+        # impl panel round 1 (opus): flock(1) answers 1 when the lock is held, and
+        # something else when it cannot lock at all (no lock manager on the mount).
+        # Reading both as "another shell is rotating" meant: nothing ever rotates.
+        self._big_history()
+        self._shim("flock", "exit 71")
+        r = self._bash("set -e; echo rotate >/dev/null; echo still-alive", shims=True)
+        self.assertIn("still-alive", r.stdout)
+        self.assertEqual(r.stderr, "")
+        self.assertEqual(len(self._archives()), 1)
+        self.assertGreater(self._archives()[0].stat().st_size, 50 * 1024 * 1024)
+        self.assertEqual(self._live_activations(), ["7", "8"])
+        self.assertLess(self.hist.stat().st_size, 1024 * 1024)
+        self._settled()
+
+    def test_a_rename_that_happened_but_reported_failure_does_not_cost_the_archive(self):
+        # impl panel round 1 (opus): `mv` put the prepared file under the live name
+        # and then said it failed. The archive is then the ONLY name of the old
+        # history — what is done next is read off the files, not off `mv`.
+        self._big_history()
+        self._shim("mv", 'case "$*" in *bash_history.archived-*.new*) "$REAL" "$@"; exit 1 ;; esac')
+        r = self._bash("set -e; echo rotate >/dev/null; echo still-alive", shims=True)
+        self.assertIn("still-alive", r.stdout)
+        archives = self._archives()
+        self.assertEqual(len(archives), 1, [p.name for p in archives])
+        self.assertGreater(archives[0].stat().st_size, 50 * 1024 * 1024)
+        self.assertEqual(self._live_activations(), ["7", "8"])
+        self.assertLess(self.hist.stat().st_size, 1024 * 1024)
+        self._settled()
 
     def test_a_rotator_killed_outright_is_cleaned_up_after_by_the_next(self):
         # SIGKILL at the rename: nothing of the rotation's own gets to tidy up
@@ -392,9 +599,12 @@ fi""")
         self._bash("echo after-it >/dev/null")
         self.assertEqual(self._live_activations(), ["7", "8"])
         self.assertLess(self.hist.stat().st_size, 1024 * 1024)
-        self.assertEqual(self._leftovers(), [])
-        for arch in self._archives():                           # every archive name holds the old history
-            self.assertGreater(arch.stat().st_size, 50 * 1024 * 1024)
+        # ONE archive: the name the killed rotator had given the history — a second
+        # name of the file still in use — is taken back before the next rotation
+        archives = self._archives()
+        self.assertEqual(len(archives), 1, [p.name for p in archives])
+        self.assertGreater(archives[0].stat().st_size, 50 * 1024 * 1024)
+        self._settled()
 
     # -- the shell it runs in is somebody's script -----------------------------------------
     def test_functions_of_the_host_script_named_like_its_tools_are_not_called(self):
@@ -402,7 +612,7 @@ fi""")
         # and that script may define functions called `mv`, `grep`, `rm` …
         self._big_history()
         hijack = "; ".join(f"{t}() {{ echo hijacked-{t}; return 0; }}" for t in
-                           ("mv", "grep", "ln", "tail", "cat", "rm", "wc", "flock"))
+                           ("mv", "grep", "ln", "tail", "cat", "rm", "wc", "flock", "find", "printf", "read"))
         r = self._bash(hijack + "; echo first >/dev/null; echo still-alive")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stdout.strip(), "still-alive")            # none of them ran, nothing printed
@@ -431,6 +641,27 @@ fi""")
         logged = self.hist.read_bytes() + archives[0].read_bytes()[-65536:]
         self.assertNotIn(b"wrapper-marker-7f3a", logged, "a command of the wrapper itself was logged")
 
+    def test_the_same_on_a_host_without_flock(self):
+        # impl panel round 1 (opus): the order kept for a host without `flock` ran in
+        # the host's own shell, with logging on for whatever it started.
+        import shutil
+        self._big_history()
+        real = shutil.which("grep")
+        (self.bindir / "grep").write_text(
+            f'#!/bin/bash\n: wrapper-marker-7f3a\nexec "{real}" "$@"\n', encoding="utf-8")
+        (self.bindir / "grep").chmod(0o755)
+        env = self._env()
+        env["PATH"] = f"{self.bindir}{os.pathsep}{self._path_without('flock')}"
+        r = subprocess.run([bash_or_skip(), "-c", "set -u; set -e; echo rotating >/dev/null; echo still-alive"],
+                           cwd=self.proj, env=env, capture_output=True, text=True, timeout=120)
+        self.assertIn("still-alive", r.stdout)
+        self.assertEqual(r.stderr, "")
+        archives = self._archives()
+        self.assertEqual(len(archives), 1, [p.name for p in archives])
+        self.assertEqual(self._live_activations(), ["7", "8"])
+        logged = self.hist.read_bytes() + archives[0].read_bytes()[-65536:]
+        self.assertNotIn(b"wrapper-marker-7f3a", logged, "a command of the wrapper itself was logged")
+
     # -- an activation written while the rotation is under way ------------------------------
     def test_an_activation_written_during_the_rotation_reaches_the_live_file(self):
         self._big_history()
@@ -444,14 +675,41 @@ esac""")
         self.assertTrue((Path(self._tmp.name) / "wrote").exists(), "the write under test never happened")
         self.assertEqual(len(self._archives()), 1)
         self.assertEqual(self._live_activations(), ["7", "8", "99"])
+        self._settled()
 
     # -- (3) the bound ------------------------------------------------------------------------
-    def test_only_the_newest_5000_activations_are_carried(self):
+    BOUND = 5 * 1024 * 1024
+
+    def test_the_carried_lines_are_bounded_by_size_and_are_the_newest_whole_ones(self):
+        # impl panel round 1 (codex-high) and a measurement: on this plugin's own
+        # workspace an activation-shaped line is 583 bytes on average and 42,680 at
+        # the longest — a bound in LINES bounds neither the fresh file nor how far
+        # back it reaches. The newest 5 MiB of them, whole lines.
+        width = 1024
+        with open(self.hist, "wb") as fh:
+            for n in range(1, 6001):                                    # 6,144,000 bytes of activations
+                head = f"2026-09-20 10:00:00{self.ACTIVATION}{n} #".encode()
+                fh.write(head + b"p" * (width - len(head) - 1) + b"\n")
+            filler = b"2026-09-20 10:00:02 | AGENT | echo filler " + b"x" * 950 + b"\n"
+            fh.write(filler * (self.BIG // len(filler) + 1))
+        self._bash("echo rotate >/dev/null")
+        lines = [ln for ln in self.hist.read_bytes().split(b"\n") if self.ACTIVATION.encode() in ln]
+        size = sum(len(ln) + 1 for ln in lines)
+        self.assertLessEqual(size, self.BOUND)
+        self.assertGreater(size, self.BOUND - 2 * width, "fewer lines were carried than the bound has room for")
+        self.assertTrue(all(len(ln) + 1 == width and ln.startswith(b"2026-09-20 10:00:00") for ln in lines),
+                        "a carried line is not a whole one")
+        numbers = [int(n) for n in self._live_activations()]
+        self.assertEqual(numbers, list(range(numbers[0], 6001)))        # the newest, none missing
+        self.assertLess(self.hist.stat().st_size, self.BOUND + 1024 * 1024)
+        self._settled()
+
+    def test_six_thousand_short_activation_lines_are_all_carried(self):
         self._big_history(activations=range(1, 6001))
         self._bash("echo rotate >/dev/null")
         carried = self._live_activations()
-        self.assertEqual(len(carried), 5000)
-        self.assertEqual((carried[0], carried[-1]), ("1001", "6000"))
+        self.assertEqual(len(carried), 6000)
+        self.assertEqual((carried[0], carried[-1]), ("1", "6000"))
 
     # -- where the new sequence cannot run ------------------------------------------------------
     def _path_without(self, tool):
@@ -546,7 +804,13 @@ class RotationArchiveIsIgnored(unittest.TestCase):
                         ".agent/alice/bash_history.archived-20260924-101010-42",
                         # the file a rotation prepares beside the history (task 174)
                         ".agent/bash_history.archived-20260924-101010-42.new",
-                        ".agent/alice/bash_history.archived-20260924-101010-42.new"):
+                        ".agent/alice/bash_history.archived-20260924-101010-42.new",
+                        # … what it reads out while it gives lines back, and the marker
+                        # that says an archive still owes some (impl panel round 1)
+                        ".agent/bash_history.archived-20260924-101010-42.owed.new",
+                        ".agent/bash_history.archived-20260924-101010-42.held.new",
+                        ".agent/bash_history.archived-owes",
+                        ".agent/alice/bash_history.archived-owes"):
                 r = subprocess.run([git, "-C", str(repo), "check-ignore", "-q", rel])
                 self.assertEqual(r.returncode, 0, f"{rel} is not ignored")
 
