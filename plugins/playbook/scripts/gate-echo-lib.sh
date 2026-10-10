@@ -786,7 +786,7 @@ write_log_append() {
     # write_log.py. Best-effort: never fail the tool call.
     # The paths cross into Python: canonical form at that boundary (task 151;
     # _canonical_path is the identity on Linux)
-    printf '%s' "$input" | python3 "$(_canonical_path "$(dirname "${BASH_SOURCE[0]}")")/write_log.py" \
+    printf '%s' "$input" | python3 -E -s "$(_canonical_path "$(dirname "${BASH_SOURCE[0]}")")/write_log.py" \
         "$(_canonical_path "$log_dir")" "$(_canonical_path "$project_dir")" 2>/dev/null || true
 }
 

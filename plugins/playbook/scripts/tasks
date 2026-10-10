@@ -29,7 +29,9 @@ fi
 # command, and a project folder `tasks/` holding a `cli.py` RAN instead of the CLI.
 # `-I` ignores PYTHONPATH too, so the program below puts the plugin directory on
 # sys.path itself and runs the module through runpy — which is what `-m` does.
-# PYTHONPATH is still exported, unchanged, for whatever the CLI starts.
-PYTHONPATH="${PLAYBOOK_PYPATH}${PYTHONPATH:+:${PYTHONPATH}}" \
-    exec python3 -I -c 'import runpy, sys; sys.path.insert(0, sys.argv.pop(1)); runpy.run_module("tasks.cli", run_name="__main__", alter_sys=True)' \
+# The plugin's directory is NOT put on PYTHONPATH (task 180): its packages are called
+# `tasks` and `provider`, and everything the CLI starts — a project's own verify
+# command among them — was handed them in front of its own. What the user had is
+# passed on as it was.
+exec python3 -I -c 'import runpy, sys; sys.path.insert(0, sys.argv.pop(1)); runpy.run_module("tasks.cli", run_name="__main__", alter_sys=True)' \
     "$PLAYBOOK_PYPATH" "$@"

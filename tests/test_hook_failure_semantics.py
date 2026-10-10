@@ -174,7 +174,9 @@ class CommandGuardCannotRun(unittest.TestCase):
                 "cg.classify_command = lambda *a, **k: time.sleep(30); sys.exit(cg.main())")
         (shim / "python3").write_text(
             "#!/bin/sh\n"
-            'case "$1" in *command_guard.py) exec "' + real + '" -c "' + hang.replace('"', '\\"') + '" "$1" ;; '
+            '# the guard is started `python3 -E -s <file>` (task 180): the file is the last word\n'
+            'for f in "$@"; do :; done\n'
+            'case "$f" in *command_guard.py) exec "' + real + '" -c "' + hang.replace('"', '\\"') + '" "$f" ;; '
             '*) exec "' + real + '" "$@" ;; esac\n',
             encoding="utf-8")
         (shim / "python3").chmod(0o755)

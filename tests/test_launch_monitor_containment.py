@@ -122,7 +122,8 @@ class LauncherDelegation(unittest.TestCase):
         self.assertIn("--ro-project", self.text)
 
     def test_the_exec_keeps_the_records_and_names_the_monitor_dir(self):
-        launch = self.text[self.text.rindex("exec env "):]
+        # the launch line no longer goes through `env PYTHONPATH=…` (task 180)
+        launch = self.text[self.text.rindex("exec python3 -I -c "):]
         self.assertIn('--ro-project --keep-records', launch)
         self.assertIn('--rw "$MONITOR_DIR"', launch)
 

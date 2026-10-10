@@ -95,8 +95,8 @@ fi
 
 # Isolated, like scripts/tasks (task 167): a project folder called `provider/` used to
 # be imported in place of the plugin's ("No module named provider.sandbox"). The
-# program puts the plugin directory on sys.path itself; PYTHONPATH stays exported for
-# the agent this starts.
-PYTHONPATH="${PLAYBOOK_PYPATH}${PYTHONPATH:+:${PYTHONPATH}}" \
-    exec python3 -I -c 'import runpy, sys; sys.path.insert(0, sys.argv.pop(1)); runpy.run_module("provider.sandbox", run_name="__main__", alter_sys=True)' \
+# program puts the plugin directory on sys.path itself. The plugin's directory is not
+# exported on PYTHONPATH (task 180): the agent this starts, and every tool it runs in
+# the project, would be handed the plugin's `tasks` and `provider` packages.
+exec python3 -I -c 'import runpy, sys; sys.path.insert(0, sys.argv.pop(1)); runpy.run_module("provider.sandbox", run_name="__main__", alter_sys=True)' \
     "$PLAYBOOK_PYPATH" "${FWD[@]}"

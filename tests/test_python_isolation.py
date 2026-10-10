@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""The plugin's launchers and inline programs are started isolated from the project (task 167, PLAN §S11 item 1).
+"""The plugin's launchers, inline programs and helper files are started isolated from the project and from
+the user's Python environment (task 167, PLAN §S11 item 1; task 180, items 19 and 20).
 
 Python puts the WORKING DIRECTORY first on `sys.path` for `python3 -c …`, for
 `python3 -` (a program on stdin) and for `python3 -m module`; for `python3 file.py`
@@ -17,16 +18,25 @@ call imports was imported in its place:
 variable out. The launchers cannot rely on `PYTHONPATH` under it, so they put the
 plugin directory on `sys.path` themselves and run the module through `runpy`.
 
+A helper started as a FILE was left alone by task 167 — the working directory does
+not reach it — and that was its row's first bound: the user's PYTHONPATH did, and
+PYTHONPATH comes before the standard library. With `PYTHONPATH=.` a project `os.py`
+took the destructive-command guard down with exit 1, which a PreToolUse hook does
+not take for a block; a broken `.pth` file in the user's own site-packages did the
+same. Task 180: every such helper is started `python3 -E -s <file>`, and the
+launchers no longer put the plugin's directory on PYTHONPATH for what they start.
+
 Three kinds of proof here:
   1. behaviour — the shipped entry points, run in a temp project that holds the
      shadowing file, each beside a control run in a clean project;
   2. a sweep over every shipped file: an inline program or a module is never
-     started without `-I`;
+     started without `-I`, a file of the plugin's never without `-E` and `-s`;
   3. the sweep's own rule, on strings it must refuse and strings it must accept.
 
-What is NOT claimed: helpers the hooks run as files are not isolated — the working
-directory does not reach them, a PYTHONPATH of the user's does (a test below shows
-it at the command guard; the ledger row states it as a bound).
+What is NOT claimed: a helper started by hand through its `#!` line reads the
+user's environment (nothing shipped starts one that way); the SYSTEM's site-packages
+are read by every helper (`-S` is not used); a codex configuration written before
+task 180 keeps its old command until it is regenerated.
 
 What the sweep does NOT see (said in the ledger row too): a call through a
 variable (`"$PY" -c …`), and — in Python sources — anything but an argv list that
@@ -237,7 +247,7 @@ class WhatTheCliStartsIsNotHandedThePluginsPackages(_Project):
 
     def _cli(self, *args, **extra):
         return self.run_in(self.project, [bash_or_skip(), SCRIPTS / "tasks", *args],
-                           PLAYBOOK_SESSION_ID="pid-180", **extra)
+                           PLAYBOOK_SESSION_ID="sess-task-180", **extra)
 
     def test_the_check_is_what_this_test_thinks_it_is(self):
         # CONTROL, outside the CLI: with the user's path the project's package is found;
@@ -395,7 +405,7 @@ class AUsersPythonpathDoesNotReachTheHelpers(_Project):
     is started `python3 -E -s <file>` now. Each entry point beside a control run
     WITHOUT the variable."""
     TRAPS = ("json.py", "os.py", "re.py", "tasks.py", "pathlib.py", "subprocess.py", "provider.py")
-    SID = "pid-180"
+    SID = "sess-task-180"      # not `pid-<number>`: that form counts only while the process is a live agent
 
     def setUp(self):
         super().setUp()
@@ -430,6 +440,23 @@ class AUsersPythonpathDoesNotReachTheHelpers(_Project):
                 self.assertNotIn("was imported", r.stdout + r.stderr)
                 self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
                 self.assertIn("BLOCKED", r.stdout + r.stderr)
+
+    def test_the_users_site_packages_do_not_reach_the_guard_either(self):
+        # `-s`: a `.pth` file in the user's own site-packages is run by every interpreter
+        # that starts in his environment — one that fails takes the guard down with it
+        where = self.run_in(self.clean, [sys.executable, "-c", "import site; print(site.getusersitepackages())"])
+        user_site = Path(where.stdout.strip())
+        self.assertTrue(str(user_site).startswith(str(self.home)), user_site)   # the temp HOME's, not the real one
+        user_site.mkdir(parents=True)
+        (user_site / "broken.pth").write_text("import sys; sys.exit('the user site ran')\n", encoding="utf-8")
+        seen = self.run_in(self.clean, [sys.executable, "-c", "pass"])
+        if "the user site ran" not in seen.stderr:
+            self.skipTest("this interpreter does not read a user site (a virtual environment)")
+        payload = {"tool_name": "Bash", "tool_input": {"command": "rm -rf /"}}
+        r = self._hook(self.clean, "command-guard-hook", payload)
+        self.assertNotIn("the user site ran", r.stdout + r.stderr)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("BLOCKED", r.stdout + r.stderr)
 
     def test_the_edit_gate_lets_an_authorized_edit_through(self):
         # it failed CLOSED here: the status reader died and every edit was refused

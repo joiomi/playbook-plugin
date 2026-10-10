@@ -237,7 +237,7 @@ PB_RELEASE=""
     IFS= read -r UNCHECKED   || PB_STATE_READ=false
     IFS= read -r FIRST_GATE  || PB_STATE_READ=false
     IFS= read -r PB_RELEASE  || PB_STATE_READ=false
-} < <(python3 "$HOOK_DIR/task-status.py" --fields "$TASK_FILE" 2>/dev/null) || PB_STATE_READ=false
+} < <(python3 -E -s "$HOOK_DIR/task-status.py" --fields "$TASK_FILE" 2>/dev/null) || PB_STATE_READ=false
 # Read tolerance: a CR-terminated field (`blocked\r`) would miss the exact
 # matches below; drop one trailing CR per field (same idiom as scripts/init's
 # manifest reader).

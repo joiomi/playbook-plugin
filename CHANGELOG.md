@@ -51,6 +51,19 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
+- **A `PYTHONPATH` that covers the project no longer switches the destructive-command guard off** (task 180,
+  PLAN S11 items 19 and 20; owner decisions 2026-10-10 and 2026-10-11). The helpers the hooks start as files —
+  the command guard, the status reader, the payload normalizer and the others — read the user's `PYTHONPATH`,
+  and `PYTHONPATH` comes before the standard library. With `PYTHONPATH=.` in the environment (direnv, an IDE's run
+  configuration) and a project file named like a standard module, the guard died with exit 1 on `rm -rf /` —
+  which a PreToolUse hook does not take for a block — and the edit gate refused every edit. A broken `.pth` file
+  in the user's own site-packages did the same. All 22 shipped calls that start such a helper, the hook commands
+  written into a codex configuration and the commands the merge skill gives now use `python3 -E -s <file>`; a
+  sweep refuses a bare `python3 <file>` from now on. And the launchers no longer put the plugin's directory on
+  `PYTHONPATH` for what they start: a project with its own package called `tasks` or `provider` could be handed
+  the plugin's in a verify command the CLI ran. Not covered: a helper started by hand through its `#!` line; the
+  system's site-packages; a codex configuration written before this version, until it is regenerated. As with
+  the inline programs (task 167), `PYTHONIOENCODING` and `PYTHONUTF8` no longer reach these helpers.
 - **A stray `.git` in the temp directory no longer changes what the verify contract's tests mean** (task 179,
   PLAN S11 item 30; owner decision 2026-10-10). A file named `.git` left in `/tmp` — a judge's experiment in its
   sandbox, where `/tmp` is writable by design — made git answer `not a git repository: (null)` in place of the

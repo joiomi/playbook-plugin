@@ -10268,7 +10268,7 @@
     {
       "id": "PB-RUNTIME-ISOLATED",
       "category": "compatibility-and-package",
-      "statement": "The plugin's launchers and inline programs are started with the project's directory off their import path. The CLI launcher (`scripts/tasks`), the sandbox launcher (`scripts/sandbox`) and the monitor launcher start their module under `python3 -I`, with the plugin directory put on `sys.path` by the launch line itself; every inline program a shipped script or command runs (`python3 -c …`, or `python3 -` with the program on stdin) carries `-I`. For these, a project file or folder named like a module they import — `json.py`, `tasks.py`, `tasks/`, `provider/` — is not imported, and not run, in its place, whatever the environment says. Helpers the hooks run as FILES are outside this statement (see the bounds).",
+      "statement": "The plugin's launchers, inline programs and helper files are started with the project's directory and the user's Python environment off their import path. The CLI launcher (`scripts/tasks`), the sandbox launcher (`scripts/sandbox`) and the monitor launcher start their module under `python3 -I`, with the plugin directory put on `sys.path` by the launch line itself; every inline program a shipped script or command runs (`python3 -c …`, or `python3 -` with the program on stdin) carries `-I`. For these, a project file or folder named like a module they import — `json.py`, `tasks.py`, `tasks/`, `provider/` — is not imported, and not run, in its place, whatever the environment says. Every helper a shipped script starts as a FILE — the payload normalizer, the status reader, the command guard, the batch-close check, the task-directory check, the write log, init's snapshot and CLAUDE.md merge, the monitor's sensor — and the commands the codex adapter writes into a configuration and the merge skill gives the agent, is started `python3 -E -s <file>`: neither `PYTHONPATH` nor the user's own site-packages reach it, and the file's own directory stays first, so it keeps its neighbours; with the user's `PYTHONPATH` covering the project, a project file named like a standard module does not take the destructive-command guard, the edit gate's status reader, the stop hook's or init down (task 180, PLAN S11 item 19). The launchers do not put the plugin's directory on `PYTHONPATH`: what the CLI, the sandbox or the monitor starts gets the user's value as it was, so a project's own `tasks` or `provider` package is not replaced by the plugin's in a command the CLI runs (task 180, item 20).",
       "owner": [
         {
           "path": "plugins/playbook/scripts/tasks",
@@ -10316,10 +10316,10 @@
           "boundary": "subprocess",
           "negative_control": {
             "path": "tests/test_python_isolation.py",
-            "reference": "WhatTheLaunchersHandToPython.test_the_users_own_pythonpath_is_still_passed_on"
+            "reference": "WhatTheLaunchersHandToPython.test_the_users_own_pythonpath_is_passed_on_as_it_was"
           },
           "limitations": [
-            "A stand-in `python3` prints what the launcher hands it: `-I -c <program> <plugin dir> <the arguments>` and the exported PYTHONPATH. It shows the launch line, not what Python does with it."
+            "A stand-in `python3` prints what the launcher hands it: `-I -c <program> <plugin dir> <the arguments>` and its PYTHONPATH — unset since task 180 (the plugin's directory was exported until then); the control gives the launcher a value of the user's, set, of two entries and empty, on the CLI and the sandbox launcher, and reads it back unchanged."
           ]
         },
         {
@@ -10398,19 +10398,6 @@
         {
           "type": "executable integration",
           "path": "tests/test_python_isolation.py",
-          "reference": "HelpersRunAsFilesAreNotGivenTheWorkingDirectory.test_what_the_row_admits_a_pythonpath_that_covers_the_project_still_reaches_them",
-          "boundary": "subprocess",
-          "negative_control": {
-            "path": "tests/test_python_isolation.py",
-            "reference": "HelpersRunAsFilesAreNotGivenTheWorkingDirectory.test_the_command_guard_is_a_file_helper_and_is_not_given_it_either"
-          },
-          "limitations": [
-            "Shows the first bound stated below, not a protection: with `PYTHONPATH=.` in the environment the destructive-command guard imports a project file and exits 1."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_python_isolation.py",
           "reference": "TheCliLauncherIgnoresProjectFiles.test_a_tasks_py_at_the_project_root",
           "boundary": "subprocess",
           "negative_control": {
@@ -10419,6 +10406,131 @@
           },
           "limitations": [
             "The real launcher (`scripts/tasks --version`) in a project that holds a `tasks.py` which raises when imported: exit code, stdout and stderr equal those of a clean project. The statement names `tasks.py` among its examples and no cited proof covered it until task 172 (task 170's binding audit) — the test itself dates from task 167."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_python_isolation.py",
+          "reference": "AUsersPythonpathDoesNotReachTheHelpers.test_the_command_guard_still_blocks",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_python_isolation.py",
+            "reference": "AUsersPythonpathDoesNotReachTheHelpers.test_the_flags_take_the_variable_away_from_one_interpreter_only"
+          },
+          "limitations": [
+            "Task 180, red first on an export of the unfixed commit: with the user's PYTHONPATH covering the project — `.`, the project's path, and that path behind another — the guard died in `site.py` importing the project's `os.py` (exit 1, which a PreToolUse hook does not take for a block). The first control in the test is a clean project without the variable; the named control shows that the flags take the variable from ONE interpreter and its children still get it."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_python_isolation.py",
+          "reference": "AUsersPythonpathDoesNotReachTheHelpers.test_the_users_site_packages_do_not_reach_the_guard_either",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task 180, red first on an export of the unfixed commit: a broken `.pth` file in the user's own site-packages (the temp HOME's) took the guard down the same way — what `-s` is for. Skipped where the interpreter reads no user site (a virtual environment)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_python_isolation.py",
+          "reference": "AUsersPythonpathDoesNotReachTheHelpers.test_the_edit_gate_lets_an_authorized_edit_through",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_python_isolation.py",
+            "reference": "HelpersRunAsFilesAreNotGivenTheWorkingDirectory.test_the_status_reader"
+          },
+          "limitations": [
+            "Task 180, red first on an export of the unfixed commit: the status reader died and the edit gate answered `BLOCKED: could not read the active task's ## Status` for an authorized edit (it fails closed there). A hand-made task record and session pointer."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_python_isolation.py",
+          "reference": "AUsersPythonpathDoesNotReachTheHelpers.test_the_stop_hook_reads_the_task_as_it_does_without_it",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task 180, red first on an export of the unfixed commit: the stop hook printed its fallback warning (`could not read the task state via python3`). The session's counters hold real activity so that the hook reaches its reading of the task; its answer is compared whole with a clean project's."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_python_isolation.py",
+          "reference": "AUsersPythonpathDoesNotReachTheHelpers.test_init_initialises_the_project",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task 180, red first on an export of the unfixed commit: `scripts/init` stopped at `could not take the pre-init snapshot`. Run whole in a temp project and a temp HOME."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_python_isolation.py",
+          "reference": "AUsersPythonpathDoesNotReachTheHelpers.test_the_command_the_codex_adapter_writes_into_a_configuration",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task 180, red first on an export of the unfixed commit: the generated command was `python3 <script>`. The three hook scripts' commands are run through bash with the variable set; an EXISTING codex configuration is not rewritten by anything here."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_python_isolation.py",
+          "reference": "EveryShippedInlinePythonIsIsolated.test_the_sweep_sees_every_file_call_file_by_file",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_python_isolation.py",
+            "reference": "TheSweepsRule.test_lines_it_accepts"
+          },
+          "limitations": [
+            "Task 180: an exact table, file by file, of the 22 calls that start a FILE of the plugin's, each seen as isolated. On the unfixed tree the sweep reported exactly those 22 as problems, and the fix inserted the flags at exactly the calls the rule had refused."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_python_isolation.py",
+          "reference": "EveryShippedInlinePythonIsIsolated.test_no_shipped_python_source_starts_a_file_through_an_argv_list",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 180: the sweep reads an argv list for its mode flag only; this asserts that no shipped Python source hands the interpreter a file that way, so that none goes unjudged."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_python_isolation.py",
+          "reference": "WhatTheCliStartsIsNotHandedThePluginsPackages.test_a_close_runs_the_projects_check_against_the_projects_package",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_python_isolation.py",
+            "reference": "WhatTheCliStartsIsNotHandedThePluginsPackages.test_the_check_is_what_this_test_thinks_it_is"
+          },
+          "limitations": [
+            "Task 180, red first on an export of the unfixed commit: the close's verify showed `[FAIL exit 1] python3 tools/check.py` — the check had imported the plugin's `tasks`. The real launcher, a git project with its own `tasks` package reached through the user's PYTHONPATH, a hand-made reversible task; the control shows the same check outside the CLI with the user's path and with the launcher's old prefix."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_python_isolation.py",
+          "reference": "WhatTheLaunchersHandToPython.test_the_sandbox_launcher",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_python_isolation.py",
+            "reference": "WhatTheLaunchersHandToPython.test_the_users_own_pythonpath_is_passed_on_as_it_was"
+          },
+          "limitations": [
+            "Task 180: the sandbox launcher's line seen from a stand-in interpreter — PYTHONPATH unset. `--list-agents` only."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_python_isolation.py",
+          "reference": "WhatTheLaunchersHandToPython.test_the_monitor_launcher_exports_nothing_either",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 180: the monitor launcher's two launch lines would start an agent; that no line of the file outside a comment assigns PYTHONPATH is read from its text."
           ]
         }
       ],
@@ -10433,10 +10545,10 @@
       "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
         "Row added by task 167 (PLAN S11 fix batch, item 1; owner 2026-10-09: \"Repar în lotul S11 (Recomandat)\"). Until then 51 shipped calls ran inline code or a plugin module with the working directory first on sys.path; the wrapper's resolver (task 115) and the stop hook (task 072) were the only isolated ones.",
-        "Bound: helpers the hooks run as FILES (`python3 <file>`: the payload normalizer, the status reader, the command guard, the batch-close check and others) are NOT isolated. For a file Python puts the file's directory first, not the working directory (control: HelpersRunAsFilesAreNotGivenTheWorkingDirectory), so the project's directory alone does not reach them — but they read PYTHONPATH, which comes before the standard library. Measured (impl panel r1, opus and codex-medium): with `PYTHONPATH=.` in the user's environment and a `json.py` at the project root, `command-guard-hook` exits 1 on `rm -rf /` instead of blocking it (exit 2), and `task-status.py` exits 1, on which the edit gate blocks every edit. Under `-I` these helpers would lose the neighbours they import; `python3 -E -s <file>` keeps the file's directory and drops PYTHONPATH (measured on those two). Not done in task 167: parked there for the owner's routing.",
-        "Bound: the launchers still EXPORT `PYTHONPATH=<plugin dir>` to whatever the CLI or the sandbox starts (unchanged by task 167). The plugin's packages are named `tasks` and `provider`; a project command started by the CLI that imports a package of that name without its own directory first on sys.path can be handed the plugin's. Parked in task 167; not covered by this row.",
+        "Task 180 (PLAN S11 item 19; owner 2026-10-10: \"Acum, în S11 (Recomandat)\") REMOVED what was this row's first bound — \"helpers the hooks run as FILES are NOT isolated\": with `PYTHONPATH=.` in the user's environment a project file named like a standard module took the destructive-command guard down with exit 1, and a broken `.pth` file in the user's own site-packages did the same (found while that task asked what proves the `-s`). Bounds of the fix, stated and not removed: (1) a helper started BY HAND through its `#!` line reads the user's environment — nothing shipped starts one that way (searched; no test sweeps for it); (2) `-E -s` leaves the SYSTEM's site-packages and their `.pth` files in — `-S` is not used; (3) a codex configuration written before task 180 keeps `python3 <script>` until it is regenerated; (4) the helper's own directory stays first on sys.path, on purpose: a file planted in the PLUGIN's scripts directory is not this row's; (5) the sweep judges a FILE call only when the word after the flags begins like a path the plugin builds — a variable, an absolute or dotted path, the merge skill's `<…-dir>/` placeholder; a bare relative path is taken for a project's own script and not judged, and a command built as a STRING in a Python source is not read (one exists, the codex adapter's, and is tested by itself).",
+        "Task 180 (PLAN S11 item 20; owner 2026-10-10: \"Îl scot, în același task (Recomandat)\") REMOVED the second bound — the launchers exported `PYTHONPATH=<plugin dir>` to whatever the CLI or the sandbox starts, in front of the user's own value. Bound of the fix: a tool of the user's that had come to lean on finding the plugin's `tasks` or `provider` on PYTHONPATH no longer finds them; nothing shipped did (the whole suite is the evidence).",
         "Bound: the sweep reads text. A call through a variable, or an interpreter spelled otherwise (`python`, `python3.12`), is not seen; a test asserts that no shipped script reaches Python through a variable today, by the variable names it knows. In Python sources only an argv list that starts with `sys.executable`, or with the interpreter's name as a literal, is read; a command handed to a shell as one string would not be (no shipped module does that).",
-        "Bound: `-I` ignores every `PYTHON*` variable, not only PYTHONPATH. A PYTHONIOENCODING or PYTHONUTF8 set by the user no longer reaches the isolated calls. Measured on Linux with `LC_ALL=C`, `C.UTF-8` and the default locale: stdin and stdout are UTF-8 with and without `-I`. A non-UTF-8 locale was not installed on the measuring host and is not measured."
+        "Bound: `-I` ignores every `PYTHON*` variable, not only PYTHONPATH. A PYTHONIOENCODING or PYTHONUTF8 set by the user no longer reaches the isolated calls. Measured on Linux with `LC_ALL=C`, `C.UTF-8` and the default locale: stdin and stdout are UTF-8 with and without `-I`. A non-UTF-8 locale was not installed on the measuring host and is not measured. Since task 180 the same holds for the helper files (`-E`): in a locale that is neither UTF-8 nor C, a user who had set one of them to keep a helper's output encodable loses that for the helpers too — not measured, for the same reason; and PYTHONDONTWRITEBYTECODE is ignored, so the plugin's modules are compiled beside themselves wherever that directory is writable."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],

@@ -46,4 +46,4 @@ if [ ! -r "$GUARD" ]; then
          "Reinstall/repair the Playbook plugin to restore it." >&2
     exit 0
 fi
-exec python3 "$GUARD"
+exec python3 -E -s "$GUARD"

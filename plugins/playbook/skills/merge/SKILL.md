@@ -237,7 +237,7 @@ commit.
 
 > **Speed (optional): start the project's verify command now, in the background.**
 > Applies only if the project declares one (`merge_verify.command`; check without
-> running it: `python3 <this-skill-dir>/merge-verify.py --plan` — exit 4 means a
+> running it: `python3 -E -s <this-skill-dir>/merge-verify.py --plan` — exit 4 means a
 > command is declared, exit 3 means there is none and this note doesn't apply.
 > Exit 4 is deliberately NOT 0: a classification never satisfies the push gate).
 > Once code
@@ -255,7 +255,7 @@ commit.
 > # by GNU mktemp (`mktemp -t name` is BSD-only and errors on Linux).
 > verify_log=$(mktemp "${TMPDIR:-/tmp}/merge-verify-log.XXXXXX")
 > echo "verify log: $verify_log"   # PRINT it — a later shell can't see this variable
-> ( python3 <this-skill-dir>/merge-verify.py; echo "merge-verify wrapper exit=$?" ) > "$verify_log" 2>&1 &
+> ( python3 -E -s <this-skill-dir>/merge-verify.py; echo "merge-verify wrapper exit=$?" ) > "$verify_log" 2>&1 &
 > ```
 > At Step 7(e) read that printed path back: it ends in `merge-verify wrapper exit=<0|1|2|3>`
 > (the same four-way verdict Step 7(e) documents). **Trust it only if** the log is
@@ -326,7 +326,7 @@ anything red:
 #     no stale self-refs in the renumbered region, and — vs --base — no mirror
 #     drift / newly-unarchived full node). ref-integrity.py ships in THIS skill's
 #     directory; run it from the repo root:
-python3 <this-skill-dir>/ref-integrity.py --remap <OLD:NEW,...> --base "$base"   # $base from Step 1
+python3 -E -s <this-skill-dir>/ref-integrity.py --remap <OLD:NEW,...> --base "$base"   # $base from Step 1
 #     ALWAYS pass --base "$base" — the differential mirror + archive-completeness
 #     checks (which catch a skipped Step 6) only run with it. Omit ONLY --remap
 #     when the merge did no renumber.
@@ -376,7 +376,7 @@ git diff "$target_before" -- ':/' ':(exclude,top)MIND_MAP.md' ':(exclude,top)MIN
 #       .agent/config.json → {"merge_verify": {"command": "<green for THIS repo>"}}
 #     merge-verify.py ships in THIS skill's directory. Run it from the repo root;
 #     don't pipe it through `| tail` (the pipe's exit status would be tail's 0):
-python3 <this-skill-dir>/merge-verify.py
+python3 -E -s <this-skill-dir>/merge-verify.py
 #     Exit code IS the verdict — 0 GREEN (ran, exited 0) / 1 FAILED (ran, non-zero)
 #     / 2 BLOCKED (merge_verify present but unusable — malformed JSON, wrong shape,
 #     misspelled key, or present-but-unreadable) / 3 SKIPPED (nothing declared: no

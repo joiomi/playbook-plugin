@@ -516,7 +516,7 @@ class StatusFenceAware(unittest.TestCase):
     def test_f3_reads_status_through_the_shared_script_not_awk(self):
         src = (SCRIPTS / "task-gate-hook").read_text(encoding="utf-8")
         self.assertFalse("STATUS=$(awk" in src, "F3 must not re-implement the status reader in awk")
-        self.assertRegex(src, r'python3 "\$HOOK_DIR/task-status\.py" "\$RESOLVED"',
+        self.assertRegex(src, r'python3 -E -s "\$HOOK_DIR/task-status\.py" "\$RESOLVED"',
                          "F3 must read the resolved task through scripts/task-status.py")
         tf = self._task(TASK.format(n="012"))
         self.assertEqual(self._f3_reads(tf), "pending")
@@ -1112,7 +1112,8 @@ class BlockedEndToEnd(unittest.TestCase):
         real = sys.executable.replace("\\", "/")
         # Only the status read crashes; payload normalization keeps working.
         (shim / "python3").write_text(
-            "#!/bin/sh\ncase \"$1\" in *task-status.py) echo 'task-status: cannot import tasks.core' >&2; exit 1;; esac\n"
+            "#!/bin/sh\n# the helper is started `python3 -E -s <file> <task.md>` (task 180): look at every word\n"
+            "case \" $* \" in *task-status.py\\ *) echo 'task-status: cannot import tasks.core' >&2; exit 1;; esac\n"
             f"exec \"{real}\" \"$@\"\n", encoding="utf-8")
         os.chmod(shim / "python3", 0o755)
         sd = self.project / ".agent" / "sessions" / SID

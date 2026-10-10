@@ -338,7 +338,7 @@ PYEOF
     echo ""
     if [ "$LINES" -gt 0 ]; then
         EPHEMERAL_OFFSET=$(mktemp)
-        python3 "$MONITOR_SRC/sensor.py" "$RECENT_FILE" --from-start --offset-file "$EPHEMERAL_OFFSET" 2>/dev/null || echo "(sensor error)"
+        python3 -E -s "$MONITOR_SRC/sensor.py" "$RECENT_FILE" --from-start --offset-file "$EPHEMERAL_OFFSET" 2>/dev/null || echo "(sensor error)"
         rm -f "$EPHEMERAL_OFFSET"
     else
         echo "(no events in the last $LOOKBACK seconds — agent is idle)"
@@ -376,7 +376,7 @@ cat >> $MONITOR_DIR/session.md <<'JUDGMENT'
 JUDGMENT
 
 ### WAIT FOR NEXT TURN (block until agent hits stop_reason=end_turn)
-python3 $MONITOR_SRC/sensor.py $JSONL --pointer-file $POINTER_FILE --wait-once --offset-file $OFFSET_FILE --trace-file $TRACE_FILE
+python3 -E -s $MONITOR_SRC/sensor.py $JSONL --pointer-file $POINTER_FILE --wait-once --offset-file $OFFSET_FILE --trace-file $TRACE_FILE
 
 ---
 

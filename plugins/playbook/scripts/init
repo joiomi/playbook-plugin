@@ -136,7 +136,7 @@ $PROJECT_DIR/.agent
 $HOME/.claude"
     if ! TXN_OUT=$(PB_TXN_PROJECT_ROOT="$PROJECT_DIR" PB_TXN_HOME="$HOME" \
         PB_TXN_STAMP="$TXN_STAMP" PB_TXN_FILES="$TXN_FILES" PB_TXN_DIRS="$TXN_DIRS" \
-        python3 "$SCRIPT_DIR/init_txn.py" begin 2>&1); then
+        python3 -E -s "$SCRIPT_DIR/init_txn.py" begin 2>&1); then
         echo "init: could not take the pre-init snapshot — aborting before any change." >&2
         printf '%s\n' "$TXN_OUT" >&2
         exit 1
@@ -161,7 +161,7 @@ _pb_rollback_finalize() {
     [ "$rc" -eq 0 ] && exit 0
     echo "" >&2
     echo "playbook init FAILED (exit $rc) — restoring the pre-init state." >&2
-    if ! python3 "$SCRIPT_DIR/init_txn.py" restore --manifest "$TXN_MANIFEST" >&2; then
+    if ! python3 -E -s "$SCRIPT_DIR/init_txn.py" restore --manifest "$TXN_MANIFEST" >&2; then
         echo "init: rollback hit errors — inspect the preserved backup:" >&2
         echo "  project: $TXN_PROJECT_BACKUP" >&2
         echo "  user:    $TXN_USER_BACKUP" >&2
@@ -568,7 +568,7 @@ fi
 # I4: guard the assignment — `set -e` aborts on a bare `VAR=$(cmd)` when cmd
 # fails, which would kill init here (before the FAILED handler + summary) on any
 # CLAUDE.md merge failure. The `if` form captures output AND rc without aborting.
-if MERGE_OUT=$(python3 "$SCRIPT_DIR/claude-md-merge.py" \
+if MERGE_OUT=$(python3 -E -s "$SCRIPT_DIR/claude-md-merge.py" \
     "$SCRIPT_DIR/CLAUDE.md.template" \
     "$PROJECT_DIR" "$PROJECT_NAME" 2>&1); then
     MERGE_RC=0

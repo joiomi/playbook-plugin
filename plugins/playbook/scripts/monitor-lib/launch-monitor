@@ -124,8 +124,8 @@ python3 -I -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/
 # the exec still refuses — with the monitor's state already reset.)
 # Both calls run isolated, like scripts/sandbox (task 167): the program puts the plugin
 # directory on sys.path itself, so a project folder called `provider/` is not imported.
-env PYTHONPATH="$PLUGIN_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
-    python3 -I -c 'import runpy, sys; sys.path.insert(0, sys.argv.pop(1)); runpy.run_module("provider.sandbox", run_name="__main__", alter_sys=True)' \
+# Neither exports the plugin's directory on PYTHONPATH (task 180, as scripts/sandbox).
+python3 -I -c 'import runpy, sys; sys.path.insert(0, sys.argv.pop(1)); runpy.run_module("provider.sandbox", run_name="__main__", alter_sys=True)' \
     "$PLUGIN_ROOT" --agent claude --ro-project --keep-records \
     --project-root "$PROJECT_DIR" --print-argv -- preflight >/dev/null || exit 2
 
@@ -178,8 +178,7 @@ That was your bootstrap output. Based on the briefing above, form your initial j
 # arrives via $SEED, so it loses nothing.
 # --keep-records (task 138): the monitor reads .agent/sessions/<id>/transcript_path,
 # which the judges' read-only sandbox hides.
-exec env PYTHONPATH="$PLUGIN_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
-    python3 -I -c 'import runpy, sys; sys.path.insert(0, sys.argv.pop(1)); runpy.run_module("provider.sandbox", run_name="__main__", alter_sys=True)' \
+exec python3 -I -c 'import runpy, sys; sys.path.insert(0, sys.argv.pop(1)); runpy.run_module("provider.sandbox", run_name="__main__", alter_sys=True)' \
     "$PLUGIN_ROOT" --agent claude --ro-project --keep-records \
     --rw "$MONITOR_DIR" --project-root "$PROJECT_DIR" \
     -- --dangerously-skip-permissions --safe-mode "${ARGS[@]}" "$SEED"

@@ -141,7 +141,7 @@ PB_FRAME_COMPLETE=true
     IFS= read -r -d '' PB_CMD        || PB_FRAME_COMPLETE=false
     IFS= read -r -d '' PB_TRANSCRIPT || PB_FRAME_COMPLETE=false
     IFS= read -r -d '' PB_PAYLOAD    || PB_FRAME_COMPLETE=false
-} < <(printf '%s' "$INPUT" | python3 "$HOOK_DIR/hook-payload-normalize.py" --emit-fields 2>/dev/null) || true
+} < <(printf '%s' "$INPUT" | python3 -E -s "$HOOK_DIR/hook-payload-normalize.py" --emit-fields 2>/dev/null) || true
 
 if [ "$PB_SENTINEL" = "pb-fields-v2" ] && [ "$PB_FRAME_COMPLETE" = true ]; then
     PB_FUSED=1
@@ -155,7 +155,7 @@ else
     # claude payloads), then read the fields the guards below need up front.
     TOOL_NAME=""; FILE_PATH=""; NORM_PATH=""; PB_CMD=""
     NORMALIZED=""
-    if NORMALIZED=$(printf '%s' "$INPUT" | python3 "$HOOK_DIR/hook-payload-normalize.py" 2>/dev/null) \
+    if NORMALIZED=$(printf '%s' "$INPUT" | python3 -E -s "$HOOK_DIR/hook-payload-normalize.py" 2>/dev/null) \
        && [ -n "$NORMALIZED" ]; then
         INPUT="$NORMALIZED"
     fi
@@ -276,7 +276,7 @@ if [ "$TOOL_NAME" = "Write" ]; then
         # creation in this project pass as a rewrite). Exit 0 = creates nothing here;
         # 1 = it does, or may. Any other exit means the helper did not run (missing,
         # unreadable): the guard then decides as it did before it had a scope.
-        if printf '%s' "$FILE_PATH" | PB_PROJECT="$PROJECT_DIR" python3 "$HOOK_DIR/task-dir-target.py" --creates 2>/dev/null; then
+        if printf '%s' "$FILE_PATH" | PB_PROJECT="$PROJECT_DIR" python3 -E -s "$HOOK_DIR/task-dir-target.py" --creates 2>/dev/null; then
             PB_CREATES=0
         else
             PB_CREATES=$?
@@ -337,7 +337,7 @@ if [ "$TOOL_NAME" = "Edit" ] || [ "$TOOL_NAME" = "Write" ] || [ "$TOOL_NAME" = "
             *) PB_IS_ACTIVE_RECORD=false ;;
         esac
         if [ -n "$ACTIVE_TASK" ] && [ "$PB_IS_ACTIVE_RECORD" = true ] \
-           && ! printf '%s' "$FILE_PATH" | PB_PROJECT="$PROJECT_DIR" python3 "$HOOK_DIR/task-dir-target.py" --path 2>/dev/null; then
+           && ! printf '%s' "$FILE_PATH" | PB_PROJECT="$PROJECT_DIR" python3 -E -s "$HOOK_DIR/task-dir-target.py" --path 2>/dev/null; then
             # "The guard could not run" => fail OPEN, loudly (uniform policy).
             # `python3 <missing-file>` exits 2, which is INDISTINGUISHABLE from
             # gate-batch-check's own legitimate block-with-exit-2 — so a missing
@@ -354,7 +354,7 @@ if [ "$TOOL_NAME" = "Edit" ] || [ "$TOOL_NAME" = "Write" ] || [ "$TOOL_NAME" = "
                      "(failing open). Reinstall/repair the Playbook plugin." >&2
             else
                 BATCH_RC=0
-                BATCH_MSG=$(echo "$INPUT" | python3 "$BATCH_HELPER" \
+                BATCH_MSG=$(echo "$INPUT" | python3 -E -s "$BATCH_HELPER" \
                     --tool "$TOOL_NAME" --file "$TASK_MD_PATH" \
                     --session-dir "$SESSION_DIR" 2>/dev/null) || BATCH_RC=$?
                 if [ "$BATCH_RC" = "2" ]; then
@@ -456,7 +456,7 @@ MSG
                     # reopened the stale-done bypass whenever core was broken).
                     # A status the reader DID print (`pending`, `unknown`, …) that
                     # is not `done*` authorizes, as before.
-                    if ! STATUS=$(python3 "$HOOK_DIR/task-status.py" "$RESOLVED" 2>/dev/null); then
+                    if ! STATUS=$(python3 -E -s "$HOOK_DIR/task-status.py" "$RESOLVED" 2>/dev/null); then
                         journal_enforcement "$PB_JOURNAL_DIR" task-gate block "status unreadable" \
                             "$SESSION_ID" "$TOOL_NAME" "$NORM_PATH"
                         cat >&2 <<MSG
@@ -556,7 +556,7 @@ MSG
     # (`mk{d,z}ir`), which only the helper's brace expansion can see.
     if { printf '%s' "$CMD" | tr -d "'\"\\\\" | grep -qE '(^|[^[:alnum:]_])mkdir([^[:alnum:]_]|$)' \
          || printf '%s' "$CMD" | grep -qF -e "\$'" -e "{"; } \
-       && ! printf '%s' "$CMD" | PB_PROJECT="$PROJECT_DIR" python3 "$HOOK_DIR/task-dir-target.py" 2>/dev/null; then
+       && ! printf '%s' "$CMD" | PB_PROJECT="$PROJECT_DIR" python3 -E -s "$HOOK_DIR/task-dir-target.py" 2>/dev/null; then
         # Task 110 (109 G2-13): this refusal was the one task-gate block with no
         # journal line (Guard 0's Write refusal above logs one).
         journal_enforcement "$PB_JOURNAL_DIR" task-gate block "manual task dir creation" \

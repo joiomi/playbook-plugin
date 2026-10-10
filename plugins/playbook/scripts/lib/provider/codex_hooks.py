@@ -248,8 +248,12 @@ def playbook_scripts_dir() -> Path:
 
 
 def _command_for(script_name: str) -> str:
+    """The command a codex configuration runs for one hook. `-E -s`: the script is
+    started in the user's environment, and a `PYTHONPATH` that covers the project put a
+    project file named like a module in the place of the standard library's (task 180).
+    A configuration written before keeps the old command until it is regenerated."""
     script_path = playbook_scripts_dir() / script_name
-    return f"python3 {shlex.quote(str(script_path))}"
+    return f"python3 -E -s {shlex.quote(str(script_path))}"
 
 
 def _playbook_hook_entry(script_name: str, matcher: str | None = None) -> dict:

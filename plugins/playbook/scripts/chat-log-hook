@@ -130,7 +130,7 @@ INPUT=$(cat)
 # <user_query> tags and uses camelCase keys; identity for claude payloads;
 # fail-open on any error). See scripts/hook-payload-normalize.py (task 014).
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
-NORMALIZED=$(printf '%s' "$INPUT" | python3 "$HOOK_DIR/hook-payload-normalize.py" 2>/dev/null || true)
+NORMALIZED=$(printf '%s' "$INPUT" | python3 -E -s "$HOOK_DIR/hook-payload-normalize.py" 2>/dev/null || true)
 if [ -n "$NORMALIZED" ]; then
     INPUT="$NORMALIZED"
 fi

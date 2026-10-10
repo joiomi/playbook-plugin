@@ -130,14 +130,14 @@ PB_FRAME_COMPLETE=true
     IFS= read -r -d '' PB_CMD        || PB_FRAME_COMPLETE=false
     IFS= read -r -d '' PB_TRANSCRIPT || PB_FRAME_COMPLETE=false
     IFS= read -r -d '' PB_PAYLOAD    || PB_FRAME_COMPLETE=false
-} < <(printf '%s' "$INPUT" | python3 "$HOOK_DIR/hook-payload-normalize.py" --emit-fields 2>/dev/null) || true
+} < <(printf '%s' "$INPUT" | python3 -E -s "$HOOK_DIR/hook-payload-normalize.py" --emit-fields 2>/dev/null) || true
 
 if [ "$PB_SENTINEL" = "pb-fields-v2" ] && [ "$PB_FRAME_COMPLETE" = true ]; then
     PB_FUSED=1
     INPUT="$PB_PAYLOAD"
 else
     TOOL_NAME=""; PB_PATH=""; PB_NORM=""; PB_CMD=""; PB_TRANSCRIPT=""
-    NORMALIZED=$(printf '%s' "$INPUT" | python3 "$HOOK_DIR/hook-payload-normalize.py" 2>/dev/null || true)
+    NORMALIZED=$(printf '%s' "$INPUT" | python3 -E -s "$HOOK_DIR/hook-payload-normalize.py" 2>/dev/null || true)
     if [ -n "$NORMALIZED" ]; then
         INPUT="$NORMALIZED"
     fi
