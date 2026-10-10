@@ -1733,5 +1733,109 @@ class RecordsOnlyDelta(unittest.TestCase):
         self.assertIn("## Status\nin_progress", self._receipt(td))   # not closed (task 140: activation writes in_progress)
 
 
+# ── task 178 (with PLAN S11 item 28; task 168's parked note): a judge never started ──
+
+class NoJudgeStartedLeavesNoTraceOfACall(unittest.TestCase):
+    """When the adapter cannot be built nothing was launched (`started is False`). The
+    runner used to print "… calling the certifying judge" before it tried, and — with a
+    clean tree — to save `tail-cert.log` as "judge output" and to write a spend record
+    for a call that was never made, a few lines before the close said "no judge was
+    called". Driven through the REAL raw runner; only the adapter is a stand-in."""
+
+    class _Answers:
+        """A provider adapter whose judge answers `said` (the run's nonce filled in)."""
+        said = "TAIL-CERT {n}: PASS\n"
+
+        def __init__(self, **kw):
+            pass
+
+        def run_headless_judge(self, *, prompt, **kw):
+            import re
+            n = re.search(r"TAIL-CERT ([0-9a-f]+):", prompt).group(1)
+            return self.said.replace("{n}", n)
+
+    @staticmethod
+    def _cannot_build(name):
+        raise ValueError("no such backend")
+
+    def _run(self, adapter_class):
+        import contextlib
+        import io
+        import shutil
+        from unittest import mock
+
+        import tasks.review as R
+        d = _repo()
+        self.addCleanup(shutil.rmtree, d, True)
+        (d / "docs").mkdir()
+        td = d / ".agent" / "tasks" / "001-t"
+        td.mkdir(parents=True)
+        tf = td / "task.md"
+        tf.write_text("# 001\n", encoding="utf-8")
+        snap = build_panel_snapshot(d, tree_state_fingerprint(d))
+        (d / "docs" / "g.md").write_text("# d\n", encoding="utf-8")
+        why, err = [], io.StringIO()
+        with mock.patch("provider.subagent._adapter_class", adapter_class), \
+                mock.patch.object(R, "_journal_review_spend") as spend, \
+                contextlib.redirect_stderr(err):
+            verdict = R.run_tail_cert_judge(d, snap, ["docs/g.md"], "PANEL PASS", why=why, task_file=tf)
+        return verdict, why, err.getvalue(), spend, td / R.TAIL_CERT_LOG
+
+    def test_nothing_is_said_to_be_called_when_nothing_could_be_started(self):
+        verdict, why, err, spend, log = self._run(self._cannot_build)
+        self.assertIsNone(verdict)
+        self.assertEqual([k for k, _ in why], ["no-judge"])
+        self.assertNotIn("calling the certifying judge", err)
+        self.assertNotIn("judge output", err)
+
+    def test_no_spend_record_for_a_call_that_was_never_made(self):
+        verdict, why, err, spend, log = self._run(self._cannot_build)
+        self.assertEqual([k for k, _ in why], ["no-judge"])
+        spend.assert_not_called()
+
+    def test_the_reason_is_still_saved_under_a_line_that_says_no_judge_ran(self):
+        verdict, why, err, spend, log = self._run(self._cannot_build)
+        self.assertTrue(log.is_file(), "the reason was not saved")
+        body = log.read_text(encoding="utf-8")
+        self.assertIn("NO JUDGE RAN", body.splitlines()[0])
+        self.assertIn("no such backend", body)
+        self.assertIn(f"no judge was started — the reason is saved: {log}", err)
+
+    def test_control_a_judge_that_ran_is_announced_once_recorded_once_and_its_output_saved(self):
+        verdict, why, err, spend, log = self._run(lambda name: self._Answers)
+        self.assertEqual(verdict, "PASS", err)
+        self.assertEqual(why, [])
+        self.assertEqual(err.count("calling the certifying judge"), 1)
+        self.assertEqual(spend.call_count, 1)
+        self.assertEqual(spend.call_args.kwargs["kind"], "tail-cert")
+        self.assertEqual(spend.call_args.kwargs["status"], "ok")
+        self.assertIn(f"tail-cert judge output saved: {log}", err)
+        body = log.read_text(encoding="utf-8")
+        self.assertNotIn("NO JUDGE RAN", body)
+        self.assertIn(": PASS", body)
+
+    def test_control_a_judge_that_ran_and_failed_is_announced_and_recorded_too(self):
+        class _Fails(self._Answers):
+            said = "(FAILED — exit 1)\nboom\n"
+        verdict, why, err, spend, log = self._run(lambda name: _Fails)
+        self.assertIsNone(verdict)
+        self.assertEqual([k for k, _ in why], ["judge"])
+        self.assertEqual(err.count("calling the certifying judge"), 1)
+        self.assertEqual(spend.call_count, 1)
+        self.assertIn("judge output saved", err)
+        self.assertNotIn("NO JUDGE RAN", log.read_text(encoding="utf-8"))
+
+    def test_control_an_error_out_of_the_call_itself_is_a_call_that_was_made(self):
+        # raised by the adapter's call — before, during or after the judge's process: the
+        # runner claims neither (task 165, post-D6 run 2), so it stays announced and recorded
+        class _Raises(self._Answers):
+            def run_headless_judge(self, **kw):
+                raise RuntimeError("broke after the run")
+        verdict, why, err, spend, log = self._run(lambda name: _Raises)
+        self.assertEqual([k for k, _ in why], ["judge"])
+        self.assertEqual(err.count("calling the certifying judge"), 1)
+        self.assertEqual(spend.call_count, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

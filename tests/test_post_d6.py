@@ -1111,5 +1111,227 @@ class EndToEnd(unittest.TestCase):
         self.assertRegex(rnd["round_id"], r"^[0-9a-f]{12}$", "the panel wrote no Round-id")
 
 
+# ── task 178 (PLAN S11 item 28): the ORDER of what the judge is handed, and what was cut ──
+
+class DeltaOrder(_TmpDir):
+    """The delta is handed file by file: code first, then tests, then docs, the ledger
+    and records — inside each class the smaller diff first — and the text names what did
+    not fit. Until task 178 it went out in git's path order, the outer scope first: on
+    task 174 a rewritten ledger row used the budget up and ONE line of the code's diff was
+    handed over, none of the tests'. Every test compares against the per-file diff git
+    itself gives for that path."""
+    EXC = [":(exclude).agent"]
+    FILES = {"CHANGELOG.md": "# log\n", "docs/ledger.json": "{}\n",
+             "plugins/code.py": "a = 1\n", "tests/test_code.py": "t = 1\n"}
+
+    def setUp(self):
+        super().setUp()
+        self.repo = self.tmp / "r"
+        self._init(self.repo, self.FILES)
+
+    def _init(self, repo, files):
+        repo.mkdir(parents=True)
+        _git(repo, "init", "-q")
+        _git(repo, "config", "user.email", "t@t")
+        _git(repo, "config", "user.name", "t")
+        self._write(repo, files)
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-q", "-m", "c0")
+
+    @staticmethod
+    def _write(repo, files):
+        for rel, body in files.items():
+            p = repo / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(body, encoding="utf-8")
+
+    def _snap(self, scopes):
+        from tasks.core import _scope_identity
+        return {"v": 1, "tree_fp": "f", "exclude": self.EXC,
+                "scopes": {name: {"commit": "x", "dirty": {}, "base": base,
+                                  "identity": _scope_identity(self.repo, repo)}
+                           for name, (repo, base) in scopes.items()}}
+
+    def _one(self, repo, base, rel):
+        """Git's own diff of ONE path, base → the working tree as it is now."""
+        cur = post_d6.worktree_tree(repo, self.EXC)
+        out = subprocess.run(["git", "diff", "--text", "--no-ext-diff", "--no-color", "-M", base, cur,
+                              "--", rel], cwd=repo, capture_output=True, text=True, check=True).stdout
+        self.assertTrue(out.startswith("diff --git "), rel)
+        return out
+
+    def _ledger_case(self):
+        base = post_d6.worktree_tree(self.repo, self.EXC)
+        self._write(self.repo, {
+            "CHANGELOG.md": "# log\n- one line\n",
+            "docs/ledger.json": "".join(f'{{"row": {i}, "statement": "a long claim"}}\n' for i in range(3000)),
+            "plugins/code.py": "a = 2\nb = 3\n",
+            "tests/test_code.py": "t = 2\n"})
+        return base
+
+    def test_over_budget_the_code_and_the_tests_go_whole_and_the_ledger_is_what_is_cut(self):
+        base = self._ledger_case()
+        text, note = post_d6.delta_text(self.repo, self._snap({"": (self.repo, base)}), 6000)
+        self.assertIsNotNone(text, note)
+        code, tests = self._one(self.repo, base, "plugins/code.py"), self._one(self.repo, base, "tests/test_code.py")
+        ledger = self._one(self.repo, base, "docs/ledger.json")
+        self.assertGreater(len(ledger), 50_000)                 # the case is the one that was met
+        self.assertIn(code, text, "the code's diff was not handed over whole")
+        self.assertIn(tests, text, "the tests' diff was not handed over whole")
+        self.assertNotIn(ledger, text)
+        self.assertLess(text.index(code), text.index(tests))
+        self.assertLess(text.index(tests), text.index("diff --git a/docs/ledger.json"))
+
+    def test_the_handed_text_and_the_note_name_what_was_cut(self):
+        base = self._ledger_case()
+        text, note = post_d6.delta_text(self.repo, self._snap({"": (self.repo, base)}), 6000)
+        lines = text.splitlines()
+        whole = [ln for ln in lines if ln.startswith("handed whole (")]
+        part = [ln for ln in lines if ln.startswith("cut part-way (")]
+        self.assertEqual(len(whole), 1, text[:900])
+        self.assertTrue(whole[0].startswith("handed whole (3): "), whole)
+        for rel in ("plugins/code.py", "tests/test_code.py", "CHANGELOG.md"):
+            self.assertIn(rel, whole[0])
+        self.assertEqual(len(part), 1, text[:900])
+        self.assertTrue(part[0].startswith("cut part-way (1): docs/ledger.json — "), part)
+        self.assertFalse([ln for ln in lines if ln.startswith("left out (")])
+        # … the same line says how much of that file went out, and it is true
+        m = __import__("re").search(r"— ([\d,]+) of ([\d,]+) chars handed$", part[0])
+        self.assertTrue(m, part[0])
+        handed, total = (int(x.replace(",", "")) for x in m.groups())
+        ledger = self._one(self.repo, base, "docs/ledger.json")
+        self.assertEqual(total, len(ledger))
+        self.assertTrue(text.endswith(ledger[:handed]), "the count is not what was handed")
+        self.assertNotIn(ledger[:handed + 1], text)
+        # … and the CLI's line (the note) names it too: nothing printed used to
+        self.assertIn("truncated", note)
+        self.assertIn("docs/ledger.json", note)
+        self.assertIn("3 of 4", note)
+
+    def test_a_file_past_the_cut_is_named_as_left_out(self):
+        base = post_d6.worktree_tree(self.repo, self.EXC)
+        self._write(self.repo, {"docs/a.json": "x\n" * 4000, "docs/b.json": "y\n" * 9000,
+                                "plugins/code.py": "a = 2\n"})
+        text, note = post_d6.delta_text(self.repo, self._snap({"": (self.repo, base)}), 5000)
+        lines = text.splitlines()
+        self.assertIn("cut part-way (1): docs/a.json — ", "\n".join(lines))     # the smaller of the two
+        left = [ln for ln in lines if ln.startswith("left out (")]
+        self.assertEqual(left, ["left out (1): docs/b.json"])
+        self.assertNotIn("diff --git a/docs/b.json", text)
+        self.assertIn("left out: 1", note)
+
+    def test_inside_a_class_the_smaller_diff_goes_first(self):
+        base = post_d6.worktree_tree(self.repo, self.EXC)
+        self._write(self.repo, {"plugins/a_big.py": "x = 1\n" * 4000, "plugins/z_small.py": "z = 1\n"})
+        text, note = post_d6.delta_text(self.repo, self._snap({"": (self.repo, base)}), 5000)
+        small = self._one(self.repo, base, "plugins/z_small.py")
+        self.assertIn(small, text, "a small code file behind a big one was not handed over")
+        self.assertLess(text.index(small), text.index("diff --git a/plugins/a_big.py"))
+        self.assertIn("cut part-way (1): plugins/a_big.py — ", text)
+
+    def test_under_budget_the_order_is_the_same_and_nothing_is_named_as_cut(self):
+        base = self._ledger_case()
+        text, note = post_d6.delta_text(self.repo, self._snap({"": (self.repo, base)}), 500_000)
+        self.assertEqual(note, "")
+        at = [text.index(self._one(self.repo, base, rel)) for rel in
+              ("plugins/code.py", "tests/test_code.py", "CHANGELOG.md", "docs/ledger.json")]
+        self.assertEqual(at, sorted(at), "not code, tests, then docs with the smaller first")
+        for word in ("handed whole", "cut part-way", "left out", "over the"):
+            self.assertNotIn(word, text)
+
+    def test_the_code_of_a_second_scope_comes_before_the_docs_of_the_first(self):
+        # the case that was met: the outer repository (plan, map — docs) is the FIRST scope
+        lib = self.repo / "lib"
+        self._init(lib, {"m.py": "m = 1\n", "tests/test_m.py": "t = 1\n"})
+        with open(self.repo / ".git" / "info" / "exclude", "a", encoding="utf-8") as f:
+            f.write("lib/\n")
+        (self.repo / ".agent").mkdir()
+        (self.repo / ".agent" / "config.json").write_text(json.dumps({"code_roots": ["lib"]}), encoding="utf-8")
+        b0, b1 = post_d6.worktree_tree(self.repo, self.EXC), post_d6.worktree_tree(lib, self.EXC)
+        self._write(self.repo, {"PLAN.md": "a long plan paragraph\n" * 3000})
+        self._write(lib, {"m.py": "m = 2\n", "tests/test_m.py": "t = 2\n"})
+        text, note = post_d6.delta_text(self.repo, self._snap({"": (self.repo, b0), "lib": (lib, b1)}), 6000)
+        self.assertIsNotNone(text, note)
+        code, tests = self._one(lib, b1, "m.py"), self._one(lib, b1, "tests/test_m.py")
+        self.assertIn(code, text, "the second scope's code was not handed over")
+        self.assertIn(tests, text)
+        self.assertLess(text.index(code), text.index(tests))
+        self.assertLess(text.index(tests), text.index("diff --git a/PLAN.md"))
+        # a file of a nested scope is named from the project's root, and both scopes' trees are said
+        self.assertIn("handed whole (2): lib/m.py, lib/tests/test_m.py", text)
+        self.assertIn("cut part-way (1): PLAN.md — ", text)
+        for tree in (b0, b1):
+            self.assertIn(tree, text)
+
+    def test_the_reorder_is_a_permutation_of_gits_own_diff(self):
+        # CONTROL (green before task 178 too): nothing is lost, doubled or cut in two by the
+        # reordering, whatever the shape of a file's header
+        self._write(self.repo, {"old name.py": "v = 1\n" * 30, "gone.py": "g = 1\n", "run.sh": "#!/bin/sh\n",
+                                "notes/quote.md": "q\n"})
+        _git(self.repo, "add", "-A")
+        _git(self.repo, "commit", "-q", "-m", "c1")
+        base = post_d6.worktree_tree(self.repo, self.EXC)
+        os.rename(self.repo / "old name.py", self.repo / "new name.py")
+        with open(self.repo / "new name.py", "a", encoding="utf-8") as f:
+            f.write("w = 2\n")
+        os.remove(self.repo / "gone.py")
+        os.chmod(self.repo / "run.sh", 0o755)
+        self._write(self.repo, {"notes/quote.md": "q\ndiff --git a/x b/y\n+++ b/y\n",
+                                "tests/new one_test.py": "n = 1\n", "plugins/code.py": "a = 5\n"})
+        cur = post_d6.worktree_tree(self.repo, self.EXC)
+        full = subprocess.run(["git", "diff", "--text", "--no-ext-diff", "--no-color", "-M", base, cur,
+                               "--", ".", *self.EXC], cwd=self.repo, capture_output=True, text=True,
+                              check=True).stdout
+        starts = [i for i in range(len(full)) if full.startswith("diff --git ", i) and (i == 0 or full[i - 1] == "\n")]
+        chunks = [full[a:b] for a, b in zip(starts, starts[1:] + [len(full)])]
+        self.assertEqual(len(chunks), 6, [c.splitlines()[0] for c in chunks])
+        files = set()
+        text, note = post_d6.delta_text(self.repo, self._snap({"": (self.repo, base)}), 500_000, files_out=files)
+        self.assertEqual(note, "")
+        for c in chunks:
+            self.assertEqual(text.count(c), 1, c.splitlines()[0])
+        self.assertEqual(sum(1 for ln in text.splitlines() if ln.startswith("diff --git ")), 6)
+        self.assertEqual(files, {"old name.py", "new name.py", "gone.py", "run.sh", "notes/quote.md",
+                                 "tests/new one_test.py", "plugins/code.py"})
+        # the renamed file is code, the quote is a doc: the line INSIDE it is not a header
+        self.assertLess(text.index("rename to new name.py"), text.index("diff --git a/notes/quote.md"))
+        self.assertLess(text.index("diff --git a/tests/new one_test.py"), text.index("diff --git a/notes/quote.md"))
+
+    def test_the_names_of_what_was_cut_are_bounded_too(self):
+        base = post_d6.worktree_tree(self.repo, self.EXC)
+        self._write(self.repo, {f"docs/a_document_with_a_long_name_{i:04d}.md": "d\n" * (200 + i) for i in range(300)})
+        cap = 9000
+        text, note = post_d6.delta_text(self.repo, self._snap({"": (self.repo, base)}), cap)
+        self.assertLessEqual(len(text), cap + 200, len(text))
+        left = [ln for ln in text.splitlines() if ln.startswith("left out (")]
+        self.assertEqual(len(left), 1, text[:600])
+        m = __import__("re").match(r"left out \((\d+)\): .* … and (\d+) more$", left[0])
+        self.assertTrue(m, left[0][-200:])
+        named = left[0].count("docs/a_document_with_a_long_name_")
+        self.assertEqual(named + int(m.group(2)), int(m.group(1)))        # every one counted, named or not
+        self.assertLess(len(left[0]), cap // 6)
+        self.assertLess(len(note), 400)
+
+    def test_without_a_file_list_the_order_stays_gits_and_the_text_says_so(self):
+        # the file list and the patch are paired one to one; when git gives no list (and
+        # the caller did not ask for the delta's files) the delta still goes out — unsorted
+        from unittest import mock
+        base = self._ledger_case()
+        real_run = subprocess.run
+
+        def failing_name_status(cmd, *a, **k):
+            if isinstance(cmd, list) and "--name-status" in cmd:
+                return subprocess.CompletedProcess(cmd, 128, b"", b"boom")
+            return real_run(cmd, *a, **k)
+        with mock.patch("tasks.post_d6.subprocess.run", side_effect=failing_name_status):
+            text, note = post_d6.delta_text(self.repo, self._snap({"": (self.repo, base)}), 500_000)
+        self.assertIsNotNone(text, note)
+        self.assertIn("in git's own order", text)
+        at = [text.index(f"diff --git a/{rel}") for rel in
+              ("CHANGELOG.md", "docs/ledger.json", "plugins/code.py", "tests/test_code.py")]
+        self.assertEqual(at, sorted(at))
+        self.assertEqual(text.count(self._one(self.repo, base, "plugins/code.py")), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
