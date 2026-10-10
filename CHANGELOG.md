@@ -51,6 +51,16 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
+- **The shell logger starts no program for a line, and writes nothing through a link** (task 176; PLAN S11). For
+  every command it logged it ran the `date` program for the stamp, and once per shell `find` for the history's
+  size. Where either is a bash script on PATH (a wrapper), that script was itself a logged shell asking for the
+  same program — a chain of shells without an end. The stamp is now bash's own (the same text, the same local
+  time; the `date` program, started unlogged, only where bash cannot make it), `find` is started unlogged, and a
+  logged line costs about a seventh of what it did (300 lines in one shell: 433 → 64 ms on the machine it was
+  measured on). A `.agent/bash_history` that is a symbolic link — a project can ship one — is no longer written to:
+  your commands used to go wherever it pointed. And the rotation no longer depends on `printf` or `read` being left
+  switched on by the script it runs in. Not changed: the zsh logger. Reaches a machine when `/playbook:init` is run
+  again (the logger in use is the copy it installs).
 - **The shell history's rotation: under a lock, and a rotation that dies half-way is finished by the next
   shell** (task 174; PLAN S11). Past 50 MB `.agent/bash_history` is moved aside and a fresh file started with the
   `tasks work` / `tasks new` lines carried over — `tasks retro` and `tasks timeline` find each task by those lines,

@@ -72,8 +72,13 @@ _cpb_rotate() {
             # trap do not apply in here, nothing in here reaches the host, and a
             # command of the rotation that turns out to be a bash script (a
             # wrapper on PATH) starts unlogged — it would otherwise be a logged
-            # shell that finds the same big file. `command` / `builtin` below: a
-            # FUNCTION of the host's script named like one of these is not ours.
+            # shell that finds the same big file. `command` below: a FUNCTION
+            # of the host's script named like one of these is not ours. And no
+            # builtin a script can switch off (`enable -n printf`, `… read`) is
+            # leaned on: the one line put in front of what is carried, the
+            # marker's line and its reading come from `cat` and `head` (task
+            # 176 — with printf off the line in front was missing, and the
+            # line dropped for it was the first one owed).
             set +e +u +C
             trap - DEBUG
             export PLAYBOOK_NO_BASHLOG=1
@@ -87,9 +92,10 @@ _cpb_rotate() {
             # be cut it is that empty line that goes, and where something had,
             # the line that was cut (or the one line too many). `-a`: a history
             # can hold stray binary bytes. Fails unless the file was read whole
-            # (`grep`: 0 = lines found, 1 = none).
+            # (`grep`: 0 = lines found, 1 = none) — and unless that line in front
+            # could be made: without it the line dropped would be a carried one.
             _carried() {
-                { builtin printf '\n'; command grep -a -E "$_re" "$1"; } | command tail -c 5242881 | command tail -n +2
+                { command cat <<< '' || exit 98; command grep -a -E "$_re" "$1"; } | command tail -c 5242881 | command tail -n +2
                 _st=("${PIPESTATUS[@]}")
                 [[ "${_st[0]}" -le 1 && "${_st[1]}" -eq 0 && "${_st[2]}" -eq 0 ]]
             }
@@ -116,7 +122,7 @@ _cpb_rotate() {
                 # a live file that ends inside a line (a writer was killed in it):
                 # closed first, so that what is given back starts on a line of its own
                 if [[ -s "$_hist" && -n "$(command tail -c 1 "$_hist" 2>/dev/null)" ]]; then
-                    builtin printf '\n' >> "$_hist" 2>/dev/null
+                    command cat <<< '' >> "$_hist" 2>/dev/null || { command rm -rf "$_tmp" 2>/dev/null; return 1; }
                 fi
                 command grep -a -F -x -v -f "$_tmp/held" "$_tmp/owed" >> "$_hist" 2>/dev/null
                 _rc=$?
@@ -150,8 +156,7 @@ _cpb_rotate() {
             # lived and left this second giving-back to us. The marker's one line
             # is read as the NAME of an archive in this lane, and as nothing else.
             if [[ -f "$_owes" ]]; then
-                _name=""
-                IFS= builtin read -r _name < "$_owes" 2>/dev/null
+                _name=$(command head -n 1 "$_owes" 2>/dev/null)
                 case "$_name" in
                     */*) _name="" ;;
                     bash_history.archived-owes) _name="" ;;
@@ -182,7 +187,7 @@ _cpb_rotate() {
             # — it never opens what a link under that name points to
             command rm -f "$_owes" "$_new" 2>/dev/null
             set -C
-            builtin printf '%s\n' "${_arch##*/}" > "$_owes" 2>/dev/null || exit 0
+            command cat <<< "${_arch##*/}" > "$_owes" 2>/dev/null || exit 0
             _carried "$_hist" > "$_new" 2>/dev/null
             _rc=$?
             set +C
@@ -341,6 +346,12 @@ _cpb_log_cmd() {
                 return 0
             fi
             [[ -d "$_lane" ]] || return 0
+            # PLAN S11 item 26 (task 176). `.agent/` comes with the project: a
+            # `bash_history` that is a symbolic link was written THROUGH — the
+            # user's commands went wherever a shipped link pointed, and a
+            # dangling one made the file. Such a lane is not logged to at all
+            # (nor looked at, nor rotated). A builtin test: no fork.
+            [[ ! -L "$_lane/bash_history" ]] || return 0
             local _cmd="${BASH_COMMAND//$'\n'/\\n}"
             # `|| return 0`: an append failure (perms, disk, history path
             # replaced by a directory) is a failing simple command inside the
@@ -374,17 +385,32 @@ _cpb_log_cmd() {
                 # died, or the one before this shell, which leaves it a second
                 # giving-back — sends this shell there (a builtin test, no fork).
                 local _big=""
+                # `find` is started with logging off (task 176): on PATH it
+                # can be a bash script, and that script would be a logged
+                # shell taking this same first look — a chain without an end.
                 if [[ -f "$_lane/bash_history.archived-owes" ]]; then
                     _big=owed
                 elif [[ -f "$_lane/bash_history" ]]; then
-                    _big=$(command find "$_lane/bash_history" -prune -size +52428800c 2>/dev/null) || _big=""
+                    _big=$(PLAYBOOK_NO_BASHLOG=1 command find "$_lane/bash_history" -prune -size +52428800c 2>/dev/null) || _big=""
                 fi
                 if [[ -n "$_big" ]]; then
                     _cpb_rotate "$_lane" || true
                 fi
                 ;;
             esac
-            { echo "$(date '+%Y-%m-%d %H:%M:%S') | AGENT | $_cmd" >> "$_lane/bash_history"; } 2>/dev/null || return 0
+            # The stamp comes from bash itself (task 176): no program is started
+            # for a line. `date` on PATH can be a bash script — a logged shell
+            # whose first line asks for a stamp (measured: without end) — and a
+            # line cost one process. The same text in the same local time, a
+            # `TZ` set in the shell followed. Where bash cannot (older than 4.2,
+            # or a script that switched the builtin off) the `date` program is
+            # asked after all, started with logging off.
+            local _now=""
+            if ! builtin printf -v _now '%(%Y-%m-%d %H:%M:%S)T' -1 2>/dev/null \
+               || [[ "$_now" != [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\ [0-9][0-9]:[0-9][0-9]:[0-9][0-9] ]]; then
+                _now=$(PLAYBOOK_NO_BASHLOG=1 command date '+%Y-%m-%d %H:%M:%S' 2>/dev/null) || _now=""
+            fi
+            { echo "$_now | AGENT | $_cmd" >> "$_lane/bash_history"; } 2>/dev/null || return 0
             if [[ -n "$_key" ]]; then
                 _CPB_SEEN="${_CPB_SEEN:-}$_key"
                 if [[ ${#_CPB_SEEN} -gt 65536 ]]; then

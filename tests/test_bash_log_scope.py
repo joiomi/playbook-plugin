@@ -1085,22 +1085,71 @@ exec "{real}" "$@"
         self.assertEqual([m.group(2) for m in self._logged()], ["set -e", "echo a-line > /dev/null", "echo still-alive"])
 
     # -- a builtin the rotation leans on, switched off by the host's script -----------------
+    def _off_then_in(self, script):
+        """A shell that switches `printf` and `read` off BEFORE it enters the project
+        (inside it, the command that switches them off would itself be the first one
+        logged, with both still on)."""
+        elsewhere = Path(self._tmp.name) / "elsewhere"
+        elsewhere.mkdir(exist_ok=True)
+        env = dict(os.environ, BASH_ENV=str(BL))
+        env.pop("PLAYBOOK_NO_BASHLOG", None)
+        return subprocess.run([bash_or_skip(), "-c", f"enable -n printf; enable -n read; cd '{self.proj}'; {script}"],
+                              cwd=elsewhere, env=env, capture_output=True, text=True, timeout=120)
+
+    def test_a_history_past_the_limit_is_rotated_where_the_script_switched_printf_off(self):
+        with open(self.hist, "wb") as fh:
+            fh.write(b"2026-09-20 10:00:00 | AGENT | .claude/bin/tasks work 7\n"
+                     b"2026-09-20 10:00:01 | AGENT | .claude/bin/tasks work 8\n")
+            filler = b"2026-09-20 10:00:02 | AGENT | echo filler " + b"x" * 950 + b"\n"
+            fh.write(filler * (51 * 1024 * 1024 // len(filler) + 1))
+        r = self._off_then_in("echo in-the-project >/dev/null; echo still-alive")
+        self.assertEqual(r.stdout.strip(), "still-alive", r.stderr)
+        self.assertEqual(len(_archives_in(self.hist.parent)), 1)
+        self.assertLess(self.hist.stat().st_size, 1024 * 1024)
+        given = [m.group(2) for m in self._logged() if m and "tasks work" in m.group(2)]
+        self.assertEqual(given, [".claude/bin/tasks work 7", ".claude/bin/tasks work 8"])
+        marker = self.hist.parent / "bash_history.archived-owes"
+        self.assertEqual(marker.read_text(encoding="utf-8"), _archives_in(self.hist.parent)[0].name + "\n")
+
+    def test_where_the_line_in_front_cannot_be_made_nothing_is_given_and_the_marker_stays(self):
+        # What is carried is read with one line put in front of it, for the second
+        # `tail` to drop. That line has to BE there: where it cannot be made, the
+        # reading must fail — not go on and have the first line owed dropped for it.
+        import shutil
+        archive = self.hist.parent / "bash_history.archived-20260101-000000-1"
+        archive.write_text("2026-09-20 10:00:00 | AGENT | .claude/bin/tasks work 7\n"
+                           "2026-09-20 10:00:01 | AGENT | .claude/bin/tasks work 8\n", encoding="utf-8")
+        self.hist.write_text("2026-10-10 10:00:00 | AGENT | echo earlier\n", encoding="utf-8")
+        marker = self.hist.parent / "bash_history.archived-owes"
+        marker.write_text(archive.name + "\n", encoding="utf-8")
+        # `cat` with nothing to read but its input is how that line is made here
+        (self.bindir / "cat").write_text(
+            f'#!/bin/sh\n[ "$#" -eq 0 ] && exit 1\nexec "{shutil.which("cat")}" "$@"\n', encoding="utf-8")
+        (self.bindir / "cat").chmod(0o755)
+        r = self._bash("set -e; echo a-line >/dev/null; echo still-alive")
+        self.assertEqual(r.stdout.strip(), "still-alive", r.stderr)
+        self.assertEqual(r.stderr, "")
+        given = [m.group(2) for m in self._logged() if m and "tasks work" in m.group(2)]
+        self.assertEqual(given, [], "something was given back from a reading that could not be whole")
+        self.assertTrue(marker.exists(), "the marker went although nothing whole was given")
+        (self.bindir / "cat").unlink()
+        self._bash("echo the-next-shell >/dev/null")
+        given = [m.group(2) for m in self._logged() if m and "tasks work" in m.group(2)]
+        self.assertEqual(given, [".claude/bin/tasks work 7", ".claude/bin/tasks work 8"])
+        self.assertFalse(marker.exists())
+
     def test_what_is_owed_is_given_whole_where_the_script_switched_printf_off(self):
-        # Found while writing the test above: the giving-back puts a line of its own in
-        # front of what it reads (bash's printf) for the second `tail` to drop. With
-        # the builtin off nothing was put there — and the line dropped was the first
-        # one owed.
+        # Found while writing the tests above: the giving-back puts a line of its own
+        # in front of what it reads (it was bash's printf) for the second `tail` to
+        # drop. With the builtin off nothing was put there — and the line dropped was
+        # the first one owed. And the marker was read with bash's `read`: with that
+        # off it read as empty, and was removed with nothing given.
         archive = self.hist.parent / "bash_history.archived-20260101-000000-1"
         archive.write_text("2026-09-20 10:00:00 | AGENT | .claude/bin/tasks work 7\n"
                            "2026-09-20 10:00:01 | AGENT | .claude/bin/tasks work 8\n", encoding="utf-8")
         self.hist.write_text("2026-10-10 10:00:00 | AGENT | echo earlier\n", encoding="utf-8")
         (self.hist.parent / "bash_history.archived-owes").write_text(archive.name + "\n", encoding="utf-8")
-        elsewhere = Path(self._tmp.name) / "elsewhere"
-        elsewhere.mkdir()
-        env = dict(os.environ, BASH_ENV=str(BL))
-        env.pop("PLAYBOOK_NO_BASHLOG", None)
-        r = subprocess.run([bash_or_skip(), "-c", f"enable -n printf; cd '{self.proj}'; echo in-the-project >/dev/null; echo still-alive"],
-                           cwd=elsewhere, env=env, capture_output=True, text=True, timeout=120)
+        r = self._off_then_in("echo in-the-project >/dev/null; echo still-alive")
         self.assertEqual(r.stdout.strip(), "still-alive", r.stderr)
         given = [m.group(2) for m in self._logged() if m and "tasks work" in m.group(2)]
         self.assertEqual(given, [".claude/bin/tasks work 7", ".claude/bin/tasks work 8"])
