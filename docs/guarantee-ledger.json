@@ -7972,7 +7972,7 @@
     {
       "id": "PB-SANDBOX-WRITE",
       "category": "sandbox",
-      "statement": "With a supported containment backend, sandbox allows project writes in worker mode, keeps git metadata read-only — the project's `.git` directory, or the `.git` file a linked worktree or a submodule has in its place together with the git directory and the common directory it leads to, and the same for every repository `.agent/config.json` names under `code_roots` — whatever an extra `--rw` path covers, and in --ro-project mode denies project writes except explicit --rw paths.",
+      "statement": "With a supported containment backend, sandbox allows project writes in worker mode, keeps git metadata read-only — the project's `.git` directory, or the `.git` file a linked worktree or a submodule has in its place together with the git directory and the common directory it leads to, and the same for every repository `.agent/config.json` names under `code_roots` — whatever an extra `--rw` path covers, and in --ro-project mode denies project writes except explicit --rw paths. The places git is TOLD to take its hooks and its settings from are read-only in the sandbox too, wherever they lie — the directory `core.hooksPath` names (or `.git/hooks`, also as a link), every settings file in effect (also as a link) and every `include`/`includeIf` path whatever its condition — for the project and every `code_roots` repository; a launch that cannot keep one of them (it does not exist where the run could create it; it is, or contains, a path the run must write; it is reached through a link in a directory the run may write) is refused, and `--rw-git-sources` lifts all of it by the owner's explicit choice (task 181, PLAN S11 item 31).",
       "owner": [
         {
           "path": "plugins/playbook/provider/sandbox.py",
@@ -8196,6 +8196,176 @@
           "limitations": [
             "`_git_dir_entries` on a directory at mode 0300 raises the refusal; the same directory, listable, gives its two entries. Skipped for root."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "WhatGitRunsCannotBeChangedFromInside.test_a_hooks_path_that_names_a_project_directory",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_sandbox_git_sources.py",
+            "reference": "WhatGitRunsCannotBeChangedFromInside.test_control_the_git_directory_itself"
+          },
+          "limitations": [
+            "Real bubblewrap through the real launch plan, a shell command in the agent's place; skipped where bubblewrap cannot start a sandbox. Task 181, red first on the unfixed module: \"the write went through\" — and, measured beside it, the host's next `git commit` ran the hook."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "WhatGitRunsCannotBeChangedFromInside.test_a_hooks_directory_that_is_a_link_into_the_project",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_sandbox_git_sources.py",
+            "reference": "WhatGitRunsCannotBeChangedFromInside.test_control_an_ordinary_repository_is_launched_and_can_write_its_files"
+          },
+          "limitations": [
+            "Real bubblewrap through the real launch plan, a shell command in the agent's place; skipped where bubblewrap cannot start a sandbox. Task 181, red first on the unfixed module: \"the write went through\"."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "WhatGitRunsCannotBeChangedFromInside.test_a_settings_file_that_is_a_link_into_the_project",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Real bubblewrap through the real launch plan, a shell command in the agent's place; skipped where bubblewrap cannot start a sandbox. Task 181, red first on the unfixed module: \"the write went through\"; the host's check is a git alias."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "WhatGitRunsCannotBeChangedFromInside.test_an_included_settings_file_in_the_project",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_sandbox_git_sources.py",
+            "reference": "WhatGitRunsCannotBeChangedFromInside.test_a_place_the_run_could_not_create_anyway_does_not_refuse"
+          },
+          "limitations": [
+            "Real bubblewrap through the real launch plan, a shell command in the agent's place; skipped where bubblewrap cannot start a sandbox. Task 181, red first on the unfixed module: \"the write went through\"."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "WhatGitRunsCannotBeChangedFromInside.test_a_conditional_include_is_kept_whatever_its_condition_says_now",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Real bubblewrap through the real launch plan, a shell command in the agent's place; skipped where bubblewrap cannot start a sandbox. Task 181, red first on the unfixed module: \"the write went through\". The host's check is `diff.external` on another branch: git does not take an ALIAS from such an include (checked), so an alias would have proved nothing."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "WhatGitRunsCannotBeChangedFromInside.test_a_repository_named_in_code_roots_is_asked_too",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Real bubblewrap through the real launch plan, a shell command in the agent's place; skipped where bubblewrap cannot start a sandbox. Task 181, red first on the unfixed module: \"the write went through\"."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "WhatGitRunsCannotBeChangedFromInside.test_a_hooks_path_that_does_not_exist_yet_refuses_the_launch",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_sandbox_git_sources.py",
+            "reference": "WhatGitRunsCannotBeChangedFromInside.test_a_judges_read_only_run_is_not_refused_and_keeps_its_outdir"
+          },
+          "limitations": [
+            "Task 181, red first on the unfixed module: no refusal — and, measured, the sandboxed command created the directory and the host ran its hook. The control is the path every review takes: read-only project, a writable outdir, the same setting, no refusal."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "WhatGitRunsCannotBeChangedFromInside.test_a_hooks_path_that_is_the_project_itself_refuses_the_launch",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task 181, red first on the unfixed module: no refusal."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "WhatGitRunsCannotBeChangedFromInside.test_a_link_in_the_project_on_the_way_to_the_hooks_refuses_the_launch",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_sandbox_git_sources.py",
+            "reference": "WhatGitIsAsked.test_the_directories_that_hold_a_link_on_the_way"
+          },
+          "limitations": [
+            "Task 181: found by reading the first form of the fix as the other side, and measured before it was closed — the read-only bind alone left a link in the project replaceable (\"inside: rc=0 'replaced' … the hook ran: True\")."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "WhatGitRunsCannotBeChangedFromInside.test_the_owner_can_allow_it_explicitly",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_sandbox_git_sources.py",
+            "reference": "TheCommandLine.test_the_option_is_not_for_the_path_the_judges_share"
+          },
+          "limitations": [
+            "Real bubblewrap through the real launch plan, a shell command in the agent's place; skipped where bubblewrap cannot start a sandbox. The explicit option: the write succeeds and the host runs the hook the agent wrote — the owner's choice; with `--prompt` the option is refused."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "WhatGitIsAsked.test_include_paths_are_read_against_the_file_that_names_them",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_sandbox_git_sources.py",
+            "reference": "WhatGitIsAsked.test_a_directory_that_is_no_repository_names_nothing"
+          },
+          "limitations": [
+            "Task 181: what git is asked and how its answers are read — an include inside an include, one that gives no value, one that does not exist, a conditional one."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "WhereTheBindsGo.test_a_source_is_bound_read_only_after_the_project_and_the_writable_paths",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_sandbox_git_sources.py",
+            "reference": "WhereTheBindsGo.test_with_the_owners_permission_nothing_is_added_and_nothing_refused"
+          },
+          "limitations": [
+            "Task 181: the argv itself — the read-only bind comes after the last writable one."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "WhereTheBindsGo.test_a_missing_source_under_a_read_only_place_does_not_refuse",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_sandbox_git_sources.py",
+            "reference": "WhereTheBindsGo.test_a_missing_source_under_tmp_refuses_even_for_a_read_only_project"
+          },
+          "limitations": [
+            "Task 181: \"could the run create it?\" is what the LAST bind over the path says — a deleted `.git/hooks`, or anything in a read-only project, does not refuse; a path under `/tmp` does."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "TheCommandLine.test_a_refusal_is_said_by_the_command_and_the_option_lifts_it",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_sandbox_git_sources.py",
+            "reference": "TheCommandLine.test_the_preview_shows_the_hooks_directory_read_only_and_the_option_takes_it_out"
+          },
+          "limitations": [
+            "Task 181: `scripts/sandbox`'s own entry point — exit 2 with the path and \"Nothing was launched.\", nothing created; the preview lists the binds."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -8211,13 +8381,14 @@
         "Confirmed containment failure on macOS CI (run 32381370391, job 96465123480): under --ro-project a project rooted at a _SYSTEM_RW_PATHS entry (e.g. /var/folders, where macOS mktemp places dirs) was fully writable because the read-only project was expressed only as an omitted require-not exemption inside a require-all-of-require-nots deny block, which a broader exemption cancels. Corrected in build_seatbelt_profile: the read-only project is now an explicit terminal deny (the .git precedent), with each extra_rw workspace re-allowed after it.",
         "The seatbelt correction shipped up to 1.5.47 (tag `last-multiplatform`) with a profile-text proof; since task 154 (2026-10-08, Linux-only) no test in the tree exercises seatbelt, and macOS is not claimed. On Linux the claim rests on the bubblewrap argv tests (tests/test_sandbox_bind_order.py BindOrder, unconditional) and the live bubblewrap test (skipped where bwrap is not installed).",
         "Proved (task 169, PLAN S11): the worker-mode .git matrix under real bubblewrap, through the shipped launcher — create, append, hook, re-point HEAD, delete a ref — alone and with an `--rw` path that covers .git. Until that task the statement was FALSE in the second case: the extra writable binds were laid after .git's read-only bind, and the later bind won, so `--rw <project>`, a parent of it, or `.git` itself made .git writable (found by the task's plan panel, measured, fixed in build_bwrap_argv: the .git bind is laid last). Consequence: an `--rw` path INSIDE .git is not writable either. The same task's impl panel then showed three more layouts open, each measured: in a linked worktree the `.git` FILE was rewritten to point elsewhere and the shared repository's config and hooks were written; a nested repository's `.git` was written. Fixed there too (`_git_paths_to_protect`): the gitfile, the git directory and the common directory of the project and of each `code_roots` repository are bound read-only, last.",
-        "Bound: a nested repository that `.agent/config.json` does NOT name under `code_roots` is project content like any other — its `.git` is writable in worker mode (pinned by a test). A `.git` that is a SYMLINK is protected at what it points to, but the link itself is an entry of a writable directory and can be replaced. A repository found only through the GIT_DIR environment variable is not looked for. What a link INSIDE a git directory points to is protected only if that target is itself git metadata: a `.git/config` or a hooks directory that is a symlink into the project (or a `core.hooksPath` that names a project directory) is project content, and writable (measured, task 169 impl round 2).",
+        "Bound: a nested repository that `.agent/config.json` does NOT name under `code_roots` is project content like any other — its `.git` is writable in worker mode (pinned by a test). A `.git` that is a SYMLINK is protected at what it points to, but the link itself is an entry of a writable directory and can be replaced. A repository found only through the GIT_DIR environment variable is not looked for. (Until task 181 this bound went on: what a link INSIDE a git directory points to, and a `core.hooksPath` that names a project directory, were project content and writable.)",
         "Task 169, impl round 2: a git directory that CONTAINS the project (worktrees inside a bare repository; a bare repository used as the project) is bound read-only BEFORE the project's bind — so the project stays writable — and the entries git keeps in it are bound read-only again after every writable bind. Those entries are recognised BY NAME, read from the directory at launch (`_is_git_dir_entry`): the names of gitrepository-layout(5) and of the shared paths in git's `path.c`, the state files git writes beside HEAD — in the syntax git itself holds a pseudoref's name to, capital letters, `_` and `-`: `<NAME>_HEAD`, `<NAME>_EDITMSG`, `BISECT_<NAME>`, `MERGE_<NAME>`, `NOTES_MERGE_<NAME>`; `sharedindex.<hex>`; and `AUTO_MERGE`, `SQUASH_MSG`, `gc.log`, `gc.pid` — and the directories of git-lfs, git-svn, git-annex and git-filter-repo. A containing git directory that cannot be LISTED refuses the launch: what cannot be listed cannot be told apart. Bounds, both of this by-name rule and both only where the directory itself is writable — a bare repository used as the project, or an `--rw` path that covers the shared directory: (1) an entry under a name that is not on that list (another tool's data kept at the top of a git directory) is project content there; (2) an entry that does not exist at launch (a `packed-refs` git has not written yet) can be created. git is asked about the layout with GIT_DIR, GIT_WORK_TREE, GIT_COMMON_DIR and the like removed from its environment. (History: the first list held 27 fixed names and missed `rr-cache`; the single judge after round 2, run 2. Run 3, allowed by the owner on 2026-10-10, found the two edges of run 2's fix, both then measured with real bubblewrap on that tree: with the directory traversable and writable but not listable (mode 0300) the code fell back to the fixed names it knew, and ORIG_HEAD — git's by pattern only — took a write from inside (Critical); and the patterns were wider than git's own names — `draft_HEAD`, a project file, was read-only with them (Important). A further bound of the by-name rule, said once: a file of the project's whose name is in git's syntax (`DRAFT_HEAD`, in capitals) is git's as far as this rule and git itself can tell.)",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
         "2026-10-08 (task 154, Linux-only): the seatbelt profile-text proof (RoProjectSeatbeltProfileDeniesWrites, control WorkerModeSeatbeltProfileUnchanged) was deleted with the other macOS-only tests; the bubblewrap proof stays.",
         "2026-10-08 (task 154 impl panel r1): the three unconditional bubblewrap argv tests (BindOrder) bound as proofs, so the row keeps a proof that runs where bwrap is not installed.",
-        "2026-10-08 (task 155, Linux-only): the macOS seatbelt backend (build_seatbelt_profile) was deleted; bubblewrap is the only backend."
+        "2026-10-08 (task 155, Linux-only): the macOS seatbelt backend (build_seatbelt_profile) was deleted; bubblewrap is the only backend.",
+        "Task 181 (PLAN S11 item 31; owner 2026-10-10: \"Da, în S11 (Recomandat)\" to \"sandbox-ul îl întreabă pe git de unde își ia scripturile și setările și face și acele locuri „doar citire” … Dacă vrei ca agentul să îți editeze totuși acele scripturi, îi dai tu voie explicit\"). Measured with real bubblewrap before the fix, five ways: a sandboxed command changed what the host's git then ran. Bounds of the fix, stated: (1) git is asked ONCE, at launch — a setting changed on the host while a run is under way is not seen; (2) what is kept is what git takes HOOKS and SETTINGS from; attribute and ignore files, which select and do not run, are not; (3) the three refusals (a place that does not exist where the run could create it; one that is or contains a path the run must write; a link on the way in a directory the run may write) are the BUILDER's reading of the owner's \"read-only\", fail-closed, and can stop a launch for a git configuration that names such a place — the message says what to create or change, and a judge's run, whose project is read-only, is refused only for a place under a directory every run may write (`/tmp`, the agents' home subdirectories); (4) the explicit option is one switch for hooks and settings together and is not available on the `--prompt` path the judges share; (5) a place that is already read-only in the sandbox (the git directory, the user's and the system's settings outside any writable bind) is not bound again; (6) links are followed as they are at launch — what the listed directories hold is checked then, not watched."
       ],
       "follow_up_phases": [
         8

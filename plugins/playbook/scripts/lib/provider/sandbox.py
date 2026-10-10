@@ -572,10 +572,23 @@ def build_bwrap_argv(
     no_network: bool = False,
     mask_records: bool | None = None,
     git_readonly: Iterable[str] | None = None,
+    git_sources: Iterable[str] | None = None,
+    git_sources_missing: Iterable[str] | None = None,
+    git_source_links: Iterable[str] | None = None,
+    git_sources_writable: bool = False,
 ) -> list[str]:
     """Generate the bwrap argv: read-only root, bind project + tmp + per-agent
     home subpaths read-write, bind git_dir — and every other path of git metadata
     the caller names in `git_readonly` (`_git_paths_to_protect`) — read-only.
+
+    `git_sources` / `git_sources_missing` / `git_source_links` (`_git_sources`, task
+    181): the places git takes its hooks and its settings from. One the run could
+    write is bound read-only, last. Three cannot be kept: one that does not exist
+    where the run could CREATE it; one that is, or contains, a path the run must
+    write; and one reached through a link that sits in a directory the run may
+    write (what the link names is bound — the link itself could be replaced) — the
+    launch is refused. `git_sources_writable=True` is the owner's explicit
+    permission to let the agent edit them: nothing is added and nothing refused.
 
     This is WRITE containment: `--ro-bind / /` leaves the whole filesystem
     READABLE (nothing outside the project is hidden), and by default there is NO
@@ -600,6 +613,17 @@ def build_bwrap_argv(
     argv = ["bwrap", "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev"]
     if no_network:
         argv.append("--unshare-net")
+    # Every bind below, in order, with whether it leaves its path writable: what a
+    # path IS in the sandbox is what the LAST bind over it says (task 181).
+    layers: "list[tuple[str, bool]]" = []
+
+    def writable_at(path: str) -> "str | None":
+        """The writable bind that governs `path` in the sandbox, or None."""
+        last = None
+        for where, writable in layers:
+            if _covers(where, Path(path)):
+                last = where if writable else None
+        return last
 
     # ORDER IS LOAD-BEARING: in bwrap, later binds stack over earlier ones.
     # The broad read-write mounts (/tmp, the write log, per-agent home subpaths)
@@ -609,16 +633,19 @@ def build_bwrap_argv(
     # first and /tmp second, which silently re-exposed a /tmp-resident project
     # read-write in judge mode — found by an empirical spike, 2026-08-13.
     argv += ["--bind", "/tmp", "/tmp"]
+    layers.append(("/tmp", True))
 
     write_log_dir = home / ".local" / "share" / "playbook"
     write_log_dir.mkdir(parents=True, exist_ok=True)
     argv += ["--bind", str(write_log_dir), str(write_log_dir)]
+    layers.append((str(write_log_dir), True))
 
     # Pre-create + bind per-agent home subpaths.
     for sub in (".claude", *_HOME_RW_SUBPATHS):
         target = home / sub
         target.mkdir(parents=True, exist_ok=True)
         argv += ["--bind", str(target), str(target)]
+        layers.append((str(target), True))
 
     # Git metadata, part one. Every path that holds it, resolved and in order.
     git_all: list[str] = []
@@ -635,9 +662,11 @@ def build_bwrap_argv(
     containing = [g for g in git_all if _covers(g, Path(project))]
     for g in containing:
         argv += ["--ro-bind", g, g]
+        layers.append((g, False))
 
     project_bind = "--bind" if project_writable else "--ro-bind"
     argv += [project_bind, project, project]
+    layers.append((project, project_writable))
 
     # Task 125: a read-only judge cannot read the conversation records — layers
     # after the project bind so they win the overlap (`_bwrap_record_masks`). A
@@ -646,6 +675,7 @@ def build_bwrap_argv(
     hidden: list[str] = []
     if (not project_writable) if mask_records is None else mask_records:
         argv += _bwrap_record_masks(project, hidden)
+        layers += [(h, False) for h in hidden]
 
     # What the masks hide must stay hidden, and a bind laid after them replaces
     # them wherever it lands. One that COVERS a hidden place binds the real records
@@ -670,6 +700,7 @@ def build_bwrap_argv(
     for rw in rw_paths:
         Path(rw).mkdir(parents=True, exist_ok=True)
         argv += ["--bind", rw, rw]
+        layers.append((rw, True))
 
     # Git metadata, part two: read-only even when the project is writable, and
     # laid after the project bind AND after every extra writable bind, so it wins
@@ -700,6 +731,44 @@ def build_bwrap_argv(
                 f"conversation records ({touched}); they cannot be hidden in this layout. Pass "
                 "--keep-records if this run may read the records. Nothing was launched.")
         argv += ["--ro-bind", g, g]
+        layers.append((g, False))
+
+    # Git's hooks and settings, wherever git is told to take them from (task 181):
+    # read-only too, laid last. The owner's explicit permission skips all of it.
+    if not git_sources_writable:
+        allow = ("Point git at a place of its own for them (`core.hooksPath`, `include.path`), or pass "
+                 "--rw-git-sources to let this agent edit the hooks and settings git takes from there. "
+                 "Nothing was launched.")
+        for source in dict.fromkeys(str(Path(s).resolve()) for s in (git_sources or [])):
+            if writable_at(source) is None:
+                continue                   # read-only already: inside git metadata, or nowhere writable
+            needed = next((w for w, writable in layers if writable and _covers(source, Path(w))), None)
+            if needed is not None:
+                raise RuntimeError(
+                    f"git takes its hooks or settings from {source}, and this run must be able to write "
+                    f"{needed}, which is that place or lies inside it — it cannot be kept read-only, and "
+                    "left writable the agent could change what git runs on this machine. " + allow)
+            # (No check against the hidden records here: a place the masks hide is not
+            # writable, so it never reaches this line, and one that COVERS a hidden place
+            # from a writable directory covers that directory's bind and was refused above.)
+            argv += ["--ro-bind", source, source]
+            layers.append((source, False))
+        for absent in dict.fromkeys(str(Path(s).resolve()) for s in (git_sources_missing or [])):
+            within = writable_at(absent)
+            if within is not None:
+                raise RuntimeError(
+                    f"git is told to take its hooks or settings from {absent}, which does not exist — and "
+                    f"this run could create it (it lies in {within}, which the run may write): git would "
+                    "then run on this machine what the agent put there. Create it yourself (empty will do) "
+                    "so that it can be kept read-only. " + allow)
+        for holder in dict.fromkeys(str(Path(s).resolve()) for s in (git_source_links or [])):
+            within = writable_at(holder)
+            if within is not None:
+                raise RuntimeError(
+                    f"git reaches its hooks or settings through a link in {holder}, a directory this run "
+                    "may write: what the link names can be kept read-only, the link itself could be "
+                    "replaced by one that names something else. Make it a real directory or file there. "
+                    + allow)
 
     argv += list(target_argv)
     return argv
@@ -857,6 +926,122 @@ def _git_paths_to_protect(project_dir: "Path | str") -> "list[str]":
     return out
 
 
+_INCLUDE_PATH_KEY = re.compile(r"include(?:if\..*)?\.path\Z", re.IGNORECASE | re.DOTALL)
+
+
+def _link_dirs_on(path: str) -> "list[str]":
+    """The real directories that hold a symbolic link followed on the way to the
+    absolute `path` (a link's own target included, so a chain gives every one).
+    The link is an ENTRY of that directory: where the directory can be written,
+    the link can be replaced by one that names something else."""
+    out: list[str] = []
+    todo = [part for part in path.split("/") if part]
+    here, followed = "/", 0
+    while todo:
+        part = todo.pop(0)
+        if part == ".":
+            continue
+        if part == "..":
+            here = os.path.dirname(here)
+            continue
+        entry = os.path.join(here, part)
+        if os.path.islink(entry):
+            followed += 1
+            if followed > 40:              # a loop: git could not follow it either
+                break
+            if here not in out:
+                out.append(here)
+            try:
+                target = os.readlink(entry)
+            except OSError:
+                break
+            if target.startswith("/"):
+                here = "/"
+            todo = [p for p in target.split("/") if p] + todo
+            continue
+        here = entry
+    return out
+
+
+def _git_sources(project_dir: "Path | str") -> "tuple[list[str], list[str], list[str]]":
+    """Where git takes its HOOKS and its SETTINGS from, for the project and for each
+    repository `code_roots` names: (the places that exist, the places that do not,
+    the directories that hold a link on the way to one of them), each resolved.
+
+    The git directory is bound read-only, but git can be told to use something
+    else, and where that is project content a worker could change what git runs on
+    the HOST at its next command (task 181, PLAN S11 item 31 — measured with real
+    bubblewrap, five ways). Git itself is asked, with its environment overrides
+    removed (`_git_env`):
+      * `git rev-parse --git-path hooks` — the hooks directory in effect
+        (`core.hooksPath`, or `hooks` in the git directory, which may be a link);
+      * `git config --list --show-origin` — every settings FILE that gives a value
+        (the repository's own, which may be a link; the user's; the system's; every
+        include whose condition holds);
+      * every `include.path` and `includeIf.<condition>.path` — read against the file
+        that names it, `~` expanded — whether or not the file gives a value, exists,
+        or its condition holds now: the condition is evaluated again on the host.
+    A directory that is no repository names nothing. Never raises."""
+    existing: list[str] = []
+    missing: list[str] = []
+    link_dirs: list[str] = []
+
+    def add(path: Path) -> None:
+        try:
+            resolved = str(path.resolve())
+        except (OSError, RuntimeError):
+            return
+        bucket = existing if os.path.lexists(resolved) else missing
+        if resolved not in bucket:
+            bucket.append(resolved)
+        for holder in _link_dirs_on(str(path)):
+            if holder not in link_dirs:
+                link_dirs.append(holder)
+
+    def ask(root: Path, *args: str) -> "str | None":
+        try:
+            answer = subprocess.run(["git", *args], cwd=str(root), capture_output=True,
+                                    check=False, env=_git_env())
+        except OSError:
+            return None
+        if answer.returncode != 0:
+            return None
+        out = answer.stdout              # bytes from git; whatever else is read as nothing said
+        if isinstance(out, bytes):
+            return out.decode("utf-8", "surrogateescape")
+        return out if isinstance(out, str) else None
+
+    def records(out: "str | None"):
+        """`--show-origin -z`: origin NUL key LF value NUL, again and again."""
+        toks = (out or "").split("\0")
+        for i in range(0, len(toks) - 1, 2):
+            origin, _, rest = toks[i], None, toks[i + 1]
+            key, _sep, value = rest.partition("\n")
+            yield origin, key, value
+
+    try:
+        roots = [Path(project_dir).resolve(), *_code_root_dirs(project_dir)]
+    except OSError:
+        return existing, missing, link_dirs
+    for root in roots:
+        hooks = ask(root, "rev-parse", "--git-path", "hooks")
+        if hooks is None or not hooks.strip("\n"):
+            continue                       # no repository here (or no git): nothing git would run
+        add(root / hooks.rstrip("\n"))
+        for origin, _key, _value in records(ask(root, "config", "--list", "--show-origin", "-z")):
+            if origin.startswith("file:"):
+                add(root / origin[5:])
+        for origin, key, value in records(ask(root, "config", "--show-origin", "-z", "--get-regexp",
+                                              r"^include(if\..*)?\.path$")):
+            if not origin.startswith("file:") or not _INCLUDE_PATH_KEY.match(key) or not value:
+                continue
+            target = Path(os.path.expanduser(value)) if value.startswith("~") else Path(value)
+            if not target.is_absolute():
+                target = (root / origin[5:]).parent / target
+            add(target)
+    return existing, missing, link_dirs
+
+
 def _compose_agent_argv(agent: str, agent_args: list[str]) -> list[str]:
     """Build the final binary argv with per-agent bypass-flag injection at the
     correct position. Codex needs its bypass AFTER the `exec` subcommand.
@@ -922,10 +1107,11 @@ def _wrapped_argv(
     no_network: bool = False,
     mask_records: bool | None = None,
     require_containment: bool = False,
+    git_sources_writable: bool = False,
 ) -> list[str]:
     """The argv of `_launch_plan` (which see) — what a launch would exec."""
     return _launch_plan(agent, agent_args, project, extra_rw, project_writable,
-                        no_network, mask_records, require_containment)[0]
+                        no_network, mask_records, require_containment, git_sources_writable)[0]
 
 
 def _launch_plan(
@@ -937,6 +1123,7 @@ def _launch_plan(
     no_network: bool = False,
     mask_records: bool | None = None,
     require_containment: bool = False,
+    git_sources_writable: bool = False,
 ) -> "tuple[list[str], bool]":
     """Compose bypass-flag injection + bwrap wrapping into the final argv, and say
     whether the child will be in a cage (wrapped here, or we are nested). Shared
@@ -963,10 +1150,16 @@ def _launch_plan(
     exe = _bwrap_exe()
     if exe:
         git_dir = _git_dir_of(project)
+        # what git runs by itself — its hooks, its settings — is asked of git, and kept
+        # read-only too (task 181); not asked at all with the owner's permission
+        sources, absent, links = ([], [], []) if git_sources_writable else _git_sources(project)
         argv = build_bwrap_argv(project, git_dir, inner_argv, extra_rw,
                                 project_writable=project_writable, no_network=no_network,
                                 mask_records=mask_records,
-                                git_readonly=_git_paths_to_protect(project))
+                                git_readonly=_git_paths_to_protect(project),
+                                git_sources=sources, git_sources_missing=absent,
+                                git_source_links=links,
+                                git_sources_writable=git_sources_writable)
         return [exe, *argv[1:]], True     # by absolute path: the launch runs in the project
     if require_containment:
         raise RuntimeError(launch_refusal() or (
@@ -1167,6 +1360,7 @@ def run(
     no_network: bool = False,
     mask_records: bool | None = None,
     require_containment: bool = False,
+    git_sources_writable: bool = False,
     **kwargs,
 ) -> subprocess.CompletedProcess:
     """Run an agent under sandbox containment. Composes bypass-flag injection
@@ -1180,7 +1374,8 @@ def run(
     """
     project = Path(project_root).resolve()
     wrapped, contained = _launch_plan(agent, agent_args, project, extra_rw, project_writable,
-                                      no_network, mask_records, require_containment)
+                                      no_network, mask_records, require_containment,
+                                      git_sources_writable)
     child_env = _child_env(env, contained)
 
     if kwargs.get("text") or isinstance(kwargs.get("input"), str):
@@ -1277,6 +1472,7 @@ def popen(
     no_network: bool = False,
     mask_records: bool | None = None,
     require_containment: bool = False,
+    git_sources_writable: bool = False,
     **kwargs,
 ) -> subprocess.Popen:
     """Non-blocking variant of run() — returns a live Popen for streaming.
@@ -1291,7 +1487,8 @@ def popen(
     """
     project = Path(project_root).resolve()
     wrapped, contained = _launch_plan(agent, agent_args, project, extra_rw, project_writable,
-                                      no_network, mask_records, require_containment)
+                                      no_network, mask_records, require_containment,
+                                      git_sources_writable)
     child_env = _child_env(env, contained)
 
     kwargs.setdefault("stdout", subprocess.PIPE)
@@ -1384,6 +1581,12 @@ def _main(argv: list[str]) -> int:
                         help="With --ro-project: do NOT hide the conversation records "
                              "(.agent chat log, sessions, bash history) — for a read-only "
                              "observer that needs them, e.g. the monitor. Judges never pass it.")
+    parser.add_argument("--rw-git-sources", action="store_true",
+                        help="Let the agent EDIT the hooks and settings git takes from outside "
+                             "the git directory (a tracked hooks directory named by "
+                             "core.hooksPath, an included settings file). By default those "
+                             "places are read-only in the sandbox: what is written there runs "
+                             "on this machine at the next git command. Not with --prompt.")
     parser.add_argument("--print-argv", action="store_true",
                         help="Print the fully wrapped argv (one arg per line) "
                              "instead of executing — inspectable containment")
@@ -1420,6 +1623,11 @@ def _main(argv: list[str]) -> int:
         print("Error: --keep-records is not supported with --prompt (the subagent "
               "path, which the judge path shares). Use raw `-- <agent args>`.",
               file=sys.stderr)
+        return 2
+    if args.rw_git_sources and args.prompt is not None:
+        print("Error: --rw-git-sources is not supported with --prompt (the subagent "
+              "path, which the judge path shares — a judge never edits git's hooks or "
+              "settings). Use raw `-- <agent args>`.", file=sys.stderr)
         return 2
 
     if args.list_agents:
@@ -1514,7 +1722,8 @@ def _main(argv: list[str]) -> int:
             wrapped = _wrapped_argv(agent, forwarded, project, args.rw,
                                     project_writable=not args.ro_project,
                                     mask_records=(False if args.keep_records else None),
-                                    no_network=args.no_network, require_containment=True)
+                                    no_network=args.no_network, require_containment=True,
+                                    git_sources_writable=args.rw_git_sources)
         except RuntimeError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 2
@@ -1526,7 +1735,8 @@ def _main(argv: list[str]) -> int:
         result = run(agent, forwarded, project, extra_rw=args.rw,
                      project_writable=not args.ro_project,
                      mask_records=(False if args.keep_records else None),
-                     no_network=args.no_network, require_containment=True)
+                     no_network=args.no_network, require_containment=True,
+                     git_sources_writable=args.rw_git_sources)
     except RuntimeError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2

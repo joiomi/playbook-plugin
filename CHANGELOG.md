@@ -51,6 +51,23 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
+- **What git runs by itself can no longer be changed from inside the sandbox** (task 181, PLAN S11 item 31;
+  owner decision 2026-10-10). The sandbox kept the git directory read-only, but git can be told to take its
+  hooks and its settings from somewhere else, and where that is the project's own content an agent could write
+  it. Measured with real bubblewrap, five ways — a `core.hooksPath` that names a project directory, a
+  `.git/hooks` or a `.git/config` that is a link into the project, an `include.path` that names a project file,
+  and a hooks directory that did not exist yet (the sandboxed command created it): each time the host's next
+  `git commit` or git alias ran what the agent had written. At launch the sandbox now ASKS git where its hooks
+  and its settings come from — the hooks directory in effect, every settings file that gives a value, every
+  `include` and `includeIf` path whatever its condition — for the project and each `code_roots` repository, and
+  binds those places read-only after every writable bind. Three cases cannot be kept read-only and REFUSE the
+  launch, naming the path and what to do: such a place that does not exist where the run could create it; one
+  that is, or contains, a path the run must write; and one reached through a link that sits in a directory the
+  run may write (what the link names can be kept, the link itself could be replaced). **`--rw-git-sources`**
+  is your explicit permission to let an agent edit them — a tracked hooks directory you want changed, say; it
+  is not available with `--prompt`. A judge's read-only run is not affected. An ordinary repository — hooks
+  and settings in `.git`, your global settings in your home — launches exactly as before. Not covered: git is
+  asked once, at launch; attribute and ignore files; a nested repository `code_roots` does not name.
 - **A `PYTHONPATH` that covers the project no longer switches the destructive-command guard off** (task 180,
   PLAN S11 items 19 and 20; owner decisions 2026-10-10 and 2026-10-11). The helpers the hooks start as files —
   the command guard, the status reader, the payload normalizer and the others — read the user's `PYTHONPATH`,
@@ -160,8 +177,9 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   the layout with `GIT_DIR` and its relatives removed from the environment. What changes for you: an agent in
   the sandbox can no longer commit in a `code_roots` repository (it never could in the project's own), and an
   `--rw` path inside `.git` is not writable. Not covered: a nested repository that `code_roots` does not name; a
-  `.git` that is a symlink (the link itself can be replaced); a `.git/config` or hooks directory that is a link
-  into the project, or a `core.hooksPath` naming a project directory — those are project files.
+  `.git` that is a symlink (the link itself can be replaced). (A `.git/config` or hooks directory that is a
+  link into the project, and a `core.hooksPath` naming a project directory, stood here as not covered until
+  task 181, above, covered them.)
 - **A read-only sandbox run refuses an `--rw` path that would show the conversation records** (task 169). With
   `--ro-project --rw <project>` (or a parent of it, or the real directory behind a symlinked lane) the extra
   writable bind was laid over the masks and the chat log became readable; an `--rw` path INSIDE `.agent`

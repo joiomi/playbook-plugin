@@ -188,6 +188,29 @@ class WhatGitRunsCannotBeChangedFromInside(_Repo):
         self.assertIn("--rw-git-sources", said)
         self.assertTrue(said.endswith("Nothing was launched."), said)
 
+    def _hooks_through_a_link_in_the_project(self):
+        (self.p / "real-hooks").mkdir()
+        (self.p / "real-hooks" / "pre-commit").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        os.chmod(self.p / "real-hooks" / "pre-commit", 0o755)
+        os.symlink("real-hooks", self.p / "hooks-link")
+        _git(self.p, "config", "core.hooksPath", "hooks-link")
+
+    def test_a_link_in_the_project_on_the_way_to_the_hooks_refuses_the_launch(self):
+        # what the link names can be bound read-only; the LINK is an entry of a directory the
+        # run may write, and can be replaced by one that names something else
+        self._hooks_through_a_link_in_the_project()
+        with self.assertRaises(RuntimeError) as cm:
+            self.plan("true")
+        said = str(cm.exception)
+        self.assertIn("link", said)
+        self.assertIn(str(self.p), said)
+        self.assertIn("--rw-git-sources", said)
+        self.assertTrue(said.endswith("Nothing was launched."), said)
+        # a judge's read-only run cannot replace it, and is not refused
+        r = self.inside("rm hooks-link 2>&1; echo rc=$?", project_writable=False, mask_records=False)
+        self.assertIn("Read-only file system", r.stdout + r.stderr)
+        self.assertTrue((self.p / "hooks-link").is_symlink())
+
     def test_a_place_the_run_could_not_create_anyway_does_not_refuse(self):
         # an include that names a file nowhere writable: nothing to protect, nothing to refuse
         _git(self.p, "config", "include.path", "/nonexistent-181/not-here.gitconfig")
@@ -228,8 +251,24 @@ class WhatGitIsAsked(_Repo):
     """Without bubblewrap: where git says its hooks and its settings come from."""
 
     def sources(self, p=None):
-        existing, missing = sandbox._git_sources(p or self.p)
+        existing, missing, _link_dirs = sandbox._git_sources(p or self.p)
         return set(existing), set(missing)
+
+    def test_the_directories_that_hold_a_link_on_the_way(self):
+        # `.git/hooks` as a link: the link is an entry of the git directory
+        (self.p / "hooks-in-project").mkdir()
+        shutil.rmtree(self.p / ".git" / "hooks")
+        os.symlink("../hooks-in-project", self.p / ".git" / "hooks")
+        self.assertEqual(sandbox._git_sources(self.p)[2], [str(self.p / ".git")])
+        # a hooks path through a link in the project, and that link through another one
+        (self.p / "real").mkdir()
+        (self.p / "sub").mkdir()
+        os.symlink("../real", self.p / "sub" / "two")
+        os.symlink("sub/two", self.p / "one")
+        _git(self.p, "config", "core.hooksPath", "one")
+        existing, _missing, link_dirs = sandbox._git_sources(self.p)
+        self.assertIn(str(self.p / "real"), existing)
+        self.assertEqual(sorted(link_dirs), sorted([str(self.p), str(self.p / "sub")]))
 
     def test_an_ordinary_repository(self):
         existing, missing = self.sources()
@@ -279,11 +318,18 @@ class WhatGitIsAsked(_Repo):
         home.mkdir()
         (home / "work.gitconfig").write_text("[core]\n\tabbrev = 12\n", encoding="utf-8")
         _git(self.p, "config", "include.path", "~/work.gitconfig")
+        # one that gives no value and one that is not there: git lists neither among the files
+        # it read, so only the include path itself — with its `~` read as git reads it — names them
+        (home / "empty.gitconfig").write_text("", encoding="utf-8")
+        _git(self.p, "config", "--add", "include.path", "~/empty.gitconfig")
+        _git(self.p, "config", "--add", "include.path", "~/absent.gitconfig")
         env = dict(os.environ, HOME=str(home))
         from unittest import mock
         with mock.patch.dict(os.environ, env, clear=True):
-            existing, _ = self.sources()
+            existing, missing = self.sources()
         self.assertIn(str(home / "work.gitconfig"), existing)
+        self.assertIn(str(home / "empty.gitconfig"), existing)
+        self.assertEqual(missing, {str(home / "absent.gitconfig")})
 
     def test_the_environment_cannot_make_git_answer_for_another_repository(self):
         other = self.repo("other")
@@ -300,9 +346,9 @@ class WhatGitIsAsked(_Repo):
         plain.mkdir()
         from unittest import mock
         with mock.patch.dict(os.environ, {"GIT_CEILING_DIRECTORIES": str(self.base)}):
-            existing, missing = sandbox._git_sources(plain)
+            existing, missing, link_dirs = sandbox._git_sources(plain)
         self.assertEqual([p for p in existing if p.startswith(str(plain))], [])
-        self.assertEqual(missing, [])
+        self.assertEqual((missing, link_dirs), ([], []))
 
 
 class WhereTheBindsGo(_Repo):
@@ -340,11 +386,62 @@ class WhereTheBindsGo(_Repo):
         missing = Path(tempfile.gettempdir()).resolve() / "pb181-no-such-hooks-dir"
         if not str(missing).startswith("/tmp/"):
             self.skipTest("the temp directory is not under /tmp here")
-        project_under_tmp = str(self.p).startswith("/tmp/")
         with self.assertRaises(RuntimeError) as cm:
             self.argv(project_writable=False, mask_records=False, git_sources_missing=[str(missing)])
         self.assertIn(str(missing), str(cm.exception))
-        self.assertTrue(project_under_tmp or True)
+
+    def test_a_link_directory_refuses_only_where_the_run_may_write_it(self):
+        with self.assertRaises(RuntimeError) as cm:
+            self.argv(git_source_links=[str(self.p)])
+        self.assertIn("link", str(cm.exception))
+        self.argv(git_source_links=[str(self.p / ".git")])                      # the git directory: read-only
+        self.argv(project_writable=False, mask_records=False, git_source_links=[str(self.p)])
+        self.argv(git_source_links=[str(self.p)], git_sources_writable=True)    # the owner's permission
+
+
+@unittest.skipUnless(bwrap_usable(), "no bubblewrap that can start a sandbox here")
+class TheCommandLine(_Repo):
+    """`scripts/sandbox` itself: the preview shows what a launch would bind, and the option."""
+
+    def main(self, *args):
+        import contextlib
+        import io
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = sandbox._main(["--agent", "claude", "--project-root", str(self.p), *args])
+        return rc, out.getvalue().splitlines(), err.getvalue()
+
+    def read_only(self, lines):
+        return [lines[i + 1] for i in range(len(lines) - 1) if lines[i] == "--ro-bind"]
+
+    def test_the_preview_shows_the_hooks_directory_read_only_and_the_option_takes_it_out(self):
+        self.hooks_path()
+        rc, lines, err = self.main("--print-argv", "--", "hello")
+        if rc == 0 and Path(lines[0]).name != "bwrap":
+            self.skipTest("this process is already inside a sandbox: the preview is the bare command")
+        self.assertEqual(rc, 0, err)
+        self.assertIn(str(self.p / ".githooks"), self.read_only(lines))
+        rc, lines, err = self.main("--print-argv", "--rw-git-sources", "--", "hello")
+        self.assertEqual(rc, 0, err)
+        self.assertNotIn(str(self.p / ".githooks"), self.read_only(lines))
+        self.assertIn(str(self.p / ".git"), self.read_only(lines))            # the git directory stays
+
+    def test_a_refusal_is_said_by_the_command_and_the_option_lifts_it(self):
+        self.hooks_path(".githooks-later", make=False)
+        rc, lines, err = self.main("--print-argv", "--", "hello")
+        if rc == 0 and lines and Path(lines[0]).name != "bwrap":
+            self.skipTest("this process is already inside a sandbox")
+        self.assertEqual(rc, 2)
+        self.assertEqual(lines, [])
+        self.assertIn(str(self.p / ".githooks-later"), err)
+        self.assertTrue(err.strip().endswith("Nothing was launched."), err)
+        self.assertFalse((self.p / ".githooks-later").exists())
+        self.assertEqual(self.main("--print-argv", "--rw-git-sources", "--", "hello")[0], 0)
+
+    def test_the_option_is_not_for_the_path_the_judges_share(self):
+        rc, lines, err = self.main("--rw-git-sources", "--prompt", "x")
+        self.assertEqual(rc, 2)
+        self.assertIn("--rw-git-sources is not supported with --prompt", err)
 
 
 if __name__ == "__main__":
