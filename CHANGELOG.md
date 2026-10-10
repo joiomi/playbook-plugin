@@ -29,7 +29,8 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   **`tasks models check` no longer says OK for a grok pin it never called.** `grok models` lists what your account
   is entitled to; it cannot see that the credit ran out, and on 2026-09-29 the check printed OK while every call
   answered 402. A listed pin now gets one tiny live turn, run with the pin's own effort (as a codex or agy pin
-  already did) and read for the one word it asks for; an effort the CLI rejects reads `BAD_EFFORT`. Under
+  already did) and read for a clean answer — the one word it asks for, nothing on stderr; an effort the CLI
+  rejects reads `BAD_EFFORT`. Under
   `--no-probe`, and in the report a review prints when it stops on a dead pin, a listed pin reads `LISTED` instead
   of `OK` (`tasks doctor` prints only pins that cannot run, and the dashboard does not run this check: neither
   changes). What changes for you: the check spends one

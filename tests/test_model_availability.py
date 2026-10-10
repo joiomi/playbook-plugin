@@ -340,14 +340,16 @@ class TheGrokProbeReadsItsAnswer(unittest.TestCase):
     """Impl panel round 1 of task 171 (opus): the claim "an out-of-credit pin does not read
     OK" rests on `probe_grok_model`, which had no test and answered OK for any exit 0. The
     shapes below are the CLI's own: `ok` and the bad-effort line captured from grok 1.0.50 on
-    2026-10-10; the 402 event as the judge path captured it on 2026-09-29."""
+    2026-10-10; the 402 as this very probe got it at 04:59:33 that night, when the account
+    ran out of credit while the task was being built."""
 
     OK_REPLY = ("ok\n", "", 0)
     BAD_EFFORT = ("", "--effort/--reasoning-effort: unknown effort level 'bogus-effort'; use one of: "
                       "xhigh, high, medium, low\nError: --effort/--reasoning-effort: unknown effort level "
                       "'bogus-effort'; use one of: xhigh, high, medium, low\n", 1)
-    OUT_OF_CREDIT = ('{"type":"error","message":"Internal error: {\\n  \\"message\\": \\"API error (status 402 '
-                     'Payment Required): Grok Build usage balance exhausted\\",\\n  \\"http_status\\": 402\\n}"}\n')
+    # captured live on 2026-10-10 04:59:33, when the account's credit ran out during this
+    # task: plain `-p`, exit 1, nothing on stdout, this on stderr
+    OUT_OF_CREDIT = 'Internal error: {\n  "message": "API error (status 402 Payment Required): Grok Build usage balance exhausted",\n  "http_status": 402\n}\nError: Internal error: {\n  "message": "API error (status 402 Payment Required): Grok Build usage balance exhausted",\n  "http_status": 402\n}\n'
 
     def _probe(self, stdout, stderr, rc, effort=None):
         self.argv = None
@@ -380,6 +382,13 @@ class TheGrokProbeReadsItsAnswer(unittest.TestCase):
                     self.assertEqual(verdict, mc.UNKNOWN)
                     self.assertIn("402", detail)
 
+    def test_the_captured_out_of_credit_answer(self):
+        verdict, detail = self._probe("", self.OUT_OF_CREDIT, 1)
+        self.assertEqual(verdict, mc.UNKNOWN)
+        # the detail says WHY: the first line alone is `Internal error: {`
+        self.assertIn("402 Payment Required", detail)
+        self.assertIn("usage balance exhausted", detail)
+
     def test_exit_zero_with_no_answer_is_not_ok(self):
         verdict, detail = self._probe("", "", 0)
         self.assertEqual(verdict, mc.UNKNOWN)
@@ -398,6 +407,17 @@ class TheGrokProbeReadsItsAnswer(unittest.TestCase):
                 verdict, detail = self._probe(said, "", 0)
                 self.assertEqual(verdict, mc.UNKNOWN)
                 self.assertIn(said.strip()[:30], detail)
+
+    def test_the_answer_beside_an_error_on_stderr_is_not_ok(self):
+        # the single judge after round 2: exit 0, `ok` on stdout AND a provider error on
+        # stderr read OK — each stream had been tested alone. A clean answer is the word
+        # and nothing on stderr.
+        for noise in ("API error (status 402 Payment Required): Grok Build usage balance exhausted\n",
+                      "warning: something the probe cannot weigh\n"):
+            with self.subTest(stderr=noise.strip()[:30]):
+                verdict, detail = self._probe("ok\n", noise, 0)
+                self.assertEqual(verdict, mc.UNKNOWN)
+                self.assertIn(noise.strip()[:30], detail)
 
     def test_control_the_answer_in_the_spellings_a_model_gives_it(self):
         for said in ("ok\n", "OK", " Ok.\n", "ok!\n", "`ok`\n", '"ok"\n'):

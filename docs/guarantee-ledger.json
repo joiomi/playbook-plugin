@@ -11629,7 +11629,7 @@
             "reference": "TheGrokProbeReadsItsAnswer.test_an_answer_is_ok"
           },
           "limitations": [
-            "`probe_grok_model` with the CLI replaced by its captured outputs: the 402 event (as the judge path captured it on 2026-09-29), on stdout or stderr, with exit 1 or exit 0 → UNKNOWN carrying the 402 line. How the plain `-p` mode itself prints a 402 was never captured (the account had credit when this was written); the rule does not depend on it — OK is exit 0 AND the one word the probe asks for; anything else is not."
+            "`probe_grok_model` with the CLI replaced by what it printed when the account ran out of credit (captured from the plain `-p` probe itself, 2026-10-10 04:59:33): that text on stdout or on stderr, with exit 1 or exit 0 → UNKNOWN carrying the 402 message. OK is exit 0 AND the one word the probe asks for AND nothing on stderr; anything else is not."
           ]
         },
         {
@@ -11680,6 +11680,32 @@
           "limitations": [
             "Exit 0 with the 402 phrase as plain text, with an error object spaced differently, with a refusal, with `ok, but …`: UNKNOWN carrying what was said. Red on the round-1 code (`'OK' != 'UNKNOWN'`), which matched the judge path's event shape only. The control: `ok` in six spellings a model gives it is OK."
           ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_model_availability.py",
+          "reference": "TheGrokProbeReadsItsAnswer.test_the_answer_beside_an_error_on_stderr_is_not_ok",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_model_availability.py",
+            "reference": "TheGrokProbeReadsItsAnswer.test_an_answer_is_ok"
+          },
+          "limitations": [
+            "Exit 0 with `ok` on stdout AND a line on stderr (the 402 wording; any other report): UNKNOWN carrying that line. Red before (`'OK' != 'UNKNOWN'`) — the single judge after round 2. The rule is strict on purpose: a routine notice a future CLI might print on stderr would read UNKNOWN too, with the notice as the stated reason; UNKNOWN does not fail the check."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_model_availability.py",
+          "reference": "TheGrokProbeReadsItsAnswer.test_the_captured_out_of_credit_answer",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_model_availability.py",
+            "reference": "TheGrokProbeReadsItsAnswer.test_an_answer_is_ok"
+          },
+          "limitations": [
+            "The capture exactly as it came (exit 1, empty stdout, the JSON object on stderr): UNKNOWN, and the detail holds `402 Payment Required` and `usage balance exhausted` — the first line alone is `Internal error: {`."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -11695,7 +11721,8 @@
         "No live provider availability/error-classification evidence in CI. Task 111 (2026-10-05): Antigravity is no longer unprobeable — agy 1.2.17 takes a model pin, so `tasks models check` runs one real turn for an agy pin; an id agy does not know is GONE, a missing or contradicted effort is BAD_EFFORT (a spec error, never a dead pin), and a missing sign-in or an exhausted quota is UNKNOWN with the cause. agy is an experimental judge seat and is not in applicable_providers; its proof replays output captured from agy 1.2.17 on one Linux account.",
         "Owner decision 2026-08-21: judge-seat is supported on claude, grok, and codex; antigravity and pi are experimental and removed from applicable_providers.",
         "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending.",
-        "Task 171 (PLAN S11; retro 107 R17): a grok pin found in `grok models` used to read OK with no call — the list is the account's entitlements and cannot see that its credit ran out (2026-09-29: every call 402 while the check said OK). A listed pin now gets one live turn — of the seat as pinned, with its effort — or LISTED where nothing is probed; the probe reads its answer (OK is exit 0 AND the one word it asked for; anything else printed, or nothing, is not OK) and an effort the CLI rejects is BAD_EFFORT. Bound: `probe_codex_model` still takes exit 0 as the answer without reading it. Bound, unchanged: a BARE `grok`, `codex:` or `claude` seat (the provider's default model) still reads OK without a call; only a bare `agy` seat is probed (task 111). The live half of this row — recorded responses from the real providers — is still PLAN S11's gauntlet."
+        "Task 171 (PLAN S11; retro 107 R17): a grok pin found in `grok models` used to read OK with no call — the list is the account's entitlements and cannot see that its credit ran out (2026-09-29: every call 402 while the check said OK). A listed pin now gets one live turn — of the seat as pinned, with its effort — or LISTED where nothing is probed; the probe reads its answer (OK is exit 0 AND the one word it asked for AND nothing on stderr; anything else is not OK) and an effort the CLI rejects is BAD_EFFORT. Bound: `probe_codex_model` still takes exit 0 as the answer without reading it. Bound, unchanged: a BARE `grok`, `codex:` or `claude` seat (the provider's default model) still reads OK without a call; only a bare `agy` seat is probed (task 111). The live half of this row — recorded responses from the real providers — is still PLAN S11's gauntlet.",
+        "LIVE, 2026-10-10 (task 171): the candidate's `tasks models check` at 03:58 printed `grok:grok-4.7:medium OK responds` (a real turn); at 04:59, the account's credit having run out in between, `UNKNOWN — probe failed …` — the case this row's fix is for, met by accident and recorded in task 171. One provider, one night: not the matrix PLAN S11's gauntlet asks for."
       ],
       "follow_up_phases": [
         8

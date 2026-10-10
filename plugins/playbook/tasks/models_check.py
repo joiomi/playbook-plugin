@@ -532,11 +532,14 @@ def probe_grok_model(model: str, effort: Optional[str] = None,
     rejects is BAD_EFFORT here (exit 1 + `unknown effort level`, captured from
     grok 1.0.50) instead of a failure at review time. And it READS its answer:
     the prompt asks for one word, and OK is exit 0 AND that word (`ok`, in the
-    spellings a model gives it). The list of entitled models cannot see spent
-    credit, so a 402 must not read OK however the CLI words it — and how this
-    plain `-p` mode words one was never captured, which is why the rule names
+    spellings a model gives it) AND nothing on stderr — a healthy call printed
+    none (grok 1.0.50, three calls), and the word beside a provider error there
+    is not a clean answer (the single judge after round 2). The list of entitled models cannot see spent
+    credit, so a 402 must not read OK however the CLI words it; the rule names
     the one good answer instead of a list of bad ones (impl panel r2: the first
     version matched the judge path's event shape and let other wordings through).
+    How this plain `-p` mode words a 402 was captured on 2026-10-10 04:59:33, when
+    the account ran dry mid-task: exit 1, stdout empty, the JSON object on stderr.
     """
     # --disable-web-search: grok's web tools are default-ON; without this a
     # probe turn can wander into a web search, blow PROBE_TIMEOUT_SECS, and
@@ -557,13 +560,18 @@ def probe_grok_model(model: str, effort: Optional[str] = None,
         except OSError as e:
             return UNKNOWN, f"probe failed to launch: {e}"
     combined = (result.stdout or "") + (result.stderr or "")
-    first = combined.strip().splitlines()[0][:160] if combined.strip() else f"exit {result.returncode}"
+    # what it printed, on one line: the CLI words a provider error as a JSON object over
+    # several lines, whose first line alone is `Internal error: {` (captured 2026-10-10)
+    first = " ".join(combined.split())[:200] or f"exit {result.returncode}"
     if result.returncode == 0:
         said = (result.stdout or "").strip()
         if not said:                     # what it printed elsewhere, if anything, says why
             return UNKNOWN, "probe exited 0 with no answer" + (f": {first}" if combined.strip() else "")
         if "".join(ch for ch in said.lower() if ch.isalnum()) != "ok":
             return UNKNOWN, f"probe exited 0 without the answer it asked for: {first}"
+        noise = (result.stderr or "").strip()
+        if noise:                        # the word AND a report on stderr is not a clean answer
+            return UNKNOWN, f"probe answered, and also reported on stderr: {' '.join(noise.split())[:200]}"
         return OK, "responds"
     if _GROK_MODEL_GONE in combined and _GROK_MODEL_GONE_2 in combined:
         return GONE, "grok rejects this model id for this account"
