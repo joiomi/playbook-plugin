@@ -25,6 +25,22 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
+- **Five small fixes from PLAN S11's list** (task 171) — each was routed to this batch weeks ago and never built.
+  **`tasks models check` no longer says OK for a grok pin it never called.** `grok models` lists what your account
+  is entitled to; it cannot see that the credit ran out, and on 2026-09-29 the check printed OK while every call
+  answered 402. A listed pin now gets one tiny live turn (as a codex or agy pin already did); under `--no-probe`, in
+  `tasks doctor` and in the dashboard it reads `LISTED` instead of `OK`. What changes for you: the check spends one
+  grok turn per pinned grok model. **The history commands show every activation.** `tasks timeline`, `tasks tagger`
+  and `tasks tag` dropped every second identical line of the shell history — a rule from when the logger wrote each
+  command twice. Going back to a task (`work 7`, `work 8`, `work 7`) showed two entries, and `tasks tag` never
+  closed the second task of a session, so every later message was attributed to it. **A task.md of another project
+  can be created.** The guard that keeps task records for `tasks new` refused a `Write` of
+  `<anywhere>/.agent/tasks/<n>/task.md`, not only in this project; it now looks at this project's records alone
+  (a relative path, or one it cannot place, is still refused). **`## CLI ##` is `## CLI`.** A heading of a
+  template-owned CLAUDE.md section written with closing hashes was not recognised: the stale section stayed and a
+  second one was inserted on every `init`. **`scripts/verify` prints its report on any console.** Where the output
+  stream could not be switched to UTF-8 the report crashed on its first line (a dash); it now writes UTF-8 to the
+  stream's byte buffer, or replaces the character.
 - **The sandbox keeps git metadata read-only in every layout it knows of** (task 169). Three things, each
   measured with real bubblewrap before it was fixed. (1) `.claude/bin/sandbox` bound `.git` read-only and then,
   last, every extra writable path — and the later bind won: with `--rw <project>`, `--rw <a parent of the

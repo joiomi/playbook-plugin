@@ -15,6 +15,7 @@ import io
 import json
 import subprocess
 import sys
+import os
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -246,6 +247,74 @@ class ClaudeConfiguredModelsTest(unittest.TestCase):
             cands = mc.claude_candidate_models(["opus"], None, proj)
         self.assertEqual(cands[0], "claude-fable-5[1m]")
         self.assertIn("claude-fable-5", cands)
+
+
+class AListedGrokPinIsNotOkWithoutACall(unittest.TestCase):
+    """PLAN S11, task 171 (retro 107 R17, from task 089). `grok models` lists what the
+    account is ENTITLED to; it cannot see that the credit ran out. On 2026-09-29 every
+    grok call answered HTTP 402 while the model check printed OK for the pin — it had
+    only found it in the list. A listed pin now gets one live turn, like a codex or an
+    agy pin; where nothing is probed its verdict is the weaker LISTED."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.project = Path(self._tmp.name)
+        os.makedirs(self.project / ".agent")
+        avail = mock.MagicMock()
+        avail.is_available.return_value = True
+        self.probed = []
+        self.answer = (mc.OK, "responds")
+
+        def probe(model, timeout=0):
+            self.probed.append(model)
+            return self.answer
+        for patch in (
+                mock.patch.object(mc, "load_codex_cache", return_value=None),
+                mock.patch.object(mc, "installed_cli_version", return_value=None),
+                mock.patch.object(mc, "list_agy_models", return_value=None),
+                mock.patch.object(mc, "list_grok_models", return_value=["grok-build", "grok-4.7"]),
+                mock.patch.object(mc, "_adapter_classes", return_value={
+                    "claude": avail, "codex": avail, "agy": avail, "pi": avail, "grok": avail}),
+                mock.patch.object(mc, "probe_grok_model", side_effect=probe),
+                mock.patch("provider.sandbox.load_judge_config", return_value={
+                    "default_judge": "grok:grok-4.7:medium",
+                    "panel": ["grok:grok-4.7:medium", "grok:grok-build", "grok:not-in-the-list", "grok"]})):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def _by_spec(self, **kw):
+        return {e["spec"]: (e["verdict"], e["detail"]) for e in mc.check_pins(self.project, **kw)["entries"]}
+
+    def test_a_listed_pin_out_of_credit_is_not_ok(self):
+        self.answer = (mc.UNKNOWN, "probe failed for another reason: API error (status 402 Payment Required)")
+        got = self._by_spec(probe=True)
+        self.assertEqual(got["grok:grok-4.7:medium"][0], mc.UNKNOWN)
+        self.assertIn("402", got["grok:grok-4.7:medium"][1])
+        self.assertEqual(sorted(set(self.probed)), ["grok-4.7", "grok-build"])    # each listed pin got its turn
+
+    def test_a_listed_pin_that_answers_is_ok_because_it_answered(self):
+        got = self._by_spec(probe=True)
+        self.assertEqual(got["grok:grok-4.7:medium"], (mc.OK, "responds"))
+        self.assertEqual(got["grok:grok-build"], (mc.OK, "responds"))
+
+    def test_without_a_probe_a_listed_pin_is_listed_not_ok(self):
+        got = self._by_spec(probe=False)
+        for spec in ("grok:grok-4.7:medium", "grok:grok-build"):
+            self.assertEqual(got[spec][0], mc.LISTED, spec)
+            self.assertIn("not live-verified", got[spec][1])
+        self.assertEqual(self.probed, [])
+
+    def test_control_a_pin_that_is_not_listed_is_gone_without_a_call(self):
+        for probe in (True, False):
+            self.probed.clear()
+            got = self._by_spec(probe=probe)
+            self.assertEqual(got["grok:not-in-the-list"][0], mc.GONE)
+            self.assertNotIn("not-in-the-list", self.probed)
+
+    def test_control_the_bare_seat_is_as_before(self):
+        # the provider's default model, no pin to verify: unchanged by this task
+        self.assertEqual(self._by_spec(probe=False)["grok"], (mc.OK, "uses the grok default model"))
 
 
 class CheckPinsTest(unittest.TestCase):

@@ -235,5 +235,62 @@ class Cp1252Console(unittest.TestCase):
         self.assertIn("1 ≠ 2", out)
 
 
+class AConsoleThatCannotBeReconfigured(unittest.TestCase):
+    """PLAN S11, task 171 (task 096 impl r2, opus). `utf8_console` swallowed a failed
+    `reconfigure` and went on with the stream as it was — the report then met the same
+    `UnicodeEncodeError` on U+2260 that task 086 had fixed for the stream that CAN be
+    reconfigured. Now the report is written in a way no character can break."""
+
+    def _report(self, console):
+        def fake_checks():
+            V.record("fake check", V.FAIL, "a ≠ b", None, ["AssertionError: 1 ≠ 2"])
+
+        with mock.patch.object(V, "run_checks", side_effect=fake_checks), \
+                mock.patch.object(V, "results", []), \
+                mock.patch.object(sys, "argv", ["verify"]), \
+                mock.patch.object(sys, "stdout", console):
+            rc = V.main()
+            sys.stdout.flush()
+        return rc
+
+    def test_a_byte_stream_whose_wrapper_refuses_gets_utf8(self):
+        class Stubborn(io.TextIOWrapper):
+            def reconfigure(self, **kw):
+                raise ValueError("this stream cannot be reconfigured")
+
+        raw = io.BytesIO()
+        console = Stubborn(raw, encoding="ascii")            # strict: `≠` cannot be written
+        self.assertEqual(self._report(console), 1)
+        out = raw.getvalue().decode("utf-8")
+        self.assertIn("AssertionError: 1 ≠ 2", out)
+        self.assertIn("0 passed, 1 failed, 0 skipped", out)  # the report reached its last line
+
+    def test_a_text_only_stream_gets_the_character_replaced(self):
+        class AsciiOnly:                                     # no reconfigure, no byte buffer
+            encoding = "ascii"
+
+            def __init__(self):
+                self.text = ""
+
+            def write(self, text):
+                text.encode("ascii")                         # raises on what ASCII lacks
+                self.text += text
+                return len(text)
+
+            def flush(self):
+                pass
+
+        console = AsciiOnly()
+        self.assertEqual(self._report(console), 1)
+        self.assertIn("AssertionError: 1 ? 2", console.text)
+        self.assertIn("0 passed, 1 failed, 0 skipped", console.text)
+
+    def test_control_a_stream_that_reconfigures_is_left_as_it_is(self):
+        raw = io.BytesIO()
+        console = io.TextIOWrapper(raw, encoding="cp1252")
+        self.assertIs(V.utf8_console(console), console)
+        self.assertEqual(console.encoding, "utf-8")
+
+
 if __name__ == "__main__":
     unittest.main()

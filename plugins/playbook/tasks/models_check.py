@@ -32,15 +32,18 @@ Per-provider discovery surfaces (probed live, 2026-07-13):
   dead pin). A pin is a whole id: `agy:<base>:<effort>` is refused, because
   agy's stream would name only `<base>`. `agy -p /quota` and `/credits` answer without a model turn.
 - grok: `grok models` lists the ACCOUNT'S entitled model ids (login-aware —
-  unlike the codex cache this list IS the entitlements), so listing alone
-  earns OK. A bad `-m` fails fast pre-turn: exit 1 + stderr `Couldn't set
+  unlike the codex cache this list IS the entitlements). Entitled is not
+  usable: the list cannot see that the credit ran out (2026-09-29: every call
+  402 while the pin read OK), so a listed pin is live-probed with one tiny
+  turn and listing alone earns LISTED (task 171). A pin that is NOT listed is
+  GONE without a call. A bad `-m` fails fast pre-turn: exit 1 + stderr `Couldn't set
   model '<x>': Invalid params: "unknown model id"` (verified live, 0.2.99),
   which makes grok pins probe-confirmable for the hard-stop path.
 - pi: no discovery surface known; adapter availability check only.
 
 Verdicts:
   OK                verified available (live probe, or provider-default pin)
-  LISTED            in the codex cache / `agy models` but not live-verified (--no-probe)
+  LISTED            in the codex cache / `agy models` / `grok models` but not live-verified (--no-probe)
   GONE              verified NOT available (probe/cache says so)
   BAD_EFFORT        codex model exists but the :effort suffix isn't supported
   NEEDS_CLI_UPGRADE model needs a newer provider CLI (codex 400 signature)
@@ -828,12 +831,18 @@ def check_pins(project_root: Path, probe: bool = True,
                         verdict, detail = _probe("grok", model_id)
                     else:
                         verdict, detail = UNKNOWN, "`grok models` unavailable (logged out?); re-run without --no-probe"
-                elif model_id in grok_models:
-                    # The list is login-aware entitlements — no live turn needed.
-                    verdict, detail = OK, "in `grok models` (account-entitled list)"
-                else:
+                elif model_id not in grok_models:
                     verdict = GONE
                     detail = f"'{model_id}' not in `grok models` (have: {', '.join(grok_models)})"
+                elif probe:
+                    # Listed is not enough (retro 107 R17, task 171): the list is the
+                    # account's ENTITLEMENTS and cannot see that its credit ran out —
+                    # on 2026-09-29 every grok call answered 402 while this line said
+                    # OK. One real turn decides, as for a codex or an agy pin.
+                    verdict, detail = _probe("grok", model_id)
+                else:
+                    verdict, detail = LISTED, ("in `grok models` (not live-verified — an entitled "
+                                               "model can still be out of credit)")
         else:  # pi
             verdict, detail = UNVERIFIABLE, "pi has no model-discovery surface"
         entries.append({"spec": spec, "provider": provider, "variant": variant,

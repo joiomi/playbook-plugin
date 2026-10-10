@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from tests._bashcheck import bash_or_skip
 import sys
@@ -500,8 +501,10 @@ class GuardZeroIsAStatedGuarantee(unittest.TestCase):
                          "AnotherSpellingOfThePathIsStillGuarded."
                          "test_control_rewriting_an_existing_task_md_is_not_a_creation")
         self.assertEqual(row["required_live_evidence"], [], "the row joined the live spine")
-        # its known bound is stated, not hidden: the guard has no project scope
-        self.assertTrue(any("outside the project" in x.lower() for x in row["missing_evidence_or_limitation"]))
+        # task 171: the guard has a project scope now, and the row cites its proof
+        cited = {p.get("reference") for p in row["proofs"]}
+        self.assertIn("GuardZeroIsAStatedGuarantee.test_a_task_md_of_another_project_is_not_this_guards", cited)
+        self.assertIn("this project", row["statement"])
 
     # Impl panel round 1 (opus): the row says `.agent[/<lane>]/tasks/…` and its proof made a
     # task.md under `.agent/tasks/` only — the lane arm of the hook's pattern had no test.
@@ -531,13 +534,73 @@ class GuardZeroIsAStatedGuarantee(unittest.TestCase):
         self.assertEqual(cited.get("GuardZeroIsAStatedGuarantee.test_a_task_md_in_a_lane_is_guarded_too"),
                          "GuardZeroIsAStatedGuarantee.test_control_the_pattern_is_one_lane_deep")
 
-    def test_what_the_row_admits_is_what_the_guard_does(self):
-        # a NEW task.md path outside the project is refused too — the row says so
+    # Task 171 (PLAN S11; retro 107 R6, from task 080): the guard had no project scope —
+    # a Write creating `<elsewhere>/.agent/tasks/003-x/task.md` was refused with "only
+    # `tasks new` creates task.md files", and `tasks new` cannot create a task in another
+    # project. The row stated it as a bound; it is a guarantee now.
+    def _write_new(self, f, path, cwd=None):
+        payload = {"hook_event_name": "PreToolUse", "tool_name": "Write",
+                   "tool_input": {"file_path": str(path), "content": "# 003\n"}}
+        if cwd is None:
+            return f.run_hook(payload)
+        env = dict(os.environ, PLAYBOOK_SESSION_ID=SESSION)
+        env.pop("PLAYBOOK_ROLE", None)
+        return subprocess.run([bash_or_skip(), str(HOOK)], input=json.dumps(payload).encode(),
+                              cwd=cwd, env=env, capture_output=True, timeout=60)
+
+    def test_a_task_md_of_another_project_is_not_this_guards(self):
         f = ProjectFixture()
-        outside = Path(tempfile.mkdtemp()) / ".agent" / "tasks" / "003-elsewhere" / "task.md"
-        r = f.run_hook({"hook_event_name": "PreToolUse", "tool_name": "Write",
-                        "tool_input": {"file_path": str(outside), "content": "# 003\n"}})
-        self.assertEqual(r.returncode, 2, r.stderr.decode())
+        elsewhere = Path(tempfile.mkdtemp()).resolve()
+        for parts in ((".agent", "tasks", "003-elsewhere"), (".agent", "alice", "tasks", "003-elsewhere")):
+            with self.subTest(parts="/".join(parts)):
+                r = self._write_new(f, elsewhere.joinpath(*parts, "task.md"))
+                self.assertEqual(r.returncode, 0, r.stderr.decode())
+                self.assertNotIn(b"creates task.md files", r.stderr)
+
+    def test_a_path_that_reaches_this_project_another_way_is_still_refused(self):
+        # the inside test is the task-directory guard's: lexical OR physical, and a path
+        # it cannot place (relative, `~`) counts as inside. (Not here, because it was never
+        # guarded: a path that reaches `.agent` through a link NOT called `.agent` — the
+        # guard's pattern reads the path's text. Parked in task 171.)
+        f = ProjectFixture()
+        outside = Path(tempfile.mkdtemp()).resolve()
+        os.symlink(f.proj, outside / "a-link-to-the-project")
+        shapes = {
+            "through a link to the project": outside / "a-link-to-the-project" / ".agent" / "tasks" / "004-x" / "task.md",
+            "relative": Path(".agent/tasks/004-x/task.md"),
+            "home-relative": Path("~/.agent/tasks/004-x/task.md"),
+        }
+        for name, path in shapes.items():
+            with self.subTest(shape=name):
+                r = self._write_new(f, path)
+                self.assertEqual(r.returncode, 2, name + ": " + r.stderr.decode())
+                self.assertIn(b"creates task.md files", r.stderr)
+
+    def test_without_its_helper_the_guard_keeps_refusing(self):
+        # "could not tell" is not "outside": a hook whose helper is missing or broken
+        # refuses the creation, as it did before it had a scope at all
+        f = ProjectFixture()
+        elsewhere = Path(tempfile.mkdtemp()).resolve()
+        target = elsewhere / ".agent" / "tasks" / "003-elsewhere" / "task.md"
+        for how in ("missing", "broken"):
+            with self.subTest(helper=how):
+                scripts = Path(tempfile.mkdtemp()) / "scripts"
+                shutil.copytree(HOOK.parent, scripts)
+                helper = scripts / "task-dir-target.py"
+                if how == "missing":
+                    helper.unlink()
+                else:
+                    helper.write_text("raise SystemExit('broken on purpose')\n", encoding="utf-8")
+                payload = {"hook_event_name": "PreToolUse", "tool_name": "Write",
+                           "tool_input": {"file_path": str(target), "content": "# 003\n"}}
+                env = dict(os.environ, PLAYBOOK_SESSION_ID=SESSION)
+                env.pop("PLAYBOOK_ROLE", None)
+                r = subprocess.run([bash_or_skip(), str(scripts / "task-gate-hook")],
+                                   input=json.dumps(payload).encode(), cwd=f.proj, env=env,
+                                   capture_output=True, timeout=60)
+                self.assertEqual(r.returncode, 2, r.stderr.decode())
+                self.assertIn(b"creates task.md files", r.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

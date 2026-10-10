@@ -14,6 +14,7 @@ spans into chat_log.md) and `retro` (a generated retro task). Imports stdlib
 from __future__ import annotations
 
 import datetime
+import re
 import sys
 from pathlib import Path
 from tasks.atomic import atomic_write
@@ -239,6 +240,37 @@ def cmd_intent(cmd_args):
     print("\nNext: read review.md with the user, grade the seams, then append "
           "vetted intent to INTENT.md (the /intent command drives this).")
 
+# timestamp | AGENT/SCRIPT | [path/]tasks work|new …
+_ACTIVATION_RE = re.compile(
+    r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \| \w+ \| '
+    r'(?:.*/)?(tasks (?:work|new) .+)$'
+)
+
+
+def activations(history_text: str):
+    """(timestamp, command) for each `tasks work` / `tasks new` line of a bash_history,
+    in file order — the one reader `tasks timeline` and `tasks tagger` share.
+
+    The logger once wrote a command twice: the agent's line and the script's echo, in
+    the same second, one under the other. Both readers hid that by dropping every
+    SECOND sight of a command. Since task 088 the logger writes a command once, and
+    that rule hid every second genuine activation — `work 7`, `work 8`, `work 7`
+    showed two entries (retro 107 R12; fixed in task 171). An echo is now recognised
+    as what it was: the same command, with the same timestamp, within two lines of the
+    sight it repeats. Everything else is an activation."""
+    last: "dict[str, tuple[int, str]]" = {}
+    for i, line in enumerate(history_text.splitlines()):
+        m = _ACTIVATION_RE.match(line)
+        if not m:
+            continue
+        stamp, cmd = m.group(1), m.group(2)
+        seen = last.get(cmd)
+        last[cmd] = (i, stamp)
+        if seen is not None and i - seen[0] <= 2 and seen[1] == stamp:
+            continue
+        yield stamp, cmd
+
+
 def cmd_timeline(cmd_args):
     """The `tasks timeline` arm — body moved verbatim from cli.py (1.5.9 split)."""
     project_path = find_project_root()
@@ -247,25 +279,10 @@ def cmd_timeline(cmd_args):
         print(f"No {bash_history.relative_to(project_path).as_posix()} found.", file=sys.stderr)
         sys.exit(1)
 
-    import re
-    # Match: timestamp | AGENT/SCRIPT | tasks work/new/done ...
-    pattern = re.compile(
-        r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \| \w+ \| '
-        r'(?:.*/)?(tasks (?:work|new) .+)$'
-    )
-    seen = set()
     printed = 0
-    for line in bash_history.read_text(encoding="utf-8", errors="replace").splitlines():
-        m = pattern.match(line)
-        if m:
-            cmd = m.group(2)
-            # Deduplicate AGENT+SCRIPT echoes (same command within 2 lines)
-            if cmd not in seen:
-                seen.add(cmd)
-                print(f"{m.group(1)}  {cmd}")
-                printed += 1
-            else:
-                seen.discard(cmd)
+    for stamp, cmd in activations(bash_history.read_text(encoding="utf-8", errors="replace")):
+        print(f"{stamp}  {cmd}")
+        printed += 1
     if not printed:   # task 073 (C2): silence looked like a crash
         print("(no `tasks work`/`tasks new` activations recorded in bash_history yet)", file=sys.stderr)
 
@@ -329,21 +346,9 @@ def cmd_tagger(cmd_args):
     flush_msg()
 
     # 2. Parse task transitions from bash_history
-    task_pattern = re.compile(
-        r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \| \w+ \| '
-        r'(?:.*/)?(tasks (?:work|new) .+)$'
-    )
-    seen = set()
     from tasks.retro import bash_history_ts_to_utc
-    for line in bash_history.read_text(encoding="utf-8", errors="replace").splitlines():
-        m = task_pattern.match(line)
-        if m:
-            task_cmd = m.group(2)
-            if task_cmd not in seen:
-                seen.add(task_cmd)
-                entries.append((bash_history_ts_to_utc(m.group(1)), 1, f"--- {task_cmd} ---"))   # local → UTC (073)
-            else:
-                seen.discard(task_cmd)
+    for stamp, task_cmd in activations(bash_history.read_text(encoding="utf-8", errors="replace")):
+        entries.append((bash_history_ts_to_utc(stamp), 1, f"--- {task_cmd} ---"))   # local → UTC (073)
 
     # 3. Sort by timestamp, then task transitions before messages (sort_key: 1 before 0)
     #    Actually: task transitions AFTER messages at same timestamp makes more sense
@@ -374,30 +379,19 @@ def cmd_tag(cmd_args):
 
     # 1. Build sorted task transition list from bash_history
     #    Each entry: (timestamp, active_task_or_None)
-    task_pattern = re.compile(
-        r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \| \w+ \| '
-        r'(?:.*/)?(tasks (?:work|new) .+)$'
-    )
     work_re = re.compile(r'tasks work (\d+)')
     transitions = []  # [(timestamp, task_num_or_None)]
-    seen = set()
     from tasks.retro import bash_history_ts_to_utc
-    for line in bash_history.read_text(encoding="utf-8", errors="replace").splitlines():
-        m = task_pattern.match(line)
-        if m:
-            task_cmd = m.group(2)
-            if task_cmd not in seen:
-                seen.add(task_cmd)
-            else:
-                seen.discard(task_cmd)
-                continue
-            ts = bash_history_ts_to_utc(m.group(1))   # local → UTC (task 073, C12)
-            if "work done" in task_cmd:
-                transitions.append((ts, None))
-            else:
-                wm = work_re.search(task_cmd)
-                if wm:
-                    transitions.append((ts, wm.group(1).zfill(3)))
+    # the shared reader (task 171): the toggle that stood here dropped the SECOND
+    # `tasks work done` of a history, so its task never closed in the spans
+    for stamp, task_cmd in activations(bash_history.read_text(encoding="utf-8", errors="replace")):
+        ts = bash_history_ts_to_utc(stamp)   # local → UTC (task 073, C12)
+        if "work done" in task_cmd:
+            transitions.append((ts, None))
+        else:
+            wm = work_re.search(task_cmd)
+            if wm:
+                transitions.append((ts, wm.group(1).zfill(3)))
     transitions.sort(key=lambda t: t[0])
     trans_times = [t[0] for t in transitions]
 

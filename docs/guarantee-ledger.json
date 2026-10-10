@@ -2342,7 +2342,7 @@
     {
       "id": "PB-TASK-MD-GUARD",
       "category": "hook-payload-and-paths",
-      "statement": "task-gate-hook refuses a `Write` that would CREATE a task record by hand — a `file_path` naming `.agent[/<lane>]/tasks/<dir>/task.md` where no such file exists — whatever lexical spelling names it (a `/./` segment, a doubled slash, an `x/..` hop: the guard judges the normalised path), and answers that only `tasks new` creates task.md files. A `Write` over a task.md that already exists is not a creation and is not refused by this guard.",
+      "statement": "task-gate-hook refuses a `Write` that would CREATE a task record of this project by hand — a `file_path` naming `.agent[/<lane>]/tasks/<dir>/task.md` inside this project where no such file exists — whatever lexical spelling names it (a `/./` segment, a doubled slash, an `x/..` hop: the guard judges the normalised path), and answers that only `tasks new` creates task.md files. A `Write` over a task.md that already exists is not a creation and is not refused by this guard. Nor is a `Write` that creates a task.md of ANOTHER project: the path is placed by the task-directory guard's own inside test (`task-dir-target.py --path`: lexically or physically inside the project; a relative or `~` path counts as inside), and when that helper is missing or fails the refusal stands.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/task-gate-hook",
@@ -2381,11 +2381,24 @@
         {
           "type": "executable integration",
           "path": "tests/test_batch_close_guard.py",
-          "reference": "GuardZeroIsAStatedGuarantee.test_what_the_row_admits_is_what_the_guard_does",
+          "reference": "GuardZeroIsAStatedGuarantee.test_a_task_md_of_another_project_is_not_this_guards",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_batch_close_guard.py",
+            "reference": "GuardZeroIsAStatedGuarantee.test_a_path_that_reaches_this_project_another_way_is_still_refused"
+          },
+          "limitations": [
+            "The real hook, a real `Write` payload: a new task.md under another directory's `.agent/tasks/` and `.agent/<lane>/tasks/` passes (exit 0, no refusal text). Red before task 171 (`2 != 0`). The control: the same creation reached through a symlink to the project, by a relative path and by a `~` path is still refused."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_batch_close_guard.py",
+          "reference": "GuardZeroIsAStatedGuarantee.test_without_its_helper_the_guard_keeps_refusing",
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": [
-            "Shows the bound stated below, not a protection: a new task.md path OUTSIDE the project is refused as well."
+            "A copy of the hook's directory with the helper removed, and one with a helper that exits with an error: the out-of-project creation is refused in both — the guard fails closed."
           ]
         }
       ],
@@ -2399,7 +2412,7 @@
       "missing_evidence_or_limitation": [
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
         "Row added by task 166 (PLAN S11 fix batch, item 5; owner 2026-10-09: \"Adaug rândul în S11 (Recomandat)\"). The guard is older than the ledger and its tests date from task 158; until this row it was enforced and tested, and stated nowhere here.",
-        "Bound: the guard has no project scope. A `Write` that would create `<anywhere>/.agent/tasks/<dir>/task.md` OUTSIDE the project is refused too (corpus vector H07 in tests/test_command_guard.py, an open PLAN S11 item) — a fixture that needs such a file in a temp directory must make it another way.",
+        "Task 171 (PLAN S11; retro 107 R6): the guard has a project scope. Until then a `Write` creating `<anywhere>/.agent/tasks/<dir>/task.md` was refused too, and this row stated that as a bound. Bound that remains, measured in that task and older than it: the pattern reads the path's TEXT, so a path that reaches this project's `.agent` through a symlink whose name is not `.agent` (`<link>/tasks/<dir>/task.md`) is not seen by this guard.",
         "Bound: only a payload whose tool is `Write` is judged by this guard. One of another tool (`Edit`, `MultiEdit`, `NotebookEdit`) that names a task.md which does not exist is not refused here; whether such a tool can create a file at all is the host's behaviour and is not checked. Making a task DIRECTORY through the shell is `PB-TASK-DIR-GUARD`'s subject, not this row's."
       ],
       "follow_up_phases": [],
@@ -7130,7 +7143,7 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": [
-            "Headings are ATX lines (a level-1 one may be indented by up to three spaces when a thematic break `---` is the nearest non-blank line above it — under a list item it would be that item's content, and the break, carried with the part, keeps the reading stable over refreshes) and Setext level-1 headings (text of one or more lines; indented text under the same break rule), task 114, outside CLOSED fenced code blocks and CLOSED <!-- --> comments that start a line; headings indented by 1-3 spaces below level 1 and ATX headings with closing hashes (`## CLI ##`) are not matched as template sections, and other HTML blocks (<div> ...) and a comment opened mid-line are not tracked, so a `#`/`##` line inside one counts as a heading. A template heading is refreshed only at its first occurrence outside the project's `#` parts; a template section the file lacks is inserted above the first such part, so a file an older merge gave a template section BELOW its part — or a future template section named like one inside the part — gets that section once more above it (duplicate template text once, then stable). Text written INSIDE a template-owned section — including a fence or comment opened there and closed only after a project `#` heading, and a `---` right under a list item or blockquote — is replaced with the section by contract; since task 114 it is never lost silently (the backup proof below). A file that is not UTF-8 is merged byte-preserving (surrogateescape); two init runs on one project at the same time are not serialized (each keeps its own backup)."
+            "Headings are ATX lines (a level-1 one may be indented by up to three spaces when a thematic break `---` is the nearest non-blank line above it — under a list item it would be that item's content, and the break, carried with the part, keeps the reading stable over refreshes) and Setext level-1 headings (text of one or more lines; indented text under the same break rule), task 114, outside CLOSED fenced code blocks and CLOSED <!-- --> comments that start a line; headings indented by 1-3 spaces below level 1 are not matched as template sections (an ATX heading with a closing sequence, `## CLI ##`, IS matched since task 171 — it was kept and a second section inserted), and other HTML blocks (<div> ...) and a comment opened mid-line are not tracked, so a `#`/`##` line inside one counts as a heading. A template heading is refreshed only at its first occurrence outside the project's `#` parts; a template section the file lacks is inserted above the first such part, so a file an older merge gave a template section BELOW its part — or a future template section named like one inside the part — gets that section once more above it (duplicate template text once, then stable). Text written INSIDE a template-owned section — including a fence or comment opened there and closed only after a project `#` heading, and a `---` right under a list item or blockquote — is replaced with the section by contract; since task 114 it is never lost silently (the backup proof below). A file that is not UTF-8 is merged byte-preserving (surrogateescape); two init runs on one project at the same time are not serialized (each keeps its own backup)."
           ]
         },
         {
@@ -7185,6 +7198,19 @@
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_init_claude_md.py",
+          "reference": "AHeadingWrittenWithClosingHashes.test_it_is_the_templates_section_and_is_refreshed_in_place",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_init_claude_md.py",
+            "reference": "AHeadingWrittenWithClosingHashes.test_control_what_is_not_a_closing_sequence_is_another_heading"
+          },
+          "limitations": [
+            "A template section whose heading the file wrote with an ATX closing sequence (four spellings): refreshed in place — the merged file equals a fresh one, one `## CLI`, the replaced line reported under the heading as written. Red before task 171 (`['## CLI ##', '## CLI'] != ['## CLI']`). The control: `## CLI#`, `## C#` and `## CLI ## and more` have no closing sequence and stay the project's own sections, byte for byte."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -11540,6 +11566,32 @@
           "limitations": [
             "Task 111: experimental agy judge seat. The probe's subprocess is replaced by stdout/stderr captured from agy 1.2.17 (2026-10-05, tests/fixtures/agy-1.2.17/) for the three `invalid model selection` messages; no agy runs in the test."
           ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_model_availability.py",
+          "reference": "AListedGrokPinIsNotOkWithoutACall.test_a_listed_pin_out_of_credit_is_not_ok",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_model_availability.py",
+            "reference": "AListedGrokPinIsNotOkWithoutACall.test_control_a_pin_that_is_not_listed_is_gone_without_a_call"
+          },
+          "limitations": [
+            "`check_pins` with every provider call replaced by a recorder: a grok pin that IS in `grok models` gets one probe, and when that answers 402 the verdict is UNKNOWN with the provider's line — not OK. Red before task 171 (`'OK' != 'UNKNOWN'`: the pin was never called)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_model_availability.py",
+          "reference": "AListedGrokPinIsNotOkWithoutACall.test_without_a_probe_a_listed_pin_is_listed_not_ok",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_model_availability.py",
+            "reference": "AListedGrokPinIsNotOkWithoutACall.test_control_the_bare_seat_is_as_before"
+          },
+          "limitations": [
+            "With no probing (`--no-probe`, doctor, the dashboard) a listed grok pin reads LISTED, and nothing is called."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -11554,7 +11606,8 @@
       "missing_evidence_or_limitation": [
         "No live provider availability/error-classification evidence in CI. Task 111 (2026-10-05): Antigravity is no longer unprobeable — agy 1.2.17 takes a model pin, so `tasks models check` runs one real turn for an agy pin; an id agy does not know is GONE, a missing or contradicted effort is BAD_EFFORT (a spec error, never a dead pin), and a missing sign-in or an exhausted quota is UNKNOWN with the cause. agy is an experimental judge seat and is not in applicable_providers; its proof replays output captured from agy 1.2.17 on one Linux account.",
         "Owner decision 2026-08-21: judge-seat is supported on claude, grok, and codex; antigravity and pi are experimental and removed from applicable_providers.",
-        "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending."
+        "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending.",
+        "Task 171 (PLAN S11; retro 107 R17): a grok pin found in `grok models` used to read OK with no call — the list is the account's entitlements and cannot see that its credit ran out (2026-09-29: every call 402 while the check said OK). A listed pin now gets one live turn, or LISTED where nothing is probed. Bound, unchanged: a BARE `grok`, `codex:` or `claude` seat (the provider's default model) still reads OK without a call; only a bare `agy` seat is probed (task 111). The live half of this row — recorded responses from the real providers — is still PLAN S11's gauntlet."
       ],
       "follow_up_phases": [
         8
@@ -12751,7 +12804,7 @@
     {
       "id": "PB-CLI-TIMELINE-TAGGER",
       "category": "cli-contracts",
-      "statement": "tasks timeline and tasks tagger fail with an explicit exit-1 message naming the missing input file, and in a multi-user repo that message names the resolved lane path.",
+      "statement": "tasks timeline and tasks tagger fail with an explicit exit-1 message naming the missing input file, and in a multi-user repo that message names the resolved lane path. Both, and `tasks tag`, read every `tasks work` / `tasks new` line of the shell history as an activation: a command run again later is a new activation, and only an echo of the old logger — the same command with the same timestamp within two lines — is not.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/history.py",
@@ -12801,6 +12854,55 @@
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_history_activations.py",
+          "reference": "TimelineShowsEveryActivation.test_going_back_to_a_task_is_shown",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_history_activations.py",
+            "reference": "TimelineShowsEveryActivation.test_control_an_old_echo_pair_is_still_one_entry"
+          },
+          "limitations": [
+            "The real CLI on a written history: `work 7`, `work 8`, `work 7` prints three transitions. Red before task 171 (two — every second sight of a command was dropped)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_history_activations.py",
+          "reference": "TimelineShowsEveryActivation.test_the_same_activation_run_again_later_is_shown",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The same command 30 seconds later is a second activation (`1 != 2` before)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_history_activations.py",
+          "reference": "TaggerShowsEveryActivation.test_going_back_to_a_task_is_shown",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_history_activations.py",
+            "reference": "TaggerShowsEveryActivation.test_control_an_old_echo_pair_is_still_one_entry"
+          },
+          "limitations": [
+            "The same history through `tasks tagger`."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_history_activations.py",
+          "reference": "TagAttributesEveryActivation.test_a_second_close_ends_its_task_and_a_return_is_seen",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_history_activations.py",
+            "reference": "TagAttributesEveryActivation.test_control_one_task_opened_and_closed"
+          },
+          "limitations": [
+            "`tasks tag` rewrites the chat log's spans from the same lines: after `work 7 / work done / work 8 / work done / work 7` the five messages are attributed 007, none, 008, none, 007. Red before task 171: the last two were attributed to 008 — the second `work done` never closed its task."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -12813,7 +12915,7 @@
       ],
       "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "Only the absent-input behavior is proved — now in a single-user repo too, including tagger's second check (chat log present, shell history absent) (task 148 (PLAN S12)); neither the chronological reconstruction nor the tagging output has an executable test, and the statement claims neither.",
+        "Proved: the absent-input behaviour (single-user and multi-user, including tagger's second check — task 148, PLAN S12) and, since task 171 (PLAN S11; retro 107 R12), how the three commands read ACTIVATIONS from the shell history. Not proved, and not claimed: the rest of the reconstruction — how messages and transitions are merged and ordered, the text of a tag. Bound, measured in task 171 and older than it: today's logger also records the whole compound command line beside each of its commands, so one activation can appear as two lines with two different texts.",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
       ],
       "follow_up_phases": [

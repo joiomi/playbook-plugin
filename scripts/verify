@@ -808,19 +808,50 @@ def _diffcheck():
     return FAIL, tail(out), cap([ln.strip() for ln in out.splitlines() if ln.strip()])
 
 
+class _CannotFailOnACharacter:
+    """What `utf8_console` gives back for a stream it could not reconfigure: UTF-8
+    straight onto the stream's byte buffer where it has one, else the stream's own
+    codec with `?` for what that codec lacks. Everything else is the stream's."""
+
+    def __init__(self, stream):
+        self._stream = stream
+        self._bytes = getattr(stream, "buffer", None)
+        self.encoding = "utf-8" if self._bytes is not None else (getattr(stream, "encoding", None) or "ascii")
+
+    def write(self, text):
+        if self._bytes is not None:
+            self._stream.flush()         # what the text layer already holds goes first
+            self._bytes.write(text.encode("utf-8", "replace"))
+        else:
+            self._stream.write(text.encode(self.encoding, "replace").decode(self.encoding, "replace"))
+        return len(text)
+
+    def flush(self):
+        if self._bytes is not None:
+            self._bytes.flush()
+        self._stream.flush()
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+
 def utf8_console(stream):
     """086 W6: a console codec that is not UTF-8 (cp1252 then) crashed the report on
-    U+2260 and cut the failure list short. Re-encode as UTF-8, replacing what cannot be written."""
+    U+2260 and cut the failure list short. Re-encode as UTF-8, replacing what cannot be
+    written. A stream that cannot be reconfigured (not a TextIOWrapper, one that refuses)
+    used to be left as it was, and the report then crashed the same way — on its own
+    first line, which holds a dash (task 096 impl r2; task 171): it is wrapped instead.
+    The caller must USE what this returns."""
     try:
         stream.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:                    # not a TextIOWrapper, or already detached
-        pass
+    except Exception:
+        return _CannotFailOnACharacter(stream)
     return stream
 
 
 def main() -> int:
-    utf8_console(sys.stdout)
-    utf8_console(sys.stderr)
+    sys.stdout = utf8_console(sys.stdout)
+    sys.stderr = utf8_console(sys.stderr)
     ap = argparse.ArgumentParser(description="Run every check in this repo.")
     ap.add_argument("--json", action="store_true", help="machine-readable summary on stdout")
     args = ap.parse_args()
