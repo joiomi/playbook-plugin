@@ -823,9 +823,22 @@ esac""")
         self.hist.symlink_to(elsewhere)
         r = self._bash("set -e; echo still-alive")              # nothing logged: only the rotation's doing
         self.assertIn("still-alive", r.stdout)
-        if elsewhere.exists():                                   # the logger's own line (older than this task) may
-            self.assertNotIn("planted-by-the-repository", elsewhere.read_text(encoding="utf-8"))   # make it; the archive's must not be in it
+        self.assertFalse(elsewhere.exists(), "a file was made where the link points")   # since task 176 not even
+        self.assertTrue(self.owes.exists())                                             # the logger's own line makes it
+
+    def test_the_rotation_itself_refuses_a_history_that_is_a_link(self):
+        # Since task 176 the callback leaves a lane with a linked history alone before
+        # it ever comes to the rotation, so the two tests above pass for the callback's
+        # reason. The rotation's own refusal is what stands if that look is ever
+        # moved: called directly here.
+        victim, archive = self._planted()
+        self.hist.symlink_to(victim)
+        r = self._bash(f"_cpb_rotate '{self.hist.parent}'; echo still-alive")
+        self.assertIn("still-alive", r.stdout)
+        self.assertEqual(victim.read_text(encoding="utf-8"), "keep\n")
         self.assertTrue(self.owes.exists())
+        self.assertTrue(archive.exists())
+        self.assertEqual(self._leftovers(), [])
 
     def test_the_marker_is_not_written_through_a_planted_link(self):
         elsewhere = Path(self._tmp.name) / "not-there"
@@ -1043,6 +1056,7 @@ exec "{real}" "$@"
         self._wrapper("date")
         r = self._bash("enable -n printf; echo one >/dev/null; echo two >/dev/null; echo still-alive")
         self.assertEqual(r.stdout.strip(), "still-alive", r.stderr)
+        self.assertEqual(r.stderr, "", "the callback said something")
         self.assertEqual(self._depths(), [1, 1, 1], "one run for each of the three lines after the builtin went")
         logged = self._logged()
         self.assertTrue(logged and all(logged), self.hist.read_text(encoding="utf-8"))
@@ -1078,6 +1092,50 @@ exec "{real}" "$@"
         self.assertEqual(r.stderr, "")
         self.assertFalse(elsewhere.exists(), "the append made the file the link points to")
 
+    def test_a_link_put_there_after_the_first_look_is_not_written_through(self):
+        # impl panel round 1 (codex-high): the look at the link was made once, before
+        # the first look at the size; the append opens the name again. The look is
+        # made again right before the append. (What a shell redirection cannot do is
+        # open without following: between that second look and the append there are
+        # two builtin steps and no more.)
+        import shutil
+        victim = Path(self._tmp.name) / "victim"
+        victim.write_text("keep\n", encoding="utf-8")
+        self.hist.write_text("2026-10-10 10:00:00 | AGENT | echo earlier\n", encoding="utf-8")
+        # `find` is the first look: at that moment the history is swapped for a link
+        (self.bindir / "find").write_text(
+            f'#!/bin/sh\nif [ ! -L "{self.hist}" ]; then rm -f "{self.hist}"; ln -s "{victim}" "{self.hist}"; fi\n'
+            f'exec "{shutil.which("find")}" "$@"\n', encoding="utf-8")
+        (self.bindir / "find").chmod(0o755)
+        r = self._bash("set -e; echo a-line >/dev/null; echo still-alive")
+        self.assertEqual(r.stdout.strip(), "still-alive", r.stderr)
+        self.assertTrue(self.hist.is_symlink(), "the case under test: the swap happened")
+        self.assertEqual(victim.read_text(encoding="utf-8"), "keep\n", "a line was written through the link")
+
+    def _user_lane(self, name="alice"):
+        (self.proj / ".agent" / "current_user").write_text(name + "\n", encoding="utf-8")
+        return self.proj / ".agent" / name
+
+    def test_a_user_lane_that_is_a_link_is_not_logged_to(self):
+        # impl panel round 1 (opus): looking at the last name only was not enough — a
+        # project can ship `.agent/current_user` and `.agent/<that user>` as a link to
+        # a directory elsewhere, and the user's commands were written there.
+        outside = Path(self._tmp.name) / "outside"
+        outside.mkdir()
+        self._user_lane().symlink_to(outside, target_is_directory=True)
+        r = self._bash("set -e; echo a-line >/dev/null; echo still-alive")
+        self.assertEqual(r.stdout.strip(), "still-alive", r.stderr)
+        self.assertEqual(r.stderr, "")
+        self.assertEqual(sorted(q.name for q in outside.iterdir()), [], "the user's commands were written elsewhere")
+
+    def test_a_user_lane_that_is_a_directory_is_logged_as_ever(self):
+        # the control of the one above
+        lane = self._user_lane()
+        lane.mkdir()
+        self._bash("set -e; echo a-line >/dev/null; echo still-alive")
+        text = (lane / "bash_history").read_text(encoding="utf-8")
+        self.assertIn(" | AGENT | echo a-line > /dev/null", text)
+
     def test_a_lane_that_is_a_real_file_is_logged_as_ever(self):
         # the control of the two above: the same commands, an ordinary history
         self.hist.write_text("", encoding="utf-8")
@@ -1104,6 +1162,7 @@ exec "{real}" "$@"
             fh.write(filler * (51 * 1024 * 1024 // len(filler) + 1))
         r = self._off_then_in("echo in-the-project >/dev/null; echo still-alive")
         self.assertEqual(r.stdout.strip(), "still-alive", r.stderr)
+        self.assertEqual(r.stderr, "", "the logger said something")
         self.assertEqual(len(_archives_in(self.hist.parent)), 1)
         self.assertLess(self.hist.stat().st_size, 1024 * 1024)
         given = [m.group(2) for m in self._logged() if m and "tasks work" in m.group(2)]
@@ -1111,32 +1170,63 @@ exec "{real}" "$@"
         marker = self.hist.parent / "bash_history.archived-owes"
         self.assertEqual(marker.read_text(encoding="utf-8"), _archives_in(self.hist.parent)[0].name + "\n")
 
-    def test_where_the_line_in_front_cannot_be_made_nothing_is_given_and_the_marker_stays(self):
-        # What is carried is read with one line put in front of it, for the second
-        # `tail` to drop. That line has to BE there: where it cannot be made, the
-        # reading must fail — not go on and have the first line owed dropped for it.
-        import shutil
+    def _owing(self):
+        """A marker and its archive: two activation lines are owed to a small live file."""
         archive = self.hist.parent / "bash_history.archived-20260101-000000-1"
         archive.write_text("2026-09-20 10:00:00 | AGENT | .claude/bin/tasks work 7\n"
                            "2026-09-20 10:00:01 | AGENT | .claude/bin/tasks work 8\n", encoding="utf-8")
         self.hist.write_text("2026-10-10 10:00:00 | AGENT | echo earlier\n", encoding="utf-8")
         marker = self.hist.parent / "bash_history.archived-owes"
         marker.write_text(archive.name + "\n", encoding="utf-8")
-        # `cat` with nothing to read but its input is how that line is made here
-        (self.bindir / "cat").write_text(
-            f'#!/bin/sh\n[ "$#" -eq 0 ] && exit 1\nexec "{shutil.which("cat")}" "$@"\n', encoding="utf-8")
-        (self.bindir / "cat").chmod(0o755)
-        r = self._bash("set -e; echo a-line >/dev/null; echo still-alive")
-        self.assertEqual(r.stdout.strip(), "still-alive", r.stderr)
-        self.assertEqual(r.stderr, "")
-        given = [m.group(2) for m in self._logged() if m and "tasks work" in m.group(2)]
-        self.assertEqual(given, [], "something was given back from a reading that could not be whole")
-        self.assertTrue(marker.exists(), "the marker went although nothing whole was given")
-        (self.bindir / "cat").unlink()
-        self._bash("echo the-next-shell >/dev/null")
-        given = [m.group(2) for m in self._logged() if m and "tasks work" in m.group(2)]
-        self.assertEqual(given, [".claude/bin/tasks work 7", ".claude/bin/tasks work 8"])
-        self.assertFalse(marker.exists())
+        return marker
+
+    def _given(self):
+        return [m.group(2) for m in self._logged() if m and "tasks work" in m.group(2)]
+
+    def _stand_in(self, tool, body):
+        import shutil
+        (self.bindir / tool).write_text(f'#!/bin/sh\n{body}\nexec "{shutil.which(tool)}" "$@"\n', encoding="utf-8")
+        (self.bindir / tool).chmod(0o755)
+
+    def test_what_is_owed_does_not_hang_on_cat_or_head(self):
+        # impl panel round 1 (opus, codex-high, codex-medium). The first build of this
+        # task read the marker with `head` and made a line to put in front of what is
+        # carried with `cat`: a `head` that failed emptied the marker's name (marker
+        # removed, nothing given); a `cat` that failed, or said yes and wrote
+        # nothing, cost the first line owed. Neither tool is asked any more.
+        for tool, body in (("head", "exit 1"),
+                           ("cat", '[ "$#" -eq 0 ] && exit 1'),
+                           ("cat", '[ "$#" -eq 0 ] && exit 0')):
+            with self.subTest(tool=tool, how=body):
+                self.setUp()
+                marker = self._owing()
+                self._stand_in(tool, body)
+                r = self._bash("set -e; echo a-line >/dev/null; echo still-alive")
+                self.assertEqual(r.stdout.strip(), "still-alive", r.stderr)
+                self.assertEqual(r.stderr, "")
+                self.assertEqual(self._given(), [".claude/bin/tasks work 7", ".claude/bin/tasks work 8"])
+                self.assertFalse(marker.exists())
+
+    def test_a_marker_that_was_not_written_whole_stops_the_rotation(self):
+        # … and where the marker cannot be written as it should read, nothing is moved:
+        # a marker that says nothing, or something else, is how a later shell loses
+        # track of what an archive owes.
+        for body in ('[ "$#" -eq 0 ] && exit 0', '[ "$#" -eq 0 ] && { echo something-else; exit 0; }'):
+            with self.subTest(cat=body):
+                self.setUp()
+                with open(self.hist, "wb") as fh:
+                    fh.write(b"2026-09-20 10:00:00 | AGENT | .claude/bin/tasks work 7\n"
+                             b"2026-09-20 10:00:01 | AGENT | .claude/bin/tasks work 8\n")
+                    filler = b"2026-09-20 10:00:02 | AGENT | echo filler " + b"x" * 950 + b"\n"
+                    fh.write(filler * (51 * 1024 * 1024 // len(filler) + 1))
+                self._stand_in("cat", body)
+                r = self._bash("set -e; echo a-line >/dev/null; echo still-alive")
+                self.assertEqual(r.stdout.strip(), "still-alive", r.stderr)
+                self.assertEqual(_archives_in(self.hist.parent), [], "the history was moved with no word of it written down")
+                self.assertGreater(self.hist.stat().st_size, 50 * 1024 * 1024)
+                self.assertEqual(self._given(), [".claude/bin/tasks work 7", ".claude/bin/tasks work 8"])
+                self.assertFalse((self.hist.parent / "bash_history.archived-owes").exists())
+                self.assertEqual(sorted(q.name for q in self.hist.parent.iterdir() if q.name.endswith(".new")), [])
 
     def test_what_is_owed_is_given_whole_where_the_script_switched_printf_off(self):
         # Found while writing the tests above: the giving-back puts a line of its own
@@ -1151,6 +1241,7 @@ exec "{real}" "$@"
         (self.hist.parent / "bash_history.archived-owes").write_text(archive.name + "\n", encoding="utf-8")
         r = self._off_then_in("echo in-the-project >/dev/null; echo still-alive")
         self.assertEqual(r.stdout.strip(), "still-alive", r.stderr)
+        self.assertEqual(r.stderr, "", "the logger said something")
         given = [m.group(2) for m in self._logged() if m and "tasks work" in m.group(2)]
         self.assertEqual(given, [".claude/bin/tasks work 7", ".claude/bin/tasks work 8"])
         self.assertFalse((self.hist.parent / "bash_history.archived-owes").exists())
