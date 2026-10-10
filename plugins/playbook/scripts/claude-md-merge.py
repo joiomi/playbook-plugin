@@ -24,7 +24,8 @@ the template sections):
                         further down (task 093) — is preserved byte-for-
                         byte. Project-specific content belongs in its own
                         sections, exactly as the template header instructs.
-                        Headings are ATX lines (a level-1 one may be indented
+                        Headings are ATX lines (a closing run of `#` — `## CLI ##`
+                        — is not part of a heading's name, task 171; a level-1 one may be indented
                         by up to three spaces right under a `---` break or
                         after a blank line and a block that is not a list item — kept,
                         it is written unindented) and
@@ -186,6 +187,20 @@ def _masked_lines(lines: "list[str]") -> "set[int]":
     return out
 
 
+# An ATX closing sequence: a run of `#` at the end of a heading, set off from its text by
+# a space or a tab (CommonMark). `## C#` and `## CLI#` have none — that `#` is text.
+CLOSING_RE = re.compile(r"[ \t]+#+[ \t]*$")
+
+
+def heading_key(heading: str) -> str:
+    """What two level-2 heading lines share when they are the same section: the line
+    without its ATX closing sequence, case-folded. `## CLI ##` IS `## CLI` — keyed by the
+    whole line it was not recognised as the template's section: the stale one stayed and
+    a second was inserted (task 093 r3 Z3; fixed in task 171). The one key every lookup
+    below uses."""
+    return CLOSING_RE.sub("", heading.strip()).strip().lower()
+
+
 def split_sections(text: str) -> "tuple[str, list[tuple[str | None, str, bool]]]":
     """(preamble, [(heading_line, body, in_project_part)]) split on level-2 headings.
 
@@ -344,7 +359,7 @@ def merge_report(template_text: str, existing: "str | None",
         existing = existing.replace("\r\n", "\n")
 
     _, tmpl_sections = split_sections(fresh)
-    tmpl_map = {h.strip().lower(): (h, b) for h, b, _ in tmpl_sections if h is not None}
+    tmpl_map = {heading_key(h): (h, b) for h, b, _ in tmpl_sections if h is not None}
 
     preamble, existing_sections = split_sections(existing)
     # One owner per template heading: its first occurrence OUTSIDE the project's `#`
@@ -353,11 +368,11 @@ def merge_report(template_text: str, existing: "str | None",
     # same-named section outside the parts is kept as written too.
     owner: "dict[str, int]" = {}
     for idx, (heading, _, in_part) in enumerate(existing_sections):
-        key = heading.strip().lower() if heading is not None else None
+        key = heading_key(heading) if heading is not None else None
         if key in tmpl_map and not in_part and key not in owner:
             owner[key] = idx
     missing = [heading + "\n" + body for heading, body, _ in tmpl_sections
-               if heading is not None and heading.strip().lower() not in owner]
+               if heading is not None and heading_key(heading) not in owner]
     out: list[str] = [preamble]
     dropped: "list[tuple[str, str]]" = []
     for idx, (heading, body, _) in enumerate(existing_sections):
@@ -368,7 +383,7 @@ def merge_report(template_text: str, existing: "str | None",
             missing = []
             out.append(body)
             continue
-        key = heading.strip().lower()
+        key = heading_key(heading)
         if owner.get(key) == idx:
             th, tb = tmpl_map[key]
             # the only place text leaves the file: a template-owned section replaced

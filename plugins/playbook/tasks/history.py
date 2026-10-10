@@ -14,6 +14,7 @@ spans into chat_log.md) and `retro` (a generated retro task). Imports stdlib
 from __future__ import annotations
 
 import datetime
+import re
 import sys
 from pathlib import Path
 from tasks.atomic import atomic_write
@@ -149,12 +150,25 @@ def cmd_context(cmd_args):
                 text = text[:max_line] + "..."
             print(f"[{msg_id}] {text}")
 
+def intent_approval(calls: int, seat: str, limit: str, cap: str) -> str:
+    """What `tasks intent --yes` must carry to approve a run of `calls` judge calls on
+    `seat`, each with the time limit `limit` and (for a claude seat) the budget cap
+    `cap`: the four figures themselves, `<calls>@<seat>@<limit>@<cap>` (`-` for no
+    cap). Not a digest of them (post-D6 run 1: an eight-digit one gave two different
+    time limits the same id). One-to-one with the figures whatever the seat's name
+    holds: `calls` is digits, and neither of the last two fields can hold an `@`
+    (the limit is `<number>s` or `unlimited`; the cap is a string Python's float()
+    accepted, or `-`), so the seat is exactly what lies between the first `@` and
+    the last two."""
+    return f"{calls}@{seat}@{limit}@{cap or '-'}"
+
+
 def cmd_intent(cmd_args):
     """The `tasks intent` arm — body moved verbatim from cli.py (1.5.9 split)."""
     # Vertical retro: 4 blind intent extractions over one task's layers.
     if not cmd_args:
         print("Error: 'intent' requires a task number", file=sys.stderr)
-        print("Usage: tasks intent <number> [--chat-file P] [--base REF --head REF] "
+        print("Usage: tasks intent <number> [--yes <calls>@<seat>@<limit>@<cap>] [--chat-file P] [--base REF --head REF] "
               "[--collect-only] [--timeout S]", file=sys.stderr)
         sys.exit(1)
 
@@ -163,6 +177,15 @@ def cmd_intent(cmd_args):
         task_num = task_num.zfill(3)
     chat_file = base = head = None
     collect_only = False
+    # Task 173 (owner's D3-C4, 2026-09-24): the extractions are judge calls, and the
+    # command made them unasked. Bare, it now says what it would spend and stops;
+    # --collect-only never spent and is not asked. The approval is the LINE the bare
+    # command printed — its four figures, `--yes <calls>@<seat>@<limit>@<cap>` — not
+    # a bare yes: the evidence is collected again on the re-run and can have grown in
+    # between (the user's own "yes" in the chat can make a task's chat layer
+    # available), so a bare yes given for one call could start two (impl panel r1,
+    # codex-high). None = not given; "" = given with nothing after it.
+    approved = None
     # None = not yet resolved; the real default comes from tasks.core so
     # `tasks intent` honours the same review knobs as plan/impl review
     # instead of pinning its own 300s. --timeout still overrides.
@@ -178,6 +201,11 @@ def cmd_intent(cmd_args):
             head = cmd_args[i + 1]; i += 2
         elif a == "--collect-only":
             collect_only = True; i += 1
+        elif a == "--yes":
+            if i + 1 < len(cmd_args) and not cmd_args[i + 1].startswith("--"):
+                approved = cmd_args[i + 1]; i += 2
+            else:
+                approved = ""; i += 1
         elif a == "--timeout" and i + 1 < len(cmd_args):
             timeout_secs = int(cmd_args[i + 1]); i += 2
         else:
@@ -216,6 +244,41 @@ def cmd_intent(cmd_args):
               "Pass --chat-file and/or --base/--head.", file=sys.stderr)
         sys.exit(1)
 
+    judge = budget = None
+    if not collect_only:
+        import shlex
+        from tasks.core import resolve_judge_budget
+        from tasks.intent import resolve_default_seat
+        # Resolved ONCE, here: these are the judge and the cap the approval is
+        # checked against, and the same two are handed to the runner below, which
+        # used to resolve them a second time — a configuration that changed between
+        # the two reads ran another judge or cap under the approval (post-D6 run 1).
+        judge = resolve_default_seat(project_path)
+        provider, _variant, seat = judge
+        budget = str(resolve_judge_budget(project_path))
+        limit = format_timeout_label(timeout_secs)
+        cap = budget if provider == "claude" else ""   # the one judge CLI with a budget knob
+        # Every figure of the line, as text (intent_approval): an approval of calls
+        # and seat alone ran after `--timeout` or the budget was raised (impl panel
+        # r2, codex-high and codex-medium).
+        quote = intent_approval(len(avail), seat, limit, cap)
+        if approved != quote:
+            if approved == "":
+                print("\ntasks intent: `--yes` needs what it approves after it "
+                      "(`--yes <calls>@<seat>@<limit>@<cap>`).", file=sys.stderr)
+            elif approved is not None:
+                print(f"\ntasks intent: `--yes {shlex.quote(approved)}` does not approve what a run would "
+                      "spend now — the evidence, the default judge, the time limit or the budget cap "
+                      "changed since that line was printed, or this command never printed it.",
+                      file=sys.stderr)
+            capped = f", each capped at ${cap}" if cap else ""
+            print(f"\ntasks intent: this would run {len(avail)} judge call(s) on {seat} — "
+                  f"time limit {limit} each{capped}. "
+                  "Nothing was spent and nothing was written.\n"
+                  f"Re-run with `--yes {shlex.quote(quote)}` to spend exactly that, or with "
+                  "--collect-only to write the prompts with no model call.", file=sys.stderr)
+            sys.exit(2)
+
     run_id = new_run_id()
     if collect_only:
         from tasks.intent import build_prompt
@@ -227,7 +290,7 @@ def cmd_intent(cmd_args):
         print(f"\nRunning {len(avail)} blind extraction(s) "
               f"(default judge, {format_timeout_label(timeout_secs)} each)...", flush=True)
         reports = run_extractions(slices, make_default_runner(
-            project_path, timeout_secs=timeout_secs, task=task_num))
+            project_path, timeout_secs=timeout_secs, task=task_num, judge=judge, budget_usd=budget))
 
     run_dir = write_run(task_dir, slices, reports, run_id=run_id)
     rel = run_dir.relative_to(project_path)
@@ -239,6 +302,43 @@ def cmd_intent(cmd_args):
     print("\nNext: read review.md with the user, grade the seams, then append "
           "vetted intent to INTENT.md (the /intent command drives this).")
 
+# timestamp | AGENT/SCRIPT | [path/]tasks work|new …
+_ACTIVATION_RE = re.compile(
+    r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \| (\w+) \| '
+    r'(?:.*/)?(tasks (?:work|new) .+)$'
+)
+
+
+def activations(history_text: str):
+    """(timestamp, command) for each `tasks work` / `tasks new` line of a bash_history,
+    in file order — the one reader `tasks timeline` and `tasks tagger` share.
+
+    An older logger wrote a command twice: the agent's line (`AGENT`) and, right under
+    it, the script's echo (`SCRIPT`), in the same second. The readers hid that by
+    dropping every SECOND sight of a command — which, with a logger that writes a
+    command once, hid every second genuine activation: `work 7`, `work 8`, `work 7`
+    showed two entries (retro 107 R12; fixed in task 171). An echo is recognised as
+    exactly what it was: a `SCRIPT` line whose command and timestamp are those of the
+    `AGENT` activation on the line directly above it IN THE FILE (any line in between
+    ends the pairing — impl panel round 2). Nothing else is dropped — the same
+    command twice in one second, by the agent, is two activations (the first version
+    of this rule looked only at the text and the second, and lost them: impl panel
+    round 1). The shipped loggers write `AGENT` lines only; measured on this
+    workspace's archived history (2026-08-22 … 09-25): 542 activation lines, all
+    `AGENT`, no two alike in one second."""
+    previous = None                      # (timestamp, kind, command) when the line above was an activation
+    for line in history_text.splitlines():
+        m = _ACTIVATION_RE.match(line)
+        if not m:
+            previous = None
+            continue
+        stamp, kind, cmd = m.group(1), m.group(2), m.group(3)
+        echo = kind == "SCRIPT" and previous == (stamp, "AGENT", cmd)
+        previous = (stamp, kind, cmd)
+        if not echo:
+            yield stamp, cmd
+
+
 def cmd_timeline(cmd_args):
     """The `tasks timeline` arm — body moved verbatim from cli.py (1.5.9 split)."""
     project_path = find_project_root()
@@ -247,25 +347,10 @@ def cmd_timeline(cmd_args):
         print(f"No {bash_history.relative_to(project_path).as_posix()} found.", file=sys.stderr)
         sys.exit(1)
 
-    import re
-    # Match: timestamp | AGENT/SCRIPT | tasks work/new/done ...
-    pattern = re.compile(
-        r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \| \w+ \| '
-        r'(?:.*/)?(tasks (?:work|new) .+)$'
-    )
-    seen = set()
     printed = 0
-    for line in bash_history.read_text(encoding="utf-8", errors="replace").splitlines():
-        m = pattern.match(line)
-        if m:
-            cmd = m.group(2)
-            # Deduplicate AGENT+SCRIPT echoes (same command within 2 lines)
-            if cmd not in seen:
-                seen.add(cmd)
-                print(f"{m.group(1)}  {cmd}")
-                printed += 1
-            else:
-                seen.discard(cmd)
+    for stamp, cmd in activations(bash_history.read_text(encoding="utf-8", errors="replace")):
+        print(f"{stamp}  {cmd}")
+        printed += 1
     if not printed:   # task 073 (C2): silence looked like a crash
         print("(no `tasks work`/`tasks new` activations recorded in bash_history yet)", file=sys.stderr)
 
@@ -329,21 +414,9 @@ def cmd_tagger(cmd_args):
     flush_msg()
 
     # 2. Parse task transitions from bash_history
-    task_pattern = re.compile(
-        r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \| \w+ \| '
-        r'(?:.*/)?(tasks (?:work|new) .+)$'
-    )
-    seen = set()
     from tasks.retro import bash_history_ts_to_utc
-    for line in bash_history.read_text(encoding="utf-8", errors="replace").splitlines():
-        m = task_pattern.match(line)
-        if m:
-            task_cmd = m.group(2)
-            if task_cmd not in seen:
-                seen.add(task_cmd)
-                entries.append((bash_history_ts_to_utc(m.group(1)), 1, f"--- {task_cmd} ---"))   # local → UTC (073)
-            else:
-                seen.discard(task_cmd)
+    for stamp, task_cmd in activations(bash_history.read_text(encoding="utf-8", errors="replace")):
+        entries.append((bash_history_ts_to_utc(stamp), 1, f"--- {task_cmd} ---"))   # local → UTC (073)
 
     # 3. Sort by timestamp, then task transitions before messages (sort_key: 1 before 0)
     #    Actually: task transitions AFTER messages at same timestamp makes more sense
@@ -374,30 +447,19 @@ def cmd_tag(cmd_args):
 
     # 1. Build sorted task transition list from bash_history
     #    Each entry: (timestamp, active_task_or_None)
-    task_pattern = re.compile(
-        r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \| \w+ \| '
-        r'(?:.*/)?(tasks (?:work|new) .+)$'
-    )
     work_re = re.compile(r'tasks work (\d+)')
     transitions = []  # [(timestamp, task_num_or_None)]
-    seen = set()
     from tasks.retro import bash_history_ts_to_utc
-    for line in bash_history.read_text(encoding="utf-8", errors="replace").splitlines():
-        m = task_pattern.match(line)
-        if m:
-            task_cmd = m.group(2)
-            if task_cmd not in seen:
-                seen.add(task_cmd)
-            else:
-                seen.discard(task_cmd)
-                continue
-            ts = bash_history_ts_to_utc(m.group(1))   # local → UTC (task 073, C12)
-            if "work done" in task_cmd:
-                transitions.append((ts, None))
-            else:
-                wm = work_re.search(task_cmd)
-                if wm:
-                    transitions.append((ts, wm.group(1).zfill(3)))
+    # the shared reader (task 171): the toggle that stood here dropped the SECOND
+    # `tasks work done` of a history, so its task never closed in the spans
+    for stamp, task_cmd in activations(bash_history.read_text(encoding="utf-8", errors="replace")):
+        ts = bash_history_ts_to_utc(stamp)   # local → UTC (task 073, C12)
+        if "work done" in task_cmd:
+            transitions.append((ts, None))
+        else:
+            wm = work_re.search(task_cmd)
+            if wm:
+                transitions.append((ts, wm.group(1).zfill(3)))
     transitions.sort(key=lambda t: t[0])
     trans_times = [t[0] for t in transitions]
 

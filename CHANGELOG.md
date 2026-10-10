@@ -6,6 +6,32 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ### Changed
 
+- **A background notification no longer wipes the stop hook's work count** (task 173; owner decision Q1 of
+  2026-09-24). The stop hook lets a turn end with gates open when the session's counters say it was a chat reply: no
+  write and fewer than five tool calls since the last prompt. Those counters were reset by every prompt — also by an
+  automatic notification (a background command finishing), which is not your prompt and can arrive in the middle of
+  a turn. Measured on a live session: a notification took a turn from 20 tool calls to 0 between two of its calls,
+  so a stop right after it would have been let through with every gate open. Now a prompt that begins with
+  `<task-notification>` or `[SYSTEM NOTIFICATION` changes no count. One exception, as decided: a turn that a
+  notification *started* — the previous turn had ended — may end if it made no write, however many read-only calls
+  it made; with one write it is held like any other. A write is an `Edit`, `Write`, `MultiEdit`, `NotebookEdit` or
+  `Bash` call — the middle two were not counted until now, so a turn whose only act was one of them passed for a
+  chat reply. The echo of a command you ran yourself (a slash command, a `!` command) still starts a fresh count.
+  The same reset also let a notification between two batch ticks of gates free the second one; that is closed by
+  the same change. A turn counts as ended only when the session's own agent stops: an agent it started itself (a
+  `claude -p` in a command) shares the session, and its stop is not the end of your turn. (Claude Code only — the
+  experimental codex hook path has no notification handling and is unchanged.)
+- **`tasks intent` asks before it spends** (task 173; owner decision D3-C4 of 2026-09-24). Each of its blind
+  extractions is a call to the default judge, up to four per run, and the command started them at once. The bare
+  command now prints which layers have evidence and one line — how many judge calls, on which judge, the time limit
+  of each (and the budget cap of each on a Claude judge) — spends nothing, writes nothing, and exits 2. The line
+  ends with the flag that approves exactly that, `--yes <calls>@<judge>@<limit>@<cap>` (the line's four figures);
+  with it the command runs — unless a run would by then be quoted differently: another number of calls (the
+  evidence is read again, and your own "yes" in the chat can add a layer), another judge, a longer time limit or a
+  higher budget cap. Then it prints the new line and again spends nothing. The judge and the cap that were approved
+  are the ones the run uses. A bare `--yes` approves nothing. `--collect-only` is unchanged. `/playbook:intent`
+  puts the line to you before it passes the flag.
+  **If you script `tasks intent`, it now needs that flag.**
 - **`sandbox` refuses to start an agent without bubblewrap** (task 164, owner decision 2026-10-09). On a host where
   `bwrap` is not installed, `.claude/bin/sandbox` used to start the agent anyway — with its permission prompts off
   and no containment — and printed no warning (the 1.6.0 entry below says the sandbox "says so": that was true of
@@ -25,6 +51,27 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ### Fixed
 
+- **Five small fixes from PLAN S11's list** (task 171) — each was routed to this batch weeks ago and never built.
+  **`tasks models check` no longer says OK for a grok pin it never called.** `grok models` lists what your account
+  is entitled to; it cannot see that the credit ran out, and on 2026-09-29 the check printed OK while every call
+  answered 402. A listed pin now gets one tiny live turn, run with the pin's own effort (as a codex or agy pin
+  already did) and read for a clean answer — the one word it asks for, nothing on stderr; an effort the CLI
+  rejects reads `BAD_EFFORT`. Under
+  `--no-probe`, and in the report a review prints when it stops on a dead pin, a listed pin reads `LISTED` instead
+  of `OK` (`tasks doctor` prints only pins that cannot run, and the dashboard does not run this check: neither
+  changes). What changes for you: the check spends one
+  grok turn per pinned grok model. **The history commands show every activation.** `tasks timeline`, `tasks tagger`
+  and `tasks tag` dropped every second identical line of the shell history — a rule from when the logger wrote each
+  command twice. Going back to a task (`work 7`, `work 8`, `work 7`) showed two entries, and `tasks tag` never
+  closed the second task of a session, so every later message was attributed to it. **A task.md of another project
+  can be created.** The guard that keeps task records for `tasks new` refused a `Write` of
+  `<anywhere>/.agent/tasks/<n>/task.md`, not only in this project; it now looks at this project's records alone
+  (a relative path that does not exist yet is still refused, and so is a path that reaches this project another
+  way — through a link, or up and out of one); the batch-close guard has the same scope. **`## CLI ##` is `## CLI`.** A heading of a
+  template-owned CLAUDE.md section written with closing hashes was not recognised: the stale section stayed and a
+  second one was inserted on every `init`. **`scripts/verify` prints its report on any console.** Where the output
+  stream could not be switched to UTF-8 the report crashed on its first line (a dash); it now writes UTF-8 to the
+  stream's byte buffer, or replaces the character where the stream names a codec that lacks it.
 - **The sandbox keeps git metadata read-only in every layout it knows of** (task 169). Three things, each
   measured with real bubblewrap before it was fixed. (1) `.claude/bin/sandbox` bound `.git` read-only and then,
   last, every extra writable path — and the later bind won: with `--rw <project>`, `--rw <a parent of the

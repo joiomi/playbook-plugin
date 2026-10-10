@@ -315,40 +315,16 @@ def build_prompt(s: Slice) -> str:
     )
 
 
-def make_default_runner(project_path: Path, *, timeout_secs: int = 300,
-                        task: "str | None" = None):
-    """Production runner: default judge model, blindness via an evidence-only dir.
+def resolve_default_seat(project_path: Path) -> "tuple[str, str | None, str]":
+    """(provider, variant, seat label) of the judge every extraction runs on.
 
-    Each call constructs the default-judge adapter with `project_root` pointed at
-    a temp dir containing ONLY this layer's evidence, and an empty
-    `system_context`. So even with Read/Glob/Grep the judge has nothing else to
-    see — blindness is enforced by construction, not just by instruction.
-    Guarantee level: strong (cwd is the evidence dir; no repo pointer) but not a
-    formal jail — see task 141 OUT-of-scope (full FS isolation deferred).
-
-    Every extraction is a judge call, so each writes one review-spend record
-    (kind "intent", round 0 = unknown) to the project's journal, the way the
-    review runner's calls do (task 120, gauntlet 2 G2-25: none did). Best-effort:
-    a journal failure never changes the extraction.
+    One resolver for the runner below and for the line `tasks intent` prints before
+    it spends anything (task 173, owner's D3-C4): the line cannot name another judge
+    than the one that would run.
     """
-    import tempfile
-
     from provider.sandbox import load_judge_config, resolve_judge_spec
-    from provider.adapters.claude import ClaudeAdapter
-    from provider.adapters.codex import CodexAdapter
-    from provider.adapters.antigravity import AntigravityAdapter
-    from provider.adapters.pi import PiAdapter
-    from provider.adapters.grok import GrokAdapter
-
-    adapters = {"claude": ClaudeAdapter, "codex": CodexAdapter,
-                "agy": AntigravityAdapter, "pi": PiAdapter, "grok": GrokAdapter}
-    # Resolve the install's configured judge budget instead of relying on an
-    # adapter-side default (there no longer is one — see adapter.py). Without
-    # this, `tasks intent` would silently ignore judge_budget_usd.
-    from tasks.core import resolve_judge_budget
-    budget_usd = resolve_judge_budget(project_path)
-    # Anchor the judge spec to the SAME project root as the budget above.
-    # load_judge_config() with no root walks up from cwd — which, when this
+    # Anchor the judge spec to the project root the caller resolved.
+    # load_judge_config() with no root walks up from cwd — which, when the
     # runner is exercised from a checkout nested under a playbook-managed
     # ancestor `.agent/`, resolves the ANCESTOR's models.json instead of this
     # project's. Its own docstring says callers that know the root must pass it;
@@ -365,10 +341,57 @@ def make_default_runner(project_path: Path, *, timeout_secs: int = 300,
     # pins "opus", but the divergent codex fallback here re-exposed the codex
     # adapter on that edge path.
     provider, variant = resolve_judge_spec(cfg.get("default_judge") or "opus")
+    from tasks import review as _review
+    return provider, variant, _review._seat_with_effort(provider, variant)
+
+
+def make_default_runner(project_path: Path, *, timeout_secs: int = 300,
+                        task: "str | None" = None,
+                        judge: "tuple[str, str | None, str] | None" = None,
+                        budget_usd: "str | None" = None):
+    """Production runner: default judge model, blindness via an evidence-only dir.
+
+    Each call constructs the default-judge adapter with `project_root` pointed at
+    a temp dir containing ONLY this layer's evidence, and an empty
+    `system_context`. So even with Read/Glob/Grep the judge has nothing else to
+    see — blindness is enforced by construction, not just by instruction.
+    Guarantee level: strong (cwd is the evidence dir; no repo pointer) but not a
+    formal jail — see task 141 OUT-of-scope (full FS isolation deferred).
+
+    `judge` (what resolve_default_seat returned) and `budget_usd`: when the caller
+    has ALREADY resolved them — `tasks intent` checks the user's approval against
+    them — they are used as given and not resolved again here: a configuration
+    that changed between two reads would otherwise run another judge, or another
+    cap, than the one approved (task 173, post-D6 run 1). Left out, each is
+    resolved here, as before.
+
+    Every extraction is a judge call, so each writes one review-spend record
+    (kind "intent", round 0 = unknown) to the project's journal, the way the
+    review runner's calls do (task 120, gauntlet 2 G2-25: none did). Best-effort:
+    a journal failure never changes the extraction.
+    """
+    import tempfile
+
+    from provider.adapters.claude import ClaudeAdapter
+    from provider.adapters.codex import CodexAdapter
+    from provider.adapters.antigravity import AntigravityAdapter
+    from provider.adapters.pi import PiAdapter
+    from provider.adapters.grok import GrokAdapter
+
+    adapters = {"claude": ClaudeAdapter, "codex": CodexAdapter,
+                "agy": AntigravityAdapter, "pi": PiAdapter, "grok": GrokAdapter}
+    # Resolve the install's configured judge budget instead of relying on an
+    # adapter-side default (there no longer is one — see adapter.py). Without
+    # this, `tasks intent` would silently ignore judge_budget_usd.
+    if budget_usd is None:
+        from tasks.core import resolve_judge_budget
+        budget_usd = resolve_judge_budget(project_path)
+    # The judge spec is anchored to the SAME project root as the budget above
+    # (why: resolve_default_seat).
+    provider, variant, seat = judge if judge is not None else resolve_default_seat(project_path)
     adapter_cls = adapters.get(provider, ClaudeAdapter)
 
     from tasks import review as _review
-    seat = _review._seat_with_effort(provider, variant)
 
     def _spend(t0: float, status: str, output: str = "", error: str = "", usage=None) -> None:
         _review._journal_review_spend(

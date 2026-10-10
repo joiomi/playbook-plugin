@@ -205,8 +205,12 @@ if [ "$AGENT_WRITABLE" = true ]; then
     # `$(( ))` executes command substitution embedded in an operand (C5).
     TOOLS_VAL=$(read_counter_int "$COUNTER_FILE" tools)
     write_counter "$COUNTER_FILE" tools $(( TOOLS_VAL + 1 ))
+    # A write is every tool that edits a file, and Bash. MultiEdit and
+    # NotebookEdit were counted as tools but not as writes until task 173, so a
+    # turn whose only act was one of them read to the stop hook as a chat reply
+    # — and its rule for a turn a notification started is "no write".
     case "$TOOL_NAME" in
-        Edit|Write|Bash)
+        Edit|Write|MultiEdit|NotebookEdit|Bash)
             WRITES_VAL=$(read_counter_int "$COUNTER_FILE" writes)
             write_counter "$COUNTER_FILE" writes $(( WRITES_VAL + 1 ))
             ;;

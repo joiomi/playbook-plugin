@@ -15,6 +15,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -474,6 +475,72 @@ class TailCertSavesWhatItsJudgeSaid(unittest.TestCase):
                                       return_value={"mutations": ["?? rogue"], "cautions": [], "degraded": False}):
                 self.assertIsNone(R.run_tail_cert_judge(Path(tmp), {}, [], "s", task_file=tf))
             self.assertFalse((td / R.TAIL_CERT_LOG).exists())
+
+
+
+class TheRiskAndTheVerdictsTheRowNames(_BoundFixture):
+    """Task 172 (PLAN S11 item 13; task 170's binding audit). The row says the bound holds
+    for an assertive, IRREVERSIBLE or unclassified task and for five verdicts the two
+    hatches override — STALE, tamper-degraded, exclude-covers-code, unstamped, unreadable.
+    Its tests set an assertive and an unclassified task, and drove STALE and degraded."""
+
+    def _held(self, *flags):
+        r = self._close(*flags)
+        self.assertFalse(self._done(r), r.stdout + r.stderr)
+        self.assertIn("no post-D6 run follows the newest impl panel", r.stderr)
+
+    def test_an_irreversible_task_is_held_to_the_same_bar(self):
+        tm = self.td / "task.md"
+        text = tm.read_text(encoding="utf-8")
+        tm.write_text(text.replace("## Risk\nassertive\n", "## Risk\nirreversible\n\nRollback: restore the backup.\n"),
+                      encoding="utf-8")
+        self.assertIn("irreversible", tm.read_text(encoding="utf-8"))
+        self._held("--stale-panel-ok", "--reason", "only docs changed")
+        self._held("--force", "--reason", "just close it")
+        self._post_d6("PASS")                              # … and a bound PASS closes it
+        r = self._close("--stale-panel-ok", "--reason", "post-D6 PASS")
+        self.assertTrue(self._done(r), r.stdout + r.stderr)
+
+    # The three other verdicts, each on a tree that is otherwise FRESH (the fixture's code
+    # edit undone), so that it is THIS verdict the hatch would override and not STALE.
+    def _fresh_again(self):
+        (self.d / "code.py").write_text("x = 1\n", encoding="utf-8")
+
+    def _blocked_for(self, words):
+        r = self._close()                                  # no hatch: the verdict itself blocks
+        self.assertFalse(self._done(r), r.stdout + r.stderr)
+        self.assertIn(words, r.stderr)
+
+    def test_control_a_fresh_panel_closes_with_no_hatch_at_all(self):
+        self._fresh_again()
+        r = self._close()
+        self.assertTrue(self._done(r), r.stdout + r.stderr)
+
+    def test_an_unstamped_round_is_held(self):
+        self._fresh_again()
+        jm = self.td / "judge.md"
+        text = jm.read_text(encoding="utf-8")
+        cut = re.sub(r"\*\*Tree-state:\*\* [0-9a-f]+\n\n", "", text)
+        self.assertNotEqual(cut, text)
+        jm.write_text(cut, encoding="utf-8")
+        self._blocked_for("NO STAMP")
+        self._held("--stale-panel-ok", "--reason", "x")
+        self._held("--force", "--reason", "x")
+
+    def test_an_exclude_that_hides_code_is_held(self):
+        self._fresh_again()
+        self.cfg["fingerprint_exclude"] = ["code.py"]
+        self._write_cfg()
+        self._blocked_for("EXCLUDE-COVERS-CODE")
+        self._held("--stale-panel-ok", "--reason", "x")
+        self._held("--force", "--reason", "x")
+
+    def test_an_unreadable_tree_is_held(self):
+        self._fresh_again()
+        (self.d / ".git" / "index").write_bytes(b"not an index")
+        self._blocked_for("UNREADABLE")
+        self._held("--stale-panel-ok", "--reason", "x")
+        self._held("--force", "--reason", "x")
 
 
 if __name__ == "__main__":

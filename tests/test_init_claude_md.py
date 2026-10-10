@@ -243,6 +243,50 @@ class ProjectPartAfterTemplateSections(unittest.TestCase):
         self.assertNotIn("#nospace", out)
 
 
+class AHeadingWrittenWithClosingHashes(unittest.TestCase):
+    """PLAN S11, task 171 (task 093 r3 Z3, codex). Markdown lets an ATX heading end in a
+    closing run of `#` — `## CLI ##` IS the heading `CLI`. The merge keyed a section by
+    its whole line, so it did not recognise the template's `## CLI` in it: the stale
+    section was kept, a second `## CLI` was added, and the status said MERGED."""
+
+    def _fresh(self) -> str:
+        return cmm.merge_claude_md(TEMPLATE, None, "proj")
+
+    def _clis(self, text: str) -> "list[str]":
+        return [ln for ln in text.splitlines() if ln.startswith("## CLI")]
+
+    def test_it_is_the_templates_section_and_is_refreshed_in_place(self):
+        fresh = self._fresh()
+        self.assertEqual(self._clis(fresh), ["## CLI"], "the template no longer has a `## CLI` section")
+        for closing in ("## CLI ##", "## CLI #", "## CLI   ####  ", "## CLI\t##"):
+            with self.subTest(heading=closing):
+                stale = fresh.replace("\n## CLI\n", "\n" + closing + "\n\nSTALE-CLI-BODY\n\n", 1)
+                self.assertIn("STALE-CLI-BODY", stale)
+                merged, dropped = cmm.merge_report(TEMPLATE, stale, "proj")
+                self.assertEqual(self._clis(merged), ["## CLI"], "the section was not matched to the template's")
+                self.assertEqual(merged, fresh)
+                # … and what the refresh replaced is reported under the heading as the file wrote it
+                self.assertEqual(dropped, [(closing.strip(), "STALE-CLI-BODY")])
+
+    def test_control_what_is_not_a_closing_sequence_is_another_heading(self):
+        # no space before the run of `#`: part of the heading's text (CommonMark)
+        fresh = self._fresh()
+        for other in ("## CLI#", "## C#", "## CLI ## and more"):
+            with self.subTest(heading=other):
+                mine = fresh.rstrip("\n") + "\n\n" + other + "\n\nMINE\n"
+                merged, dropped = cmm.merge_report(TEMPLATE, mine, "proj")
+                self.assertEqual(merged, mine)
+                self.assertEqual(dropped, [])
+
+    def test_the_key_of_a_heading(self):
+        key = cmm.heading_key
+        self.assertEqual(key("## CLI ##"), key("## CLI"))
+        self.assertEqual(key("## Cli  ###   "), key("## CLI"))
+        self.assertNotEqual(key("## CLI#"), key("## CLI"))
+        self.assertNotEqual(key("## C#"), key("## C"))
+        self.assertEqual(key("## #"), "##")           # an empty heading with a closing run
+
+
 class MergeGitignore(unittest.TestCase):
     def test_created_when_absent(self):
         out = cmm.merge_gitignore(None)

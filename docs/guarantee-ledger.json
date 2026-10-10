@@ -1957,7 +1957,7 @@
     {
       "id": "PB-BATCH-CLOSE",
       "category": "hook-payload-and-paths",
-      "statement": "The gate hook blocks two or more unannotated gate closures in one edit — an `Edit`, a `Write`, or a `MultiEdit`, the last judged on the file before and after all its edits — annotated batches beyond the five-gate ceiling, born-checked gate lines, and a second batch with no intervening work, while an annotated batch within the limit and a single bare close remain allowed — whatever lexical spelling names the active task.md (a `/./` segment, a doubled slash, an `x/..` hop): the guard judges the normalised path.",
+      "statement": "The gate hook blocks two or more unannotated gate closures in one edit — an `Edit`, a `Write`, or a `MultiEdit`, the last judged on the file before and after all its edits — annotated batches beyond the five-gate ceiling, born-checked gate lines, and a second batch with no intervening work, while an annotated batch within the limit and a single bare close remain allowed — whatever lexical spelling names the active task.md (a `/./` segment, a doubled slash, an `x/..` hop): the guard judges the normalised path. It judges THIS project's active task record only: a task.md of another project whose directory carries the same task number is not its subject (task 171).",
       "owner": [
         {
           "path": "plugins/playbook/scripts/gate-batch-check.py",
@@ -2050,6 +2050,29 @@
           "limitations": [
             "The Claude Code version this was built on (2.1.295) offers no `MultiEdit` tool: the payload is the documented shape (`file_path` + `edits`), not one captured from a live session."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_batch_close_guard.py",
+          "reference": "GuardZeroIsAStatedGuarantee.test_the_batch_close_guard_is_about_this_projects_records_too",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_batch_close_guard.py",
+            "reference": "GuardZeroIsAStatedGuarantee.test_control_the_batch_close_guard_still_holds_for_this_projects_active_task"
+          },
+          "limitations": [
+            "A new task.md of another project, three gates born checked, in a directory with this project's active task number: passes (exit 0). Red on the round-1 code (`2 != 0 : BLOCKED: this batch mints gate line(s) already checked`; impl panel round 2). The control: the same born-checked lines added to THIS project's active task.md are still refused."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_notification_turn.py",
+          "reference": "TheConsecutiveBatchGuardAcrossANotification.test_a_notification_between_two_batch_ticks_does_not_free_the_second",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The real task-gate-hook for the two batch edits and the real chat-log-hook for a `<task-notification>` between them: the second batch is blocked. Unfixed tree: `0 != 2 : the second batch went through` — the consecutive-batch guard compares the session's tool count with the one it recorded, and the reset a notification performed until task 173 made the difference negative."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -2063,7 +2086,8 @@
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
         "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21).",
         "2026-10-09 (task 158): up to 1.5.47 the guard matched the RAW file path, so `…/N-x/./task.md`, `//` or an `x/..` hop skipped it (and the hand-made-task.md guard beside it) while the code-edit guard exempted the edit as an `.agent/` path. Fixed on both the fused and the recovery branch of the hook (`AnotherSpellingOfThePathIsStillGuarded.test_the_recovery_path_judges_the_same_normalised_path`, `…test_creating_a_task_md_by_hand_is_blocked_under_every_spelling`).",
-        "2026-10-09 (task 166, PLAN S11 item 6; owner: \"Acopăr totuși, în S11\"): until then the guard ran for `Edit` and `Write` only, and three gates ticked bare in ONE `MultiEdit` went through. It now applies the call's edits in order to the file as it is on disk and judges the result like a `Write`."
+        "2026-10-09 (task 166, PLAN S11 item 6; owner: \"Acopăr totuși, în S11\"): until then the guard ran for `Edit` and `Write` only, and three gates ticked bare in ONE `MultiEdit` went through. It now applies the call's edits in order to the file as it is on disk and judges the result like a `Write`.",
+        "Task 173: the `second batch with no intervening work` clause reads the session's `tools` counter, so anything that resets that counter between the two batches frees the second. Until task 173 an automatic notification did (shown red on the unfixed tree); a USER prompt between the two still does, by design — a new prompt is a new count."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],
@@ -2342,7 +2366,7 @@
     {
       "id": "PB-TASK-MD-GUARD",
       "category": "hook-payload-and-paths",
-      "statement": "task-gate-hook refuses a `Write` that would CREATE a task record by hand — a `file_path` naming `.agent[/<lane>]/tasks/<dir>/task.md` where no such file exists — whatever lexical spelling names it (a `/./` segment, a doubled slash, an `x/..` hop: the guard judges the normalised path), and answers that only `tasks new` creates task.md files. A `Write` over a task.md that already exists is not a creation and is not refused by this guard.",
+      "statement": "task-gate-hook refuses a `Write` that would CREATE a task record of this project by hand — a `file_path` naming `.agent[/<lane>]/tasks/<dir>/task.md` inside this project where no such file exists — whatever lexical spelling names it (a `/./` segment, a doubled slash, an `x/..` hop: the guard judges the normalised path), and answers that only `tasks new` creates task.md files. A `Write` over a task.md that already exists is not a creation and is not refused by this guard. Nor is a `Write` that creates a task.md of ANOTHER project. Whether a `Write` would create a file inside this project is decided on the path AS WRITTEN, read both as the kernel reads it (links first, then `..`) and as text (collapsed first): a creation inside the project under either reading is refused, a file that already exists under a reading is a rewrite under it (`task-dir-target.py --creates`, with the two inside helpers the task-directory guard uses; a relative or `~` path is judged on existence alone). When that helper does not run, the guard decides as it did before it had a scope: any creation that matches the pattern is refused.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/task-gate-hook",
@@ -2381,11 +2405,37 @@
         {
           "type": "executable integration",
           "path": "tests/test_batch_close_guard.py",
-          "reference": "GuardZeroIsAStatedGuarantee.test_what_the_row_admits_is_what_the_guard_does",
+          "reference": "GuardZeroIsAStatedGuarantee.test_a_task_md_of_another_project_is_not_this_guards",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_batch_close_guard.py",
+            "reference": "GuardZeroIsAStatedGuarantee.test_a_path_that_reaches_this_project_another_way_is_still_refused"
+          },
+          "limitations": [
+            "The real hook, a real `Write` payload: a new task.md under another directory's `.agent/tasks/` and `.agent/<lane>/tasks/` passes (exit 0, no refusal text). Red before task 171 (`2 != 0`). The control: the same creation reached through a symlink to the project, up and out of a symlink INTO it (`<link>/../.agent/…`: outside as text, inside for the kernel — the first version handed the helper the collapsed path and let this one through; impl panel round 1), by a relative path and by a `~` path is still refused."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_batch_close_guard.py",
+          "reference": "GuardZeroIsAStatedGuarantee.test_without_its_helper_the_guard_keeps_refusing",
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": [
-            "Shows the bound stated below, not a protection: a new task.md path OUTSIDE the project is refused as well."
+            "A copy of the hook's directory with the helper removed, and one with a helper that exits with an error: the out-of-project creation is refused in both — the guard fails closed."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_batch_close_guard.py",
+          "reference": "GuardZeroIsAStatedGuarantee.test_what_exists_is_asked_of_the_path_as_written_too",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_batch_close_guard.py",
+            "reference": "GuardZeroIsAStatedGuarantee.test_a_task_md_of_another_project_is_not_this_guards"
+          },
+          "limitations": [
+            "`<link into the project>/../.agent/tasks/004-x/task.md` with a decoy file where its TEXT collapses to: refused (the kernel would create the project's file). Red on the round-1 code (`0 != 2`: \"exists already\" was asked of the collapsed path alone; impl panel round 2). The other side in the same test: the project's file exists and only the kernel's reading finds it — a rewrite, exit 0."
           ]
         }
       ],
@@ -2399,7 +2449,7 @@
       "missing_evidence_or_limitation": [
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
         "Row added by task 166 (PLAN S11 fix batch, item 5; owner 2026-10-09: \"Adaug rândul în S11 (Recomandat)\"). The guard is older than the ledger and its tests date from task 158; until this row it was enforced and tested, and stated nowhere here.",
-        "Bound: the guard has no project scope. A `Write` that would create `<anywhere>/.agent/tasks/<dir>/task.md` OUTSIDE the project is refused too (corpus vector H07 in tests/test_command_guard.py, an open PLAN S11 item) — a fixture that needs such a file in a temp directory must make it another way.",
+        "Task 171 (PLAN S11; retro 107 R6): the guard has a project scope. Until then a `Write` creating `<anywhere>/.agent/tasks/<dir>/task.md` was refused too, and this row stated that as a bound. Bound that remains, measured in that task and older than it: the pattern reads the path's TEXT, so a path that reaches this project's `.agent` through a symlink whose name is not `.agent` (`<link>/tasks/<dir>/task.md`) is not seen by this guard.",
         "Bound: only a payload whose tool is `Write` is judged by this guard. One of another tool (`Edit`, `MultiEdit`, `NotebookEdit`) that names a task.md which does not exist is not refused here; whether such a tool can create a file at all is the host's behaviour and is not checked. Making a task DIRECTORY through the shell is `PB-TASK-DIR-GUARD`'s subject, not this row's."
       ],
       "follow_up_phases": [],
@@ -7130,7 +7180,7 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": [
-            "Headings are ATX lines (a level-1 one may be indented by up to three spaces when a thematic break `---` is the nearest non-blank line above it — under a list item it would be that item's content, and the break, carried with the part, keeps the reading stable over refreshes) and Setext level-1 headings (text of one or more lines; indented text under the same break rule), task 114, outside CLOSED fenced code blocks and CLOSED <!-- --> comments that start a line; headings indented by 1-3 spaces below level 1 and ATX headings with closing hashes (`## CLI ##`) are not matched as template sections, and other HTML blocks (<div> ...) and a comment opened mid-line are not tracked, so a `#`/`##` line inside one counts as a heading. A template heading is refreshed only at its first occurrence outside the project's `#` parts; a template section the file lacks is inserted above the first such part, so a file an older merge gave a template section BELOW its part — or a future template section named like one inside the part — gets that section once more above it (duplicate template text once, then stable). Text written INSIDE a template-owned section — including a fence or comment opened there and closed only after a project `#` heading, and a `---` right under a list item or blockquote — is replaced with the section by contract; since task 114 it is never lost silently (the backup proof below). A file that is not UTF-8 is merged byte-preserving (surrogateescape); two init runs on one project at the same time are not serialized (each keeps its own backup)."
+            "Headings are ATX lines (a level-1 one may be indented by up to three spaces when a thematic break `---` is the nearest non-blank line above it — under a list item it would be that item's content, and the break, carried with the part, keeps the reading stable over refreshes) and Setext level-1 headings (text of one or more lines; indented text under the same break rule), task 114, outside CLOSED fenced code blocks and CLOSED <!-- --> comments that start a line; headings indented by 1-3 spaces below level 1 are not matched as template sections (an ATX heading with a closing sequence, `## CLI ##`, IS matched since task 171 — it was kept and a second section inserted), and other HTML blocks (<div> ...) and a comment opened mid-line are not tracked, so a `#`/`##` line inside one counts as a heading. A template heading is refreshed only at its first occurrence outside the project's `#` parts; a template section the file lacks is inserted above the first such part, so a file an older merge gave a template section BELOW its part — or a future template section named like one inside the part — gets that section once more above it (duplicate template text once, then stable). Text written INSIDE a template-owned section — including a fence or comment opened there and closed only after a project `#` heading, and a `---` right under a list item or blockquote — is replaced with the section by contract; since task 114 it is never lost silently (the backup proof below). A file that is not UTF-8 is merged byte-preserving (surrogateescape); two init runs on one project at the same time are not serialized (each keeps its own backup)."
           ]
         },
         {
@@ -7185,6 +7235,19 @@
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_init_claude_md.py",
+          "reference": "AHeadingWrittenWithClosingHashes.test_it_is_the_templates_section_and_is_refreshed_in_place",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_init_claude_md.py",
+            "reference": "AHeadingWrittenWithClosingHashes.test_control_what_is_not_a_closing_sequence_is_another_heading"
+          },
+          "limitations": [
+            "A template section whose heading the file wrote with an ATX closing sequence (four spellings): refreshed in place — the merged file equals a fresh one, one `## CLI`, the replaced line reported under the heading as written. Red before task 171 (`['## CLI ##', '## CLI'] != ['## CLI']`). The control: `## CLI#`, `## C#` and `## CLI ## and more` have no closing sequence and stay the project's own sections, byte for byte."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -9812,6 +9875,19 @@
           "limitations": [
             "Shows the first bound stated below, not a protection: with `PYTHONPATH=.` in the environment the destructive-command guard imports a project file and exits 1."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_python_isolation.py",
+          "reference": "TheCliLauncherIgnoresProjectFiles.test_a_tasks_py_at_the_project_root",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_python_isolation.py",
+            "reference": "TheCliLauncherIgnoresProjectFiles.test_it_behaves_like_the_module_run_directly"
+          },
+          "limitations": [
+            "The real launcher (`scripts/tasks --version`) in a project that holds a `tasks.py` which raises when imported: exit code, stdout and stderr equal those of a clean project. The statement names `tasks.py` among its examples and no cited proof covered it until task 172 (task 170's binding audit) — the test itself dates from task 167."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -11308,7 +11384,7 @@
     {
       "id": "PB-HOOK-STOP-CLOSE",
       "category": "risk-and-close",
-      "statement": "Stop enforcement blocks a first stop while task completion requirements remain, fails closed on an unknowable lane, and uses its one-shot valve to avoid permanently trapping the session. The blocked-task release reads `## Status`, and the gate count + first unchecked gate are read, through the CLI's own fence-aware Python readers in ONE spawn (scripts/task-status.py --fields → core._extract_status + core._live_gate_state + core._freehand_release_allowed as a 4-line frame), never an independent awk/grep rule — the Freehand waiver is decided in Python, not by a bash prefix test on the gate text; when that reader cannot run the status is unreadable, the Freehand release is disabled, and gates are counted by a fence-blind LINE grep that is BOM-tolerant like the Python reader (`^(U+FEFF)*[[:space:]]*- \\[ \\]`, byte-wise under LC_ALL=C) and whose exit code is read — a grep failure (exit >= 2, unreadable file, unsupported regex, missing binary) counts as at least one open gate — so over the fixture table the fallback count is >= the Python count and the arm never releases on a count it could not take or under-counts the CLI (fail closed, loud). The one-shot `stop_hook_active` valve is read with a bash-builtin regex when python3 cannot run (no python3, no grep), so a no-python session blocked by this arm can still end its re-issued stop. BOUND, on both arms: the counter-gated conversational bypass (session writes=0 and tools<5) releases a low-activity turn of a COUNTED tree regardless of open gates — it is a release for chat replies, not a fail-closed path — and it is disarmed when the fallback count itself failed.",
+      "statement": "Stop enforcement blocks a first stop while task completion requirements remain, fails closed on an unknowable lane, and uses its one-shot valve to avoid permanently trapping the session. The blocked-task release reads `## Status`, and the gate count + first unchecked gate are read, through the CLI's own fence-aware Python readers in ONE spawn (scripts/task-status.py --fields → core._extract_status + core._live_gate_state + core._freehand_release_allowed as a 4-line frame), never an independent awk/grep rule — the Freehand waiver is decided in Python, not by a bash prefix test on the gate text; when that reader cannot run the status is unreadable, the Freehand release is disabled, and gates are counted by a fence-blind LINE grep that is BOM-tolerant like the Python reader (`^(U+FEFF)*[[:space:]]*- \\[ \\]`, byte-wise under LC_ALL=C) and whose exit code is read — a grep failure (exit >= 2, unreadable file, unsupported regex, missing binary) counts as at least one open gate — so over the fixture table the fallback count is >= the Python count and the arm never releases on a count it could not take or under-counts the CLI (fail closed, loud). The one-shot `stop_hook_active` valve is read with a bash-builtin regex when python3 cannot run (no python3, no grep), so a no-python session blocked by this arm can still end its re-issued stop. BOUND, on both arms: the counter-gated conversational bypass (session writes=0 and tools<5, counted from the last USER prompt) releases a low-activity turn of a COUNTED tree regardless of open gates — it is a release for chat replies, not a fail-closed path — and it is disarmed when the fallback count itself failed. An automatic notification — a prompt that begins with `<task-notification>` or `[SYSTEM NOTIFICATION` — does not reset those counters (owner's Q1, 2026-09-24; task 173): one that lands in the middle of a turn changes nothing, so the work of that turn still holds its stop. The same block releases one more turn, by the owner's exception: a turn that a notification STARTED — no tool call had run since the last stop this hook let through for the session's OWN agent (an agent nested under it shares the session, and its stop ends no turn), in the same prompt generation — and that has made no write since — no Edit, Write, MultiEdit, NotebookEdit or Bash call — however many other tool calls it made; one such write and it is held like any other turn. The echo of a command the user ran (`<command-name>`, `<local-command-caveat>`) still resets the counters, as a prompt of theirs does.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/stop-hook",
@@ -11382,6 +11458,267 @@
             "Task 072: with python3 shimmed out, a BOM-prefixed live gate still BLOCKS the first stop (the fallback pattern admits `(U+FEFF)*` like core._live_gate_scan's lstrip), and a grep that exits 2 BLOCKS instead of releasing on a count it never took. Both watched red against the 1.5.43 hook. Local subprocess only; the >= property over every parity case is tests/test_gate_parser_parity.py (grep_fallback_unchecked, pattern pinned to the hook's literal lines by test_fallback_pattern_is_the_hooks_own).",
             "Task 072 impl panel: `test_no_python_valve_still_ends_a_second_stop` pins that the valve is python-free (watched red: the second stop exited 2 with python3 shimmed out); `test_no_python_fallback_keeps_the_conversational_bypass` pins the disclosed bound (a writes=0/tools<5 counter file releases the no-python arm too — not red-first, it documents pre-existing behaviour the statement now names)."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_notification_turn.py",
+          "reference": "AStopAfterANotification.test_work_then_a_notification_in_the_middle_of_the_turn_then_a_stop_is_blocked",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_notification_turn.py",
+            "reference": "AStopAfterANotification.test_control_the_chat_reply_bypass_is_unchanged"
+          },
+          "limitations": [
+            "The three REAL hooks as subprocesses in event order (chat-log-hook for a prompt, state-echo-hook for a tool call, stop-hook for the stop) over a fixture project with an active task and an open gate: prompt, two Bash calls and a Read, a `<task-notification>`, a Read, stop → exit 2. On the unfixed tree: `0 != 2 : released with a gate open and two writes in the turn` — the sequence measured on a live session on 2026-10-10 05:43 (`tools=20 writes=20` → `0 0` between two tool calls of one turn). Local subprocesses; the host's own scheduling of Stop and of a notification is not live-proven beyond that one measurement."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_notification_turn.py",
+          "reference": "ANotificationDoesNotResetTheCounters.test_an_automatic_notification_leaves_the_counts_as_they_were",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_notification_turn.py",
+            "reference": "ANotificationDoesNotResetTheCounters.test_control_a_user_prompt_resets"
+          },
+          "limitations": [
+            "Both automatic markers; five counted calls before, the same counts after. Unfixed tree: `(0, 0) != (5, 2)`."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_notification_turn.py",
+          "reference": "ANotificationDoesNotResetTheCounters.test_the_echo_of_a_command_the_user_ran_still_resets",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "`<command-name>` and `<local-command-caveat>` reset as a user prompt does. Holds on the unfixed tree; red in a copy that treats them as notifications (`(3, 2) != (0, 0)`)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_notification_turn.py",
+          "reference": "AStopAfterANotification.test_a_turn_a_notification_started_may_end_if_it_made_no_write",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_notification_turn.py",
+            "reference": "AStopAfterANotification.test_one_write_in_that_turn_and_the_stop_is_blocked"
+          },
+          "limitations": [
+            "The owner's exception: a user's turn with two writes is let end (blocked once, then the valve), a notification starts the next turn, six Read calls, stop → exit 0 with the gate open. Unfixed tree: `2 != 0` (the reset left tools=6, over the bypass's limit). Red again in a copy whose stop hook has no notification case."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_notification_turn.py",
+          "reference": "AStopAfterANotification.test_one_write_in_that_turn_and_the_stop_is_blocked",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "One Bash, Edit, Write, MultiEdit or NotebookEdit call in the notification-started turn → exit 2. Red in a copy where a noted baseline is enough without comparing it (`0 != 2`); the last two were red on the tree before they were counted as writes."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_notification_turn.py",
+          "reference": "AStopAfterANotification.test_a_second_notification_during_that_turn_does_not_move_the_baseline",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "A notification-started turn writes, a second notification lands in it, stop → exit 2: only a notification with no tool call since a stop that was let through counts as a start. Red in a copy that notes a baseline whenever a mark exists."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_notification_turn.py",
+          "reference": "AStopAfterANotification.test_a_stop_that_was_blocked_is_not_the_end_of_a_turn",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "A blocked stop (exit 2) leaves no `turn_end` file; a notification after it notes no baseline; the next stop is blocked. Red in a copy that marks every stop, and in one where a notification is a start with no mark at all."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_notification_turn.py",
+          "reference": "AStopAfterANotification.test_a_user_prompt_ends_what_the_notification_began",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "A notification's baseline of 0 does not survive the user's next prompt: six Read calls after it and the stop is blocked. Red in a copy whose reset keeps the two files (`0 != 2`)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_notification_turn.py",
+          "reference": "AStopAfterANotification.test_a_baseline_that_is_not_a_number_releases_nothing",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Beside a valid mark with the same nonce, a baseline whose number is empty, non-numeric, signed, hex, 30 digits or a command substitution, with writes=0 and tools=9 → exit 2 each, and nothing is executed; the control in the same test, a plain `0` with that nonce, releases. Red in a copy that reads the number through `_safe_int` (garbage reads as 0 = writes)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_notification_turn.py",
+          "reference": "TheStopHookMarksOnlyAStopItLetThrough.test_each_way_a_stop_is_let_through_leaves_the_mark",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_notification_turn.py",
+            "reference": "TheStopHookMarksOnlyAStopItLetThrough.test_a_blocked_stop_leaves_no_mark_and_says_what_it_said"
+          },
+          "limitations": [
+            "The valve, all gates done, a blocked status, no active task: each exits 0 and leaves `turn_end` whose first word is the tool count; the counts themselves are unchanged. Unfixed tree: `None != '3'`."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_notification_turn.py",
+          "reference": "TheStopHookMarksOnlyAStopItLetThrough.test_with_no_counters_file_nothing_is_written",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "No counters file: a blocked stop, the valve and a stop with no active task create neither it nor a mark. Red in a copy whose mark is written without the file test. (Its first version drove only the blocked stop and passed that break — rewritten.)"
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_notification_turn.py",
+          "reference": "AFailureWhileMarkingDoesNotChangeTheVerdict.test_a_blocked_stop_stays_blocked_and_an_allowed_one_allowed",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The hook run from a copy of the plugin whose mark writer fails: exit 2 stays 2, exit 0 stays 0, and the failing write is seen to have been reached. Red with the trap unguarded (`1 != 0`): under `set -e` a failing command inside a plain EXIT trap replaces the exit status with 1 (measured on bash 5.1 for 0 and for 2)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_notification_turn.py",
+          "reference": "AStopAfterANotification.test_every_tool_that_edits_a_file_is_a_write",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_notification_turn.py",
+            "reference": "AStopAfterANotification.test_control_the_chat_reply_bypass_is_unchanged"
+          },
+          "limitations": [
+            "A prompt, then ONE MultiEdit (or NotebookEdit) through the real state-echo-hook: the counters read tools=1 writes=1 and the stop is blocked. Before the count was widened: `(1, 0) != (1, 1)` — the turn was released as a chat reply."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_notification_turn.py",
+          "reference": "TheCountersFileIsNeverRewrittenByTheRule.test_a_stop_let_through_and_a_notification_leave_the_file_as_it_was",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "After a stop that is let through (which writes the mark) and a notification that starts a turn (which notes the baseline), the counters file is the same inode with the same bytes. On the first version (nested `978ff38`, the marks as keys of that file): `(17767222, b'…') != (17767223, b'…')`."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_notification_turn.py",
+          "reference": "TheCountersFileIsNeverRewrittenByTheRule.test_a_write_that_lands_while_the_notification_is_read_still_holds_the_stop",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "`cat` and `sed` shimmed first on PATH count each read OF THE COUNTERS FILE by the real chat-log-hook and, after the Nth, do what a tool call's hook does (tools and writes +1): the hook reads the file exactly once, and when the write lands right after that read the stop that follows is held. On the first version: `2 != 1` / `3 != 1 : the notification's hook read the counters file more than once`. A deterministic stand-in for the overlap the panel described; two real hook processes racing are not run against each other."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_notification_turn.py",
+          "reference": "AStopAfterANotification.test_a_notification_right_after_a_user_prompt_is_not_a_start",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "A reply with no tool call ends (mark: 0 tools); the USER speaks; a notification lands before the first tool call of their turn (tools is 0 again); six Read calls; stop → exit 2: the user's prompt removed the mark. Red in a copy whose reset keeps the two files."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_notification_turn.py",
+          "reference": "ANotificationAndAUserPromptAtOnce.test_a_baseline_published_after_the_users_prompt_does_not_release_their_turn",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_notification_turn.py",
+            "reference": "ANotificationAndAUserPromptAtOnce.test_control_with_no_user_prompt_in_between_the_notification_starts_its_turn"
+          },
+          "limitations": [
+            "Two real hook processes, one deterministic interleaving each: `mv` (then `cat`) is shimmed for the chat-log-hook handling a notification, and at that call the USER's prompt hook is run to its END before the shim does its work — so the baseline is renamed into place AFTER the user's reset. Six Read calls in the user's turn, stop → exit 2. On the lock version (nested `4548fe3`) the `mv` case was released after the reset's 5 s wait: `0 != 2 : the user's own turn ended on a notification's baseline` — the single judge's finding, reproduced. Red in a copy whose stop hook honours a baseline without the mark's nonce. Not a stress test."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_notification_turn.py",
+          "reference": "AStopAfterANotification.test_a_baseline_counts_only_beside_the_mark_it_was_taken_from",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "writes=0 and nine tool calls, the files written by hand: same nonce of the current generation → exit 0 (two controls: no prompt seen yet, and a named generation); the mark gone, the mark of a later stop, the mark of an OLDER prompt generation, a mark made before any prompt once there has been one, either file without a nonce, a third word, a nonce that is not a plain word (a command substitution — not executed), a 65-character nonce → exit 2 each."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_notification_turn.py",
+          "reference": "AStopAfterANotification.test_each_stop_let_through_makes_a_new_nonce",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Three turns ended in a row: three different nonces, each 8-64 characters of letters, digits and dashes, each beginning with the generation of the prompt that turn answered. Red in a copy whose nonce is a constant."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_notification_turn.py",
+          "reference": "ANotificationAndAUserPromptAtOnce.test_the_two_exits_that_log_nothing_end_it_too",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "A notification has started a turn (baseline on disk); then a user prompt that is empty once the IDE tags are filtered out, or the same message twice within a second — the two prompts the hook logs nothing for: both files are gone after either. On nested `4548fe3`: `True is not false` (the baseline stood). Their counters are NOT reset — unchanged since before task 088, disclosed."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_notification_turn.py",
+          "reference": "ANestedAgentsStopIsNotTheSessionsTurnEnd.test_a_nested_agents_stop_leaves_no_mark",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_notification_turn.py",
+            "reference": "ANestedAgentsStopIsNotTheSessionsTurnEnd.test_control_the_sessions_own_stop_does"
+          },
+          "limitations": [
+            "The stop hook run with a /proc fixture in which the process that starts it is an agent whose parent is an agent too (`PLAYBOOK_PROC_ROOT`): after the user's turn has written, the nested agent's stop is held, then let through by the valve — and leaves NO mark; its completion notice notes no baseline; the user's stop is held. On nested `52a7264`: `True is not false : a nested agent's stop marked the session's turn end` (the single judge's finding, run 2). A fixture, not two live agents."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_notification_turn.py",
+          "reference": "ANestedAgentsStopIsNotTheSessionsTurnEnd.test_a_nested_stop_does_not_take_away_a_mark_that_is_there",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "A nested agent that stops after the session's own turn ended neither renews nor removes the mark (byte-identical before and after)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_notification_turn.py",
+          "reference": "AStopHookOvertakenByAUsersPrompt.test_a_mark_published_after_the_users_prompt_starts_nothing",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The real stop hook with `mv`, then `head`, shimmed: at that call the USER's next prompt hook is run to its END, so the stop hook publishes its mark after that prompt (`mv`), or goes on deciding after it (`head`). A notification before the first tool call of the user's turn then notes no baseline, and six Read calls later the stop is held. On nested `52a7264`: `True is not false : a mark of the turn BEFORE the user's prompt was taken for a start`. The `head` case alone tells a generation read when the hook starts from one read when it ends (a break that read it at the end passed the `mv` case). Two real hook processes, one deterministic interleaving each."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_notification_turn.py",
+          "reference": "AStopHookOvertakenByAUsersPrompt.test_every_prompt_of_the_users_begins_a_new_generation",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Four prompts of the user's — two plain, a slash-command echo, one that is empty once the IDE tags are filtered out — leave four different generations; a notification leaves the last one as it was."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -11397,7 +11734,14 @@
         "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21).",
         "Task 043 (V7): the status read depends on python3 >= 3.10 being on PATH (already required by task-gate-hook and the CLI); its absence makes a genuinely blocked task unable to end the turn via the blocked release (the one-shot stop_hook_active valve still ends a re-issued stop). Cost: one python spawn per Stop event (~30 ms import of tasks.core), not on the per-tool PreToolUse path. Task 055: the same spawn now also carries the gate count and first gate (`--fields`, 4 LF-only lines: status, count, first gate, `release`/`hold`; a partial, non-numeric or unknown-valued frame is unreadable → fail closed); still one spawn per Stop event, not on the per-tool path. [SUPERSEDED in part by task 072: the `stop_hook_active` valve no longer needs python3 (bash `=~`), so a blocked task CAN end its re-issued stop without python3; what still needs python3 is the `blocked`-status release and gate precision.]",
         "CLOSED in task 055 (043 round-5 panel vector): gate discovery no longer greps — status, live unchecked count, first live gate and the Freehand waiver come from ONE python spawn (`task-status.py --fields` → core._status_from_lines / _live_gate_state / _freehand_release_allowed over ONE read of the file, physical `\\n` lines only). The 055 impl panels (rounds 1-2) then closed: a blank-text first gate hiding a later Freehand gate, unclosed-fenced and indented Freehand decoys (the waiver is decided in Python: Freehand-prefixed, not `Freehand log`, indent < 4, no unclosed fence), `splitlines()` vs grep on U+0085/U+2028 (physical lines for gates AND the status reader/writers — a `prose\\x85## Status\\x85blocked` line can no longer mint a status), and a two-read snapshot in `--fields`. RESIDUAL, disclosed: when the reader cannot run the grep fallback counts fence-blind (over-counts only) and never releases; the other task.md scanners (risk, section spans, handoff, receipts, compact) still use `splitlines()` — not on the stop/F3 release path, parked as an engine-wide line-model vector alongside the HTML-comment item. [SUPERSEDED wording, task 072: 'never releases' was overbroad — the fallback never UNDER-counts and never releases on a count it could not take; the counter-gated conversational bypass (writes=0, tools<5) is the documented release for a COUNTED tree on both arms, and the valve ends a re-issued stop. See the current statement.]",
-        "CLOSED in task 072 (070 release panel, codex-high #2 / codex-medium #3): the no-python fallback was NOT fail-closed as the 1.5.43 entry stated — `|| UNCHECKED=0` mapped a grep FAILURE to zero gates (released the stop) and the `^[[:space:]]*` anchor missed BOM-prefixed gates the Python reader counts (under-count → release). Now: exit code read (0/1 = count taken, else >= 1 + loud), pattern `^(U+FEFF)*[[:space:]]*- \\[ \\]` under LC_ALL=C via printf-built bytes (bash 3.2 / BSD grep safe). Residual, disclosed: the fallback is still fence-blind and HTML-comment-blind (over-counts only — a hidden line is never added); it is reached only when python3 is missing or import-broken, in which case the CLI itself is unusable, so the arm's job is to block, not to be precise; a grep whose ERE lacks `(…)*` support fails through the error arm (blocks), never silently. Impl panel (opus / codex-high / grok): the first re-statement said 'a first stop with work open is never released' — overbroad, the conversational bypass (writes=0, tools<5) releases on both arms; narrowed above and pinned. grok found the valve itself was python-parsed, so a no-python block was PERMANENT (no CLI to check gates, no valve to end the turn) — fixed with a byte-wise `\"stop_hook_active\": true` read when python3 cannot run, watched red. Round 2 (codex-medium): the valve's grep read still depended on grep — now a bash `=~` builtin, pinned with python3 AND grep shimmed out; (codex-high) the bypass is disarmed when the count failed (grep exit >= 2 or garbled output), pinned with low counters; (opus) every BOM shape is also driven through the hook's real inline-argv grep in test_blocked_state, not only the parity `-f` route. Disclosed bound (codex-high #2, not fixed): the shell valve cannot tell JSON nesting depth, so a NESTED object carrying `\"stop_hook_active\": true` would read as the valve — the Stop payload is produced by the host, not by the agent, so this is documented rather than parsed. Round 4 (codex-medium): the shell valve regex applied to ANY python parse failure, so a malformed payload (`{\"stop_hook_active\": true` unclosed) released with python3 present — now the regex runs only when `python3 -c pass` itself fails; with python3 present a malformed payload reads as not-active (pinned with three malformed shapes). The 043-V7 and 055 limitation bullets above are annotated as superseded rather than deleted (history stays readable)."
+        "CLOSED in task 072 (070 release panel, codex-high #2 / codex-medium #3): the no-python fallback was NOT fail-closed as the 1.5.43 entry stated — `|| UNCHECKED=0` mapped a grep FAILURE to zero gates (released the stop) and the `^[[:space:]]*` anchor missed BOM-prefixed gates the Python reader counts (under-count → release). Now: exit code read (0/1 = count taken, else >= 1 + loud), pattern `^(U+FEFF)*[[:space:]]*- \\[ \\]` under LC_ALL=C via printf-built bytes (bash 3.2 / BSD grep safe). Residual, disclosed: the fallback is still fence-blind and HTML-comment-blind (over-counts only — a hidden line is never added); it is reached only when python3 is missing or import-broken, in which case the CLI itself is unusable, so the arm's job is to block, not to be precise; a grep whose ERE lacks `(…)*` support fails through the error arm (blocks), never silently. Impl panel (opus / codex-high / grok): the first re-statement said 'a first stop with work open is never released' — overbroad, the conversational bypass (writes=0, tools<5) releases on both arms; narrowed above and pinned. grok found the valve itself was python-parsed, so a no-python block was PERMANENT (no CLI to check gates, no valve to end the turn) — fixed with a byte-wise `\"stop_hook_active\": true` read when python3 cannot run, watched red. Round 2 (codex-medium): the valve's grep read still depended on grep — now a bash `=~` builtin, pinned with python3 AND grep shimmed out; (codex-high) the bypass is disarmed when the count failed (grep exit >= 2 or garbled output), pinned with low counters; (opus) every BOM shape is also driven through the hook's real inline-argv grep in test_blocked_state, not only the parity `-f` route. Disclosed bound (codex-high #2, not fixed): the shell valve cannot tell JSON nesting depth, so a NESTED object carrying `\"stop_hook_active\": true` would read as the valve — the Stop payload is produced by the host, not by the agent, so this is documented rather than parsed. Round 4 (codex-medium): the shell valve regex applied to ANY python parse failure, so a malformed payload (`{\"stop_hook_active\": true` unclosed) released with python3 present — now the regex runs only when `python3 -c pass` itself fails; with python3 present a malformed payload reads as not-active (pinned with three malformed shapes). The 043-V7 and 055 limitation bullets above are annotated as superseded rather than deleted (history stays readable).",
+        "Task 173 (owner's Q1 of 2026-09-24, PLAN S11): until then EVERY prompt reset the session's tools/writes counters, a harness notification included — measured live on 2026-10-10: a background command's `<task-notification>` took a turn from `tools=20 writes=20` to `0 0` between two of its tool calls, so a stop within four read-only calls after it was released with every gate open. Mechanism now, two one-line files beside the session's `counters`, each `<number> <nonce>`: the stop hook, on every exit 0 with a resolved session, a readable lane and an existing counters file, writes `turn_end` — the tool count and a NEW nonce (the kernel's random UUID); the chat-log hook, on a notification, writes `notif_start` — the write count and the nonce of the mark it read — only when that mark's count equals the current `tools`; the stop hook releases when `notif_start` and `turn_end` both parse, carry the SAME nonce, and the baseline equals `writes`. Every prompt of the user's removes both files — also the two the hook logs nothing for (empty once the IDE tags are filtered out; the same message twice within a second), which reset no count, as before. History of the mechanism, because each step was a reviewer's finding: (1) the marks were keys of the counters file; a key is set by copying the whole file and renaming the copy over it, so a notification's hook overlapping a tool call's hook could rename a stale copy over that call's increment (impl round 1: opus, codex-high, codex-medium) — they became files of their own, nothing that serves the rule rewrites the counters file, and the notification's hook reads it ONCE (a tool call's hook bumps `tools`, then `writes`, each by a rename, so one read cannot show the old `tools` beside the new `writes`). (2) The notification's hook read the mark and only later wrote its baseline, so a USER prompt whose hook ran in between was followed by a baseline that stood in the user's own turn (impl round 2: codex-high, codex-medium) — answered with a session lock that had a 5 s limit. (3) The limit was a hole: a reset that stopped waiting ran unlocked and the baseline was published after it (post-D6 run 1, reproduced: `0 != 2 : the user's own turn ended on a notification's baseline`). The lock is gone; no ordering is relied on: a baseline that reaches the disk late names a mark that a user's prompt removed or a later stop replaced, and is a dead letter. (4) Every agent in a process chain resolves to the ROOT agent's session, so a `claude -p` the session's agent runs fires this stop hook into the same session; run as a background command, its mark and its completion notice read together as a turn's start in the middle of the user's own; and a stop hook still running when the user's next prompt arrives published its mark after that prompt had removed the old ones (post-D6 run 2, both reproduced). Two fences: the stop hook marks only when its process chain holds ONE agent (`_agent_walk all`; two or more = a nested agent, no mark), and the nonce it makes begins with the PROMPT GENERATION it saw when it started — a word in the file `prompt_gen` that every prompt of the user's renews, first thing — so a mark of an older generation is taken for a start by neither the notification's hook nor the bypass. That last fix (nested `3fa5356`) was read by the single judge in a third run the owner allowed on 2026-10-10; it raised neither of the two again and found the next step of the same race, stated below.",
+        "Task 173, three readings of the owner's sentence that are the builder's, not his (put to him on 2026-10-10): (1) `automatic notification` = the two markers above, not the echo of a user's own command; (2) `a turn started by a notification` is told from a notification landing mid-turn by the mark, and a turn that ended WITHOUT a Stop event (an interrupt) leaves no mark, so a notification after it is read as mid-turn — the stricter side, and so does any tool call that runs in the session between that stop and the notification: if a background sub-agent's own tool calls reach this session's PostToolUse hook, the notice of its completion is read as landing mid-turn and its turn is held once (the valve ends a re-issued stop) — NOT measured: the session that built this had no sub-agent tool, and the repo does not show whether such calls reach the hook (impl panel, opus); a background shell command makes no tool call while it runs, which is the case measured; (3) `zero writes` is the hook's own counter, which counts Edit, Write, MultiEdit, NotebookEdit and Bash calls — a sub-agent call or an MCP tool is not a write for it — and the exception carries NO tool-count limit, because his sentence has none, whereas the chat-reply bypass bounds such calls by tools<5.",
+        "Task 173: the two one-line files (`turn_end`, `notif_start`) sit beside the session's counters file in `.agent/`, writable by the agent exactly as `tools` and `writes` are — a session that edits them (a matching nonce in both is all it takes) can release its own stop, as it already could by writing `writes=0`; they add no new trust — the nonce is against a baseline written LATE, not against a session forging its own files. (This note spoke of two KEYS of the counters file until the impl panel's second round, opus: the row contradicted itself.) The codex hook path (experimental, no support claim) has no notification handling: every codex prompt is logged and resets; unchanged.",
+        "Task 173: until then the `writes` counter counted Edit, Write and Bash only — a MultiEdit or a NotebookEdit was a tool call but not a write, so a turn whose only act was one of them (fewer than five calls) was released by the chat-reply bypass with gates open. Found while reading what `zero writes` rests on; both are counted now (red first: `(1, 0) != (1, 1)`).",
+        "Task 173, NOT closed by it and older than it — MEASURED 2026-10-10 with the real state-echo-hook started as overlapping processes against one fixture session: `write_counter` is an unlocked copy-and-rename, so PostToolUse hooks that overlap lose increments. 20 rounds of 2 overlapping Bash calls (40 calls) left `tools=20 writes=20`; 10 rounds of 6 (60 calls) left `tools=10 writes=15`; 20 calls one after another left 20 and 20. The host runs tool calls of one message in parallel, so both counters under-count in ordinary use, and an under-counted `writes` is the RELEASING side of the chat-reply bypass and of the notification exception alike (a Read and a Bash that overlap can lose the Bash's write entirely). The rule's own two writers no longer take part in it (they do not touch the file). Serialising the counters under a per-session lock changes the hook that runs on every tool call — its own fix, routed to the owner with the S11 list (task 173, parked).",
+        "Task 173: `one agent in the chain = the session's own stop` was MEASURED on one live session (Claude Code 2.1.296, Linux, 2026-10-10: a command the session runs walks up to exactly one agent, the session's). A host that started its hooks from a helper process of its own that is also named `claude` would make every stop look nested, and the owner's exception would then never apply — the stricter side, and not seen. The walk stops at the Claude Code daemon and reads `/proc` (or `PLAYBOOK_PROC_ROOT`, which the tests use to pin it).",
+        "Task 173, BOUND left open at its close (the single judge's third run, 2026-10-10; PLAN S11 item (18)): the stop hook reads the prompt generation only after it has read its input, parsed it and resolved the session. A user's prompt whose hook runs to its end in that window — after the stop hook of the turn before it has started, before it reaches that read — gives that stop the NEW generation; its mark then counts in the user's turn, and a notification before the first tool call of that turn is taken for a start, so a read-only turn of the user's could end with gates open. Not reproduced by a test here (the tested orderings are the prompt landing at the mark's rename and while the hook decides after that read). Reading the generation first thing would shrink the window, not close it; a turn identity from the host in both payloads would close it."
       ],
       "follow_up_phases": [
         8
@@ -11586,6 +11930,120 @@
           "limitations": [
             "Task 111: experimental agy judge seat. The probe's subprocess is replaced by stdout/stderr captured from agy 1.2.17 (2026-10-05, tests/fixtures/agy-1.2.17/) for the three `invalid model selection` messages; no agy runs in the test."
           ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_model_availability.py",
+          "reference": "AListedGrokPinIsNotOkWithoutACall.test_a_listed_pin_out_of_credit_is_not_ok",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_model_availability.py",
+            "reference": "AListedGrokPinIsNotOkWithoutACall.test_control_a_pin_that_is_not_listed_is_gone_without_a_call"
+          },
+          "limitations": [
+            "`check_pins` with every provider call replaced by a recorder: a grok pin that IS in `grok models` gets one probe, and when that answers 402 the verdict is UNKNOWN with the provider's line — not OK. Red before task 171 (`'OK' != 'UNKNOWN'`: the pin was never called)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_model_availability.py",
+          "reference": "AListedGrokPinIsNotOkWithoutACall.test_without_a_probe_a_listed_pin_is_listed_not_ok",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_model_availability.py",
+            "reference": "AListedGrokPinIsNotOkWithoutACall.test_control_the_bare_seat_is_as_before"
+          },
+          "limitations": [
+            "With no probing a listed grok pin reads LISTED, and nothing is called. Where that shows: `tasks models check --no-probe`, and the report a review prints when it stops on a dead pin (`check_pins(probe=False)` in review.py). NOT in `tasks doctor` (it prints only pins that cannot run) nor in the dashboard (it does not run this check) — the first wording of this line named both, wrongly (impl panel round 2)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_model_availability.py",
+          "reference": "TheGrokProbeReadsItsAnswer.test_out_of_credit_is_not_ok_whatever_the_exit_code",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_model_availability.py",
+            "reference": "TheGrokProbeReadsItsAnswer.test_an_answer_is_ok"
+          },
+          "limitations": [
+            "`probe_grok_model` with the CLI replaced by what it printed when the account ran out of credit (captured from the plain `-p` probe itself, 2026-10-10 04:59:33): that text on stdout or on stderr, with exit 1 or exit 0 → UNKNOWN carrying the 402 message. OK is exit 0 AND the one word the probe asks for AND nothing on stderr; anything else is not."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_model_availability.py",
+          "reference": "TheGrokProbeReadsItsAnswer.test_exit_zero_with_no_answer_is_not_ok",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Exit 0 with nothing printed is UNKNOWN, not OK."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_model_availability.py",
+          "reference": "TheGrokProbeReadsItsAnswer.test_an_effort_the_cli_rejects_is_a_bad_effort",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_model_availability.py",
+            "reference": "TheGrokProbeReadsItsAnswer.test_the_pinned_effort_is_what_the_probe_runs"
+          },
+          "limitations": [
+            "The CLI's own line for an effort it does not accept (exit 1, captured from grok 1.0.50 on 2026-10-10) → BAD_EFFORT."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_model_availability.py",
+          "reference": "AListedGrokPinIsNotOkWithoutACall.test_two_efforts_of_one_model_are_two_seats",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_model_availability.py",
+            "reference": "AListedGrokPinIsNotOkWithoutACall.test_the_probe_is_of_the_seat_as_pinned_effort_and_all"
+          },
+          "limitations": [
+            "Two pins of one model with different efforts are probed separately and can get different verdicts (the probe was of the model alone: impl panel round 1, both codex seats)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_model_availability.py",
+          "reference": "TheGrokProbeReadsItsAnswer.test_exit_zero_with_anything_but_the_answer_asked_for_is_not_ok",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_model_availability.py",
+            "reference": "TheGrokProbeReadsItsAnswer.test_control_the_answer_in_the_spellings_a_model_gives_it"
+          },
+          "limitations": [
+            "Exit 0 with the 402 phrase as plain text, with an error object spaced differently, with a refusal, with `ok, but …`: UNKNOWN carrying what was said. Red on the round-1 code (`'OK' != 'UNKNOWN'`), which matched the judge path's event shape only. The control: `ok` in six spellings a model gives it is OK."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_model_availability.py",
+          "reference": "TheGrokProbeReadsItsAnswer.test_the_answer_beside_an_error_on_stderr_is_not_ok",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_model_availability.py",
+            "reference": "TheGrokProbeReadsItsAnswer.test_an_answer_is_ok"
+          },
+          "limitations": [
+            "Exit 0 with `ok` on stdout AND a line on stderr (the 402 wording; any other report): UNKNOWN carrying that line. Red before (`'OK' != 'UNKNOWN'`) — the single judge after round 2. The rule is strict on purpose: a routine notice a future CLI might print on stderr would read UNKNOWN too, with the notice as the stated reason; UNKNOWN does not fail the check."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_model_availability.py",
+          "reference": "TheGrokProbeReadsItsAnswer.test_the_captured_out_of_credit_answer",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_model_availability.py",
+            "reference": "TheGrokProbeReadsItsAnswer.test_an_answer_is_ok"
+          },
+          "limitations": [
+            "The capture exactly as it came (exit 1, empty stdout, the JSON object on stderr): UNKNOWN, and the detail holds `402 Payment Required` and `usage balance exhausted` — the first line alone is `Internal error: {`."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -11600,7 +12058,9 @@
       "missing_evidence_or_limitation": [
         "No live provider availability/error-classification evidence in CI. Task 111 (2026-10-05): Antigravity is no longer unprobeable — agy 1.2.17 takes a model pin, so `tasks models check` runs one real turn for an agy pin; an id agy does not know is GONE, a missing or contradicted effort is BAD_EFFORT (a spec error, never a dead pin), and a missing sign-in or an exhausted quota is UNKNOWN with the cause. agy is an experimental judge seat and is not in applicable_providers; its proof replays output captured from agy 1.2.17 on one Linux account.",
         "Owner decision 2026-08-21: judge-seat is supported on claude, grok, and codex; antigravity and pi are experimental and removed from applicable_providers.",
-        "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending."
+        "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending.",
+        "Task 171 (PLAN S11; retro 107 R17): a grok pin found in `grok models` used to read OK with no call — the list is the account's entitlements and cannot see that its credit ran out (2026-09-29: every call 402 while the check said OK). A listed pin now gets one live turn — of the seat as pinned, with its effort — or LISTED where nothing is probed; the probe reads its answer (OK is exit 0 AND the one word it asked for AND nothing on stderr; anything else is not OK) and an effort the CLI rejects is BAD_EFFORT. Bound: `probe_codex_model` still takes exit 0 as the answer without reading it. Bound, unchanged: a BARE `grok`, `codex:` or `claude` seat (the provider's default model) still reads OK without a call; only a bare `agy` seat is probed (task 111). The live half of this row — recorded responses from the real providers — is still PLAN S11's gauntlet.",
+        "LIVE, 2026-10-10 (task 171): the candidate's `tasks models check` at 03:58 printed `grok:grok-4.7:medium OK responds` (a real turn); at 04:59, the account's credit having run out in between, `UNKNOWN — probe failed …` — the case this row's fix is for, met by accident and recorded in task 171. One provider, one night: not the matrix PLAN S11's gauntlet asks for."
       ],
       "follow_up_phases": [
         8
@@ -12730,7 +13190,7 @@
     {
       "id": "PB-CLI-INTENT",
       "category": "cli-contracts",
-      "statement": "tasks intent runs blind per-layer extractions over a finished task and distils the reconciled result into INTENT.md, defaulting its extraction judge to the all-Claude default rather than codex.",
+      "statement": "tasks intent runs blind per-layer extractions over a finished task and distils the reconciled result into INTENT.md, defaulting its extraction judge to the all-Claude default rather than codex. It spends nothing unasked (task 173, owner's D3-C4 of 2026-09-24): without `--yes` it prints which layers have evidence and one line — how many judge calls a run would make, on which seat, the time limit of each and, for a claude seat, the budget cap of each — makes no judge call, writes no run directory and no spend record, and exits 2; that line ends with the flag that approves exactly what it quotes, `--yes <calls>@<seat>@<limit>@<cap>` — the line's four figures as text, one-to-one with them — and the command runs only when the approval given is that of the line a run would be quoted as at that moment; a bare `--yes`, the approval of a line that no longer holds or one never printed prints the line again and spends nothing; the judge and the cap the approval was checked against are the ones handed to the runner, which does not resolve them again; `--collect-only`, which never spent, is not asked. The seat in that line is resolved by the function the runner itself uses.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/history.py",
@@ -12761,6 +13221,221 @@
           "limitations": [
             "Only the unset-config judge fallback is asserted."
           ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_intent_cost_question.py",
+          "reference": "TheBareCommandSpendsNothing.test_it_says_what_it_would_spend_and_exits_2",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_intent_cost_question.py",
+            "reference": "WithYesItRuns.test_it_makes_the_calls_it_announced"
+          },
+          "limitations": [
+            "cmd_intent in-process with the claude adapter's judge call faked and counted: exit 2, zero calls, the line names 2 judge calls (two of four layers have evidence in the fixture), the seat, and ends with `--yes 2@claude:opus:high@1200s@10`. Unfixed tree: `0 != 2` — it ran. Proves what is started, not what a live judge answers."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_intent_cost_question.py",
+          "reference": "TheBareCommandSpendsNothing.test_it_leaves_no_run_directory_and_no_spend_record",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "No `intent/<run-id>/` directory and no `kind: intent` record in the journal after the bare command. Unfixed tree: a run directory was there."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_intent_cost_question.py",
+          "reference": "WithYesItRuns.test_it_makes_the_calls_it_announced",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "With the `--yes …` the bare command printed: two calls, one run directory, two spend records on that seat. Unfixed tree: `Error: unknown option for intent: --yes`."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_intent_cost_question.py",
+          "reference": "TheSeatInTheLineIsTheSeatThatRuns.test_another_default_judge",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "With `default_judge` set to claude:sonnet the line names `claude:sonnet:high`, and the approved run's spend records and model argument are that seat. Red in a copy whose line names a fixed judge."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_intent_cost_question.py",
+          "reference": "TheBareCommandSpendsNothing.test_the_line_says_the_time_limit_of_each_call",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`--timeout 77` → `time limit 77s each`."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_intent_cost_question.py",
+          "reference": "TheBareCommandSpendsNothing.test_for_a_claude_seat_it_says_the_budget_cap_of_each_call",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "PLAYBOOK_JUDGE_BUDGET_USD=3.5 → `each capped at $3.5` (the budget knob exists for the claude CLI only; for another provider's seat the line says nothing of a cap, and no test drives that branch)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_intent_cost_question.py",
+          "reference": "WhatNeverSpentIsNotAsked.test_collect_only_writes_its_prompts_as_before",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`--collect-only`: exit 0, zero calls, the prompts written, no question. Holds on the unfixed tree; red in a copy that asks it too (`2 != 0`)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_intent_cost_question.py",
+          "reference": "ThroughTheCommandLine.test_the_bare_command_exits_2_and_starts_no_judge",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_intent_cost_question.py",
+            "reference": "WhatNeverSpentIsNotAsked.test_no_evidence_is_still_the_error_it_was"
+          },
+          "limitations": [
+            "The real CLI in a subprocess with a `claude` first on PATH that would leave a file behind if it were ever started: exit 2, the line on stderr, no such file, no run directory. Unfixed tree: `0 != 2`."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_intent_cost_question.py",
+          "reference": "TheApprovalIsTheQuote.test_evidence_that_grew_since_the_quote_is_asked_about_again",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_intent_cost_question.py",
+            "reference": "TheApprovalIsTheQuote.test_the_same_quote_runs_when_nothing_changed"
+          },
+          "limitations": [
+            "Quoted with one layer available; a second layer appears; the same approval → exit 2, zero calls, no run directory, the new line (2 calls). Round 1's scenario (codex-high): the evidence is collected again on the re-run, and the user's own answer in the chat can be what adds a layer. On the first version, where a bare `--yes` ran whatever was there: `0 != 2`."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_intent_cost_question.py",
+          "reference": "TheApprovalIsTheQuote.test_a_bare_yes_approves_nothing",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`--yes` with nothing after it: exit 2, zero calls, `needs what it approves`. On the first version a bare `--yes` ran (`0 != 2`)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_intent_cost_question.py",
+          "reference": "TheApprovalIsTheQuote.test_a_yes_followed_by_another_option_approves_nothing",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`--yes --timeout 77`: the option after it is not taken for the approval, and is still honoured in the line."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_intent_cost_question.py",
+          "reference": "TheApprovalIsTheQuote.test_a_longer_time_limit_than_the_one_quoted_is_asked_about_again",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_intent_cost_question.py",
+            "reference": "TheApprovalIsTheQuote.test_the_same_quote_runs_when_nothing_changed"
+          },
+          "limitations": [
+            "Quoted with `--timeout 60`; the same approval with `--timeout 6000` → exit 2, zero calls, the new line; with `--timeout 60` it runs, each call with that limit. Round 2's scenario (codex-high, codex-medium), reproduced on nested `5d7cc5b` before the fix: an approval of calls and seat given for 60 s and $2 ran with 6000 s and $50."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_intent_cost_question.py",
+          "reference": "TheApprovalIsTheQuote.test_a_raised_budget_cap_is_asked_about_again",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Quoted with PLAYBOOK_JUDGE_BUDGET_USD=2; the same approval with 50 → refused, the new line says `each capped at $50`; with 2 it runs and each call carries that cap."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_intent_cost_question.py",
+          "reference": "TheApprovalIsTheQuote.test_another_default_judge_than_the_one_quoted_is_asked_about_again",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Quoted on claude:opus; `default_judge` set to claude:sonnet; the same approval → refused, the new line names the new seat."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_intent_cost_question.py",
+          "reference": "TheApprovalIsTheQuote.test_two_different_lines_never_share_an_approval",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_intent_cost_question.py",
+            "reference": "TheApprovalIsTheQuote.test_the_same_quote_runs_when_nothing_changed"
+          },
+          "limitations": [
+            "Two calls on claude:opus:high, cap $2, time limits 23069s and 30214s: two different approvals, and that of the first does not run the second. The single judge's pair (post-D6 run 1): under the eight-digit digest of nested `4548fe3` both were `48320ceb` — the test's red line there is `'48320ceb' == '48320ceb'`."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_intent_cost_question.py",
+          "reference": "TheApprovalIsTheQuote.test_the_approval_is_one_to_one_with_the_four_figures",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`intent_approval` over a grid of 180 figure sets, with seats that hold the separator (`x@1200s`, `x@1200s@5`): 180 different approvals. A grid, not a proof — the argument is in the function's docstring (neither the limit nor the cap can hold an `@`)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_intent_cost_question.py",
+          "reference": "TheApprovalIsTheQuote.test_an_approval_that_was_never_printed_approves_nothing",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`yes`, `2`, `00000000`, round 1's `2@claude:opus:high`, a three-field and a five-field form, one with a leading space → refused each."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_intent_cost_question.py",
+          "reference": "WhatWasApprovedIsWhatRuns.test_a_judge_that_changes_after_the_check_is_not_the_one_that_runs",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`resolve_default_seat` answers claude:opus to its first call and claude:sonnet to any later one — a configuration that changed after the check: the run's model argument and spend records are opus. On nested `4548fe3`, where the runner resolved the judge again: sonnet ran (the single judge's finding, post-D6 run 1). In-process, the resolver faked."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_intent_cost_question.py",
+          "reference": "WhatWasApprovedIsWhatRuns.test_a_cap_that_changes_after_the_check_is_not_the_one_that_runs",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`resolve_judge_budget` answers 10 to its first call and 500 to any later one: every call carries the cap 10."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_intent_cost_question.py",
+          "reference": "TheFlagIsSafeToPasteWhateverTheSeat.test_the_flag_is_printed_quoted_for_a_shell_and_runs",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "A seat with shell characters (`claude:claude-opus-5-5[1m]`): the flag is printed single-quoted, and the token a shell hands over from it runs. Red in a copy that prints it unquoted."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -12775,7 +13450,8 @@
       "missing_evidence_or_limitation": [
         "No executable test drives the layer collection, the blind extraction run, the reconciliation, or the INTENT.md write.",
         "The extraction step needs a live judge provider, so its behavior is unproved offline.",
-        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
+        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
+        "Task 173 (owner's D3-C4): the cost question is a refusal with the flag to pass, not an interactive prompt — the CLI is run by an agent, and `commands/intent.md` tells that agent to put the line to the user before passing the flag; whether an agent does so is a prompt-file instruction, not something a test can hold (an agent can write the four figures itself without asking — the flag is a question, not a wall). What the flag DOES hold: the approval is the line's four figures — calls, seat, time limit, budget cap — so what runs is what was quoted or nothing, and the judge and cap that were checked are the ones the runner is given. It was `--yes` alone, then calls and seat, then an eight-digit digest of the four: each form fell to a reviewer (a layer that appears between quote and run; a raised limit or cap; two limits with one digest). Not covered: the line does not estimate tokens or money actually spent, the SIZE of the evidence behind an unchanged number of calls is not part of the quote, and what the judge's own CLI reads from its configuration at launch is outside this command."
       ],
       "follow_up_phases": [
         3,
@@ -12797,7 +13473,7 @@
     {
       "id": "PB-CLI-TIMELINE-TAGGER",
       "category": "cli-contracts",
-      "statement": "tasks timeline and tasks tagger fail with an explicit exit-1 message naming the missing input file, and in a multi-user repo that message names the resolved lane path.",
+      "statement": "tasks timeline and tasks tagger fail with an explicit exit-1 message naming the missing input file, and in a multi-user repo that message names the resolved lane path. Both, and `tasks tag`, read every `tasks work` / `tasks new` line of the shell history as an activation: a command run again is a new activation — also within the same second — and only the echo of an older logger is not: a `SCRIPT` line whose command and timestamp are those of an `AGENT` activation on the line directly above it in the file.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/history.py",
@@ -12847,6 +13523,88 @@
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_history_activations.py",
+          "reference": "TimelineShowsEveryActivation.test_going_back_to_a_task_is_shown",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_history_activations.py",
+            "reference": "TimelineShowsEveryActivation.test_control_an_old_echo_pair_is_still_one_entry"
+          },
+          "limitations": [
+            "The real CLI on a written history: `work 7`, `work 8`, `work 7` prints three transitions. Red before task 171 (two — every second sight of a command was dropped)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_history_activations.py",
+          "reference": "TimelineShowsEveryActivation.test_the_same_activation_run_again_later_is_shown",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The same command 30 seconds later is a second activation (`1 != 2` before)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_history_activations.py",
+          "reference": "TaggerShowsEveryActivation.test_going_back_to_a_task_is_shown",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_history_activations.py",
+            "reference": "TaggerShowsEveryActivation.test_control_an_old_echo_pair_is_still_one_entry"
+          },
+          "limitations": [
+            "The same history through `tasks tagger`."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_history_activations.py",
+          "reference": "TagAttributesEveryActivation.test_a_second_close_ends_its_task_and_a_return_is_seen",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_history_activations.py",
+            "reference": "TagAttributesEveryActivation.test_control_one_task_opened_and_closed"
+          },
+          "limitations": [
+            "`tasks tag` rewrites the chat log's spans from the same lines: after `work 7 / work done / work 8 / work done / work 7` the five messages are attributed 007, none, 008, none, 007. Red before task 171: the last two were attributed to 008 — the second `work done` never closed its task."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_history_activations.py",
+          "reference": "TimelineShowsEveryActivation.test_commands_of_one_second_are_all_shown",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_history_activations.py",
+            "reference": "TimelineShowsEveryActivation.test_control_an_old_echo_pair_is_still_one_entry"
+          },
+          "limitations": [
+            "`work 7`, `work 8`, `work 7` written in ONE second print three transitions, and the same command twice in one second prints two. Red on this task's first rule, which called any same-second repeat within two lines an echo (impl panel round 1, three judges)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_history_activations.py",
+          "reference": "TimelineShowsEveryActivation.test_only_a_script_line_right_under_its_agent_line_is_an_echo",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "`SCRIPT` lines that repeat nothing directly above them are activations — also when the line they would repeat is two lines up with another command in between (the round-1 code compared with the previous ACTIVATION line and dropped that one: `['tasks work 7'] != ['tasks work 7', 'tasks work 7']`; impl panel round 2)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_history_activations.py",
+          "reference": "TagAttributesEveryActivation.test_a_history_written_within_one_second_closes_its_tasks_too",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "`tasks tag` on work 7 / done / work 8 / done written in one second: no message is attributed to a task. Red on the first rule (all five messages attributed to 008)."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -12859,7 +13617,7 @@
       ],
       "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "Only the absent-input behavior is proved — now in a single-user repo too, including tagger's second check (chat log present, shell history absent) (task 148 (PLAN S12)); neither the chronological reconstruction nor the tagging output has an executable test, and the statement claims neither.",
+        "Proved: the absent-input behaviour (single-user and multi-user, including tagger's second check — task 148, PLAN S12) and, since task 171 (PLAN S11; retro 107 R12), how the three commands read ACTIVATIONS from the shell history. Not proved, and not claimed: the rest of the reconstruction — how messages and transitions are merged and ordered, the text of a tag. Bound, measured in task 171 and older than it: today's logger also records the whole compound command line beside each of its commands, so one activation can appear as two lines with two different texts. Measured for the echo rule (task 171): this workspace's archived history of 2026-08-22 … 09-25 holds 542 activation lines, all of kind `AGENT`, no two alike in one second, and the shipped loggers write `AGENT` only — a `SCRIPT` echo is the trace of an older logger.",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
       ],
       "follow_up_phases": [
@@ -15333,7 +16091,7 @@
     {
       "id": "PB-POST-D6-PROTOCOL",
       "category": "judges-and-reviews",
-      "statement": "The post-D6 review protocol (task 108): both context builders (panel and single judge) deliver FIRST a SETTLED block — the task's last unfenced `## Owner rulings` lines verbatim plus the judge.md/judge-archive.md triage bullets whose VERDICT is `REJECT` (right after the bullet, after its bold title, or ending inside the bold title — not a mention in prose) — under a header that says a ruling closes a design choice, never a correctness defect; every impl panel round's header carries a unique `**Round-id:**` and its Panel-snapshot records per scope a `base` tree of the working state (staged, unstaged, untracked) built in a temporary GIT_INDEX_FILE without changing the real index or `git status`; `impl-review` after an impl panel delivers the diff base → current working tree, refusing to send anything when a tree, the scope set or a scope's directory moves between building the delta and the tamper baseline, and giving task.md only the budget left after SETTLED + delta + map (a head-clamp tells the judge) (an unchanged file absent, an untracked file present; a scope set or scope directory changed since the panel refuses the delta; over budget, the stat of the same two trees — itself bounded to a third of the cap — and the exact diff commands), computes POST-D6 VERDICT (PASS = no counted Critical or Important; a tag counts only right after the severity marker; [SETTLED] is not counted, [SETTLED-CONTRADICTED] is, and [PRE-EXISTING] is not counted only when a delta was delivered and the finding (its whole text) cites no file the FULL delta changed — the file set is taken before any truncation and holds both paths of a rename; the check is deliberately at FILE level (owner amendment 2026-09-30: judges often cite wrong lines, and file level errs toward more review); the response's last non-empty line must BE a whole, bare (not code-spanned) CAP line whose count equals the recognised findings, and `more remain` is incomplete — otherwise the verdict fails closed), and RESERVES each run under the task lock before any judge is spawned: runs 1-2 after a panel are free, run 3 needs a counted Critical in run 2, run 4+ always needs `--owner-ok --reason`; a refused run exits 2 with nothing spent, one review at a time per task — a panel reserves before its tamper snapshot too, so a panel and a single judge exclude each other (a live reservation — while its owning process runs (POSIX, same host; recorded pid + host), otherwise by its OWN recorded expiry — refuses a second one without writing — its append would void the first run by tamper; a reservation older than the hard timeout + 10 min counts as spent), a corrupt ledger line refuses every new reservation until repaired (or `--owner-ok`), a run killed at its hard timeout counts (verdict TIMEOUT), a run that produced no review releases its reservation, and every owner-ok reason is recorded and named in the close receipt.",
+      "statement": "The post-D6 review protocol (task 108): both context builders (panel and single judge) deliver FIRST a SETTLED block — the task's last unfenced `## Owner rulings` lines verbatim plus the judge.md/judge-archive.md triage bullets whose VERDICT is `REJECT` (right after the bullet, after its bold title, or ending inside the bold title — not a mention in prose) — under a header that says a ruling closes a design choice, never a correctness defect; every impl panel round's header carries a unique `**Round-id:**` and its Panel-snapshot records per scope a `base` tree of the working state (staged, unstaged, untracked) built in a temporary GIT_INDEX_FILE without changing the real index or `git status`; `impl-review` after an impl panel delivers the diff base → current working tree, refusing to send anything when a tree, the scope set or a scope's directory moves between building the delta and the tamper baseline, and giving task.md only the budget left after SETTLED + delta + map (a head-clamp tells the judge) (an unchanged file absent, an untracked file present; a scope set or scope directory changed since the panel refuses the delta; over budget, the stat of the same two trees — its listing kept to a third of the cap at most: cut there, with one line saying so, when it is longer — and the exact diff commands), computes POST-D6 VERDICT (PASS = no counted Critical or Important; a tag counts only right after the severity marker; [SETTLED] is not counted, [SETTLED-CONTRADICTED] is, and [PRE-EXISTING] is not counted only when a delta was delivered and the finding (its whole text) cites no file the FULL delta changed — the file set is taken before any truncation and holds both paths of a rename; the check is deliberately at FILE level (owner amendment 2026-09-30: judges often cite wrong lines, and file level errs toward more review); the response's last non-empty line must BE a whole, bare (not code-spanned) CAP line whose count equals the recognised findings, and `more remain` is incomplete — otherwise the verdict fails closed), and RESERVES each run under the task lock before any judge is spawned: runs 1-2 after a panel are free, run 3 needs a counted Critical in run 2, run 4+ always needs `--owner-ok --reason`; a refused run exits 2 with nothing spent, one review at a time per task — a panel reserves before its tamper snapshot too, so a panel and a single judge exclude each other (a live reservation — while its owning process runs (POSIX, same host; recorded pid + host), otherwise by its OWN recorded expiry — refuses a second one without writing — its append would void the first run by tamper; a reservation past the horizon it recorded — the hard review timeout plus 10 minutes for a single judge, plus 15 for a panel; two hours for either when the review runs with no hard timeout (`--timeout unlimited`) — counts as spent), a corrupt ledger line refuses every new reservation until repaired (or `--owner-ok`), a run killed at its hard timeout counts (verdict TIMEOUT), a run that produced no review releases its reservation, and every owner-ok reason is recorded and named in the close receipt.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/post_d6.py",
@@ -15437,6 +16195,419 @@
           "limitations": [
             "Mutation-checked in task 108 (removing the refusal turns it red)."
           ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "OwnerRulings.test_rulings_extracted_verbatim_pin_and_blanks_dropped",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`## Owner rulings` lines verbatim (the pin marker and blank lines dropped): the extractor's exact output is asserted."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "OwnerRulings.test_fenced_example_is_not_a_ruling",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`unfenced`: a `## Owner rulings` heading inside a code fence is not read."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "OwnerRulings.test_of_two_sections_the_last_one_is_read",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`the LAST … section`: of two unfenced sections only the second is returned. New in task 172; red in a copy where the first match wins (`['- 2026-09-01 an earlier ruling, since replaced.'] != ['- 2026-09-29 the ruling that stands.']`)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "RejectedFindings.test_reject_lines_from_judge_md_and_archive",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "REJECT triage bullets are read from judge.md AND judge-archive.md."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "RejectedFindings.test_accept_lines_and_prose_are_not_extracted",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "An ACCEPT bullet and a mention of the word in prose are not extracted."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "Round1Rejects.test_reject_must_be_in_the_verdict_position",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "The VERDICT positions: right after the bullet, after the bold title (with or without a dash) — and not an ACCEPT bullet whose text mentions REJECT."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "SingleRun2.test_reject_inside_the_bold_title_is_a_verdict",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "The third position: REJECT ending inside the bold title (the real shape of task 051's judge.md)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "SettledBlock.test_block_carries_header_rulings_and_rejects",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "The block's header says a ruling is \"never a correctness defect\" and names SETTLED-CONTRADICTED; the block holds the ruling and the REJECT line."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_post_d6.py",
+          "reference": "EndToEnd.test_the_settled_block_comes_first_in_both_contexts",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "`deliver FIRST`: in the panel's context and in the single judge's, the SETTLED block precedes the delta, the mind map and the task record. New in task 172 (presence was asserted, not place); red in a copy that puts the block after the map (`'MIND_MAP' != '=== SETTLED'`)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "Round1Cap.test_round_id_separates_two_panels_on_the_same_tree",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`a unique **Round-id:**`: two rounds on one tree are told apart by it; a legacy round without one falls back to its tree state."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_post_d6.py",
+          "reference": "EndToEnd.test_a_scope_added_between_delta_and_tamper_baseline_sends_nothing",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "`the scope set … moves between building the delta and the tamper baseline`: a scope added in between → exit 1, no judge spawned."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "Round1Delta.test_a_scope_removed_after_the_panel_refuses_the_delta",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`a scope set … changed since the panel refuses the delta`."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "Round1Delta.test_a_scope_whose_directory_is_another_one_refuses_the_delta",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`a scope's directory`: the scope is still named but its directory is not the one the panel recorded → no delta. New in task 172; red in a copy that does not compare the directory (a delta is returned)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_post_d6.py",
+          "reference": "EndToEnd.test_a_head_clamp_tells_the_judge",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "`a head-clamp tells the judge`: with a tiny context budget the delivered text carries HEAD-CLAMPED."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "Round1Delta.test_truncated_delta_names_untracked_files_in_its_stat",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`over budget, the stat of the same two trees … and the exact diff commands`: the truncated text names an untracked file in its stat and carries the base tree of the diff command."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "SingleRun2.test_the_stat_is_bounded_by_the_cap_too",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "With 600 untracked files the whole text stays within the cap; the stat's LISTING is cut at a third of the cap and one short line saying so follows the cut (so the stat part as a whole is a third plus that line — the statement first said the stat itself was bounded to a third, which the marker line exceeded: task 172's impl panel, codex-medium). The share was asserted by task 172; red in a copy with the share at a half (`4001 not less than or equal to 2667`)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "Round1Verdict.test_tag_counts_only_right_after_the_severity",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`a tag counts only right after the severity marker`: a literal [SETTLED] later on the line is not a tag."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "Verdict.test_pre_existing_is_parked_not_counted",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "[PRE-EXISTING] is not counted when a delta was delivered and the finding cites no file of it."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "Round2.test_pre_existing_counts_when_no_delta_was_delivered",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "… and IS counted when no delta was delivered."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "Round2.test_pre_existing_counts_when_it_cites_a_file_the_delta_changed",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "… and when the finding cites a file the delta changed."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "DeltaRun1.test_a_citation_on_the_findings_next_line_counts",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`the finding (its whole text)`: a citation on the finding's next line counts."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "DeltaRun3.test_an_extensionless_delta_file_is_matched",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "File level: a file with no extension (`Makefile:8`) is matched."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "DeltaRun1.test_delta_files_come_from_the_full_diff_even_when_truncated",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`the file set is taken before any truncation`."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "DeltaRun2.test_both_rename_paths_are_delta_files",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`holds both paths of a rename`."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "DeltaRun3.test_a_failed_file_enumeration_refuses_the_delta",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "A file list that could not be taken whole refuses the delta (a partial set never feeds the verdict)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "SingleRun1.test_the_final_cap_line_decides_and_must_match",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`a CAP line whose count equals the recognised findings`: an earlier quoted CAP line does not hide the final one, and a mismatch fails closed."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "SingleRun2.test_the_cap_line_must_end_the_response",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`the response's last non-empty line must BE a … CAP line`."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "Round2.test_the_last_line_must_be_a_whole_cap_line",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`a whole … CAP line`: a sentence that ends with the CAP text is not one."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "DeltaRun1.test_a_backticked_cap_line_is_an_example_not_a_verdict",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`bare (not code-spanned)`."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "Round2.test_more_remain_is_incomplete",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`more remain is incomplete`."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "Round1Cap.test_run_four_needs_the_owner_even_after_a_critical",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`run 4+ always needs --owner-ok --reason`."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "DeltaRun2.test_a_reservation_of_a_live_process_blocks_past_its_expiry",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`a live reservation — while its owning process runs`: an expired reservation of a live process on this host still blocks."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "DeltaRun2.test_a_reservation_of_a_dead_process_does_not_block",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "… and one of a dead process does not."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "DeltaRun1.test_a_reservation_keeps_its_own_expiry",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`otherwise by its OWN recorded expiry`: a later caller's shorter horizon does not make it stale."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "DeltaRun3.test_the_recorded_horizon_wins_over_a_longer_caller_timeout",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "… nor does a later caller's longer one keep it alive, where liveness cannot be judged."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "RunCap.test_receipt_line_names_runs_and_owner_ok",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`every owner-ok reason is recorded`: the receipt line names the runs and the reason."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "RunCap.test_close_receipt_carries_the_post_d6_line",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`… and named in the close receipt`."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_post_d6.py",
+          "reference": "EndToEnd.test_a_scope_repointed_between_delta_and_tamper_baseline_sends_nothing",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "`… or a scope's directory moves between building the delta and the tamper baseline`: the code root is a link, repointed in between to a clone with the SAME tree — the scope set and every tree are unchanged — and the run exits 1 with no judge spawned. Written after task 172's impl panel (opus, sonnet), which would not accept the clause being cut while the behaviour is there; red in a copy whose re-check does not compare the directory (`0 != 1`: a judge was spawned)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_post_d6.py",
+          "reference": "EndToEnd.test_each_reservation_records_its_own_horizon",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The horizon each entry point records: the hard review timeout + 900 s for the panel's reservation, + 600 s for the single judge's. The statement said `+ 10 min` for both — true of the single judge only (task 172's impl panel, opus); corrected. Red in a copy with the single judge's margin at one minute (`(2100.0, 1260.0) != (2100, 1800)`)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "RunCap.test_third_run_allowed_after_a_critical_in_run_two",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`run 3 needs a counted Critical in run 2` — the ALLOWING side: with a Critical counted in run 2, run 3 is permitted. Left out of task 172's first list of citations (its impl panel, opus: without it no cited proof failed if a Critical stopped opening run 3)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_post_d6.py",
+          "reference": "EndToEnd.test_without_a_hard_timeout_the_horizon_is_two_hours",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_post_d6.py",
+            "reference": "EndToEnd.test_each_reservation_records_its_own_horizon"
+          },
+          "limitations": [
+            "A panel and a single judge run with `--timeout unlimited`: each reservation records 7,200 seconds. Added after task 172's tail-certification judge refused the close — the statement, as that task had just corrected it, spoke only of a hard timeout plus a margin. Red in a copy where an unlimited single judge records one hour (`[7200, 3600] != [7200, 7200]`)."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -15456,7 +16627,9 @@
         "A run whose process is killed outright (SIGKILL, power loss) keeps its reservation and is counted: the spend happened.",
         "A judge run that produced NO review (a 402 / out-of-credits failure, a budget-cap exit, a tamper stop) releases its reservation although it may have spent tokens — the owner's rule for the cap is to err toward one more review (2026-09-29); every such run is still in the review-spend journal.",
         "The cap's key (`**Round-id:**` in judge.md) and its count (post-panel-reviews.jsonl) live in the agent-writable task directory with no integrity check: editing the Round-id or deleting the ledger resets the count. The protocol bounds an honest agent's spend; it is not a control against a hostile one (owner ruling (a) framing).",
-        "Reservation liveness uses os.kill(pid, 0) (the Windows guard — signal 0 terminates there — went with task 156, Linux-only); a reused pid can make a dead reservation look live until the pid is gone."
+        "Reservation liveness uses os.kill(pid, 0) (the Windows guard — signal 0 terminates there — went with task 156, Linux-only); a reused pid can make a dead reservation look live until the pid is gone.",
+        "Task 172 (PLAN S11 item 13; task 170's binding audit): until then this row cited 7 tests for a statement of about 30 clauses. The tests that carry the others were in the same module, uncited; each was read against its clause and is cited now, and the clauses that no test reached got an assertion, each watched red on one deliberate break in a throwaway copy: the SETTLED block's place (`FIRST`), the LAST rulings section, a scope whose directory changed, the stat's third of the cap.",
+        "Task 172, after its impl panel: the clause about a scope's DIRECTORY moving between the delta and the tamper baseline, which that task had first cut for want of a test, is back in the statement with its test; the reservation horizon reads as the code has it (10 minutes of margin for a single judge, 15 for a panel — the statement had said 10 for both); the stat's bound is worded as what is cut (its listing), not as the size of the whole stat part."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],
@@ -15655,6 +16828,42 @@
           },
           "limitations": [
             "cmd_panel_review in-process, the judges faked at the adapter and the tamper guard stubbed clean; seat_outage's clock pinned."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_seat_outage.py",
+          "reference": "OutageRecord.test_the_record_is_a_file_of_the_lanes_journal",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_seat_outage.py",
+            "reference": "OutageRecord.test_record_current_expiry_and_clear"
+          },
+          "limitations": [
+            "After one recorded outage the lane holds `journal/seat-outages.json`, and nothing of it lies outside `journal/`. The statement says where the record is; every older test reached it through the module's own `_record()` (task 170's binding audit). Watched red in a throwaway copy with the record moved out of `journal/` (`'journal/seat-outages.json' not found in ['seat-outages.json', 'task.md.lock']`)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_init_claude_md.py",
+          "reference": "MergeGitignore.test_created_when_absent",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "`gitignored`: init's block holds `.agent/journal/` and `.agent/*/journal/` — the directory the record is a file of (the test above). An older test of another module, cited here since task 172."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_seat_outage.py",
+          "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_the_configured_panel_is_counted_like_a_models_selection",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_seat_outage.py",
+            "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_enough_live_seats_still_pass"
+          },
+          "limitations": [
+            "cmd_panel_review in-process, the judges faked at the adapter and the tamper guard stubbed clean — as its sibling proofs. The REQUESTED seats when they come from the configured panel: six seats written to the project's `.agent/models.json` and read by the real loader (no `--models`), three unable to run → `only 3 of the 6 requested seats can run, and the quorum is 4`, no judge called. Every older quorum test passed `--models`. Watched red in two throwaway copies: one that counts only a `--models` selection, one that does not read the configured panel. (Its first version handed the panel in through a mocked loader and was recorded with the wrong boundary — task 172's impl panel, opus and codex-high.)"
           ]
         }
       ],
@@ -16021,6 +17230,58 @@
           "limitations": [
             "Added after the post-D6 run 2 (task 149)."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "TheRiskAndTheVerdictsTheRowNames.test_an_irreversible_task_is_held_to_the_same_bar",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_stale_close_bound.py",
+            "reference": "StaleCloseBound.test_without_the_opt_in_nothing_changes"
+          },
+          "limitations": [
+            "The real close on an `irreversible` task: refused with `--stale-panel-ok` and with `--force` while no post-D6 run follows the panel, done once a bound PASS exists. The statement names the risk; until task 172 no test set it. Red in a copy that leaves irreversible tasks out of the bound (the close went through)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "TheRiskAndTheVerdictsTheRowNames.test_an_unstamped_round_is_held",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_stale_close_bound.py",
+            "reference": "TheRiskAndTheVerdictsTheRowNames.test_control_a_fresh_panel_closes_with_no_hatch_at_all"
+          },
+          "limitations": [
+            "On a tree that is otherwise FRESH, a round with no `**Tree-state:**`: the plain close is blocked for NO STAMP, and both hatches meet the bound. Red, with the two below, in a copy whose bound lists only STALE and tamper-degraded (each close went through)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "TheRiskAndTheVerdictsTheRowNames.test_an_exclude_that_hides_code_is_held",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_stale_close_bound.py",
+            "reference": "TheRiskAndTheVerdictsTheRowNames.test_control_a_fresh_panel_closes_with_no_hatch_at_all"
+          },
+          "limitations": [
+            "The same for a `fingerprint_exclude` that hides a source file: blocked for EXCLUDE-COVERS-CODE, both hatches held."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stale_close_bound.py",
+          "reference": "TheRiskAndTheVerdictsTheRowNames.test_an_unreadable_tree_is_held",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_stale_close_bound.py",
+            "reference": "TheRiskAndTheVerdictsTheRowNames.test_control_a_fresh_panel_closes_with_no_hatch_at_all"
+          },
+          "limitations": [
+            "The same for a tree git cannot fingerprint (a corrupt index): blocked as UNREADABLE, both hatches held."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -16036,7 +17297,8 @@
         "Added by task 149 (PLAN S12b); the plugin default stays off (PLAN B2b decides it after task 146's value check).",
         "`--owner-ok` is an accountability marker an agent can type, not an authentication.",
         "A post-D6 run recorded before task 149 carries no reviewed tree and cannot bind a close.",
-        "The carrying impl round is dated by its OWN reservation (a panel's Round-id is its reservation id since task 149); a round from before, or a deleted ledger, cannot be dated and refuses while the rule is on — `--owner-ok` is the way through. Times are compared in local time."
+        "The carrying impl round is dated by its OWN reservation (a panel's Round-id is its reservation id since task 149); a round from before, or a deleted ledger, cannot be dated and refuses while the rule is on — `--owner-ok` is the way through. Times are compared in local time.",
+        "Task 172 (PLAN S11 item 13; task 170's binding audit): the statement named an `irreversible` task and five overridable verdicts; the tests set assertive and unclassified tasks and drove STALE and tamper-degraded. The other risk and the other three verdicts each have a test now — all four clauses held when driven for real, none had to be cut."
       ],
       "follow_up_phases": [
         8

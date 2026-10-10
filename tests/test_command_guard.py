@@ -1890,7 +1890,7 @@ H_VECTORS = [
     ("H04", "task-gate-hook", "edit-code", {}, {}, 0, 0, ""),
     ("H05", "task-gate-hook", "edit-doc", {}, {}, 0, 0, ""),
     ("H06", "task-gate-hook", "write-taskmd-manual", {}, {}, 2, 2, ""),
-    ("H07", "task-gate-hook", "write-taskmd-outside", {}, {}, 2, 2, "open: R6 (Guard 0 has no project scope) — another S11 group"),
+    ("H07", "task-gate-hook", "write-taskmd-outside", {}, {}, 2, 0, "task 171 (R6): a task.md of ANOTHER project is not Guard 0's"),
     ("H08", "task-gate-hook", "bash-mkdir-taskdir", {}, {}, 2, 2, ""),
     ("H09", "task-gate-hook", "bash-mkdir-var-agent", {}, {}, 0, 0, "task 110 (G2-02): candidate was 2, a regression"),
     ("H10", "task-gate-hook", "bash-heredoc-note", {}, {}, 2, 0, "task 110 (R8 / item 31): a heredoc NOTE runs no mkdir"),

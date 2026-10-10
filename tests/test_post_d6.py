@@ -93,6 +93,13 @@ class OwnerRulings(_TmpDir):
         got = post_d6.extract_owner_rulings(TASK_WITH_RULINGS)
         self.assertNotIn("a fenced example", " ".join(got))
 
+    def test_of_two_sections_the_last_one_is_read(self):
+        # the row says the LAST unfenced section (a task that restated its rulings); the
+        # fixture above has one (task 172)
+        two = ("# 1\n\n## Owner rulings\n- 2026-09-01 an earlier ruling, since replaced.\n\n## Why\nx\n\n"
+               "## Owner rulings\n<!-- pin -->\n- 2026-09-29 the ruling that stands.\n")
+        self.assertEqual(post_d6.extract_owner_rulings(two), ["- 2026-09-29 the ruling that stands."])
+
     def test_no_section_no_rulings(self):
         self.assertEqual(post_d6.extract_owner_rulings("# 1\n\n## Why\nx\n"), [])
 
@@ -476,6 +483,17 @@ class Round1Delta(_TmpDir):
         self.assertIsNone(text)
         self.assertIn("scope", note)
 
+    def test_a_scope_whose_directory_is_another_one_refuses_the_delta(self):
+        # the row names the scope SET and a scope's DIRECTORY; the test above removes a
+        # scope — here the scope is still named and its directory is not the one the
+        # panel saw (task 172)
+        base = post_d6.worktree_tree(self.repo, [":(exclude).agent"])
+        snap = self._snap(base)
+        snap["scopes"][""]["identity"] = "the-directory-the-panel-saw"
+        text, note = post_d6.delta_text(self.repo, snap, 50_000)
+        self.assertIsNone(text)
+        self.assertIn("scope", note)
+
     def test_truncated_delta_names_untracked_files_in_its_stat(self):
         base = post_d6.worktree_tree(self.repo, [":(exclude).agent"])
         (self.repo / "big.py").write_text("x = 1\n" * 4000, encoding="utf-8")
@@ -573,6 +591,17 @@ class SingleRun2(_TmpDir):
         text, note = post_d6.delta_text(repo, snap, cap)
         self.assertIsNotNone(text, note)
         self.assertLessEqual(len(text), cap + 200, len(text))
+        # … and the stat's LISTING is cut at a third of the cap (task 172: the total above
+        # holds for other shares too); one line saying so follows the cut, so the stat
+        # part as a whole is a third plus that line (impl panel r1, codex-medium)
+        marker = "[... stat truncated"
+        self.assertIn(marker, text)
+        after_notice = text.split("...]\n", 1)[1]
+        listing = after_notice.split(marker, 1)[0]
+        self.assertLessEqual(len(listing), cap // 3 + 1)
+        self.assertGreater(len(listing), cap // 4)
+        said = marker + after_notice.split(marker, 1)[1].split("\n", 1)[0]
+        self.assertLess(len(said), 80)
 
 
 # ── impl panel round 2 on task 108 findings, red first ───────────────────────
@@ -854,7 +883,7 @@ class EndToEnd(unittest.TestCase):
             os.chdir(cwd)
         return code, err.getvalue(), out.getvalue()
 
-    def _panel(self):
+    def _panel(self, *extra):
         from unittest import mock
         from provider.adapters.claude import ClaudeAdapter
         cap = self.panel_contexts
@@ -865,7 +894,7 @@ class EndToEnd(unittest.TestCase):
         with mock.patch.object(ClaudeAdapter, "is_available", classmethod(lambda cls: True)), \
              mock.patch.object(ClaudeAdapter, "run_headless_judge", judge):
             return self._in_project(lambda: self.R.cmd_panel_review(
-                ["001", "--mode", "impl", "--models", "claude:opus,claude:sonnet"]))
+                ["001", "--mode", "impl", "--models", "claude:opus,claude:sonnet", *extra]))
 
     def _single(self, output, *extra, rc=0):
         from unittest import mock
@@ -924,6 +953,69 @@ class EndToEnd(unittest.TestCase):
         self.assertIn("changed while the delta was being built", err)
         self.assertEqual(len(self.single_calls), n)
 
+    def test_a_scope_repointed_between_delta_and_tamper_baseline_sends_nothing(self):
+        # The third thing the re-check compares, beside the trees and the scope SET: each
+        # scope's DIRECTORY. Task 172 first cut this clause from the row for want of a test;
+        # its impl panel (opus, sonnet) pointed at the test above as the way to write one.
+        # The code root `lib` is a link; in between it is repointed to a clone with the SAME
+        # tree — the set and every tree are unchanged, only where `lib` leads is not.
+        from unittest import mock
+        for name in ("lib_a", "lib_b"):
+            repo = self.d / name
+            repo.mkdir()
+            _git(repo, "init", "-q")
+            _git(repo, "config", "user.email", "t@t")
+            _git(repo, "config", "user.name", "t")
+            (repo / "m.py").write_text("m = 1\n", encoding="utf-8")
+            _git(repo, "add", "-A")
+            _git(repo, "commit", "-q", "-m", "c0")
+        os.symlink("lib_a", self.d / "lib")
+        with open(self.d / ".git" / "info" / "exclude", "a", encoding="utf-8") as f:
+            f.write("lib\nlib_a/\nlib_b/\n")
+        (self.d / ".agent" / "config.json").write_text(json.dumps({"code_roots": ["lib"]}), encoding="utf-8")
+        self._panel()
+        (self.d / "edit.py").write_text("v = 2\n", encoding="utf-8")
+        real = self.R._snapshot_repo_state
+
+        def repoint_then_snapshot(*a, **k):
+            os.remove(self.d / "lib")
+            os.symlink("lib_b", self.d / "lib")
+            return real(*a, **k)
+        n = len(self.single_calls)
+        with mock.patch.object(self.R, "_snapshot_repo_state", repoint_then_snapshot):
+            code, err, out = self._single("CAP: 0/5 reported, exhausted\n")
+        self.assertEqual(code, 1, err)
+        self.assertIn("changed while the delta was being built", err)
+        self.assertEqual(len(self.single_calls), n, "a judge was spawned on a scope that points elsewhere")
+
+    def test_each_reservation_records_its_own_horizon(self):
+        # "a reservation past its horizon counts as spent" — and the horizon is what the
+        # entry point wrote: the hard review timeout plus 15 minutes for a panel, plus 10
+        # for a single judge (impl panel r1, opus: the row said "+ 10 min" for both and no
+        # test pinned either number)
+        from tasks.core import resolve_review_timeout
+        hard = resolve_review_timeout(self.d)
+        self._panel()
+        (self.d / "edit.py").write_text("v = 2\n", encoding="utf-8")
+        self._single("CAP: 0/5 reported, exhausted\n")
+        lines = [json.loads(ln) for ln in (self.tf.parent / post_d6.RUNS_NAME).read_text(encoding="utf-8").splitlines()]
+        reserved = [r for r in lines if r.get("status") == "reserved"]
+        panel = next(r for r in reserved if r.get("kind") == "panel")
+        single = next(r for r in reserved if r.get("kind") != "panel")
+        self.assertEqual((panel["expires_after"], single["expires_after"]), (hard + 900, hard + 600))
+
+    def test_without_a_hard_timeout_the_horizon_is_two_hours(self):
+        # the tail-certification judge of task 172: "the hard timeout plus a margin" says
+        # nothing of a review run with `--timeout unlimited` — there is no hard timeout
+        # then, and both entry points record 7,200 seconds
+        self._panel("--timeout", "unlimited")
+        (self.d / "edit.py").write_text("v = 2\n", encoding="utf-8")
+        self._single("CAP: 0/5 reported, exhausted\n", "--timeout", "unlimited")
+        lines = [json.loads(ln) for ln in (self.tf.parent / post_d6.RUNS_NAME).read_text(encoding="utf-8").splitlines()]
+        reserved = [r for r in lines if r.get("status") == "reserved"]
+        self.assertEqual(len(reserved), 2, reserved)
+        self.assertEqual([r["expires_after"] for r in reserved], [7200, 7200])
+
     def test_a_head_clamp_tells_the_judge(self):
         self._panel()
         (self.d / "edit.py").write_text("v = 2\n", encoding="utf-8")
@@ -931,6 +1023,22 @@ class EndToEnd(unittest.TestCase):
         with mock.patch("tasks.core.resolve_review_context_chars", return_value=800):
             self._single("CAP: 0/5 reported, exhausted\n")
         self.assertIn("HEAD-CLAMPED", self.single_calls[-1])
+
+    def test_the_settled_block_comes_first_in_both_contexts(self):
+        # PB-POST-D6-PROTOCOL says both builders deliver the SETTLED block FIRST; the tests
+        # asserted that it is there, not where (task 170's binding audit; task 172). What
+        # it must precede: the delta, the mind map and the task record.
+        def first_of(context, *marks):
+            at = {m: context.find(m) for m in marks}
+            self.assertNotIn(-1, at.values(), at)
+            return min(at, key=at.get)
+
+        self._panel()
+        self.assertEqual(first_of(self.panel_contexts[0], "=== SETTLED", "MIND_MAP", "## Intent"), "=== SETTLED")
+        (self.d / "edit.py").write_text("v = 2\n", encoding="utf-8")
+        self._single("CAP: 0/5 reported, exhausted\n")
+        self.assertEqual(first_of(self.single_calls[-1], "=== SETTLED", "POST-PANEL DELTA", "MIND_MAP", "## Intent"),
+                         "=== SETTLED")
 
     def test_protocol_end_to_end(self):
         code, err, out = self._panel()

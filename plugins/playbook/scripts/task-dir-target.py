@@ -7,6 +7,8 @@ is a real task directory or a fixture elsewhere (task 080, S1d — the 073 flag
 C15: `<tmp>/.agent/tasks/001-x` in a temp dir was refused).
 
 Usage:   printf '%s' <command> | PB_PROJECT=<project root> python3 task-dir-target.py
+         printf '%s' <file path> | PB_PROJECT=<project root> python3 task-dir-target.py --path
+         printf '%s' <file path> | PB_PROJECT=<project root> python3 task-dir-target.py --creates
 Exit 0   every `.agent[/<lane>]/tasks/` token is an absolute path outside the project
 Exit 1   some token is, or may be, inside it — the hook blocks
 Other    (a crash) — the hook blocks too; this script can only NARROW the guard
@@ -688,6 +690,36 @@ def may_be_inside(command: str, project: str) -> bool:
     return False
 
 
+def path_may_be_inside(path: str, project: str) -> bool:
+    """`--path` (task 171, Guard 0): is this FILE path inside the project, or may it be?
+    The same inside test a task-directory target gets — lexical or physical — and the
+    same answer for a path that cannot be placed against the project (relative, `~`)."""
+    if not path or path.startswith("~") or not _is_absolute(path):
+        return True
+    return _lexically_inside(path, project) or _physically_inside(path, project)
+
+
+def write_may_create_inside(path: str, project: str) -> bool:
+    """`--creates` (task 171, Guard 0): would a `Write` of this path CREATE a file inside
+    the project — or may it? The tool that opens the path is not ours to know, so the
+    path is read both ways: as the kernel reads it (links followed, then `..`; a missing
+    directory is taken as it will be made) and as text (collapsed first). A creation
+    inside the project under EITHER reading counts; a file that exists is a rewrite. So
+    `<link into the project>/../.agent/tasks/N/task.md` with a decoy at the place its
+    text collapses to is still a creation (impl panel r2), and a rewrite of an existing
+    record under any lexical spelling is not. A path that cannot be placed (relative,
+    `~`) is judged on existence alone, as the guard always did."""
+    if not path:
+        return True
+    if path.startswith("~") or not _is_absolute(path):
+        return not os.path.isfile(path)
+    for reading in (os.path.realpath(path), _canon(path)):
+        if not os.path.isfile(reading) and (
+                _lexically_inside(reading, project) or _physically_inside(reading, project)):
+            return True
+    return False
+
+
 def main() -> int:
     # The command arrives on STDIN, never in the environment (task 080: Git Bash,
     # up to 1.5.47, rewrote an env value starting with `/`; stdin carries the
@@ -696,6 +728,10 @@ def main() -> int:
     project = os.environ.get("PB_PROJECT", "")
     if not command or not project:
         return 1
+    if sys.argv[1:] == ["--path"]:                # stdin is one file path, not a command
+        return 1 if path_may_be_inside(command, project) else 0
+    if sys.argv[1:] == ["--creates"]:
+        return 1 if write_may_create_inside(command, project) else 0
     return 1 if may_be_inside(command, project) else 0
 
 

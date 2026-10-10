@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from tests._bashcheck import bash_or_skip
 import sys
@@ -500,8 +501,10 @@ class GuardZeroIsAStatedGuarantee(unittest.TestCase):
                          "AnotherSpellingOfThePathIsStillGuarded."
                          "test_control_rewriting_an_existing_task_md_is_not_a_creation")
         self.assertEqual(row["required_live_evidence"], [], "the row joined the live spine")
-        # its known bound is stated, not hidden: the guard has no project scope
-        self.assertTrue(any("outside the project" in x.lower() for x in row["missing_evidence_or_limitation"]))
+        # task 171: the guard has a project scope now, and the row cites its proof
+        cited = {p.get("reference") for p in row["proofs"]}
+        self.assertIn("GuardZeroIsAStatedGuarantee.test_a_task_md_of_another_project_is_not_this_guards", cited)
+        self.assertIn("this project", row["statement"])
 
     # Impl panel round 1 (opus): the row says `.agent[/<lane>]/tasks/…` and its proof made a
     # task.md under `.agent/tasks/` only — the lane arm of the hook's pattern had no test.
@@ -531,13 +534,165 @@ class GuardZeroIsAStatedGuarantee(unittest.TestCase):
         self.assertEqual(cited.get("GuardZeroIsAStatedGuarantee.test_a_task_md_in_a_lane_is_guarded_too"),
                          "GuardZeroIsAStatedGuarantee.test_control_the_pattern_is_one_lane_deep")
 
-    def test_what_the_row_admits_is_what_the_guard_does(self):
-        # a NEW task.md path outside the project is refused too — the row says so
+    # Task 171 (PLAN S11; retro 107 R6, from task 080): the guard had no project scope —
+    # a Write creating `<elsewhere>/.agent/tasks/003-x/task.md` was refused with "only
+    # `tasks new` creates task.md files", and `tasks new` cannot create a task in another
+    # project. The row stated it as a bound; it is a guarantee now.
+    def _write_new(self, f, path, cwd=None):
+        payload = {"hook_event_name": "PreToolUse", "tool_name": "Write",
+                   "tool_input": {"file_path": str(path), "content": "# 003\n"}}
+        if cwd is None:
+            return f.run_hook(payload)
+        env = dict(os.environ, PLAYBOOK_SESSION_ID=SESSION)
+        env.pop("PLAYBOOK_ROLE", None)
+        return subprocess.run([bash_or_skip(), str(HOOK)], input=json.dumps(payload).encode(),
+                              cwd=cwd, env=env, capture_output=True, timeout=60)
+
+    def test_a_task_md_of_another_project_is_not_this_guards(self):
         f = ProjectFixture()
-        outside = Path(tempfile.mkdtemp()) / ".agent" / "tasks" / "003-elsewhere" / "task.md"
-        r = f.run_hook({"hook_event_name": "PreToolUse", "tool_name": "Write",
-                        "tool_input": {"file_path": str(outside), "content": "# 003\n"}})
+        elsewhere = Path(tempfile.mkdtemp()).resolve()
+        for parts in ((".agent", "tasks", "003-elsewhere"), (".agent", "alice", "tasks", "003-elsewhere")):
+            with self.subTest(parts="/".join(parts)):
+                r = self._write_new(f, elsewhere.joinpath(*parts, "task.md"))
+                self.assertEqual(r.returncode, 0, r.stderr.decode())
+                self.assertNotIn(b"creates task.md files", r.stderr)
+
+    def test_a_path_that_reaches_this_project_another_way_is_still_refused(self):
+        # the inside test is the task-directory guard's: lexical OR physical, and a path
+        # it cannot place (relative, `~`) counts as inside. (Not here, because it was never
+        # guarded: a path that reaches `.agent` through a link NOT called `.agent` — the
+        # guard's pattern reads the path's text. Parked in task 171.)
+        f = ProjectFixture()
+        outside = Path(tempfile.mkdtemp()).resolve()
+        os.symlink(f.proj, outside / "a-link-to-the-project")
+        os.makedirs(f.proj / "src")
+        os.symlink(f.proj / "src", outside / "a-link-into-it")
+        shapes = {
+            "through a link to the project": outside / "a-link-to-the-project" / ".agent" / "tasks" / "004-x" / "task.md",
+            # impl panel round 1 (opus): collapsed as TEXT this is `<outside>/.agent/…`; the
+            # kernel follows the link first and lands in this project. The guard handed its
+            # helper the collapsed path, so the helper never saw the path as written.
+            "up and out of a link into it": Path(str(outside / "a-link-into-it") + "/../.agent/tasks/004-x/task.md"),
+            "relative": Path(".agent/tasks/004-x/task.md"),
+            "home-relative": Path("~/.agent/tasks/004-x/task.md"),
+        }
+        for name, path in shapes.items():
+            with self.subTest(shape=name):
+                r = self._write_new(f, path)
+                self.assertEqual(r.returncode, 2, name + ": " + r.stderr.decode())
+                self.assertIn(b"creates task.md files", r.stderr)
+
+    def test_what_exists_is_asked_of_the_path_as_written_too(self):
+        # impl panel round 2 (grok): the guard asked "does it exist already?" of the
+        # COLLAPSED path and "is it inside?" of the path as written. With a file planted at
+        # the collapsed path, a creation inside this project passed as a rewrite.
+        f = ProjectFixture()
+        outside = Path(tempfile.mkdtemp()).resolve()
+        os.makedirs(f.proj / "src")
+        os.symlink(f.proj / "src", outside / "a-link-into-it")
+        written = str(outside / "a-link-into-it") + "/../.agent/tasks/004-x/task.md"
+        decoy = outside / ".agent" / "tasks" / "004-x" / "task.md"          # where the TEXT collapses to
+        os.makedirs(decoy.parent)
+        decoy.write_text("# a decoy\n", encoding="utf-8")
+        r = self._write_new(f, written)
+        self.assertEqual(r.returncode, 2, "a creation in this project passed as a rewrite: " + r.stderr.decode())
+        self.assertIn(b"creates task.md files", r.stderr)
+        # the other side: the project's file exists (only the kernel's reading finds it) —
+        # writing over it is a rewrite, not a creation
+        shutil.rmtree(outside / ".agent")
+        real = f.proj / ".agent" / "tasks" / "004-x"
+        os.makedirs(real)
+        (real / "task.md").write_text("# 004\n", encoding="utf-8")
+        r = self._write_new(f, written)
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+
+    BORN_CHECKED = "# 001 - theirs\n\n## Work Plan\n- [x] one\n- [x] two\n- [x] three\n"
+
+    def _write(self, f, path, content):
+        return f.run_hook({"hook_event_name": "PreToolUse", "tool_name": "Write",
+                           "tool_input": {"file_path": str(path), "content": content}})
+
+    def test_the_batch_close_guard_is_about_this_projects_records_too(self):
+        # impl panel round 2 (opus): one guard further down, the Write this task released
+        # was refused again — a new task.md of ANOTHER project, born with ticked gates,
+        # whose directory carries this project's active task number (001)
+        f = ProjectFixture()
+        elsewhere = Path(tempfile.mkdtemp()).resolve()
+        r = self._write(f, elsewhere / ".agent" / "tasks" / "001-theirs" / "task.md", self.BORN_CHECKED)
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        self.assertNotIn(b"born-checked", r.stderr)
+
+    def test_control_the_batch_close_guard_still_holds_for_this_projects_active_task(self):
+        f = ProjectFixture()
+        r = self._write(f, f.task_file, f.task_file.read_text(encoding="utf-8") + "- [x] born one\n- [x] born two\n")
         self.assertEqual(r.returncode, 2, r.stderr.decode())
+        self.assertIn(b"born-checked", r.stderr)
+
+    def _in_a_project_named_like_a_task(self):
+        """The fixture's project, moved to a directory called `001-project` (its active
+        task is 001), with a second task record 002 beside the active one."""
+        f = ProjectFixture()
+        named = f.proj.parent / "001-project"
+        os.rename(f.proj, named)
+        f.proj = named
+        f.task_file = named / ".agent" / "tasks" / "001-thing" / "task.md"
+        f.session_dir = named / ".agent" / "sessions" / SESSION
+        other = named / ".agent" / "tasks" / "002-other"
+        os.makedirs(other)
+        (other / "task.md").write_text("# 002 - Other\n\n## Status\npending\n\n## Work Plan\n"
+                                       + "\n".join(G) + "\n", encoding="utf-8")
+        return f, other / "task.md"
+
+    def test_another_task_of_this_project_is_not_the_active_one_whatever_the_projects_name(self):
+        # the single judge's run 2: "is it the active task's record?" was asked by looking
+        # for `/<number>-` ANYWHERE in the path. In a project directory called `001-project`
+        # every task record of the project passed for task 001's, and a bare batch in task
+        # 002's record was judged by the batch rule of the active task.
+        f, other = self._in_a_project_named_like_a_task()
+        text = other.read_text(encoding="utf-8")
+        ticked = text
+        for g in G[:3]:
+            ticked = ticked.replace(g, checked(g), 1)
+        self.assertNotEqual(ticked, text)
+        r = self._write(f, other, ticked)
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+        self.assertNotIn(b"outcome note", r.stderr)
+
+    def test_control_the_active_tasks_record_is_still_judged_there(self):
+        f, _other = self._in_a_project_named_like_a_task()
+        text = f.task_file.read_text(encoding="utf-8")
+        ticked = text
+        for g in G[:3]:
+            ticked = ticked.replace(g, checked(g), 1)
+        r = self._write(f, f.task_file, ticked)
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+        self.assertIn(b"outcome note", r.stderr)
+
+    def test_without_its_helper_the_guard_keeps_refusing(self):
+        # "could not tell" is not "outside": a hook whose helper is missing or broken
+        # refuses the creation, as it did before it had a scope at all
+        f = ProjectFixture()
+        elsewhere = Path(tempfile.mkdtemp()).resolve()
+        target = elsewhere / ".agent" / "tasks" / "003-elsewhere" / "task.md"
+        for how in ("missing", "broken"):
+            with self.subTest(helper=how):
+                scripts = Path(tempfile.mkdtemp()) / "scripts"
+                shutil.copytree(HOOK.parent, scripts)
+                helper = scripts / "task-dir-target.py"
+                if how == "missing":
+                    helper.unlink()
+                else:
+                    helper.write_text("raise SystemExit('broken on purpose')\n", encoding="utf-8")
+                payload = {"hook_event_name": "PreToolUse", "tool_name": "Write",
+                           "tool_input": {"file_path": str(target), "content": "# 003\n"}}
+                env = dict(os.environ, PLAYBOOK_SESSION_ID=SESSION)
+                env.pop("PLAYBOOK_ROLE", None)
+                r = subprocess.run([bash_or_skip(), str(scripts / "task-gate-hook")],
+                                   input=json.dumps(payload).encode(), cwd=f.proj, env=env,
+                                   capture_output=True, timeout=60)
+                self.assertEqual(r.returncode, 2, r.stderr.decode())
+                self.assertIn(b"creates task.md files", r.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

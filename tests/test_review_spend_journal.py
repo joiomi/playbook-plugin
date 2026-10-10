@@ -1108,7 +1108,15 @@ class IntentSpendE2E(_E2EBase):
         from tasks import history
         calls = self._stub("# Intent inferred\n- x\n")
         with _chdir(self.project), contextlib.redirect_stdout(io.StringIO()):
-            history.cmd_intent(["42"])
+            # task 173: it spends only on the approval of the line it quoted — the bare
+            # command prints that line and its id, and exits 2
+            import re
+            quoted = io.StringIO()
+            with contextlib.redirect_stderr(quoted), contextlib.suppress(SystemExit):
+                history.cmd_intent(["42"])
+            self.assertEqual(calls, [])
+            quote = re.search(r"`--yes (\S+)`", quoted.getvalue()).group(1)
+            history.cmd_intent(["42", "--yes", quote])
         recs = self._intent_records()
         self.assertTrue(calls)
         self.assertEqual(len(recs), len(calls), recs)

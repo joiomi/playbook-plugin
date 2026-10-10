@@ -165,21 +165,41 @@ class HarnessPromptsAreNotUserWords(_ChatLogFixture):
         self.assertIn("\nplain probe-nojq-user \u00e9\n", text)
         self.assertNotIn('{"prompt"', text)
 
-    def test_a_skipped_harness_prompt_still_resets_the_session_counters(self):
-        # The skip is about the LOG only: it performs the same counter reset a
-        # logged prompt does (read by the stop hook's conversational bypass).
-        # The hook's two older exits — empty after filtering, and the same-second
-        # duplicate guard — predate task 088 and are not changed by it.
+    def test_a_skipped_notification_leaves_the_session_counters_alone(self):
+        # Until task 173 this test pinned the opposite: a skipped harness prompt
+        # performed the same counter reset a logged prompt does. Owner's Q1
+        # (2026-09-24): an automatic notification no longer resets the counters
+        # the stop hook's bypass reads — the file comes out byte for byte as it
+        # went in. (The sequences that rule is about: tests/test_notification_turn.py.)
         counters = self.project / ".agent" / "sessions" / SID / "counters"
         counters.parent.mkdir(parents=True)
-        counters.write_bytes(b"tools=7\nwrites=3\ngate_x=1\n")
-        r = self._run("<task-notification> probe-harness-reset")
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertNotIn("probe-harness-reset", self._logged())
-        text = counters.read_text(encoding="utf-8")
-        self.assertIn("tools=0", text)
-        self.assertIn("writes=0", text)
-        self.assertIn("gate_x=1", text)
+        before = b"tools=7\nwrites=3\ngate_x=1\n"
+        for marker in ("<task-notification>", "[SYSTEM NOTIFICATION - NOT USER INPUT]"):
+            with self.subTest(marker):
+                counters.write_bytes(before)
+                r = self._run(f"{marker} probe-harness-reset")
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertNotIn("probe-harness-reset", self._logged())
+                self.assertEqual(counters.read_bytes(), before)
+
+    def test_a_skipped_echo_of_the_users_command_still_resets_them(self):
+        # `<command-name>` / `<local-command-caveat>`: skipped from the log like a
+        # notification, but the user's own act — a fresh count, gate fields kept.
+        # … and it ends whatever a notification began: the two one-line files of that
+        # rule (the last stop let through, the notification's baseline) go with it,
+        # and a new prompt generation begins (the one file it leaves beside counters).
+        counters = self.project / ".agent" / "sessions" / SID / "counters"
+        counters.parent.mkdir(parents=True)
+        for marker in ("<command-name>", "<local-command-caveat>"):
+            with self.subTest(marker):
+                counters.write_bytes(b"tools=7\nwrites=3\ngate_x=1\n")
+                for name in ("turn_end", "notif_start"):
+                    (counters.parent / name).write_text("7\n", encoding="utf-8")
+                r = self._run(f"{marker} probe-command-echo")
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertNotIn("probe-command-echo", self._logged())
+                self.assertEqual(counters.read_text(encoding="utf-8"), "tools=0\nwrites=0\ngate_x=1\n")
+                self.assertEqual(sorted(p.name for p in counters.parent.iterdir()), ["counters", "prompt_gen"])
 
     def test_a_user_prompt_that_merely_mentions_a_marker_is_logged(self):
         self._run("why do I see <task-notification> lines? probe-user-2")

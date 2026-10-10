@@ -72,6 +72,59 @@ if [ -z "$STOP_ACTIVE" ]; then
 fi
 SESSION_ID="$(resolve_session_id)"
 
+# Owner's Q1 (2026-09-24; PLAN S11, task 173): a notification no longer resets
+# the session's counters, and a turn STARTED by one may end if it made no write.
+# For the chat-log hook to tell a notification that starts a turn from one that
+# lands in the middle of one, every stop this hook lets through (exit 0, on any
+# path below) leaves the tool count of that moment in a one-line file beside the
+# counters, `turn_end`; it equals `tools` only while no tool has run since. With
+# it goes a nonce made for this stop: a notification's baseline carries the nonce
+# of the mark it was taken from, and counts only beside that mark (see the
+# bypass below, and read_session_mark).
+# A blocked stop (exit 2) leaves nothing. Written only where a counters file
+# already exists, for a resolved session and a readable lane — and never INTO the
+# counters file, which a tool call's hook may be updating (impl panel r1; see
+# write_session_mark). It never changes the exit
+# status: the trap calls it as `… || true`, because under `set -e` a command
+# that fails inside a plain EXIT trap replaces the shell's exit status with 1,
+# whatever it was (measured on bash 5.1, for 0 and for 2). The only write below
+# runs for an exit 0, so today that could only turn an allowed stop into a hook
+# error; the guard is there so that no later line added to this function can
+# turn a BLOCK (2) into 1, which the host reads as a non-blocking error. A mark
+# that cannot be written is the stricter case: no mark, and a later notification
+# is read as landing mid-turn.
+# Two fences since post-D6 run 2. (1) Only the session's OWN agent ends its turn:
+# every agent in a process chain resolves to the root agent's session
+# (resolve_session_id), so a `claude -p` the agent runs fires this hook into the
+# same session when it finishes — and, run as a background command, its mark and
+# its completion notice read together as "a notification started a turn" in the
+# middle of the user's. The walk lists the agents of this hook's chain: one is
+# the session's own (measured on a live session), two or more is a nested one,
+# which leaves no mark. (2) The nonce begins with the prompt generation this
+# hook saw when it STARTED (PB_PROMPT_GEN, read right here, before any
+# decision): a hook that a user's prompt overtakes publishes a mark of the
+# generation before that prompt, which starts nothing.
+PB_PROMPT_GEN=none
+[ -z "$SESSION_ID" ] || PB_PROMPT_GEN=$(read_prompt_generation "$AGENT_DIR/sessions/$SESSION_ID")
+pb_note_turn_end() {
+    local rc=$?
+    if [ "$rc" -eq 0 ] && [ -n "${SESSION_ID:-}" ] && [ "${MARKER_INVALID:-false}" != true ]; then
+        local dir="$AGENT_DIR/sessions/$SESSION_ID"
+        if [ -f "$dir/counters" ]; then
+            local agents
+            agents=$(_agent_walk all)
+            # shellcheck disable=SC2086  # word-splitting is the count
+            set -- $agents
+            if [ "$#" -le 1 ]; then
+                write_session_mark "$dir/turn_end" \
+                    "$(read_counter_int "$dir/counters" tools) ${PB_PROMPT_GEN:-none}-$(new_session_nonce)"
+            fi
+        fi
+    fi
+    return 0
+}
+trap 'pb_note_turn_end || true' EXIT
+
 # Enforcement-journal target (log-only, best-effort). The resolved lane, but
 # NEVER in the fresh-clone shape (lanes exist, no marker): a root journal there
 # would mint phantom root-lane state (see S15). Empty disables journalling.
@@ -261,6 +314,29 @@ if [ -f "$COUNTER_FILE" ] && [ "${PB_GREP_RC:-0}" -le 1 ]; then
     WRITES=$(read_counter_int "$COUNTER_FILE" writes)
     TOOLS=$(read_counter_int "$COUNTER_FILE" tools)
     if [ "$WRITES" -eq 0 ] && [ "$TOOLS" -lt 5 ]; then
+        exit 0
+    fi
+    # Owner's Q1 (task 173): the counters above run from the last USER prompt — a
+    # notification no longer resets them. His one exception: a turn that a
+    # notification STARTED may end if it made no write. The chat-log hook noted
+    # the write count at that start (file `notif_start`); equal now = none since.
+    # No tool-count limit: his sentence has none. Only a plain number counts — a
+    # missing, empty or malformed value releases nothing (read_session_mark; the
+    # bytes are `.agent/`-resident, and `_safe_int` would read garbage as 0).
+    # And only beside the mark it was taken from: the baseline's nonce must be the
+    # nonce of `turn_end` as it stands now. A user's prompt removes that mark and
+    # a later stop replaces it, so a baseline written late — by a notification's
+    # hook that a user's prompt overtook — releases nothing (post-D6 run 1).
+    # And the mark itself must be of the session's CURRENT prompt generation (the
+    # head of its nonce): one made before the user's last prompt is not this
+    # turn's, whenever it reached the disk (post-D6 run 2).
+    PB_NOTIF_START=$(read_session_mark "$SESSION_DIR/notif_start")
+    PB_TURN_END=$(read_session_mark "$SESSION_DIR/turn_end")
+    PB_TURN_NONCE="${PB_TURN_END#* }"
+    if [ -n "$PB_NOTIF_START" ] && [ -n "$PB_TURN_END" ] \
+       && [ "${PB_NOTIF_START#* }" = "$PB_TURN_NONCE" ] \
+       && [ "${PB_TURN_NONCE%%-*}" = "$(read_prompt_generation "$SESSION_DIR")" ] \
+       && [ "$WRITES" -eq "$((10#${PB_NOTIF_START%% *}))" ]; then
         exit 0
     fi
 fi

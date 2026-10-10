@@ -169,23 +169,85 @@ fi
 # words; on 2026-09-23, 498 of 833 entries began with <task-notification>, and
 # attribution / intent / retro read them as the user. Skipped (no consumer needs
 # them). Only the START counts: a user prompt that merely mentions one is logged.
-# The skip is about the LOG only: it performs the same counter reset a logged
-# prompt does (read by the stop hook's conversational bypass). The two older
-# exits below (empty after filtering, same-second duplicate) predate task 088.
+# The two older exits below (empty after filtering, same-second duplicate)
+# predate task 088.
 # Task 105: resolved ONCE here; "" = unresolved (under the Claude Code
 # background daemon, no PLAYBOOK_SESSION_ID) — the prompt is still logged
 # (tagged `no-session`), but no session counters are touched.
 SESSION_ID="$(resolve_session_id)"
 [ -z "$SESSION_ID" ] && session_unresolved_notice
+# A user's prompt ends whatever a notification began (task 173): it begins a new
+# prompt generation — FIRST, so that a mark published by a stop hook still in
+# flight is already of an older one — and the stop hook's mark and the
+# notification's baseline go. Every prompt of the user's does this, also the two
+# the hook logs nothing for further down.
+drop_notification_marks() {
+    [ -n "$SESSION_ID" ] || return 0
+    local dir="$AGENT_DIR/sessions/$SESSION_ID"
+    [ -d "$dir" ] || return 0
+    new_prompt_generation "$dir"
+    rm -f "$dir/turn_end" "$dir/notif_start" 2>/dev/null || true
+}
 reset_session_counters() {
     [ -n "$SESSION_ID" ] || return 0
     local session_dir="$AGENT_DIR/sessions/$SESSION_ID"
     mkdir -p "$session_dir"
     reset_counters "$session_dir/counters"
+    drop_notification_marks
+}
+# Owner's Q1 (2026-09-24; PLAN S11, task 173): an AUTOMATIC notification does not
+# reset the counters the stop hook's bypass reads. It is not the user's prompt and
+# it can land in the middle of a turn — measured live on 2026-10-10: a background
+# command's notification took a turn's `tools=20 writes=20` to `0 0` between two
+# of its tool calls, and a stop right after it would have been released with every
+# gate open. The one exception he made: a turn STARTED by a notification may end
+# if it made no write. A turn started by one is told from a turn one landed in by
+# the stop hook's mark: the file `turn_end` holds the tool count at the last stop
+# it let through — it equals `tools` only while no tool has run since — and a
+# nonce made for that stop. Then, and only then, the write count of this moment
+# is noted (file `notif_start`) WITH THAT NONCE, for the stop hook to compare.
+# Otherwise nothing is written; no counters file, nothing is created.
+# The counters file is READ ONCE and never written here (impl panel r1): a tool
+# call's hook bumps `tools` and then `writes`, each by renaming a new file into
+# place, so one read is one consistent picture — it cannot show the old `tools`
+# beside the new `writes` — and nothing here can rename a stale copy over an
+# increment.
+# No lock, and no order to rely on (post-D6 run 1; round 2 had a lock with a time
+# limit, and the limit was the hole): if a user's prompt removes the mark while
+# this runs, the baseline written afterwards names a mark that is gone, and the
+# stop hook honours a baseline only beside the mark with its nonce. The same for
+# the other direction — a stop hook still running when the user's prompt arrives
+# (run 2): its mark carries the prompt generation it started in, the prompt began
+# a new one, and a mark of another generation is not taken for a start.
+note_notification() {
+    [ -n "$SESSION_ID" ] || return 0
+    local dir="$AGENT_DIR/sessions/$SESSION_ID"
+    [ -f "$dir/counters" ] || return 0
+    local mark ended nonce snapshot tools writes
+    mark=$(read_session_mark "$dir/turn_end")
+    [ -n "$mark" ] || return 0
+    ended="${mark%% *}"
+    nonce="${mark#* }"
+    # A mark of another prompt generation is not this turn's: the stop hook that
+    # wrote it started before the user's last prompt (post-D6 run 2).
+    [ "${nonce%%-*}" = "$(read_prompt_generation "$dir")" ] || return 0
+    snapshot=$(cat "$dir/counters" 2>/dev/null) || return 0
+    tools=$(printf '%s\n' "$snapshot" | sed -n 's/^tools=//p' | head -1)
+    writes=$(printf '%s\n' "$snapshot" | sed -n 's/^writes=//p' | head -1)
+    [ "$ended" = "$tools" ] || return 0
+    case "$writes" in ''|*[!0-9]*) return 0 ;; esac
+    [ "${#writes}" -le 18 ] || return 0
+    write_session_mark "$dir/notif_start" "$writes $nonce"
 }
 _lead="${USER_MESSAGE#"${USER_MESSAGE%%[![:space:]]*}"}"
 case "$_lead" in
-    "<task-notification>"*|"<local-command-caveat>"*|"<command-name>"*|"[SYSTEM NOTIFICATION"*)
+    "<task-notification>"*|"[SYSTEM NOTIFICATION"*)
+        note_notification
+        exit 0 ;;
+    "<local-command-caveat>"*|"<command-name>"*)
+        # The echo of a command the USER ran (a slash command, a `!` command):
+        # skipped from the log like a notification, but it is their act and
+        # starts a fresh count, as any prompt of theirs does.
         reset_session_counters
         exit 0 ;;
 esac
@@ -220,8 +282,10 @@ sys.stdout.buffer.write(s.encode("utf-8", "surrogateescape"))' 2>/dev/null) && U
     }
 fi
 
-# Skip logging if message is empty after filtering
+# Skip logging if message is empty after filtering. No count is reset for it (as
+# before task 088) — but it is the user's prompt: what a notification began ends.
 if [ -z "$USER_MESSAGE" ]; then
+    drop_notification_marks
     exit 0
 fi
 
@@ -240,6 +304,7 @@ migrate_if_needed "$LOCAL_LOG" "$COUNTER_FILE"
 LAST_TS=$(tail -10 "$LOCAL_LOG" 2>/dev/null | grep -o '\[[0-9-]* [0-9:]* UTC\]' | tail -1)
 LAST_MSG=$(tail -3 "$LOCAL_LOG" 2>/dev/null | grep -v '^$' | grep -v '^\*\*\[' | grep -v '^---' | tail -1)
 if [ "[$TIMESTAMP]" = "$LAST_TS" ] && [ "$USER_MESSAGE" = "$LAST_MSG" ]; then
+    drop_notification_marks     # the user's prompt all the same (task 173)
     exit 0
 fi
 
