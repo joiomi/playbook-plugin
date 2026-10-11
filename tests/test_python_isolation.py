@@ -804,6 +804,11 @@ class TheSweepsRule(unittest.TestCase):
             'python3 -B /opt/playbook/scripts/write_log.py',
             "python3 ./helper.py",
             'X=$(printf %s "$IN" | PB_PROJECT="$P" python3 "$HOOK_DIR/task-dir-target.py" --creates)',
+            # impl round 1 (opus): the path behind a JSON-escaped quote — the way `hooks.json`
+            # writes a command — and behind `--`
+            '"command": "python3 \\"${CLAUDE_PLUGIN_ROOT}/scripts/x.py\\""',
+            'python3 -- "$F"',
+            "python3 -- \\'$F\\'",
         ):
             self.assertIn("bad", self._kinds(line), line)
 
@@ -859,6 +864,91 @@ class TheSweepsRule(unittest.TestCase):
             self.assertEqual(argv_lists_in(ok), [("ok-inline", "-c")], ok)
         # a long option is not a mode, and what follows a file is the file's own
         self.assertEqual(argv_lists_in('subprocess.run([sys.executable, "--version"])'), [("other", "")])
+
+
+class ACodexConfigurationWrittenBeforeIsReplacedNotDoubled(unittest.TestCase):
+    """`.codex/hooks.json` holds the command of every hook as text. Task 180 changed that
+    text (`python3 <script>` became `python3 -E -s <script>`), and the install took two
+    commands for the same hook only when their TEXT was the same: installing again over an
+    older file added the new command beside the old one — the unisolated one still ran,
+    and every hook ran twice (impl round 1: opus by reading, codex by running it)."""
+
+    def setUp(self):
+        if str(PLUGIN) not in sys.path:
+            sys.path.insert(0, str(PLUGIN))
+        from provider import codex_hooks
+        self.ch = codex_hooks
+        self.new = codex_hooks.render_playbook_hooks()
+
+    @staticmethod
+    def _older(doc):
+        """The same document as a version before task 180 wrote it."""
+        old = json.loads(json.dumps(doc))
+        for entries in old["hooks"].values():
+            for entry in entries:
+                for hook in entry["hooks"]:
+                    assert hook["command"].startswith("python3 -E -s "), hook["command"]
+                    hook["command"] = "python3 " + hook["command"][len("python3 -E -s "):]
+        return old
+
+    @staticmethod
+    def _commands(doc):
+        return sorted((event, entry.get("matcher") or "", hook["command"])
+                      for event, entries in doc["hooks"].items() for entry in entries for hook in entry["hooks"])
+
+    def test_installing_over_an_older_file_leaves_one_isolated_command_per_hook(self):
+        merged = self.ch.merge_hooks(self._older(self.new), self.new)
+        self.assertEqual(self._commands(merged), self._commands(self.new))
+        self.assertFalse([c for _, _, c in self._commands(merged) if " -E -s " not in c])
+
+    def test_a_hook_of_the_users_beside_ours_and_under_another_matcher_stays(self):
+        old = self._older(self.new)
+        mine = {"type": "command", "command": "python3 /home/me/lint.py"}
+        other = {"matcher": "^Bash$", "hooks": [{"type": "command", "command": "/home/me/notify --quiet"}]}
+        old["hooks"]["PreToolUse"][1]["hooks"].append(mine)            # in the SAME entry as the command guard
+        old["hooks"]["PreToolUse"].append(other)
+        merged = self.ch.merge_hooks(old, self.new)
+        self.assertEqual(self._commands(merged), sorted(self._commands(self.new) + [
+            ("PreToolUse", "^exec_command$", "python3 /home/me/lint.py"),
+            ("PreToolUse", "^Bash$", "/home/me/notify --quiet")]))
+        # … and it is still in the entry it was written in, after ours
+        guard_entry = merged["hooks"]["PreToolUse"][1]
+        self.assertEqual([h["command"].rsplit("/", 1)[-1] for h in guard_entry["hooks"]], ["command_guard.py", "lint.py"])
+
+    def test_a_file_that_already_holds_both_forms_ends_with_one(self):
+        # what this task's own first build left behind after a second install
+        both = self._older(self.new)
+        for event, entries in self.new["hooks"].items():
+            both["hooks"][event].extend(json.loads(json.dumps(entries)))
+        self.assertEqual(len(self._commands(both)), 2 * len(self._commands(self.new)))
+        merged = self.ch.merge_hooks(both, self.new)
+        self.assertEqual(self._commands(merged), self._commands(self.new))
+
+    def test_the_same_script_under_another_python_of_the_users_is_not_ours(self):
+        # only a command that starts `python3` with options and THAT script is an older form of ours
+        old = {"hooks": {"Stop": [{"hooks": [
+            {"type": "command", "command": self.new["hooks"]["Stop"][0]["hooks"][0]["command"].replace("python3 -E -s", "/opt/py/bin/python3.12 -X dev")},
+            {"type": "command", "command": "echo python3 " + shlex.quote(str(self.ch.playbook_scripts_dir() / "codex-stop-hook"))}]}]}}
+        kept = self._commands(old)
+        merged = self.ch.merge_hooks(old, self.new)
+        self.assertEqual(self._commands(merged), sorted(kept + self._commands(self.new)))
+
+    def test_through_the_install_itself(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / ".codex").mkdir()
+            path = root / ".codex" / "hooks.json"
+            path.write_text(json.dumps(self._older(self.new)), encoding="utf-8")
+            self.assertEqual(self.ch.install_project_hooks(root), path)
+            once = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(self._commands(once), self._commands(self.new))
+            self.ch.install_project_hooks(root)                         # and again: nothing more
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), once)
+
+    def test_control_a_fresh_install_and_a_second_one(self):
+        first = self.ch.merge_hooks({}, self.new)
+        self.assertEqual(self._commands(first), self._commands(self.new))
+        self.assertEqual(self.ch.merge_hooks(first, self.new), first)
 
 
 if __name__ == "__main__":
