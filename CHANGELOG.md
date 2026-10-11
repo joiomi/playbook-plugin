@@ -99,17 +99,21 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   the plugin's in a verify command the CLI ran. Not covered: a helper started by hand through its `#!` line; the
   system's site-packages; a codex configuration written before this version, until it is regenerated. As with
   the inline programs (task 167), `PYTHONIOENCODING` and `PYTHONUTF8` no longer reach these helpers.
-- **A stray `.git` in the temp directory no longer changes what the verify contract's tests mean** (task 179,
+- **A stray `.git` file in the temp directory no longer breaks the verify contract's tests** (task 179,
   PLAN S11 item 30; owner decision 2026-10-10). A file named `.git` left in `/tmp` — a judge's experiment in its
   sandbox, where `/tmp` is writable by design — made git answer `not a git repository: (null)` in place of the
   plain "not a git repository" in every temp project below it, and six tests that build a project which is no
   repository failed, for the whole machine, until the file was deleted; a close's own verify would have failed
   the same way. `scripts/verify` now tells git, for every child it starts, not to look at or above the temp
   root, and for each test module not above its private temp directory either (`GIT_CEILING_DIRECTORIES`; a
-  value the caller already had stays in front, unchanged). Measured with such a file planted above the tests'
-  directories, in a private temp root: six failures before, none after. Not covered: a test module run by hand,
-  outside `scripts/verify`; and whether a judge should be able to write the top of `/tmp` at all is a separate
-  question, not decided here.
+  value the caller already had stays in front, unchanged; the contract's own entries are resolved, so a temp root
+  reached through a link stays a ceiling). Measured with such a file planted above the tests' directories, in a
+  private temp root: six failures before, none after. Not covered: a test module run by hand, outside
+  `scripts/verify`; a VALID repository at the temp root (a `git init` there) — the tests' own git calls stop at
+  the ceiling, but the sandbox asks git with the caller's git variables removed, on purpose, and still sees it:
+  measured in this task's review, nine tests of six modules fail then and none in the same temp root without
+  the repository; and whether a judge should be able to write the top of `/tmp` at all is a separate question,
+  not decided here.
 - **The judge after the last panel is handed the code first, and is told what did not fit** (task 178, PLAN S11
   item 28; owner decision 2026-10-10). `tasks impl-review <N>` after an impl panel gives its judge the delta from
   the panel's saved base, within a budget. It went out in git's path order, the outer repository first, so a

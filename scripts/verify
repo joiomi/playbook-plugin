@@ -94,11 +94,20 @@ def git_ceilings(*below: str) -> str:
     it starts, so a module is told the temp root as well as its private directory:
     with the private directory alone, a command started IN it would still look above
     (measured). Not covered: a project made AT the temp root itself in a run that has
-    no private directory — git always looks in the directory it starts in. The
+    no private directory — git always looks in the directory it starts in; and a
+    VALID repository above the temp directories as product code sees it that asks
+    git with the caller's git variables removed on purpose (the sandbox's probes,
+    `provider/sandbox.py::_git_env`) — no ceiling reaches those (measured in impl
+    round 1: nine tests of six modules fail with a `git init` at the temp root). The
     caller's value stays in front exactly as it was (an empty entry there means
-    something to git); a variable that is set and empty adds no entry."""
+    something to git); a variable that is set and empty adds no entry. The
+    contract's own entries are given RESOLVED: after an empty entry git does not
+    resolve links in the entries that follow, and the directory it works in is
+    always the real one — a temp root named through a link was then no ceiling
+    (impl round 1, reproduced)."""
     had = os.environ.get("GIT_CEILING_DIRECTORIES") or ""
-    return os.pathsep.join(([had] if had else []) + [tempfile.gettempdir(), *below])
+    mine = [os.path.realpath(p) for p in (tempfile.gettempdir(), *below)]
+    return os.pathsep.join(([had] if had else []) + mine)
 
 
 def decode(raw: bytes) -> str:
