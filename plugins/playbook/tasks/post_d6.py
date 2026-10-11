@@ -444,7 +444,8 @@ def delta_text(project_path: Path, snapshot: "dict | None", cap: int,
     which file is cut part-way and which are left out — by name — each scope's
     `--stat`, and as much of the ordered diff as fits; the note says the same in
     short, for the line the CLI prints. A scope whose file list cannot be paired
-    with its patch is handed in git's own order, first, and the text says so."""
+    with its patch is handed in git's own order and the text says so — after the
+    code and tests of the scopes that pair, before the docs."""
     from tasks.core import _tail_cert_scopes, load_config
     if not isinstance(snapshot, dict) or not isinstance(snapshot.get("scopes"), dict):
         return None, "the newest impl panel recorded no snapshot"
