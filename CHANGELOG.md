@@ -118,10 +118,12 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   settings, not for git's own directories. Round-two repairs also keep empty default settings files,
   refuse unresolvable sources and multiply linked source files (including hook files), protect shadowed
   hooks paths, and pin ancestors above the project inside broader writable areas. Those ancestor pins
-  precede project and record masks, preserving read-only judge runs. **Open limitation:** where processes
+  precede project and record masks, preserving read-only judge runs. **Compatibility limitation:** where processes
   can create nested user/mount namespaces, they can detach the protected tree and replace Git metadata.
-  This was measured with bubblewrap 0.6.1; requiring working `--unshare-user --disable-userns` is awaiting
-  the owner's compatibility decision. This task is not closed.
+  This was measured with bubblewrap 0.6.1. Each launch probes the selected binary once: with working
+  `--disable-userns`, it adds `--unshare-user --disable-userns` even with `--rw-git-sources`; otherwise it
+  proceeds with one stderr warning naming the limit and the remedy (non-setuid bubblewrap >= 0.8.0).
+  `--print-argv` reports the same. This conditional behavior is the owner's compatibility choice.
 - **A `PYTHONPATH` that covers the project no longer switches the destructive-command guard off** (task 180,
   PLAN S11 items 19 and 20; owner decisions 2026-10-10 and 2026-10-11). The helpers the hooks start as files —
   the command guard, the status reader, the payload normalizer and the others — read the user's `PYTHONPATH`,

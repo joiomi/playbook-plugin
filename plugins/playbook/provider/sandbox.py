@@ -577,6 +577,7 @@ def build_bwrap_argv(
     git_sources_unanswered: Iterable[str] | None = None,
     git_source_links: Iterable[str] | None = None,
     git_sources_writable: bool = False,
+    bwrap_exe: str | None = None,
 ) -> list[str]:
     """Generate the bwrap argv: read-only root, bind project + tmp + per-agent
     home subpaths read-write, bind git_dir — and every other path of git metadata
@@ -865,6 +866,11 @@ def build_bwrap_argv(
         argv += ["--ro-bind", place, place]
         layers.append((place, False))
 
+    if bwrap_supports_disable_userns(bwrap_exe or _bwrap_exe() or "bwrap"):
+        argv += ["--unshare-user", "--disable-userns"]
+    else:
+        print("Warning: bubblewrap lacks usable --disable-userns; nested user/mount namespaces can "
+              "bypass read-only mounts. Upgrade to non-setuid bubblewrap >= 0.8.0.", file=sys.stderr)
     argv += list(target_argv)
     return argv
 
@@ -1380,7 +1386,7 @@ def _launch_plan(
                                 git_readonly=_git_paths_to_protect(project),
                                 git_sources=sources, git_sources_missing=absent,
                                 git_source_links=links, git_sources_unanswered=unanswered,
-                                git_sources_writable=git_sources_writable)
+                                git_sources_writable=git_sources_writable, bwrap_exe=exe)
         return [exe, *argv[1:]], True     # by absolute path: the launch runs in the project
     if require_containment:
         raise RuntimeError(launch_refusal() or (
@@ -1414,6 +1420,20 @@ def _probe_command() -> str:
         if os.access(candidate, os.X_OK):
             return candidate
     return sys.executable or "/bin/sh"
+
+
+def bwrap_supports_disable_userns(exe: str) -> bool:
+    """Probe working namespace protection once per argv build, using the binary
+    that will launch it. Older or unusable builds retain the owner's compatibility
+    mode; do not infer capability from a version string or cache it across launches."""
+    try:
+        result = subprocess.run(
+            [exe, "--unshare-user", "--disable-userns", "--ro-bind", "/", "/",
+             "--proc", "/proc", "--dev", "/dev", _probe_command()],
+            stdin=subprocess.DEVNULL, capture_output=True, timeout=15)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
 
 
 def bwrap_start_error(exe: str) -> "str | None":
