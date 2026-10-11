@@ -251,7 +251,8 @@ def _command_for(script_name: str) -> str:
     """The command a codex configuration runs for one hook. `-E -s`: the script is
     started in the user's environment, and a `PYTHONPATH` that covers the project put a
     project file named like a module in the place of the standard library's (task 180).
-    A configuration written before keeps the old command until it is regenerated."""
+    A configuration written before holds the older text of the command; installing the
+    hooks again puts this one in its place (`merge_hooks`)."""
     script_path = playbook_scripts_dir() / script_name
     return f"python3 -E -s {shlex.quote(str(script_path))}"
 
@@ -335,6 +336,19 @@ def _existing_commands_for_matcher(event_entries: list, matcher: str) -> set[str
     return seen
 
 
+def _script_of(command: str) -> "str | None":
+    """The script a `python3 [-options] <script>` command starts, or None for any
+    other command: another interpreter, an option that takes a value, more words."""
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        return None
+    if len(words) < 2 or words[0] != "python3":
+        return None
+    rest = [w for w in words[1:] if not re.fullmatch(r"-[A-Za-z]+", w)]
+    return rest[0] if len(rest) == 1 and words[-1] == rest[0] else None
+
+
 def merge_hooks(existing: dict, additions: dict) -> dict:
     """Merge Playbook hook entries into an existing hooks.json document.
 
@@ -344,6 +358,14 @@ def merge_hooks(existing: dict, additions: dict) -> dict:
     re-installing must NOT add a second Playbook entry for that matcher.
     Different matchers under the same event coexist (panel finding A
     earlier — `^Bash$` linter vs `^apply_patch$` Playbook hook).
+
+    An OLDER TEXT of one of our commands — `python3`, options, the same script,
+    under the same matcher — is that command: it is rewritten where it stands,
+    and a second copy of it is dropped. Compared as text alone, the command of
+    task 180 (`-E -s` added) was a new hook beside the old one: the unisolated
+    one still ran and every hook ran twice (task 180, impl round 1). A hook of
+    the user's is never touched: another interpreter, another script, any other
+    command.
     """
     merged = json.loads(json.dumps(existing or {}))
     if not isinstance(merged.get("hooks"), dict):
@@ -355,6 +377,29 @@ def merge_hooks(existing: dict, additions: dict) -> dict:
         for entry in new_entries:
             matcher = entry.get("matcher") or ""
             new_commands = _entry_commands(entry)
+            ours = {s: c for c in new_commands if (s := _script_of(c))}
+            present: set[str] = set()
+            emptied: list[int] = []
+            for old in event_entries:
+                if not isinstance(old, dict) or (old.get("matcher") or "") != matcher \
+                        or not isinstance(old.get("hooks"), list):
+                    continue
+                kept = []
+                for hook in old["hooks"]:
+                    command = hook.get("command") if isinstance(hook, dict) else None
+                    now = ours.get(_script_of(command)) if isinstance(command, str) else None
+                    if now is None:
+                        kept.append(hook)
+                        continue
+                    if now in present:
+                        continue                # a second copy of one of our commands
+                    present.add(now)
+                    hook["command"] = now
+                    kept.append(hook)
+                if not kept and old["hooks"]:
+                    emptied.append(id(old))     # nothing but second copies of ours was in it
+                old["hooks"] = kept
+            event_entries[:] = [e for e in event_entries if id(e) not in emptied]
             existing_for_matcher = _existing_commands_for_matcher(event_entries, matcher)
             # Skip if every command in the new entry is already registered
             # under this matcher (idempotent re-install).

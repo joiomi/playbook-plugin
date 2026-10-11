@@ -531,8 +531,9 @@ _SHORT_FLAGS = re.compile(r"-[A-Za-z]+")
 # What the interpreter is handed when it is started on a FILE of the plugin's: a
 # variable, an absolute or a dotted path, or the skill's `<…-dir>/` placeholder. A bare
 # relative path (`scripts/verify`) is a PROJECT's own file in the texts that suggest a
-# command, and is not this rule's.
-_FILE_START = re.compile(r"""["']?(?:\$|/|\./|\.\./|~/|<[\w-]+>/)""")
+# command, and is not this rule's. The quote may itself be escaped — a command written
+# inside a JSON string, as `hooks/hooks.json` writes its own (impl round 1).
+_FILE_START = re.compile(r"""\\?["']?(?:\$|/|\./|\.\./|~/|<[\w-]+>/)""")
 
 
 def calls_on(line: str) -> list[tuple[str, str]]:
@@ -557,6 +558,9 @@ def calls_on(line: str) -> list[tuple[str, str]]:
                 verdict = ("ok-inline", "-") if isolated else \
                     ("bad", "a program on stdin (`python3 -`) without -I")
                 break
+            if t == "--":                               # the end of the options: a file follows
+                i += 1
+                continue
             if not _SHORT_FLAGS.fullmatch(t):
                 # a file, a long option, prose. It is a call only after whitespace
                 # (`python3/the hook scripts` is prose) and a file of the plugin's only
@@ -907,10 +911,18 @@ class ACodexConfigurationWrittenBeforeIsReplacedNotDoubled(unittest.TestCase):
         other = {"matcher": "^Bash$", "hooks": [{"type": "command", "command": "/home/me/notify --quiet"}]}
         old["hooks"]["PreToolUse"][1]["hooks"].append(mine)            # in the SAME entry as the command guard
         old["hooks"]["PreToolUse"].append(other)
+        empty = {"matcher": "^exec_command$", "hooks": []}               # theirs, and empty before we came
+        old["hooks"]["PreToolUse"].append(empty)
+        # our own script, older text, registered by THEM under a matcher that is not ours:
+        # theirs to change — only what stands under the matcher we install is rewritten
+        guard = "python3 " + shlex.quote(str(self.ch.playbook_scripts_dir() / "command_guard.py"))
+        old["hooks"]["PreToolUse"].append({"matcher": "^mine$", "hooks": [{"type": "command", "command": guard}]})
         merged = self.ch.merge_hooks(old, self.new)
+        self.assertIn(empty, merged["hooks"]["PreToolUse"])
         self.assertEqual(self._commands(merged), sorted(self._commands(self.new) + [
             ("PreToolUse", "^exec_command$", "python3 /home/me/lint.py"),
-            ("PreToolUse", "^Bash$", "/home/me/notify --quiet")]))
+            ("PreToolUse", "^Bash$", "/home/me/notify --quiet"),
+            ("PreToolUse", "^mine$", guard)]))
         # … and it is still in the entry it was written in, after ours
         guard_entry = merged["hooks"]["PreToolUse"][1]
         self.assertEqual([h["command"].rsplit("/", 1)[-1] for h in guard_entry["hooks"]], ["command_guard.py", "lint.py"])
@@ -923,12 +935,16 @@ class ACodexConfigurationWrittenBeforeIsReplacedNotDoubled(unittest.TestCase):
         self.assertEqual(len(self._commands(both)), 2 * len(self._commands(self.new)))
         merged = self.ch.merge_hooks(both, self.new)
         self.assertEqual(self._commands(merged), self._commands(self.new))
+        # an entry that held nothing but a second copy of ours goes with it
+        self.assertFalse([e for entries in merged["hooks"].values() for e in entries if not e["hooks"]])
 
     def test_the_same_script_under_another_python_of_the_users_is_not_ours(self):
         # only a command that starts `python3` with options and THAT script is an older form of ours
         old = {"hooks": {"Stop": [{"hooks": [
             {"type": "command", "command": self.new["hooks"]["Stop"][0]["hooks"][0]["command"].replace("python3 -E -s", "/opt/py/bin/python3.12 -X dev")},
-            {"type": "command", "command": "echo python3 " + shlex.quote(str(self.ch.playbook_scripts_dir() / "codex-stop-hook"))}]}]}}
+            {"type": "command", "command": "echo python3 " + shlex.quote(str(self.ch.playbook_scripts_dir() / "codex-stop-hook"))},
+            {"type": "command", "command": "/opt/py/bin/python3 " + shlex.quote(str(self.ch.playbook_scripts_dir() / "codex-stop-hook"))},
+            {"type": "command", "command": "python3-wrapper -E -s " + shlex.quote(str(self.ch.playbook_scripts_dir() / "codex-stop-hook"))}]}]}}
         kept = self._commands(old)
         merged = self.ch.merge_hooks(old, self.new)
         self.assertEqual(self._commands(merged), sorted(kept + self._commands(self.new)))

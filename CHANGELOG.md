@@ -97,7 +97,8 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   sweep refuses a bare `python3 <file>` from now on. And the launchers no longer put the plugin's directory on
   `PYTHONPATH` for what they start: a project with its own package called `tasks` or `provider` could be handed
   the plugin's in a verify command the CLI ran. Not covered: a helper started by hand through its `#!` line; the
-  system's site-packages; a codex configuration written before this version, until it is regenerated. As with
+  system's site-packages; a codex configuration written before this version, until its hooks are installed again — the install then
+  puts the new command in the old one's place. As with
   the inline programs (task 167), `PYTHONIOENCODING` and `PYTHONUTF8` no longer reach these helpers.
 - **A stray `.git` file in the temp directory no longer breaks the verify contract's tests** (task 179,
   PLAN S11 item 30; owner decision 2026-10-10). A file named `.git` left in `/tmp` — a judge's experiment in its
