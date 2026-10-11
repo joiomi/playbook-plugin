@@ -456,7 +456,7 @@ can no longer be compared (it is missing, the code roots changed, git failed) �
 "tail certification unavailable", without its cause. For a documentation-only delta the close says which of
 three things happened: no judge ran — the delta could not be put before one (its size against the 98,304-byte
 payload one judge can be sent, or the file that could not be read), the tamper snapshot could not be taken, or
-the judge's adapter could not be resolved or built; the judge returned FAIL; or there is no usable verdict, with
+the judge's adapter could not be resolved or built, or its program is not installed; the judge returned FAIL; or there is no usable verdict, with
 the reason (the call to the judge timed out or failed — the close shows what came back and does not guess
 whether a judge process ran — its answer has no verdict line, or it was discarded because the tree changed
 while it ran). Each needs a fresh panel.

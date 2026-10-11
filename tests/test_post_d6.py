@@ -1572,6 +1572,24 @@ class DeltaOrder(_TmpDir):
             with self.subTest(name=name):
                 self.assertFalse(post_d6._written_as_it_is(name))
 
+    def test_a_name_git_quotes_still_goes_out_sorted(self):
+        # The use of the predicate above, not the predicate: a name git writes in quotes
+        # is never compared with its header — compared, it could not match, and every
+        # scope that holds such a file would go out unsorted (post-panel run 2: with
+        # the condition replaced by "always compare" the module stayed green).
+        base = post_d6.worktree_tree(self.repo, self.EXC)
+        self._write(self.repo, {"plugins/caf\u00e9.py": "c = 1\n", 'plugins/a"b.py': "q = 1\n",
+                                "docs/long.md": "d\n" * 400})
+        files = set()
+        text, note = post_d6.delta_text(self.repo, self._snap({"": (self.repo, base)}), 500_000, files_out=files)
+        self.assertIn('diff --git "a/plugins/caf\\303\\251.py" "b/plugins/caf\\303\\251.py"\n', text)   # git did quote it
+        self.assertIn('diff --git "a/plugins/a\\"b.py" "b/plugins/a\\"b.py"\n', text)
+        self.assertNotIn("in git's own order", text)
+        doc = text.index("diff --git a/docs/long.md")
+        self.assertLess(text.index('"a/plugins/caf'), doc)
+        self.assertLess(text.index('"a/plugins/a\\"b.py"'), doc)
+        self.assertEqual(files, {"plugins/caf\u00e9.py", 'plugins/a"b.py', "docs/long.md"})
+
     def test_two_scopes_with_interleaved_sizes_each_run_under_its_own_line(self):
         # inside a class the files go by size over ALL scopes, so one scope's files of a
         # class can come in several runs; each run has its line, every file its part once

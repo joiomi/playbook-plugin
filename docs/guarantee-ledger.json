@@ -17857,6 +17857,19 @@
           "limitations": [
             "Task 178, impl round 1 (sonnet: untested): two scopes, two code files each, sizes interleaved — four runs, each under its own line, every file's part once. Green on the first build; it pins the behaviour, it did not find a defect."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_post_d6.py",
+          "reference": "DeltaOrder.test_a_name_git_quotes_still_goes_out_sorted",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_post_d6.py",
+            "reference": "DeltaOrder.test_a_name_git_quotes_is_paired_by_position_only"
+          },
+          "limitations": [
+            "Task 178, post-panel run 2 (opus, 2026-10-11): the judge replaced the comparison's condition by \"always compare\" in a scratch copy and the module stayed green — only the predicate was tested, not its use. This test sends two names git quotes (a byte outside ASCII; a double quote) through the whole delta: sorted, code before docs. Green on the fixed code; red under that break (run in the break harness after the test was written)."
+          ]
         }
       ],
       "applicable_platforms": [

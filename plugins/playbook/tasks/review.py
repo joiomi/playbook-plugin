@@ -2435,7 +2435,8 @@ def _run_tail_cert_judge_raw(project_path, prompt, timeout_secs) -> str:
         backend, variant = dj, None
     # Two steps, because they are two different facts (task 165, post-D6 run 2):
     # an adapter that cannot be resolved or built means NOTHING was launched —
-    # the one case marked `started=False`; an error out of the call itself may
+    # marked `started=False`, as is one whose program is not installed (further
+    # down); an error out of the call itself may
     # come before the judge's process, during it, or after it finished (a parse
     # error on its output), so it claims neither.
     try:
@@ -2510,7 +2511,8 @@ def run_tail_cert_judge(project_path, snapshot, non_behavioral, panel_summary,
     r1-r2, post-D6 runs 1-2): each appends ONE `(kind, sentence)` pair to `why` when a
     list is given. Kind `no-judge` is said only where it is KNOWN that no judge ran:
     the delta could not be read any more, the tamper snapshot could not be taken, the
-    adapter could not be resolved or built. Kind `judge` is every call that was made
+    adapter could not be resolved or built, or it says its program is not installed
+    (task 178). Kind `judge` is every call that was made
     and left no verdict — it timed out, failed, raised, printed nothing, has no
     verdict line, or was discarded by the tamper guard; its sentence says what came
     back and does not claim that the judge ran. A PASS or a FAIL appends nothing."""
