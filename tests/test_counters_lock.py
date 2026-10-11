@@ -631,9 +631,9 @@ class TheGateIsReadUnderTheLock(_Counters):
         # Three rounds on one line. Appended under our lock with an unlimited wait for the
         # chat log's, the entry made every other hook wait (round 1); appended after ours
         # was let go, it could be lost with the hook (round 2); appended without the chat
-        # log's lock after a second, it could be lost under a `tasks tag` rewrite (round 3).
-        # (round 3), and a second of waiting under ours starved the hooks behind (post-panel
-        # run 1). So: the chat log's lock is TRIED under ours, not waited for; if it is not given,
+        # log's lock after a second, it could be lost under a `tasks tag` rewrite (round 3);
+        # and a second of waiting under ours starved the hooks behind (post-panel run 1).
+        # So: the chat log's lock is TRIED under ours, not waited for; if it is not given,
         # nothing is appended and the gate is NOT advanced — the next call finds the old
         # gate and tries again.
         self._tick_the_first_gate()

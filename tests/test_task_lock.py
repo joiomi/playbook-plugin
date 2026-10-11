@@ -1092,8 +1092,8 @@ class Round3Fixes(unittest.TestCase):
     def test_the_state_echo_append_takes_the_lock(self):
         # codex-high #4: the FINAL-gate append was a second, unlocked writer of
         # chat_log.md. Count the append blocks and require each to be wrapped.
-        # (Two sites until task 182 made them one function; that it WAITS for the chat
-        # log's lock is run in tests/test_counters_lock.py::TheGateIsReadUnderTheLock.)
+        # (Two sites until task 182 made them one function; that it TRIES the chat log's
+        # lock is run in tests/test_counters_lock.py::TheGateIsReadUnderTheLock.)
         hook = (PLUGIN / "scripts" / "state-echo-hook").read_text(encoding="utf-8")
         appends = hook.count('>> "$GATE_LOG"')
         wrapped = hook.count('chat_log_counter.lock')

@@ -533,15 +533,17 @@ class WhereTheBindsGo(_Repo):
         b = self.binds(self.argv(git_sources=[str(hooks)]))
         self.assertEqual([x for x in b if x[1].startswith(str(self.p)) and x[0] == "--bind"], [("--bind", str(self.p))])
 
-    def test_nothing_is_bound_writable_inside_another_protected_place(self):
-        # one source inside another: the outer one is read-only as a whole — a writable
-        # bind of a directory in it would open it again
+    def test_a_kept_place_inside_another_ends_read_only_whatever_the_order(self):
+        # one source inside another: whatever is bound onto itself on the way to the inner
+        # one, the outer one's read-only bind is laid after it and covers it
         outer = self.p / "conf"
-        (outer / "sub" / "hooks").mkdir(parents=True)
-        b = self.binds(self.argv(git_sources=[str(outer), str(outer / "sub" / "hooks")]))
-        self.assertNotIn(("--bind", str(outer / "sub")), b)
-        self.assertNotIn(("--bind", str(outer)), b)
-        self.assertIn(("--ro-bind", str(outer)), b)
+        inner = outer / "sub" / "hooks"
+        inner.mkdir(parents=True)
+        for sources in ([str(outer), str(inner)], [str(inner), str(outer)]):
+            with self.subTest(first=Path(sources[0]).name):
+                b = self.binds(self.argv(git_sources=sources))
+                inside = [i for i, (flag, path) in enumerate(b) if flag == "--bind" and path.startswith(str(outer))]
+                self.assertLess(max(inside, default=-1), b.index(("--ro-bind", str(outer))))
 
     def test_a_directory_is_bound_onto_itself_once(self):
         (self.p / "tools").mkdir()

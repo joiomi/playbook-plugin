@@ -7972,7 +7972,7 @@
     {
       "id": "PB-SANDBOX-WRITE",
       "category": "sandbox",
-      "statement": "With a supported containment backend, sandbox allows project writes in worker mode, keeps git metadata read-only — the project's `.git` directory, or the `.git` file a linked worktree or a submodule has in its place together with the git directory and the common directory it leads to, and the same for every repository `.agent/config.json` names under `code_roots` — whatever an extra `--rw` path covers, and in --ro-project mode denies project writes except explicit --rw paths. The places git is TOLD to take its hooks and its settings from are read-only in the sandbox too, wherever they lie — the directory `core.hooksPath` names (or `.git/hooks`, also as a link), every settings file in effect (also as a link) and every `include`/`includeIf` path whatever its condition — for the project and every `code_roots` repository; a launch that cannot keep one of them (it does not exist where the run could create it; it is, or contains, a path the run must write; it is reached through a link in a directory the run may write) is refused, and `--rw-git-sources` lifts all of it by the owner's explicit choice (task 181, PLAN S11 item 31).",
+      "statement": "With a supported containment backend, sandbox allows project writes in worker mode, keeps git metadata read-only — the project's `.git` directory, or the `.git` file a linked worktree or a submodule has in its place together with the git directory and the common directory it leads to, and the same for every repository `.agent/config.json` names under `code_roots` — whatever an extra `--rw` path covers, and in --ro-project mode denies project writes except explicit --rw paths. The places git is TOLD to take its hooks and its settings from are read-only in the sandbox too, wherever they lie — the directory `core.hooksPath` names (or `.git/hooks`, also as a link), every settings file in effect (also as a link) and every `include`/`includeIf` path whatever its condition — for the project and every `code_roots` repository; what a settings file names that is NOT in effect now (a conditional include's own `core.hooksPath` and includes) is read from the file itself; and every directory between a writable bind's root and a place that is kept read-only — git's hooks and settings, and git's own directories of the project and of every `code_roots` repository — is bound onto itself, so that it cannot be renamed, removed or replaced from inside; a launch that cannot keep one of them (it does not exist where the run could create it; it is, or contains, a path the run must write; it is reached through a link in a directory the run may write; git cannot answer in a repository that is there on disk; a directory that would have to be fixed holds a place the run keeps read-only) is refused, and `--rw-git-sources` lifts all of it but the fixing of git's own directories, by the owner's explicit choice (task 181, PLAN S11 item 31).",
       "owner": [
         {
           "path": "plugins/playbook/provider/sandbox.py",
@@ -8366,6 +8366,157 @@
           "limitations": [
             "Task 181: `scripts/sandbox`'s own entry point — exit 2 with the path and \"Nothing was launched.\", nothing created; the preview lists the binds."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "ADirectoryAboveAProtectedPlace.test_the_directory_that_holds_an_included_file",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_sandbox_git_sources.py",
+            "reference": "WhatGitRunsCannotBeChangedFromInside.test_control_an_ordinary_repository_is_launched_and_can_write_its_files"
+          },
+          "limitations": [
+            "Real bubblewrap through the real launch plan, a shell command in the agent's place; skipped where bubblewrap cannot start a sandbox. Task 181 rework, red first on the task's first build: \"the directory of an included file: the directory was moved aside\". After: \"Device or resource busy\", the host's alias does not run, the file is as it was, and a sibling, a file at the top and an unrelated rename still work."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "ADirectoryAboveAProtectedPlace.test_a_hooks_directory_two_levels_down_at_either_level",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Real bubblewrap through the real launch plan, a shell command in the agent's place; skipped where bubblewrap cannot start a sandbox. Task 181 rework, red first on the task's first build: \"the outer directory: the directory was moved aside\". Both levels."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "ADirectoryAboveAProtectedPlace.test_a_repository_named_in_code_roots",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Real bubblewrap through the real launch plan, a shell command in the agent's place; skipped where bubblewrap cannot start a sandbox. Task 181 rework, red first on the task's first build: \"a code root: the directory was moved aside\" — the shape task 169 left: the nested repository's `.git` read-only, the repository itself movable."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "WhatGitDoesNotSayByItself.test_a_hooks_path_named_inside_a_conditional_include",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_sandbox_git_sources.py",
+            "reference": "WhatGitRunsCannotBeChangedFromInside.test_a_conditional_include_is_kept_whatever_its_condition_says_now"
+          },
+          "limitations": [
+            "Real bubblewrap through the real launch plan, a shell command in the agent's place; skipped where bubblewrap cannot start a sandbox. Task 181 rework, red first on the task's first build: \"a hooks path of a conditional include: the write went through\"; on the branch the include is for, the host's commit does not run the hook."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "WhatGitDoesNotSayByItself.test_a_settings_file_git_cannot_read_refuses_the_launch",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_sandbox_git_sources.py",
+            "reference": "WhatGitIsAsked.test_a_directory_that_is_no_repository_names_nothing"
+          },
+          "limitations": [
+            "Task 181 rework, red first on the task's first build: \"RuntimeError not raised\". Refused for a worker and for a read-only run; the owner's option launches. The control: a directory that is no repository names nothing and is not refused."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "WhatGitDoesNotSayByItself.test_a_project_one_level_below_the_top_of_its_repository",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Real bubblewrap through the real launch plan, a shell command in the agent's place; skipped where bubblewrap cannot start a sandbox. Task 181 rework, red first on the task's first build: the launch itself raised \"…/pkg/.git/config, which does not exist — and this run could create it\"."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "WhatGitIsAskedBelowTheTopAndBehindAnInclude.test_what_an_include_that_does_not_hold_names",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_sandbox_git_sources.py",
+            "reference": "WhatGitIsAskedBelowTheTopAndBehindAnInclude.test_two_includes_that_name_each_other_end"
+          },
+          "limitations": [
+            "Task 181 rework: what `_git_sources` answers — the conditional file, the file it includes in turn (read against it), the hooks path it names (read against the top of the work tree) and an absolute one."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "WhatGitIsAskedBelowTheTopAndBehindAnInclude.test_a_repository_git_cannot_answer_for",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_sandbox_git_sources.py",
+            "reference": "WhatGitIsAskedBelowTheTopAndBehindAnInclude.test_control_no_git_program_and_no_repository_are_not_that"
+          },
+          "limitations": [
+            "Task 181 rework: a repository whose settings git cannot read, and one where only an include that does NOT hold cannot be read — both unanswered; no git program, and a directory that is no repository, are not."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "WhereTheBindsGo.test_the_directories_above_a_source_are_bound_onto_themselves_first_outermost_first",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_sandbox_git_sources.py",
+            "reference": "WhereTheBindsGo.test_a_source_right_under_the_bind_needs_no_other_bind"
+          },
+          "limitations": [
+            "Task 181 rework: the argv — outermost first, each before the read-only bind of what it leads to and before git's own directories."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "WhereTheBindsGo.test_a_kept_place_inside_another_ends_read_only_whatever_the_order",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_sandbox_git_sources.py",
+            "reference": "WhereTheBindsGo.test_a_directory_is_bound_onto_itself_once"
+          },
+          "limitations": [
+            "Task 181 rework: one source inside another, in both orders — nothing writable is laid after the outer one's read-only bind. (A condition that skipped such directories proved nothing under the break harness and was removed.)"
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "WhereTheBindsGo.test_a_code_roots_git_directory_pins_the_code_root",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 181 rework: git's own directory of a nested repository fixes that repository's directory — with the owner's option for hooks and settings too."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "WhereTheBindsGo.test_a_directory_that_holds_a_read_only_place_cannot_be_bound_writable_over_it",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 181 rework: a source beside a READ-ONLY project in one directory of `/tmp` refuses, naming both; beside a writable project it is simply kept."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "WhereTheBindsGo.test_a_repository_git_could_not_answer_for_refuses",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 181 rework: the argv builder's own refusal, and the option that lifts it."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -8388,7 +8539,7 @@
         "2026-10-08 (task 154, Linux-only): the seatbelt profile-text proof (RoProjectSeatbeltProfileDeniesWrites, control WorkerModeSeatbeltProfileUnchanged) was deleted with the other macOS-only tests; the bubblewrap proof stays.",
         "2026-10-08 (task 154 impl panel r1): the three unconditional bubblewrap argv tests (BindOrder) bound as proofs, so the row keeps a proof that runs where bwrap is not installed.",
         "2026-10-08 (task 155, Linux-only): the macOS seatbelt backend (build_seatbelt_profile) was deleted; bubblewrap is the only backend.",
-        "Task 181 (PLAN S11 item 31; owner 2026-10-10: \"Da, în S11 (Recomandat)\" to \"sandbox-ul îl întreabă pe git de unde își ia scripturile și setările și face și acele locuri „doar citire” … Dacă vrei ca agentul să îți editeze totuși acele scripturi, îi dai tu voie explicit\"). Measured with real bubblewrap before the fix, five ways: a sandboxed command changed what the host's git then ran. Bounds of the fix, stated: (1) git is asked ONCE, at launch — a setting changed on the host while a run is under way is not seen; (2) what is kept is what git takes HOOKS and SETTINGS from; attribute and ignore files, which select and do not run, are not; (3) the three refusals (a place that does not exist where the run could create it; one that is or contains a path the run must write; a link on the way in a directory the run may write) are the BUILDER's reading of the owner's \"read-only\", fail-closed, and can stop a launch for a git configuration that names such a place — the message says what to create or change, and a judge's run, whose project is read-only, is refused only for a place under a directory every run may write (`/tmp`, the agents' home subdirectories); (4) the explicit option is one switch for hooks and settings together and is not available on the `--prompt` path the judges share; (5) a place that is already read-only in the sandbox (the git directory, the user's and the system's settings outside any writable bind) is not bound again; (6) links are followed as they are at launch — what the listed directories hold is checked then, not watched."
+        "Task 181 (PLAN S11 item 31; owner 2026-10-10: \"Da, în S11 (Recomandat)\" to \"sandbox-ul îl întreabă pe git de unde își ia scripturile și setările și face și acele locuri „doar citire” … Dacă vrei ca agentul să îți editeze totuși acele scripturi, îi dai tu voie explicit\"). Measured with real bubblewrap before the fix, five ways: a sandboxed command changed what the host's git then ran. Bounds of the fix, stated: (1) git is asked ONCE, at launch — a setting changed on the host while a run is under way is not seen; (2) what is kept is what git takes HOOKS and SETTINGS from; attribute and ignore files, which select and do not run, are not; (3) the three refusals (a place that does not exist where the run could create it; one that is or contains a path the run must write; a link on the way in a directory the run may write) are the BUILDER's reading of the owner's \"read-only\", fail-closed, and can stop a launch for a git configuration that names such a place — the message says what to create or change, and a judge's run, whose project is read-only, is refused only for a place under a directory every run may write (`/tmp`, the agents' home subdirectories); (4) the explicit option is one switch for hooks and settings together and is not available on the `--prompt` path the judges share; (5) a place that is already read-only in the sandbox (the git directory, the user's and the system's settings outside any writable bind) is not bound again; (6) links are followed as they are at launch — what the listed directories hold is checked then, not watched. REWORK after the task's first panel (2026-10-11; below quorum — the codex seat's provider ended its turn as a possible cybersecurity risk — opus's four findings, none of them run by it, each MEASURED with real bubblewrap before it was closed, `measure181b.py`): (a) a read-only bind fixes its own path only — `mv tools t2`, a new `tools` with the agent's file, and the host's `git boom` ran it (\"inside rc=0 'replaced' … marker: True\"); the same one level down for a hooks directory, and for a `code_roots` repository as a whole (task 169's shape, never measured then); cure measured first with raw bubblewrap (`measure181c.py`): each directory on the way bound onto itself — rename, removal and replacement answer \"Device or resource busy\", a sibling is still writable, and BOTH levels are needed (\"ONLY the inner pinned — rename the outer: RENAMED\"); (b) a project one level below the top of its repository was refused at every launch — git names the repository's own settings file from the top of the work tree; (c) a `core.hooksPath` named INSIDE a conditional include stayed writable and ran on the host once the condition held; (d) a settings file with a syntax error made git fail, that read as \"no repository\", and the agent repaired the file with an alias of its own that the host then ran. After the rework the same script answers: busy; busy; launched; \"Read-only file system\"; REFUSED. Bounds of the rework, stated: (7) the fixing is as strong as the read-only binds themselves — both rest on the kernel refusing to change or remove a mount from inside; (8) a directory that is fixed cannot be renamed or removed by the agent's own work either, for the length of the run; (9) a file that has a SECOND hard link in a writable place can be written through that name — the agent cannot make such a link (\"Invalid cross-device link\", measured), one that is already there is not looked for; (10) \"a repository that is there on disk\" is read from the first `.git` entry on the way up, as git reads it — a stray `.git` that leads nowhere is no repository and does not refuse; (11) a directory that would have to be fixed over a place the run keeps read-only or hidden (hooks beside a READ-ONLY project in one directory of `/tmp`) refuses the launch — fail-closed, a layout not met; (12) what a file names is read with `git config -f`, includes followed by the plugin itself, a file already in effect not read twice."
       ],
       "follow_up_phases": [
         8

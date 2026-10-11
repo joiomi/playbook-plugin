@@ -574,6 +574,7 @@ def build_bwrap_argv(
     git_readonly: Iterable[str] | None = None,
     git_sources: Iterable[str] | None = None,
     git_sources_missing: Iterable[str] | None = None,
+    git_sources_unanswered: Iterable[str] | None = None,
     git_source_links: Iterable[str] | None = None,
     git_sources_writable: bool = False,
 ) -> list[str]:
@@ -581,6 +582,8 @@ def build_bwrap_argv(
     home subpaths read-write, bind git_dir — and every other path of git metadata
     the caller names in `git_readonly` (`_git_paths_to_protect`) — read-only.
 
+    `git_sources_unanswered` (roots where git could not be asked: the launch is
+    refused) and
     `git_sources` / `git_sources_missing` / `git_source_links` (`_git_sources`, task
     181): the places git takes its hooks and its settings from. One the run could
     write is bound read-only, last. Three cannot be kept: one that does not exist
@@ -730,19 +733,41 @@ def build_bwrap_argv(
                 f"git metadata at {g} is in or over a place where a read-only run hides the "
                 f"conversation records ({touched}); they cannot be hidden in this layout. Pass "
                 "--keep-records if this run may read the records. Nothing was launched.")
-        argv += ["--ro-bind", g, g]
-        layers.append((g, False))
 
     # Git's hooks and settings, wherever git is told to take them from (task 181):
-    # read-only too, laid last. The owner's explicit permission skips all of it.
+    # read-only too. The owner's explicit permission skips all of it. DECIDED here —
+    # against what every path will be once git's own directories are laid — and
+    # laid further down, with the rest of what is to be kept.
+    kept: list[str] = []
     if not git_sources_writable:
         allow = ("Point git at a place of its own for them (`core.hooksPath`, `include.path`), or pass "
                  "--rw-git-sources to let this agent edit the hooks and settings git takes from there. "
                  "Nothing was launched.")
+        unanswered = list(dict.fromkeys(str(s) for s in (git_sources_unanswered or [])))
+        if unanswered:
+            # git failed where there IS a repository — a settings file it cannot read,
+            # as a rule. Read as "no repository here", nothing was kept, and the agent
+            # could repair the file with settings of its own (impl round 1; measured).
+            raise RuntimeError(
+                "git could not say where it takes its hooks and its settings from in "
+                f"{', '.join(unanswered)} — most likely a settings file it cannot read (`git status` there "
+                "names it). Nothing git would run there can be kept read-only while it cannot be asked, "
+                "and a file that cannot be read now could be repaired from inside with settings of the "
+                "agent's own. Repair it, or pass --rw-git-sources to let this agent edit the hooks and "
+                "settings git takes from there. Nothing was launched.")
+        decided = layers + [(g, False) for g in git_binds]
+
+        def writable_then(path: str) -> "str | None":
+            last = None
+            for where, writable in decided:
+                if _covers(where, Path(path)):
+                    last = where if writable else None
+            return last
+
         for source in dict.fromkeys(str(Path(s).resolve()) for s in (git_sources or [])):
-            if writable_at(source) is None:
+            if writable_then(source) is None:
                 continue                   # read-only already: inside git metadata, or nowhere writable
-            needed = next((w for w, writable in layers if writable and _covers(source, Path(w))), None)
+            needed = next((w for w, writable in decided if writable and _covers(source, Path(w))), None)
             if needed is not None:
                 raise RuntimeError(
                     f"git takes its hooks or settings from {source}, and this run must be able to write "
@@ -751,10 +776,10 @@ def build_bwrap_argv(
             # (No check against the hidden records here: a place the masks hide is not
             # writable, so it never reaches this line, and one that COVERS a hidden place
             # from a writable directory covers that directory's bind and was refused above.)
-            argv += ["--ro-bind", source, source]
-            layers.append((source, False))
+            kept.append(source)
+            decided.append((source, False))
         for absent in dict.fromkeys(str(Path(s).resolve()) for s in (git_sources_missing or [])):
-            within = writable_at(absent)
+            within = writable_then(absent)
             if within is not None:
                 raise RuntimeError(
                     f"git is told to take its hooks or settings from {absent}, which does not exist — and "
@@ -762,13 +787,54 @@ def build_bwrap_argv(
                     "then run on this machine what the agent put there. Create it yourself (empty will do) "
                     "so that it can be kept read-only. " + allow)
         for holder in dict.fromkeys(str(Path(s).resolve()) for s in (git_source_links or [])):
-            within = writable_at(holder)
+            within = writable_then(holder)
             if within is not None:
                 raise RuntimeError(
                     f"git reaches its hooks or settings through a link in {holder}, a directory this run "
                     "may write: what the link names can be kept read-only, the link itself could be "
                     "replaced by one that names something else. Make it a real directory or file there. "
                     + allow)
+
+    # THE DIRECTORIES ABOVE what is kept (task 181, impl round 1; task 169's nested
+    # repositories had the same shape). A read-only bind makes ITS path refuse a
+    # rename, and nothing above it: a plain directory between the writable bind's
+    # root and the place could be moved aside from inside and a new one made under
+    # its name — the host's git then read the agent's file (measured). So every
+    # directory on that way is bound onto itself, which makes it a mount point: it
+    # cannot be renamed, removed or replaced (measured: "Device or resource busy"),
+    # and stays writable inside. Outermost first, and BEFORE every read-only bind
+    # below: a bind laid over a directory hides what was laid inside it earlier.
+    protected = git_binds + kept
+    pins: "dict[str, str]" = {}
+    for place in protected:
+        within = writable_at(place)        # as the path is before anything is kept
+        if within is None:
+            continue
+        above, d = [], os.path.dirname(place)
+        while d != within and d != os.path.dirname(d) and _covers(within, Path(d)):
+            above.append(d)
+            d = os.path.dirname(d)
+        for d in above:
+            # (a directory that lies inside ANOTHER kept place is fixed like any other:
+            # that place's read-only bind is laid after it, further down, and covers it)
+            pins.setdefault(d, place)
+    for d in sorted(pins, key=lambda p: p.count(os.sep)):
+        inner = next((w for w, writable in layers if not writable and w != d and _covers(d, Path(w))), None)
+        if inner is not None:
+            # e.g. hooks beside a READ-ONLY project in one directory of /tmp: the
+            # directory bound onto itself would lay the writable /tmp over the project
+            raise RuntimeError(
+                f"{pins[d]} holds git metadata, hooks or settings and must be kept read-only; for that the "
+                f"directory {d} above it has to be fixed in place, and {inner}, which this run keeps "
+                "read-only or hidden, lies inside that directory — fixing it would open that place. Move "
+                "one of the two out of that directory"
+                + ("" if pins[d] in git_binds else ", or pass --rw-git-sources to let this agent edit the "
+                   "hooks and settings git takes from there") + ". Nothing was launched.")
+        argv += ["--bind", d, d]
+        layers.append((d, True))
+    for place in protected:
+        argv += ["--ro-bind", place, place]
+        layers.append((place, False))
 
     argv += list(target_argv)
     return argv
@@ -963,10 +1029,41 @@ def _link_dirs_on(path: str) -> "list[str]":
     return out
 
 
-def _git_sources(project_dir: "Path | str") -> "tuple[list[str], list[str], list[str]]":
+def _repository_on_disk(root: Path) -> bool:
+    """Whether `root` lies in a git repository git could USE, by what is on disk — asked
+    only where git itself failed. The first `.git` entry on the way up decides, as it
+    does for git: a directory with a `HEAD`, or a file whose `gitdir:` names one; a
+    stray `.git` that leads nowhere is no repository (git runs nothing there). A bare
+    repository is its own directory."""
+    try:
+        here = root.resolve()
+    except (OSError, RuntimeError):
+        return False
+    if (here / "HEAD").is_file() and (here / "objects").is_dir():
+        return True
+    while True:
+        entry = here / ".git"
+        if os.path.lexists(entry):
+            try:
+                if entry.is_dir():
+                    return (entry / "HEAD").exists()
+                first = entry.read_text(encoding="utf-8", errors="replace").splitlines()[:1]
+            except OSError:
+                return False
+            if first and first[0].startswith("gitdir:"):
+                target = Path(first[0][len("gitdir:"):].strip())
+                return ((here / target) / "HEAD").exists()
+            return False
+        if here.parent == here:
+            return False
+        here = here.parent
+
+
+def _git_sources(project_dir: "Path | str") -> "tuple[list[str], list[str], list[str], list[str]]":
     """Where git takes its HOOKS and its SETTINGS from, for the project and for each
     repository `code_roots` names: (the places that exist, the places that do not,
-    the directories that hold a link on the way to one of them), each resolved.
+    the directories that hold a link on the way to one of them, the roots where git
+    could not be asked), each resolved.
 
     The git directory is bound read-only, but git can be told to use something
     else, and where that is project content a worker could change what git runs on
@@ -977,69 +1074,124 @@ def _git_sources(project_dir: "Path | str") -> "tuple[list[str], list[str], list
         (`core.hooksPath`, or `hooks` in the git directory, which may be a link);
       * `git config --list --show-origin` — every settings FILE that gives a value
         (the repository's own, which may be a link; the user's; the system's; every
-        include whose condition holds);
+        include whose condition holds). Git names the repository's own file from the
+        TOP of the work tree, wherever it is asked: read against a project that is a
+        directory below the top it named a file that does not exist, and every launch
+        there was refused (impl round 1);
       * every `include.path` and `includeIf.<condition>.path` — read against the file
         that names it, `~` expanded — whether or not the file gives a value, exists,
-        or its condition holds now: the condition is evaluated again on the host.
-    A directory that is no repository names nothing. Never raises."""
+        or its condition holds now: the condition is evaluated again on the host;
+      * and, for each such file that is NOT in effect now, what the file itself names
+        (`git config -f <file> --no-includes`): its own includes, in turn, and its
+        `core.hooksPath` — git lists nothing of a file whose condition does not hold,
+        so a hooks directory named there stayed writable (impl round 1; measured).
+    A directory that is no repository names nothing. A root where there IS a repository
+    on disk and git fails — a settings file it cannot read — is returned as unanswered:
+    it used to read as "no repository", and nothing was kept (impl round 1; measured).
+    Never raises."""
     existing: list[str] = []
     missing: list[str] = []
     link_dirs: list[str] = []
+    unanswered: list[str] = []
 
-    def add(path: Path) -> None:
+    def add(path: Path) -> "str | None":
         try:
             resolved = str(path.resolve())
         except (OSError, RuntimeError):
-            return
+            return None
         bucket = existing if os.path.lexists(resolved) else missing
         if resolved not in bucket:
             bucket.append(resolved)
         for holder in _link_dirs_on(str(path)):
             if holder not in link_dirs:
                 link_dirs.append(holder)
+        return resolved
 
-    def ask(root: Path, *args: str) -> "str | None":
+    def ask(root: Path, *args: str) -> "tuple[int | None, str]":
+        """(git's exit status, what it printed); (None, "") where there is no git."""
         try:
             answer = subprocess.run(["git", *args], cwd=str(root), capture_output=True,
                                     check=False, env=_git_env())
         except OSError:
-            return None
-        if answer.returncode != 0:
-            return None
+            return None, ""
         out = answer.stdout              # bytes from git; whatever else is read as nothing said
         if isinstance(out, bytes):
-            return out.decode("utf-8", "surrogateescape")
-        return out if isinstance(out, str) else None
+            out = out.decode("utf-8", "surrogateescape")
+        return answer.returncode, out if isinstance(out, str) else ""
 
-    def records(out: "str | None"):
+    def records(out: str):
         """`--show-origin -z`: origin NUL key LF value NUL, again and again."""
-        toks = (out or "").split("\0")
+        toks = out.split("\0")
         for i in range(0, len(toks) - 1, 2):
-            origin, _, rest = toks[i], None, toks[i + 1]
+            origin, rest = toks[i], toks[i + 1]
             key, _sep, value = rest.partition("\n")
             yield origin, key, value
+
+    def named(value: str, beside: Path) -> Path:
+        """A path a setting names: `~` expanded, a relative one read against `beside`."""
+        target = Path(os.path.expanduser(value)) if value.startswith("~") else Path(value)
+        return target if target.is_absolute() else beside / target
 
     try:
         roots = [Path(project_dir).resolve(), *_code_root_dirs(project_dir)]
     except OSError:
-        return existing, missing, link_dirs
+        return existing, missing, link_dirs, unanswered
     for root in roots:
-        hooks = ask(root, "rev-parse", "--git-path", "hooks")
-        if hooks is None or not hooks.strip("\n"):
-            continue                       # no repository here (or no git): nothing git would run
+        rc, hooks = ask(root, "rev-parse", "--git-path", "hooks")
+        if rc is None:
+            break                          # no git on this machine: nothing would run there
+        if rc != 0 or not hooks.strip("\n"):
+            if _repository_on_disk(root) and str(root) not in unanswered:
+                unanswered.append(str(root))
+            continue                       # else: no repository here, nothing git would run
+        rc_top, top = ask(root, "rev-parse", "--show-toplevel")
+        base = Path(top.rstrip("\n")) if rc_top == 0 and top.strip("\n") else root   # a bare repository: itself
         add(root / hooks.rstrip("\n"))
-        for origin, _key, _value in records(ask(root, "config", "--list", "--show-origin", "-z")):
+        rc_list, listed = ask(root, "config", "--list", "--show-origin", "-z")
+        # (`--get-regexp` answers 1 when nothing matches: that IS an answer)
+        rc_inc, includes = ask(root, "config", "--show-origin", "-z", "--get-regexp",
+                               r"^include(if\..*)?\.path$")
+        if rc_list != 0 or rc_inc not in (0, 1):
+            if str(root) not in unanswered:
+                unanswered.append(str(root))
+            continue
+        in_effect: "set[str]" = set()
+        for origin, _key, _value in records(listed):
             if origin.startswith("file:"):
-                add(root / origin[5:])
-        for origin, key, value in records(ask(root, "config", "--show-origin", "-z", "--get-regexp",
-                                              r"^include(if\..*)?\.path$")):
+                resolved = add(base / origin[5:])
+                if resolved:
+                    in_effect.add(resolved)
+        todo: "list[str]" = []
+        for origin, key, value in records(includes):
             if not origin.startswith("file:") or not _INCLUDE_PATH_KEY.match(key) or not value:
                 continue
-            target = Path(os.path.expanduser(value)) if value.startswith("~") else Path(value)
-            if not target.is_absolute():
-                target = (root / origin[5:]).parent / target
-            add(target)
-    return existing, missing, link_dirs
+            resolved = add(named(value, (base / origin[5:]).parent))
+            if resolved:
+                todo.append(resolved)
+        # what a file that is not in effect now names, in the file's own words
+        seen: "set[str]" = set()
+        while todo:
+            path = todo.pop()
+            if path in seen or path in in_effect or not os.path.isfile(path):
+                continue
+            seen.add(path)
+            rc_f, out = ask(root, "config", "-f", path, "--no-includes", "-z", "--get-regexp",
+                            r"^(include(if\..*)?\.path|core\.hookspath)$")
+            if rc_f not in (0, 1):
+                if str(root) not in unanswered:
+                    unanswered.append(str(root))       # it cannot be read: nor can what it names be kept
+                continue
+            for rest in out.split("\0"):
+                key, sep, value = rest.partition("\n")
+                if not sep or not value:
+                    continue
+                if key.lower() == "core.hookspath":
+                    add(named(value, base))            # hooks run from the top of the work tree
+                elif _INCLUDE_PATH_KEY.match(key):
+                    resolved = add(named(value, Path(path).parent))
+                    if resolved:
+                        todo.append(resolved)
+    return existing, missing, link_dirs, unanswered
 
 
 def _compose_agent_argv(agent: str, agent_args: list[str]) -> list[str]:
@@ -1152,13 +1304,14 @@ def _launch_plan(
         git_dir = _git_dir_of(project)
         # what git runs by itself — its hooks, its settings — is asked of git, and kept
         # read-only too (task 181); not asked at all with the owner's permission
-        sources, absent, links = ([], [], []) if git_sources_writable else _git_sources(project)
+        sources, absent, links, unanswered = (([], [], [], []) if git_sources_writable
+                                              else _git_sources(project))
         argv = build_bwrap_argv(project, git_dir, inner_argv, extra_rw,
                                 project_writable=project_writable, no_network=no_network,
                                 mask_records=mask_records,
                                 git_readonly=_git_paths_to_protect(project),
                                 git_sources=sources, git_sources_missing=absent,
-                                git_source_links=links,
+                                git_source_links=links, git_sources_unanswered=unanswered,
                                 git_sources_writable=git_sources_writable)
         return [exe, *argv[1:]], True     # by absolute path: the launch runs in the project
     if require_containment:

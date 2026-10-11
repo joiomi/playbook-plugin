@@ -99,8 +99,22 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   run may write (what the link names can be kept, the link itself could be replaced). **`--rw-git-sources`**
   is your explicit permission to let an agent edit them — a tracked hooks directory you want changed, say; it
   is not available with `--prompt`. A judge's read-only run is not affected. An ordinary repository — hooks
-  and settings in `.git`, your global settings in your home — launches exactly as before. Not covered: git is
-  asked once, at launch; attribute and ignore files; a nested repository `code_roots` does not name.
+  and settings in `.git`, your global settings in your home — launches exactly as before. Four things the
+  first form of this left open, found by its review and each measured with real bubblewrap before it was
+  closed: (1) a read-only place is only as fixed as the directories above it — `mv tools t2`, then a new
+  `tools` with the agent's own file, and the host's git read that file; the same for a hooks directory one
+  level down and for a whole `code_roots` repository, whose `.git` was read-only and which could itself be
+  moved aside. Every directory between a writable area's root and such a place is now bound onto itself,
+  which makes it a mount point: it cannot be renamed, removed or replaced ("Device or resource busy") and
+  stays writable inside. (2) What a conditional include NAMES — a `core.hooksPath`, further includes — is read
+  from the file itself; git lists nothing of an include whose condition does not hold now. (3) A repository
+  where git cannot answer (a settings file with a syntax error) REFUSES the launch; it used to read as "no
+  repository here", nothing was kept, and the agent could repair the file with settings of its own. (4) A
+  project that is a directory below the top of its repository launches; it was refused every time. Not
+  covered: git is asked once, at launch; attribute and ignore files; a nested repository `code_roots` does
+  not name; a file that has a second hard link in a writable place; and a directory that is fixed in place
+  cannot be renamed or removed by the agent's own work either — `--rw-git-sources` lifts that for hooks and
+  settings, not for git's own directories.
 - **A `PYTHONPATH` that covers the project no longer switches the destructive-command guard off** (task 180,
   PLAN S11 items 19 and 20; owner decisions 2026-10-10 and 2026-10-11). The helpers the hooks start as files —
   the command guard, the status reader, the payload normalizer and the others — read the user's `PYTHONPATH`,
