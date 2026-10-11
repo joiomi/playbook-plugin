@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -351,6 +352,88 @@ class WhatGitDoesNotSayByItself(_Sandboxed):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual((self.p / "pkg" / "made.txt").read_text(encoding="utf-8"), "ok\n")
         self.assertFalse((self.p / "pkg" / ".git").exists())
+
+
+@unittest.skipUnless(bwrap_usable(), "no bubblewrap that can start a sandbox here")
+class PanelRoundTwo(_Sandboxed):
+    def test_an_empty_repository_config_is_still_read_only(self):
+        (self.p / ".git/config").unlink()
+        (self.p / "empty").write_text("", encoding="utf-8")
+        (self.p / ".git/config").symlink_to("../empty")
+        self.refused(self.inside(ADD_ALIAS.format(path="empty")), "an empty repository config")
+        self.assertFalse(self.alias_ran_it())
+
+    def test_an_unresolvable_source_refuses_the_launch(self):
+        (self.p / "loop").symlink_to("loop")
+        _git(self.p, "config", "core.hooksPath", "loop")
+        with self.assertRaises(RuntimeError) as cm:
+            self.plan("rm loop && mkdir loop && " + WRITE_HOOK.format(path="loop/pre-commit"))
+        self.assertIn(str(self.p / "loop"), str(cm.exception))
+        self.assertIn("--rw-git-sources", str(cm.exception))
+        self.assertFalse(self.commit_ran_it())
+
+    def test_a_writable_hard_link_to_settings_cannot_change_host_git(self):
+        os.link(self.p / ".git/config", self.p / "alias-config")
+        try:
+            r = self.inside(ADD_ALIAS.format(path="alias-config"))
+        except RuntimeError as exc:
+            self.assertIn(str(self.p / ".git/config"), str(exc))
+            self.assertIn("--rw-git-sources", str(exc))
+        else:
+            self.refused(r, "a hard link to settings")
+        self.assertFalse(self.alias_ran_it())
+
+    def test_an_ancestor_in_the_broad_writable_layer_cannot_be_replaced(self):
+        moved = str(self.base) + "-moved"
+        self.addCleanup(shutil.rmtree, moved, True)
+        script = (f"mv {shlex.quote(str(self.base))} {shlex.quote(moved)} && "
+                  f"mkdir -p {shlex.quote(str(self.p))} && cd {shlex.quote(str(self.p))} && "
+                  "git init -q && git config user.name t && git config user.email t@t && "
+                  "echo a > a.txt && git add a.txt && " + WRITE_HOOK.format(path=".git/hooks/pre-commit"))
+        r = self.inside(script)
+        self.assertNotEqual(r.returncode, 0, "the ancestor of the project was moved aside")
+        self.assertIn("Device or resource busy", r.stderr)
+        self.assertFalse(self.commit_ran_it())
+
+    def test_a_shadowed_hooks_path_is_still_read_only(self):
+        self.hooks_path()
+        (self.p / ".release-hooks").mkdir()
+        branch = _git(self.p, "branch", "--show-current").stdout.strip()
+        (self.p / "later").write_text("[core]\n\thooksPath = .release-hooks\n", encoding="utf-8")
+        _git(self.p, "config", f"includeIf.onbranch:{branch}.path", "../later")
+        self.refused(self.inside(WRITE_HOOK.format(path=".githooks/pre-commit")), "a shadowed hooks path")
+        _git(self.p, "checkout", "-q", "-b", "other")
+        self.assertFalse(self.commit_ran_it())
+
+    def test_a_nested_namespace_cannot_detach_the_protected_tree(self):
+        # A new user+mount namespace can pivot to a tmpfs root and detach the WHOLE
+        # inherited tree. A retained descriptor then permits replacing mount points.
+        script = r'''
+import ctypes, os, subprocess, sys
+p = sys.argv[1]
+fd = os.open(p, os.O_RDONLY | os.O_DIRECTORY)
+os.mkdir(p + '/replacement')
+subprocess.run(['git', 'init', '-q', p + '/replacement'], check=True)
+subprocess.run(['git', '-C', p + '/replacement', 'config', 'alias.boom', '!touch RAN-ON-HOST'], check=True)
+libc = ctypes.CDLL(None, use_errno=True)
+new = p + '/namespace-root'
+os.mkdir(new)
+if libc.mount(b'tmpfs', new.encode(), b'tmpfs', 0, None) != 0:
+    raise OSError(ctypes.get_errno(), 'mount')
+os.mkdir(new + '/old')
+os.chdir(new)
+if libc.pivot_root(b'.', b'old') != 0:
+    raise OSError(ctypes.get_errno(), 'pivot_root')
+os.chdir('/')
+if libc.umount2(b'/old', 2) != 0:
+    raise OSError(ctypes.get_errno(), 'detach old tree')
+os.rename('.git', 'git-moved', src_dir_fd=fd, dst_dir_fd=fd)
+os.rename('replacement/.git', '.git', src_dir_fd=fd, dst_dir_fd=fd)
+'''
+        command = "unshare -Ur -m " + shlex.quote(sys.executable) + " -c " + shlex.quote(script) + " " + shlex.quote(str(self.p))
+        r = self.inside(command)
+        self.assertFalse(self.alias_ran_it(), "a nested namespace replaced what the host's git reads: " + r.stdout + r.stderr)
+        self.assertNotEqual(r.returncode, 0, "nested user namespaces were allowed")
 
 
 class WhatGitIsAsked(_Repo):
