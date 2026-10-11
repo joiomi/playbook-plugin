@@ -713,6 +713,41 @@ class TheGateIsReadUnderTheLock(_Counters):
         self.assertFalse((self.session_dir / "counts_unsure").exists())
         self.assertEqual(self.stop().returncode, 0)          # a reply with one counted Read may end
 
+    def _a_flock_that_refuses_the_chat_logs_lock(self, ours_too):
+        d = Path(self._tmp.name) / ("refuse-both" if ours_too else "refuse-202")
+        d.mkdir()
+        ours = '*" 204 "*) exit 1 ;; ' if ours_too else ""
+        (d / "flock").write_text(f'#!/bin/sh\ncase " $* " in *" 202 "*) exit 1 ;; {ours}esac\n'
+                                 f'exec "{shutil.which("flock")}" "$@"\n', encoding="utf-8")
+        (d / "flock").chmod(0o755)
+        return str(d) + os.pathsep + os.environ["PATH"]
+
+    def test_a_gate_whose_entry_stays_unwritten_is_said_at_every_call(self):
+        # "not yet" has no end of its own: a holder of the chat log's lock that never lets
+        # go froze the gate with nothing said (post-panel run 2, run by the judge)
+        self._tick_the_first_gate()
+        path = self._a_flock_that_refuses_the_chat_logs_lock(ours_too=False)
+        for _ in range(2):
+            rc, out, err = self.finish(self.start_tool("Read", PATH=path))
+            self.assertEqual(rc, 0, err)
+            self.assertIn("is not logged yet", out)
+            self.assertNotIn("previous gate done", out)
+        self.assertEqual((self.counters()["gate_key"], self._log().count("**[G001:7]**")), ("001:7", 0))
+        self.tools("Read")                                               # the real flock again
+        self.assertEqual((self.counters()["gate_key"], self._log().count("**[G001:7]**")), ("001:8", 1))
+
+    def test_where_there_is_no_lock_to_take_the_entry_is_appended_without_one(self):
+        # a `flock` that refuses every request at once: a host with no lock to take — the
+        # gate is logged as on a host without `flock`, not held for ever
+        self._tick_the_first_gate()
+        path = self._a_flock_that_refuses_the_chat_logs_lock(ours_too=True)
+        rc, out, err = self.finish(self.start_tool("Read", PATH=path))
+        self.assertEqual(rc, 0, err)
+        self.assertNotIn(NOTICE, out)
+        self.assertNotIn("is not logged yet", out)
+        self.assertIn("previous gate done", out)
+        self.assertEqual((self.counters()["gate_key"], self._log().count("**[G001:7]**")), ("001:8", 1))
+
     def test_the_last_gate_waits_for_its_entry_too(self):
         # no gate left open: the counters forget the gate only once its entry is written
         self._tick_the_first_gate()
