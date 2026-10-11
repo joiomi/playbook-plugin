@@ -7972,7 +7972,7 @@
     {
       "id": "PB-SANDBOX-WRITE",
       "category": "sandbox",
-      "statement": "With a supported containment backend, sandbox allows project writes in worker mode, keeps git metadata read-only — the project's `.git` directory, or the `.git` file a linked worktree or a submodule has in its place together with the git directory and the common directory it leads to, and the same for every repository `.agent/config.json` names under `code_roots` — whatever an extra `--rw` path covers, and in --ro-project mode denies project writes except explicit --rw paths. The places git is TOLD to take its hooks and its settings from are read-only in the sandbox too, wherever they lie — the directory `core.hooksPath` names (or `.git/hooks`, also as a link), every settings file in effect (also as a link) and every `include`/`includeIf` path whatever its condition — for the project and every `code_roots` repository; what a settings file names that is NOT in effect now (a conditional include's own `core.hooksPath` and includes) is read from the file itself; and every directory between a writable bind's root and a place that is kept read-only — git's hooks and settings, and git's own directories of the project and of every `code_roots` repository — is bound onto itself, so that it cannot be renamed, removed or replaced from inside; a launch that cannot keep one of them (it does not exist where the run could create it; it is, or contains, a path the run must write; it is reached through a link in a directory the run may write; git cannot answer in a repository that is there on disk; a directory that would have to be fixed holds a place the run keeps read-only) is refused, and `--rw-git-sources` lifts all of it but the fixing of git's own directories, by the owner's explicit choice (task 181, PLAN S11 item 31).",
+      "statement": "With a supported containment backend on a host that prevents nested user/mount namespace creation, sandbox allows project writes in worker mode, keeps git metadata read-only — the project's `.git` directory, or the `.git` file a linked worktree or a submodule has in its place together with the git directory and the common directory it leads to, and the same for every repository `.agent/config.json` names under `code_roots` — whatever an extra `--rw` path covers, and in --ro-project mode denies project writes except explicit --rw paths. The places git is TOLD to take its hooks and its settings from are read-only in the sandbox too, wherever they lie — all directories named by core.hooksPath (including shadowed values), or .git/hooks, plus their direct hook files and symlink targets, every settings file in effect and default settings files even when empty (also as a link) and every `include`/`includeIf` path whatever its condition — for the project and every `code_roots` repository; what a settings file names that is NOT in effect now (a conditional include's own `core.hooksPath` and includes) is read from the file itself; and every directory between the outermost covering writable root and a place that is kept read-only — git's hooks and settings, and git's own directories of the project and of every `code_roots` repository — is bound onto itself, so that it cannot be renamed, removed or replaced from inside; a launch that cannot keep one of them (it does not exist where the run could create it; it is, or contains, a path the run must write; it is reached through a link in a directory the run may write; git cannot answer in a repository that is there on disk; a source cannot be resolved; a source file has multiple hard links) is refused, and `--rw-git-sources` lifts all of it but the fixing of git's own directories, by the owner's explicit choice (task 181, PLAN S11 item 31).",
       "owner": [
         {
           "path": "plugins/playbook/provider/sandbox.py",
@@ -8501,11 +8501,11 @@
         {
           "type": "executable unit",
           "path": "tests/test_sandbox_git_sources.py",
-          "reference": "WhereTheBindsGo.test_a_directory_that_holds_a_read_only_place_cannot_be_bound_writable_over_it",
+          "reference": "WhereTheBindsGo.test_a_directory_above_a_read_only_project_is_fixed_before_the_project",
           "boundary": "unit",
           "negative_control": null,
           "limitations": [
-            "Task 181 rework: a source beside a READ-ONLY project in one directory of `/tmp` refuses, naming both; beside a writable project it is simply kept."
+            "Task 181 round-two repair: a broad ancestor is pinned before the read-only project bind; the project restriction wins."
           ]
         },
         {
@@ -8516,6 +8516,76 @@
           "negative_control": null,
           "limitations": [
             "Task 181 rework: the argv builder's own refusal, and the option that lifts it."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "PanelRoundTwo.test_an_empty_repository_config_is_still_read_only",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Real bubblewrap through the actual launch plan; empty default repository config is explicitly discovered and its target denies writes. Observed red on df8b392 with current tests at /tmp/pb181-r2-red-cqdbk3rc/red.log, then green on the repaired tree. Namespace detachment is a separate unresolved boundary."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "PanelRoundTwo.test_an_unresolvable_source_refuses_the_launch",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Real bubblewrap through the actual launch plan; an unresolvable hook path refuses launch. Observed red on df8b392 with current tests at /tmp/pb181-r2-red-cqdbk3rc/red.log, then green on the repaired tree. Namespace detachment is a separate unresolved boundary."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "PanelRoundTwo.test_a_writable_hard_link_to_settings_cannot_change_host_git",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Real bubblewrap through the actual launch plan; a multiply linked settings file refuses launch. Observed red on df8b392 with current tests at /tmp/pb181-r2-red-cqdbk3rc/red.log, then green on the repaired tree. Namespace detachment is a separate unresolved boundary."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "PanelRoundTwo.test_an_ancestor_in_the_broad_writable_layer_cannot_be_replaced",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Real bubblewrap through the actual launch plan; an ancestor above the project inside /tmp cannot be renamed. Observed red on df8b392 with current tests at /tmp/pb181-r2-red-cqdbk3rc/red.log, then green on the repaired tree. Namespace detachment is a separate unresolved boundary."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "PanelRoundTwo.test_a_shadowed_hooks_path_is_still_read_only",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Real bubblewrap through the actual launch plan; a hooks path shadowed by an active conditional include still denies writes. Observed red on df8b392 with current tests at /tmp/pb181-r2-red-cqdbk3rc/red.log, then green on the repaired tree. Namespace detachment is a separate unresolved boundary."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "PanelRoundTwo.test_a_hook_file_with_a_writable_hard_link_refuses_the_launch",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Real bubblewrap through the actual launch plan; a multiply linked hook file refuses launch. Observed red on df8b392 with current tests at /tmp/pb181-r2-red-cqdbk3rc/red.log, then green on the repaired tree. Namespace detachment is a separate unresolved boundary."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_sandbox_git_sources.py",
+          "reference": "PanelRoundTwo.test_a_hook_file_linked_to_project_content_is_read_only",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Real bubblewrap through the actual launch plan; a symlinked hook target in writable project content denies writes. Observed red on df8b392 with current tests at /tmp/pb181-r2-red-cqdbk3rc/red.log, then green on the repaired tree. Namespace detachment is a separate unresolved boundary."
           ]
         }
       ],
@@ -8539,7 +8609,8 @@
         "2026-10-08 (task 154, Linux-only): the seatbelt profile-text proof (RoProjectSeatbeltProfileDeniesWrites, control WorkerModeSeatbeltProfileUnchanged) was deleted with the other macOS-only tests; the bubblewrap proof stays.",
         "2026-10-08 (task 154 impl panel r1): the three unconditional bubblewrap argv tests (BindOrder) bound as proofs, so the row keeps a proof that runs where bwrap is not installed.",
         "2026-10-08 (task 155, Linux-only): the macOS seatbelt backend (build_seatbelt_profile) was deleted; bubblewrap is the only backend.",
-        "Task 181 (PLAN S11 item 31; owner 2026-10-10: \"Da, în S11 (Recomandat)\" to \"sandbox-ul îl întreabă pe git de unde își ia scripturile și setările și face și acele locuri „doar citire” … Dacă vrei ca agentul să îți editeze totuși acele scripturi, îi dai tu voie explicit\"). Measured with real bubblewrap before the fix, five ways: a sandboxed command changed what the host's git then ran. Bounds of the fix, stated: (1) git is asked ONCE, at launch — a setting changed on the host while a run is under way is not seen; (2) what is kept is what git takes HOOKS and SETTINGS from; attribute and ignore files, which select and do not run, are not; (3) the three refusals (a place that does not exist where the run could create it; one that is or contains a path the run must write; a link on the way in a directory the run may write) are the BUILDER's reading of the owner's \"read-only\", fail-closed, and can stop a launch for a git configuration that names such a place — the message says what to create or change, and a judge's run, whose project is read-only, is refused only for a place under a directory every run may write (`/tmp`, the agents' home subdirectories); (4) the explicit option is one switch for hooks and settings together and is not available on the `--prompt` path the judges share; (5) a place that is already read-only in the sandbox (the git directory, the user's and the system's settings outside any writable bind) is not bound again; (6) links are followed as they are at launch — what the listed directories hold is checked then, not watched. REWORK after the task's first panel (2026-10-11; below quorum — the codex seat's provider ended its turn as a possible cybersecurity risk — opus's four findings, none of them run by it, each MEASURED with real bubblewrap before it was closed, `measure181b.py`): (a) a read-only bind fixes its own path only — `mv tools t2`, a new `tools` with the agent's file, and the host's `git boom` ran it (\"inside rc=0 'replaced' … marker: True\"); the same one level down for a hooks directory, and for a `code_roots` repository as a whole (task 169's shape, never measured then); cure measured first with raw bubblewrap (`measure181c.py`): each directory on the way bound onto itself — rename, removal and replacement answer \"Device or resource busy\", a sibling is still writable, and BOTH levels are needed (\"ONLY the inner pinned — rename the outer: RENAMED\"); (b) a project one level below the top of its repository was refused at every launch — git names the repository's own settings file from the top of the work tree; (c) a `core.hooksPath` named INSIDE a conditional include stayed writable and ran on the host once the condition held; (d) a settings file with a syntax error made git fail, that read as \"no repository\", and the agent repaired the file with an alias of its own that the host then ran. After the rework the same script answers: busy; busy; launched; \"Read-only file system\"; REFUSED. Bounds of the rework, stated: (7) the fixing is as strong as the read-only binds themselves — both rest on the kernel refusing to change or remove a mount from inside; (8) a directory that is fixed cannot be renamed or removed by the agent's own work either, for the length of the run; (9) a file that has a SECOND hard link in a writable place can be written through that name — the agent cannot make such a link (\"Invalid cross-device link\", measured), one that is already there is not looked for; (10) \"a repository that is there on disk\" is read from the first `.git` entry on the way up, as git reads it — a stray `.git` that leads nowhere is no repository and does not refuse; (11) a directory that would have to be fixed over a place the run keeps read-only or hidden (hooks beside a READ-ONLY project in one directory of `/tmp`) refuses the launch — fail-closed, a layout not met; (12) what a file names is read with `git config -f`, includes followed by the plugin itself, a file already in effect not read twice."
+        "Task 181 (PLAN S11 item 31; owner 2026-10-10: \"Da, în S11 (Recomandat)\" to \"sandbox-ul îl întreabă pe git de unde își ia scripturile și setările și face și acele locuri „doar citire” … Dacă vrei ca agentul să îți editeze totuși acele scripturi, îi dai tu voie explicit\"). Measured with real bubblewrap before the fix, five ways: a sandboxed command changed what the host's git then ran. Bounds of the fix, stated: (1) git is asked ONCE, at launch — a setting changed on the host while a run is under way is not seen; (2) what is kept is what git takes HOOKS and SETTINGS from; attribute and ignore files, which select and do not run, are not; (3) the three refusals (a place that does not exist where the run could create it; one that is or contains a path the run must write; a link on the way in a directory the run may write) are the BUILDER's reading of the owner's \"read-only\", fail-closed, and can stop a launch for a git configuration that names such a place — the message says what to create or change, and a judge's run, whose project is read-only, is refused only for a place under a directory every run may write (`/tmp`, the agents' home subdirectories); (4) the explicit option is one switch for hooks and settings together and is not available on the `--prompt` path the judges share; (5) a place that is already read-only in the sandbox (the git directory, the user's and the system's settings outside any writable bind) is not bound again; (6) links are followed as they are at launch — what the listed directories hold is checked then, not watched. REWORK after the task's first panel (2026-10-11; below quorum — the codex seat's provider ended its turn as a possible cybersecurity risk — opus's four findings, none of them run by it, each MEASURED with real bubblewrap before it was closed, `measure181b.py`): (a) a read-only bind fixes its own path only — `mv tools t2`, a new `tools` with the agent's file, and the host's `git boom` ran it (\"inside rc=0 'replaced' … marker: True\"); the same one level down for a hooks directory, and for a `code_roots` repository as a whole (task 169's shape, never measured then); cure measured first with raw bubblewrap (`measure181c.py`): each directory on the way bound onto itself — rename, removal and replacement answer \"Device or resource busy\", a sibling is still writable, and BOTH levels are needed (\"ONLY the inner pinned — rename the outer: RENAMED\"); (b) a project one level below the top of its repository was refused at every launch — git names the repository's own settings file from the top of the work tree; (c) a `core.hooksPath` named INSIDE a conditional include stayed writable and ran on the host once the condition held; (d) a settings file with a syntax error made git fail, that read as \"no repository\", and the agent repaired the file with an alias of its own that the host then ran. After the rework the same script answers: busy; busy; launched; \"Read-only file system\"; REFUSED. Bounds of the rework, stated: (7) the fixing is as strong as the read-only binds themselves — both rest on the kernel refusing to change or remove a mount from inside; (8) a directory that is fixed cannot be renamed or removed by the agent's own work either, for the length of the run; (9) a file that has a SECOND hard link in a writable place can be written through that name — the agent cannot make such a link (\"Invalid cross-device link\", measured), one that is already there is not looked for; (10) \"a repository that is there on disk\" is read from the first `.git` entry on the way up, as git reads it — a stray `.git` that leads nowhere is no repository and does not refuse; (11) a directory that would have to be fixed over a place the run keeps read-only or hidden (hooks beside a READ-ONLY project in one directory of `/tmp`) refuses the launch — fail-closed, a layout not met; (12) what a file names is read with `git config -f`, includes followed by the plugin itself, a file already in effect not read twice.",
+        "2026-10-11 task 181 round-two triage: seven regression cases observed red on df8b392 and green on the working tree. Supersedes rework bounds (9) and (11): all discovered source files with st_nlink > 1 conservatively refuse launch without searching for aliases, even when every alias might already be read-only; source discovery includes direct hook files and their symlink targets. Ancestors are pinned up to the outermost writable layer, before later project binds and record masks. CRITICAL OPEN BOUNDARY: existing bubblewrap 0.6.1 permits nested user/mount namespace creation; the recovered real measurement detached the protected tree and replaced .git, with host marker True. The namespace regression is explicitly skipped, not proof of protection. Requiring a working --unshare-user --disable-userns is pending the owner compatibility decision; task 181 remains open."
       ],
       "follow_up_phases": [
         8

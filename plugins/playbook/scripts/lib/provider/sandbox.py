@@ -582,7 +582,8 @@ def build_bwrap_argv(
     home subpaths read-write, bind git_dir — and every other path of git metadata
     the caller names in `git_readonly` (`_git_paths_to_protect`) — read-only.
 
-    `git_sources_unanswered` (roots where git could not be asked: the launch is
+    `git_sources_unanswered` (roots where git could not be asked, or sources that
+    could not be resolved: the launch is
     refused) and
     `git_sources` / `git_sources_missing` / `git_source_links` (`_git_sources`, task
     181): the places git takes its hooks and its settings from. One the run could
@@ -590,7 +591,9 @@ def build_bwrap_argv(
     where the run could CREATE it; one that is, or contains, a path the run must
     write; and one reached through a link that sits in a directory the run may
     write (what the link names is bound — the link itself could be replaced) — the
-    launch is refused. `git_sources_writable=True` is the owner's explicit
+    launch is refused. A source file with multiple hard links also refuses the
+    launch, including a file inside an already read-only hooks directory: another
+    name could still be writable. `git_sources_writable=True` is the owner's explicit
     permission to let the agent edit them: nothing is added and nothing refused.
 
     This is WRITE containment: `--ro-bind / /` leaves the whole filesystem
@@ -649,6 +652,10 @@ def build_bwrap_argv(
         target.mkdir(parents=True, exist_ok=True)
         argv += ["--bind", str(target), str(target)]
         layers.append((str(target), True))
+
+    # Ancestor pins go here: later project binds and record masks must win over
+    # them. Pinning a /tmp ancestor after a judge's project would expose it again.
+    pin_index = len(argv)
 
     # Git metadata, part one. Every path that holds it, resolved and in order.
     git_all: list[str] = []
@@ -765,6 +772,19 @@ def build_bwrap_argv(
             return last
 
         for source in dict.fromkeys(str(Path(s).resolve()) for s in (git_sources or [])):
+            # Even a file already under read-only .git may have a writable name
+            # for the same inode. A path bind cannot protect that other name.
+            try:
+                info = os.stat(source)
+                if os.path.isfile(source) and info.st_nlink > 1:
+                    raise RuntimeError(
+                        f"git takes hooks or settings from {source}, which has {info.st_nlink} hard links; "
+                        "a read-only bind on one name cannot keep the other names read-only. "
+                        "Remove the extra hard links or give git a separate copy. " + allow)
+            except OSError as exc:
+                raise RuntimeError(
+                    f"Cannot check hard links for git source {source}: {exc}. Repair the file or the "
+                    "project's directory permissions. " + allow) from exc
             if writable_then(source) is None:
                 continue                   # read-only already: inside git metadata, or nowhere writable
             needed = next((w for w, writable in decided if writable and _covers(source, Path(w))), None)
@@ -807,9 +827,12 @@ def build_bwrap_argv(
     protected = git_binds + kept
     pins: "dict[str, str]" = {}
     for place in protected:
-        within = writable_at(place)        # as the path is before anything is kept
-        if within is None:
+        # The governing bind is insufficient: /tmp (or a home bind) still lets
+        # an ancestor ABOVE the project be moved aside. Use the outermost layer.
+        covering = [w for w, writable in layers if writable and _covers(w, Path(place))]
+        if not covering:
             continue
+        within = min(covering, key=lambda p: len(Path(p).parts))
         above, d = [], os.path.dirname(place)
         while d != within and d != os.path.dirname(d) and _covers(within, Path(d)):
             above.append(d)
@@ -817,10 +840,15 @@ def build_bwrap_argv(
         for d in above:
             # (a directory that lies inside ANOTHER kept place is fixed like any other:
             # that place's read-only bind is laid after it, further down, and covers it)
-            pins.setdefault(d, place)
+            if not any(w == d for w, _writable in layers):
+                pins.setdefault(d, place)
+    early_pins: list[str] = []
+    late_pins: list[str] = []
     for d in sorted(pins, key=lambda p: p.count(os.sep)):
-        inner = next((w for w, writable in layers if not writable and w != d and _covers(d, Path(w))), None)
-        if inner is not None:
+        early = any(w != d and _covers(d, Path(w)) for w, _writable in layers)
+        inner = next((w for w, writable in layers if not writable and w != d and _covers(d, Path(w))
+                      and not _covers(w, Path(pins[d]))), None)
+        if inner is not None and not early:
             # e.g. hooks beside a READ-ONLY project in one directory of /tmp: the
             # directory bound onto itself would lay the writable /tmp over the project
             raise RuntimeError(
@@ -830,8 +858,9 @@ def build_bwrap_argv(
                 "one of the two out of that directory"
                 + ("" if pins[d] in git_binds else ", or pass --rw-git-sources to let this agent edit the "
                    "hooks and settings git takes from there") + ". Nothing was launched.")
-        argv += ["--bind", d, d]
-        layers.append((d, True))
+        (early_pins if early else late_pins).extend(["--bind", d, d])
+    argv[pin_index:pin_index] = early_pins
+    argv += late_pins
     for place in protected:
         argv += ["--ro-bind", place, place]
         layers.append((place, False))
@@ -1071,10 +1100,14 @@ def _git_sources(project_dir: "Path | str") -> "tuple[list[str], list[str], list
     bubblewrap, five ways). Git itself is asked, with its environment overrides
     removed (`_git_env`):
       * `git rev-parse --git-path hooks` — the hooks directory in effect
-        (`core.hooksPath`, or `hooks` in the git directory, which may be a link);
+        (`core.hooksPath`, or `hooks` in the git directory, which may be a link),
+        plus its direct files and the targets of links to them;
+      * the repository's config and config.worktree, and existing system/global
+        files, even when they are empty and emit no values;
       * `git config --list --show-origin` — every settings FILE that gives a value
         (the repository's own, which may be a link; the user's; the system's; every
-        include whose condition holds). Git names the repository's own file from the
+        include whose condition holds), plus ALL core.hooksPath values, including
+        ones shadowed by a later value. Git names the repository's own file from the
         TOP of the work tree, wherever it is asked: read against a project that is a
         directory below the top it named a file that does not exist, and every launch
         there was refused (impl round 1);
@@ -1085,6 +1118,7 @@ def _git_sources(project_dir: "Path | str") -> "tuple[list[str], list[str], list
         (`git config -f <file> --no-includes`): its own includes, in turn, and its
         `core.hooksPath` — git lists nothing of a file whose condition does not hold,
         so a hooks directory named there stayed writable (impl round 1; measured).
+    A source that cannot be resolved is returned as unanswered, never dropped.
     A directory that is no repository names nothing. A root where there IS a repository
     on disk and git fails — a settings file it cannot read — is returned as unanswered:
     it used to read as "no repository", and nothing was kept (impl round 1; measured).
@@ -1098,6 +1132,8 @@ def _git_sources(project_dir: "Path | str") -> "tuple[list[str], list[str], list
         try:
             resolved = str(path.resolve())
         except (OSError, RuntimeError):
+            if str(path) not in unanswered:
+                unanswered.append(str(path))
             return None
         bucket = existing if os.path.lexists(resolved) else missing
         if resolved not in bucket:
@@ -1118,6 +1154,21 @@ def _git_sources(project_dir: "Path | str") -> "tuple[list[str], list[str], list
         if isinstance(out, bytes):
             out = out.decode("utf-8", "surrogateescape")
         return answer.returncode, out if isinstance(out, str) else ""
+
+    def add_hooks(path: Path) -> None:
+        """Keep hook files too: a directory bind does not follow symlink targets
+        or protect another hard-link name for a file inside it."""
+        resolved = add(path)
+        if resolved is None or not os.path.isdir(resolved):
+            return
+        try:
+            with os.scandir(resolved) as entries:
+                for entry in entries:
+                    if entry.is_symlink() or entry.is_file(follow_symlinks=False):
+                        add(Path(entry.path))
+        except OSError:
+            if str(path) not in unanswered:
+                unanswered.append(str(path))
 
     def records(out: str):
         """`--show-origin -z`: origin NUL key LF value NUL, again and again."""
@@ -1146,7 +1197,22 @@ def _git_sources(project_dir: "Path | str") -> "tuple[list[str], list[str], list
             continue                       # else: no repository here, nothing git would run
         rc_top, top = ask(root, "rev-parse", "--show-toplevel")
         base = Path(top.rstrip("\n")) if rc_top == 0 and top.strip("\n") else root   # a bare repository: itself
-        add(root / hooks.rstrip("\n"))
+        add_hooks(root / hooks.rstrip("\n"))
+        # Origins name only files that EMIT values. Git also reads empty default
+        # files, including .git/config linked into writable project content.
+        for name in ("config", "config.worktree"):
+            rc_config, config = ask(root, "rev-parse", "--git-path", name)
+            if rc_config != 0 or not config.strip("\n"):
+                if str(root) not in unanswered:
+                    unanswered.append(str(root))
+            else:
+                path = root / config.rstrip("\n")
+                if name == "config" or os.path.lexists(path):
+                    add(path)
+        for path in (Path("/etc/gitconfig"), Path.home() / ".gitconfig",
+                     Path(os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")) / "git/config"):
+            if os.path.lexists(path):
+                add(path)
         rc_list, listed = ask(root, "config", "--list", "--show-origin", "-z")
         # (`--get-regexp` answers 1 when nothing matches: that IS an answer)
         rc_inc, includes = ask(root, "config", "--show-origin", "-z", "--get-regexp",
@@ -1156,7 +1222,9 @@ def _git_sources(project_dir: "Path | str") -> "tuple[list[str], list[str], list
                 unanswered.append(str(root))
             continue
         in_effect: "set[str]" = set()
-        for origin, _key, _value in records(listed):
+        for origin, key, value in records(listed):
+            if key.lower() == "core.hookspath":
+                add_hooks(named(value, base))     # ALL values, even ones shadowed now
             if origin.startswith("file:"):
                 resolved = add(base / origin[5:])
                 if resolved:
@@ -1186,7 +1254,7 @@ def _git_sources(project_dir: "Path | str") -> "tuple[list[str], list[str], list
                 if not sep or not value:
                     continue
                 if key.lower() == "core.hookspath":
-                    add(named(value, base))            # hooks run from the top of the work tree
+                    add_hooks(named(value, base))      # hooks run from the top of the work tree
                 elif _INCLUDE_PATH_KEY.match(key):
                     resolved = add(named(value, Path(path).parent))
                     if resolved:

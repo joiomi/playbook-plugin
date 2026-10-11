@@ -84,14 +84,15 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   it in place and `writes` and `tools` are two reads, so a stop that overlaps a prompt's reset can read zero
   counts, or none; and a prompt of an agent NESTED under the session resets the session's counts and clears
   the mark, as it reset the counts before this change (read, not run; parked).
-- **What git runs by itself can no longer be changed from inside the sandbox** (task 181, PLAN S11 item 31;
+- **The sandbox protects the paths Git uses for hooks and settings** (task 181, PLAN S11 item 31;
   owner decision 2026-10-10). The sandbox kept the git directory read-only, but git can be told to take its
   hooks and its settings from somewhere else, and where that is the project's own content an agent could write
   it. Measured with real bubblewrap, five ways — a `core.hooksPath` that names a project directory, a
   `.git/hooks` or a `.git/config` that is a link into the project, an `include.path` that names a project file,
   and a hooks directory that did not exist yet (the sandboxed command created it): each time the host's next
   `git commit` or git alias ran what the agent had written. At launch the sandbox now ASKS git where its hooks
-  and its settings come from — the hooks directory in effect, every settings file that gives a value, every
+  and its settings come from — every hooks path, including shadowed values and linked hook files,
+  default settings files even when empty, every settings file that gives a value, every
   `include` and `includeIf` path whatever its condition — for the project and each `code_roots` repository, and
   binds those places read-only after every writable bind. Three cases cannot be kept read-only and REFUSE the
   launch, naming the path and what to do: such a place that does not exist where the run could create it; one
@@ -112,9 +113,15 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   repository here", nothing was kept, and the agent could repair the file with settings of its own. (4) A
   project that is a directory below the top of its repository launches; it was refused every time. Not
   covered: git is asked once, at launch; attribute and ignore files; a nested repository `code_roots` does
-  not name; a file that has a second hard link in a writable place; and a directory that is fixed in place
+  not name; and a directory that is fixed in place
   cannot be renamed or removed by the agent's own work either — `--rw-git-sources` lifts that for hooks and
-  settings, not for git's own directories.
+  settings, not for git's own directories. Round-two repairs also keep empty default settings files,
+  refuse unresolvable sources and multiply linked source files (including hook files), protect shadowed
+  hooks paths, and pin ancestors above the project inside broader writable areas. Those ancestor pins
+  precede project and record masks, preserving read-only judge runs. **Open limitation:** where processes
+  can create nested user/mount namespaces, they can detach the protected tree and replace Git metadata.
+  This was measured with bubblewrap 0.6.1; requiring working `--unshare-user --disable-userns` is awaiting
+  the owner's compatibility decision. This task is not closed.
 - **A `PYTHONPATH` that covers the project no longer switches the destructive-command guard off** (task 180,
   PLAN S11 items 19 and 20; owner decisions 2026-10-10 and 2026-10-11). The helpers the hooks start as files —
   the command guard, the status reader, the payload normalizer and the others — read the user's `PYTHONPATH`,
