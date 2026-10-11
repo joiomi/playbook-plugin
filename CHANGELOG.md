@@ -61,14 +61,22 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   overlapping call (measured: six entries for one gate). Every read-modify-write of that file — a call's count,
   the step that notices a ticked gate, a single write, the reset at your prompt — now happens under one lock
   per session (`counters.lock` beside the file, `flock`). The same measurement now: 40 of 40, 60 of 60, and 60
-  of 60 twelve at a time. The lock has a time limit: if it is not given within 2 seconds
-  (`PLAYBOOK_COUNTERS_LOCK_WAIT`, whole seconds, 1 to 99) the call is counted without it, as every call was
-  before, and the hook's answer says so; that wait is spent once per tool call, not once per write. What it
-  costs, measured: about 3 ms more per tool call (78 to 81 ms for the hook); six calls side by side now take
-  turns for the two short steps and are all done about 0.1 s later than before (93 to 198 ms). Not
+  of 60 twelve at a time. The gate a hook compares is read from the task record under the same lock — read
+  before it, a tick that landed between two overlapping calls made the slower hook log the OPEN gate as done —
+  and the gate's entry is appended to the chat log after the lock is let go. The lock has a time limit: if it
+  is not given within 2 seconds (`PLAYBOOK_COUNTERS_LOCK_WAIT`: 1, 2 or 3 — the host stops a hook after 5) the
+  call is counted without it and the hook's answer says so. A count made that way may be too low, and a count
+  that is too low is what releases a stop: the session is marked, and the stop hook does not use its chat-reply
+  release until your next prompt has reset the counts under the lock. The same holds when what stands in the
+  lock's place is not a plain file, or cannot be opened. The wait is spent once per tool call. What it
+  costs, measured: about 3 ms more per tool call (81 to 84 ms for the hook on a busy machine); six calls side by
+  side now take turns for the two short steps and are all done about 0.2 s later than before (122 to 288 ms in
+  the same run). Not
   covered: a host without `flock` (counted as before, and nothing says so); the Codex lane, where nothing
   counts tool calls and the reset at a prompt is the file's only writer (it does not take the lock); the stop
-  hook itself, which only reads — the file is replaced by a rename, so it sees one whole state or the next.
+  hook itself, which only reads and takes no lock — a single write replaces the file by a rename, but the reset
+  at a prompt rewrites it in place and `writes` and `tools` are two reads, so a stop that overlaps a prompt's
+  reset can read zero counts, or none.
 - **What git runs by itself can no longer be changed from inside the sandbox** (task 181, PLAN S11 item 31;
   owner decision 2026-10-10). The sandbox kept the git directory read-only, but git can be told to take its
   hooks and its settings from somewhere else, and where that is the project's own content an agent could write

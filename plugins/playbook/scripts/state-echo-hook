@@ -254,6 +254,15 @@ if [ -z "$TASK_FILE" ]; then
     exit 0
 fi
 
+# The counters lock is taken BEFORE the gate is read from task.md (task 182, impl
+# round 1): the step below compares the gate read here with the one the counters
+# hold, and a gate read before the lock could be older than what a hook that
+# overtook this one had written — it then logged the OPEN gate as done and put the
+# old one back. Held from here to the write of the new gate, and for nothing else.
+if [ "$AGENT_WRITABLE" = true ]; then
+    counters_lock "$COUNTER_FILE"
+fi
+
 # Count total and done checkboxes (only [ ], [x], [X] — not [8] reference links)
 TOTAL_GATES=$(grep -cE '^[[:space:]]*- \[( |x|X)\]' "$TASK_FILE" 2>/dev/null) || TOTAL_GATES=0
 DONE_GATES=$(grep -cE '^[[:space:]]*- \[[xX]\]' "$TASK_FILE" 2>/dev/null) || DONE_GATES=0
@@ -299,15 +308,12 @@ REL_PATH="${TASK_FILE#$PROJECT_DIR/}"
 GATE_LOG="$AGENT_DIR/chat_log.md"
 TRANSITION_MSG=""
 SKIP_MSG=""
-# The whole step — read the previous gate, decide, log, write the new one — under
-# one hold of the counters lock (task 182). Side by side, six calls after a ticked
-# gate each read the OLD gate and each logged its completion (measured: six
-# entries for one gate), and the repeat count lost steps as the tool count did.
-# Order of locks: the counters lock first, the chat log's lock inside it; nothing
-# takes them the other way round.
-if [ "$AGENT_WRITABLE" = true ]; then
-    counters_lock "$COUNTER_FILE"
-fi
+# The whole step — the gate read above, the previous one read from the counters,
+# the decision, the new one written — is one hold of the counters lock (task 182).
+# Side by side, six calls after a ticked gate each read the OLD gate and each logged
+# its completion (measured: six entries for one gate), and the repeat count lost
+# steps as the tool count did. What the step has to LOG is only noted here.
+PB_LOG_GATE=false
 if [ -n "$GATE_LINE" ] && [ "$IS_FREEHAND" = true ]; then
     # Freehand mode: no counter increment, no repeat warning, no transition logging
     NEW_COUNT=0
@@ -335,32 +341,7 @@ elif [ -n "$GATE_LINE" ]; then
             TRANSITION_MSG="# ✓ previous gate done (${PREV_COUNT} tool calls)"
         fi
         if [ "$AGENT_WRITABLE" = true ]; then
-            # Task 058 (impl panel r2, codex-high #3): this appends to the SAME
-            # chat_log.md that `tasks tag` rewrites, so it takes the same lock the
-            # chat-log hook and the Python rewriter use. Without flock the append
-            # is unchanged and `tasks tag` still refuses a stale rewrite.
-            _gate_append() {
-            {
-                echo "---"
-                echo ""
-                echo "**[G${PREV_TASK}:${PREV_LINE}]** [$(date -u '+%Y-%m-%d %H:%M:%S UTC')] \`HOST\` (${PREV_COUNT} tool calls)"
-                echo ""
-                if [ -n "$TASK" ] && [ "${PREV_KEY%%:*}" != "$TASK" ]; then
-                    # task 073 (C10): a gate-key change caused by a TASK SWITCH is not a
-                    # completion — never log an open gate as [x]; keep the entry (it anchors
-                    # the previous task's attribution window) but say what happened.
-                    echo "- [ ] ${PREV_TEXT} (left open — switched to task ${TASK})"
-                else
-                    echo "- [x] ${PREV_TEXT}"
-                fi
-                echo ""
-            } >> "$GATE_LOG" 2>/dev/null || PLAYBOOK_WRITE_FAILED=true
-            }
-            if command -v flock &>/dev/null; then
-                ( flock -x 202; _gate_append ) 202>"$AGENT_DIR/chat_log_counter.lock"
-            else
-                _gate_append
-            fi
+            PB_LOG_GATE=true
         fi
         # Gate-skip detection: new first-unchecked is above the just-completed gate
         if [ "$PREV_TASK" = "$TASK" ] && [ "$GATE_LINE" -lt "$PREV_LINE" ] 2>/dev/null; then
@@ -394,30 +375,7 @@ else
         PREV_TEXT=$(read_counter "$COUNTER_FILE" gate_text)
         PREV_TASK="${PREV_KEY%%:*}"
         PREV_LINE="${PREV_KEY##*:}"
-        # Task 058 (impl panel r3, codex-high #4): the FINAL-gate append is a
-        # second writer of chat_log.md and needs the same lock as the one above.
-        _final_gate_append() {
-        {
-            echo "---"
-            echo ""
-            echo "**[G${PREV_TASK}:${PREV_LINE}]** [$(date -u '+%Y-%m-%d %H:%M:%S UTC')] \`HOST\` (${PREV_COUNT} tool calls)"
-            echo ""
-            if [ -n "$TASK" ] && [ "${PREV_KEY%%:*}" != "$TASK" ]; then
-                # task 073 (C10): a gate-key change caused by a TASK SWITCH is not a
-                # completion — never log an open gate as [x]; keep the entry (it anchors
-                # the previous task's attribution window) but say what happened.
-                echo "- [ ] ${PREV_TEXT} (left open — switched to task ${TASK})"
-            else
-                echo "- [x] ${PREV_TEXT}"
-            fi
-            echo ""
-        } >> "$GATE_LOG" 2>/dev/null || PLAYBOOK_WRITE_FAILED=true
-        }
-        if command -v flock &>/dev/null; then
-            ( flock -x 203; _final_gate_append ) 203>"$AGENT_DIR/chat_log_counter.lock"
-        else
-            _final_gate_append
-        fi
+        PB_LOG_GATE=true
         # Clear gate_* fields (task complete), keep tools/writes
         write_counter "$COUNTER_FILE" gate_key ""
         write_counter "$COUNTER_FILE" gate_count ""
@@ -425,6 +383,38 @@ else
     fi
 fi
 counters_unlock
+
+# The completed gate's entry goes into the chat log AFTER the counters lock is let
+# go (task 182, impl round 1): the append waits for the chat log's lock, without a
+# limit — and it used to wait holding ours, every other call's hook behind it.
+# Task 058 (impl panels r2-r3, codex-high): this appends to the SAME chat_log.md
+# that `tasks tag` rewrites, so it takes the same lock the chat-log hook and the
+# Python rewriter use. Without flock the append is unchanged and `tasks tag` still
+# refuses a stale rewrite.
+if [ "$PB_LOG_GATE" = true ]; then
+    _gate_append() {
+    {
+        echo "---"
+        echo ""
+        echo "**[G${PREV_TASK}:${PREV_LINE}]** [$(date -u '+%Y-%m-%d %H:%M:%S UTC')] \`HOST\` (${PREV_COUNT} tool calls)"
+        echo ""
+        if [ -n "$TASK" ] && [ "${PREV_KEY%%:*}" != "$TASK" ]; then
+            # task 073 (C10): a gate-key change caused by a TASK SWITCH is not a
+            # completion — never log an open gate as [x]; keep the entry (it anchors
+            # the previous task's attribution window) but say what happened.
+            echo "- [ ] ${PREV_TEXT} (left open — switched to task ${TASK})"
+        else
+            echo "- [x] ${PREV_TEXT}"
+        fi
+        echo ""
+    } >> "$GATE_LOG" 2>/dev/null || PLAYBOOK_WRITE_FAILED=true
+    }
+    if command -v flock &>/dev/null; then
+        ( flock -x 202; _gate_append ) 202>"$AGENT_DIR/chat_log_counter.lock"
+    else
+        _gate_append
+    fi
+fi
 
 # --- Build output (guarded by eval flags — state logic above always runs) ---
 # Eval verification marker — harness checks for this in claude-raw.jsonl
@@ -499,7 +489,7 @@ fi
 # Not inside a sandboxed judge, as for the warning above.
 if [ "$PLAYBOOK_COUNTERS_UNLOCKED" = true ] && [ "${PLAYBOOK_SANDBOXED:-}" != "1" ]; then
     CONTEXT="${CONTEXT}
-# ⚠ the session's counters lock could not be taken within ${PLAYBOOK_COUNTERS_WAITED}s — this call was counted without it (a count can be lost when tool calls overlap)."
+# ⚠ the session's counters lock could not be taken within ${PLAYBOOK_COUNTERS_WAITED}s — this call was counted without it (a count can be lost when tool calls overlap), so the stop hook holds this turn like one that wrote, until your next prompt."
 fi
 
 # Format as hook JSON. The old fallback `|| echo "\"$CONTEXT\""` did NOT escape

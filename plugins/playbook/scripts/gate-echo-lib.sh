@@ -643,14 +643,23 @@ is_code_file_path() {
 # counters_lock FILE / counters_unlock — a pair. They nest: write_counter
 # inside a caller's lock does not wait for itself. They never fail the caller.
 # Where no lock can be had the step goes on WITHOUT one, as every step did
-# before:
-#   - no `flock` on the host, or the lock file cannot be opened (a session
-#     directory that cannot be written — the write itself then says so);
-#   - the lock is not given within PLAYBOOK_COUNTERS_LOCK_WAIT seconds (a whole
-#     number, 1 to 99; anything else means 2 — the hooks have 5). That is waited
-#     for ONCE per process: a later step of the same hook does not wait again,
-#     and PLAYBOOK_COUNTERS_UNLOCKED=true lets the hook say it.
-# A reader does not take the lock: the file is replaced by a rename.
+# before — and there are two kinds of "cannot":
+#   - there is no lock to take: no `flock` on the host, or a session directory
+#     that cannot be written (the write itself then says so). As before, silent.
+#   - there IS one and it was not given: not within PLAYBOOK_COUNTERS_LOCK_WAIT
+#     seconds (1, 2 or 3; anything else means 2 — the host kills a hook after 5,
+#     and one killed while it waits has neither counted nor said anything); what
+#     stands in the lock's place is no plain file (a FIFO there made the OPEN
+#     wait for ever); or it cannot be opened where it could have been made. Then
+#     the count may be wrong, and a `writes` that is too low is what releases a
+#     stop: the session is MARKED (file `counts_unsure` beside the counters) and
+#     the stop hook does not use its chat-reply release until reset_counters —
+#     the user's next prompt — has run UNDER the lock (impl round 1). That is
+#     waited for ONCE per process, and PLAYBOOK_COUNTERS_UNLOCKED=true lets the
+#     hook say it.
+# A reader takes no lock. A single write replaces the file by a rename; the reset
+# rewrites it in place, and the stop hook reads `writes` and `tools` in two
+# reads — so a reader can meet a reset half-way (zero counts, or none yet).
 PLAYBOOK_COUNTERS_UNLOCKED=false
 PLAYBOOK_COUNTERS_WAITED=""
 _PB_COUNTERS_DEPTH=0
@@ -661,15 +670,37 @@ counters_lock() {
     [ "$_PB_COUNTERS_DEPTH" -eq 1 ] || return 0
     [ "$PLAYBOOK_COUNTERS_UNLOCKED" != true ] || return 0
     command -v flock &>/dev/null || return 0
-    { exec 204>>"$1.lock"; } 2>/dev/null || return 0
+    local lock="$1.lock" wait="${PLAYBOOK_COUNTERS_LOCK_WAIT:-}"
+    case "$wait" in [1-3]) ;; *) wait=2 ;; esac
+    if [ -e "$lock" ] || [ -L "$lock" ]; then
+        if [ ! -f "$lock" ] || [ -L "$lock" ]; then
+            _counters_unsure "$1" "$wait"
+            return 0
+        fi
+    fi
+    if ! { exec 204>>"$lock"; } 2>/dev/null; then
+        [ ! -w "$(_counters_dir "$1")" ] || _counters_unsure "$1" "$wait"
+        return 0
+    fi
     _PB_COUNTERS_FD=true
-    local wait="${PLAYBOOK_COUNTERS_LOCK_WAIT:-}"
-    case "$wait" in [1-9]|[1-9][0-9]) ;; *) wait=2 ;; esac
     if ! flock -w "$wait" 204 2>/dev/null; then
-        PLAYBOOK_COUNTERS_UNLOCKED=true
-        PLAYBOOK_COUNTERS_WAITED="$wait"
+        _counters_unsure "$1" "$wait"
     fi
     return 0
+}
+
+# _counters_dir FILE — the directory FILE lies in, without starting a program.
+_counters_dir() {
+    case "$1" in */*) printf '%s' "${1%/*}" ;; *) printf '.' ;; esac
+}
+
+# _counters_unsure FILE WAIT — there is a lock and it was not given: say so to
+# the hook (the flag) and to the stop hook (the mark, removed by a reset made
+# under the lock). Never fails the caller.
+_counters_unsure() {
+    PLAYBOOK_COUNTERS_UNLOCKED=true
+    PLAYBOOK_COUNTERS_WAITED="$2"
+    : > "$(_counters_dir "$1")/counts_unsure" 2>/dev/null || true
 }
 
 counters_unlock() {
@@ -725,6 +756,11 @@ reset_counters() {
         fi
     else
         printf 'tools=0\nwrites=0\n' > "$file"
+    fi
+    # counts made under the lock are sure again; a reset that could not take it
+    # leaves the mark, or has just made it
+    if [ "$PLAYBOOK_COUNTERS_UNLOCKED" != true ]; then
+        rm -f "$(_counters_dir "$file")/counts_unsure" 2>/dev/null || true
     fi
     counters_unlock
 }

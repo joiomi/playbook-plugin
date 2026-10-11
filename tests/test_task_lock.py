@@ -1086,13 +1086,16 @@ class Round3Fixes(unittest.TestCase):
         self.assertIn("not force", src[max(0, i - 600):i],
                       "the commit-time CAS ignores --force")
 
-    def test_both_state_echo_append_sites_take_the_lock(self):
+    def test_the_state_echo_append_takes_the_lock(self):
         # codex-high #4: the FINAL-gate append was a second, unlocked writer of
         # chat_log.md. Count the append blocks and require each to be wrapped.
+        # (Two sites until task 182's impl round 1 made them one, appended after the
+        # counters lock is let go; that it WAITS for the chat log's lock is run in
+        # tests/test_counters_lock.py::TheGateIsReadUnderTheLock.)
         hook = (PLUGIN / "scripts" / "state-echo-hook").read_text(encoding="utf-8")
         appends = hook.count('>> "$GATE_LOG"')
         wrapped = hook.count('chat_log_counter.lock')
-        self.assertGreaterEqual(appends, 2, "the hook's append sites moved")
+        self.assertEqual(appends, 1, "the hook's append sites moved")
         self.assertGreaterEqual(wrapped, appends,
                                 f"{appends} appends but only {wrapped} lock wrappers")
 

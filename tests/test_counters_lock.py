@@ -210,6 +210,19 @@ class AGatesCompletionIsLoggedOnce(_Counters):
         self.assertEqual(self._logged(), 1)
         self.assertEqual(self.counters()["gate_count"], "1")
 
+    def test_the_last_gate_is_logged_once_too_and_the_gate_is_forgotten(self):
+        # no gate left open: the entry of the last one, once, and the counters hold no gate
+        self.tools("Read")                                               # 001:7 logged, now on 001:8
+        self.task_file.write_text(
+            self.task_file.read_text(encoding="utf-8").replace("- [ ] the second gate", "- [x] the second gate — done"),
+            encoding="utf-8")
+        self.overlapping(*["Read"] * 4)
+        log = self.chat_log.read_text(encoding="utf-8")
+        self.assertEqual(log.count("**[G001:8]**"), 1)
+        self.assertIn("- [x] the second gate", log)
+        self.assertEqual({k: v for k, v in self.counters().items() if k.startswith("gate_")},
+                         {"gate_key": "", "gate_count": "", "gate_text": ""})
+
 
 @_needs_flock
 class EveryWriterWaitsForTheLock(_Counters):
@@ -327,6 +340,7 @@ class TheLockHasATimeLimit(_Counters):
         self.assertEqual(self.counts(), (1, 1))
         self.assertGreaterEqual(took, 0.9, "the hook did not wait for the lock at all")
         self.assertIn(NOTICE, out)
+        self.assertIn("the stop hook holds this turn", out)             # what it costs, said where it is seen
         self.assertIn("1s", out)
         json.loads(out)                                  # … and it is still the hook's answer
 
@@ -420,7 +434,8 @@ class ACountMadeWithoutTheLockHoldsTheStop(_Counters):
     def test_something_that_is_no_file_in_the_locks_place(self):
         # a FIFO there made the OPEN wait for ever, before any time limit (codex); a
         # directory or a link is no lock either
-        for what in ("fifo", "directory", "link"):
+        (self.session_dir / "a-real-file").write_text("", encoding="utf-8")
+        for what in ("fifo", "directory", "link", "link to a file"):
             with self.subTest(what=what):
                 if self.lock_file.is_dir() and not self.lock_file.is_symlink():
                     os.rmdir(self.lock_file)
@@ -432,8 +447,10 @@ class ACountMadeWithoutTheLockHoldsTheStop(_Counters):
                     os.mkfifo(self.lock_file)
                 elif what == "directory":
                     os.mkdir(self.lock_file)
-                else:
+                elif what == "link":
                     os.symlink(self.session_dir / "elsewhere", self.lock_file)
+                else:
+                    os.symlink(self.session_dir / "a-real-file", self.lock_file)
                 proc = self.start_tool(PLAYBOOK_COUNTERS_LOCK_WAIT="1")
                 try:
                     out, err = proc.communicate(timeout=20)
