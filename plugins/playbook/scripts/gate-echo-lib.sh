@@ -657,11 +657,14 @@ is_code_file_path() {
 #     written to the counters by this process — no copy, no rename, nothing
 #     that could land later over what was counted under the lock (three rounds
 #     of the task's panel each found a way for a write made without the lock to
-#     release a stop). The session is MARKED instead (file `counts_unsure`
-#     beside the counters): the counts are behind, and the stop hook uses
-#     neither of its low-activity releases until reset_counters — the user's
-#     next prompt — has run UNDER the lock. PLAYBOOK_COUNTERS_UNLOCKED=true
-#     lets the hook say it; after it the process does not wait again.
+#     release a stop). Where what was not written is a COUNT (`tools`,
+#     `writes`) or the reset, the session is MARKED instead (file
+#     `counts_unsure` beside the counters): the counts are behind, and the stop
+#     hook uses neither of its low-activity releases until reset_counters — the
+#     user's next prompt — has run UNDER the lock. A gate field that was not
+#     written leaves no mark: the stop hook does not read those, and the next
+#     call writes them. PLAYBOOK_COUNTERS_UNLOCKED=true lets the hook say what
+#     happened; after it the process does not wait again.
 # A reader takes no lock. A single write replaces the file by a rename; the reset
 # rewrites it in place, and the stop hook reads `writes` and `tools` in two
 # reads — so a reader can meet a reset half-way (zero counts, or none yet).
@@ -728,12 +731,12 @@ _counters_dir() {
 }
 
 # _counters_unsure FILE WAIT — there is a lock and it was not given: say so to
-# the hook (the flag) and to the stop hook (the mark, removed by a reset made
-# under the lock). Never fails the caller.
+# the hook (the flag). What the stop hook must know — that a COUNT was not made
+# — is said by the writer that did not make it (the mark). Never fails the
+# caller.
 _counters_unsure() {
     PLAYBOOK_COUNTERS_UNLOCKED=true
     PLAYBOOK_COUNTERS_WAITED="$2"
-    _counters_mark "$1"
 }
 
 # _counters_mark FILE — leave the mark beside FILE. Never fails the caller.
@@ -763,8 +766,9 @@ write_counter() {
     local tmp="${file}.tmp.$$"
     counters_lock "$file"
     if [ "$PLAYBOOK_COUNTERS_UNLOCKED" = true ]; then
-        # there is a lock and it was not given: nothing is written without it
-        _counters_mark "$file"
+        # there is a lock and it was not given: nothing is written without it —
+        # and a count that was not made is what the stop hook must know of
+        case "$key" in tools|writes) _counters_mark "$file" ;; esac
         counters_unlock
         return 0
     fi

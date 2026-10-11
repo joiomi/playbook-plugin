@@ -200,6 +200,7 @@ if [ -n "$TRANSCRIPT_PATH" ] && [ "$AGENT_WRITABLE" = true ]; then
 fi
 
 # Increment tool/write counters
+PB_NOT_COUNTED=false
 if [ "$AGENT_WRITABLE" = true ]; then
     # read_counter_int (not read_counter): the counter bytes are untrusted and
     # `$(( ))` executes command substitution embedded in an operand (C5).
@@ -207,6 +208,7 @@ if [ "$AGENT_WRITABLE" = true ]; then
     # tool calls the host ran side by side each read the same number and wrote
     # the same number plus one — 40 calls two at a time were counted as 20.
     counters_lock "$COUNTER_FILE"
+    PB_NOT_COUNTED=$PLAYBOOK_COUNTERS_UNLOCKED       # true: this call's count is not made
     TOOLS_VAL=$(read_counter_int "$COUNTER_FILE" tools)
     write_counter "$COUNTER_FILE" tools $(( TOOLS_VAL + 1 ))
     # A write is every tool that edits a file, and Bash. MultiEdit and
@@ -317,11 +319,13 @@ SKIP_MSG=""
 # The entry and the new gate go together or not at all (impl rounds 1-3, each of
 # which found the other order wanting): the entry is appended under the chat
 # log's lock — the one `tasks tag` and the chat-log hook use (task 058) — which
-# is waited for ONE second, under ours; where it is not given, or ours was not,
+# is TRIED, not waited for, under ours; where it is not given, or ours was not,
 # NOTHING is appended and the gate is not advanced: the next call finds the old
 # gate and tries again. Never appended without that lock where `flock` exists (a
 # `tasks tag` rewrite could drop it), never after the new gate (a hook that died
-# in the wait lost it for good), never waited for without a limit.
+# in the wait lost it for good), never waited for under ours (a second of it,
+# and the hooks of six calls side by side ran out of their own wait behind it —
+# post-panel run 1, measured).
 _gate_append() {
     {
         echo "---"
@@ -347,15 +351,8 @@ _log_gate_entry() {
     local rc=0
     [ "$PLAYBOOK_COUNTERS_UNLOCKED" != true ] || return 3
     if command -v flock &>/dev/null; then
-        (
-            tries=0
-            until flock -n 202 2>/dev/null; do
-                tries=$(( tries + 1 ))
-                [ "$tries" -lt 10 ] || exit 3
-                sleep 0.1
-            done
-            _gate_append || exit 4
-        ) 202>"$AGENT_DIR/chat_log_counter.lock" || rc=$?
+        ( flock -n 202 2>/dev/null || exit 3; _gate_append || exit 4 ) \
+            202>"$AGENT_DIR/chat_log_counter.lock" || rc=$?
     else
         _gate_append || rc=4
     fi
@@ -510,12 +507,19 @@ if [ "$PLAYBOOK_WRITE_FAILED" = true ] && [ "${PLAYBOOK_SANDBOXED:-}" != "1" ]; 
 # ⚠ gate-logging write FAILED — session state / gate history not updated (retro attribution will degrade). Run \`tasks doctor\` and check .agent dir writability + AV locks."
 fi
 
-# There is a counters lock and it was not given (task 182): the call was not
-# counted — say so, a stuck holder is otherwise invisible.
+# There is a counters lock and it was not given (task 182) — say so, a stuck
+# holder is otherwise invisible, and say WHICH step went without: the count
+# (then the stop hook holds the turn) or only the gate step after a count that
+# was made (then nothing is held; the next call looks at the gate).
 # Not inside a sandboxed judge, as for the warning above.
 if [ "$PLAYBOOK_COUNTERS_UNLOCKED" = true ] && [ "${PLAYBOOK_SANDBOXED:-}" != "1" ]; then
-    CONTEXT="${CONTEXT}
+    if [ "$PB_NOT_COUNTED" = true ]; then
+        CONTEXT="${CONTEXT}
 # ⚠ the session's counters lock could not be taken within ${PLAYBOOK_COUNTERS_WAITED}s — this call was NOT counted, and the stop hook holds this turn like one that wrote, until your next prompt."
+    else
+        CONTEXT="${CONTEXT}
+# ⚠ the session's counters lock could not be taken again within this call's ${PLAYBOOK_COUNTERS_WAITED}s — the call is counted; the gate was not looked at, the next call does that."
+    fi
 fi
 
 # Format as hook JSON. The old fallback `|| echo "\"$CONTEXT\""` did NOT escape

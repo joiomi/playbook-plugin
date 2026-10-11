@@ -64,7 +64,7 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   change: 40 of 40, 60 of 60, and 60 of 60 twelve at a time. The gate a hook compares is read from the task
   record under the same lock — read before it, a tick that landed between two overlapping calls made the slower
   hook log the OPEN gate as done. A gate's entry and the new gate are written together or not at all: the entry
-  is appended under the chat log's own lock, which is waited for one second; where it is not given, nothing is
+  is appended under the chat log's own lock, which is tried and not waited for; where it is not given, nothing is
   appended and the gate is not advanced — the next tool call tries again; a chat log that cannot be written is
   now said by the hook where the host has `flock` too. The lock has a time limit: 2 seconds for a whole tool
   call (`PLAYBOOK_COUNTERS_LOCK_WAIT`: 1 or 2 — it can only shorten the wait; the host stops a hook after 5,

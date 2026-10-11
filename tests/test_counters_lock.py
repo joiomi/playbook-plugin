@@ -493,6 +493,21 @@ class ACountMadeWithoutTheLockHoldsTheStop(_Counters):
         self.assertFalse(self.unsure.exists())
         self.assertEqual(len(self._asked()), 3, "asked again after it was known that this flock cannot wait")
 
+    def test_which_key_was_not_written_decides_the_mark(self):
+        # the library alone, the lock held: a count that is not made marks the session —
+        # either count — and a gate field that is not written does not
+        for key, marked in (("tools", True), ("writes", True), ("gate_key", False), ("gate_count", False)):
+            with self.subTest(key=key):
+                self.unsure.unlink(missing_ok=True)
+                before = self.counters_file.read_bytes()
+                with self.held():
+                    rc, out, err = self.finish(self.start_lib(
+                        f'write_counter "$F" {key} 7\necho "unlocked=$PLAYBOOK_COUNTERS_UNLOCKED"',
+                        PLAYBOOK_COUNTERS_LOCK_WAIT="1"))
+                self.assertEqual((rc, err, out.strip()), (0, "", "unlocked=true"))
+                self.assertEqual(self.counters_file.read_bytes(), before)
+                self.assertEqual(self.unsure.exists(), marked)
+
     def test_a_flock_that_refuses_marks_it_too(self):
         rc, out, err = self.finish(self.start_tool(PATH=self._flock_shim(), PLAYBOOK_COUNTERS_LOCK_WAIT="1"))
         self.assertEqual(rc, 0, err)
