@@ -422,8 +422,9 @@ class PanelRoundTwo(_Sandboxed):
         _git(self.p, "checkout", "-q", "-b", "other")
         self.assertFalse(self.commit_ran_it())
 
-    @unittest.skip("PRE-EXISTING, parked: bwrap 0.6.1 lacks --disable-userns; the measured namespace escape needs an owner decision on upgrading bubblewrap")
     def test_a_nested_namespace_cannot_detach_the_protected_tree(self):
+        if not sandbox.bwrap_supports_disable_userns(sandbox._bwrap_exe() or "bwrap"):
+            self.skipTest("bubblewrap lacks usable --disable-userns; upgrade to bubblewrap >= 0.8.0")
         # A new user+mount namespace can pivot to a tmpfs root and detach the WHOLE
         # inherited tree. A retained descriptor then permits replacing mount points.
         script = r'''
@@ -452,6 +453,69 @@ os.rename('replacement/.git', '.git', src_dir_fd=fd, dst_dir_fd=fd)
         r = self.inside(command)
         self.assertFalse(self.alias_ran_it(), "a nested namespace replaced what the host's git reads: " + r.stdout + r.stderr)
         self.assertNotEqual(r.returncode, 0, "nested user namespaces were allowed")
+
+
+class NamespaceProtection(_Repo):
+    def test_supported_flags_are_added_once_even_with_git_source_permission(self):
+        from unittest import mock
+        for allowed in (False, True):
+            with mock.patch.object(sandbox, "bwrap_supports_disable_userns", return_value=True) as probe, \
+                    mock.patch("sys.stderr", new_callable=__import__("io").StringIO) as err:
+                argv = sandbox.build_bwrap_argv(self.p, self.p / ".git", ["true"], None,
+                                                git_sources_writable=allowed, bwrap_exe="/chosen/bwrap")
+            probe.assert_called_once_with("/chosen/bwrap")
+            self.assertEqual(argv.count("--unshare-user"), 1)
+            self.assertEqual(argv.count("--disable-userns"), 1)
+            self.assertEqual(err.getvalue(), "")
+
+    def test_unsupported_flags_warn_once_and_keep_the_launch(self):
+        from unittest import mock
+        with mock.patch.object(sandbox, "bwrap_supports_disable_userns", return_value=False) as probe, \
+                mock.patch("sys.stderr", new_callable=__import__("io").StringIO) as err:
+            argv = sandbox.build_bwrap_argv(self.p, self.p / ".git", ["true"], None,
+                                            bwrap_exe="/chosen/bwrap")
+        probe.assert_called_once_with("/chosen/bwrap")
+        self.assertNotIn("--unshare-user", argv)
+        self.assertNotIn("--disable-userns", argv)
+        self.assertEqual(argv[-1], "true")
+        self.assertEqual(len(err.getvalue().splitlines()), 1)
+        for text in ("nested user/mount namespaces", "--disable-userns", "bubblewrap >= 0.8.0"):
+            self.assertIn(text, err.getvalue())
+
+    def test_probe_runs_the_real_flags_and_interprets_the_exit_status(self):
+        from unittest import mock
+        for rc in (0, 1):
+            with mock.patch.object(sandbox.subprocess, "run", return_value=mock.Mock(returncode=rc)) as run:
+                supported = sandbox.bwrap_supports_disable_userns("/chosen/bwrap")
+            self.assertEqual(supported, rc == 0)
+            argv = run.call_args.args[0]
+            self.assertEqual(argv[0], "/chosen/bwrap")
+            self.assertIn("--unshare-user", argv)
+            self.assertIn("--disable-userns", argv)
+            self.assertTrue(os.path.isabs(argv[-1]))
+            self.assertIn("timeout", run.call_args.kwargs)
+
+    def test_probe_failure_or_timeout_uses_the_compatible_branch(self):
+        from unittest import mock
+        for error in (OSError("unavailable"), subprocess.TimeoutExpired("bwrap", 15)):
+            with mock.patch.object(sandbox.subprocess, "run", side_effect=error):
+                self.assertFalse(sandbox.bwrap_supports_disable_userns("/chosen/bwrap"))
+
+    def test_preview_uses_the_same_probe_and_warning(self):
+        from unittest import mock
+        import contextlib
+        import io
+        for supported in (False, True):
+            with mock.patch.object(sandbox, "bwrap_supports_disable_userns", return_value=supported) as probe, \
+                    mock.patch.object(sandbox, "launch_refusal", return_value=None), \
+                    mock.patch.object(sandbox, "is_sandboxed", return_value=False), \
+                    contextlib.redirect_stdout(io.StringIO()) as out, \
+                    contextlib.redirect_stderr(io.StringIO()) as err:
+                rc = sandbox._main(["--agent", "claude", "--project", str(self.p), "--print-argv", "--", "-p", "hi"])
+            self.assertEqual(rc, 0, err.getvalue())
+            probe.assert_called_once()
+            self.assertEqual("--disable-userns" in out.getvalue().splitlines(), supported)
+            self.assertEqual(len(err.getvalue().splitlines()), 0 if supported else 1)
 
 
 class WhatGitIsAsked(_Repo):
