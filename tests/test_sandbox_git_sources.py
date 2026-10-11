@@ -94,9 +94,8 @@ class _Repo(unittest.TestCase):
         _git(self.p, "config", "core.hooksPath", name)
 
 
-@unittest.skipUnless(bwrap_usable(), "no bubblewrap that can start a sandbox here")
-class WhatGitRunsCannotBeChangedFromInside(_Repo):
-    """The measured cases, each through the launch plan a real run uses."""
+class _Sandboxed(_Repo):
+    """A real command under real bubblewrap, through the launch plan a real run uses."""
 
     def plan(self, script, p=None, **kw):
         # the REAL launch plan — its bubblewrap, its git directory, its read-only binds — with
@@ -116,6 +115,11 @@ class WhatGitRunsCannotBeChangedFromInside(_Repo):
     def refused(self, r, what):
         self.assertNotEqual(r.returncode, 0, f"{what}: the write went through")
         self.assertIn("Read-only file system", r.stdout + r.stderr)
+
+
+@unittest.skipUnless(bwrap_usable(), "no bubblewrap that can start a sandbox here")
+class WhatGitRunsCannotBeChangedFromInside(_Sandboxed):
+    """The measured cases, each through the launch plan a real run uses."""
 
     def test_control_the_git_directory_itself(self):
         # green before task 181 too: this is what the sandbox always kept
@@ -247,11 +251,113 @@ class WhatGitRunsCannotBeChangedFromInside(_Repo):
         self.assertFalse(self.commit_ran_it(nested))
 
 
+@unittest.skipUnless(bwrap_usable(), "no bubblewrap that can start a sandbox here")
+class ADirectoryAboveAProtectedPlace(_Sandboxed):
+    """A place is kept by one read-only bind on the path itself — and that bind makes only
+    THAT path refuse a rename. A plain directory between the writable bind's root and the
+    place could be moved aside from inside and a new one made under its name: the host's
+    git then read the agent's file (impl round 1, opus by reading; measured with real
+    bubblewrap before anything was changed — `measure181b.py`: "inside rc=0 'replaced' …
+    marker: True"). Every directory on the way is bound onto itself first, which makes it a
+    mount point: it cannot be renamed, removed or replaced, and stays writable inside."""
+
+    def busy(self, r, what):
+        self.assertNotEqual(r.returncode, 0, f"{what}: the directory was moved aside")
+        self.assertIn("Device or resource busy", r.stdout + r.stderr)
+
+    def test_the_directory_that_holds_an_included_file(self):
+        (self.p / "tools").mkdir()
+        (self.p / "tools" / "extra.gitconfig").write_text("[core]\n\tabbrev = 12\n", encoding="utf-8")
+        _git(self.p, "config", "include.path", "../tools/extra.gitconfig")
+        self.busy(self.inside("mv tools t2 && mkdir tools && " + ADD_ALIAS.format(path="tools/extra.gitconfig")),
+                  "the directory of an included file")
+        self.assertFalse(self.alias_ran_it(), "the host's git read what the sandboxed command put in its place")
+        self.assertEqual((self.p / "tools" / "extra.gitconfig").read_text(encoding="utf-8"), "[core]\n\tabbrev = 12\n")
+        # … and the agent can still write beside the file, and anywhere else
+        r = self.inside("echo ok > tools/other.txt && echo ok > top.txt && mkdir d && mv d e")
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_a_hooks_directory_two_levels_down_at_either_level(self):
+        (self.p / "a" / "b" / "hooks").mkdir(parents=True)
+        (self.p / "a" / "b" / "hooks" / "pre-commit").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        os.chmod(self.p / "a" / "b" / "hooks" / "pre-commit", 0o755)
+        _git(self.p, "config", "core.hooksPath", "a/b/hooks")
+        again = " && mkdir -p a/b/hooks && " + WRITE_HOOK.format(path="a/b/hooks/pre-commit")
+        self.busy(self.inside("mv a a2" + again), "the outer directory")
+        self.busy(self.inside("mv a/b a/b2" + again), "the inner directory")
+        self.assertFalse(self.commit_ran_it())
+        self.assertEqual(self.inside("mkdir a/c && echo ok > a/c/f && echo ok > a/b/g").returncode, 0)
+
+    def test_a_repository_named_in_code_roots(self):
+        # the same shape one task earlier (task 169): the code root's `.git` was read-only,
+        # the code root itself could be moved aside and a new repository made under its name
+        nested = self.repo("proj/plugin")
+        (self.p / ".agent").mkdir()
+        (self.p / ".agent" / "config.json").write_text(json.dumps({"code_roots": ["plugin"]}), encoding="utf-8")
+        r = self.inside("mv plugin p2 && mkdir plugin && cd plugin && git init -q && "
+                        + WRITE_HOOK.format(path=".git/hooks/pre-commit"))
+        self.busy(r, "a code root")
+        self.assertFalse(self.commit_ran_it(nested))
+        self.assertEqual(self.inside("echo ok > plugin/new.txt").returncode, 0)
+
+
+@unittest.skipUnless(bwrap_usable(), "no bubblewrap that can start a sandbox here")
+class WhatGitDoesNotSayByItself(_Sandboxed):
+    """Three things the first build took from git's answers as they came (impl round 1,
+    opus; each measured before it was changed)."""
+
+    def test_a_hooks_path_named_inside_a_conditional_include(self):
+        # the conditional file was kept — and what is IN it was not read: git does not
+        # list the values of an include whose condition does not hold
+        (self.p / "tools").mkdir()
+        (self.p / ".release-hooks").mkdir()
+        (self.p / ".release-hooks" / "pre-commit").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        os.chmod(self.p / ".release-hooks" / "pre-commit", 0o755)
+        (self.p / "tools" / "later.gitconfig").write_text("[core]\n\thooksPath = .release-hooks\n", encoding="utf-8")
+        _git(self.p, "config", "includeIf.onbranch:later.path", "../tools/later.gitconfig")
+        self.refused(self.inside(WRITE_HOOK.format(path=".release-hooks/pre-commit")), "a hooks path of a conditional include")
+        _git(self.p, "checkout", "-q", "-b", "later")
+        self.assertFalse(self.commit_ran_it(), "on the branch the include is for, the host ran the agent's hook")
+
+    def test_a_settings_file_git_cannot_read_refuses_the_launch(self):
+        # git fails as a whole, and that was read as "no repository here": nothing was
+        # kept, and the agent could repair the file with settings of its own
+        (self.p / "tools").mkdir()
+        (self.p / "tools" / "extra.gitconfig").write_text("[core\n\tabbrev = 12\n", encoding="utf-8")
+        _git(self.p, "config", "include.path", "../tools/extra.gitconfig")
+        self.assertNotEqual(_git(self.p, "rev-parse", "--git-dir", check=False).returncode, 0)
+        with self.assertRaises(RuntimeError) as cm:
+            self.plan("true")
+        said = str(cm.exception)
+        self.assertIn(str(self.p), said)
+        self.assertIn("could not", said)
+        self.assertIn("Nothing was launched.", said)
+        self.assertFalse((self.p / MARKER).exists())
+        # a judge's read-only run of the same project is refused too: nothing is known of it
+        with self.assertRaises(RuntimeError):
+            self.plan("true", project_writable=False)
+        # the owner's permission lifts it, as it lifts the rest
+        self.assertEqual(self.inside("true", git_sources_writable=True).returncode, 0)
+
+    def test_a_project_one_level_below_the_top_of_its_repository(self):
+        # git names the repository's own settings file from the TOP of the work tree; read
+        # against the project it was `<project>/.git/config`, which does not exist — and
+        # every launch was refused with "create it yourself"
+        (self.p / "pkg").mkdir()
+        (self.p / "pkg" / "b.txt").write_text("b\n", encoding="utf-8")
+        _git(self.p, "add", "-A")
+        _git(self.p, "commit", "-q", "-m", "c1")
+        r = self.inside("echo ok > made.txt", p=self.p / "pkg")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual((self.p / "pkg" / "made.txt").read_text(encoding="utf-8"), "ok\n")
+        self.assertFalse((self.p / "pkg" / ".git").exists())
+
+
 class WhatGitIsAsked(_Repo):
     """Without bubblewrap: where git says its hooks and its settings come from."""
 
     def sources(self, p=None):
-        existing, missing, _link_dirs = sandbox._git_sources(p or self.p)
+        existing, missing, _link_dirs, _unanswered = sandbox._git_sources(p or self.p)
         return set(existing), set(missing)
 
     def test_the_directories_that_hold_a_link_on_the_way(self):
@@ -266,7 +372,7 @@ class WhatGitIsAsked(_Repo):
         os.symlink("../real", self.p / "sub" / "two")
         os.symlink("sub/two", self.p / "one")
         _git(self.p, "config", "core.hooksPath", "one")
-        existing, _missing, link_dirs = sandbox._git_sources(self.p)
+        existing, _missing, link_dirs, _unanswered = sandbox._git_sources(self.p)
         self.assertIn(str(self.p / "real"), existing)
         self.assertEqual(sorted(link_dirs), sorted([str(self.p), str(self.p / "sub")]))
 
@@ -346,13 +452,136 @@ class WhatGitIsAsked(_Repo):
         plain.mkdir()
         from unittest import mock
         with mock.patch.dict(os.environ, {"GIT_CEILING_DIRECTORIES": str(self.base)}):
-            existing, missing, link_dirs = sandbox._git_sources(plain)
+            existing, missing, link_dirs, unanswered = sandbox._git_sources(plain)
+            self.assertEqual(unanswered, [])
         self.assertEqual([p for p in existing if p.startswith(str(plain))], [])
         self.assertEqual((missing, link_dirs), ([], []))
 
 
+class WhatGitIsAskedBelowTheTopAndBehindAnInclude(_Repo):
+    """The same three, as what `_git_sources` answers."""
+
+    def test_from_a_directory_below_the_top(self):
+        (self.p / "pkg").mkdir()
+        existing, missing, _links, unanswered = sandbox._git_sources(self.p / "pkg")
+        self.assertIn(str(self.p / ".git" / "config"), existing)
+        self.assertIn(str(self.p / ".git" / "hooks"), existing)
+        self.assertEqual((missing, unanswered), ([], []))
+
+    def test_what_an_include_that_does_not_hold_names(self):
+        (self.p / "tools").mkdir()
+        (self.p / "tools" / "later.gitconfig").write_text(
+            "[core]\n\thooksPath = .release-hooks\n[include]\n\tpath = deeper.gitconfig\n", encoding="utf-8")
+        (self.p / "tools" / "deeper.gitconfig").write_text("[core]\n\thooksPath = /somewhere/else/hooks\n", encoding="utf-8")
+        _git(self.p, "config", "includeIf.onbranch:later.path", "../tools/later.gitconfig")
+        existing, missing, _links, unanswered = sandbox._git_sources(self.p)
+        self.assertIn(str(self.p / "tools" / "later.gitconfig"), existing)
+        self.assertIn(str(self.p / "tools" / "deeper.gitconfig"), existing)      # read against the file that names it
+        self.assertIn(str(self.p / ".release-hooks"), missing)                   # against the top of the work tree
+        self.assertIn("/somewhere/else/hooks", missing)
+        self.assertEqual(unanswered, [])
+
+    def test_two_includes_that_name_each_other_end(self):
+        (self.p / "a.gitconfig").write_text("[include]\n\tpath = b.gitconfig\n", encoding="utf-8")
+        (self.p / "b.gitconfig").write_text("[include]\n\tpath = a.gitconfig\n", encoding="utf-8")
+        _git(self.p, "config", "includeIf.onbranch:never.path", "../a.gitconfig")
+        existing, _missing, _links, unanswered = sandbox._git_sources(self.p)
+        self.assertIn(str(self.p / "a.gitconfig"), existing)
+        self.assertIn(str(self.p / "b.gitconfig"), existing)
+        self.assertEqual(unanswered, [])
+
+    def test_a_repository_git_cannot_answer_for(self):
+        (self.p / "broken.gitconfig").write_text("[core\n", encoding="utf-8")
+        _git(self.p, "config", "include.path", "../broken.gitconfig")
+        self.assertEqual(sandbox._git_sources(self.p)[3], [str(self.p)])
+        # … and one that an include which does NOT hold cannot be read of
+        other = self.repo("other")
+        (other / "broken.gitconfig").write_text("[core\n", encoding="utf-8")
+        _git(other, "config", "includeIf.onbranch:never.path", "../broken.gitconfig")
+        self.assertEqual(_git(other, "rev-parse", "--git-dir").returncode, 0)          # git itself still works there
+        self.assertEqual(sandbox._git_sources(other)[3], [str(other)])
+
+    def test_control_no_git_program_and_no_repository_are_not_that(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as plain:
+            self.assertEqual(sandbox._git_sources(plain)[3], [])
+        with mock.patch.object(sandbox.subprocess, "run", side_effect=FileNotFoundError("git")):
+            self.assertEqual(sandbox._git_sources(self.p), ([], [], [], []))
+
+
 class WhereTheBindsGo(_Repo):
     """The argv itself: after everything writable, and nothing laid over a path the run needs."""
+
+    def binds(self, argv):
+        """(flag, path) of every bind, in order."""
+        return [(argv[i], argv[i + 1]) for i in range(len(argv) - 2)
+                if argv[i] in ("--bind", "--ro-bind") and argv[i + 1] == argv[i + 2]]
+
+    def test_the_directories_above_a_source_are_bound_onto_themselves_first_outermost_first(self):
+        hooks = self.p / "a" / "b" / "hooks"
+        hooks.mkdir(parents=True)
+        b = self.binds(self.argv(git_sources=[str(hooks)]))
+        tail = b[b.index(("--bind", str(self.p))) + 1:]
+        self.assertEqual([x for x in tail if x[1].startswith(str(self.p / "a"))],
+                         [("--bind", str(self.p / "a")), ("--bind", str(self.p / "a" / "b")), ("--ro-bind", str(hooks))])
+        # every one of them before the read-only binds of git's own directory
+        self.assertLess(b.index(("--bind", str(self.p / "a" / "b"))), b.index(("--ro-bind", str(self.p / ".git"))))
+
+    def test_a_source_right_under_the_bind_needs_no_other_bind(self):
+        hooks = self.p / ".githooks"
+        hooks.mkdir()
+        b = self.binds(self.argv(git_sources=[str(hooks)]))
+        self.assertEqual([x for x in b if x[1].startswith(str(self.p)) and x[0] == "--bind"], [("--bind", str(self.p))])
+
+    def test_nothing_is_bound_writable_inside_another_protected_place(self):
+        # one source inside another: the outer one is read-only as a whole — a writable
+        # bind of a directory in it would open it again
+        outer = self.p / "conf"
+        (outer / "sub" / "hooks").mkdir(parents=True)
+        b = self.binds(self.argv(git_sources=[str(outer), str(outer / "sub" / "hooks")]))
+        self.assertNotIn(("--bind", str(outer / "sub")), b)
+        self.assertNotIn(("--bind", str(outer)), b)
+        self.assertIn(("--ro-bind", str(outer)), b)
+
+    def test_a_directory_is_bound_onto_itself_once(self):
+        (self.p / "tools").mkdir()
+        for name in ("a.gitconfig", "b.gitconfig"):
+            (self.p / "tools" / name).write_text("", encoding="utf-8")
+        b = self.binds(self.argv(git_sources=[str(self.p / "tools" / "a.gitconfig"), str(self.p / "tools" / "b.gitconfig")]))
+        self.assertEqual(b.count(("--bind", str(self.p / "tools"))), 1)
+        self.assertLess(b.index(("--bind", str(self.p / "tools"))), b.index(("--ro-bind", str(self.p / "tools" / "a.gitconfig"))))
+
+    def test_a_code_roots_git_directory_pins_the_code_root(self):
+        nested = self.repo("proj/plugin")
+        b = self.binds(self.argv(git_readonly=[str(nested / ".git")]))
+        self.assertLess(b.index(("--bind", str(nested))), b.index(("--ro-bind", str(nested / ".git"))))
+        # … with the owner's permission for hooks and settings too: git's own directory is not theirs to open
+        b = self.binds(self.argv(git_readonly=[str(nested / ".git")], git_sources_writable=True))
+        self.assertIn(("--bind", str(nested)), b)
+
+    def test_a_directory_that_holds_a_read_only_place_cannot_be_bound_writable_over_it(self):
+        # a source beside a READ-ONLY project in one directory of /tmp: binding that
+        # directory onto itself would lay the writable /tmp over the project again
+        base = self.p.parent
+        if not str(base).startswith("/tmp/"):
+            self.skipTest("the temp directory is not under /tmp here")
+        hooks = base / "shared-hooks"
+        hooks.mkdir()
+        with self.assertRaises(RuntimeError) as cm:
+            self.argv(project_writable=False, mask_records=False, git_sources=[str(hooks)])
+        self.assertIn(str(hooks), str(cm.exception))
+        self.assertIn(str(self.p), str(cm.exception))
+        # the same source beside a WRITABLE project is simply kept
+        self.assertIn(("--ro-bind", str(hooks)), self.binds(self.argv(git_sources=[str(hooks)])))
+
+    def test_a_repository_git_could_not_answer_for_refuses(self):
+        with self.assertRaises(RuntimeError) as cm:
+            self.argv(git_sources_unanswered=[str(self.p)])
+        self.assertIn("could not", str(cm.exception))
+        self.assertIn("Nothing was launched.", str(cm.exception))
+        with self.assertRaises(RuntimeError):
+            self.argv(project_writable=False, mask_records=False, git_sources_unanswered=[str(self.p)])
+        self.argv(git_sources_unanswered=[str(self.p)], git_sources_writable=True)
 
     def argv(self, **kw):
         return sandbox.build_bwrap_argv(self.p, self.p / ".git", ["true"], kw.pop("extra_rw", None), **kw)
