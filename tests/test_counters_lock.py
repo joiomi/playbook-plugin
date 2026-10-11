@@ -96,15 +96,17 @@ class _Counters(_Session):
             self.assertNotIn(NOTICE, out)
         return done
 
-    def _flock_shim(self, refuse=True):
-        """A `flock` that notes how the counters lock (descriptor 204) was asked for —
-        and refuses it, or hands the request to the real program; every other lock is
-        the real program's."""
+    def _flock_shim(self, refuse=True, at_once=False):
+        """A `flock` that notes how the counters lock (descriptor 204) was asked for — and
+        refuses it as a wait that ran out does (after the seconds it was asked to wait), or
+        AT ONCE (a `flock` that cannot wait with a limit), or hands the request to the real
+        program; every other lock is the real program's."""
         d = Path(self._tmp.name) / "shim"
         d.mkdir()
         self.asked = Path(self._tmp.name) / "flock-asked"
         shim = d / "flock"
-        shim.write_text(f'#!/bin/sh\ncase " $* " in *" 204 "*) echo "$*" >> "{self.asked}"; {"exit 1" if refuse else ":"} ;; esac\n'
+        does = "exit 1" if at_once else ('[ "$1" != "-w" ] || sleep "$2"; exit 1' if refuse else ":")
+        shim.write_text(f'#!/bin/sh\ncase " $* " in *" 204 "*) echo "$*" >> "{self.asked}"; {does} ;; esac\n'
                         f'exec "{shutil.which("flock")}" "$@"\n', encoding="utf-8")
         shim.chmod(0o755)
         return str(d) + os.pathsep + os.environ["PATH"]
@@ -337,9 +339,10 @@ class TheLockHasATimeLimit(_Counters):
             rc, out, err = self.finish(self.start_tool(PLAYBOOK_COUNTERS_LOCK_WAIT="1"))
             took = time.monotonic() - started
         self.assertEqual(rc, 0, err)
-        self.assertEqual(self.counts(), (1, 1))
+        self.assertEqual(self.counts(), (0, 0))          # nothing is written without the lock (round 3)
         self.assertGreaterEqual(took, 0.9, "the hook did not wait for the lock at all")
         self.assertIn(NOTICE, out)
+        self.assertIn("was NOT counted", out)
         self.assertIn("the stop hook holds this turn", out)             # what it costs, said where it is seen
         self.assertIn("1s", out)
         json.loads(out)                                  # … and it is still the hook's answer
@@ -350,11 +353,11 @@ class TheLockHasATimeLimit(_Counters):
         rc, out, err = self.finish(self.start_tool(PATH=self._flock_shim(), PLAYBOOK_COUNTERS_LOCK_WAIT="1"))
         self.assertEqual(rc, 0, err)
         self.assertEqual(self._asked(), ["-w 1 204"])
-        self.assertEqual(self.counts(), (1, 1))
+        self.assertEqual(self.counts(), (0, 0))
         self.assertIn(NOTICE, out)
 
     def test_two_seconds_unless_told_otherwise(self):
-        env = self._env(PATH=self._flock_shim())
+        env = self._env(PATH=self._flock_shim(refuse=False))
         del env["PLAYBOOK_COUNTERS_LOCK_WAIT"]
         # 1 or 2: the host kills a hook after 5 seconds, and a hook that is killed while it
         # waits has neither counted the call nor said anything (the setting reached 99 at first, then 3)
@@ -423,6 +426,7 @@ class ACountMadeWithoutTheLockHoldsTheStop(_Counters):
             r = self._hook("chat-log-hook", {"prompt": f"a prompt while the lock is held, {self._n}"})
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue(self.unsure.exists())
+        self.assertEqual(self.counts(), (0, 0))          # the turn's Read was not counted, and nothing was reset
         self.assertEqual(self.stop().returncode, 2)
 
     def _a_turn_a_notification_started(self, one_read_without_the_lock):
@@ -445,44 +449,48 @@ class ACountMadeWithoutTheLockHoldsTheStop(_Counters):
         self.assertTrue(self.unsure.exists())
         self.assertEqual(r.returncode, 2, "released by the notification exception on counts made without the lock")
 
-    def test_a_copy_made_before_a_reset_and_renamed_after_it(self):
-        # A hook that was not given the lock goes on without it — and between the COPY it
-        # makes of the counters and the rename of that copy over them, the user's next
-        # prompt resets the counts under the lock (the mark goes) and a write is counted.
-        # The rename then puts the old `writes` back. So a write made without the lock
-        # leaves the mark AGAIN when it lands (impl round 2, codex — counted Critical).
-        d = Path(self._tmp.name) / "mv-shim"
+    def test_a_call_that_was_not_given_the_lock_writes_nothing_to_the_counters(self):
+        # Round 2 left the mark again AFTER a write made without the lock had landed; between
+        # that rename and the mark the stop hook could read the old `writes` (impl round 3,
+        # codex — counted Critical for the third time on this path). Where there is a lock and
+        # it is not given, the counters are not written at all: no copy, no rename, nothing
+        # that could land later. The mark says the counts are behind.
+        d = Path(self._tmp.name) / "mv-log"
         d.mkdir()
-        hold = Path(self._tmp.name) / "mv-hold"
-        (d / "mv").write_text(
-            '#!/bin/sh\n'
-            'if [ -n "$PB_TEST_HOLD_MV" ] && [ ! -e "$PB_TEST_HOLD_MV.waiting" ]; then\n'
-            '  case "$*" in *counters*)\n'
-            '    : > "$PB_TEST_HOLD_MV.waiting"\n'
-            '    while [ ! -e "$PB_TEST_HOLD_MV.go" ]; do sleep 0.05; done ;;\n'
-            '  esac\n'
-            'fi\n'
-            f'exec "{shutil.which("mv")}" "$@"\n', encoding="utf-8")
+        log = Path(self._tmp.name) / "mv-calls"
+        (d / "mv").write_text(f'#!/bin/sh\necho "$*" >> "{log}"\nexec "{shutil.which("mv")}" "$@"\n', encoding="utf-8")
         (d / "mv").chmod(0o755)
         self.prompt()
+        self.tools("Bash")
+        before = self.counters_file.read_bytes()
         with self.held():
-            slow = self.start_tool("Read", PATH=str(d) + os.pathsep + os.environ["PATH"],
-                                   PB_TEST_HOLD_MV=str(hold), PLAYBOOK_COUNTERS_LOCK_WAIT="1")
-            deadline = time.monotonic() + 30
-            while not Path(str(hold) + ".waiting").exists():
-                self.assertLess(time.monotonic(), deadline, "the slow hook never reached its rename")
-                time.sleep(0.02)
+            rc, out, err = self.finish(self.start_tool("Bash", PATH=str(d) + os.pathsep + os.environ["PATH"],
+                                                       PLAYBOOK_COUNTERS_LOCK_WAIT="1"))
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(self.counters_file.read_bytes(), before)
+        renamed = [ln for ln in (log.read_text(encoding="utf-8").splitlines() if log.exists() else []) if "counters" in ln]
+        self.assertEqual(renamed, [], "a copy of the counters was renamed without the lock")
         self.assertTrue(self.unsure.exists())
-        self.prompt()                                    # reset under the lock: counts sure again
+        self.assertEqual(self.stop().returncode, 2)
+        # the user's next prompt resets under the lock; what is counted after it stays counted
+        self.prompt()
         self.assertFalse(self.unsure.exists())
         self.tools("Bash")
         self.assertEqual(self.counts(), (1, 1))
-        Path(str(hold) + ".go").write_text("", encoding="utf-8")
-        rc, out, err = self.finish(slow)
-        self.assertEqual(rc, 0, err)
-        self.assertEqual(self.counts()[1], 0, "not the case that was meant: the old copy did not undo the write")
-        self.assertTrue(self.unsure.exists(), "a count was put back without the lock and nothing marks it")
-        self.assertEqual(self.stop().returncode, 2)
+
+    def test_a_flock_that_cannot_wait_is_no_lock_at_all(self):
+        # A `flock` without the timed wait (BusyBox) refuses every request AT ONCE. That is
+        # not a lock that was not given in time: read as one, the mark never cleared and
+        # every call was warned for the whole session (impl round 3, opus). It is a host
+        # with no lock to take — counted as before the task, nothing said, nothing marked.
+        path = self._flock_shim(at_once=True)
+        for _ in range(3):
+            rc, out, err = self.finish(self.start_tool(PATH=path))
+            self.assertEqual(rc, 0, err)
+            self.assertNotIn(NOTICE, out)
+        self.assertEqual(self.counts(), (3, 3))
+        self.assertFalse(self.unsure.exists())
+        self.assertEqual(len(self._asked()), 3, "asked again after it was known that this flock cannot wait")
 
     def test_a_flock_that_refuses_marks_it_too(self):
         rc, out, err = self.finish(self.start_tool(PATH=self._flock_shim(), PLAYBOOK_COUNTERS_LOCK_WAIT="1"))
@@ -517,7 +525,7 @@ class ACountMadeWithoutTheLockHoldsTheStop(_Counters):
                     proc.communicate()
                     self.fail("the hook did not come back: it waits on what stands in the lock's place")
                 self.assertEqual(proc.returncode, 0, err)
-                self.assertEqual(self.counts(), (1, 1))
+                self.assertEqual(self.counts(), (0, 0))
                 self.assertIn(NOTICE, out)
                 self.assertTrue(self.unsure.exists())
                 self.assertFalse((self.session_dir / "elsewhere").exists(), "the link was written through")
@@ -529,7 +537,7 @@ class ACountMadeWithoutTheLockHoldsTheStop(_Counters):
         self.addCleanup(os.chmod, self.lock_file, 0o644)
         rc, out, err = self.finish(self.start_tool(PLAYBOOK_COUNTERS_LOCK_WAIT="1"))
         self.assertEqual(rc, 0, err)
-        self.assertEqual(self.counts(), (1, 1))
+        self.assertEqual(self.counts(), (0, 0))
         self.assertIn(NOTICE, out)
         self.assertTrue(self.unsure.exists())
 
@@ -602,40 +610,54 @@ class TheGateIsReadUnderTheLock(_Counters):
         self.assertEqual(self.counters()["gate_count"], "2")
         self.assertNotIn("previous gate done", out)
 
-    def test_the_chat_log_is_waited_for_a_second_and_without_the_counters_lock(self):
-        # The entry is owed once the new gate is written. A wait for the chat log's lock
-        # that outlived the hook lost it for good (impl round 2, codex): the wait has a
-        # limit of its own, after which the entry is appended without that lock — as on a
-        # host that has no `flock`.
+    def test_a_gate_whose_entry_cannot_be_written_yet_is_not_advanced(self):
+        # Three rounds on one line. Appended under our lock with an unlimited wait for the
+        # chat log's, the entry made every other hook wait (round 1); appended after ours
+        # was let go, it could be lost with the hook (round 2); appended without the chat
+        # log's lock after a second, it could be lost under a `tasks tag` rewrite (round 3).
+        # So: the chat log's lock is waited for ONE second, under ours; if it is not given,
+        # nothing is appended and the gate is NOT advanced — the next call finds the old
+        # gate and tries again.
         self._tick_the_first_gate()
         chat_lock = self.project / ".agent" / "chat_log_counter.lock"
         fd = os.open(chat_lock, os.O_CREAT | os.O_RDWR, 0o644)
-        fcntl.flock(fd, fcntl.LOCK_EX)                       # … and never let go while the hook runs
+        fcntl.flock(fd, fcntl.LOCK_EX)                       # … and not let go while the first hook runs
         proc = self.start_tool("Read")
         try:
-            deadline = time.monotonic() + 30
-            while self.counters().get("gate_key") != "001:8" and time.monotonic() < deadline:
-                time.sleep(0.02)
-            free, until = False, time.monotonic() + 0.8     # the hold ends a moment after that write
-            while not free and time.monotonic() < until:
-                free = subprocess.run(["flock", "-n", str(self.lock_file), "true"]).returncode == 0
-            seen = (proc.poll() is None, free, self.counters().get("gate_key"), self._log().count("**[G001:7]**"))
             try:
                 out, err = proc.communicate(timeout=20)
                 ended = True
             except subprocess.TimeoutExpired:
                 ended = False
+            seen = (self.counters().get("gate_key"), self._log().count("**[G001:7]**"))
         finally:
             os.close(fd)
             if proc.poll() is None:
                 out, err = proc.communicate(timeout=60)
-        # while it waited: still running, our lock free, the new gate written, its entry not yet
-        self.assertEqual(seen, (True, True, "001:8", 0),
-                         "(running, counters lock free, gate key, entries) once the new gate was written")
         self.assertTrue(ended, "the hook waited for the chat log's lock for as long as it was held")
         self.assertEqual(proc.returncode, 0, err)
+        self.assertEqual(seen, ("001:7", 0), "(gate key, entries) after a hook that was not given the chat log's lock")
+        self.assertNotIn("previous gate done", out)
+        self.assertEqual(self.counts(), (2, 0))              # the call itself is counted
+        # the lock is free again: the next call logs the gate, once, and moves on
+        done = self.overlapping(*["Read"] * 3)
         self.assertEqual(self._log().count("**[G001:7]**"), 1)
-        self.assertIn("previous gate done", out)
+        self.assertEqual(len([d for d in done if "previous gate done" in d[1]]), 1)
+        self.assertEqual(self.counters()["gate_key"], "001:8")
+
+    def test_a_chat_log_that_cannot_be_appended_to_is_said(self):
+        # Parked by this task's first build and closed here, on the same lines: with `flock`
+        # on the host the append ran in a subshell and its failure never came back — the
+        # hook's "write FAILED" line was never printed (measured before: "with flock: … the
+        # hook says the write FAILED: False"). The gate still moves on: a log that cannot
+        # be written must not hold it for ever.
+        self._tick_the_first_gate()
+        self.chat_log.unlink(missing_ok=True)
+        self.chat_log.mkdir()
+        rc, out, err = self.finish(self.start_tool("Read"))
+        self.assertEqual(rc, 0, err)
+        self.assertIn("write FAILED", out)
+        self.assertEqual(self.counters()["gate_key"], "001:8")
 
 
 @_needs_flock
