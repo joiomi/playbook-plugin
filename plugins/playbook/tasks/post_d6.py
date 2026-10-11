@@ -309,9 +309,12 @@ def scope_delta(repo: Path, base: str, exclude: "list[str]", with_tree: bool = F
         if not cur:
             return out(None, "could not build the current working-tree object")
         # the prefixes are asked for: a user's `diff.noprefix` changes every file's
-        # header line, which is what the patch is cut into files by (task 178)
+        # header line, which is what the patch is cut into files by (task 178). So is
+        # the short form of a gitlink's change: with `diff.submodule=log` or `diff` a
+        # nested repository's move is a "Submodule …" line with no header line at all
+        # (impl round 1: measured, the whole scope then went out unsorted)
         d = _git(repo, ["diff", "--text", "--no-ext-diff", "--no-color", "-M",
-                        "--src-prefix=a/", "--dst-prefix=b/",
+                        "--src-prefix=a/", "--dst-prefix=b/", "--submodule=short",
                         base, cur, "--", ".", *exclude])
         if d.returncode != 0:
             return out(None, "git diff failed")
@@ -374,12 +377,22 @@ def _split_patch(text: str) -> "list[str]":
     return [text[a:b] for a, b in zip(starts, starts[1:] + [len(text)])]
 
 
+def _written_as_it_is(path: str) -> bool:
+    """Whether git writes `path` into a patch's header line as it is: printable ASCII
+    with no double quote and no backslash. Those two, a control character and — with
+    git's default `core.quotePath` — any byte outside ASCII make git write the name in
+    quotes, escaped; a space does not."""
+    return all(" " <= ch <= "~" and ch not in '"\\' for ch in path)
+
+
 def _pair_parts(entries, parts: "list[str]") -> "list[tuple[tuple, str]] | None":
     """Each file of the list with its part of the patch, or None when the two do not
     pair one to one. Two parts in a row under the SAME header line are one file — a
     type change, which git writes as a deletion and a creation and lists once. Where
-    a name needs no quoting the header is compared with it, so a pairing that
-    drifted is refused, never believed."""
+    git writes a name as it is the header is compared with it, so a pairing that
+    drifted is refused, never believed; a name git quotes is paired by position, the
+    count of parts still checked (impl round 1: the comparison used to be skipped for
+    any name with a space)."""
     out, j = [], 0
     for paths in entries:
         if j >= len(parts):
@@ -390,7 +403,7 @@ def _pair_parts(entries, parts: "list[str]") -> "list[tuple[tuple, str]] | None"
         if j < len(parts) and parts[j].split("\n", 1)[0] == head:
             part += parts[j]
             j += 1
-        if all(re.fullmatch(r"[A-Za-z0-9_./+@=,~^%-]+", p) for p in paths):
+        if all(_written_as_it_is(p) for p in paths):
             if head != f"diff --git a/{paths[0]} b/{paths[-1]}":
                 return None
         out.append((paths, part))
@@ -497,16 +510,30 @@ def delta_text(project_path: Path, snapshot: "dict | None", cap: int,
     # begins and ends in it, which is what the cut is named from.
     body = "".join(scope_lines)
     spans = []                                  # (name, start, end) in handing order
+    last = None
+    # … a class at a time over ALL scopes; inside a class the smaller diff first, so that
+    # as many files as possible go whole — whichever scope they are in (so one scope's
+    # files of a class can come in several runs, each under its own line)
+    ordered = sorted(units, key=lambda u: (u[0], u[2], u[1], u[3]))
+    for cls, scope_no, _size, _file_no, shown, part in ordered:
+        if cls >= 2:
+            break
+        if (cls, scope_no) != last:
+            body += f"#### {_CLASS_TITLES[cls]} — scope {labels[scope_no]}\n"
+            last = (cls, scope_no)
+        spans.append((shown, len(body), len(body) + len(part)))
+        body += part
+    # A scope whose list does not fit its patch goes AFTER what is known to be code
+    # and tests and before the docs: in git's order it may begin with a ledger, and
+    # handed first it put that in front of the others' code again (impl round 1).
     for scope_no, label, patch in unsorted:
         body += (f"#### in git's own order (its file list could not be paired with the patch) — "
                  f"scope {label}\n")
         spans.append((f"scope {label}, unsorted", len(body), len(body) + len(patch)))
         body += patch
-    last = None
-    # … a class at a time over ALL scopes; inside a class the smaller diff first, so that
-    # as many files as possible go whole — whichever scope they are in
-    for cls, scope_no, _size, _file_no, shown, part in sorted(
-            units, key=lambda u: (u[0], u[2], u[1], u[3])):
+    for cls, scope_no, _size, _file_no, shown, part in ordered:
+        if cls < 2:
+            continue
         if (cls, scope_no) != last:
             body += f"#### {_CLASS_TITLES[cls]} — scope {labels[scope_no]}\n"
             last = (cls, scope_no)

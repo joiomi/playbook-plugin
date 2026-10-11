@@ -57,8 +57,8 @@ Emitted for **every judge invocation** — by the review runner (`tasks/review.p
 for each panel seat, the single judge and the tail-cert judge, and by `tasks intent`
 (`tasks/intent.py`) for each blind extraction (task 120) — via
 `pb_journal.append_review`, on its completion or timeout. A tail-certification judge
-that could not be started — its adapter could not be built, so nothing was launched —
-is no invocation and leaves no record (task 178). The one exception is a
+that could not be started — its adapter could not be built, or its program is not
+installed, so nothing was launched — is no invocation and leaves no record (task 178). The one exception is a
 **tamper hard-stop**: if the working tree changed while the judges ran (a judge or
 any other writer — the guard cannot tell which), the review emits its tamper banner and stops, recording **no** spend — the journal write
 must never precede that banner (a hostile-tree hang inside it could suppress the

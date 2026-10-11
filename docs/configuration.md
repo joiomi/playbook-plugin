@@ -449,7 +449,7 @@ and the one recorded with the panel, so moving or removing it later changes noth
 on, a carrying panel that no reservation dates (a deleted run ledger) refuses. A value that is not a date refuses
 every stale close until it is fixed. The binding is checked again inside the lock the close commits under. Post-D6 runs made before 1.5.47 recorded no tree and cannot bind a close. Tail
 certification saves its judge's output as `tail-cert.log` in the task directory; when no judge could be started
-(the default judge's adapter cannot be built) the file holds the reason under a first line that says `NO JUDGE
+(the default judge's adapter cannot be built, or its program is not installed) the file holds the reason under a first line that says `NO JUDGE
 RAN`, and no spend record is written (task 178). When it does not certify, the
 close says why. Two refusals come before any certification: a code path in the delta, and a panel snapshot that
 can no longer be compared (it is missing, the code roots changed, git failed) — the latter is reported as

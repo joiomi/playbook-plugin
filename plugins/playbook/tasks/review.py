@@ -2445,6 +2445,19 @@ def _run_tail_cert_judge_raw(project_path, prompt, timeout_secs) -> str:
                                           project_root=Path(project_path))
     except Exception as e:
         return _TailCertRaw(f"(error: tail-cert judge spawn failed: {e})", started=False)
+    # … and neither was anything launched when the judge's program is not installed:
+    # the adapter builds, and its `run_headless_judge` answers "(error: … not found on
+    # PATH)" without starting a process (task 178, impl round 1 — the commonest way a
+    # judge cannot be started). Asked of the adapter itself; one that cannot say
+    # (a test's stand-in) is taken as able to start.
+    try:
+        _installed = getattr(adapter, "is_available", None)
+        _missing = callable(_installed) and _installed() is False
+    except Exception:
+        _missing = False
+    if _missing:
+        _name = getattr(adapter, "binary_name", lambda: backend)()
+        return _TailCertRaw(f"(error: {_name} not found on PATH)", started=False)
     # said only now that there is something to call (task 178): the caller used to
     # say it before this function had tried to build the adapter
     print("  … calling the certifying judge", file=sys.stderr, flush=True)

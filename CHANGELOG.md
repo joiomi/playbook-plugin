@@ -120,13 +120,18 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   handed whole, the one cut part-way (and how much of it went out) and the ones left out, and the `context:` line
   the command prints carries the same counts and names. The classes are the close's own
   (`classify_delta_paths`: a nested `.md` that is no doc is code); the size of the budget is unchanged. A scope
-  whose file list cannot be paired with its patch is handed in git's own order, first, and the text says so.
+  whose file list cannot be paired with its patch is handed in git's own order and the text says so — after the
+  code and tests of the scopes that can be sorted, before the docs. Your git settings do not change the order:
+  the plugin asks git itself for the `a/` and `b/` prefixes and for the short form of a nested repository's
+  change (`diff.noprefix`, `diff.mnemonicPrefix`, `diff.submodule` — with the last set to `log` or `diff` a
+  whole scope used to go out unsorted, docs first: measured in this task's review).
 - **A tail-certification judge that could not be started is no longer announced, saved or recorded as a call**
-  (task 178; a note parked by task 168). When the default judge's adapter cannot be built the close printed "…
-  calling the certifying judge", saved `tail-cert.log` as "judge output" and wrote a spend record with status
-  `error` — and then said, rightly, that no judge had been called. The "calling" line is now printed only once
-  there is an adapter to call; with nothing launched, the saved file's first line says `NO JUDGE RAN`, the printed
-  line says that the reason was saved, and no spend record is written.
+  (task 178; a note parked by task 168). When the default judge's adapter cannot be built, or its program is
+  not installed, the close printed "… calling the certifying judge", saved `tail-cert.log` as "judge output" and
+  wrote a spend record with status `error` — and then said, rightly, that no judge had been called. The
+  "calling" line is now printed only once there is a judge to start; with nothing launched, the saved file's
+  first line says `NO JUDGE RAN`, the printed line says that the reason was saved, and no spend record is
+  written. A program that is installed and dies at once is still a call that was made.
 - **The shell logger starts no program for a line, and does not log through a linked history or user lane**
   (task 176; PLAN S11). For
   every command it logged it ran the `date` program for the stamp, and once per shell `find` for the history's
