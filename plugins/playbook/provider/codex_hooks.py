@@ -347,7 +347,10 @@ def _script_of(command: str) -> "str | None":
         return None
     if len(words) < 2 or words[0] != "python3":
         return None
-    rest = [w for w in words[1:] if not re.fullmatch(r"-[A-Za-z]+", w)]
+    options = [w for w in words[1:] if re.fullmatch(r"-[A-Za-z]+", w)]
+    if any(set(w[1:]) & set("cmWX") for w in options):       # these take a value
+        return None
+    rest = [w for w in words[1:] if w not in options]
     return rest[0] if len(rest) == 1 and words[-1] == rest[0] else None
 
 

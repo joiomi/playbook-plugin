@@ -10744,7 +10744,7 @@
           "type": "executable integration",
           "path": "tests/test_python_isolation.py",
           "reference": "ACodexConfigurationWrittenBeforeIsReplacedNotDoubled.test_through_the_install_itself",
-          "boundary": "subprocess",
+          "boundary": "unit",
           "negative_control": null,
           "limitations": [
             "Task 180, impl round 1 (2026-10-11), red first on the task's first build: the merged document held every hook twice, the unisolated command among them. `install_project_hooks` on a temp project whose `.codex/hooks.json` is the older document; a second install changes nothing."

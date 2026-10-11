@@ -101,7 +101,8 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   again — and then only where it names the SAME plugin directory: there the install puts the new command in the
   old one's place. A configuration written by an installed older version names that version's directory, is not
   recognised, and gets the new command BESIDE the old one, as before this version (measured: 6 commands become
-  12, the 6 unisolated ones left; the isolated guard still blocks — a known limit, parked). As with
+  12, the 6 unisolated ones left. By reading, not run under Codex: the isolated guard is registered beside the
+  old one and still blocks. A known limit, parked). As with
   the inline programs (task 167), `PYTHONIOENCODING` and `PYTHONUTF8` no longer reach these helpers.
 - **A stray `.git` file in the temp directory no longer breaks the verify contract's tests** (task 179,
   PLAN S11 item 30; owner decision 2026-10-10). A file named `.git` left in `/tmp` — a judge's experiment in its

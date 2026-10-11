@@ -946,7 +946,11 @@ class ACodexConfigurationWrittenBeforeIsReplacedNotDoubled(unittest.TestCase):
             {"type": "command", "command": self.new["hooks"]["Stop"][0]["hooks"][0]["command"].replace("python3 -E -s", "/opt/py/bin/python3.12 -X dev")},
             {"type": "command", "command": "echo python3 " + shlex.quote(str(self.ch.playbook_scripts_dir() / "codex-stop-hook"))},
             {"type": "command", "command": "/opt/py/bin/python3 " + shlex.quote(str(self.ch.playbook_scripts_dir() / "codex-stop-hook"))},
-            {"type": "command", "command": "python3-wrapper -E -s " + shlex.quote(str(self.ch.playbook_scripts_dir() / "codex-stop-hook"))}]}]}}
+            {"type": "command", "command": "python3-wrapper -E -s " + shlex.quote(str(self.ch.playbook_scripts_dir() / "codex-stop-hook"))},
+            # … nor our script with a word after it, or as the VALUE of an option (post-panel run 2)
+            {"type": "command", "command": "python3 " + shlex.quote(str(self.ch.playbook_scripts_dir() / "codex-stop-hook")) + " --quiet"},
+            {"type": "command", "command": "python3 -c " + shlex.quote(str(self.ch.playbook_scripts_dir() / "codex-stop-hook"))},
+            {"type": "command", "command": "python3 -W " + shlex.quote(str(self.ch.playbook_scripts_dir() / "codex-stop-hook"))}]}]}}
         kept = self._commands(old)
         merged = self.ch.merge_hooks(old, self.new)
         self.assertEqual(self._commands(merged), sorted(kept + self._commands(self.new)))
