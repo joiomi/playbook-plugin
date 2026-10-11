@@ -1758,9 +1758,10 @@ class NoJudgeStartedLeavesNoTraceOfACall(unittest.TestCase):
     def _cannot_build(name):
         raise ValueError("no such backend")
 
-    def _run(self, adapter_class):
+    def _run(self, adapter_class, path=None):
         import contextlib
         import io
+        import os
         import shutil
         from unittest import mock
 
@@ -1775,11 +1776,39 @@ class NoJudgeStartedLeavesNoTraceOfACall(unittest.TestCase):
         snap = build_panel_snapshot(d, tree_state_fingerprint(d))
         (d / "docs" / "g.md").write_text("# d\n", encoding="utf-8")
         why, err = [], io.StringIO()
+        env = {"PATH": path} if path is not None else {}
         with mock.patch("provider.subagent._adapter_class", adapter_class), \
                 mock.patch.object(R, "_journal_review_spend") as spend, \
+                mock.patch.dict(os.environ, env), \
                 contextlib.redirect_stderr(err):
             verdict = R.run_tail_cert_judge(d, snap, ["docs/g.md"], "PANEL PASS", why=why, task_file=tf)
         return verdict, why, err.getvalue(), spend, td / R.TAIL_CERT_LOG
+
+    def _a_path_with_git_only(self):
+        import shutil
+        import tempfile
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d, True)
+        os_symlink = __import__("os").symlink
+        os_symlink(shutil.which("git"), d / "git")
+        return str(d)
+
+    def test_a_judge_whose_program_is_not_installed_is_no_call_either(self):
+        # The REAL adapter of the default judge, on a PATH that holds git and nothing
+        # else. It builds — and answers "(error: … not found on PATH)" without starting
+        # anything: until impl round 1 (opus, codex) that was announced as a call, saved
+        # as "judge output" and given a spend record, like the case this class began with.
+        from provider.subagent import _adapter_class as real
+        verdict, why, err, spend, log = self._run(lambda name: real(name), path=self._a_path_with_git_only())
+        self.assertIsNone(verdict)
+        self.assertEqual([k for k, _ in why], ["no-judge"])
+        self.assertNotIn("calling the certifying judge", err)
+        self.assertNotIn("judge output", err)
+        spend.assert_not_called()
+        body = log.read_text(encoding="utf-8")
+        self.assertIn("NO JUDGE RAN", body.splitlines()[0])
+        self.assertIn("not found on PATH", body)
+        self.assertIn(f"no judge was started — the reason is saved: {log}", err)
 
     def test_nothing_is_said_to_be_called_when_nothing_could_be_started(self):
         verdict, why, err, spend, log = self._run(self._cannot_build)

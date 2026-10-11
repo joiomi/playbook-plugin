@@ -1487,6 +1487,114 @@ class DeltaOrder(_TmpDir):
     def test_a_users_diff_mnemonicprefix_setting_does_not_unsort_the_delta(self):
         self._with_git_config("diff.mnemonicPrefix")
 
+    def _with_submodule_setting(self, setting):
+        # A nested repository that is not ignored is a gitlink of the outer tree. With the
+        # user's `diff.submodule=log` (or `diff`) git writes its change as a "Submodule …"
+        # line with no file header: the list and the patch were no longer paired and the
+        # whole scope went out in git's order, docs before code again (impl round 1, opus;
+        # measured before the fix). The plugin asks for the short form itself.
+        sub = self.repo / "sub"
+        self._init(sub, {"s.txt": "s\n"})
+        base = self._ledger_case()
+        self._write(sub, {"s.txt": "changed\n"})
+        _git(sub, "commit", "-q", "-am", "the nested repository moved")
+        _git(self.repo, "config", "diff.submodule", setting)
+        text, note = post_d6.delta_text(self.repo, self._snap({"": (self.repo, base)}), 6000)
+        self.assertNotIn("in git's own order", text)
+        self.assertNotIn("Submodule sub", text)
+        self.assertIn("diff --git a/sub b/sub\n", text)
+        self.assertIn(self._one(self.repo, base, "plugins/code.py"), text)
+        self.assertLess(text.index("diff --git a/plugins/code.py"), text.index("diff --git a/docs/ledger.json"))
+
+    def test_a_users_diff_submodule_log_setting_does_not_unsort_the_delta(self):
+        self._with_submodule_setting("log")
+
+    def test_a_users_diff_submodule_diff_setting_does_not_unsort_the_delta(self):
+        self._with_submodule_setting("diff")
+
+    def test_a_scope_that_cannot_be_sorted_comes_after_the_code_and_tests_of_the_others(self):
+        # What is KNOWN to be code and tests goes first; a scope whose list does not fit
+        # its patch may begin with a ledger, so it goes after them — and before the docs,
+        # so that its own code is not behind them (impl round 1, opus: an unsortable scope
+        # handed first was the defect of task 174 again).
+        from unittest import mock
+        lib, b0, b1 = self._two_scopes({"m.py": "m = 1\n", "docs/long.md": "d\n"})
+        self._write(lib, {"m.py": "m = 2\n", "docs/long.md": "d\n" * 300})
+        base = self._ledger_case()
+        self.assertEqual(base, b0)
+        real = post_d6._name_status_entries
+
+        def no_list_for_the_second_scope(repo, *a, **k):
+            return [] if Path(repo) == lib else real(repo, *a, **k)
+        with mock.patch.object(post_d6, "_name_status_entries", side_effect=no_list_for_the_second_scope):
+            text, note = post_d6.delta_text(self.repo, self._snap({"": (self.repo, b0), "lib": (lib, b1)}), 500_000)
+        self.assertIsNotNone(text, note)
+        unsorted = text.index("in git's own order")
+        self.assertIn("scope lib", text[unsorted:unsorted + 200])
+        self.assertLess(text.index("diff --git a/plugins/code.py"), unsorted)
+        self.assertLess(text.index("diff --git a/tests/test_code.py"), unsorted)
+        self.assertLess(unsorted, text.index("diff --git a/docs/ledger.json"))
+        self.assertLess(unsorted, text.index("diff --git a/CHANGELOG.md"))
+        cur = post_d6.worktree_tree(lib, self.EXC)
+        whole = subprocess.run([*self.DIFF, b1, cur, "--", ".", *self.EXC], cwd=lib, capture_output=True,
+                               text=True, check=True).stdout
+        self.assertEqual(text.count(whole), 1, "the unsorted scope's patch did not go out whole and once")
+
+    def test_a_file_list_in_another_order_is_not_believed_for_names_with_spaces_either(self):
+        # git writes a name with a space into the header as it is; only a name it QUOTES
+        # (a quote, a backslash, a control character, a byte outside ASCII) cannot be
+        # compared. The check used to be skipped for anything outside a short list of
+        # characters, so a drifted pairing of two such files was believed (impl round 1,
+        # sonnet).
+        from unittest import mock
+        self._write(self.repo, {"plugins/a file.py": "a = 1\n", "plugins/b file.py": "b = 1\n"})
+        base = post_d6.worktree_tree(self.repo, self.EXC)
+        self._write(self.repo, {"plugins/a file.py": "a = 2\n", "plugins/b file.py": "b = 2\nc = 3\n"})
+        cur = post_d6.worktree_tree(self.repo, self.EXC)
+        real = post_d6._name_status_entries(self.repo, base, cur, self.EXC)
+        self.assertEqual(real, [("plugins/a file.py",), ("plugins/b file.py",)])
+        full = subprocess.run([*self.DIFF, base, cur, "--", ".", *self.EXC], cwd=self.repo,
+                              capture_output=True, text=True, check=True).stdout
+        with mock.patch.object(post_d6, "_name_status_entries", return_value=real[::-1]):
+            text, note = post_d6.delta_text(self.repo, self._snap({"": (self.repo, base)}), 500_000)
+        self.assertIn("in git's own order", text)
+        self.assertEqual(text.count(full), 1)
+        # control: the list as git gives it is believed, and each file is named by its own part
+        text, note = post_d6.delta_text(self.repo, self._snap({"": (self.repo, base)}), 500_000)
+        self.assertNotIn("in git's own order", text)
+        self.assertEqual(text.count(full.split("diff --git a/plugins/b file.py")[0]), 1)
+
+    def test_a_name_git_quotes_is_paired_by_position_only(self):
+        # the stated bound of the check above: for a name git writes in quotes the header
+        # is not compared — the count still is
+        self.assertTrue(post_d6._written_as_it_is("plugins/a file.py"))
+        for name in ('a"b.py', "a\\b.py", "a\tb.py", "caf\u00e9.py", "a\x7fb.py"):
+            with self.subTest(name=name):
+                self.assertFalse(post_d6._written_as_it_is(name))
+
+    def test_two_scopes_with_interleaved_sizes_each_run_under_its_own_line(self):
+        # inside a class the files go by size over ALL scopes, so one scope's files of a
+        # class can come in several runs; each run has its line, every file its part once
+        # (impl round 1, sonnet: untested)
+        lib, b0, b1 = self._two_scopes({"m1.py": "m = 1\n", "m2.py": "m = 1\n"})
+        self._write(self.repo, {"plugins/p1.py": "p = 1\n", "plugins/p2.py": "p = 1\n"})
+        b0 = post_d6.worktree_tree(self.repo, self.EXC)
+        self._write(lib, {"m1.py": "m = 2\n" * 5, "m2.py": "m = 2\n" * 70})
+        self._write(self.repo, {"plugins/p1.py": "p = 2\n" * 30, "plugins/p2.py": "p = 2\n" * 150})
+        text, note = post_d6.delta_text(self.repo, self._snap({"": (self.repo, b0), "lib": (lib, b1)}), 500_000)
+        parts = [self._one(lib, b1, "m1.py"), self._one(self.repo, b0, "plugins/p1.py"),
+                 self._one(lib, b1, "m2.py"), self._one(self.repo, b0, "plugins/p2.py")]
+        self.assertEqual(sorted(parts, key=len), parts, "the case is not interleaved by size")
+        for p in parts:
+            self.assertEqual(text.count(p), 1)
+        at = [text.index(p) for p in parts]
+        self.assertEqual(at, sorted(at))
+        lines = [ln for ln in text.splitlines() if ln.startswith("#### ")]
+        self.assertEqual(lines, ["#### code — scope lib", "#### code — scope .",
+                                 "#### code — scope lib", "#### code — scope ."])
+        for p, line in zip(parts, lines):          # the line right above a run names its scope
+            self.assertTrue(text[:text.index(p)].rstrip("\n").endswith(line), line)
+
     def test_the_names_of_what_was_cut_are_bounded_too(self):
         base = post_d6.worktree_tree(self.repo, self.EXC)
         self._write(self.repo, {f"docs/a_document_with_a_long_name_{i:04d}.md": "d\n" * (200 + i) for i in range(300)})
