@@ -646,6 +646,58 @@ class TheGateIsReadUnderTheLock(_Counters):
         self.assertEqual(len([d for d in done if "previous gate done" in d[1]]), 1)
         self.assertEqual(self.counters()["gate_key"], "001:8")
 
+    def test_six_calls_side_by_side_while_the_chat_logs_lock_is_held(self):
+        # The single judge ran this (post-panel run 1): gate ticked, the chat log's lock held,
+        # six overlapping Bash calls. All six were counted — and three answers said "this
+        # call was NOT counted", the session was marked and the stop held: each hook waited
+        # a second for the chat log's lock under ours, and the ones behind ran out of their
+        # own wait at the GATE step, after their count was made. The chat log's lock is
+        # tried once, not waited for; and a hook says "not counted" only of a count.
+        self._tick_the_first_gate()
+        before = self.counts()
+        chat_lock = self.project / ".agent" / "chat_log_counter.lock"
+        fd = os.open(chat_lock, os.O_CREAT | os.O_RDWR, 0o644)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            procs = [self.start_tool("Bash") for _ in range(6)]
+            done = [self.finish(p) for p in procs]
+        finally:
+            os.close(fd)
+        for rc, out, err in done:
+            self.assertEqual(rc, 0, err)
+            self.assertNotIn(NOTICE, out)
+        self.assertEqual(self.counts(), (before[0] + 6, before[1] + 6))
+        self.assertFalse((self.session_dir / "counts_unsure").exists())
+        self.assertEqual((self.counters()["gate_key"], self._log().count("**[G001:7]**")), ("001:7", 0))
+        self.tools("Read")
+        self.assertEqual((self.counters()["gate_key"], self._log().count("**[G001:7]**")), ("001:8", 1))
+
+    def test_a_call_that_was_counted_and_only_lost_the_gate_step_says_that(self):
+        # our lock given for the count and not given again for the gate step: the count is
+        # sure — no mark, the stop not held — and the answer does not say "not counted"
+        d = Path(self._tmp.name) / "second-shim"
+        d.mkdir()
+        calls = Path(self._tmp.name) / "second-calls"
+        (d / "flock").write_text(
+            '#!/bin/sh\n'
+            'case " $* " in *" 204 "*)\n'
+            f'  echo x >> "{calls}"\n'
+            f'  if [ "$(wc -l < "{calls}")" -eq 2 ]; then [ "$1" != "-w" ] || sleep "$2"; exit 1; fi ;;\n'
+            'esac\n'
+            f'exec "{shutil.which("flock")}" "$@"\n', encoding="utf-8")
+        (d / "flock").chmod(0o755)
+        self.prompt()
+        before = self.counts()
+        rc, out, err = self.finish(self.start_tool("Read", PATH=str(d) + os.pathsep + os.environ["PATH"],
+                                                   PLAYBOOK_COUNTERS_LOCK_WAIT="1"))
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(self.counts(), (before[0] + 1, before[1]))
+        self.assertIn(NOTICE, out)
+        self.assertNotIn("NOT counted", out)
+        self.assertIn("the gate was not looked at", out)
+        self.assertFalse((self.session_dir / "counts_unsure").exists())
+        self.assertEqual(self.stop().returncode, 0)          # a reply with one counted Read may end
+
     def test_the_last_gate_waits_for_its_entry_too(self):
         # no gate left open: the counters forget the gate only once its entry is written
         self._tick_the_first_gate()
