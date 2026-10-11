@@ -65,7 +65,8 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   record under the same lock — read before it, a tick that landed between two overlapping calls made the slower
   hook log the OPEN gate as done. A gate's entry and the new gate are written together or not at all: the entry
   is appended under the chat log's own lock, which is tried and not waited for; where it is not given, nothing is
-  appended and the gate is not advanced — the next tool call tries again; a chat log that cannot be written is
+  appended and the gate is not advanced — the next tool call tries again, and the hook says at each call that
+  the gate is not logged yet; a chat log that cannot be written is
   now said by the hook where the host has `flock` too. The lock has a time limit: 2 seconds for a whole tool
   call (`PLAYBOOK_COUNTERS_LOCK_WAIT`: 1 or 2 — it can only shorten the wait; the host stops a hook after 5,
   and a hook's two holds can wait just under 3 seconds between them). A call that was not given the lock is NOT

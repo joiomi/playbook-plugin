@@ -11,8 +11,9 @@ at a time were counted as `tools=20 writes=20`, 60 calls six at a time as 10 and
 
 The fix: every read-modify-write of the file — a single write, an increment, the reset
 at a prompt, the gate's repeat count — happens under ONE lock per session
-(`counters.lock`, flock), with a time limit after which the step goes on without it, as
-every step did before.
+(`counters.lock`, flock), with a time limit. A step that was not given the lock writes
+NOTHING to the counters (the first build let it go on without the lock; three review
+rounds each found a way for such a write to release a stop).
 
 These tests run the REAL hooks as overlapping processes and compare what the counters
 say with the number of calls; then they hold the lock themselves and look at what each
@@ -330,8 +331,8 @@ class TheLockIsHeldOnlyForItsTwoSteps(_Counters):
 
 @_needs_flock
 class TheLockHasATimeLimit(_Counters):
-    """A lock that is never let go must not hold a tool call: after the limit the call is
-    counted WITHOUT the lock, as every call was before, and the hook says so."""
+    """A lock that is never let go must not hold a tool call: after the limit the hook goes
+    on — the call is NOT counted, nothing is written to the counters, and the hook says so."""
 
     def test_a_lock_that_is_never_let_go(self):
         with self.held():
@@ -384,11 +385,11 @@ class TheLockHasATimeLimit(_Counters):
 
 @_needs_flock
 class ACountMadeWithoutTheLockHoldsTheStop(_Counters):
-    """Where the lock exists and was not given, the call is still counted — unlocked, as
-    before, so a count may be lost; and a lost `writes` is what lets the stop hook take a
-    turn for a chat reply. So the session is MARKED (file `counts_unsure`), and the stop
-    hook does not use that release until a prompt of the user's has reset the counts under
-    the lock (impl round 1, codex — counted Critical)."""
+    """Where a lock exists and was not given, the call is NOT counted and nothing is written
+    to the counters — so the counts are behind, and a count that is too low is what lets the
+    stop hook take a turn for a chat reply. The session is MARKED (file `counts_unsure`), and
+    the stop hook uses neither of its low-activity releases until a prompt of the user's has
+    reset the counts under the lock (three review rounds, a counted Critical in each)."""
 
     def setUp(self):
         super().setUp()
@@ -631,7 +632,8 @@ class TheGateIsReadUnderTheLock(_Counters):
         # chat log's, the entry made every other hook wait (round 1); appended after ours
         # was let go, it could be lost with the hook (round 2); appended without the chat
         # log's lock after a second, it could be lost under a `tasks tag` rewrite (round 3).
-        # So: the chat log's lock is waited for ONE second, under ours; if it is not given,
+        # (round 3), and a second of waiting under ours starved the hooks behind (post-panel
+        # run 1). So: the chat log's lock is TRIED under ours, not waited for; if it is not given,
         # nothing is appended and the gate is NOT advanced — the next call finds the old
         # gate and tries again.
         self._tick_the_first_gate()
@@ -763,6 +765,7 @@ class TheGateIsReadUnderTheLock(_Counters):
         finally:
             os.close(fd)
         self.assertEqual(rc, 0, err)
+        self.assertIn("is not logged yet", out)
         self.assertEqual((self.counters()["gate_key"], self._log().count("**[G001:8]**")), ("001:8", 0))
         self.tools("Read")
         self.assertEqual((self.counters()["gate_key"], self._log().count("**[G001:8]**")), ("", 1))
@@ -775,6 +778,7 @@ class TheGateIsReadUnderTheLock(_Counters):
         self.assertEqual(rc, 0, err)
         self.assertIn(NOTICE, out)
         self.assertNotIn("previous gate done", out)
+        self.assertNotIn("is not logged yet", out)           # one reason is said, the true one
         self.assertEqual((self.counters()["gate_key"], self._log().count("**[G001:7]**")), ("001:7", 0))
         self.overlapping("Read", "Read")
         self.assertEqual((self.counters()["gate_key"], self._log().count("**[G001:7]**")), ("001:8", 1))

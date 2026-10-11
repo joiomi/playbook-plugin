@@ -973,7 +973,7 @@ class Round2Fixes(unittest.TestCase):
     def test_the_state_echo_hook_appends_under_the_shared_lock(self):
         # codex-high #3: the gate logger appends to chat_log.md too, so a
         # `tasks tag` rewrite could lose a gate entry.
-        # (Since task 182 the lock is waited for ONE second — tried, not blocked on — and
+        # (Since task 182 the lock is TRIED, not waited for — and
         # where it is not given the entry is not appended and the gate not advanced; that
         # is run in tests/test_counters_lock.py::TheGateIsReadUnderTheLock.)
         hook = (PLUGIN / "scripts" / "state-echo-hook").read_text(encoding="utf-8")

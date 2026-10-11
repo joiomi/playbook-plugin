@@ -350,7 +350,9 @@ _gate_append() {
 _log_gate_entry() {
     local rc=0
     [ "$PLAYBOOK_COUNTERS_UNLOCKED" != true ] || return 3
-    if command -v flock &>/dev/null; then
+    # (a host whose `flock` cannot wait with a limit has no lock to take: the entry
+    # is appended without one, as where there is no `flock` — post-panel run 2)
+    if command -v flock &>/dev/null && [ "$_PB_COUNTERS_NOLOCK" != true ]; then
         ( flock -n 202 2>/dev/null || exit 3; _gate_append || exit 4 ) \
             202>"$AGENT_DIR/chat_log_counter.lock" || rc=$?
     else
@@ -434,6 +436,8 @@ else
             write_counter "$COUNTER_FILE" gate_key ""
             write_counter "$COUNTER_FILE" gate_count ""
             write_counter "$COUNTER_FILE" gate_text ""
+        else
+            PB_GATE_PENDING=true
         fi
     fi
 fi
@@ -505,6 +509,15 @@ fi
 if [ "$PLAYBOOK_WRITE_FAILED" = true ] && [ "${PLAYBOOK_SANDBOXED:-}" != "1" ]; then
     CONTEXT="${CONTEXT}
 # ⚠ gate-logging write FAILED — session state / gate history not updated (retro attribution will degrade). Run \`tasks doctor\` and check .agent dir writability + AV locks."
+fi
+
+# A completed gate whose entry could not be written yet because the CHAT LOG's lock
+# was held (ours was given): said at every call it stays so — "not yet" has no end
+# of its own, and a holder that never lets go froze the gate unseen (post-panel
+# run 2). Where ours was not given, the lines below say that instead.
+if [ "$PB_GATE_PENDING" = true ] && [ "$PLAYBOOK_COUNTERS_UNLOCKED" != true ] && [ "${PLAYBOOK_SANDBOXED:-}" != "1" ]; then
+    CONTEXT="${CONTEXT}
+# ⚠ the gate you completed is not logged yet — the chat log's lock is held by another process; the next tool call tries again."
 fi
 
 # There is a counters lock and it was not given (task 182) — say so, a stuck
