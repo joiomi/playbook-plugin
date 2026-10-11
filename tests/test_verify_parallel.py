@@ -694,6 +694,30 @@ class AStrayRepositoryPointerAboveTheTempDirs(unittest.TestCase):
         self.assertIn("Ran 3 tests in ", out)
         self.assertEqual(out.strip().splitlines()[-1], "OK")
 
+    def test_an_empty_entry_of_the_callers_and_a_temp_root_reached_through_a_link(self):
+        # After an EMPTY entry git does not resolve links in the entries that follow, and
+        # the contract's own entries follow the caller's value. The directory git works in
+        # is always the real one — so a temp root named through a link was no ceiling of
+        # it, and the stray file was seen again (impl round 1, codex).
+        link = Path(self._td.name) / "a-link-to-the-temp-root"
+        os.symlink(self.temp_root, link)
+        with mock.patch.dict(os.environ, {"GIT_CEILING_DIRECTORIES": os.pathsep + "/no-such-ceiling"}), \
+                mock.patch.object(tempfile, "tempdir", str(link)):
+            rc, out = V.run_suite(2, "-q", root=self.root)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("Ran 3 tests in ", out)
+        self.assertEqual(out.strip().splitlines()[-1], "OK")
+
+    def test_control_the_same_link_without_an_empty_entry(self):
+        # git resolves the entries itself when no empty one stands before them
+        link = Path(self._td.name) / "a-link-to-the-temp-root"
+        os.symlink(self.temp_root, link)
+        with mock.patch.dict(os.environ, {"GIT_CEILING_DIRECTORIES": "/no-such-ceiling"}), \
+                mock.patch.object(tempfile, "tempdir", str(link)):
+            rc, out = V.run_suite(2, "-q", root=self.root)
+        self.assertEqual(rc, 0, out)
+        self.assertIn("Ran 3 tests in ", out)
+
     def test_the_single_process_run_does_not_see_it_either(self):
         # `PLAYBOOK_VERIFY_JOBS=1`, or a suite that binds `load_tests`: ONE child that works in the
         # shared temp root itself, with the child environment every other step gets. (No private
