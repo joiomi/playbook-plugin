@@ -973,9 +973,13 @@ class Round2Fixes(unittest.TestCase):
     def test_the_state_echo_hook_appends_under_the_shared_lock(self):
         # codex-high #3: the gate logger appends to chat_log.md too, so a
         # `tasks tag` rewrite could lose a gate entry.
+        # (Since task 182's impl round 2 the lock is waited for ONE second and the entry
+        # then appended without it — the new gate is already written by then, and a wait
+        # that outlived the hook lost the entry; the wait itself is run in
+        # tests/test_counters_lock.py::TheGateIsReadUnderTheLock.)
         hook = (PLUGIN / "scripts" / "state-echo-hook").read_text(encoding="utf-8")
         self.assertIn("chat_log_counter.lock", hook)
-        self.assertIn("flock -x", hook)
+        self.assertIn("flock -w 1 202", hook)
 
     def test_compact_refuses_a_stale_compose(self):
         # sonnet #2 + codex ×2: compact composed its new text BEFORE taking the

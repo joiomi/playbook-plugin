@@ -357,7 +357,7 @@ class TheLockHasATimeLimit(_Counters):
         env = self._env(PATH=self._flock_shim())
         del env["PLAYBOOK_COUNTERS_LOCK_WAIT"]
         # 1 or 2: the host kills a hook after 5 seconds, and a hook that is killed while it
-        # waits has neither counted the call nor said anything (it took 1 to 99, then 1 to 3)
+        # waits has neither counted the call nor said anything (the setting reached 99 at first, then 3)
         for value, want in ((None, "2"), ("1", "1"), ("2", "2"), ("3", "2"), ("4", "2"), ("7", "2"), ("99", "2"), ("0", "2"),
                             ("-1", "2"), ("1.5", "2"), ("abc", "2"), ("1; touch pwned", "2"), ("", "2")):
             with self.subTest(value=value):

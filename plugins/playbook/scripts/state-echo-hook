@@ -390,7 +390,10 @@ counters_unlock
 # Task 058 (impl panels r2-r3, codex-high): this appends to the SAME chat_log.md
 # that `tasks tag` rewrites, so it takes the same lock the chat-log hook and the
 # Python rewriter use. Without flock the append is unchanged and `tasks tag` still
-# refuses a stale rewrite.
+# refuses a stale rewrite. That lock is waited for ONE second (impl round 2): the
+# new gate is already written, so a wait that outlived this hook lost the entry
+# for good; after the second it is appended without the lock, as where no `flock`
+# exists.
 if [ "$PB_LOG_GATE" = true ]; then
     _gate_append() {
     {
@@ -410,7 +413,7 @@ if [ "$PB_LOG_GATE" = true ]; then
     } >> "$GATE_LOG" 2>/dev/null || PLAYBOOK_WRITE_FAILED=true
     }
     if command -v flock &>/dev/null; then
-        ( flock -x 202; _gate_append ) 202>"$AGENT_DIR/chat_log_counter.lock"
+        ( flock -w 1 202 || true; _gate_append ) 202>"$AGENT_DIR/chat_log_counter.lock"
     else
         _gate_append
     fi

@@ -647,16 +647,20 @@ is_code_file_path() {
 #   - there is no lock to take: no `flock` on the host, or a session directory
 #     that cannot be written (the write itself then says so). As before, silent.
 #   - there IS one and it was not given: not within PLAYBOOK_COUNTERS_LOCK_WAIT
-#     seconds (1, 2 or 3; anything else means 2 — the host kills a hook after 5,
-#     and one killed while it waits has neither counted nor said anything); what
+#     seconds (1 or 2; anything else means 2 — the host kills a hook after 5,
+#     and one killed while it waits has neither counted nor said anything; the
+#     limit is for the PROCESS: a hook takes the lock twice, and the second hold
+#     waits only for what the first left — impl round 2); what
 #     stands in the lock's place is no plain file (a FIFO there made the OPEN
 #     wait for ever); or it cannot be opened where it could have been made. Then
 #     the count may be wrong, and a `writes` that is too low is what releases a
 #     stop: the session is MARKED (file `counts_unsure` beside the counters) and
 #     the stop hook does not use its chat-reply release until reset_counters —
-#     the user's next prompt — has run UNDER the lock (impl round 1). That is
-#     waited for ONCE per process, and PLAYBOOK_COUNTERS_UNLOCKED=true lets the
-#     hook say it.
+#     the user's next prompt — has run UNDER the lock (impl round 1). Every
+#     write made without the lock leaves the mark AGAIN when it lands: it may
+#     put a copy made before such a reset back over what was counted after it
+#     (impl round 2). After a lock that was not given the process does not wait
+#     again, and PLAYBOOK_COUNTERS_UNLOCKED=true lets the hook say it.
 # A reader takes no lock. A single write replaces the file by a rename; the reset
 # rewrites it in place, and the stop hook reads `writes` and `tools` in two
 # reads — so a reader can meet a reset half-way (zero counts, or none yet).
@@ -664,14 +668,15 @@ PLAYBOOK_COUNTERS_UNLOCKED=false
 PLAYBOOK_COUNTERS_WAITED=""
 _PB_COUNTERS_DEPTH=0
 _PB_COUNTERS_FD=false
+_PB_COUNTERS_SPENT_MS=0     # what this process has already waited for the lock
 
 counters_lock() {
     _PB_COUNTERS_DEPTH=$(( _PB_COUNTERS_DEPTH + 1 ))
     [ "$_PB_COUNTERS_DEPTH" -eq 1 ] || return 0
     [ "$PLAYBOOK_COUNTERS_UNLOCKED" != true ] || return 0
     command -v flock &>/dev/null || return 0
-    local lock="$1.lock" wait="${PLAYBOOK_COUNTERS_LOCK_WAIT:-}"
-    case "$wait" in [1-3]) ;; *) wait=2 ;; esac
+    local lock="$1.lock" wait="${PLAYBOOK_COUNTERS_LOCK_WAIT:-}" left began t0 t1
+    case "$wait" in [1-2]) ;; *) wait=2 ;; esac
     if [ -e "$lock" ] || [ -L "$lock" ]; then
         if [ ! -f "$lock" ] || [ -L "$lock" ]; then
             _counters_unsure "$1" "$wait"
@@ -683,8 +688,21 @@ counters_lock() {
         return 0
     fi
     _PB_COUNTERS_FD=true
-    if ! flock -w "$wait" 204 2>/dev/null; then
-        _counters_unsure "$1" "$wait"
+    # one wait for the whole process: the second hold gets what the first left, in
+    # whole seconds; with nothing left it only tries
+    left=$(( wait - _PB_COUNTERS_SPENT_MS / 1000 ))
+    began=$SECONDS
+    t0="${EPOCHREALTIME:-}"
+    if [ "$left" -gt 0 ]; then
+        flock -w "$left" 204 2>/dev/null || _counters_unsure "$1" "$wait"
+    else
+        flock -n 204 2>/dev/null || _counters_unsure "$1" "$wait"
+    fi
+    t1="${EPOCHREALTIME:-}"
+    if [ -n "$t0" ] && [ -n "$t1" ]; then        # bash 5: to the microsecond
+        _PB_COUNTERS_SPENT_MS=$(( _PB_COUNTERS_SPENT_MS + (10#${t1/[.,]/} - 10#${t0/[.,]/}) / 1000 ))
+    else
+        _PB_COUNTERS_SPENT_MS=$(( _PB_COUNTERS_SPENT_MS + (SECONDS - began) * 1000 ))
     fi
     return 0
 }
@@ -700,6 +718,11 @@ _counters_dir() {
 _counters_unsure() {
     PLAYBOOK_COUNTERS_UNLOCKED=true
     PLAYBOOK_COUNTERS_WAITED="$2"
+    _counters_mark "$1"
+}
+
+# _counters_mark FILE — leave the mark beside FILE. Never fails the caller.
+_counters_mark() {
     : > "$(_counters_dir "$1")/counts_unsure" 2>/dev/null || true
 }
 
@@ -734,6 +757,12 @@ write_counter() {
     if ! { printf '%s=%s\n' "$key" "$value" >> "$tmp" 2>/dev/null && mv "$tmp" "$file" 2>/dev/null; }; then
         rm -f "$tmp" 2>/dev/null || true
         PLAYBOOK_WRITE_FAILED=true
+    fi
+    # A write made without the lock may have put an OLDER copy back — over a count
+    # made after the user's next prompt had reset the file and cleared the mark: it
+    # leaves the mark again as it lands (impl round 2, reproduced).
+    if [ "$PLAYBOOK_COUNTERS_UNLOCKED" = true ]; then
+        _counters_mark "$file"
     fi
     counters_unlock
     return 0
