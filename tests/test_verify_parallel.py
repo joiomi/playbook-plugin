@@ -600,35 +600,38 @@ class GitIsToldWhereToStop(_Suite):
         return seen
 
     def test_each_module_is_told_the_temp_root_and_then_its_own_directory(self):
-        root = tempfile.gettempdir()
+        # the contract's own entries are RESOLVED (impl round 1): where the temp directory is
+        # reached through a link, the ceiling names the real one — the module's TMPDIR does not
+        tmp = tempfile.gettempdir()
+        root = os.path.realpath(tmp)
         for mod, env in self._children().items():
             with self.subTest(mod=mod):
-                self.assertEqual(os.path.dirname(env["TMPDIR"]), root)
+                self.assertEqual(os.path.dirname(env["TMPDIR"]), tmp)
                 # the root AS WELL AS the private directory: a ceiling stops git only as a proper
                 # ancestor of where it starts, so the private directory alone leaves a command
                 # started IN it looking above. (Git does not mind the order; it is fixed so that
                 # the value is one known string.)
-                self.assertEqual(env["GIT_CEILING_DIRECTORIES"], root + os.pathsep + env["TMPDIR"])
+                self.assertEqual(env["GIT_CEILING_DIRECTORIES"], root + os.pathsep + os.path.realpath(env["TMPDIR"]))
 
     def test_what_the_caller_had_stays_in_front_exactly_as_it_was(self):
-        root = tempfile.gettempdir()
+        root = os.path.realpath(tempfile.gettempdir())
         # an EMPTY entry means something to git (the entries after it are not resolved through
         # links): it must neither be dropped nor gain a neighbour in front
         for inherited in ("/somewhere/else", "/a" + os.pathsep + "/b", os.pathsep + "/after/an/empty/entry"):
             with self.subTest(inherited=inherited):
                 for env in self._children(inherited).values():
                     self.assertEqual(env["GIT_CEILING_DIRECTORIES"],
-                                     inherited + os.pathsep + root + os.pathsep + env["TMPDIR"])
+                                     inherited + os.pathsep + root + os.pathsep + os.path.realpath(env["TMPDIR"]))
                 self.setUp()                                             # a fresh suite for the next value
 
     def test_a_variable_that_is_set_and_empty_adds_no_empty_entry(self):
-        root = tempfile.gettempdir()
+        root = os.path.realpath(tempfile.gettempdir())
         for env in self._children("").values():
-            self.assertEqual(env["GIT_CEILING_DIRECTORIES"], root + os.pathsep + env["TMPDIR"])
+            self.assertEqual(env["GIT_CEILING_DIRECTORIES"], root + os.pathsep + os.path.realpath(env["TMPDIR"]))
 
     def test_every_other_child_is_told_the_temp_root(self):
         # the single-process run, the two shell fixtures, the ledger's tests: no private directory there
-        root = tempfile.gettempdir()
+        root = os.path.realpath(tempfile.gettempdir())
         for inherited, want in ((None, root), ("", root), ("/a" + os.pathsep + "/b", "/a" + os.pathsep + "/b" + os.pathsep + root)):
             with self.subTest(inherited=inherited), self._without(inherited):
                 self.assertEqual(V.env()["GIT_CEILING_DIRECTORIES"], want)
