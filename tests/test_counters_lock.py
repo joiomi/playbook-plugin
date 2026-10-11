@@ -420,13 +420,14 @@ class ACountMadeWithoutTheLockHoldsTheStop(_Counters):
 
     def test_a_prompt_whose_own_reset_could_not_take_the_lock_leaves_it_unsure(self):
         self.prompt()
+        self.tools("Bash")                                   # counted under the lock: (1, 1)
         self._a_read_while_the_lock_is_held()
         with self.held():
             self._n = getattr(self, "_n", 0) + 1
             r = self._hook("chat-log-hook", {"prompt": f"a prompt while the lock is held, {self._n}"})
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue(self.unsure.exists())
-        self.assertEqual(self.counts(), (0, 0))          # the turn's Read was not counted, and nothing was reset
+        self.assertEqual(self.counts(), (1, 1))          # the Read was not counted, and NOTHING was reset
         self.assertEqual(self.stop().returncode, 2)
 
     def _a_turn_a_notification_started(self, one_read_without_the_lock):
@@ -644,6 +645,37 @@ class TheGateIsReadUnderTheLock(_Counters):
         self.assertEqual(self._log().count("**[G001:7]**"), 1)
         self.assertEqual(len([d for d in done if "previous gate done" in d[1]]), 1)
         self.assertEqual(self.counters()["gate_key"], "001:8")
+
+    def test_the_last_gate_waits_for_its_entry_too(self):
+        # no gate left open: the counters forget the gate only once its entry is written
+        self._tick_the_first_gate()
+        self.tools("Read")                                               # 001:7 logged, now on 001:8
+        self.task_file.write_text(
+            self.task_file.read_text(encoding="utf-8").replace("- [ ] the second gate", "- [x] the second gate — done"),
+            encoding="utf-8")
+        chat_lock = self.project / ".agent" / "chat_log_counter.lock"
+        fd = os.open(chat_lock, os.O_CREAT | os.O_RDWR, 0o644)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            rc, out, err = self.finish(self.start_tool("Read"))
+        finally:
+            os.close(fd)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual((self.counters()["gate_key"], self._log().count("**[G001:8]**")), ("001:8", 0))
+        self.tools("Read")
+        self.assertEqual((self.counters()["gate_key"], self._log().count("**[G001:8]**")), ("", 1))
+
+    def test_a_call_that_was_not_given_the_counters_lock_logs_no_gate(self):
+        # it cannot write the new gate, so it must not write the entry either
+        self._tick_the_first_gate()
+        with self.held():
+            rc, out, err = self.finish(self.start_tool("Read", PLAYBOOK_COUNTERS_LOCK_WAIT="1"))
+        self.assertEqual(rc, 0, err)
+        self.assertIn(NOTICE, out)
+        self.assertNotIn("previous gate done", out)
+        self.assertEqual((self.counters()["gate_key"], self._log().count("**[G001:7]**")), ("001:7", 0))
+        self.overlapping("Read", "Read")
+        self.assertEqual((self.counters()["gate_key"], self._log().count("**[G001:7]**")), ("001:8", 1))
 
     def test_a_chat_log_that_cannot_be_appended_to_is_said(self):
         # Parked by this task's first build and closed here, on the same lines: with `flock`

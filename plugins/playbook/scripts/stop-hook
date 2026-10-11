@@ -305,11 +305,11 @@ fi
 # Not when the gate COUNT itself failed (task 072 round 2, codex): a heuristic
 # must not release a tree the hook could not count — "never releases on a count
 # it could not take" is the ledger's exact sentence.
-# Nor when the counts themselves are not sure (task 182, impl round 1): a tool
-# call's hook that was not given the counters lock counted without it and left
-# the mark `counts_unsure`; a `writes` lost that way would read here as a chat
-# reply. The mark goes when a prompt of the user's has reset the counts under
-# the lock. It also holds the notification exception below, which reads `writes`.
+# Nor when the counts themselves are not sure (task 182): a tool call's hook
+# that was not given the counters lock did not count its call and left the mark
+# `counts_unsure`; a `writes` that is behind would read here as a chat reply.
+# The mark goes when a prompt of the user's has reset the counts under the lock.
+# It also holds the notification exception below, which reads `writes`.
 COUNTER_FILE="$SESSION_DIR/counters"
 if [ -f "$COUNTER_FILE" ] && [ "${PB_GREP_RC:-0}" -le 1 ] && [ ! -e "$SESSION_DIR/counts_unsure" ]; then
     # read_counter_int (not read_counter): coerce the .agent/-resident counter

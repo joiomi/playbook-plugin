@@ -973,13 +973,12 @@ class Round2Fixes(unittest.TestCase):
     def test_the_state_echo_hook_appends_under_the_shared_lock(self):
         # codex-high #3: the gate logger appends to chat_log.md too, so a
         # `tasks tag` rewrite could lose a gate entry.
-        # (Since task 182's impl round 2 the lock is waited for ONE second and the entry
-        # then appended without it — the new gate is already written by then, and a wait
-        # that outlived the hook lost the entry; the wait itself is run in
-        # tests/test_counters_lock.py::TheGateIsReadUnderTheLock.)
+        # (Since task 182 the lock is waited for ONE second — tried, not blocked on — and
+        # where it is not given the entry is not appended and the gate not advanced; that
+        # is run in tests/test_counters_lock.py::TheGateIsReadUnderTheLock.)
         hook = (PLUGIN / "scripts" / "state-echo-hook").read_text(encoding="utf-8")
         self.assertIn("chat_log_counter.lock", hook)
-        self.assertIn("flock -w 1 202", hook)
+        self.assertIn("flock -n 202", hook)
 
     def test_compact_refuses_a_stale_compose(self):
         # sonnet #2 + codex ×2: compact composed its new text BEFORE taking the
@@ -1093,9 +1092,8 @@ class Round3Fixes(unittest.TestCase):
     def test_the_state_echo_append_takes_the_lock(self):
         # codex-high #4: the FINAL-gate append was a second, unlocked writer of
         # chat_log.md. Count the append blocks and require each to be wrapped.
-        # (Two sites until task 182's impl round 1 made them one, appended after the
-        # counters lock is let go; that it WAITS for the chat log's lock is run in
-        # tests/test_counters_lock.py::TheGateIsReadUnderTheLock.)
+        # (Two sites until task 182 made them one function; that it WAITS for the chat
+        # log's lock is run in tests/test_counters_lock.py::TheGateIsReadUnderTheLock.)
         hook = (PLUGIN / "scripts" / "state-echo-hook").read_text(encoding="utf-8")
         appends = hook.count('>> "$GATE_LOG"')
         wrapped = hook.count('chat_log_counter.lock')
