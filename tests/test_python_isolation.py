@@ -36,7 +36,9 @@ Three kinds of proof here:
 What is NOT claimed: a helper started by hand through its `#!` line reads the
 user's environment (nothing shipped starts one that way); the SYSTEM's site-packages
 are read by every helper (`-S` is not used); a codex configuration written before
-task 180 keeps its old command until it is regenerated.
+task 180 keeps its old command until its hooks are installed again, and is rewritten
+then only where it names the same plugin directory (one written by an installed
+older version gets the new command beside the old one — a known limit).
 
 What the sweep does NOT see (said in the ledger row too): a call through a
 variable (`"$PY" -c …`), and — in Python sources — anything but an argv list that

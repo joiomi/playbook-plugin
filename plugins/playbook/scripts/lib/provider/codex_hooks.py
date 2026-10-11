@@ -252,7 +252,9 @@ def _command_for(script_name: str) -> str:
     started in the user's environment, and a `PYTHONPATH` that covers the project put a
     project file named like a module in the place of the standard library's (task 180).
     A configuration written before holds the older text of the command; installing the
-    hooks again puts this one in its place (`merge_hooks`)."""
+    hooks again puts this one in its place (`merge_hooks`) — where the configuration
+    names the same scripts directory. One written by an installed older version names
+    that version's directory and gets this command BESIDE the old one, as before."""
     script_path = playbook_scripts_dir() / script_name
     return f"python3 -E -s {shlex.quote(str(script_path))}"
 
