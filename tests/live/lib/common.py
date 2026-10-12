@@ -16,11 +16,14 @@ and no `test_*` file, so `unittest discover` does not collect it, and
 """
 from __future__ import annotations
 
+import atexit
 import datetime as _dt
 import hashlib
+import json
 import os
 import shlex
 import shutil
+import tempfile
 import subprocess
 import sys
 from pathlib import Path
@@ -35,7 +38,9 @@ _CAP = 200_000                                # characters kept per stream; more
 
 # what a nested session must not inherit from the session that runs the gauntlet
 _STRIP_PREFIXES = ("PLAYBOOK_", "CLAUDE_CODE_", "CLAUDECODE", "CLAUDE_PLUGIN_", "CODEX_", "GROK_")
-_STRIP_NAMES = ("BASH_ENV", "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP")
+_STRIP_NAMES = ("BASH_ENV", "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP",
+                # the parent session's identity (the product strips the same: sandbox._PARENT_SESSION_ENV)
+                "CLAUDE_PID", "CLAUDE_ENV_FILE", "CLAUDE_PROJECT_DIR", "CLAUDE_EFFORT")
 
 
 def clean_env(extra: "dict[str, str] | None" = None, drop: "tuple[str, ...]" = ()) -> "dict[str, str]":
@@ -48,12 +53,15 @@ def clean_env(extra: "dict[str, str] | None" = None, drop: "tuple[str, ...]" = (
 
 
 def snapshot(root: Path) -> "dict[str, tuple[int, str]]":
-    """path -> (size, sha256 of the first 1 MiB) for every regular file under root."""
+    """path -> (size, sha256 of the first 1 MiB) for every regular file under root, and
+    `path/` -> (-1, "dir") for every directory (an empty directory left behind is a change too)."""
     out: "dict[str, tuple[int, str]]" = {}
     if not root.exists():
         return out
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d != ".git"]
+        for d in dirnames:
+            out[str((Path(dirpath) / d).relative_to(root)) + "/"] = (-1, "dir")
         for name in filenames:
             p = Path(dirpath) / name
             try:
@@ -71,7 +79,7 @@ def delta(before: "dict[str, tuple[int, str]]", after: "dict[str, tuple[int, str
     lines = []
     for k in sorted(set(before) | set(after)):
         if k not in before:
-            lines.append(f"+ {k} ({after[k][0]} B)")
+            lines.append(f"+ {k}" if after[k][0] < 0 else f"+ {k} ({after[k][0]} B)")
         elif k not in after:
             lines.append(f"- {k}")
         elif before[k] != after[k]:
@@ -141,8 +149,10 @@ class Run:
             self.lines.append("env: " + " ".join(f"{k}={shlex.quote(v)}" for k, v in env_shown.items()))
         t0 = _dt.datetime.now()
         try:
-            r = subprocess.run(cmd, cwd=cwd, env=env, input=stdin, capture_output=True, text=True,
-                               timeout=timeout, errors="replace")
+            # no step reads the harness's own stdin: given text, or nothing (a CLI that reads stdin sees EOF)
+            feed = {"input": stdin} if stdin is not None else {"stdin": subprocess.DEVNULL}
+            r = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True,
+                               timeout=timeout, errors="replace", **feed)
         except subprocess.TimeoutExpired as exc:
             out = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
             err = exc.stderr.decode(errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
@@ -231,6 +241,109 @@ def scratch_project(path: Path, *, lanes: "tuple[str, ...]" = ()) -> Path:
     subprocess.run(["git", "add", "-A"], cwd=path, check=True, env=env)
     subprocess.run(["git", "commit", "-q", "-m", "scratch project"], cwd=path, check=True, env=env)
     return path
+
+
+def tempdir(prefix: str) -> Path:
+    """A scratch directory removed when the row's process exits (one row runs per process)."""
+    d = Path(tempfile.mkdtemp(prefix=prefix))
+    atexit.register(shutil.rmtree, d, True)
+    return d
+
+
+INSTALLED_PLUGIN = "playbook@playbook-x-marketplace"
+
+
+def session_project(path: Path, *, lanes: "tuple[str, ...]" = (), marker: "str | None" = None) -> Path:
+    """A scratch project where a real claude session runs the CANDIDATE: the owner's installed
+    copy is disabled for this project only (its `.claude/settings.json`), the candidate is loaded
+    with `--plugin-dir` by `claude_session`, and `.claude/bin/tasks` runs the candidate's CLI.
+    (Verified 2026-10-12 in the session's debug log: "Read hooks.json for plugin playbook
+    (enabled=true): <tree>…" and, for the installed copy, "will NOT register, plugin is disabled".)"""
+    scratch_project(path, lanes=lanes)
+    if marker is not None:
+        (path / ".agent" / "current_user").write_text(marker + "\n", encoding="utf-8")
+    settings = path / ".claude" / "settings.json"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    data = json.loads(settings.read_text(encoding="utf-8")) if settings.exists() else {}
+    data.setdefault("enabledPlugins", {})[INSTALLED_PLUGIN] = False
+    settings.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    wrapper = path / ".claude" / "bin" / "tasks"
+    wrapper.parent.mkdir(parents=True, exist_ok=True)
+    wrapper.write_text(f'#!/bin/bash\nexec "{PLUGIN}/scripts/tasks" "$@"\n', encoding="utf-8")
+    wrapper.chmod(0o755)
+    return path
+
+
+def claude_session(run: "Run", title: str, project: Path, prompt: str, *, model: str = "haiku",
+                   extra: "tuple[str, ...]" = (), timeout: float = 900) -> "tuple[subprocess.CompletedProcess, list[dict]]":
+    """One real headless claude session in `project`, the candidate loaded with --plugin-dir. The
+    stream of events (tool calls, their results, hook feedback, the final result) is kept whole in
+    the artifact; the parsed events are returned for the clauses."""
+    # DETACHED (`setsid -f`): the hooks attribute a session to the ROOT agent of their process chain (by
+    # design — a sub-session belongs to its session), so a session started under the one running the
+    # gauntlet would carry ITS identity. Detached, the chain is `bash → systemd` (measured) and the
+    # session is a user's own, as in a terminal.
+    work = Path(tempfile.mkdtemp(prefix="pb184-sess-"))
+    (work / "prompt").write_text(prompt, encoding="utf-8")
+    claude = ["claude", "-p", "--plugin-dir", str(PLUGIN), "--model", model, "--dangerously-skip-permissions",
+              "--output-format", "stream-json", "--verbose", "--include-hook-events",
+              # the user's own settings stay out: their hooks (a Stop sound) would run in every test session
+              "--setting-sources", "project,local", *extra]
+    inner = (f"cd {shlex.quote(str(project))} && {' '.join(shlex.quote(a) for a in claude)} "
+             f"< {shlex.quote(str(work / 'prompt'))} > {shlex.quote(str(work / 'out'))} 2> {shlex.quote(str(work / 'err'))}; "
+             f"echo $? > {shlex.quote(str(work / 'rc.tmp'))} && mv {shlex.quote(str(work / 'rc.tmp'))} {shlex.quote(str(work / 'rc'))}")
+    waiter = (f"setsid -f bash -c {shlex.quote(inner)}; n=0; while [ ! -f {shlex.quote(str(work / 'rc'))} ]; do "
+              f"sleep 1; n=$((n+1)); [ $n -gt {int(timeout)} ] && {{ echo 'timed out' >&2; exit 124; }}; done; "
+              f"cat {shlex.quote(str(work / 'out'))}; cat {shlex.quote(str(work / 'err'))} >&2; exit $(cat {shlex.quote(str(work / 'rc'))})")
+    run.note(f"session prompt:\n{prompt.rstrip()}")
+    r = run.step(title + " (claude " + " ".join(claude[1:]) + ")", waiter, cwd=project, env=clean_env(),
+                 timeout=timeout + 60, watch=[project / ".agent", project / "src"])
+    shutil.rmtree(work, ignore_errors=True)
+    events = []
+    for line in r.stdout.splitlines():
+        try:
+            events.append(json.loads(line))
+        except ValueError:
+            continue
+    return r, events
+
+
+def tool_calls(events: "list[dict]") -> "list[tuple[str, dict]]":
+    """(tool name, input) of every tool call the session made, in order."""
+    out = []
+    for e in events:
+        if e.get("type") == "assistant":
+            for c in (e.get("message") or {}).get("content") or []:
+                if isinstance(c, dict) and c.get("type") == "tool_use":
+                    out.append((c.get("name", ""), c.get("input") or {}))
+    return out
+
+
+def tool_results(events: "list[dict]") -> "list[str]":
+    """The text of every tool result the session received (hook refusals come back here)."""
+    out = []
+    for e in events:
+        if e.get("type") == "user":
+            for c in (e.get("message") or {}).get("content") or []:
+                if isinstance(c, dict) and c.get("type") == "tool_result":
+                    body = c.get("content")
+                    if isinstance(body, list):
+                        body = " ".join(x.get("text", "") for x in body if isinstance(x, dict))
+                    out.append(str(body))
+    return out
+
+
+def journal(project: Path, lane: "str | None" = None) -> "list[dict]":
+    base = project / ".agent" / lane if lane else project / ".agent"
+    f = base / "journal" / "enforcement.jsonl"
+    rows = []
+    if f.exists():
+        for x in f.read_text(encoding="utf-8").splitlines():
+            try:
+                rows.append(json.loads(x))
+            except ValueError:
+                continue
+    return rows
 
 
 def owner_home_guard() -> "dict[str, str]":

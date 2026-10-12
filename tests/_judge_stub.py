@@ -82,7 +82,8 @@ def clean_env(**extra: str) -> "dict[str, str]":
     settings — a review started by a test must not act as the session that runs the suite."""
     drop = ("PLAYBOOK_", "CLAUDE_CODE_", "CLAUDECODE", "CLAUDE_PLUGIN_")
     env = {k: v for k, v in os.environ.items()
-           if not k.startswith(drop) and k not in ("BASH_ENV", "PYTHONPATH", "PYTHONHOME")}
+           if not k.startswith(drop) and k not in ("BASH_ENV", "PYTHONPATH", "PYTHONHOME", "CLAUDE_PID",
+                                                    "CLAUDE_ENV_FILE", "CLAUDE_PROJECT_DIR")}
     env.update(extra)
     return env
 

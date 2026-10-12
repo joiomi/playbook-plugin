@@ -54,6 +54,36 @@ for id in "${ROWS[@]}"; do
         PB-INSTALL-ROLLBACK)
             echo "=== PB-INSTALL-ROLLBACK: the upgraded copy's init interrupted three controlled ways; everything restored; a re-run recovers"
             row "$id" ;;
+        PB-TASK-ACTIVATE)
+            echo "=== PB-TASK-ACTIVATE: a real session: no task refused, a pending task allowed, a blocked task refused with its resume"
+            row "$id" ;;
+        PB-PROVIDER-HOOK-INVOCATION)
+            echo "=== PB-PROVIDER-HOOK-INVOCATION: a real session: an allowed edit, a destructive command blocked, the prompt attributed, the echo, the stop"
+            row "$id" ;;
+        PB-HOOK-STATE-ECHO)
+            echo "=== PB-HOOK-STATE-ECHO: a real session: the echo after each tool event, two parallel calls, a ticked gate"
+            row "$id" ;;
+        PB-HOOK-STOP-CLOSE)
+            echo "=== PB-HOOK-STOP-CLOSE: real sessions: the first stop blocked with gates open, the valve, a complete task let through"
+            row "$id" ;;
+        PB-TASK-FREEHAND)
+            echo "=== PB-TASK-FREEHAND: real sessions: freehand released, its log captured, a tracked task re-arms the gates"
+            row "$id" ;;
+        PB-LANE-RESOLUTION)
+            echo "=== PB-LANE-RESOLUTION: real sessions: a two-lane repository stays in its lane; a fresh clone with no marker invents no root lane"
+            row "$id" ;;
+        PB-PAYLOAD-NORMALIZE)
+            echo "=== PB-PAYLOAD-NORMALIZE: real hook payloads captured in a session and fed to the normalizer: native bytes unchanged, fields its own; a foreign dialect rewritten"
+            row "$id" ;;
+        PB-PROVIDER-CAPABILITY-DEGRADE)
+            echo "=== PB-PROVIDER-CAPABILITY-DEGRADE: claude's advertised capability cells observed in a real session; the model report and live probes against the real CLIs"
+            row "$id" ;;
+        PB-SLASH-COMMANDS)
+            echo "=== PB-SLASH-COMMANDS: every shipped command discovered and dispatched in a real session (tools off)"
+            row "$id" ;;
+        PB-MERGE-PUSH-GATE)
+            echo "=== PB-MERGE-PUSH-GATE: /playbook:merge --push on a disposable two-branch repository: pushed only after the four gates and GREEN; a failing verify pushes nothing"
+            row "$id" ;;
         *) echo "no live section for $id" >&2; false ;;
     esac
     rc=$?

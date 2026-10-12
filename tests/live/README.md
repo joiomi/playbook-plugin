@@ -27,3 +27,17 @@ account; task 109's copied homes cost a codex sign-in), touch the owner's instal
 or projects (the install rows run in a disposable HOME), write inside this
 repository. Scratch projects are made under the system temp directory with the
 project half of init (`claude-md-merge.py`), never its HOME half.
+
+**The session rows** (`lib/rows_session.py`, `lib/rows_session2.py`) start real headless
+`claude -p` sessions in scratch projects. Each scratch project disables the owner's
+installed copy in its own `.claude/settings.json`; the candidate is loaded with
+`--plugin-dir`, and `.claude/bin/tasks` runs the candidate's CLI. Sessions run with
+`--setting-sources project,local`, so the owner's user settings — his own hooks, such
+as a sound at every stop — stay out of them, and DETACHED (`setsid -f`): the hooks give
+a session the identity of the root agent of its process chain, so a session started
+under the one running the gauntlet would carry that one's identity. What a clause reads
+is what the hooks left — the enforcement journal, the chat log, the files, the hook
+responses Claude Code reports with `--include-hook-events` — never the agent's own
+account. Scratch directories are removed when the row ends; the sessions' transcripts
+stay where Claude Code keeps them (`~/.claude/projects/-tmp-pb184-*`), which the
+gauntlet does not touch.

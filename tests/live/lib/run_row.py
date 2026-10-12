@@ -9,9 +9,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import rows_install  # noqa: E402
 import rows_platform  # noqa: E402
+import rows_session  # noqa: E402
+import rows_session2  # noqa: E402
 
 ROWS = {}
-for module in (rows_platform, rows_install):
+for module in (rows_platform, rows_install, rows_session, rows_session2):
     ROWS.update(module.ROWS)
 
 
