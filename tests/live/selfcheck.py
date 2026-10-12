@@ -405,7 +405,13 @@ def owner_distillation() -> None:
         return
     for label, doctor, want in (("the record as it is", None, True),
                                 ("INTENT.md without the run's marker", "marker", False),
-                                ("a seam left without a verdict", "seam", False)):
+                                ("a seam left without a verdict", "seam", False),
+                                # task 170, impl round 1, P1: a seam counts as graded with exactly one box ticked, or
+                                # as NOT GRADED only when its verdict says so
+                                ("a seam with neither box ticked and no NOT GRADED", "unticked", False),
+                                ("a seam with both boxes ticked", "both", False),
+                                # P6: the ratification is read in the recorded run's OWN entry, not the task's last one
+                                ("the run's entry emptied, another ratified entry appended", "body", False)):
         d = tempdir("pb170-od-")
         run_dir = d / src[0].relative_to(proj)
         run_dir.mkdir(parents=True)
@@ -414,16 +420,92 @@ def owner_distillation() -> None:
         text = (proj / "INTENT.md").read_text(encoding="utf-8")
         if doctor == "marker":
             text = text.replace(f"<!-- intent:T{num}:{rid} -->", "")
+        if doctor == "body":
+            mark = f"<!-- intent:T{num}:{rid} -->"
+            head, rest = text.split(mark, 1)
+            nxt = re.search(r"(?m)^## task ", rest)
+            text = head + mark + "\n\n" + (rest[nxt.start():] if nxt else "")
+            text = text.rstrip() + (f"\n\n## task {num} · another-run\n<!-- intent:T{num}:another-run -->\n\n"
+                                    "- **Confirmed** — something else.\n\nRatified by the owner, another day.\n")
         (d / "INTENT.md").write_text(text, encoding="utf-8")
+        sheet = run_dir / "review.md"
         if doctor == "seam":
-            sheet = run_dir / "review.md"
             sheet.write_text(re.sub(r"(?m)^(- \[x\] aligned / \[ \] drift — verdict:).*$", r"\1", sheet.read_text(
                 encoding="utf-8"), count=1), encoding="utf-8")
+        if doctor == "unticked":
+            sheet.write_text(re.sub(r"(?m)^- \[x\] aligned / \[ \] drift — verdict:", "- [ ] aligned / [ ] drift — verdict:",
+                                    sheet.read_text(encoding="utf-8"), count=1), encoding="utf-8")
+        if doctor == "both":
+            sheet.write_text(re.sub(r"(?m)^- \[x\] aligned / \[ \] drift — verdict:", "- [x] aligned / [x] drift — verdict:",
+                                    sheet.read_text(encoding="utf-8"), count=1), encoding="utf-8")
         run = Run("PB-SELFCHECK", "the owner's distillation record", d / "out", [])
         rows_judge._owner_distillation(run, (d, num, rid))
         ok = all(c[1] for c in run.clauses)
         check(f"R8.3 PB-CLI-INTENT's record check — {label}", ok, want,
               "; ".join(f"{'PASS' if c[1] else 'FAIL'} {c[0][:50]}" for c in run.clauses if not c[1]) or "all clauses pass")
+
+
+def gauntlet_windows() -> None:
+    """Two windows the gauntlet's signal handler must cover (task 170, impl round 1), each widened in a copy of
+    gauntlet.sh by a `sleep 2` so the signal lands in it every time: (P4) a selfcheck started but not yet held as
+    `child`; (P5) a row that wrote PASS and exited 139, before the loop compared its verdict with its exit."""
+    # P4
+    d = _gauntlet_copy("import sys, pathlib\npathlib.Path(sys.argv[2], sys.argv[1] + '.txt').write_text("
+                       "'# stub\\nROW ' + sys.argv[1] + ': PASS (1 clauses)\\n')\n",
+                       "import os, sys, time, pathlib\npathlib.Path(sys.argv[1], 'sc.pid').write_text(str(os.getpid()))\n"
+                       "time.sleep(60)\n")
+    g_sh = d / "gauntlet.sh"
+    src = g_sh.read_text()
+    spawn = 'python3 -I "$HERE/selfcheck.py" "$OUT" &\n'
+    widened = src.replace(spawn, spawn + "sleep 2\n", 1)
+    g_sh.write_text(widened)
+    out = d / "out"
+    g = subprocess.Popen(["bash", str(g_sh), "--out", str(out), "PB-PYTHON-FLOOR"], stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+    try:
+        ok = widened != src and _wait_for(out / "sc.pid")
+        g.send_signal(signal.SIGTERM)
+        try:
+            rc = g.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            rc = None
+        time.sleep(0.3)
+        try:
+            left = _running(int((out / "sc.pid").read_text()))
+        except (OSError, ValueError):
+            left = False
+        check("P4 a SIGTERM before the selfcheck is held as `child` still reaches it", ok and rc == 143 and not left,
+              True, f"window widened and selfcheck started: {ok}; rc {rc}; selfcheck still running: {left}")
+    finally:
+        end_tree(g.pid)
+        try:
+            end_tree(int((out / "sc.pid").read_text()))
+        except (OSError, ValueError):
+            pass
+    # P5
+    d = _gauntlet_copy("import os, sys, pathlib\npathlib.Path(sys.argv[2], sys.argv[1] + '.txt').write_text("
+                       "'# stub\\nROW ' + sys.argv[1] + ': PASS (1 clauses)\\n')\nos._exit(139)\n",
+                       "import sys\nsys.exit(0)\n")
+    g_sh = d / "gauntlet.sh"
+    src = g_sh.read_text()
+    widened = src.replace("    rc=$?\n", "    rc=$?\n    sleep 2\n", 1)
+    g_sh.write_text(widened)
+    out = d / "out"
+    g = subprocess.Popen(["bash", str(g_sh), "--out", str(out), "PB-PYTHON-FLOOR"], stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+    try:
+        ok = widened != src and _wait_for(out / "PB-PYTHON-FLOOR.txt")
+        time.sleep(0.5)                                # the row has exited; the loop sleeps before its check
+        g.send_signal(signal.SIGTERM)
+        try:
+            rc = g.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            rc = None
+        check("P5 a SIGTERM after a dead row wrote PASS, before its check, still sets the artifact aside",
+              ok and rc == 143 and not (out / "PB-PYTHON-FLOOR.txt").exists(), True,
+              f"window widened and artifact written: {ok}; rc {rc}; still there: {(out / 'PB-PYTHON-FLOOR.txt').exists()}")
+    finally:
+        end_tree(g.pid)
 
 
 def _gauntlet_copy(run_row: str, selfcheck: str) -> Path:
@@ -514,7 +596,7 @@ def main(argv: "list[str]") -> int:
         signal.signal(s, lambda signum, _f: sys.exit(128 + signum))
     for f in (freehand, names, install_env, snapshot_whole, step_timeout, step_detached, gauntlet_quarantine,
               registry_probe, docker_timeout, gauntlet_missing_and_lock, spawn_interrupted, gauntlet_interrupted,
-              owner_distillation):
+              owner_distillation, gauntlet_windows):
         f()
     print(f"selfcheck: {'every control holds' if not FAILED else f'{len(FAILED)} control(s) do not hold'}")
     return 1 if FAILED else 0

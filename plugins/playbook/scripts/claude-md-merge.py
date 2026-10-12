@@ -113,6 +113,8 @@ GITIGNORE_ENTRIES = (
     ".agent/*/tasks/*/*.lock",
     ".agent/chat_log_counter.lock",
     ".agent/*/chat_log_counter.lock",
+    # Task 170: the lock under which `append_intent` reads and replaces the root INTENT.md.
+    ".agent/intent.lock",
 )
 
 

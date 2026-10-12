@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tasks.atomic import atomic_write
+from tasks.filelock import named_lock
 
 # Per-layer evidence budget. Large chat spans / diffs get head+tail trimmed so
 # the default judge model isn't blown past its context (same idea as
@@ -517,13 +518,18 @@ def append_intent(intent_md: Path, task_num: str, run_id: str, ratified: str) ->
     """
     marker = f"<!-- intent:T{task_num}:{run_id} -->"
     header = "# Validated Intent\n\n_Append-only. Each entry is user-ratified._\n"
-    existing = intent_md.read_text(encoding="utf-8", errors="replace") if intent_md.exists() else header
-    if marker in existing:
-        return  # idempotent — this exact run already ratified
     entry = (f"\n## task {task_num} · {run_id}\n{marker}\n\n{ratified.strip()}\n")
     # Read-modify-write of the whole file (not an O_APPEND) → atomic, so an
-    # interrupt can't truncate ratified intent to a fragment.
-    atomic_write(intent_md, existing.rstrip() + "\n" + entry)
+    # interrupt can't truncate ratified intent to a fragment — and the read and the
+    # replace under ONE lock, so two sessions ratifying at once cannot erase each
+    # other's entry (task 170, impl panel round 1, P7: measured, the second entry lost).
+    # The lock file sits in `.agent/` beside the project's other runtime locks and
+    # init's .gitignore block keeps it out of the record.
+    with named_lock(intent_md.parent / ".agent" / "intent.lock"):
+        existing = intent_md.read_text(encoding="utf-8", errors="replace") if intent_md.exists() else header
+        if marker in existing:
+            return  # idempotent — this exact run already ratified
+        atomic_write(intent_md, existing.rstrip() + "\n" + entry)
 
 
 def last_intent_entry(intent_md: Path, task_num: str) -> str | None:

@@ -15459,7 +15459,7 @@
     {
       "id": "PB-CLI-INTENT",
       "category": "cli-contracts",
-      "statement": "tasks intent runs blind per-layer extractions over a finished task, defaulting its extraction judge to the all-Claude default rather than codex; the reconciliation and the distillation are the /playbook:intent flow's (commands/intent.md): the agent reconciles the reports with the user and appends only what the user ratifies to root INTENT.md, under `## task N · <run-id>` with the run's marker (`tasks.intent.append_intent`, append-only), which the CLI reads back as the task's baseline (`last_intent_entry`). It spends nothing unasked (task 173, owner's D3-C4 of 2026-09-24): without `--yes` it prints which layers have evidence and one line — how many judge calls a run would make, on which seat, the time limit of each and, for a claude seat, the budget cap of each — makes no judge call, writes no run directory and no spend record, and exits 2; that line ends with the flag that approves exactly what it quotes, `--yes <calls>@<seat>@<limit>@<cap>` — the line's four figures as text, one-to-one with them — and the command runs only when the approval given is that of the line a run would be quoted as at that moment; a bare `--yes`, the approval of a line that no longer holds or one never printed prints the line again and spends nothing; the judge and the cap the approval was checked against are the ones handed to the runner, which does not resolve them again; `--collect-only`, which never spent, is not asked. The seat in that line is resolved by the function the runner itself uses.",
+      "statement": "tasks intent runs blind per-layer extractions over a finished task, defaulting its extraction judge to the all-Claude default rather than codex; the reconciliation and the distillation are the /playbook:intent flow's (commands/intent.md): the agent reconciles the reports with the user and appends only what the user ratifies to root INTENT.md, under `## task N · <run-id>` with the run's marker (`tasks.intent.append_intent`: append-only, the read and the replace under one lock — `.agent/intent.lock`, kept out of the record by init's `.gitignore` block — so two sessions ratifying at once keep both entries), which the CLI reads back as the task's baseline (`last_intent_entry`). It spends nothing unasked (task 173, owner's D3-C4 of 2026-09-24): without `--yes` it prints which layers have evidence and one line — how many judge calls a run would make, on which seat, the time limit of each and, for a claude seat, the budget cap of each — makes no judge call, writes no run directory and no spend record, and exits 2; that line ends with the flag that approves exactly what it quotes, `--yes <calls>@<seat>@<limit>@<cap>` — the line's four figures as text, one-to-one with them — and the command runs only when the approval given is that of the line a run would be quoted as at that moment; a bare `--yes`, the approval of a line that no longer holds or one never printed prints the line again and spends nothing; the judge and the cap the approval was checked against are the ones handed to the runner, which does not resolve them again; `--collect-only`, which never spent, is not asked. The seat in that line is resolved by the function the runner itself uses.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/history.py",
@@ -15704,6 +15704,36 @@
           "negative_control": null,
           "limitations": [
             "A seat with shell characters (`claude:claude-opus-5-5[1m]`): the flag is printed single-quoted, and the token a shell hands over from it runs. Red in a copy that prints it unquoted."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_intent_append.py",
+          "reference": "AppendIntent.test_two_sessions_ratifying_at_once_keep_both_entries",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Two real processes append to one INTENT.md; the first is held between its read and its replace while the second appends. Red on the unlocked function (task 170, impl panel round 1, P7): \"'<!-- intent:T043:r2 -->' not found\" — the second entry erased."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_intent_append.py",
+          "reference": "AppendIntent.test_the_same_run_ratified_twice_is_one_entry",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "The same run's marker twice: one entry, the first text kept."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_intent_append.py",
+          "reference": "AppendIntent.test_the_lock_lives_in_agent_and_init_keeps_it_out_of_the_record",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "The lock file is `.agent/intent.lock` (not beside INTENT.md) and is an entry of init's `.gitignore` block."
           ]
         },
         {

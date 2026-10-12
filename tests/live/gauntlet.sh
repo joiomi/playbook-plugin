@@ -41,7 +41,10 @@ fi
 child=""
 current=""
 on_signal() {
-    [ -n "$child" ] && kill -TERM "$child" 2>/dev/null && wait "$child" 2>/dev/null
+    # the held child, and every job this shell started — one spawned but not yet held as `child` too (task 170, P4)
+    local p
+    for p in $child $(jobs -p); do kill -TERM "$p" 2>/dev/null; done
+    wait 2>/dev/null
     # the row the signal interrupted never counts, whatever its artifact already says (task 184's L3)
     if [ -n "$current" ] && [ -f "$OUT/$current.txt" ]; then
         mv -f "$OUT/$current.txt" "$OUT/$current.txt.invalid"
@@ -59,7 +62,6 @@ row() {
     wait "$child"
     local rc=$?
     child=""
-    current=""
     return $rc
 }
 
@@ -155,6 +157,8 @@ for id in "${ROWS[@]}"; do
         worst=1
     elif [ $rc -eq 3 ] && [ $worst -eq 0 ]; then worst=3
     fi
+    # only now is the row's artifact judged: until here a signal still sets it aside (task 170, P5)
+    current=""
 done
 # The harness's own negative controls, on what this run just wrote: a clause that has gone loose fails the run
 # (impl panel round 2, T11). Controls whose row was not run here are skipped and said so.

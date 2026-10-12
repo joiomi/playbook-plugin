@@ -387,23 +387,40 @@ def _owner_distillation(run: Run, record: "tuple[Path, str, str]" = OWNER_DISTIL
         (rdirs[0] / f).stat().st_size > 0 for f in rfiles)
     run.clause("the distillation done with the owner rests on a real run: its four layer reports and its grading "
                "sheet are there", reports_ok, f"run {rid} of task {num}: {rfiles}")
-    r = run.step("the product reads the owner-ratified entry back as the task's baseline (`last_intent_entry`)",
+    # the ratification is read in the recorded run's OWN entry — from its marker to the next `## task` heading — not in
+    # whatever entry of the task comes last (task 170, impl round 1, P6)
+    md = proj / "INTENT.md"
+    text = md.read_text(encoding="utf-8") if md.is_file() else ""
+    marker = f"<!-- intent:T{num}:{rid} -->"
+    heading = f"## task {num} · {rid}\n{marker}"
+    own = text.split(heading, 1)[1] if heading in text else ""
+    nxt = re.search(r"(?m)^## task ", own)
+    own = (own[:nxt.start()] if nxt else own).strip()
+    run.note(f"the recorded run's own entry in INTENT.md:\n{own}")
+    run.clause("INTENT.md holds that run's entry — `## task N · <run-id>` and its marker — and the owner's ratification "
+               "is in that entry's own body", text.count(marker) == 1 and bool(own) and "Ratified by the owner" in own
+               and "**Confirmed**" in own, f"marker {text.count(marker)}x; the entry's body {len(own)} chars")
+    # the product's reader gives the task's LAST entry as its baseline: compared with the last entry read here
+    blocks = re.split(r"(?m)^## task ", text)[1:]
+    last = [b for b in blocks if b.startswith(f"{num} ·")]
+    want = last[-1].split("-->", 1)[-1].strip() if last else ""
+    r = run.step("the product's reader: the task's baseline (`last_intent_entry`)",
                  ["python3", "-I", "-c", "import sys; sys.path.insert(0, sys.argv[1]); from pathlib import Path; "
-                  "from tasks.intent import last_intent_entry; t = Path(sys.argv[2]).read_text(encoding='utf-8'); "
-                  "print('MARKER', sys.argv[4] in t); print('HEADING', ('## task ' + sys.argv[3] + ' · ' + sys.argv[5]) in t); "
-                  "b = last_intent_entry(Path(sys.argv[2]), sys.argv[3]); print('BODY'); print(b or '')",
-                  str(PLUGIN), str(proj / "INTENT.md"), num, f"<!-- intent:T{num}:{rid} -->", rid])
-    body = r.stdout.split("BODY\n", 1)[-1]
-    run.clause("INTENT.md holds that run's entry — `## task N · <run-id>` with its marker — ratified by the owner, "
-               "and the product's reader returns it as the task's baseline",
-               r.returncode == 0 and "MARKER True" in r.stdout and "HEADING True" in r.stdout
-               and "Ratified by the owner" in body and "**Confirmed**" in body,
-               f"rc {r.returncode}; {[x for x in r.stdout.splitlines() if x.startswith(('MARKER', 'HEADING'))]}; "
-               f"body {len(body)} chars")
+                  "from tasks.intent import last_intent_entry; print(last_intent_entry(Path(sys.argv[2]), sys.argv[3]) or '')",
+                  str(PLUGIN), str(md), num])
+    run.clause("the product's reader returns the task's last ratified entry as its baseline", r.returncode == 0
+               and bool(want) and r.stdout.strip() == want, f"rc {r.returncode}; returned {len(r.stdout.strip())} chars, "
+               f"the last entry {len(want)}")
+    # a seam is graded with exactly ONE box ticked, or left NOT GRADED only when its verdict says so and why (P1)
     review = (rdirs[0] / "review.md").read_text(encoding="utf-8") if rdirs else ""
     seams = re.findall(r"(?m)^- \[(x| )\] aligned / \[(x| )\] drift — verdict: (.*)$", review)
-    run.clause("the three seams were graded with the owner (each has a verdict)",
-               len(seams) == 3 and all(v.strip() for _a, _d, v in seams),
+
+    def graded(a: str, d: str, v: str) -> bool:
+        if (a, d) in (("x", " "), (" ", "x")):
+            return bool(v.strip())
+        return (a, d) == (" ", " ") and v.strip().startswith("NOT GRADED") and len(v.strip()) > len("NOT GRADED") + 10
+    run.clause("each of the three seams carries the owner's grading: one box ticked with its verdict, or NOT GRADED "
+               "with the reason", len(seams) == 3 and all(graded(*s) for s in seams),
                f"{[(a, d, v[:40]) for a, d, v in seams]}")
 
 
