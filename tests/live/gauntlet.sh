@@ -39,19 +39,27 @@ fi
 # exit that ends its steps' processes and a detached session first (impl panel round 2, T14). A row's old
 # artifact goes before it runs, so a row that dies leaves none behind to be read as its verdict (T12).
 child=""
+current=""
 on_signal() {
     [ -n "$child" ] && kill -TERM "$child" 2>/dev/null && wait "$child" 2>/dev/null
+    # the row the signal interrupted never counts, whatever its artifact already says (task 184's L3)
+    if [ -n "$current" ] && [ -f "$OUT/$current.txt" ]; then
+        mv -f "$OUT/$current.txt" "$OUT/$current.txt.invalid"
+        echo "ROW $current: FAIL (interrupted; its artifact set aside as $current.txt.invalid)"
+    fi
     echo "gauntlet: interrupted" >&2
     exit 143
 }
 trap on_signal TERM HUP INT
 row() {
     rm -f "$OUT/$1.txt"
+    current="$1"
     python3 -I "$HERE/lib/run_row.py" "$1" "$OUT" &
     child=$!
     wait "$child"
     local rc=$?
     child=""
+    current=""
     return $rc
 }
 
@@ -151,5 +159,9 @@ done
 # The harness's own negative controls, on what this run just wrote: a clause that has gone loose fails the run
 # (impl panel round 2, T11). Controls whose row was not run here are skipped and said so.
 echo "=== selfcheck: the harness's own negative controls on these artifacts"
-python3 -I "$HERE/selfcheck.py" "$OUT" || worst=1
+# a tracked child like a row, so a signal to this script reaches it (task 184's L2)
+python3 -I "$HERE/selfcheck.py" "$OUT" &
+child=$!
+wait "$child" || worst=1
+child=""
 exit $worst

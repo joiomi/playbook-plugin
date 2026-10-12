@@ -162,10 +162,13 @@ class Run:
         # reparented before the timeout is still found and ended (single judge after round 2, J1)
         token = uuid.uuid4().hex
         env = dict(os.environ if env is None else env, **{STEP_TOKEN: token})
-        p = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                             errors="replace", start_new_session=True,
-                             stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL)
+        p = None
         try:
+            # the spawn is inside the protected block: a signal that lands as it returns, before `p` is held, is
+            # cleaned up by the token alone (task 184's L1)
+            p = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                 errors="replace", start_new_session=True,
+                                 stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL)
             out, err = p.communicate(input=stdin, timeout=timeout)
             r = subprocess.CompletedProcess(cmd, p.returncode, out, err)
         except subprocess.TimeoutExpired:
@@ -177,7 +180,7 @@ class Run:
                 out, err = "", "[the step's output could not be collected after the timeout]"
             r = subprocess.CompletedProcess(cmd, 124, out, err + f"\n[timed out after {timeout} s; {ended} process(es) of the step ended]")
         except BaseException:
-            end_tree(p.pid, token)
+            end_tree(p.pid if p is not None else None, token)
             raise
         secs = (_dt.datetime.now() - t0).total_seconds()
         self.lines += [f"rc: {r.returncode}   ({secs:.1f} s)", "--- stdout ---", _cut(r.stdout).rstrip("\n"),
@@ -380,19 +383,31 @@ def _carriers(token: str) -> "list[int]":
     return out
 
 
-def end_tree(pid: int, token: "str | None" = None) -> int:
+def end_tree(pid: "int | None", token: "str | None" = None) -> int:
     """SIGKILL a step's whole tree: its process group, every descendant, and — given the step's token — every
-    process that carries it, wherever it moved. Returns how many."""
-    victims = set(_descendants(pid)) | {pid} | (set(_carriers(token)) if token else set())
-    try:
-        os.killpg(pid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-        pass
+    process that carries it, wherever it moved. With no pid (the spawn never returned one), the token alone.
+    Returns how many."""
+    victims = (set(_descendants(pid)) | {pid} if pid is not None else set()) | (set(_carriers(token)) if token else set())
+    if pid is not None:
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
     for v in victims:
         try:
             os.kill(v, signal.SIGKILL)
         except (ProcessLookupError, PermissionError):
             pass
+    # a victim that is this process's own child (one whose Popen never returned) is reaped, not left a zombie
+    end = time.monotonic() + 2
+    for v in victims:
+        while True:
+            try:
+                if os.waitpid(v, os.WNOHANG)[0] or time.monotonic() > end:
+                    break
+            except ChildProcessError:            # not our child, or already reaped
+                break
+            time.sleep(0.05)
     return len(victims)
 
 

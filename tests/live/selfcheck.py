@@ -354,6 +354,118 @@ def gauntlet_missing_and_lock() -> None:
         end_tree(holder.pid)
 
 
+def _running(pid: int) -> bool:
+    """Alive and not a zombie (a killed child nobody reaped still has a /proc entry)."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except OSError:
+        return False
+    return stat[stat.rindex(")") + 2:].split()[0] != "Z"
+
+
+def spawn_interrupted() -> None:
+    """A signal that lands as the spawn returns — before `Run.step` holds the process — must not leave the step's
+    process running: the step's token finds it (task 184's L1). Simulated by a Popen that starts the real process
+    and then raises SystemExit, as a SIGTERM turned into an exit would there."""
+    import common
+    d = tempdir("pb184-sp-")
+    real = common.subprocess.Popen
+    started = []
+
+    class Interrupted(real):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            started.append(self.pid)
+            raise SystemExit(143)
+    run = common.Run("PB-SELFCHECK", "a step interrupted as it spawns", d / "out", [])
+    common.subprocess.Popen = Interrupted
+    try:
+        try:
+            run.step("a long step", "exec sleep 300", timeout=60)
+        except SystemExit:
+            pass
+    finally:
+        common.subprocess.Popen = real
+    time.sleep(0.3)
+    left = bool(started) and _running(started[0])
+    if left:
+        end_tree(started[0])
+    check("L1 a step interrupted as its process spawned leaves no process behind", bool(started) and not left, True,
+          f"spawned: {started}; still running: {left}")
+
+
+def _gauntlet_copy(run_row: str, selfcheck: str) -> Path:
+    d = tempdir("pb184-gs-")
+    (d / "lib").mkdir()
+    (d / "gauntlet.sh").write_text((Path(__file__).resolve().parent / "gauntlet.sh").read_text())
+    (d / "lib" / "run_row.py").write_text(run_row)
+    (d / "selfcheck.py").write_text(selfcheck)
+    return d
+
+
+def _wait_for(path: Path, seconds: float = 20) -> bool:
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        if path.exists() and path.read_text().strip():
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def gauntlet_interrupted() -> None:
+    """A SIGTERM to the gauntlet (a) reaches a selfcheck that is running (task 184's L2) and (b) sets aside the
+    artifact of the row it interrupts, even one that already says PASS (L3)."""
+    # (a) the run's selfcheck is a long one that records its pid
+    d = _gauntlet_copy("import sys, pathlib\npathlib.Path(sys.argv[2], sys.argv[1] + '.txt').write_text("
+                       "'# stub\\nROW ' + sys.argv[1] + ': PASS (1 clauses)\\n')\n",
+                       "import os, sys, time, pathlib\npathlib.Path(sys.argv[1], 'sc.pid').write_text(str(os.getpid()))\n"
+                       "time.sleep(60)\n")
+    out = d / "out"
+    g = subprocess.Popen(["bash", str(d / "gauntlet.sh"), "--out", str(out), "PB-PYTHON-FLOOR"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    try:
+        ok = _wait_for(out / "sc.pid")
+        g.send_signal(signal.SIGTERM)
+        try:
+            rc = g.wait(timeout=30)
+        except subprocess.TimeoutExpired:      # the gauntlet did not end on the signal
+            rc = None
+        time.sleep(0.3)
+        try:
+            os.kill(int((out / "sc.pid").read_text()), 0)
+            left = True
+        except (OSError, ValueError):
+            left = False
+        check("L2 a SIGTERM to the gauntlet reaches the selfcheck it is running", ok and rc == 143 and not left, True,
+              f"selfcheck started: {ok}; gauntlet rc {rc}; selfcheck still running: {left}")
+    finally:
+        end_tree(g.pid)
+        try:
+            end_tree(int((out / "sc.pid").read_text()))
+        except (OSError, ValueError):
+            pass
+    # (b) the row writes PASS, then is still running when the signal comes
+    d = _gauntlet_copy("import sys, time, pathlib\npathlib.Path(sys.argv[2], sys.argv[1] + '.txt').write_text("
+                       "'# stub\\nROW ' + sys.argv[1] + ': PASS (1 clauses)\\n')\ntime.sleep(60)\n",
+                       "import sys\nsys.exit(0)\n")
+    out = d / "out"
+    g = subprocess.Popen(["bash", str(d / "gauntlet.sh"), "--out", str(out), "PB-PYTHON-FLOOR"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    try:
+        ok = _wait_for(out / "PB-PYTHON-FLOOR.txt")
+        g.send_signal(signal.SIGTERM)
+        try:
+            rc = g.wait(timeout=30)
+        except subprocess.TimeoutExpired:      # the gauntlet did not end on the signal
+            rc = None
+        check("L3 the artifact of a row the gauntlet's SIGTERM interrupted is set aside, PASS or not",
+              ok and rc == 143 and not (out / "PB-PYTHON-FLOOR.txt").exists()
+              and (out / "PB-PYTHON-FLOOR.txt.invalid").exists(), True,
+              f"artifact written: {ok}; rc {rc}; still there: {(out / 'PB-PYTHON-FLOOR.txt').exists()}")
+    finally:
+        end_tree(g.pid)
+
+
 def main(argv: "list[str]") -> int:
     if len(argv) != 1 or not Path(argv[0]).is_dir():
         print("usage: python3 -I tests/live/selfcheck.py <artifacts-dir>", file=sys.stderr)
@@ -369,7 +481,7 @@ def main(argv: "list[str]") -> int:
     for s in (signal.SIGTERM, signal.SIGHUP):            # an interrupted selfcheck still runs its cleanups (K2)
         signal.signal(s, lambda signum, _f: sys.exit(128 + signum))
     for f in (freehand, names, install_env, snapshot_whole, step_timeout, step_detached, gauntlet_quarantine,
-              registry_probe, docker_timeout, gauntlet_missing_and_lock):
+              registry_probe, docker_timeout, gauntlet_missing_and_lock, spawn_interrupted, gauntlet_interrupted):
         f()
     print(f"selfcheck: {'every control holds' if not FAILED else f'{len(FAILED)} control(s) do not hold'}")
     return 1 if FAILED else 0
