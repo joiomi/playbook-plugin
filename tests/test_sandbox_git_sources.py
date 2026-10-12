@@ -642,6 +642,15 @@ class SettingsFilesTheEnvironmentNames(_Sandboxed):
         home.mkdir()
         self.environment(HOME=home, XDG_CONFIG_HOME="")
         self.not_launched(home / ".gitconfig")
+        # … and BOTH of the user's files have to be there: made one at a time, the launch is refused
+        # for the other, which the run could create as well (the single judge after the panel, run 3)
+        (home / ".gitconfig").write_text("", encoding="utf-8")
+        self.not_launched(home / ".config" / "git" / "config")
+        (home / ".gitconfig").write_text("", encoding="utf-8")
+        (home / ".config" / "git").mkdir(parents=True, exist_ok=True)
+        (home / ".config" / "git" / "config").write_text("", encoding="utf-8")
+        r = self.inside("echo launched")
+        self.assertEqual(r.stdout.strip(), "launched", r.stderr)
 
     def test_control_no_user_file_at_all_is_launched(self):
         # /dev/null, as a hermetic environment sets it: nothing to keep, nothing to create
