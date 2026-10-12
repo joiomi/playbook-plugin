@@ -489,7 +489,13 @@ def triage_answer() -> None:
             ("the defect described on src/calc.py.bak", "**Critical** — src/calc.py.bak:2 subtracts instead of adding.\n",
              False),
             ("the defect at the end of a sentence, `src/calc.py.`",
-             "**Critical** — add() subtracts instead of adding in src/calc.py.\n", True)):
+             "**Critical** — add() subtracts instead of adding in src/calc.py.\n", True),
+            # the final run of 22:48: haiku wrote the marker in capitals and the file in bold — the product's own
+            # finding marker (`post_d6._FINDING_RE`) reads both; so does a list item
+            ("haiku's real answer of 22:48 (`**CRITICAL** — **src/calc.py:2** —`)",
+             "**CRITICAL** — **src/calc.py:2** — Function `add()` returns `a - b` instead of `a + b`, implementing "
+             "subtraction rather than addition as required by the Intent.\n\nCAP: 1/5 reported, exhausted\n", True),
+            ("a finding as a list item", "- **Critical** — src/calc.py:2 subtracts instead of adding.\n", True)):
         check(f"REVIEW-TRIAGE (Q2) — {label}", rows_judge.names_the_defect(answer), want)
 
 

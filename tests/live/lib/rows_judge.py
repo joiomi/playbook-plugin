@@ -330,17 +330,30 @@ def names_the_defect(answer: str) -> bool:
     write `**Critical** — src/calc.py:2 …`, or `**Critical: …**` with the file on the next line (haiku, task 170's
     run of 21:32), or a blank line between them (round 2, Q2); a finding that only names the file ("Unable to
     inspect src/calc.py") or names another one (`other_calc.py`) is not the planted defect found."""
-    marks = list(re.finditer(r"(?m)^\s*\*\*(Critical|Important)\b", answer))
-    for i, m in enumerate(marks):
-        end = marks[i + 1].start() if i + 1 < len(marks) else len(answer)
-        cap = re.search(r"(?m)^CAP:", answer[m.start():end])
-        finding = answer[m.start():m.start() + cap.start()] if cap else answer[m.start():end]
+    # a finding starts where the PRODUCT's own reader of a judge's answer says it does (`post_d6._FINDING_RE`, the
+    # marker the post-D6 count uses: any case, a list item, glued after a sentence) — not a reading of the harness's
+    # own (the final run of 22:48: haiku's `**CRITICAL**` in capitals)
+    finding_re = _product_finding_re()
+    starts = [ln.start() + fm.start() for ln in re.finditer(r"(?m)^.*$", answer)
+              for fm in finding_re.finditer(ln.group(0))]
+    for i, at in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else len(answer)
+        cap = re.search(r"(?m)^CAP:", answer[at:end])
+        finding = answer[at:at + cap.start()] if cap else answer[at:end]
         # the file itself (not `src/calc.py.bak`), an affirmative account (not "unable to inspect … cannot determine")
         if re.search(r"(?<![\w/.-])src/calc\.py(?!\w)(?!\.\w)", finding) and not re.search(
                 r"unable to|cannot|can't|could not|couldn't|not able to", finding, re.I) and re.search(
                 r"subtract|minus|a - b|returns? `?-1|instead of add|instead of `?a \+ b|\bsign\b", finding, re.I):
             return True
     return False
+
+
+def _product_finding_re():
+    import sys
+    if str(PLUGIN) not in sys.path:
+        sys.path.insert(0, str(PLUGIN))
+    from tasks.post_d6 import _FINDING_RE
+    return _FINDING_RE
 
 
 def seat_answer(task_dir: Path, cli: str, since_ns: int, rc: int) -> str:
