@@ -5,6 +5,22 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 ## [Unreleased]
 
 ### Changed
+- **The ledger's live rows were run live** (task 184, PLAN S11). Twenty-two rows of the guarantee ledger say
+  they need a real run — real sessions, real judges, real interpreters, real bubblewrap, a real plugin install —
+  and `tests/live/gauntlet.sh` now runs each one on the plugin tree of a checkout and keeps one artifact per row
+  (never run by CI or `scripts/verify`: it spends model quota and starts containers). Fifteen rows are now verified
+  by it: the Python floor and the standard-library runtime (real 3.9, 3.10 and newest interpreters), the sandbox's
+  detection and its read/network/write rules (real bubblewrap, a real judge), the upgrade and its rollback (a
+  disposable HOME with the real plugin manager), and nine surfaces of a real Claude Code session — task activation,
+  freehand, the hooks' invocation, the state echo (parallel tool calls included), the stop hook, lane resolution,
+  hook payloads, Claude's capability cells and the slash commands; the merge skill's push order was observed once
+  each way. Five judge rows passed on Claude and Codex judges and wait for grok, whose seat is out of credit; `tasks intent` passed up to the distillation, which is done with
+  the owner. Statements were narrowed where a run showed them too wide: the state echo leaves an empty session
+  folder at the root of a fresh multi-user clone, the claude adapter reports no transcript folder for a project path with `_`, `.` or a space,
+  a project directory whose name starts with a task's number can make the hooks read another task's record, the
+  stop hook's prompt-generation read has a narrow race, and an upgrade's rollback covers the re-initialization,
+  not the plugin manager's own copy step. Nothing in the product changed.
+
 - **The guarantee ledger no longer promises codex and grok as the agent that runs your session** (task 183;
   owner decision 2026-10-12). Claude is the only supported agent; codex and grok are supported as JUDGES.
   The two rows about launching codex or grok as the agent (`PB-PROVIDER-BOOTSTRAP`, `PB-PROVIDER-HOOK-INSTALL`)

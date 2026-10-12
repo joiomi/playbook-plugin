@@ -6,7 +6,7 @@
     {
       "id": "PB-TASK-ACTIVATE",
       "category": "task-lifecycle",
-      "statement": "tasks work resolves the active task from the per-session pointer, and the edit gate refuses to authorize a code edit when that pointer is junk, a stale number, glob-bearing, or points at a done task or at a blocked one (paused on the owner's decision; the refusal names `tasks work <N>` as the resume), while a real pending pointer authorizes.",
+      "statement": "tasks work resolves the active task from the per-session pointer, and the edit gate refuses to authorize a code edit when that pointer is junk, a stale number, glob-bearing, or points at a done task or at a blocked one (paused on the owner's decision; the refusal names `tasks work <N>` as the resume), while a real pending pointer authorizes. BOUND (PLAN §S11 item (23), deferred after the 1.6.1 release): the hooks find the active task's record with `find -path \"*/<N>-*/*\"`, which also matches every record when the PROJECT directory's own name starts with `<N>-`; in such a project the hook reads the first record `find` lists, which may be another task's.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/lifecycle.py",
@@ -85,6 +85,16 @@
           "limitations": [
             "The task is blocked through the real `tasks blocked` and the real hook runs as a subprocess; hermetic, not a live provider hook invocation."
           ]
+        },
+        {
+          "type": "live-provider test",
+          "path": "tests/live/gauntlet.sh",
+          "reference": "scenario:PB-TASK-ACTIVATE",
+          "boundary": "live-provider",
+          "negative_control": null,
+          "limitations": [
+            "A real headless claude session (Claude Code 2.1.296, haiku) on the candidate: an edit with no active task refused (journaled), the same edit allowed once `tasks work 1` set a pending task, and refused again once the task was blocked, the refusal naming `tasks work 1`. Junk, stale, glob-bearing and done pointers stay unit/integration-proven."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -93,12 +103,12 @@
       "applicable_providers": [
         "claude"
       ],
-      "status": "partially_evidenced",
+      "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "Live provider and non-Linux platform cells are absent.",
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
         "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21).",
-        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`)."
+        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
+        "2026-10-12 (task 184, PLAN S11): the live claude cell ran (scenario PB-TASK-ACTIVATE)."
       ],
       "follow_up_phases": [
         8
@@ -767,7 +777,7 @@
     {
       "id": "PB-TASK-FREEHAND",
       "category": "task-lifecycle",
-      "statement": "The freehand transition is recorded in an auditable timestamped freehand log entry that the log reader parses. The stop-hook's Freehand release is DECIDED in Python (core._freehand_release_allowed, shipped as the 4th `--fields` line): the first LIVE unchecked gate — read by the CLI's own fence-aware gate reader (core._live_gate_scan, physical `\\n` lines only) — starts with `Freehand` (not the `Freehand log` cleanup gate), sits at indent < 4 columns, and the file has no unclosed code fence; so a `- [ ] Freehand…` line quoted inside a closed or UNCLOSED fence, an indented example, or a later Freehand gate behind a blank-text first gate can never be the gate that releases the stop; when the reader cannot run the release is disabled (fail closed).",
+      "statement": "The freehand transition is recorded in an auditable timestamped freehand log entry that the log reader parses. The stop-hook's Freehand release is DECIDED in Python (core._freehand_release_allowed, shipped as the 4th `--fields` line): the first LIVE unchecked gate — read by the CLI's own fence-aware gate reader (core._live_gate_scan, physical `\\n` lines only) — starts with `Freehand` (not the `Freehand log` cleanup gate), sits at indent < 4 columns, and the file has no unclosed code fence; so a `- [ ] Freehand…` line quoted inside a closed or UNCLOSED fence, an indented example, or a later Freehand gate behind a blank-text first gate can never be the gate that releases the stop; when the reader cannot run the release is disabled (fail closed). BOUND (PLAN §S11 item (23), deferred after the 1.6.1 release): the hooks find the active task's record with `find -path \"*/<N>-*/*\"`, which also matches every record when the PROJECT directory's own name starts with `<N>-`; in such a project the hook reads the first record `find` lists, which may be another task's.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/lifecycle.py",
@@ -839,6 +849,16 @@
           "limitations": [
             "15-case table: python rule == the hook's 4th field, incl. the blank-first-gate, unclosed-fence, indented, `Freehand log` and CRLF shapes."
           ]
+        },
+        {
+          "type": "live-provider test",
+          "path": "tests/live/gauntlet.sh",
+          "reference": "scenario:PB-TASK-FREEHAND",
+          "boundary": "live-provider",
+          "negative_control": null,
+          "limitations": [
+            "Real headless claude sessions: `tasks freehand` starts a task with its timestamped start marker; an edit allowed and the stop released; `tasks freehand log` writes the span from the chat log under the `Freehand log` gate; after `tasks work` on a tracked task a turn that wrote is stopped again."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -847,13 +867,12 @@
       "applicable_providers": [
         "claude"
       ],
-      "status": "partially_evidenced",
+      "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "No executable proof that entering freehand relaxes the edit/stop gate, nor that activating a task afterwards re-arms it.",
-        "Live provider and non-Linux platform cells are absent.",
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
         "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21).",
-        "CLOSED in task 055 (043 round-5 panel vector, codex): the stop-hook no longer discovers gates with `grep -c`/`grep -m1`; it reads status + live unchecked count + first live unchecked gate from ONE spawn of scripts/task-status.py --fields (core._live_gate_state — the same function behind `_gate_counts`/`_extract_head_position`/the lifecycle close count), so hook and CLI agree by construction and the parity test pins them on fenced decoy tables. Fence view is FENCE-ONLY: a CLOSED fence hides its `- [ ]` lines; an UNCLOSED fence hides nothing (its gates stay counted → the stop still blocks); indented-code tracking is OFF so a nested `    - [ ] gate` after a blank line stays a gate (it must never vanish from the count — that would release the stop). Round-1 impl panel (055) then found the RELEASE (not the count) still fail-open on three shapes the count correctly kept live — a blank-text first gate hiding a later Freehand gate (sentinel bug), an unclosed-fenced Freehand decoy, an indented Freehand example — so the release decision moved into Python (`_freehand_release_allowed`, the 4th `--fields` line; hold on any unclosed fence or indent >= 4), and the gate reader splits on physical `\\n` only (`_physical_lines`; `splitlines()` would count a `prose\\x85- [ ] x` line grep cannot see, breaking the fallback's over-count property). `_extract_head_position` takes its gate from the same scan (an NBSP-led marker is a gate for no reader); its one documented extra is stopping earlier at an empty `- **Field**:` line. The grep survives only as the no-python fallback: fence-blind can only OVER-count, and the Freehand release is disabled there. STILL fence-blind, disclosed: scripts/state-echo-hook's advisory counts (display only, not enforcing — parked), scripts/gate-batch-check.py's GATE_RE (batch-tick guard: can only over-block), retro.py's per-section gate scan (analytics), provider/codex_hooks._scan_gates (experimental provider; cannot import tasks.*). HTML-comment blocks remain live regions for every scanner (engine-wide vector, parked in 043 — not picked up here)."
+        "CLOSED in task 055 (043 round-5 panel vector, codex): the stop-hook no longer discovers gates with `grep -c`/`grep -m1`; it reads status + live unchecked count + first live unchecked gate from ONE spawn of scripts/task-status.py --fields (core._live_gate_state — the same function behind `_gate_counts`/`_extract_head_position`/the lifecycle close count), so hook and CLI agree by construction and the parity test pins them on fenced decoy tables. Fence view is FENCE-ONLY: a CLOSED fence hides its `- [ ]` lines; an UNCLOSED fence hides nothing (its gates stay counted → the stop still blocks); indented-code tracking is OFF so a nested `    - [ ] gate` after a blank line stays a gate (it must never vanish from the count — that would release the stop). Round-1 impl panel (055) then found the RELEASE (not the count) still fail-open on three shapes the count correctly kept live — a blank-text first gate hiding a later Freehand gate (sentinel bug), an unclosed-fenced Freehand decoy, an indented Freehand example — so the release decision moved into Python (`_freehand_release_allowed`, the 4th `--fields` line; hold on any unclosed fence or indent >= 4), and the gate reader splits on physical `\\n` only (`_physical_lines`; `splitlines()` would count a `prose\\x85- [ ] x` line grep cannot see, breaking the fallback's over-count property). `_extract_head_position` takes its gate from the same scan (an NBSP-led marker is a gate for no reader); its one documented extra is stopping earlier at an empty `- **Field**:` line. The grep survives only as the no-python fallback: fence-blind can only OVER-count, and the Freehand release is disabled there. STILL fence-blind, disclosed: scripts/state-echo-hook's advisory counts (display only, not enforcing — parked), scripts/gate-batch-check.py's GATE_RE (batch-tick guard: can only over-block), retro.py's per-section gate scan (analytics), provider/codex_hooks._scan_gates (experimental provider; cannot import tasks.*). HTML-comment blocks remain live regions for every scanner (engine-wide vector, parked in 043 — not picked up here).",
+        "2026-10-12 (task 184, PLAN S11): entering freehand relaxes the stop, and activating a tracked task re-arms it — observed live on claude (scenario PB-TASK-FREEHAND)."
       ],
       "follow_up_phases": [
         3,
@@ -1645,6 +1664,16 @@
             "reference": "ByteIdentityContract.test_prompt_mentioning_the_grok_wrapper_is_untouched"
           },
           "limitations": []
+        },
+        {
+          "type": "live-provider test",
+          "path": "tests/live/gauntlet.sh",
+          "reference": "scenario:PB-PAYLOAD-NORMALIZE",
+          "boundary": "live-provider",
+          "negative_control": null,
+          "limitations": [
+            "A real headless claude session with a project hook beside the plugin's saving every payload byte for byte: 17 payloads (SessionStart, UserPromptSubmit, Pre/PostToolUse for Read, Edit, Write, Bash, Stop) passed through the candidate's normalizer unchanged, and `--emit-fields` returned each payload's own tool, path, command and transcript; the control — a camelCase dialect of a captured Edit — was rewritten to the Claude schema. Foreign dialects stay proven by unit tests on captured shapes."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -1653,11 +1682,11 @@
       "applicable_providers": [
         "claude"
       ],
-      "status": "partially_evidenced",
+      "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "No live-provider payload capture proves every advertised dialect reaches the normalizer in its real wire form.",
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
-        "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21)."
+        "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21).",
+        "2026-10-12 (task 184, PLAN S11): claude's real wire form captured and fed to the normalizer (scenario PB-PAYLOAD-NORMALIZE). The foreign dialects (grok, Cursor) are experimental surfaces with no live claim."
       ],
       "follow_up_phases": [
         3,
@@ -4321,7 +4350,7 @@
     {
       "id": "PB-LANE-RESOLUTION",
       "category": "sessions-and-attribution",
-      "statement": "Every surface that reads or writes runtime state resolves the per-user lane — the tasks CLI, the shell wrapper, the shared shell library, the provider hooks, the monitor, and the shell command loggers — and on a fresh multi-user clone whose gitignored .agent/current_user marker is absent, no surface invents a root lane.",
+      "statement": "Every surface that reads or writes runtime state resolves the per-user lane — the tasks CLI, the shell wrapper, the shared shell library, the provider hooks, the monitor, and the bash and zsh command loggers (the zsh one is run with a real zsh against the four lane shapes by CI, the `bash-log.zsh lane shapes (real zsh)` step of .github/workflows/verify.yml, and held to the bash one by a source-level test here, where zsh is not installed) — and on a fresh multi-user clone whose gitignored .agent/current_user marker is absent, no surface invents a root lane: no task, chat log, journal, shell history or session state is written at the root. BOUND: the state echo leaves an EMPTY `.agent/sessions/<id>/` directory there on each tool call (nothing is written into it, and lane detection reads only `.agent/<name>/tasks`).",
       "owner": [
         {
           "path": "plugins/playbook/provider/paths.py",
@@ -4448,6 +4477,16 @@
           "limitations": [
             "Task 100 (PLAN S8 binding audit, 2026-09-27): the provider-hook surface on a fresh multi-user clone (lanes present, marker absent) — neither hook mints a root lane or a root chat log. These are the codex hooks (experimental foreign surface); the Claude bash hooks resolve through gate-echo-lib.sh, whose marker-absent answer is pinned by the parity proofs above."
           ]
+        },
+        {
+          "type": "live-provider test",
+          "path": "tests/live/gauntlet.sh",
+          "reference": "scenario:PB-LANE-RESOLUTION",
+          "boundary": "live-provider",
+          "negative_control": null,
+          "limitations": [
+            "Real headless claude sessions: in a two-lane repository with the marker, the session's task, chat log and journal land in its lane and nothing at the root, and `tasks list` reads that lane only; on a fresh clone with no marker nothing of a lane is written at the root, the session is told the marker is missing, and the state echo's empty per-session directory is recorded as the bound."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -4456,18 +4495,19 @@
       "applicable_providers": [
         "claude"
       ],
-      "status": "partially_evidenced",
+      "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
         "CORRECTED IN THE CANDIDATE BUNDLED ARTIFACT, NOT FULLY EVIDENCED. Neither bundled logger initialises the lane to the root any more, and each one now decides on exactly two filesystem facts: whether .agent/current_user is present and valid, and whether root .agent/tasks/ is a directory. A valid marker selects the validated user lane. No marker with a root .agent/tasks/ selects the root, which IS a real lane in the legacy and mixed layouts. Everything else writes nothing: no marker and no root tasks/, or a marker that is invalid or unusable. Nothing about the children of .agent/ is consulted, so the per-user-lane enumeration the previous candidate ran is deleted. That makes the loggers DELIBERATELY STRICTER than provider/paths.py::lanes_without_marker, tasks/core.py and gate-echo-lib.sh, and no parity with them is claimed here. The shapes it costs are the marker-absent ones with no root tasks/: a bare .agent/, a committed .agent/config.json and nothing else, a sessions/ directory only, and a child of .agent/ that has no tasks/ of its own. On each of those resolve_agent_dir still answers the root and tasks retro/tasks context still read <root>/.agent/bash_history, so nothing is written where the previous candidate wrote the root. That is a missing forensic log, never cross-user contamination, it is owner-ratified, and it heals as soon as anything creates .agent/tasks/ — which /playbook:init does. The direction of the difference is bound as a test rather than asserted in prose: TestResolverParity.test_logger_is_never_looser_than_lanes_without_marker runs one nine-shape table through all four implementations and requires that the logger never write the root on a shape where a reference reports that a per-user lane exists — the Critical fresh-clone case, which was reproduced red first and is green now. The enumeration was removed because it was this file's only glob and the file is sourced into a shell it does not control, so its result followed the HOST shell's globbing state. Measured on the previous candidate against .agent/alice/tasks/ with no marker, a shape that must skip: default options and shopt -s failglob skipped, while set -f, set -o noglob and GLOBIGNORE='*' each silently wrote the SHARED root. Those three preludes are now cells in tests/test_provider_multiuser.py::HostShellOptionMatrix, as the regression guard for the enumeration staying deleted; no broader invariance under arbitrary host shell state is claimed. Reproduced red first and then green by the hermetic logger cases in tests/test_provider_multiuser.py (MarkerAbsentWithLanes, ValidMarker, InvalidMarker, LegitimateRootLane), and tests/wrapper-multiuser-fixture.sh under the corrected bundled logger is 274 passed / 0 failed where it was 272 passed / 2 failed before.",
         "plugins/playbook/scripts/bash-log.zsh received the structurally identical correction, but zsh is not installed on this host: it was neither executed nor syntax-checked. The zsh cell is a SOURCE-LEVEL claim only, held by tests/test_provider_multiuser.py::ZshLoggerSourceParity — lane-initialisation placement, that the bare root is assigned only under the .agent/tasks/ guard, the marker validation arms, the one-line marker contract, and that the unset line still clears every variable the file introduces — and its live execution is Phase 8 work.",
         "The stale INSTALLED copy at ~/.claude/bash-log.sh is deliberately unchanged and still reproduces the original two S15 failures, measured on this host. Neither copy is identified here by digest: a hash of the bundled logger went stale three times inside this correction while the substantive claim — installed is older, and lacks the hook-suppression guard — stayed true throughout. Installation is out of this candidate's scope, so a host still running the previously installed logger keeps the old behavior until the plugin is re-installed.",
-        "macOS and Windows/Git Bash path, marker, and logger behavior remain unexercised, as does live provider lane handoff (Phase 8).",
         "One exemption this correction must not break, and one that was deliberately given up. (1) wrapper-multiuser-fixture.sh scenario S6's mixed layout, where root .agent/tasks/ makes the root a real lane, is this entry's distinct negative_control (LegitimateRootLane.test_mixed_layout_without_a_marker_logs_to_the_root); a blanket \"never log to root\" implementation was measured red there and on the fixture's S16 legacy assertion, and still is. (2) A project with no per-user lane and no root tasks/ yet — reachably, a clone of a single-user project that committed .agent/config.json, since git tracks no empty tasks/ — used to log the root and now skips. The variant that skips whenever root .agent/tasks/ is absent was previously rejected as over-strict; it is the ratified behavior now, and its cost is named above. LegitimateRootLane.test_committed_config_only_writes_nothing pins that shape, and test_bare_agent_directory_writes_nothing, test_sessions_dir_only_writes_nothing and test_child_directory_without_tasks_writes_nothing pin its siblings.",
         "Bounded blast radius of the corrected defect, retained for the record: .agent/bash_history and .agent/*/bash_history are both in the init-seeded gitignore block (plugins/playbook/scripts/claude-md-merge.py::GITIGNORE_ENTRIES), so a stray root history file never propagated between clones, and it never created .agent/tasks/, so it could not cascade into the mixed-layout exemption.",
         "KNOWN PRECISION LIMIT, pre-existing and NOT introduced by this correction: a dot-named lane directory splits the shell family from the Python family. On .agent/.hidden/tasks/ with no marker, provider/paths.py and tasks/core.py report ['.hidden'] while gate-echo-lib.sh reports [] — measured — because it globs and globbing skips dotfiles. Unreachable through supported flows: validate_username rejects a leading dot, so no surface that reads the marker can select such a lane. Pinned by tests/test_provider_multiuser.py::TestResolverParity.test_dot_named_lane_is_a_known_shell_python_divergence. The loggers are no longer part of this split: they read no child of .agent/ at all, so a dot-named lane is just another marker-absent shape with no root tasks/ and they skip — under default options and under shopt -s dotglob or a non-empty GLOBIGNORE alike (HostShellOptionMatrix.test_dotglob_no_longer_moves_the_dot_named_lane_answer). Reconciling the shell and Python families belongs to Phase 4, which is listed in follow_up_phases.",
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
         "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21).",
-        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`)."
+        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
+        "2026-10-12 (task 184, PLAN S11): the zsh cell, until now named unexecuted, IS executed — by CI, which installs zsh on the Linux runner and runs the real bash-log.zsh against the four lane shapes (valid marker, no marker with root tasks/, no marker without, an unusable marker; .github/workflows/verify.yml); a workflow step is not a ledger proof path, so the statement names it. Not on this host, which has no zsh.",
+        "2026-10-12 (task 184, PLAN S11): live provider lane handoff observed on claude (scenario PB-LANE-RESOLUTION). NARROWED with a bound it found: `scripts/state-echo-hook:176` makes the session directory before it checks the fresh-clone shape (task-gate-hook and session-start-hook skip it); the directory stays empty. Parked on task 184 after the 1.6.1 release (not grave, older than this batch: 2026-07-20)."
       ],
       "follow_up_phases": [
         4,
@@ -5662,6 +5702,16 @@
           "limitations": [
             "Task 100 (PLAN S8 binding audit, 2026-09-27): the review payload is selected from task.md sections (pinned/trimmed by `select_task_context`) — the prompt's task context has no conversation input by construction."
           ]
+        },
+        {
+          "type": "live-provider test",
+          "path": "tests/live/gauntlet.sh",
+          "reference": "scenario:PB-JUDGE-BLIND-CONTEXT",
+          "boundary": "live-provider",
+          "negative_control": null,
+          "limitations": [
+            "Real judges through a recording shim placed where each judge CLI starts (it keeps the exact argv and prompt, then runs the real CLI): a TASK review (`tasks plan-review 1`) on claude (haiku) and codex (gpt-6.1-sol, low) carried the task's marker and never the canary written only into the chat log, and neither judge's answer carried it; the task-less `--prompt` question did carry it; `--bare` sent the question with the review protocol's time budget and nothing of the project."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -5678,7 +5728,8 @@
         "Live provider isolation from ambient conversation is not observed.",
         "Owner decision 2026-08-21: judge-seat is supported on claude, grok, and codex; antigravity and pi are experimental and removed from applicable_providers.",
         "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending.",
-        "Task 100 (PLAN S8 binding audit, 2026-09-27): the only cited proof asserted the CONTEXT NOTE / trim notice, not the absence of conversation; rebound to the payload-construction proof. Bound worth stating: the judge process runs with the repository READABLE, and `.agent/chat_log.md` is a file in that tree — the PROMPT carries no conversation, but a judge that reads the chat log on its own is not prevented by construction; the canary test in required_live_evidence is what would measure it (S11)."
+        "Task 100 (PLAN S8 binding audit, 2026-09-27): the only cited proof asserted the CONTEXT NOTE / trim notice, not the absence of conversation; rebound to the payload-construction proof. Bound worth stating: the judge process runs with the repository READABLE, and `.agent/chat_log.md` is a file in that tree — the PROMPT carries no conversation, but a judge that reads the chat log on its own is not prevented by construction; the canary test in required_live_evidence is what would measure it (S11).",
+        "2026-10-12 (task 184, PLAN S11): claude and codex halves ran live (scenario PB-JUDGE-BLIND-CONTEXT). grok's half waits for its tokens: its seat answers out of credit (HTTP 402) until the subscription's tokens return (owner, 2026-10-12: it stays in the panel and comes back by itself); this row flips when it has run."
       ],
       "follow_up_phases": [
         8
@@ -5732,6 +5783,42 @@
           "limitations": [
             "Linux bubblewrap only; skipped where bwrap is unavailable."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_judge_paths_integration.py",
+          "reference": "JudgesRunReadOnly.test_a_single_judge_cannot_write_the_project",
+          "boundary": "real-os",
+          "negative_control": {
+            "path": "tests/test_judge_paths_integration.py",
+            "reference": "JudgesRunReadOnly.test_control_the_same_judge_launched_as_a_worker_writes"
+          },
+          "limitations": [
+            "A stand-in judge CLI (tests/_judge_stub.py) answers at the process boundary; the review path, the sandbox and bubblewrap are the real ones."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_judge_paths_integration.py",
+          "reference": "JudgesRunReadOnly.test_every_panel_judge_cannot_write_the_project",
+          "boundary": "real-os",
+          "negative_control": {
+            "path": "tests/test_judge_paths_integration.py",
+            "reference": "JudgesRunReadOnly.test_control_the_same_judge_launched_as_a_worker_writes"
+          },
+          "limitations": [
+            "A stand-in judge CLI (tests/_judge_stub.py) answers at the process boundary; the review path, the sandbox and bubblewrap are the real ones."
+          ]
+        },
+        {
+          "type": "live-provider test",
+          "path": "tests/live/gauntlet.sh",
+          "reference": "scenario:PB-JUDGE-READONLY",
+          "boundary": "live-provider",
+          "negative_control": null,
+          "limitations": [
+            "Real judges through a recording shim that tries one write into the project from where the judge's CLI starts: the single judge (`tasks plan-review 1`) on claude and on codex, and a panel of both, each ran inside the sandbox and each write was refused (`Read-only file system`); no file appeared."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -5748,7 +5835,8 @@
         "Owner decision 2026-08-21: judge-seat is supported on claude, grok, and codex; antigravity and pi are experimental and removed from applicable_providers.",
         "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending.",
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
-        "2026-10-08 (task 155, Linux-only): the macOS seatbelt backend (build_seatbelt_profile) was deleted; bubblewrap is the only backend."
+        "2026-10-08 (task 155, Linux-only): the macOS seatbelt backend (build_seatbelt_profile) was deleted; bubblewrap is the only backend.",
+        "2026-10-12 (task 184, PLAN S11): claude and codex halves ran live (scenario PB-JUDGE-READONLY). Seen on the way, parked on task 184 after the 1.6.1 release: the SINGLE claude judge runs with every tool (`--dangerously-skip-permissions`, no `--tools` limit; review.py:3097) while the panel's claude seat asks for Read, Glob and Grep only — with bubblewrap the read-only mount refuses the write either way, which is all this row claims; without it (UNCONTAINED, announced) the single claude judge could write. grok's half waits for its tokens: its seat answers out of credit (HTTP 402) until the subscription's tokens return (owner, 2026-10-12: it stays in the panel and comes back by itself); this row flips when it has run."
       ],
       "follow_up_phases": [
         2,
@@ -5914,6 +6002,81 @@
           "limitations": [
             "Task 100 (PLAN S8 binding audit, 2026-09-27): an invalid configured value falls back to majority, visibly — cited by no proof until this audit (only the fractional case was)."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_judge_paths_integration.py",
+          "reference": "APanelIsResolvedAgainstItsQuorum.test_majority_passes_two_of_three",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_judge_paths_integration.py",
+            "reference": "APanelIsResolvedAgainstItsQuorum.test_control_majority_fails_when_two_of_three_fail"
+          },
+          "limitations": [
+            "A stand-in judge CLI (tests/_judge_stub.py) answers at the process boundary; the review path, the sandbox and bubblewrap are the real ones."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_judge_paths_integration.py",
+          "reference": "APanelIsResolvedAgainstItsQuorum.test_all_fails_two_of_three",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_judge_paths_integration.py",
+            "reference": "APanelIsResolvedAgainstItsQuorum.test_control_majority_fails_when_two_of_three_fail"
+          },
+          "limitations": [
+            "A stand-in judge CLI (tests/_judge_stub.py) answers at the process boundary; the review path, the sandbox and bubblewrap are the real ones."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_judge_paths_integration.py",
+          "reference": "APanelIsResolvedAgainstItsQuorum.test_an_absolute_number_is_not_rounded",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_judge_paths_integration.py",
+            "reference": "APanelIsResolvedAgainstItsQuorum.test_control_majority_fails_when_two_of_three_fail"
+          },
+          "limitations": [
+            "A stand-in judge CLI (tests/_judge_stub.py) answers at the process boundary; the review path, the sandbox and bubblewrap are the real ones."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_judge_paths_integration.py",
+          "reference": "APanelIsResolvedAgainstItsQuorum.test_a_fraction_rounds_up",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_judge_paths_integration.py",
+            "reference": "APanelIsResolvedAgainstItsQuorum.test_control_majority_fails_when_two_of_three_fail"
+          },
+          "limitations": [
+            "A stand-in judge CLI (tests/_judge_stub.py) answers at the process boundary; the review path, the sandbox and bubblewrap are the real ones."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_judge_paths_integration.py",
+          "reference": "APanelIsResolvedAgainstItsQuorum.test_an_invalid_value_falls_back_to_majority_and_says_so",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_judge_paths_integration.py",
+            "reference": "APanelIsResolvedAgainstItsQuorum.test_control_majority_fails_when_two_of_three_fail"
+          },
+          "limitations": [
+            "A stand-in judge CLI (tests/_judge_stub.py) answers at the process boundary; the review path, the sandbox and bubblewrap are the real ones."
+          ]
+        },
+        {
+          "type": "live-provider test",
+          "path": "tests/live/gauntlet.sh",
+          "reference": "scenario:PB-PANEL-QUORUM",
+          "boundary": "live-provider",
+          "negative_control": null,
+          "limitations": [
+            "A panel of two real seats (claude haiku, codex gpt-6.1-sol low) and a third, sonnet, failed on purpose at the CLI boundary by the recording shim (a 529): under majority, all, 3, 0.6 and `banana` the verdict line, the quorum and the exit code were each as configured, and the bad value was named before the fallback."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -5928,7 +6091,8 @@
       "missing_evidence_or_limitation": [
         "High mechanical claim lacks executable integration evidence at the panel command boundary.",
         "Owner decision 2026-08-21: judge-seat is supported on claude, grok, and codex; antigravity and pi are experimental and removed from applicable_providers.",
-        "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending."
+        "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending.",
+        "2026-10-12 (task 184, PLAN S11): claude and codex halves ran live (scenario PB-PANEL-QUORUM). grok's half waits for its tokens: its seat answers out of credit (HTTP 402) until the subscription's tokens return (owner, 2026-10-12: it stays in the panel and comes back by itself); this row flips when it has run."
       ],
       "follow_up_phases": [
         3,
@@ -7395,6 +7559,67 @@
           "limitations": [
             "Current tests invoke local hooks directly or fake provider CLIs; they do not prove real provider scheduling/trust."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_hooks_invoked_integration.py",
+          "reference": "WithNoActiveTask.test_the_task_gate_blocks_a_code_edit_and_journals_it",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_hooks_invoked_integration.py",
+            "reference": "WithAnActiveTask.test_control_the_same_edit_is_allowed"
+          },
+          "limitations": [
+            "Every command hooks.json registers, run as Claude Code runs it (the payload on stdin, the plugin root in the environment)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_hooks_invoked_integration.py",
+          "reference": "WithAnActiveTask.test_the_command_guard_blocks_a_destructive_command_and_journals_it",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_hooks_invoked_integration.py",
+            "reference": "WithAnActiveTask.test_control_a_harmless_command_passes_the_guard"
+          },
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_hooks_invoked_integration.py",
+          "reference": "WithAnActiveTask.test_the_state_echo_reports_the_gate_and_counts_the_call",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_hooks_invoked_integration.py",
+          "reference": "WithAnActiveTask.test_the_chat_logger_records_the_prompt",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_hooks_invoked_integration.py",
+          "reference": "WithAnActiveTask.test_stop_blocks_a_turn_that_wrote_while_gates_are_open",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_hooks_invoked_integration.py",
+            "reference": "WithEveryGateChecked.test_control_a_turn_that_wrote_may_end_when_every_gate_is_checked"
+          },
+          "limitations": []
+        },
+        {
+          "type": "live-provider test",
+          "path": "tests/live/gauntlet.sh",
+          "reference": "scenario:PB-PROVIDER-HOOK-INVOCATION",
+          "boundary": "live-provider",
+          "negative_control": null,
+          "limitations": [
+            "A real headless claude session on the candidate: an edit allowed under an active task, a force push (`git push --force origin main`, in a project with no remote) blocked by the command guard (journaled), the prompt attributed in the chat log to the session's own id, the state echo after each tool event, the stop hook's own line on the first stop."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -7403,11 +7628,11 @@
       "applicable_providers": [
         "claude"
       ],
-      "status": "missing_evidence",
+      "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "Every live provider invocation cell is missing.",
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
-        "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21)."
+        "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21).",
+        "2026-10-12 (task 184, PLAN S11): the claude cell is proven at the process boundary by five integration tests (every registered hook command, as Claude Code runs it) and live (scenario PB-PROVIDER-HOOK-INVOCATION)."
       ],
       "follow_up_phases": [
         8
@@ -7428,7 +7653,7 @@
     {
       "id": "PB-PROVIDER-CAPABILITY-DEGRADE",
       "category": "providers-and-hooks",
-      "statement": "The model-detection report says how each provider's model is pinned instead of implying parity: Antigravity's entry lists the ids `agy models` prints, says to pin a seat as `agy:<id>`, and names it an experimental judge seat whose pin `tasks models check` live-probes; the capability matrix (`ProviderCapabilities` / `detect_capabilities`) and the documented Codex plain-shell caveat are asserted by no test.",
+      "statement": "The model-detection report says how each provider's model is pinned instead of implying parity: Antigravity's entry lists the ids `agy models` prints, says to pin a seat as `agy:<id>`, and names it an experimental judge seat whose pin `tasks models check` live-probes. Claude's capability cells (`ClaudeAdapter.detect_capabilities`) hold in a live session — a prompt hook, a pre-tool hook that blocks, a post-tool hook, a stop hook that holds a turn, the session id in every payload, a JSONL transcript in the folder it reports — for a project path of letters, digits, `-` and `/`; BOUND: for a path holding any other character (`_`, `.`, a space) the adapter reports no transcript folder, because it maps only `/` where Claude Code maps every non-alphanumeric character. The other providers' cells and the Codex plain-shell caveat are asserted by no test.",
       "owner": [
         {
           "path": "plugins/playbook/provider/capabilities.py",
@@ -7456,6 +7681,29 @@
             "reference": "DetectProvidersTest.test_all_five_providers_always_present"
           },
           "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_model_pins_integration.py",
+          "reference": "TheReportSaysHowEachModelIsPinned.test_agy_lists_its_ids_and_how_to_pin_them",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_model_pins_integration.py",
+            "reference": "TheReportWithoutAgy.test_control_without_agy_it_is_not_installed_and_lists_nothing"
+          },
+          "limitations": [
+            "`tasks models detect` run as a user runs it, a stand-in `agy models` printing the 1.2.17 listing."
+          ]
+        },
+        {
+          "type": "live-provider test",
+          "path": "tests/live/gauntlet.sh",
+          "reference": "scenario:PB-PROVIDER-CAPABILITY-DEGRADE",
+          "boundary": "live-provider",
+          "negative_control": null,
+          "limitations": [
+            "A real headless claude session on the candidate, the adapter's own report beside it: each of claude's six cells observed (journal, hook responses, captured payloads, the transcript file); a second session in a path holding `_` and `.` records the bound. `tasks models detect` against the real `agy models` (every id listed) and `tasks models check` probing haiku and an agy pin (both OK); the control — a claude pin no CLI knows — is GONE and the check fails."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -7464,13 +7712,13 @@
       "applicable_providers": [
         "claude"
       ],
-      "status": "partially_evidenced",
+      "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "Provider capability matrix has not been live-certified against current CLI versions.",
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
         "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21).",
         "Task 100 (PLAN S8 binding audit, 2026-09-27) NARROWED: the single proof covers only the Antigravity pin note in `detect_providers`; no test references `ProviderCapabilities` or `detect_capabilities`, and docs/providers.md's Codex plain-shell caveat is prose. Experimental foreign-provider surface (owner 2026-08-21); S11.",
-        "Task 111 (2026-10-05) CHANGED THE CLAIM: until agy 1.2 this row said the report names Antigravity's pin as `NOT selectable`. agy 1.2.17 takes `--model <id>` (measured on one Linux account; the id carries the effort), so the report now gives the pin instruction and the proof asserts it. The seat stays an experimental judge seat; the rest of this row is unchanged."
+        "Task 111 (2026-10-05) CHANGED THE CLAIM: until agy 1.2 this row said the report names Antigravity's pin as `NOT selectable`. agy 1.2.17 takes `--model <id>` (measured on one Linux account; the id carries the effort), so the report now gives the pin instruction and the proof asserts it. The seat stays an experimental judge seat; the rest of this row is unchanged.",
+        "2026-10-12 (task 184, PLAN S11): claude's capability cells live-certified on Claude Code 2.1.296 (scenario PB-PROVIDER-CAPABILITY-DEGRADE). NARROWED with a bound it found (claude.py:289, since 2026-05-26), parked on task 184 after the 1.6.1 release: no runtime path of the claude flow reads the transcript folder (the chat-log hook takes the prompt from the payload), so nothing is lost today; the report is wrong for such paths."
       ],
       "follow_up_phases": [
         2,
@@ -7845,6 +8093,16 @@
           "limitations": [
             "Task 138 G1-2: runs upgrade.md's step-2 pull block as written, under a temporary HOME, against a git clone one commit behind its origin; the `claude plugin` commands themselves are not run."
           ]
+        },
+        {
+          "type": "live-platform test",
+          "path": "tests/live/gauntlet.sh",
+          "reference": "scenario:PB-UPGRADE-INSTALLED-COPY",
+          "boundary": "live-platform",
+          "negative_control": null,
+          "limitations": [
+            "A disposable HOME (no copied credential) with the real `claude plugin` manager: 1.6.0 installed from a local release clone, the candidate published as 1.6.1, upgrade.md's marketplace-update, plugin-update and init blocks run as written; the manifest's installPath is followed, not the newest copy a glob finds; the user's CLAUDE.md content survives. The restart step is not run (it ends the session)."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -7853,12 +8111,12 @@
       "applicable_providers": [
         "claude"
       ],
-      "status": "partially_evidenced",
+      "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "Packaged upgrade, stale-cache selection, and post-upgrade provider behavior are untested.",
         "Upgrade is snapshot-less: unlike scripts/init (now transactional — see PB-INSTALL-ROLLBACK), this is a Claude skill whose steps (pull a release clone, `claude plugin marketplace update`, `claude plugin update`, restart, re-init — in place since task 115/138) have no rollback wrapper. The reinit it triggers rolls itself back, but a failure inside Claude Code's own plugin update can still leave a mixed installation; a transactional upgrade is not claimed.",
         "Task 100 (PLAN S8 binding audit, 2026-09-27) NARROWED `before fallback discovery` to `rather than by globbing`: the cited proof asserts the manifest installPath is read and a foreign plugin's path is not; no test asserts the ORDER of candidate_hooks_paths' sources. The update + re-init steps are the skill's prose (commands/upgrade.md), untested — see the snapshot-less bound above.",
-        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`)."
+        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
+        "2026-10-12 (task 184, PLAN S11): the packaged upgrade ran live through the real plugin manager (scenario PB-UPGRADE-INSTALLED-COPY): manifest-not-glob selection with a newer copy on disk, the re-init against the manifest's copy, the project running the new version after it. The upgrade stays snapshot-less (next limitation)."
       ],
       "follow_up_phases": [
         8,
@@ -7880,7 +8138,7 @@
     {
       "id": "PB-INSTALL-ROLLBACK",
       "category": "installation-and-upgrade",
-      "statement": "A failed initialization or upgrade can be rolled back without losing user/project content or leaving a mixed-version enforcing installation.",
+      "statement": "A failed initialization — the first one, or the re-initialization an upgrade runs once the plugin manager has installed the new copy — rolls back without losing user or project content or leaving a mixed-version enforcing installation: a failing write in the project, a failing write in the user's HOME and a SIGTERM each restore everything init touched, and a plain re-run then installs the one new version. The plugin manager's own copy step is not covered.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/init",
@@ -7934,6 +8192,16 @@
           "limitations": [
             "A trapped SIGTERM mid-run (exit 143) triggers rollback; a POSIX signal, not real power loss."
           ]
+        },
+        {
+          "type": "live-platform test",
+          "path": "tests/live/gauntlet.sh",
+          "reference": "scenario:PB-INSTALL-ROLLBACK",
+          "boundary": "live-platform",
+          "negative_control": null,
+          "limitations": [
+            "A disposable HOME with the real plugin manager, 1.6.0 upgraded to the candidate as 1.6.1: three induced failures in the re-init (a read-only project file the upgrade must change, a read-only ~/.claude, a SIGTERM) each left the project and the user's files byte-identical; the control without the transaction left a file changed; a plain re-run recovered."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -7944,13 +8212,14 @@
         "codex",
         "grok"
       ],
-      "status": "partially_evidenced",
+      "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
         "scripts/init is now transactional (init_txn.py snapshots every file it may modify and, on any non-zero exit, restores the pre-init state and removes what it created), proven on the host OS by three induced-failure integration tests plus a negative control. Two boundaries remain unproved.",
         "Upgrade is a Claude skill (commands/upgrade.md), NOT scripts/init, and remains snapshot-less: it re-runs init (which now rolls itself back), but the skill's own in-place refresh (clone pull, marketplace update, plugin update) has no transactional wrapper, so a mid-upgrade failure is not proven rollback-safe here. See PB-UPGRADE-INSTALLED-COPY.",
         "Interrupt coverage is a trapped SIGTERM on the host OS; real power-loss durability and a controlled interruption on windows-git-bash are the pending live-platform evidence.",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
-        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`)."
+        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
+        "2026-10-12 (task 184, PLAN S11): NARROWED — `A failed initialization or upgrade can be rolled back` claimed the upgrade as a whole; the plugin manager's copy step has no transaction (PB-UPGRADE-INSTALLED-COPY), so the statement now covers the re-initialization an upgrade runs and names the copy step as not covered. The re-init's rollback ran live (scenario PB-INSTALL-ROLLBACK)."
       ],
       "follow_up_phases": [
         2,
@@ -9173,6 +9442,16 @@
           "limitations": [
             "The same for `.git/hooks` as a link to the directory above the project. Observed red on e6bf3d0 (the tests alone are nested commit a1fc80a: \"a read-only run read the conversation records\"), green on the repaired tree."
           ]
+        },
+        {
+          "type": "live-platform test",
+          "path": "tests/live/gauntlet.sh",
+          "reference": "scenario:PB-SANDBOX-READ-NETWORK",
+          "boundary": "live-platform",
+          "negative_control": null,
+          "limitations": [
+            "One real claude judge in a read-only sandbox on Linux ran five commands: a file outside the project read (/etc/hostname), an HTTPS request answered 200, a project write refused (`Read-only file system`), `.agent/chat_log.md` refused (`Permission denied`); its own answer reached the model API."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -9183,9 +9462,8 @@
         "codex",
         "grok"
       ],
-      "status": "partially_evidenced",
+      "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "The mechanical argv boundary (no --unshare-net by default, --ro-bind / root leaving the filesystem readable, opt-in --unshare-net) is unit-proven on every platform and live-proven under Linux bwrap; a live end-to-end measurement of read visibility and outbound network reachability from a real judge on Linux is deferred to Phase 8.",
         "Up to 1.5.47 (tag `last-multiplatform`; not claimed since 2026-10-08, Linux-only): macOS seatbelt and Windows could not isolate the network at all; the --no-network opt-in fails loudly on any non-bwrap backend rather than emit a no-op.",
         "Up to 1.5.47 (not claimed since 2026-10-08): on Windows there was no containment backend, so even write containment was a no-op and judges ran uncontained (the working-tree tamper guard was the only defense).",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
@@ -9193,7 +9471,8 @@
         "2026-10-08 (task 155, Linux-only): the macOS seatbelt backend (build_seatbelt_profile) was deleted; bubblewrap is the only backend.",
         "Task 169 (PLAN S11): a bind laid after the record masks must not OVERLAP a place where they hide records — `.agent`, the real directory behind a symlinked lane, the real target of a record that is a symlink. A read-only run whose `--rw` path covers such a place, is it, or lies anywhere inside it is REFUSED before that path is created or anything is launched, and the message names `--keep-records`; so with the records hidden there is no writable path in `.agent` at all (the monitor, which has one, keeps the records). Git metadata is held to the same rule: a repository kept inside `.agent` and named in `code_roots` makes a read-only run refuse. A git directory that is the project is bound before the masks, never after. (History: round 1 of that task laid the masks again over a covering path, which silently made the path's files read-only and dropped new ones; round 2 replaced that with a refusal of covering paths only; the single judge after it showed that a path inside `.agent/sessions/<id>`, or equal to a lane with no record yet, still replaced the mask there.) `<project>/.agent` is such a place whether or not it exists at launch: with none, `--rw <project>/.agent` had the launcher itself create the directory and bind it writable (the single judge's run 2). Bound, not changed here: the check is made on the paths as they resolve at launch.",
         "MEASURED BOUND (task 169, 2026-10-10, real bubblewrap; older than that task): a project that has NO `.agent` directory at launch has nothing masked — there is nothing to lay a layer on, and bubblewrap cannot mount over a path that is absent from a read-only bind. A chat log the host wrote into an `.agent` created 0.7 s after the launch was read from inside the read-only run, with no `--rw` at all. So `created … while it runs` in the statement holds for an `.agent` that existed at launch (every review has one: the task record is in it); a read-only run started in a folder where the plugin has not been initialised, and initialised during the run, is outside it. Not cured here — the cures are design choices (refuse such a run; have the launcher create `.agent`, a write by a read-only launch); parked in task 169 for the owner.",
-        "2026-10-12 task 181 (never released): its first form bound a place git takes its hooks from read-only LAST, and one that is a directory above a read-only project, in a place the run may write, was laid over the record masks — a judge's run read `.agent/chat_log.md` (measured: hidden on e23e72f before the task, readable on df8b392 and ce60bb4). Found by the single judge after the task's second panel, run 3; such a launch is now refused (PB-SANDBOX-WRITE, the last entry of its limitations). The three regression tests are listed here too."
+        "2026-10-12 task 181 (never released): its first form bound a place git takes its hooks from read-only LAST, and one that is a directory above a read-only project, in a place the run may write, was laid over the record masks — a judge's run read `.agent/chat_log.md` (measured: hidden on e23e72f before the task, readable on df8b392 and ce60bb4). Found by the single judge after the task's second panel, run 3; such a launch is now refused (PB-SANDBOX-WRITE, the last entry of its limitations). The three regression tests are listed here too.",
+        "2026-10-12 (task 184, PLAN S11): the live end-to-end measurement ran (scenario PB-SANDBOX-READ-NETWORK): reads and the network allowed, project writes denied, the conversation records hidden, from inside a real judge's sandbox. The argv boundary stays unit-proven and live-proven under bwrap as before."
       ],
       "follow_up_phases": [
         2,
@@ -9367,6 +9646,16 @@
           "limitations": [
             "`which` answering `bin/bwrap`, `bwrap` or `./bwrap`: no containment is reported, the judge paths' argv is the unwrapped one (the path that warns), and the launcher's raises, naming the entry. An absolute answer becomes the first word of the wrapped argv."
           ]
+        },
+        {
+          "type": "live-platform test",
+          "path": "tests/live/gauntlet.sh",
+          "reference": "scenario:PB-SANDBOX-DETECTION-FALLBACK",
+          "boundary": "live-platform",
+          "negative_control": null,
+          "limitations": [
+            "Real bubblewrap on Linux and a real claude agent: the absolute bwrap path, refusals with no bwrap, a relative-PATH bwrap and a bwrap that cannot start (a stand-in that fails as the real one does without user namespaces), nested detection inside the plugin's own sandbox, and the judge path's UNCONTAINED warning and its no-fallback failure — each with a real claude judge."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -9377,13 +9666,14 @@
         "codex",
         "grok"
       ],
-      "status": "partially_evidenced",
+      "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
         "2026-10-09 (task 164, owner ruling): the uncontained policy is decided for the LAUNCHER — it refuses (tests/test_sandbox_refuses_uncontained.py, live, with negative controls), also when bwrap vanishes after its check, and the monitor is refused before it writes — and for the judge paths the owner left the fallback as it is: uncontained, with the review's warning and the tamper guard. Limits: PLAYBOOK_SANDBOXED=1 set by hand is an operator's statement that an outer cage exists and nothing verifies it. The monitor's pre-flight and its launch are two checks: if bubblewrap breaks between them the launch still refuses, with the monitor's state already reset. Still without an integration test: a real review on a host with no bwrap (the warning it prints is source-read), and a real bubblewrap that cannot start (the launcher's probe is tested against a stand-in binary).",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
         "Task 100 (PLAN S8 binding audit, 2026-09-27): this row cited only `test_environment.SandboxItemTest.test_unknown_os_has_no_primitive` — an advisory-text test of environment.py, not of the owner (sandbox.py). Rebound to tests/test_windows_uncontained_path.py (3 tests, cited nowhere before). Still asserted by NO test: nested-containment detection (`is_sandboxed`) and the operator-visible UNCONTAINED warning text (review.py gates it on containment_available(); source-read) — both stay in required_live_evidence.",
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
-        "2026-10-08 (task 154, Linux-only): the two proofs were simulated-Windows tests (tests/test_windows_uncontained_path.py, deleted); rebound to the same three checks on a Linux host without bwrap (tests/test_sandbox_uncontained_fallback.py)."
+        "2026-10-08 (task 154, Linux-only): the two proofs were simulated-Windows tests (tests/test_windows_uncontained_path.py, deleted); rebound to the same three checks on a Linux host without bwrap (tests/test_sandbox_uncontained_fallback.py).",
+        "2026-10-12 (task 184, PLAN S11): nested-containment detection and the operator-visible UNCONTAINED warning, until now asserted by no test, are asserted by the live run (scenario PB-SANDBOX-DETECTION-FALLBACK)."
       ],
       "follow_up_phases": [
         2,
@@ -10700,6 +10990,16 @@
             "reference": "ShellEntrypointFloorGuard.test_supported_interpreter_passes_guard"
           },
           "limitations": []
+        },
+        {
+          "type": "live-platform test",
+          "path": "tests/live/gauntlet.sh",
+          "reference": "scenario:PB-PYTHON-FLOOR",
+          "boundary": "live-platform",
+          "negative_control": null,
+          "limitations": [
+            "Containers of the official python images on Linux: every shipped .py file compiled and the CLI round trip run under 3.10 (the floor) and 3.14 (the newest); under 3.9 the seven shell entry points refuse before importing anything and the four python hooks say so and fail open. The hooks under 3.9 are run directly, not inside a provider session."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -10710,11 +11010,11 @@
         "codex",
         "grok"
       ],
-      "status": "partially_evidenced",
+      "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "On-this-platform unit and subprocess evidence now pins the 3.10 floor in doctor, every shell entry point, and the codex python hooks (fail-open advisory / fail-closed enforcing polarity preserved). The minimum/latest interpreter matrix run against a real < 3.10 interpreter across linux, macos, and windows-git-bash remains Phase-8 live-platform work.",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
-        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`)."
+        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
+        "2026-10-12 (task 184, PLAN S11): the live interpreter matrix ran on Linux (scenario PB-PYTHON-FLOOR of tests/live/gauntlet.sh). A floor issue the matrix does not see, parked on task 184 after the 1.6.1 release: the codex adapter reads ~/.codex/config.toml with `tomllib` (standard from 3.11) inside `except Exception`, so on 3.10 `_codex_hooks_enabled` answers False whatever the file says — the experimental codex AGENT path only; judges are not affected."
       ],
       "follow_up_phases": [
         8
@@ -10993,7 +11293,7 @@
     {
       "id": "PB-RUNTIME-STDLIB",
       "category": "compatibility-and-package",
-      "statement": "Shipped Playbook runtime requires no third-party Python packages, no build step, and uses plain Bash/Python/Markdown files.",
+      "statement": "Shipped Playbook runtime requires no third-party Python packages and no build step: every shipped Python file imports only the standard library or the plugin's own modules, the CLI runs on an interpreter with no site-packages at all, and every shipped file is plain text — Bash, zsh, Python, Markdown, JSON, and the experimental pi adapter's TypeScript bridge — with nothing compiled or binary.",
       "owner": [
         {
           "path": "docs/architecture.md",
@@ -11020,6 +11320,53 @@
           "limitations": [
             "No automated import/dependency inventory or clean minimal-host packaged test proves the claim."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_runtime_stdlib_integration.py",
+          "reference": "EveryImportIsTheStandardLibraryOrThePlugins.test_no_shipped_python_file_imports_a_third_party_package",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_runtime_stdlib_integration.py",
+            "reference": "EveryImportIsTheStandardLibraryOrThePlugins.test_control_the_scan_names_a_third_party_import"
+          },
+          "limitations": [
+            "An AST scan of every shipped .py file; `tomllib` is counted standard (3.11+) — see PB-PYTHON-FLOOR for its 3.10 bound."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_runtime_stdlib_integration.py",
+          "reference": "TheCliRunsWithNoSitePackages.test_a_tasks_round_trip_runs",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_runtime_stdlib_integration.py",
+            "reference": "TheCliRunsWithNoSitePackages.test_control_a_package_this_host_has_in_site_packages_cannot_be_imported"
+          },
+          "limitations": [
+            "`python3 -I -S` on the host: site-packages are not on the path; the control imports a package the host has there and fails."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_runtime_stdlib_integration.py",
+          "reference": "EveryShippedFileIsPlainText.test_nothing_compiled_or_binary_is_shipped",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_runtime_stdlib_integration.py",
+            "reference": "EveryShippedFileIsPlainText.test_control_a_binary_file_is_named"
+          },
+          "limitations": []
+        },
+        {
+          "type": "live-platform test",
+          "path": "tests/live/gauntlet.sh",
+          "reference": "scenario:PB-RUNTIME-STDLIB",
+          "boundary": "live-platform",
+          "negative_control": null,
+          "limitations": [
+            "python:3.10-slim and the newest image with pip and setuptools removed: the CLI round trip runs from the plugin tree mounted read-only (no build step); every shipped file is text (131 files at the run)."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -11030,11 +11377,11 @@
         "codex",
         "grok"
       ],
-      "status": "partially_evidenced",
+      "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "Runtime dependency claim lacks a packaged minimal-tool integration test.",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
-        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`)."
+        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
+        "2026-10-12 (task 184, PLAN S11): NARROWED — `plain Bash/Python/Markdown files` left out the shipped zsh logger (scripts/bash-log.zsh) and the pi adapter's TypeScript bridge; the statement names them. Proven by three integration tests with negative controls and by the live run (scenario PB-RUNTIME-STDLIB)."
       ],
       "follow_up_phases": [
         3,
@@ -12780,7 +13127,7 @@
     {
       "id": "PB-HOOK-STATE-ECHO",
       "category": "task-lifecycle",
-      "statement": "After applicable tool calls, state echo reports the current active gate and records transcript binding without allowing malformed payloads to corrupt session state. The step that notices a ticked gate — read the previous gate from the session's counters, log its completion, write the new one — is one hold of the session's counters lock, and the gate it compares is read from task.md under that hold, so tool calls whose hooks overlap log a gate's completion ONCE, each add one to its repeat count, and a tick that lands between two of them does not make the slower one log the open gate; the entry is appended under the chat log's lock, which is tried and not waited for, and where it is not given neither the entry nor the new gate is written — the next call tries again; a chat log that cannot be written is said (task 182; on a host with no lock to take the step runs without one, as before).",
+      "statement": "After applicable tool calls, state echo reports the current active gate and records transcript binding without allowing malformed payloads to corrupt session state. The step that notices a ticked gate — read the previous gate from the session's counters, log its completion, write the new one — is one hold of the session's counters lock, and the gate it compares is read from task.md under that hold, so tool calls whose hooks overlap log a gate's completion ONCE, each add one to its repeat count, and a tick that lands between two of them does not make the slower one log the open gate; the entry is appended under the chat log's lock, which is tried and not waited for, and where it is not given neither the entry nor the new gate is written — the next call tries again; a chat log that cannot be written is said (task 182; on a host with no lock to take the step runs without one, as before). BOUND (PLAN §S11 item (23), deferred after the 1.6.1 release): the hooks find the active task's record with `find -path \"*/<N>-*/*\"`, which also matches every record when the PROJECT directory's own name starts with `<N>-`; in such a project the hook reads the first record `find` lists, which may be another task's.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/state-echo-hook",
@@ -12857,6 +13204,16 @@
           "limitations": [
             "The real `state-echo-hook`, started as processes that overlap on one fixture session. Fifteen calls, five at a time, on one gate. Task 182, red first on the unfixed scripts: \"'3' != '15'\"."
           ]
+        },
+        {
+          "type": "live-provider test",
+          "path": "tests/live/gauntlet.sh",
+          "reference": "scenario:PB-HOOK-STATE-ECHO",
+          "boundary": "live-provider",
+          "negative_control": null,
+          "limitations": [
+            "A real headless claude session: the echo's gate line after every tool event, two Reads issued in ONE assistant message both echoed, a ticked gate's completion line, every PostToolUse response a success. The counters lock's overlap behaviour stays integration-proven (task 182)."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -12865,11 +13222,11 @@
       "applicable_providers": [
         "claude"
       ],
-      "status": "partially_evidenced",
+      "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "No live-provider matrix establishes PostToolUse scheduling and visible rendering.",
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
-        "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21)."
+        "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21).",
+        "2026-10-12 (task 184, PLAN S11): PostToolUse scheduling and the echo's rendering observed live on claude, parallel calls included (scenario PB-HOOK-STATE-ECHO)."
       ],
       "follow_up_phases": [
         8
@@ -12890,7 +13247,7 @@
     {
       "id": "PB-HOOK-STOP-CLOSE",
       "category": "risk-and-close",
-      "statement": "Stop enforcement blocks a first stop while task completion requirements remain, fails closed on an unknowable lane, and uses its one-shot valve to avoid permanently trapping the session. The blocked-task release reads `## Status`, and the gate count + first unchecked gate are read, through the CLI's own fence-aware Python readers in ONE spawn (scripts/task-status.py --fields → core._extract_status + core._live_gate_state + core._freehand_release_allowed as a 4-line frame), never an independent awk/grep rule — the Freehand waiver is decided in Python, not by a bash prefix test on the gate text; when that reader cannot run the status is unreadable, the Freehand release is disabled, and gates are counted by a fence-blind LINE grep that is BOM-tolerant like the Python reader (`^(U+FEFF)*[[:space:]]*- \\[ \\]`, byte-wise under LC_ALL=C) and whose exit code is read — a grep failure (exit >= 2, unreadable file, unsupported regex, missing binary) counts as at least one open gate — so over the fixture table the fallback count is >= the Python count and the arm never releases on a count it could not take or under-counts the CLI (fail closed, loud). The one-shot `stop_hook_active` valve is read with a bash-builtin regex when python3 cannot run (no python3, no grep), so a no-python session blocked by this arm can still end its re-issued stop. BOUND, on both arms: the counter-gated conversational bypass (session writes=0 and tools<5, counted from the last USER prompt) releases a low-activity turn of a COUNTED tree regardless of open gates — it is a release for chat replies, not a fail-closed path — and it is disarmed when the fallback count itself failed. An automatic notification — a prompt that begins with `<task-notification>` or `[SYSTEM NOTIFICATION` — does not reset those counters (owner's Q1, 2026-09-24; task 173): one that lands in the middle of a turn changes nothing, so the work of that turn still holds its stop. The same block releases one more turn, by the owner's exception: a turn that a notification STARTED — no tool call had run since the last stop this hook let through for the session's OWN agent (an agent nested under it shares the session, and its stop ends no turn), in the same prompt generation — and that has made no write since — no Edit, Write, MultiEdit, NotebookEdit or Bash call — however many other tool calls it made; one such write and it is held like any other turn. The echo of a command the user ran (`<command-name>`, `<local-command-caveat>`) still resets the counters, as a prompt of theirs does. The counters are written under ONE lock per session (`counters.lock`, flock): a tool call's count, the reset at a prompt and every single write of a key are each one hold of it, so tool calls whose hooks the host runs side by side are each counted (task 182, PLAN S11 item 17). The lock has a time limit (2 seconds; 1 or 2 by `PLAYBOOK_COUNTERS_LOCK_WAIT`; one limit for a hook's two holds together). Where a lock exists and is NOT given — not in time, something that is no plain file in its place, or a lock file that cannot be opened where it could have been made — the call is NOT counted, nothing is written to the counters without the lock, and the session is marked (`counts_unsure` beside the counters): the chat-reply release and the notification exception are both OFF until a prompt of the user's has reset the counts under the lock (task 182, impl rounds 1 to 3). BOUND: on a host with no `flock`, or whose `flock` cannot wait with a limit, there is no lock to take, a call is counted without one and a count can be lost, as before.",
+      "statement": "Stop enforcement blocks a first stop while task completion requirements remain, fails closed on an unknowable lane, and uses its one-shot valve to avoid permanently trapping the session. The blocked-task release reads `## Status`, and the gate count + first unchecked gate are read, through the CLI's own fence-aware Python readers in ONE spawn (scripts/task-status.py --fields → core._extract_status + core._live_gate_state + core._freehand_release_allowed as a 4-line frame), never an independent awk/grep rule — the Freehand waiver is decided in Python, not by a bash prefix test on the gate text; when that reader cannot run the status is unreadable, the Freehand release is disabled, and gates are counted by a fence-blind LINE grep that is BOM-tolerant like the Python reader (`^(U+FEFF)*[[:space:]]*- \\[ \\]`, byte-wise under LC_ALL=C) and whose exit code is read — a grep failure (exit >= 2, unreadable file, unsupported regex, missing binary) counts as at least one open gate — so over the fixture table the fallback count is >= the Python count and the arm never releases on a count it could not take or under-counts the CLI (fail closed, loud). The one-shot `stop_hook_active` valve is read with a bash-builtin regex when python3 cannot run (no python3, no grep), so a no-python session blocked by this arm can still end its re-issued stop. BOUND, on both arms: the counter-gated conversational bypass (session writes=0 and tools<5, counted from the last USER prompt) releases a low-activity turn of a COUNTED tree regardless of open gates — it is a release for chat replies, not a fail-closed path — and it is disarmed when the fallback count itself failed. An automatic notification — a prompt that begins with `<task-notification>` or `[SYSTEM NOTIFICATION` — does not reset those counters (owner's Q1, 2026-09-24; task 173): one that lands in the middle of a turn changes nothing, so the work of that turn still holds its stop. The same block releases one more turn, by the owner's exception: a turn that a notification STARTED — no tool call had run since the last stop this hook let through for the session's OWN agent (an agent nested under it shares the session, and its stop ends no turn), in the same prompt generation — and that has made no write since — no Edit, Write, MultiEdit, NotebookEdit or Bash call — however many other tool calls it made; one such write and it is held like any other turn. The echo of a command the user ran (`<command-name>`, `<local-command-caveat>`) still resets the counters, as a prompt of theirs does. The counters are written under ONE lock per session (`counters.lock`, flock): a tool call's count, the reset at a prompt and every single write of a key are each one hold of it, so tool calls whose hooks the host runs side by side are each counted (task 182, PLAN S11 item 17). The lock has a time limit (2 seconds; 1 or 2 by `PLAYBOOK_COUNTERS_LOCK_WAIT`; one limit for a hook's two holds together). Where a lock exists and is NOT given — not in time, something that is no plain file in its place, or a lock file that cannot be opened where it could have been made — the call is NOT counted, nothing is written to the counters without the lock, and the session is marked (`counts_unsure` beside the counters): the chat-reply release and the notification exception are both OFF until a prompt of the user's has reset the counts under the lock (task 182, impl rounds 1 to 3). BOUND: on a host with no `flock`, or whose `flock` cannot wait with a limit, there is no lock to take, a call is counted without one and a count can be lost, as before. BOUND (PLAN §S11 item (18), deferred after the 1.6.1 release): the stop hook reads the prompt generation only after it has read its input and resolved the session; a user's prompt whose hook completes in that window gives the stop of the turn before it the new generation, and a notification early in the user's turn is then taken for a turn's start, so a read-only turn of the user's can end with gates open — not reproduced by a test. BOUND (PLAN §S11 item (23), deferred after the 1.6.1 release): the hooks find the active task's record with `find -path \"*/<N>-*/*\"`, which also matches every record when the PROJECT directory's own name starts with `<N>-`; in such a project the hook reads the first record `find` lists, which may be another task's.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/stop-hook",
@@ -13563,6 +13920,16 @@
           "limitations": [
             "Task 182, post-panel run 2 (the judge ran it), red first: \"'is not logged yet' not found\". A `flock` that refuses the chat log's lock: the gate is not advanced and each call's answer says its entry is not logged yet. The control: a `flock` that refuses EVERY request at once is a host with no lock to take — the entry is appended without one, the gate moves on."
           ]
+        },
+        {
+          "type": "live-provider test",
+          "path": "tests/live/gauntlet.sh",
+          "reference": "scenario:PB-HOOK-STOP-CLOSE",
+          "boundary": "live-provider",
+          "negative_control": null,
+          "limitations": [
+            "Real headless claude sessions: with gates open after a turn that wrote, the first stop blocked by the hook's own line and the re-issued stop let through (the session ended, rc 0); with every gate ticked one edit at a time, the first stop let through. The fallback arms stay integration-proven."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -13571,9 +13938,8 @@
       "applicable_providers": [
         "claude"
       ],
-      "status": "partially_evidenced",
+      "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "Real provider Stop/close semantics and capability gaps are unverified.",
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
         "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21).",
         "Task 043 (V7): the status read depends on python3 >= 3.10 being on PATH (already required by task-gate-hook and the CLI); its absence makes a genuinely blocked task unable to end the turn via the blocked release (the one-shot stop_hook_active valve still ends a re-issued stop). Cost: one python spawn per Stop event (~30 ms import of tasks.core), not on the per-tool PreToolUse path. Task 055: the same spawn now also carries the gate count and first gate (`--fields`, 4 LF-only lines: status, count, first gate, `release`/`hold`; a partial, non-numeric or unknown-valued frame is unreadable → fail closed); still one spawn per Stop event, not on the per-tool path. [SUPERSEDED in part by task 072: the `stop_hook_active` valve no longer needs python3 (bash `=~`), so a blocked task CAN end its re-issued stop without python3; what still needs python3 is the `blocked`-status release and gate precision.]",
@@ -13585,7 +13951,8 @@
         "Task 173: until then the `writes` counter counted Edit, Write and Bash only — a MultiEdit or a NotebookEdit was a tool call but not a write, so a turn whose only act was one of them (fewer than five calls) was released by the chat-reply bypass with gates open. Found while reading what `zero writes` rests on; both are counted now (red first: `(1, 0) != (1, 1)`).",
         "CLOSED in task 182 (PLAN S11 item 17; owner 2026-10-10: \"Îl repar în S11 (Recomandat)\"). What stood here: Task 173, NOT closed by it and older than it — MEASURED 2026-10-10 with the real state-echo-hook started as overlapping processes against one fixture session: `write_counter` is an unlocked copy-and-rename, so PostToolUse hooks that overlap lose increments. 20 rounds of 2 overlapping Bash calls (40 calls) left `tools=20 writes=20`; 10 rounds of 6 (60 calls) left `tools=10 writes=15`; 20 calls one after another left 20 and 20. The host runs tool calls of one message in parallel, so both counters under-count in ordinary use, and an under-counted `writes` is the RELEASING side of the chat-reply bypass and of the notification exception alike (a Read and a Bash that overlap can lose the Bash's write entirely). The rule's own two writers no longer take part in it (they do not touch the file). NOW: every read-modify-write of the counters file is made under one lock per session — `<counters>.lock`, `flock -w` on a descriptor opened in the hook's own shell; the pair `counters_lock`/`counters_unlock` nests, so a write inside a held lock neither waits for itself nor lets go of it. Re-measured 2026-10-11 with the same probe: 40 of 40 two at a time, 60 of 60 six at a time, 60 of 60 twelve at a time (before, the same day: 20 of 40 and 10 of 60). BOUNDS, stated: (1) the time limit — the BUILDER's reading of the plan's \"with a time limit\": after 2 seconds (1 or 2 by `PLAYBOOK_COUNTERS_LOCK_WAIT`; the hooks' own limit is 5 — the setting reached 99 until impl round 1 and 3 until round 2, and a hook killed while it waits counts nothing and says nothing: opus, codex) the call is NOT counted (round 3) and the hook's answer says so; the limit is ONE for the process — a hook takes the lock twice, and the second hold waits for what the first left, in whole seconds (round 2, opus: given late both times it waited the limit twice). What the first build did NOT do, and impl round 1's codex seat counted as Critical: a count made without the lock may be too low, and that is the releasing side — so the session is now marked and the stop hook's two low-activity releases are off until a reset made under the lock; the mark is a file in `.agent/` beside the counters, which a session that edits it can remove as it can write `writes=0`; (2) a host without `flock`, or a session directory that cannot be written: there is no lock to take — counted as before, and nothing says so (a lock file that cannot be opened where it COULD be made is a lock that was not given: marked and said); (3) a reader — the stop hook, the notification rule — takes no lock: a single write replaces the file by a rename, the reset rewrites it in place, and `tools` and `writes` are still two reads; (4) the reset at a prompt writes the file in place (the limitation of PB-CONFIG-ATOMIC-DURABILITY stands), under the lock; (5) the chat hook does not say that its reset was NOT MADE for want of the lock — what it prints would become part of the prompt; the counts then stay those of the turn before and the mark stays with them; (6) the Codex lane: nothing there counts a tool call, the Python reset at a prompt is the only writer of a Codex session's file and does not take the lock (pinned by a test that fails when a second Python writer appears); (7) the lock file sits in `.agent/` beside the counters, writable by the agent as they are — it adds no trust and takes none away: a session that holds the lock itself gets no count at all, the mark and the notice at every call; (8) a gate's entry and the new gate are written together or not at all: the entry is appended under the chat log's lock, which is TRIED under ours and not waited for; where it is not given nothing is appended and the gate is not advanced, so the next call retries; a chat log that cannot be WRITTEN is said and does not hold the gate. (Four orders in four reviews: under our lock with an unlimited wait for the chat log's — every other hook waited; after ours was let go — lost with a hook that died in the wait; without the chat log's lock after a second — could be dropped by a `tasks tag` rewrite; waited for one second under ours — six overlapping calls ran out of their own wait behind it, measured by the single judge.) A call that was given the lock for its count and not again for the gate step is counted and leaves no mark; its answer says that the gate was not looked at; a gate whose entry stays unwritten because the chat log's lock is held is said at every call for as long as it lasts — \"not yet\" has no end of its own, and nothing but the holder's release ends it; where there is no lock to take the entry is appended without one, as before the task; (9) a `flock` that refuses AT ONCE — one that cannot wait with a limit, BusyBox's — is a host with no lock to take: counted as before, nothing said (round 3, opus: read as a wait that ran out it left the mark for the whole session and warned at every call); it is told from a wait that ran out by the TIME the refusal took, to the microsecond on bash 5 and to the second before it; (10) the notice is a line of the hook's ordinary answer — the answers it gives before it looks for a gate (no active task, no task file) do not carry it. COST, measured 2026-10-11 (the real hook from both trees, turn about, twice): one call 78.0 → 80.9 ms and 79.0 → 82.3 ms (medians of 40); six calls at once 93.0 → 197.7 ms and 92.3 → 198.2 ms for the batch (medians of 15) — the six now take turns for the two steps, about 18 ms of holding each. Impl round 1 also moved the READ of the gate from task.md under the lock (opus: read before it, a tick that landed between two overlapping hooks made the slower one log the OPEN gate as done and write the old gate back — reproduced with the real hooks) and re-measured the cost on the changed hook, whose hold now takes in the read of the gate (the real hook from both trees, turn about, on a machine under load 2.6 to 4.6): one call 81.3 → 84.4 ms and 112.9 → 116.7 ms; six at once 122.1 → 288.1 ms and 143.0 → 333.4 ms for the batch. Impl round 2 (codex, counted Critical; reproduced with an `mv` made to wait between a hook's copy of the counters and its rename): a hook that was not given the lock could put a copy made BEFORE the user's next prompt back over what was counted AFTER it, the reset having cleared the mark — so a write made without the lock now leaves the mark again as it lands. What is left of that window is the instant between such a rename and the mark that follows it. Impl round 3 (codex, counted Critical for the third time on this path) closed that instant by its root: where there is a lock and it is not given, the counters are not written at all — no copy, no rename, no reset — so nothing made without the lock can land later; the call is not counted, and the mark says the counts are behind. Re-measured on that final form (2026-10-11, machine load 1.5): the first probe 40 of 40, 60 of 60, 60 of 60 twelve at a time, 20 of 20 in sequence; one call 79.8 → 83.4 ms and 80.2 → 83.8 ms; six at once 94.6 → 244.8 ms and 94.0 → 246.0 ms for the batch. NOT covered and older than the task (round 3, opus, by reading — not run): the chat hook's reset has no fence against the prompt of an agent NESTED under the session, which resets the session's counts — and now clears the mark; parked on the task for after the release.",
         "Task 173: `one agent in the chain = the session's own stop` was MEASURED on one live session (Claude Code 2.1.296, Linux, 2026-10-10: a command the session runs walks up to exactly one agent, the session's). A host that started its hooks from a helper process of its own that is also named `claude` would make every stop look nested, and the owner's exception would then never apply — the stricter side, and not seen. The walk stops at the Claude Code daemon and reads `/proc` (or `PLAYBOOK_PROC_ROOT`, which the tests use to pin it).",
-        "Task 173, BOUND left open at its close (the single judge's third run, 2026-10-10; PLAN S11 item (18)): the stop hook reads the prompt generation only after it has read its input, parsed it and resolved the session. A user's prompt whose hook runs to its end in that window — after the stop hook of the turn before it has started, before it reaches that read — gives that stop the NEW generation; its mark then counts in the user's turn, and a notification before the first tool call of that turn is taken for a start, so a read-only turn of the user's could end with gates open. Not reproduced by a test here (the tested orderings are the prompt landing at the mark's rename and while the hook decides after that read). Reading the generation first thing would shrink the window, not close it; a turn identity from the host in both payloads would close it."
+        "Task 173, BOUND left open at its close (the single judge's third run, 2026-10-10; PLAN S11 item (18)): the stop hook reads the prompt generation only after it has read its input, parsed it and resolved the session. A user's prompt whose hook runs to its end in that window — after the stop hook of the turn before it has started, before it reaches that read — gives that stop the NEW generation; its mark then counts in the user's turn, and a notification before the first tool call of that turn is taken for a start, so a read-only turn of the user's could end with gates open. Not reproduced by a test here (the tested orderings are the prompt landing at the mark's rename and while the hook decides after that read). Reading the generation first thing would shrink the window, not close it; a turn identity from the host in both payloads would close it.",
+        "2026-10-12 (task 184, PLAN S11): claude's real Stop semantics observed live (scenario PB-HOOK-STOP-CLOSE). On the way the batch-close guard refused a three-gate write with short notes — the product right."
       ],
       "follow_up_phases": [
         8
@@ -13888,6 +14255,68 @@
           "limitations": [
             "The capture exactly as it came (exit 1, empty stdout, the JSON object on stderr): UNKNOWN, and the detail holds `402 Payment Required` and `usage balance exhausted` — the first line alone is `Internal error: {`."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_model_pins_integration.py",
+          "reference": "APinIsCheckedNotAssumed.test_without_a_probe_a_pin_is_unprobed_not_ok",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_model_pins_integration.py",
+            "reference": "APinIsCheckedNotAssumed.test_a_probe_that_answers_is_ok"
+          },
+          "limitations": [
+            "A stand-in judge CLI (tests/_judge_stub.py) answers at the process boundary; the review path, the sandbox and bubblewrap are the real ones."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_model_pins_integration.py",
+          "reference": "APinIsCheckedNotAssumed.test_a_probe_the_cli_rejects_is_gone_and_the_command_fails",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_model_pins_integration.py",
+            "reference": "APinIsCheckedNotAssumed.test_a_probe_that_answers_is_ok"
+          },
+          "limitations": [
+            "A stand-in judge CLI (tests/_judge_stub.py) answers at the process boundary; the review path, the sandbox and bubblewrap are the real ones."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_model_pins_integration.py",
+          "reference": "APanelStopsOnlyOnAConfirmedRemovedModel.test_a_removed_model_confirmed_by_its_probe_stops_the_run",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_model_pins_integration.py",
+            "reference": "APanelStopsOnlyOnAConfirmedRemovedModel.test_control_the_same_text_with_a_probe_that_answers_does_not_stop_it"
+          },
+          "limitations": [
+            "A stand-in judge CLI (tests/_judge_stub.py) answers at the process boundary; the review path, the sandbox and bubblewrap are the real ones."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_model_pins_integration.py",
+          "reference": "APanelStopsOnlyOnAConfirmedRemovedModel.test_budget_and_timeout_texts_are_never_a_removed_model",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_model_pins_integration.py",
+            "reference": "APanelStopsOnlyOnAConfirmedRemovedModel.test_control_the_same_text_with_a_probe_that_answers_does_not_stop_it"
+          },
+          "limitations": [
+            "A stand-in judge CLI (tests/_judge_stub.py) answers at the process boundary; the review path, the sandbox and bubblewrap are the real ones."
+          ]
+        },
+        {
+          "type": "live-provider test",
+          "path": "tests/live/gauntlet.sh",
+          "reference": "scenario:PB-MODEL-AVAILABILITY",
+          "boundary": "live-provider",
+          "negative_control": null,
+          "limitations": [
+            "`tasks models check` against the real CLIs: haiku and codex gpt-6.1-sol:low OK; a claude and a codex pin each CLI rejects GONE and the check failing; grok, out of credit, not read as removed (entitlement). A review whose judge pin is removed stops and says so; a real haiku judge cut by a 3 s review limit is reported as a timeout and one stopped by a $0.0001 budget as a budget stop — neither as a removed model."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -13904,7 +14333,8 @@
         "Owner decision 2026-08-21: judge-seat is supported on claude, grok, and codex; antigravity and pi are experimental and removed from applicable_providers.",
         "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending.",
         "Task 171 (PLAN S11; retro 107 R17): a grok pin found in `grok models` used to read OK with no call — the list is the account's entitlements and cannot see that its credit ran out (2026-09-29: every call 402 while the check said OK). A listed pin now gets one live turn — of the seat as pinned, with its effort — or LISTED where nothing is probed; the probe reads its answer (OK is exit 0 AND the one word it asked for AND nothing on stderr; anything else is not OK) and an effort the CLI rejects is BAD_EFFORT. Bound: `probe_codex_model` still takes exit 0 as the answer without reading it. Bound, unchanged: a BARE `grok`, `codex:` or `claude` seat (the provider's default model) still reads OK without a call; only a bare `agy` seat is probed (task 111). The live half of this row — recorded responses from the real providers — is still PLAN S11's gauntlet.",
-        "LIVE, 2026-10-10 (task 171): the candidate's `tasks models check` at 03:58 printed `grok:grok-4.7:medium OK responds` (a real turn); at 04:59, the account's credit having run out in between, `UNKNOWN — probe failed …` — the case this row's fix is for, met by accident and recorded in task 171. One provider, one night: not the matrix PLAN S11's gauntlet asks for."
+        "LIVE, 2026-10-10 (task 171): the candidate's `tasks models check` at 03:58 printed `grok:grok-4.7:medium OK responds` (a real turn); at 04:59, the account's credit having run out in between, `UNKNOWN — probe failed …` — the case this row's fix is for, met by accident and recorded in task 171. One provider, one night: not the matrix PLAN S11's gauntlet asks for.",
+        "2026-10-12 (task 184, PLAN S11): claude and codex halves ran live, and grok's entitlement response (scenario PB-MODEL-AVAILABILITY). grok's half waits for its tokens: its seat answers out of credit (HTTP 402) until the subscription's tokens return (owner, 2026-10-12: it stays in the panel and comes back by itself); this row flips when it has run."
       ],
       "follow_up_phases": [
         8
@@ -14391,6 +14821,16 @@
           "limitations": [
             "Fixture: an early failing step cannot report GREEN (real repo)."
           ]
+        },
+        {
+          "type": "live-provider test",
+          "path": "tests/live/gauntlet.sh",
+          "reference": "scenario:PB-MERGE-PUSH-GATE",
+          "boundary": "live-provider",
+          "negative_control": null,
+          "limitations": [
+            "One observed run each way, a real headless claude session (sonnet) on a disposable two-branch repository with a local bare remote: `/playbook:merge feature main --push` ran ref-integrity, merge-doctor, the code-identity diff and merge-verify (GREEN) and only then committed and pushed; with the declared command failing, merge-verify printed FAILED and nothing was pushed. The order is the model following the skill's prose — observed, not guaranteed; the statement claims only merge-verify's exit-code contract."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -14406,8 +14846,8 @@
         "Task 100 impl panel round 2 (2026-09-27) (opus, codex-high): `the push gate is mechanical in merge-verify.py` still overstated — the skill's gate is five conditions the agent follows as prose, and merge-verify.py supplies only the fifth. The statement now says exactly that: the classifier's exit-code contract is what is verified; the agent's ordering and its push decision remain the human-judgment proof plus the S11 live item.",
         "Task 100 impl panel round 1 (2026-09-27) (codex-high, grok): the statement's second sentence — the skill text sequencing the push offer after ref-integrity, contamination, code identity and this verdict — was still inside a verified row; per docs/guarantee-ledger.md a clause the evidence does not reach is split out or left non-green, so it is REMOVED from the statement and lives only here and in required_live_evidence (S11: run /playbook:merge on a disposable repo and watch where the push offer appears). The owners now name the code that implements the gate (merge-verify.py main/resolve_command/run_command_capture) beside the skill section that consumes it.",
         "Task 100 (PLAN S8c, 2026-09-27) NARROWED the statement to what the proofs establish: the earlier `the merge skill offers push only after reference integrity, contamination, code identity and the declared verify command have all been run and reported green` is a sequencing instruction in skills/merge/SKILL.md that Claude executes — it cannot be driven under test (there is no push-offer function; the skill is markdown). What IS mechanical — merge-verify.py's one-code-per-outcome push gate — is now the statement and is verified; the prose ordering stays as the human-judgment proof and as an S11 gauntlet item (run the skill on a disposable repo and watch where the push offer appears).",
-        "No hosted remote push is exercised anywhere in the suite.",
-        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
+        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
+        "2026-10-12 (task 184, PLAN S11): the skill's push sequencing observed live once each way (scenario PB-MERGE-PUSH-GATE); a local bare remote, not a hosted one."
       ],
       "follow_up_phases": [
         8
@@ -15280,6 +15720,16 @@
           "limitations": [
             "A seat with shell characters (`claude:claude-opus-5-5[1m]`): the flag is printed single-quoted, and the token a shell hands over from it runs. Red in a copy that prints it unquoted."
           ]
+        },
+        {
+          "type": "live-provider test",
+          "path": "tests/live/gauntlet.sh",
+          "reference": "scenario:PB-CLI-INTENT",
+          "boundary": "live-provider",
+          "negative_control": null,
+          "limitations": [
+            "On a finished scratch task with all four layers: without `--yes`, with a bare `--yes`, with the quote printed for an earlier judge and with one never printed, `tasks intent` exited 2 and printed the line again — no judge CLI launched (a recording shim saw none), no run directory, no spend record; with the exact quote it ran four blind extractions on a real claude judge (haiku), one spend record each, the chat's words in one prompt only and the code's in another, and wrote the four reports and the grading sheet. The plugin's default extraction judge was a claude seat."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -15295,7 +15745,8 @@
         "No executable test drives the layer collection, the blind extraction run, the reconciliation, or the INTENT.md write.",
         "The extraction step needs a live judge provider, so its behavior is unproved offline.",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
-        "Task 173 (owner's D3-C4): the cost question is a refusal with the flag to pass, not an interactive prompt — the CLI is run by an agent, and `commands/intent.md` tells that agent to put the line to the user before passing the flag; whether an agent does so is a prompt-file instruction, not something a test can hold (an agent can write the four figures itself without asking — the flag is a question, not a wall). What the flag DOES hold: the approval is the line's four figures — calls, seat, time limit, budget cap — so what runs is what was quoted or nothing, and the judge and cap that were checked are the ones the runner is given. It was `--yes` alone, then calls and seat, then an eight-digit digest of the four: each form fell to a reviewer (a layer that appears between quote and run; a raised limit or cap; two limits with one digest). Not covered: the line does not estimate tokens or money actually spent, the SIZE of the evidence behind an unchanged number of calls is not part of the quote, and what the judge's own CLI reads from its configuration at launch is outside this command."
+        "Task 173 (owner's D3-C4): the cost question is a refusal with the flag to pass, not an interactive prompt — the CLI is run by an agent, and `commands/intent.md` tells that agent to put the line to the user before passing the flag; whether an agent does so is a prompt-file instruction, not something a test can hold (an agent can write the four figures itself without asking — the flag is a question, not a wall). What the flag DOES hold: the approval is the line's four figures — calls, seat, time limit, budget cap — so what runs is what was quoted or nothing, and the judge and cap that were checked are the ones the runner is given. It was `--yes` alone, then calls and seat, then an eight-digit digest of the four: each form fell to a reviewer (a layer that appears between quote and run; a raised limit or cap; two limits with one digest). Not covered: the line does not estimate tokens or money actually spent, the SIZE of the evidence behind an unchanged number of calls is not part of the quote, and what the judge's own CLI reads from its configuration at launch is outside this command.",
+        "2026-10-12 (task 184, PLAN S11): the extractions and the no-spend refusals ran live (scenario PB-CLI-INTENT). The distillation into INTENT.md is done with the owner (his answer of 2026-10-12, \"Îl facem împreună (Recomandat)\") and has not run; this row flips when it has."
       ],
       "follow_up_phases": [
         3,
@@ -16253,6 +16704,16 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": []
+        },
+        {
+          "type": "live-provider test",
+          "path": "tests/live/gauntlet.sh",
+          "reference": "scenario:PB-SLASH-COMMANDS",
+          "boundary": "live-provider",
+          "negative_control": null,
+          "limitations": [
+            "Seven real headless claude sessions, tools off: each shipped `commands/*.md` is listed by the session as `playbook:<name>`, and `/playbook:<name>` (with an argument for init, intent and playbook) reaches the conversation — its name tag, its body and its argument are in the session's transcript, and the model answered it. Dispatch only: no command's instructions were carried out."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -16263,11 +16724,11 @@
         "codex",
         "grok"
       ],
-      "status": "partially_evidenced",
+      "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
         "No test enumerates the seven slash commands documented in docs/cli.md against the shipped commands/ directory, so a command could be documented but absent (or shipped but undocumented) without failing.",
-        "No test invokes a slash command through a provider harness.",
-        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
+        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
+        "2026-10-12 (task 184, PLAN S11): discovery and dispatch observed live on claude for all seven commands (scenario PB-SLASH-COMMANDS)."
       ],
       "follow_up_phases": [
         3,
@@ -16546,6 +17007,42 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_judge_paths_integration.py",
+          "reference": "TheSingleJudgeIsAskedForFindingsOnly.test_the_prompt_a_single_judge_receives_forbids_editing",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_judge_paths_integration.py",
+            "reference": "TheSingleJudgeIsAskedForFindingsOnly.test_control_the_capture_records_an_editing_instruction_when_one_is_sent"
+          },
+          "limitations": [
+            "A stand-in judge CLI (tests/_judge_stub.py) answers at the process boundary; the review path, the sandbox and bubblewrap are the real ones."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_judge_paths_integration.py",
+          "reference": "TheSingleJudgeIsAskedForFindingsOnly.test_the_panel_prompt_keeps_its_own_sentence",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_judge_paths_integration.py",
+            "reference": "TheSingleJudgeIsAskedForFindingsOnly.test_control_the_capture_records_an_editing_instruction_when_one_is_sent"
+          },
+          "limitations": [
+            "A stand-in judge CLI (tests/_judge_stub.py) answers at the process boundary; the review path, the sandbox and bubblewrap are the real ones."
+          ]
+        },
+        {
+          "type": "live-provider test",
+          "path": "tests/live/gauntlet.sh",
+          "reference": "scenario:PB-REVIEW-TRIAGE",
+          "boundary": "live-provider",
+          "negative_control": null,
+          "limitations": [
+            "Real single judges (`tasks impl-review 1`) on claude and codex through the recording shim: the review instructions they received ask for findings and never to edit the task or tick a gate; each answered with findings (the planted sign error, as Critical) and no gate line of task.md changed — the CLI records the review, triage stays the agent's."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -16561,7 +17058,8 @@
         "The prompt contract is proved at the renderer boundary; no executable evidence shows a live judge obeying it or the agent performing the triage.",
         "High mechanical claim has no executable integration proof at the review command boundary.",
         "Owner decision 2026-08-21: judge-seat is supported on claude, grok, and codex; antigravity and pi are experimental and removed from applicable_providers.",
-        "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending."
+        "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending.",
+        "2026-10-12 (task 184, PLAN S11): claude and codex halves ran live (scenario PB-REVIEW-TRIAGE). grok's half waits for its tokens: its seat answers out of credit (HTTP 402) until the subscription's tokens return (owner, 2026-10-12: it stays in the panel and comes back by itself); this row flips when it has run."
       ],
       "follow_up_phases": [
         3,

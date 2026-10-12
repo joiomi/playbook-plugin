@@ -540,23 +540,31 @@ class GuaranteeLedgerValidation(_LedgerFixture):
 
     # ------------------------------------------- known_violation status contract
     def test_the_ledger_records_the_closed_lane_defect(self):
-        """PB-LANE-RESOLUTION: corrected in 1.5.34, and still not green.
+        """PB-LANE-RESOLUTION: corrected in 1.5.34; verified since task 184, its open cells NAMED.
 
         The entry moved off `known_violation` because the candidate bundled
-        artifact no longer reproduces the defect — not because the guarantee is
-        fully evidenced. zsh is unexecuted, macOS/Windows are unverified, live
-        provider evidence is absent, and the installed copy is stale, so the
-        status is `partially_evidenced` with those limitations named.
+        artifact no longer reproduces the defect. It stayed partial while live
+        provider evidence was absent; task 184 ran it (scenario PB-LANE-RESOLUTION
+        of tests/live/gauntlet.sh). What is still not executed is said IN THE
+        STATEMENT, not left to the status: the zsh logger is run with a real zsh
+        by CI only (this host has none) and held to the bash one by a
+        source-level test, and the state echo's empty per-session directory at
+        the root of a fresh clone is a stated BOUND.
+        macOS/Windows are not claimed (Linux-only since 2026-10-08).
         """
         entry = next(e for e in self.ledger["guarantees"]
                      if e["id"] == "PB-LANE-RESOLUTION")
-        self.assertEqual("partially_evidenced", entry["status"])
+        self.assertEqual("verified_by_current_executable_evidence", entry["status"])
+        for named in ("zsh one is run with a real zsh", "by CI", "BOUND", ".agent/sessions/<id>/"):
+            self.assertIn(named, entry["statement"])
+        live = [p for p in entry["proofs"] if p["path"] == "tests/live/gauntlet.sh"]
+        self.assertEqual(["scenario:PB-LANE-RESOLUTION"], [p["reference"] for p in live])
         self.assertIsNone(entry["violation_reproduction"],
                           "a corrected artifact may not keep a reproduction")
         self.assertNotIn(2, entry["follow_up_phases"],
                          "the Phase 2 runtime correction is done")
         self.assertIn(8, entry["follow_up_phases"],
-                      "the zsh/macOS/Windows/live cells remain Phase 8 work")
+                      "the row keeps its Phase 8 live evidence on the schedule")
 
         proof = next(p for p in entry["proofs"]
                      if p["reference"].startswith("MarkerAbsentWithLanes."))
@@ -569,7 +577,7 @@ class GuaranteeLedgerValidation(_LedgerFixture):
                         "the adverse control must be the root-lane exemption")
 
         limitations = " ".join(entry["missing_evidence_or_limitation"])
-        for expected in ("zsh", "~/.claude/bash-log.sh", "Phase 8"):
+        for expected in ("zsh", "~/.claude/bash-log.sh", "task 184"):
             self.assertIn(expected, limitations)
 
     def test_the_real_ledger_has_no_open_known_violation(self):
