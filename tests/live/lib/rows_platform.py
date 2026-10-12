@@ -37,6 +37,25 @@ UNCHECKED_CLAUDE_HOOKS = {
 NEXT_VERSIONS = ("3.15", "3.16")             # NEW_IMAGE is the newest only while neither of these images exists
 
 
+def newest_probe(tags: "list[str]") -> str:
+    """Shell that asks the registry for each tag: `exists`, `absent` ONLY on the registry's own "no such manifest",
+    anything else `UNKNOWN` with its last line — a timeout or an error is never read as absence (single judge after
+    round 2, J3). Three tries per tag while the answer is unknown."""
+    lines = []
+    for t in tags:
+        lines.append(
+            f"for try in 1 2 3; do out=$(timeout 30 docker manifest inspect {t} 2>&1 >/dev/null); rc=$?; "
+            f"if [ $rc -eq 0 ]; then v='{t} exists'; break; "
+            f"elif printf '%s' \"$out\" | grep -q 'no such manifest'; then v='{t} absent (no such manifest)'; break; "
+            f"else v=\"{t} UNKNOWN (rc=$rc: $(printf '%s' \"$out\" | tail -1))\"; sleep 5; fi; done; echo \"$v\"")
+    return "\n".join(lines)
+
+
+def newest_verdict(stdout: str, tags: "list[str]") -> "tuple[bool, str]":
+    ok = f"{tags[0]} exists" in stdout and all(f"{t} absent (no such manifest)" in stdout for t in tags[1:])
+    return ok, " / ".join(stdout.strip().splitlines()) or "(no answer)"
+
+
 def _claude_hook_probe() -> str:
     """Shell lines that run each unchecked Claude hook once with its real payload, in a project with no task."""
     lines = ["mkdir -p /tmp/hp/src /tmp/hp/.agent/tasks && echo 'x = 1' > /tmp/hp/src/a.py && cd /tmp/hp",
@@ -114,12 +133,9 @@ def python_floor(out: Path) -> int:
     # "the newest" is measured, not written down (impl panel round 2, T10): the registry is asked for the next two
     # versions, and for NEW_IMAGE itself as the control that the registry answered at all
     tags = [NEW_IMAGE] + [f"python:{v}-slim" for v in NEXT_VERSIONS]
-    r = run.step("which python images exist on Docker Hub today", " ".join(
-        f"docker manifest inspect {t} >/dev/null 2>&1 && echo '{t} exists' || echo '{t} absent';" for t in tags))
-    found = r.stdout.split()
-    run.clause(f"{NEW_IMAGE} is the newest python image today: it exists and {', '.join(tags[1:])} do not",
-               f"{NEW_IMAGE} exists" in r.stdout and all(f"{t} absent" in r.stdout for t in tags[1:]),
-               " / ".join(r.stdout.strip().splitlines()) or f"(no answer; {found})")
+    r = run.step("which python images exist on Docker Hub today", newest_probe(tags), timeout=300)
+    ok, said = newest_verdict(r.stdout, tags)
+    run.clause(f"{NEW_IMAGE} is the newest python image today: it exists and {', '.join(tags[1:])} do not", ok, said)
     expected = _python_files()
     run.note(f"python files in the plugin tree (modules + scripts whose first line runs python): {expected}")
     for image, label in ((MIN_IMAGE, "the minimum, 3.10"), (NEW_IMAGE, "the newest")):

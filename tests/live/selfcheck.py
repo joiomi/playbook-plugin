@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 
 import rows_install  # noqa: E402
 import rows_judge  # noqa: E402
+import rows_platform  # noqa: E402
 import rows_session  # noqa: E402
 import rows_session2  # noqa: E402
 from common import delta, snapshot, tempdir, tool_results  # noqa: E402
@@ -148,6 +149,9 @@ def merge(d: Path) -> None:
     for label, res in (("`fatal: bad revision`", "fatal: bad revision 'deadbeef'\n"),
                        ("a diff that also changes another file", idents[0][1] + "\ndiff --git a/src/a.py b/src/a.py\n-A = 2\n+A = 9\n"),
                        ("an empty result", ""),
+                       ("the same change plus a mode change 100644 -> 100755",
+                        re.sub(r"index ([0-9a-f]+)\.\.([0-9a-f]+) 100644", r"old mode 100644\nnew mode 100755\nindex \1..\2",
+                               idents[0][1])),
                        ("an extra line inside src/b.py, its hunk header true",
                         idents[0][1].replace("@@ -1 +1 @@\n-B = 1\n+B = 2", "@@ -1 +1,2 @@\n-B = 1\n+B = 2\n+raise RuntimeError('x')"))):
         check(f"I7 code identity — {label}", rows_session2.identity_green(res), False)
@@ -238,6 +242,64 @@ def step_timeout() -> None:
         end_tree(int((d / "gc").read_text()))          # … and the grandchild in its own session
 
 
+def step_detached() -> None:
+    """A process that detached (setsid -f) and was reparented BEFORE the timeout is not a descendant any more;
+    the step's token in its environment still finds it (single judge after round 2, J1)."""
+    d = tempdir("pb184-det-")
+    from common import Run
+    r = Run("PB-SELFCHECK", "a step that detaches a child at once", d / "out", [])
+    cmd = f"setsid -f bash -c 'trap \"\" TERM; echo $$ > {d}/gc; exec sleep 300'; sleep 1; sleep 300"
+    res = r.step("a step whose child detaches at once and ignores SIGTERM", cmd, timeout=3)
+    time.sleep(0.5)
+    try:
+        os.kill(int((d / "gc").read_text()), 0)
+        alive = True
+    except (OSError, ValueError):
+        alive = False
+    check("J1 a child detached and reparented before the timeout is gone after it", res.returncode == 124 and not alive,
+          True, (res.stderr.strip().splitlines() or [""])[-1])
+
+
+def gauntlet_quarantine() -> None:
+    """gauntlet.sh run on a stub row that writes a PASS artifact and then dies (exit 139): the artifact is set aside
+    and the run fails; the same stub exiting 0 keeps it (single judge after round 2, J2)."""
+    for code, kept in ((139, False), (0, True)):
+        d = tempdir("pb184-gq-")
+        (d / "lib").mkdir()
+        (d / "gauntlet.sh").write_text((Path(__file__).resolve().parent / "gauntlet.sh").read_text())
+        (d / "lib" / "run_row.py").write_text(
+            "import os, sys, pathlib\n"
+            "pathlib.Path(sys.argv[2], sys.argv[1] + '.txt').write_text('# stub\\nROW ' + sys.argv[1] + ': PASS (1 clauses)\\n')\n"
+            f"os._exit({code})\n")
+        (d / "selfcheck.py").write_text("import sys\nsys.exit(0)\n")
+        out = d / "out"
+        r = subprocess.run(["bash", str(d / "gauntlet.sh"), "--out", str(out), "PB-PYTHON-FLOOR"],
+                           capture_output=True, text=True, timeout=60)
+        art = (out / "PB-PYTHON-FLOOR.txt").exists()
+        check(f"J2 a row that wrote PASS and exited {code}: artifact {'kept' if kept else 'set aside'}, run rc "
+              f"{0 if kept else 1}", art == kept and r.returncode == (0 if kept else 1)
+              and (out / "PB-PYTHON-FLOOR.txt.invalid").exists() != kept, True,
+              f"rc {r.returncode}; " + " / ".join(x for x in r.stdout.splitlines() if x.startswith("ROW")))
+
+
+def registry_probe() -> None:
+    """The newest-image probe with a stand-in `docker` first on PATH: the registry's own "no such manifest" is
+    absence; a timeout or another error is UNKNOWN and fails the clause (single judge after round 2, J3)."""
+    tags = [rows_platform.NEW_IMAGE] + [f"python:{v}-slim" for v in rows_platform.NEXT_VERSIONS]
+    for label, body, want in (
+            ("not-found for the next two", 'case "$3" in *3.14*) exit 0;; *) echo "no such manifest: docker.io/library/$3" >&2; exit 1;; esac', True),
+            ("an error for the next two", 'case "$3" in *3.14*) exit 0;; *) echo "net/http: TLS handshake timeout" >&2; exit 1;; esac', False),
+            ("no answer at all", "exit 1", False)):
+        d = tempdir("pb184-reg-")
+        (d / "docker").write_text("#!/bin/bash\n" + body + "\n")
+        (d / "docker").chmod(0o755)
+        probe = rows_platform.newest_probe(tags).replace("sleep 5", "sleep 0")
+        r = subprocess.run(["bash", "-c", probe], capture_output=True, text=True, timeout=120,
+                           env=dict(os.environ, PATH=f"{d}:{os.environ['PATH']}"))
+        ok, said = rows_platform.newest_verdict(r.stdout, tags)
+        check(f"J3 the newest-image clause with the registry answering {label}", ok, want, said)
+
+
 def main(argv: "list[str]") -> int:
     if len(argv) != 1 or not Path(argv[0]).is_dir():
         print("usage: python3 -I tests/live/selfcheck.py <artifacts-dir>", file=sys.stderr)
@@ -250,7 +312,8 @@ def main(argv: "list[str]") -> int:
             f(d)
         else:
             print(f"skip {f.__name__}: no {row}.txt in {d} (that row was not run)")
-    for f in (freehand, names, install_env, snapshot_whole, step_timeout):
+    for f in (freehand, names, install_env, snapshot_whole, step_timeout, step_detached, gauntlet_quarantine,
+              registry_probe):
         f()
     print(f"selfcheck: {'every control holds' if not FAILED else f'{len(FAILED)} control(s) do not hold'}")
     return 1 if FAILED else 0

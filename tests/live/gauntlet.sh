@@ -124,6 +124,18 @@ for id in "${ROWS[@]}"; do
         *) echo "no live section for $id" >&2; false ;;
     esac
     rc=$?
+    # an artifact counts only when its verdict is the one its row's exit status says: PASS 0, FAIL 1, WAITING 3.
+    # Anything else — a row that died after writing a PASS — is set aside, so check_flips never reads it (J2)
+    art="$OUT/$id.txt"
+    if [ -f "$art" ]; then
+        got=$(sed -n "s/^ROW $id: \([A-Z]*\).*/\1/p" "$art" | tail -1)
+        case "$rc:$got" in
+            0:PASS|1:FAIL|3:WAITING) ;;
+            *) mv -f "$art" "$art.invalid"
+               echo "ROW $id: FAIL (exit $rc does not match its artifact's verdict '${got:-none}'; set aside as $id.txt.invalid)"
+               rc=1 ;;
+        esac
+    fi
     if [ $rc -ne 0 ] && [ $rc -ne 3 ]; then
         [ $rc -ne 1 ] && echo "ROW $id: FAIL (the row exited $rc)"
         worst=1

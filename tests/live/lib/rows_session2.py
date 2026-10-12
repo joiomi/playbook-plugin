@@ -337,7 +337,8 @@ def identity_green(result: str) -> bool:
     """The code-identity diff ran and shows exactly the merge's incoming change — the feature's one change in
     `src/b.py` — and nothing else: no error, no other file, no other changed line in that file (impl panel I7:
     a command that merely matched, `fatal: bad revision` included, used to count as green; round 2, T15: an
-    extra line inside `src/b.py` did). A command that printed the same diff twice is still that diff."""
+    extra line inside `src/b.py` did; J4: a mode change did). A command that printed the same diff twice is still
+    that diff."""
     if re.search(r"(?m)^(fatal|error):", result):
         return False
     sections = re.split(r"(?m)^(?=diff --git )", result)[1:]
@@ -345,7 +346,17 @@ def identity_green(result: str) -> bool:
         return False
     for s in sections:
         head = re.match(r"diff --git a/(\S+) b/(\S+)", s)
-        if not head or head.groups() != ("src/b.py", "src/b.py") or _hunk_changes(s) != ["-B = 1", "+B = 2"]:
+        # git's header for a content-only change of a regular file, and nothing else before the first hunk: a mode
+        # change, a rename or a binary note shows here (single judge after round 2, J4)
+        meta = []
+        for ln in s.splitlines()[1:]:
+            if ln.startswith("@@"):
+                break
+            meta.append(ln)
+        plain = (len(meta) == 3 and re.fullmatch(r"index [0-9a-f]+\.\.[0-9a-f]+ 100644", meta[0]) is not None
+                 and meta[1:] == ["--- a/src/b.py", "+++ b/src/b.py"])
+        if not head or head.groups() != ("src/b.py", "src/b.py") or not plain \
+                or _hunk_changes(s) != ["-B = 1", "+B = 2"]:
             return False
     return True
 

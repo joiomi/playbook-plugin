@@ -158,6 +158,10 @@ class Run:
         # no step reads the harness's own stdin: given text, or nothing (a CLI that reads stdin sees EOF).
         # Each step runs in its own session, so a timeout or an interrupted run can end everything it started,
         # not only the direct child (impl panel round 2, T13)
+        # every process of the step carries the step's token in its environment, so one that detached and was
+        # reparented before the timeout is still found and ended (single judge after round 2, J1)
+        token = uuid.uuid4().hex
+        env = dict(os.environ if env is None else env, **{STEP_TOKEN: token})
         p = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                              errors="replace", start_new_session=True,
                              stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL)
@@ -165,7 +169,7 @@ class Run:
             out, err = p.communicate(input=stdin, timeout=timeout)
             r = subprocess.CompletedProcess(cmd, p.returncode, out, err)
         except subprocess.TimeoutExpired:
-            ended = end_tree(p.pid)
+            ended = end_tree(p.pid, token)
             try:
                 out, err = p.communicate(timeout=30)
             except subprocess.TimeoutExpired:            # a process outside the tree still holds the pipes
@@ -173,7 +177,7 @@ class Run:
                 out, err = "", "[the step's output could not be collected after the timeout]"
             r = subprocess.CompletedProcess(cmd, 124, out, err + f"\n[timed out after {timeout} s; {ended} process(es) of the step ended]")
         except BaseException:
-            end_tree(p.pid)
+            end_tree(p.pid, token)
             raise
         secs = (_dt.datetime.now() - t0).total_seconds()
         self.lines += [f"rc: {r.returncode}   ({secs:.1f} s)", "--- stdout ---", _cut(r.stdout).rstrip("\n"),
@@ -360,9 +364,26 @@ def _descendants(pid: int) -> "list[int]":
     return out
 
 
-def end_tree(pid: int) -> int:
-    """SIGKILL a step's whole tree: its process group and every descendant, wherever it moved. Returns how many."""
-    victims = set(_descendants(pid)) | {pid}
+STEP_TOKEN = "PB_LIVE_STEP"
+
+
+def _carriers(token: str) -> "list[int]":
+    """Every process of this user whose environment holds the step's token (it survives setsid and reparenting)."""
+    mark, out = f"{STEP_TOKEN}={token}".encode(), []
+    for d in Path("/proc").iterdir():
+        if d.name.isdigit():
+            try:
+                if mark in (d / "environ").read_bytes().split(b"\0"):
+                    out.append(int(d.name))
+            except OSError:
+                continue
+    return out
+
+
+def end_tree(pid: int, token: "str | None" = None) -> int:
+    """SIGKILL a step's whole tree: its process group, every descendant, and — given the step's token — every
+    process that carries it, wherever it moved. Returns how many."""
+    victims = set(_descendants(pid)) | {pid} | (set(_carriers(token)) if token else set())
     try:
         os.killpg(pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
