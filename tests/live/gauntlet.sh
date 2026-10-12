@@ -7,7 +7,9 @@
 # NEVER run by CI or `scripts/verify`: it starts real agent sessions and judges
 # (they spend the owner's quota), containers and a disposable install. Run by hand:
 #
-#   tests/live/gauntlet.sh --out <dir> [ROW-ID ...]     # no ROW-ID: every row
+#   tests/live/gauntlet.sh --out <dir> [--root candidate|installed] [ROW-ID ...]     # no ROW-ID: every row
+#   (--root installed: every row runs the copy the plugin manager installed — `installed_plugins.json`'s
+#    installPath — instead of this checkout's tree; PLAN §S13's installed-root gauntlet)
 #   tests/live/gauntlet.sh --list
 #
 # Exit status: 0 every selected row PASS; 1 a row FAILED (any status but 0 and 3, a
@@ -20,8 +22,9 @@ ROWS=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --out) OUT="$2"; shift 2 ;;
+        --root) case "$2" in candidate|installed) export PB_LIVE_ROOT="$2" ;; *) echo "--root is candidate or installed" >&2; exit 2 ;; esac; shift 2 ;;
         --list) grep -oE '^ +echo "=== PB-[A-Z0-9-]+:' "${BASH_SOURCE[0]}" | sed 's/.*=== //; s/:$//'; exit 0 ;;
-        -h|--help) sed -n '2,15p' "${BASH_SOURCE[0]}"; exit 0 ;;
+        -h|--help) sed -n '2,17p' "${BASH_SOURCE[0]}"; exit 0 ;;
         PB-*) ROWS+=("$1"); shift ;;
         *) echo "unknown argument: $1 (see --help)" >&2; exit 2 ;;
     esac

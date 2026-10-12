@@ -34,7 +34,33 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 TESTS = HERE.parent.parent                    # playbook-plugin/tests
 NESTED = TESTS.parent                         # playbook-plugin (the nested repository)
-PLUGIN = NESTED / "plugins" / "playbook"      # the CANDIDATE plugin tree
+CANDIDATE_PLUGIN = NESTED / "plugins" / "playbook"
+
+
+def installed_entry(home: "Path | None" = None) -> dict:
+    """The registry entry of the plugin copy Claude Code runs for this user: the `playbook@…` entry of
+    `~/.claude/plugins/installed_plugins.json`. Refuses — loudly — a missing registry, entry or copy: an
+    installed-root run that silently fell back to the checkout would be candidate evidence labelled installed."""
+    reg = (home or Path(os.path.expanduser("~"))) / ".claude" / "plugins" / "installed_plugins.json"
+    data = json.loads(reg.read_text(encoding="utf-8"))
+    entries = [e for k, v in (data.get("plugins") or {}).items() if k.startswith("playbook@") for e in v]
+    paths = [e.get("installPath") for e in entries]
+    if len(paths) != 1 or not paths[0] or not (Path(paths[0]) / "scripts" / "tasks").is_file():
+        raise SystemExit(f"installed root: expected ONE playbook copy with scripts/tasks in {reg}, found {paths}")
+    return entries[0]
+
+
+def installed_plugin_root(home: "Path | None" = None) -> Path:
+    return Path(installed_entry(home)["installPath"])
+
+
+# The plugin tree every row runs: the CANDIDATE (this checkout) by default; with PB_LIVE_ROOT=installed, the copy the
+# plugin manager installed (PLAN §S13's installed-root gauntlet; task 185, plan panel A5)
+ROOT = os.environ.get("PB_LIVE_ROOT", "candidate")
+if ROOT not in ("candidate", "installed"):
+    raise SystemExit(f"PB_LIVE_ROOT must be candidate or installed, not {ROOT!r}")
+INSTALLED = installed_entry() if ROOT == "installed" else {}
+PLUGIN = Path(INSTALLED["installPath"]) if ROOT == "installed" else CANDIDATE_PLUGIN
 
 PASS, FAIL, WAITING = 0, 1, 3
 SPAWNING = False          # a step's process is being spawned (run_row's handler holds a signal meanwhile)
@@ -137,8 +163,10 @@ class Run:
         self.waiting: "list[str]" = []
         self.started = _dt.datetime.now().astimezone()
         self.lines += [f"# {row} — live run", f"title: {title}", f"targets: {', '.join(self.targets)}",
-                       f"candidate (nested HEAD): {candidate()}", f"plugin tree: {PLUGIN}",
-                       f"started: {self.started.isoformat(timespec='seconds')}", "tools:"]
+                       f"candidate (nested HEAD): {candidate()}", f"root: {ROOT}", f"plugin tree: {PLUGIN}"]
+        if ROOT == "installed":
+            self.lines += [f"installed copy: version {INSTALLED.get('version')}, commit {INSTALLED.get('gitCommitSha')}"]
+        self.lines += [f"started: {self.started.isoformat(timespec='seconds')}", "tools:"]
         self.lines += [f"  {v}" for v in tool_versions()]
         self._n = 0
 

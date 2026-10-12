@@ -22,9 +22,9 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from common import NESTED, Run, clean_env, owner_home_guard, snapshot
+from common import INSTALLED, NESTED, ROOT, Run, clean_env, owner_home_guard, snapshot
 
-OLD_REF = "main"                      # v1.6.0 on the nested repository
+OLD_REF = "d3b5364"                   # v1.6.0, the release of 2026-10-09 — pinned: `main` moves at each release (task 185)
 NEW_VERSION = "1.6.1"
 MARKET = "playbook-x-marketplace"
 NAME = "gauntlet-project"
@@ -54,10 +54,23 @@ def install_env(home: Path) -> "dict[str, str]":
     return {k: v for k, v in env.items() if not CREDENTIAL_LIKE.search(k)}
 
 
+def check_released_head() -> None:
+    """On the installed root the install rows still publish this checkout's HEAD over v1.6.0: it must be the commit
+    the installed copy was built from, or they would test an unreleased tree under the installed label (task 185)."""
+    if ROOT != "installed":
+        return
+    head = subprocess.run(["git", "-C", str(NESTED), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    sha = str(INSTALLED.get("gitCommitSha") or "")
+    if len(sha) < 7 or not head.startswith(sha):
+        raise SystemExit(f"installed root: this checkout's HEAD {head[:12]} is not the installed copy's commit "
+                         f"{sha[:12] or '(none in the registry)'}")
+
+
 class Install:
     """One disposable install: its HOME, its repositories, its project."""
 
     def __init__(self, run: Run, root: Path):
+        check_released_head()
         self.run, self.root = run, root
         self.home = root / "home"
         self.home.mkdir()
@@ -85,7 +98,11 @@ class Install:
                         and "CLAUDE_CONFIG_DIR is unset" in r.stdout and "credential-like variables: 0" in r.stdout,
                         " / ".join(r.stdout.strip().splitlines()))
         self.step("the 'GitHub' repository: a bare clone of the nested repository", ["git", "clone", "-q", "--bare", str(NESTED), str(self.bare)])
-        self.step("the release clone the marketplace is a directory of, on v1.6.0", ["git", "clone", "-q", "-b", OLD_REF, str(self.bare), str(self.release)])
+        # the release clone on v1.6.0 by its commit, its `main` still tracking 'GitHub' (the upgrade's pull fast-forwards
+        # it): `clone -b main` sets the tracking and `reset --hard` keeps it, where `checkout -B` dropped it (task 185)
+        self.step("the release clone the marketplace is a directory of, on v1.6.0",
+                  f"git clone -q -b main {self.bare} {self.release} && git -C {self.release} reset -q --hard {OLD_REF} "
+                  f"&& git -C {self.release} rev-parse --short HEAD && git -C {self.release} rev-parse --abbrev-ref main@{{upstream}}")
         self.step("add the marketplace (a local directory)", ["claude", "plugin", "marketplace", "add", str(self.release)])
         self.step("install the plugin from it", ["claude", "plugin", "install", f"playbook@{MARKET}"], timeout=300)
         self.proj.mkdir()
@@ -121,8 +138,11 @@ class Install:
         data["version"] = NEW_VERSION
         pj.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
         self.run.note(f"(scratch clone only) plugin.json version {old} -> {NEW_VERSION} on top of candidate {head[:12]}")
-        self.step("the release commit, pushed to 'GitHub'", "git -c user.email=r@r -c user.name=release commit -qam "
-                  f"'release {NEW_VERSION} (scratch)' && git push -q origin main", cwd=self.work)
+        # a candidate that already carries the version (the release commit itself) has nothing to commit: it is pushed as
+        # it is (task 185, plan panel A5 — the commit used to fail and nothing reached 'GitHub')
+        self.step("the release commit, pushed to 'GitHub'", "{ git diff --quiet || git -c user.email=r@r -c user.name=release "
+                  f"commit -qam 'release {NEW_VERSION} (scratch)'; }} && git push -q origin main && git rev-parse --short HEAD",
+                  cwd=self.work)
 
     def upgrade(self) -> None:
         """/playbook:upgrade steps 2 and 3, from the installed copy's own commands/upgrade.md."""

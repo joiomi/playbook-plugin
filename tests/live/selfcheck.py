@@ -703,6 +703,47 @@ def gauntlet_windows() -> None:
         end_tree(g.pid)
 
 
+def installed_root() -> None:
+    """The installed-root mode (task 185, plan panel A5): with PB_LIVE_ROOT=installed every row runs the copy the
+    registry names — never the checkout — and a registry that names no usable copy is refused, not fallen back from."""
+    lib = Path(__file__).resolve().parent / "lib"
+    probe = "import sys; sys.path.insert(0, sys.argv[1]); import common; print('ROOT', common.ROOT); print('PLUGIN', common.PLUGIN)"
+    home = tempdir("pb185-ir-")
+    copy = home / "cache" / "playbook" / "9.9.9"
+    (copy / "scripts").mkdir(parents=True)
+    (copy / "scripts" / "tasks").write_text("#!/bin/bash\n", encoding="utf-8")
+    reg = home / ".claude" / "plugins"
+    reg.mkdir(parents=True)
+
+    def run(entries, root):
+        (reg / "installed_plugins.json").write_text(json.dumps({"plugins": entries}), encoding="utf-8")
+        env = dict(os.environ, HOME=str(home), **({"PB_LIVE_ROOT": root} if root else {}))
+        env.pop("PB_LIVE_ROOT", None) if not root else None
+        return subprocess.run([sys.executable, "-I", "-c", probe, str(lib)], capture_output=True, text=True, env=env)
+    r = run({"playbook@m": [{"installPath": str(copy), "version": "9.9.9"}]}, "installed")
+    check("installed root: the rows run the copy the registry names", r.returncode == 0
+          and f"PLUGIN {copy}" in r.stdout and "ROOT installed" in r.stdout, True, r.stdout.strip().replace("\n", " / "))
+    r = run({"playbook@m": [{"installPath": str(home / "missing"), "version": "9.9.9"}]}, "installed")
+    check("installed root: a registry whose copy is missing is refused, not fallen back from", r.returncode != 0
+          and "installed root" in r.stderr, True, (r.stderr.strip().splitlines() or [""])[-1][:120])
+    r = run({"playbook@m": [{"installPath": str(copy)}]}, None)
+    check("without --root the rows run this checkout (the candidate)", r.returncode == 0 and "ROOT candidate" in r.stdout
+          and str(copy) not in r.stdout, True, r.stdout.strip().replace("\n", " / "))
+    # the install rows publish this checkout's HEAD: on the installed root it must be the installed copy's commit
+    head = subprocess.run(["git", "-C", str(lib.parent.parent.parent), "rev-parse", "HEAD"], capture_output=True,
+                          text=True).stdout.strip()
+    probe_head = "import sys; sys.path.insert(0, sys.argv[1]); import rows_install; rows_install.check_released_head(); print('OK')"
+    for sha, want, label in ((head, True, "the installed copy's commit is HEAD: the install rows run"),
+                             ("0" * 40, False, "the installed copy's commit is not HEAD: the install rows refuse"),
+                             (None, False, "the registry names no commit: the install rows refuse")):
+        (reg / "installed_plugins.json").write_text(json.dumps({"plugins": {"playbook@m": [
+            {"installPath": str(copy), **({"gitCommitSha": sha} if sha else {})}]}}), encoding="utf-8")
+        r = subprocess.run([sys.executable, "-I", "-c", probe_head, str(lib)], capture_output=True, text=True,
+                           env=dict(os.environ, HOME=str(home), PB_LIVE_ROOT="installed"))
+        check(f"installed root: {label}", r.returncode == 0 and r.stdout.strip() == "OK", want,
+              (r.stdout.strip() or (r.stderr.strip().splitlines() or [""])[-1])[:120])
+
+
 def _gauntlet_copy(run_row: str, selfcheck: str) -> Path:
     d = tempdir("pb184-gs-")
     (d / "lib").mkdir()
@@ -791,7 +832,8 @@ def main(argv: "list[str]") -> int:
         signal.signal(s, lambda signum, _f: sys.exit(128 + signum))
     for f in (freehand, names, install_env, snapshot_whole, step_timeout, step_detached, gauntlet_quarantine,
               registry_probe, docker_timeout, gauntlet_missing_and_lock, spawn_interrupted, gauntlet_interrupted,
-              owner_distillation, gauntlet_windows, triage_answer, seat_answer_bound, double_signal, pre_exec_signal):
+              owner_distillation, gauntlet_windows, triage_answer, seat_answer_bound, double_signal, pre_exec_signal,
+              installed_root):
         f()
     print(f"selfcheck: {'every control holds' if not FAILED else f'{len(FAILED)} control(s) do not hold'}")
     return 1 if FAILED else 0

@@ -13,8 +13,16 @@ containers and needs the network. `unittest discover` does not collect it (no
 own six fixtures; `scripts/verify` neither runs nor lints this directory (its
 `bash -n` and `ast.parse` steps count the same files with and without it).
 
-    tests/live/gauntlet.sh --out <dir> [ROW-ID ...]    # no ROW-ID: every row
+    tests/live/gauntlet.sh --out <dir> [--root candidate|installed] [ROW-ID ...]    # no ROW-ID: every row
     tests/live/gauntlet.sh --list
+
+`--root installed` (PLAN §S13's installed-root gauntlet, task 185) runs every row on the copy the
+plugin manager installed — the `installPath` of the `playbook@…` entry of
+`~/.claude/plugins/installed_plugins.json` — instead of this checkout's tree; a registry without
+exactly one such copy is refused, never fallen back from. Each artifact names its root
+(`root: candidate|installed`) and the tree it ran. The install rows build their own disposable
+install either way: they publish this checkout's HEAD over v1.6.0 (`rows_install.OLD_REF`), so on
+the installed root HEAD must be the released commit.
 
 One artifact per row, `<dir>/<ROW-ID>.txt`: the candidate commit, tool versions,
 every command with its full output and the filesystem delta it was told to watch,
