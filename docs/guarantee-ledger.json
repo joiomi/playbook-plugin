@@ -5724,6 +5724,7 @@
       ],
       "status": "partially_evidenced",
       "missing_evidence_or_limitation": [
+        "WAIVER 2026-10-12 PB-JUDGE-BLIND-CONTEXT: grok's live half is deferred after the 1.6.1 release — the owner, 2026-10-12: «mai dureaza 3 zile pana o sa aiba grok iar tokene.. nu pot sa astept atata dupa el». The claude and codex halves ran live on the candidate (task 184, scenario PB-JUDGE-BLIND-CONTEXT); grok stays in the panel.",
         "Task 100 impl panel round 2 (2026-09-27) (codex-high): `panel-review --prompt` with no task number includes `.agent/chat_log.md` in the judge's context (review.py, the taskless arm of `_build_payload`) — by design, since a free question has no task to anchor on. The statement now names that arm as the exception; the blind-context claim is scoped to task reviews.",
         "Live provider isolation from ambient conversation is not observed.",
         "Owner decision 2026-08-21: judge-seat is supported on claude, grok, and codex; antigravity and pi are experimental and removed from applicable_providers.",
@@ -5831,6 +5832,7 @@
       ],
       "status": "partially_evidenced",
       "missing_evidence_or_limitation": [
+        "WAIVER 2026-10-12 PB-JUDGE-READONLY: grok's live half is deferred after the 1.6.1 release — the owner, 2026-10-12: «mai dureaza 3 zile pana o sa aiba grok iar tokene.. nu pot sa astept atata dupa el». The claude and codex halves ran live on the candidate (task 184, scenario PB-JUDGE-READONLY); grok stays in the panel.",
         "No current live-provider proof. Where no bwrap is on PATH (or the judge runs nested inside another sandbox), project_writable=False is a no-op and judges run UNCONTAINED — the before/after working-tree tamper guard is the only defense there. A bwrap that is installed but cannot run is not detected: containment is reported and the judge launch fails. (Up to 1.5.47: macOS seatbelt, never run in CI; Windows had no backend at all.)",
         "Owner decision 2026-08-21: judge-seat is supported on claude, grok, and codex; antigravity and pi are experimental and removed from applicable_providers.",
         "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending.",
@@ -6089,6 +6091,7 @@
       ],
       "status": "partially_evidenced",
       "missing_evidence_or_limitation": [
+        "WAIVER 2026-10-12 PB-PANEL-QUORUM: grok's live half is deferred after the 1.6.1 release — the owner, 2026-10-12: «mai dureaza 3 zile pana o sa aiba grok iar tokene.. nu pot sa astept atata dupa el». The claude and codex halves ran live on the candidate (task 184, scenario PB-PANEL-QUORUM); grok stays in the panel.",
         "High mechanical claim lacks executable integration evidence at the panel command boundary.",
         "Owner decision 2026-08-21: judge-seat is supported on claude, grok, and codex; antigravity and pi are experimental and removed from applicable_providers.",
         "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending.",
@@ -14329,6 +14332,7 @@
       ],
       "status": "partially_evidenced",
       "missing_evidence_or_limitation": [
+        "WAIVER 2026-10-12 PB-MODEL-AVAILABILITY: grok's live half is deferred after the 1.6.1 release — the owner, 2026-10-12: «mai dureaza 3 zile pana o sa aiba grok iar tokene.. nu pot sa astept atata dupa el». The claude and codex halves ran live on the candidate (task 184, scenario PB-MODEL-AVAILABILITY); grok stays in the panel.",
         "No live provider availability/error-classification evidence in CI. Task 111 (2026-10-05): Antigravity is no longer unprobeable — agy 1.2.17 takes a model pin, so `tasks models check` runs one real turn for an agy pin; an id agy does not know is GONE, a missing or contradicted effort is BAD_EFFORT (a spec error, never a dead pin), and a missing sign-in or an exhausted quota is UNKNOWN with the cause. agy is an experimental judge seat and is not in applicable_providers; its proof replays output captured from agy 1.2.17 on one Linux account.",
         "Owner decision 2026-08-21: judge-seat is supported on claude, grok, and codex; antigravity and pi are experimental and removed from applicable_providers.",
         "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending.",
@@ -17055,6 +17059,7 @@
       ],
       "status": "partially_evidenced",
       "missing_evidence_or_limitation": [
+        "WAIVER 2026-10-12 PB-REVIEW-TRIAGE: grok's live half is deferred after the 1.6.1 release — the owner, 2026-10-12: «mai dureaza 3 zile pana o sa aiba grok iar tokene.. nu pot sa astept atata dupa el». The claude and codex halves ran live on the candidate (task 184, scenario PB-REVIEW-TRIAGE); grok stays in the panel.",
         "The prompt contract is proved at the renderer boundary; no executable evidence shows a live judge obeying it or the agent performing the triage.",
         "High mechanical claim has no executable integration proof at the review command boundary.",
         "Owner decision 2026-08-21: judge-seat is supported on claude, grok, and codex; antigravity and pi are experimental and removed from applicable_providers.",

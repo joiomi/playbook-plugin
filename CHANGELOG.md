@@ -14,7 +14,8 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   disposable HOME with the real plugin manager), and nine surfaces of a real Claude Code session — task activation,
   freehand, the hooks' invocation, the state echo (parallel tool calls included), the stop hook, lane resolution,
   hook payloads, Claude's capability cells and the slash commands; the merge skill's push order was observed once
-  each way. Five judge rows passed on Claude and Codex judges and wait for grok, whose seat is out of credit; `tasks intent` passed up to the distillation, which is done with
+  each way. Five judge rows passed on Claude and Codex judges; grok, out of credit for three more days, is waived for
+  this release by the owner's decision (its live half runs after the release); `tasks intent` passed up to the distillation, which is done with
   the owner. Statements were narrowed where a run showed them too wide: the state echo leaves an empty session
   folder at the root of a fresh multi-user clone, the claude adapter reports no transcript folder for a project path with `_`, `.` or a space,
   a project directory whose name starts with a task's number can make the hooks read another task's record, the
