@@ -411,7 +411,9 @@ def owner_distillation() -> None:
                                 ("a seam with neither box ticked and no NOT GRADED", "unticked", False),
                                 ("a seam with both boxes ticked", "both", False),
                                 # P6: the ratification is read in the recorded run's OWN entry, not the task's last one
-                                ("the run's entry emptied, another ratified entry appended", "body", False)):
+                                ("the run's entry emptied, another ratified entry appended", "body", False),
+                                # Q3: the reader must return the recorded run's OWN entry
+                                ("a later entry of the same task after the recorded run's", "later", False)):
         d = tempdir("pb170-od-")
         run_dir = d / src[0].relative_to(proj)
         run_dir.mkdir(parents=True)
@@ -427,6 +429,9 @@ def owner_distillation() -> None:
             text = head + mark + "\n\n" + (rest[nxt.start():] if nxt else "")
             text = text.rstrip() + (f"\n\n## task {num} · another-run\n<!-- intent:T{num}:another-run -->\n\n"
                                     "- **Confirmed** — something else.\n\nRatified by the owner, another day.\n")
+        if doctor == "later":
+            text = text.rstrip() + (f"\n\n## task {num} · a-later-run\n<!-- intent:T{num}:a-later-run -->\n\n"
+                                    "- **Confirmed** — a later intent.\n\nRatified by the owner, later.\n")
         (d / "INTENT.md").write_text(text, encoding="utf-8")
         sheet = run_dir / "review.md"
         if doctor == "seam":
@@ -466,6 +471,128 @@ def triage_answer() -> None:
         check(f"REVIEW-TRIAGE the judge's answer — {label}", rows_judge.names_the_defect(answer), want)
     check("REVIEW-TRIAGE the OLD reading on haiku's real answer (it failed the run: one line only)",
           re.search(r"\*\*(Critical|Important)\*\*[^\n]*calc\.py", HAIKU_ANSWER) is not None, False)
+    # task 170, impl round 2, Q2 (agy, codex): a blank line inside the finding; a finding that only names the file
+    for label, answer, want in (
+            ("a blank line between the severity heading and the file",
+             "**Critical: add() is wrong**\n\nsrc/calc.py:2 returns `a - b` instead of `a + b`.\n", True),
+            ("a finding that could not read the file",
+             "**Important: Unable to inspect src/calc.py**\nThe sandbox refused the read.\n", False),
+            ("a finding about another file whose name ends in calc.py",
+             "**Critical** — src/other_calc.py:2 subtracts instead of adding.\n", False)):
+        check(f"REVIEW-TRIAGE (Q2) — {label}", rows_judge.names_the_defect(answer), want)
+
+
+def seat_answer_bound() -> None:
+    """Q6 (task 170, impl round 2, codex): each seat's answer is its OWN log — `judge.log` for claude,
+    `judge-codex.log` for codex — written by that step (newer than its start) that exited 0. Replay: claude's
+    review left `judge.log`; codex's step then fails and writes nothing — codex must not be certified with
+    claude's answer, as the old reading (the newest `judge*.log`) did."""
+    d = tempdir("pb170-sa-")
+    (d / "judge.log").write_text(CODEX_ANSWER, encoding="utf-8")
+    t0 = time.time_ns()
+    time.sleep(0.01)
+    old = next(iter(sorted(d.glob("judge*.log"), key=lambda p: p.stat().st_mtime_ns, reverse=True)), None)
+    check("Q6 the OLD reading certified codex with claude's log (no log of its own, the step failed)",
+          bool(old) and rows_judge.names_the_defect(old.read_text(encoding="utf-8")), True)
+    seat = getattr(rows_judge, "seat_answer", None)
+    got = seat(d, "codex", t0, 1) if seat else "<no seat_answer>"
+    check("Q6 a failed codex step with no log of its own gives no answer", got == "", True, repr(got[:40]))
+    (d / "judge-codex.log").write_text(CODEX_ANSWER, encoding="utf-8")
+    got = seat(d, "codex", t0, 0) if seat else ""
+    check("Q6 codex's own fresh log, its step exited 0, is its answer", rows_judge.names_the_defect(got), True)
+    got = seat(d, "codex", time.time_ns() + 10**9, 0) if seat else ""
+    check("Q6 a log older than the step's start is not its answer", got == "", True)
+
+
+def double_signal() -> None:
+    """Q4 (task 170, impl round 2, codex): two SIGTERMs in a row to a row that is running a step — the gauntlet
+    used to send them (`$child` is also in `jobs -p`) — must not abort its cleanup: no process of the step is left.
+    Ten trials, a row process each (the real `run_row._exit_on` handler, a real `Run.step`)."""
+    lib = Path(__file__).resolve().parent / "lib"
+    driver = ("import sys, signal, pathlib\nsys.path.insert(0, sys.argv[1])\nimport common, run_row\n"
+              "for s in (signal.SIGTERM, signal.SIGHUP):\n    signal.signal(s, run_row._exit_on)\n"
+              "d = pathlib.Path(sys.argv[2])\nr = common.Run('PB-X', 'x', d / 'out', [])\n"
+              "r.step('a step', f\"echo $PB_LIVE_STEP > {d}/tok; setsid bash -c 'trap \\\"\\\" TERM; echo $$ > {d}/gc; exec sleep 300' & sleep 300\", timeout=120)\n")
+    left_total = 0
+    # two signals sent back to back are one (the kernel does not queue a pending SIGTERM): the second is sent a
+    # little after the first, so it lands while the first one's cleanup runs
+    for gap in (0.002, 0.005, 0.01, 0.02, 0.05) * 2:
+        d = tempdir("pb170-ds-")
+        (d / "drv.py").write_text(driver, encoding="utf-8")
+        p = subprocess.Popen([sys.executable, "-I", str(d / "drv.py"), str(lib), str(d)], stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+        try:
+            if not _wait_for(d / "gc"):
+                left_total += 1
+                continue
+            p.send_signal(signal.SIGTERM)
+            time.sleep(gap)
+            p.send_signal(signal.SIGTERM)
+            try:
+                p.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                pass
+            time.sleep(0.3)
+            # every process of the step — the grandchild, the step's own `sleep 300`, its shell — by its token
+            from common import _carriers
+            tok = (d / "tok").read_text().strip() if (d / "tok").exists() else ""
+            left_total += any(_running(x) for x in (_carriers(tok) if tok else [])) or not tok
+        finally:
+            end_tree(p.pid)
+            try:
+                end_tree(None, (d / "tok").read_text().strip())
+            except (OSError, ValueError):
+                pass
+    check("Q4 two SIGTERMs in a row leave no process of the step behind (10 trials)", left_total == 0, True,
+          f"trials with a survivor: {left_total}")
+
+
+def pre_exec_signal() -> None:
+    """Q5 (task 170, impl round 2, codex): a signal that lands while a step is spawning — after the fork, before the
+    child carries its token, before `Run.step` holds it — is held until the process is held, then ends it.
+    Simulated: a Popen stand-in forks a child WITHOUT the token, the signal lands, and only then does it return."""
+    import common
+    import run_row
+    d = tempdir("pb170-pe-")
+    real = common.subprocess.Popen
+    started = []
+
+    class Bare:
+        def __init__(self, *a, **k):
+            pid = os.fork()
+            if pid == 0:
+                os.execvp("sleep", ["sleep", "300"])      # no token in its environment
+            self.pid = pid
+            started.append(pid)
+            os.kill(os.getpid(), signal.SIGTERM)          # the signal lands before the spawn has returned
+            time.sleep(0.2)
+
+        def communicate(self, *a, **k):
+            os.waitpid(self.pid, 0)
+            return "", ""
+
+        def kill(self):
+            os.kill(self.pid, signal.SIGKILL)
+    saved = {s: signal.getsignal(s) for s in (signal.SIGTERM, signal.SIGHUP)}
+    for s in saved:
+        signal.signal(s, run_row._exit_on)
+    run = common.Run("PB-SELFCHECK", "a signal during the spawn", d / "out", [])
+    common.subprocess.Popen = Bare
+    try:
+        try:
+            run.step("a step", "true", timeout=60)
+        except SystemExit:
+            pass
+    finally:
+        common.subprocess.Popen = real
+        for s, h in saved.items():
+            signal.signal(s, h)
+    time.sleep(0.3)
+    left = bool(started) and _running(started[0])
+    if left:
+        end_tree(started[0])
+    check("Q5 a signal during the spawn (child without its token) still ends the child", bool(started) and not left,
+          True, f"spawned {started}; still running {left}")
 
 
 def gauntlet_windows() -> None:
@@ -619,7 +746,7 @@ def main(argv: "list[str]") -> int:
         signal.signal(s, lambda signum, _f: sys.exit(128 + signum))
     for f in (freehand, names, install_env, snapshot_whole, step_timeout, step_detached, gauntlet_quarantine,
               registry_probe, docker_timeout, gauntlet_missing_and_lock, spawn_interrupted, gauntlet_interrupted,
-              owner_distillation, gauntlet_windows, triage_answer):
+              owner_distillation, gauntlet_windows, triage_answer, seat_answer_bound, double_signal, pre_exec_signal):
         f()
     print(f"selfcheck: {'every control holds' if not FAILED else f'{len(FAILED)} control(s) do not hold'}")
     return 1 if FAILED else 0

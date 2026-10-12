@@ -17,6 +17,7 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import time
 import uuid
 from pathlib import Path
 
@@ -324,15 +325,33 @@ EDIT_WORDS = re.compile(r"\b((edit|update|modify|rewrite)\s+(the\s+)?(task|task\
 
 
 def names_the_defect(answer: str) -> bool:
-    """A finding marked Critical or Important that names `calc.py`, the planted defect's file, inside the finding —
-    its severity line or the lines under it, up to the next blank line. Read per finding, not per line: a judge may
-    write `**Critical** — src/calc.py:2 …` or `**Critical: …**` with the file on the next line (haiku did, task 170's
-    final run of 21:32 — the clause had read only the first form)."""
-    for m in re.finditer(r"(?m)^\s*\*\*(Critical|Important)\b", answer):
-        finding = re.split(r"\n\s*\n", answer[m.start():], maxsplit=1)[0]
-        if "calc.py" in finding:
+    """A finding marked Critical or Important that names `src/calc.py` itself and says what is wrong with its
+    arithmetic. A finding runs from its severity marker to the next one, a `CAP:` line or the end — so a judge may
+    write `**Critical** — src/calc.py:2 …`, or `**Critical: …**` with the file on the next line (haiku, task 170's
+    run of 21:32), or a blank line between them (round 2, Q2); a finding that only names the file ("Unable to
+    inspect src/calc.py") or names another one (`other_calc.py`) is not the planted defect found."""
+    marks = list(re.finditer(r"(?m)^\s*\*\*(Critical|Important)\b", answer))
+    for i, m in enumerate(marks):
+        end = marks[i + 1].start() if i + 1 < len(marks) else len(answer)
+        cap = re.search(r"(?m)^CAP:", answer[m.start():end])
+        finding = answer[m.start():m.start() + cap.start()] if cap else answer[m.start():end]
+        if re.search(r"(?<![\w/.-])src/calc\.py\b", finding) and re.search(
+                r"subtract|minus|a - b|returns? `?-1|instead of add|instead of `?a \+ b|sign", finding, re.I):
             return True
     return False
+
+
+def seat_answer(task_dir: Path, cli: str, since_ns: int, rc: int) -> str:
+    """The answer of THIS seat's review: its own log — `judge.log` for claude, `judge-<cli>.log` otherwise — written
+    by this step (newer than its start), the step having exited 0. Anything else is no answer: a codex step that
+    failed and wrote nothing used to be read through claude's older `judge.log` (round 2, Q6)."""
+    log = task_dir / ("judge.log" if cli == "claude" else f"judge-{cli}.log")
+    try:
+        if rc != 0 or log.stat().st_mtime_ns < since_ns:
+            return ""
+        return log.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
 
 
 def review_triage(out: Path) -> int:
@@ -348,6 +367,7 @@ def review_triage(out: Path) -> int:
             j.seats([seat], seat)
             gates = lambda: re.findall(r"(?m)^\s*- \[[ xX]\] .*$", task.read_text(encoding="utf-8"))  # noqa: E731
             before = gates()
+            t0 = time.time_ns()
             r = j.tasks(run, f"a single judge — `tasks impl-review 1`, judge {seat}", "impl-review", "1")
             calls = j.judge_calls(cli)
             # the review's INSTRUCTIONS — after the inline context (task.md and the map, which carry their own words)
@@ -358,8 +378,7 @@ def review_triage(out: Path) -> int:
                        f"its gates", bool(calls) and prompt.startswith("You are a senior engineer reviewing a COMPLETED")
                        and re.search(r"finding", prompt, re.I) is not None and not asks,
                        f"calls {len(calls)}; edit-words in the instructions: {asks}")
-            log = next(iter(sorted(task.parent.glob("judge*.log"), key=lambda p: p.stat().st_mtime_ns, reverse=True)), None)
-            answer = log.read_text(encoding="utf-8", errors="replace") if log else r.stdout
+            answer = seat_answer(task.parent, cli, t0, r.returncode)
             run.clause(f"{cli}: the judge answered with findings — the sign error in add — and no gate of the task was "
                        f"ticked or rewritten (the CLI records the review; triage is the agent's)",
                        gates() == before and names_the_defect(answer),
@@ -420,9 +439,10 @@ def _owner_distillation(run: Run, record: "tuple[Path, str, str]" = OWNER_DISTIL
                  ["python3", "-I", "-c", "import sys; sys.path.insert(0, sys.argv[1]); from pathlib import Path; "
                   "from tasks.intent import last_intent_entry; print(last_intent_entry(Path(sys.argv[2]), sys.argv[3]) or '')",
                   str(PLUGIN), str(md), num])
-    run.clause("the product's reader returns the task's last ratified entry as its baseline", r.returncode == 0
-               and bool(want) and r.stdout.strip() == want, f"rc {r.returncode}; returned {len(r.stdout.strip())} chars, "
-               f"the last entry {len(want)}")
+    run.clause("the product's reader gives back the recorded run's own entry as the task's baseline (the run is the "
+               "task's last ratified entry)", r.returncode == 0 and bool(own) and r.stdout.strip() == own == want,
+               f"rc {r.returncode}; returned {len(r.stdout.strip())} chars; the run's own entry {len(own)}; "
+               f"the task's last {len(want)}")
     # a seam is graded with exactly ONE box ticked, or left NOT GRADED only when its verdict says so and why (P1)
     review = (rdirs[0] / "review.md").read_text(encoding="utf-8") if rdirs else ""
     seams = re.findall(r"(?m)^- \[(x| )\] aligned / \[(x| )\] drift — verdict: (.*)$", review)

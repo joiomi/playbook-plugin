@@ -22,6 +22,13 @@ for module in (rows_platform, rows_install, rows_session, rows_session2, rows_ju
 def _exit_on(signum, _frame):
     # SIGTERM/SIGHUP become an ordinary exit, so every `finally` runs: a step's process tree and a detached
     # session are ended before the row's scratch directories go (impl panel round 2, T14)
+    import common
+    if common.SPAWNING:                    # a step is spawning: held until its process is held (task 170, Q5)
+        common.PENDING = signum
+        return
+    # once: a second signal must not abort the cleanup the first one started (task 170, Q4 — measured 9 in 10)
+    for s in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(s, signal.SIG_IGN)
     raise SystemExit(128 + signum)
 
 

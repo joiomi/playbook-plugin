@@ -37,6 +37,8 @@ NESTED = TESTS.parent                         # playbook-plugin (the nested repo
 PLUGIN = NESTED / "plugins" / "playbook"      # the CANDIDATE plugin tree
 
 PASS, FAIL, WAITING = 0, 1, 3
+SPAWNING = False          # a step's process is being spawned (run_row's handler holds a signal meanwhile)
+PENDING: "int | None" = None
 _CAP = 200_000                                # characters kept per stream; more is said, never silently cut
 
 # what a nested session must not inherit from the session that runs the gauntlet
@@ -162,13 +164,22 @@ class Run:
         # reparented before the timeout is still found and ended (single judge after round 2, J1)
         token = uuid.uuid4().hex
         env = dict(os.environ if env is None else env, **{STEP_TOKEN: token})
+        global SPAWNING, PENDING
         p = None
         try:
             # the spawn is inside the protected block: a signal that lands as it returns, before `p` is held, is
-            # cleaned up by the token alone (task 184's L1)
-            p = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                 errors="replace", start_new_session=True,
-                                 stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL)
+            # cleaned up by the token alone (task 184's L1) — and one that lands during the spawn itself, when the
+            # child may not carry its token yet, is HELD by run_row's handler until `p` is held (task 170, Q5)
+            SPAWNING = True
+            try:
+                p = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                     errors="replace", start_new_session=True,
+                                     stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL)
+            finally:
+                SPAWNING = False
+            if PENDING is not None:
+                signum, PENDING = PENDING, None
+                raise SystemExit(128 + signum)
             out, err = p.communicate(input=stdin, timeout=timeout)
             r = subprocess.CompletedProcess(cmd, p.returncode, out, err)
         except subprocess.TimeoutExpired:

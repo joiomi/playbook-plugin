@@ -41,9 +41,14 @@ fi
 child=""
 current=""
 on_signal() {
-    # the held child, and every job this shell started — one spawned but not yet held as `child` too (task 170, P4)
-    local p
-    for p in $child $(jobs -p); do kill -TERM "$p" 2>/dev/null; done
+    # the held child, and every job this shell started — one spawned but not yet held as `child` too (task 170, P4) —
+    # each pid ONCE: a second SIGTERM could abort the cleanup the first started (Q4; run_row.py also ignores it)
+    local p seen=" "
+    for p in $child $(jobs -p); do
+        case "$seen" in *" $p "*) continue ;; esac
+        seen="$seen$p "
+        kill -TERM "$p" 2>/dev/null
+    done
     wait 2>/dev/null
     # the row the signal interrupted never counts, whatever its artifact already says (task 184's L3)
     if [ -n "$current" ] && [ -f "$OUT/$current.txt" ]; then

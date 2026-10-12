@@ -5,11 +5,11 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 ## [Unreleased]
 
 ### Changed
-- **Two sessions ratifying intent at once no longer erase each other's entry** (task 170). `/playbook:intent`
-  writes what you ratify into the project's INTENT.md by reading the file, adding the entry and replacing the file.
-  Two sessions doing that at the same moment each read the old file, and the one that wrote last erased the other's
-  entry — measured: the second entry was lost. The read and the replace now happen under one lock
-  (`.agent/intent.lock`, which init's `.gitignore` block keeps out of git); both entries stay.
+- **The INTENT.md helper takes a lock** (task 170). `tasks.intent.append_intent` — the function that adds a
+  ratified entry to the project's INTENT.md — read the file and replaced it with no lock: two calls at the same
+  moment lost one entry (measured). It now reads and replaces under one lock (`.agent/intent.lock`, kept out of git
+  by init's `.gitignore` block). The `/playbook:intent` flow itself does not call it yet: its last step has the
+  agent append to INTENT.md with its own edit, as before (a known limit, after this release).
 
 - **The ledger's live rows were run live** (task 184, PLAN S11). Twenty-two rows of the guarantee ledger say
   they need a real run — real sessions, real judges, real interpreters, real bubblewrap, a real plugin install —
