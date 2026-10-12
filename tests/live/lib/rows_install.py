@@ -36,6 +36,13 @@ def _blocks(md: Path) -> "list[str]":
     return re.findall(r"```bash\n(.*?)```", md.read_text(encoding="utf-8"), re.S)
 
 
+CREDENTIAL_LIKE = re.compile(r"(_API_KEY|_TOKEN|_SECRET|_PASSWORD)$|^(ANTHROPIC|OPENAI|XAI|GEMINI|GOOGLE)_")
+ENV_PROBE = ("for v in HOME XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME; do printf '%s=%s\\n' \"$v\" \"${!v}\"; done; "
+             "for v in BASH_ENV CLAUDE_CONFIG_DIR; do if [ -n \"${!v+x}\" ]; then echo \"$v is SET\"; "
+             "else echo \"$v is unset\"; fi; done; echo \"credential-like variables: $(env | cut -d= -f1 | "
+             "grep -cE '(_API_KEY|_TOKEN|_SECRET|_PASSWORD)$|^(ANTHROPIC|OPENAI|XAI|GEMINI|GOOGLE)_')\"")
+
+
 class Install:
     """One disposable install: its HOME, its repositories, its project."""
 
@@ -44,9 +51,12 @@ class Install:
         self.home = root / "home"
         self.home.mkdir()
         (self.home / ".bashrc").write_text("# the user's own shell setup\nexport MY_VAR=1\n", encoding="utf-8")
-        self.env = clean_env({"HOME": str(self.home), "XDG_CONFIG_HOME": str(self.home / ".config"),
-                              "XDG_CACHE_HOME": str(self.home / ".cache"), "XDG_DATA_HOME": str(self.home / ".local/share"),
-                              "SHELL": "/bin/bash"})
+        # CLAUDE_CONFIG_DIR would send the plugin manager's writes to the owner's real configuration whatever HOME
+        # says, and the group needs no login: no credential-like variable reaches it (impl panel I11, I12)
+        env = clean_env({"HOME": str(self.home), "XDG_CONFIG_HOME": str(self.home / ".config"),
+                         "XDG_CACHE_HOME": str(self.home / ".cache"), "XDG_DATA_HOME": str(self.home / ".local/share"),
+                         "SHELL": "/bin/bash"}, drop=("CLAUDE_CONFIG_DIR",))
+        self.env = {k: v for k, v in env.items() if not CREDENTIAL_LIKE.search(k)}
         self.shown = {k: self.env[k] for k in ("HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME")}
         self.bare, self.release, self.work, self.proj = root / "github.git", root / "release", root / "work", root / "proj"
 
@@ -61,10 +71,13 @@ class Install:
         return ((self.manifest().get("plugins") or {}).get(f"playbook@{MARKET}") or [{}])[0]
 
     def setup_old_install(self) -> None:
-        r = self.step("the disposable HOME every command of this group runs with", ["env"])
-        self.run.clause("the group's HOME is the disposable one, BASH_ENV is not set",
-                        f"HOME={self.home}\n" in r.stdout and "\nBASH_ENV=" not in "\n" + r.stdout,
-                        f"HOME={self.home}; BASH_ENV in env: {'BASH_ENV=' in r.stdout}")
+        # only the isolation variables are printed, never the whole environment (it lands in the artifact)
+        r = self.step("the disposable HOME every command of this group runs with", ENV_PROBE)
+        self.run.clause("the group's HOME is the disposable one; BASH_ENV, CLAUDE_CONFIG_DIR and every "
+                        "credential-like variable are absent",
+                        f"HOME={self.home}\n" in r.stdout and "BASH_ENV is unset" in r.stdout
+                        and "CLAUDE_CONFIG_DIR is unset" in r.stdout and "credential-like variables: 0" in r.stdout,
+                        " / ".join(r.stdout.strip().splitlines()))
         self.step("the 'GitHub' repository: a bare clone of the nested repository", ["git", "clone", "-q", "--bare", str(NESTED), str(self.bare)])
         self.step("the release clone the marketplace is a directory of, on v1.6.0", ["git", "clone", "-q", "-b", OLD_REF, str(self.bare), str(self.release)])
         self.step("add the marketplace (a local directory)", ["claude", "plugin", "marketplace", "add", str(self.release)])

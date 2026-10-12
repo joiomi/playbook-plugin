@@ -15,12 +15,17 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   freehand, the hooks' invocation, the state echo (parallel tool calls included), the stop hook, lane resolution,
   hook payloads, Claude's capability cells and the slash commands; the merge skill's push order was observed once
   each way. Five judge rows passed on Claude and Codex judges; grok, out of credit for three more days, is waived for
-  this release by the owner's decision (its live half runs after the release); `tasks intent` passed up to the distillation, which is done with
+  this release by the owner's decision (its live half runs after the release, once the harness has a grok seat); `tasks intent` passed up to the distillation, which is done with
   the owner. Statements were narrowed where a run showed them too wide: the state echo leaves an empty session
   folder at the root of a fresh multi-user clone, the claude adapter reports no transcript folder for a project path with `_`, `.` or a space,
   a project directory whose name starts with a task's number can make the hooks read another task's record, the
   stop hook's prompt-generation read has a narrow race, and an upgrade's rollback covers the re-initialization,
-  not the plugin manager's own copy step. Nothing in the product changed.
+  not the plugin manager's own copy step. Nothing in the product changed. The review of the harness found seven
+  of its checks able to pass without the behaviour they name (a resume command matched in the session's own prompt,
+  one echo of two parallel calls enough, a timeout matched in a line printed before the judge started, a merge gate
+  counted green on a failed diff, …); each is now exact, and `tests/live/selfcheck.py` keeps a negative control for
+  it. The Python floor's run now also gives codex's apply-patch hook a real event: below the floor it refuses an edit
+  (fail-closed), as the code says and the ledger had said the opposite of.
 
 - **The guarantee ledger no longer promises codex and grok as the agent that runs your session** (task 183;
   owner decision 2026-10-12). Claude is the only supported agent; codex and grok are supported as JUDGES.

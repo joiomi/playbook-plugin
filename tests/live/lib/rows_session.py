@@ -45,17 +45,62 @@ def blocked(stop: "list[dict]") -> bool:
     return any(x.get("exit_code") == 2 for x in stop)
 
 
-def parallel_calls(events: "list[dict]", name: str) -> int:
-    """The most calls of tool `name` one assistant message made (stream-json gives each content
-    block of a message as its own event, all with the message's id)."""
-    per: "dict[str, int]" = {}
-    for e in events:
-        if e.get("type") == "assistant":
-            m = e.get("message") or {}
-            n = sum(1 for c in m.get("content") or [] if isinstance(c, dict) and c.get("type") == "tool_use"
-                    and c.get("name") == name)
-            per[str(m.get("id"))] = per.get(str(m.get("id")), 0) + n
-    return max(per.values(), default=0)
+def resume_named(events: "list[dict]") -> "tuple[bool, str]":
+    """The PreToolUse:Edit response that refused an edit on the BLOCKED task names `tasks work <N>` as the
+    resume. Read in that refusal only: the session's own prompt, echoed back elsewhere, says `tasks work 1`
+    too (impl panel I3)."""
+    refusals = [str(e.get("output") or "") for e in hook_responses(events, "PreToolUse")
+                if str(e.get("hook_name", "")).startswith("PreToolUse:Edit") and "is blocked" in str(e.get("output") or "")]
+    named = [x for x in refusals if re.search(r"tasks work 0*1\b", x)]
+    return bool(named), f"refusals of the blocked task: {len(refusals)}, naming `tasks work 0*1`: {len(named)}"
+
+
+def parallel_echoes(events: "list[dict]", name: str = "Read", line: str = "Working on task [001]") -> "tuple[bool, str]":
+    """Every call of `name` in the one message that made the most of them got its OWN PostToolUse response
+    carrying the gate line (impl panel I4). Hook events carry no tool_use_id; Claude Code reports a call's
+    PostToolUse responses after the call and before its result, so a call's window is (its tool_use, its
+    tool_result) and each response is given to one call only."""
+    use_at: "dict[str, tuple[int, str]]" = {}
+    result_at: "dict[str, int]" = {}
+    for i, e in enumerate(events):
+        for c in (e.get("message") or {}).get("content") or [] if e.get("type") in ("assistant", "user") else []:
+            if not isinstance(c, dict):
+                continue
+            if c.get("type") == "tool_use" and c.get("name") == name:
+                use_at[str(c.get("id"))] = (i, str((e.get("message") or {}).get("id")))
+            elif c.get("type") == "tool_result":
+                result_at[str(c.get("tool_use_id"))] = i
+    per: "dict[str, list[str]]" = {}
+    for tid, (_i, mid) in use_at.items():
+        per.setdefault(mid, []).append(tid)
+    calls = max(per.values(), key=len, default=[])
+    taken: "set[int]" = set()
+    echoed = 0
+    for tid in sorted(calls, key=lambda x: use_at[x][0]):
+        lo, hi = use_at[tid][0], result_at.get(tid, -1)
+        for i in range(lo + 1, hi):
+            e = events[i]
+            if (i not in taken and e.get("type") == "system" and e.get("subtype") == "hook_response"
+                    and e.get("hook_name") == f"PostToolUse:{name}" and line in str(e.get("output") or "")):
+                taken.add(i)
+                echoed += 1
+                break
+    return len(calls) >= 2 and echoed == len(calls), f"{name} calls in one message: {len(calls)}, each with its own echo: {echoed}"
+
+
+def freehand_logged(task_text: str, results: "list[str]") -> "tuple[bool, str]":
+    """`tasks freehand log` put the span's messages right under the `Freehand log` gate: counted only in the
+    block between that gate line and the next gate or heading (the activation's Recent Chat, elsewhere in the
+    file, holds messages too — impl panel I9), and the CLI said it inserted at least one."""
+    m = re.search(r"(?m)^- \[[ x]\] Freehand log\b.*$", task_text)
+    block = ""
+    if m:
+        rest = task_text[m.end():]
+        stop = re.search(r"(?m)^(- \[[ x]\] |#{1,6} )", rest)
+        block = rest[:stop.start()] if stop else rest
+    n = len(re.findall(r"(?m)^\*\*\[M\d+\]\*\*", block))
+    said = [int(x) for r in results for x in re.findall(r"Inserted (\d+) chat_log messages", r)]
+    return n >= 1 and any(x >= 1 for x in said), f"messages under the gate: {n}; the CLI said inserted: {said}"
 
 
 def _proj(prefix: str, **kw) -> Path:
@@ -83,17 +128,17 @@ def task_activate(out: Path) -> int:
         "Then reply DONE.\n"))
     j = journal(p)
     run.note("journal:\n" + "\n".join(json.dumps(x) for x in j))
-    results = " ".join(tool_results(ev))
     run.clause("with no active task the session's code edit is refused at the gate (journaled)",
                len(_blocks(j, "no active task")) >= 1, f"no-active-task blocks: {len(_blocks(j, 'no active task'))}")
     run.clause("with the session's pointer on a real pending task the same edit goes through",
                (p / "src" / "app.py").read_text(encoding="utf-8").startswith("x = 2"),
                f"src/app.py now: {(p / 'src' / 'app.py').read_text(encoding='utf-8').strip()!r}")
     blocked = _blocks(j, "pointer to blocked task")
+    named, said = resume_named(ev)
     run.clause("with the task blocked (paused on the owner) the next edit is refused, and the refusal names "
-               "`tasks work <N>` as the resume", bool(blocked) and "tasks work 1" in results
+               "`tasks work <N>` as the resume", bool(blocked) and named
                and (p / "src" / "app.py").read_text(encoding="utf-8").startswith("x = 2"),
-               f"blocked-task refusals: {[x.get('reason') for x in blocked]}; resume named: {'tasks work 1' in results}")
+               f"blocked-task refusals (journal): {[x.get('reason') for x in blocked]}; {said}")
     return run.finish()
 
 
@@ -145,14 +190,11 @@ def state_echo(out: Path) -> int:
         "Then reply DONE.\n"))
     post = hook_responses(ev, "PostToolUse")
     ctx = [json.dumps(x) for x in post]
-    reads = [n for n, _i in tool_calls(ev) if n == "Read"]
-    parallel = parallel_calls(ev, "Read") >= 2
+    both, said = parallel_echoes(ev)
     run.clause("after each real tool event the state echo reports the task and its current gate",
                sum("Working on task [001]" in c for c in ctx) >= 2, f"{len(post)} PostToolUse responses, "
                f"{sum('Working on task [001]' in c for c in ctx)} with the gate line")
-    run.clause("two tool calls issued in one message are both echoed", parallel and len(reads) >= 2
-               and sum("Working on task [001]" in c for c in ctx) >= 3,
-               f"parallel reads in one message: {parallel}; reads: {len(reads)}")
+    run.clause("two tool calls issued in one message are both echoed, each by its own response", both, said)
     done = [c for c in ctx if "previous gate done" in c or "✓" in c]
     run.clause("ticking a gate is noticed by the echo (the completion line)", bool(done),
                f"echo lines with a completion: {len(done)}")
@@ -223,8 +265,8 @@ def freehand(out: Path) -> int:
         "Then reply DONE.\n"))
     text = task.read_text(encoding="utf-8") if task else ""
     stops2 = stop_rounds(ev2)
-    run.clause("`tasks freehand log` records the span from the chat log under the `Freehand log` gate",
-               "[M0" in text.split("Freehand log", 1)[-1], f"log entries after the gate: {text.split('Freehand log', 1)[-1].count('[M0')}")
+    logged, said = freehand_logged(text, tool_results(ev2))
+    run.clause("`tasks freehand log` records the span from the chat log under the `Freehand log` gate", logged, said)
     run.clause("after the switch to a tracked task, a turn that wrote is stopped by the re-armed gates",
                bool(stops2) and blocked(stops2[0]), f"stops blocked: {[blocked(s) for s in stops2]}")
     return run.finish()

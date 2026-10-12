@@ -303,11 +303,21 @@ def _calls_with_results(events: "list[dict]") -> "list[tuple[str, str, str]]":
     return out
 
 
-# each gate: what its command looks like, and what its GREEN outcome prints (the skill's own tools' words)
+def identity_green(result: str) -> bool:
+    """The code-identity diff ran and shows exactly the merge's incoming change — the feature's one hunk in
+    `src/b.py` — and nothing else: no error, no other file (impl panel I7: a command that merely matched,
+    `fatal: bad revision` included, used to count as green)."""
+    files = set(re.findall(r"(?m)^diff --git a/(\S+) b/", result))
+    return (re.search(r"(?m)^(fatal|error):", result) is None and files == {"src/b.py"}
+            and re.search(r"(?m)^\+B = 2$", result) is not None)
+
+
+# each gate: what its command looks like, and what its GREEN outcome prints (the skill's own tools' words) —
+# a pattern its result must match, or a function of its result
 GATES = {"ref-integrity": (r"ref-integrity\.py", r"ref-integrity: clean"),
          "contamination (merge-doctor)": (r"tasks merge-doctor", r"SAFE TO CONTINUE"),
          # the skill's Step 7(d) form: the whole tree against the pre-merge tip, minus the paths the semantic steps own
-         "code identity": (r"git diff\s+(\"?\$\w+\"?|[0-9a-f]{7,40})\b[^|;&\n]*:\(exclude,top\)MIND_MAP\.md", None),
+         "code identity": (r"git diff\s+(\"?\$\w+\"?|[0-9a-f]{7,40})\b[^|;&\n]*:\(exclude,top\)MIND_MAP\.md", identity_green),
          "merge-verify": (r"merge-verify\.py(?![^;&|\n]*--plan)", r"merge-verify: GREEN")}
 
 
@@ -319,7 +329,7 @@ def _gate_timeline(calls: "list[tuple[str, str, str]]") -> "dict[str, tuple[int,
             continue
         for g, (rx, ok) in GATES.items():
             m = re.search(rx, cmd)
-            if g not in at and m and (ok is None or re.search(ok, res)):
+            if g not in at and m and (ok(res) if callable(ok) else re.search(ok, res)):
                 at[g] = (i, m.start())
         m = re.search(r"git push", cmd)
         if "push" not in at and m:

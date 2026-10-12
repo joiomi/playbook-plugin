@@ -23,9 +23,12 @@ import json
 import os
 import shlex
 import shutil
+import signal
 import tempfile
 import subprocess
 import sys
+import time
+import uuid
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -244,8 +247,16 @@ def scratch_project(path: Path, *, lanes: "tuple[str, ...]" = ()) -> Path:
 
 
 def tempdir(prefix: str) -> Path:
-    """A scratch directory removed when the row's process exits (one row runs per process)."""
-    d = Path(tempfile.mkdtemp(prefix=prefix))
+    """A scratch directory removed when the row's process exits (one row runs per process). Its name
+    holds letters and digits only: `mkdtemp`'s alphabet has `_`, and a project path with one meets the
+    adapter's transcript-folder bound (parked on task 184) in about one run in five (impl panel I5)."""
+    while True:
+        d = Path(tempfile.gettempdir()) / f"{prefix}{uuid.uuid4().hex[:10]}"
+        try:
+            d.mkdir(mode=0o700)
+            break
+        except FileExistsError:
+            continue
     atexit.register(shutil.rmtree, d, True)
     return d
 
@@ -283,22 +294,28 @@ def claude_session(run: "Run", title: str, project: Path, prompt: str, *, model:
     # design — a sub-session belongs to its session), so a session started under the one running the
     # gauntlet would carry ITS identity. Detached, the chain is `bash → systemd` (measured) and the
     # session is a user's own, as in a terminal.
-    work = Path(tempfile.mkdtemp(prefix="pb184-sess-"))
+    work = tempdir("pb184-sess-")
     (work / "prompt").write_text(prompt, encoding="utf-8")
     claude = ["claude", "-p", "--plugin-dir", str(PLUGIN), "--model", model, "--dangerously-skip-permissions",
               "--output-format", "stream-json", "--verbose", "--include-hook-events",
               # the user's own settings stay out: their hooks (a Stop sound) would run in every test session
               "--setting-sources", "project,local", *extra]
-    inner = (f"cd {shlex.quote(str(project))} && {' '.join(shlex.quote(a) for a in claude)} "
+    # the detached shell writes its pid first: `setsid` makes it the leader of the session's process group
+    inner = (f"echo $$ > {shlex.quote(str(work / 'pid'))}; cd {shlex.quote(str(project))} && {' '.join(shlex.quote(a) for a in claude)} "
              f"< {shlex.quote(str(work / 'prompt'))} > {shlex.quote(str(work / 'out'))} 2> {shlex.quote(str(work / 'err'))}; "
              f"echo $? > {shlex.quote(str(work / 'rc.tmp'))} && mv {shlex.quote(str(work / 'rc.tmp'))} {shlex.quote(str(work / 'rc'))}")
     waiter = (f"setsid -f bash -c {shlex.quote(inner)}; n=0; while [ ! -f {shlex.quote(str(work / 'rc'))} ]; do "
               f"sleep 1; n=$((n+1)); [ $n -gt {int(timeout)} ] && {{ echo 'timed out' >&2; exit 124; }}; done; "
               f"cat {shlex.quote(str(work / 'out'))}; cat {shlex.quote(str(work / 'err'))} >&2; exit $(cat {shlex.quote(str(work / 'rc'))})")
     run.note(f"session prompt:\n{prompt.rstrip()}")
-    r = run.step(title + " (claude " + " ".join(claude[1:]) + ")", waiter, cwd=project, env=clean_env(),
-                 timeout=timeout + 60, watch=[project / ".agent", project / "src"])
-    shutil.rmtree(work, ignore_errors=True)
+    try:
+        r = run.step(title + " (claude " + " ".join(claude[1:]) + ")", waiter, cwd=project, env=clean_env(),
+                     timeout=timeout + 60, watch=[project / ".agent", project / "src"])
+    finally:
+        # a session cut by the timeout, or by an interrupted gauntlet, must not keep running (and spending)
+        # after its project is gone (impl panel I13): its whole process group is ended before cleanup
+        _end_group(run, work / "pid")
+        shutil.rmtree(work, ignore_errors=True)
     events = []
     for line in r.stdout.splitlines():
         try:
@@ -306,6 +323,31 @@ def claude_session(run: "Run", title: str, project: Path, prompt: str, *, model:
         except ValueError:
             continue
     return r, events
+
+
+def _end_group(run: "Run", pidfile: Path) -> None:
+    try:
+        pgid = int(pidfile.read_text().strip())
+    except (OSError, ValueError):
+        return
+    for sig, grace in ((signal.SIGTERM, 10.0), (signal.SIGKILL, 5.0)):
+        try:
+            os.killpg(pgid, 0)
+        except (ProcessLookupError, PermissionError):
+            return
+        run.note(f"the session's process group {pgid} was still running: {sig.name} sent")
+        try:
+            os.killpg(pgid, sig)
+        except (ProcessLookupError, PermissionError):
+            return
+        end = time.monotonic() + grace
+        while time.monotonic() < end:
+            try:
+                os.killpg(pgid, 0)
+            except (ProcessLookupError, PermissionError):
+                return
+            time.sleep(0.2)
+    run.note(f"the session's process group {pgid} survived SIGKILL")
 
 
 def tool_calls(events: "list[dict]") -> "list[tuple[str, dict]]":

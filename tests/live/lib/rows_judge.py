@@ -26,7 +26,20 @@ TASKS = str(PLUGIN / "scripts" / "tasks")
 CLAUDE_SEAT = "haiku"
 CODEX_SEAT = "codex:gpt-6.1-sol:low"
 GROK_WAIT = ("grok", "its seat answers out of credit (HTTP 402) until the subscription's tokens return — the owner's "
-                     "word of 2026-10-12: it stays in the panel and comes back by itself")
+                     "word of 2026-10-12: it stays in the panel and comes back by itself. This harness has no grok seat yet (`Judges` shims "
+                     "claude and codex): its half is new code, written and reviewed once the credit returns")
+REMOVED = re.compile(r"\bGONE\b|model (was )?removed")
+
+
+def timeout_reported(text: str) -> bool:
+    """The product's own words for a judge cut by the hard limit — not merely `timeout` anywhere: the CLI prints
+    a soft/hard clamp line with that word before the judge even starts (impl panel I6)."""
+    return re.search(r"hit hard timeout after \d+", text) is not None and REMOVED.search(text) is None
+
+
+def budget_reported(text: str) -> bool:
+    """The product's own words for a judge stopped by its budget cap (same shape as the timeout clause)."""
+    return re.search(r"hit the \$[0-9.]+ budget cap", text) is not None and REMOVED.search(text) is None
 
 _SHIM = r'''#!/bin/bash
 # a recording shim (task 184, W4): stands where the judge's CLI starts, inside the judge's sandbox —
@@ -291,16 +304,14 @@ def model_availability(out: Path) -> int:
         r = j.tasks(run, "a real haiku judge cut by a 3 s review limit", "plan-review", "1")
         text = r.stdout + r.stderr
         run.clause("timeout: a real judge cut by the review limit is reported as a timeout, never as a removed model",
-                   re.search(r"timed out|timeout", text, re.I) is not None
-                   and re.search(r"\bGONE\b|model (was )?removed", text) is None, f"rc {r.returncode}; tail {text.strip()[-300:]!r}")
+                   timeout_reported(text), f"rc {r.returncode}; tail {text.strip()[-300:]!r}")
         j.config(judge_budget_usd="0.0001")
         r = j.tasks(run, "a real haiku judge with a budget cap it cannot fit", "plan-review", "1")
         text = r.stdout + r.stderr
         run.clause("budget: a real judge stopped by its budget cap is reported as such, never as a removed model",
-                   re.search(r"budget", text, re.I) is not None and re.search(r"\bGONE\b|model (was )?removed", text) is None,
-                   f"rc {r.returncode}; tail {text.strip()[-300:]!r}")
-        run.wait_for("grok", "the supported and missing-model halves of its seat need its tokens; its entitlement half "
-                             "ran above")
+                   budget_reported(text), f"rc {r.returncode}; tail {text.strip()[-300:]!r}")
+        run.wait_for("grok", "the supported and missing-model halves of its seat need its tokens and a grok seat in this "
+                             "harness (not written yet); its entitlement half ran above")
     finally:
         j.cleanup()
     return run.finish()

@@ -62,6 +62,8 @@ T=/pb/scripts/tasks
 for c in "new quick smoke-one first" "list" "work 1" "status" "audit" "parked"; do
   echo ">>> tasks $c"; $T $c; echo "<<< rc=$?"
 done
+# the tree it ran from is the read-only mount itself: a write there must be refused
+if touch /pb/.pb184-write-probe 2>/dev/null; then echo "RO-PROBE: written"; else echo "RO-PROBE: refused"; fi
 '''
 
 
@@ -91,6 +93,8 @@ def python_floor(out: Path) -> int:
         run.clause(f"the CLI round trip (new, list, work, status, audit, parked) runs under {label}",
                    len(rcs) == 6 and all(x == "<<< rc=0" for x in rcs) and "Traceback" not in r.stdout + r.stderr,
                    f"exit statuses {[x[7:] for x in rcs]}, Traceback in output: {'Traceback' in r.stdout + r.stderr}")
+        run.clause(f"under {label} the tree the round trip ran from refused a write (the mount is read-only)",
+                   "RO-PROBE: refused" in r.stdout, f"{[x for x in r.stdout.splitlines() if x.startswith('RO-PROBE')]}")
     # one below the floor: every entry point refuses, or (a hook) lets the call through loud — before any import
     # launch-monitor first looks for a live main session — a process named `claude` with a session
     # directory — and only then checks the interpreter: give it one (a copy of `sleep` named claude)
@@ -101,6 +105,11 @@ def python_floor(out: Path) -> int:
              "mkdir -p .agent/sessions/pid-$! && for s in ") + " ".join(FLOOR_ENTRY_POINTS) + r'''; do
   out=$(timeout 20 /pb/scripts/$s </dev/null 2>&1); rc=$?
   echo "### $s rc=$rc"; printf '%s\n' "$out"
+done
+# the apply-patch hook's floor keeps its per-event polarity: the enforcing PreToolUse read fails CLOSED
+for ev in PreToolUse PostToolUse; do
+  out=$(printf '{"hook_event_name": "%s"}' "$ev" | timeout 20 /pb/scripts/codex-apply-patch-hook 2>&1); rc=$?
+  echo "### codex-apply-patch-hook@$ev rc=$rc"; printf '%s\n' "$out"
 done'''
     r = _docker(run, "each entry point under Python 3.9, one below the floor", OLD_IMAGE, probe, network=True)
     blocks = {}
@@ -116,6 +125,10 @@ done'''
         rc, body = blocks.get(s, ("?", ""))
         run.clause(f"under 3.9 the hook `{s}` says so and does not fail with a traceback", rc == "0"
                    and "3.10" in body and "Traceback" not in body, f"rc={rc}: {body.strip()[:160]!r}")
+    for ev, want_rc, word in (("PreToolUse", "2", "fail-closed"), ("PostToolUse", "0", "fail-open")):
+        rc, body = blocks.get(f"codex-apply-patch-hook@{ev}", ("?", ""))
+        run.clause(f"under 3.9 `codex-apply-patch-hook` given a {ev} event exits {want_rc} ({word})",
+                   rc == want_rc and word in body and "Traceback" not in body, f"rc={rc}: {body.strip()[:160]!r}")
     return run.finish()
 
 
@@ -143,11 +156,14 @@ def runtime_stdlib(out: Path) -> int:
                     "command -v git || echo 'no git on this image'\n" + _ROUND_TRIP)
         rcs = [line for line in r.stdout.splitlines() if line.startswith("<<< rc=")]
         gone = r.stdout.count("No module named") >= 2
+        ok = gone and len(rcs) == 6 and all(x == "<<< rc=0" for x in rcs) and "Traceback" not in r.stdout + r.stderr
         run.clause(f"with no third-party package at all ({label}: pip and setuptools gone) the CLI round trip runs",
-                   gone and len(rcs) == 6 and all(x == "<<< rc=0" for x in rcs) and "Traceback" not in r.stdout + r.stderr,
-                   f"third-party gone: {gone}; exit statuses {[x[7:] for x in rcs]}")
-    run.clause("no build step: the checked-out tree runs as it is, mounted read-only", True,
-               "the round trips above ran `/pb/scripts/tasks` straight from the read-only mount of the plugin tree")
+                   ok, f"third-party gone: {gone}; exit statuses {[x[7:] for x in rcs]}")
+        # no build step: the round trip above ran `/pb/scripts/tasks` from the mount, and the mount refused a write
+        # (a constant here passed whatever happened — impl panel I2)
+        probe = [x for x in r.stdout.splitlines() if x.startswith("RO-PROBE")]
+        run.clause(f"no build step ({label}): the checked-out tree runs as it is, from a mount that refused a write",
+                   ok and probe == ["RO-PROBE: refused"], f"round trip passed: {ok}; {probe}")
     return run.finish()
 
 

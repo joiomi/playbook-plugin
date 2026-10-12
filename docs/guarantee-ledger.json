@@ -5730,7 +5730,7 @@
         "Owner decision 2026-08-21: judge-seat is supported on claude, grok, and codex; antigravity and pi are experimental and removed from applicable_providers.",
         "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending.",
         "Task 100 (PLAN S8 binding audit, 2026-09-27): the only cited proof asserted the CONTEXT NOTE / trim notice, not the absence of conversation; rebound to the payload-construction proof. Bound worth stating: the judge process runs with the repository READABLE, and `.agent/chat_log.md` is a file in that tree — the PROMPT carries no conversation, but a judge that reads the chat log on its own is not prevented by construction; the canary test in required_live_evidence is what would measure it (S11).",
-        "2026-10-12 (task 184, PLAN S11): claude and codex halves ran live (scenario PB-JUDGE-BLIND-CONTEXT). grok's half waits for its tokens: its seat answers out of credit (HTTP 402) until the subscription's tokens return (owner, 2026-10-12: it stays in the panel and comes back by itself); this row flips when it has run."
+        "2026-10-12 (task 184, PLAN S11): claude and codex halves ran live (scenario PB-JUDGE-BLIND-CONTEXT). grok's half waits for its tokens: its seat answers out of credit (HTTP 402) until the subscription's tokens return (owner, 2026-10-12: it stays in the panel and comes back by itself); this row flips when it has run, which first needs a grok seat in the live harness — `tests/live/lib/rows_judge.py` has none yet (parked on task 184)."
       ],
       "follow_up_phases": [
         8
@@ -5833,12 +5833,12 @@
       "status": "partially_evidenced",
       "missing_evidence_or_limitation": [
         "WAIVER 2026-10-12 PB-JUDGE-READONLY: grok's live half is deferred after the 1.6.1 release — the owner, 2026-10-12: «mai dureaza 3 zile pana o sa aiba grok iar tokene.. nu pot sa astept atata dupa el». The claude and codex halves ran live on the candidate (task 184, scenario PB-JUDGE-READONLY); grok stays in the panel.",
-        "No current live-provider proof. Where no bwrap is on PATH (or the judge runs nested inside another sandbox), project_writable=False is a no-op and judges run UNCONTAINED — the before/after working-tree tamper guard is the only defense there. A bwrap that is installed but cannot run is not detected: containment is reported and the judge launch fails. (Up to 1.5.47: macOS seatbelt, never run in CI; Windows had no backend at all.)",
+        "Where no bwrap is on PATH (or the judge runs nested inside another sandbox), project_writable=False is a no-op and judges run UNCONTAINED — the before/after working-tree tamper guard is the only defense there. A bwrap that is installed but cannot run is not detected: containment is reported and the judge launch fails. (Up to 1.5.47: macOS seatbelt, never run in CI; Windows had no backend at all.)",
         "Owner decision 2026-08-21: judge-seat is supported on claude, grok, and codex; antigravity and pi are experimental and removed from applicable_providers.",
         "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending.",
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
         "2026-10-08 (task 155, Linux-only): the macOS seatbelt backend (build_seatbelt_profile) was deleted; bubblewrap is the only backend.",
-        "2026-10-12 (task 184, PLAN S11): claude and codex halves ran live (scenario PB-JUDGE-READONLY). Seen on the way, parked on task 184 after the 1.6.1 release: the SINGLE claude judge runs with every tool (`--dangerously-skip-permissions`, no `--tools` limit; review.py:3097) while the panel's claude seat asks for Read, Glob and Grep only — with bubblewrap the read-only mount refuses the write either way, which is all this row claims; without it (UNCONTAINED, announced) the single claude judge could write. grok's half waits for its tokens: its seat answers out of credit (HTTP 402) until the subscription's tokens return (owner, 2026-10-12: it stays in the panel and comes back by itself); this row flips when it has run."
+        "2026-10-12 (task 184, PLAN S11): claude and codex halves ran live (scenario PB-JUDGE-READONLY). Seen on the way, parked on task 184 after the 1.6.1 release: the SINGLE claude judge runs with every tool (`--dangerously-skip-permissions`, no `--tools` limit; review.py:3097) while the panel's claude seat asks for Read, Glob and Grep only — with bubblewrap the read-only mount refuses the write either way, which is all this row claims; without it (UNCONTAINED, announced) the single claude judge could write. grok's half waits for its tokens: its seat answers out of credit (HTTP 402) until the subscription's tokens return (owner, 2026-10-12: it stays in the panel and comes back by itself); this row flips when it has run, which first needs a grok seat in the live harness — `tests/live/lib/rows_judge.py` has none yet (parked on task 184)."
       ],
       "follow_up_phases": [
         2,
@@ -6092,10 +6092,9 @@
       "status": "partially_evidenced",
       "missing_evidence_or_limitation": [
         "WAIVER 2026-10-12 PB-PANEL-QUORUM: grok's live half is deferred after the 1.6.1 release — the owner, 2026-10-12: «mai dureaza 3 zile pana o sa aiba grok iar tokene.. nu pot sa astept atata dupa el». The claude and codex halves ran live on the candidate (task 184, scenario PB-PANEL-QUORUM); grok stays in the panel.",
-        "High mechanical claim lacks executable integration evidence at the panel command boundary.",
         "Owner decision 2026-08-21: judge-seat is supported on claude, grok, and codex; antigravity and pi are experimental and removed from applicable_providers.",
         "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending.",
-        "2026-10-12 (task 184, PLAN S11): claude and codex halves ran live (scenario PB-PANEL-QUORUM). grok's half waits for its tokens: its seat answers out of credit (HTTP 402) until the subscription's tokens return (owner, 2026-10-12: it stays in the panel and comes back by itself); this row flips when it has run."
+        "2026-10-12 (task 184, PLAN S11): claude and codex halves ran live (scenario PB-PANEL-QUORUM). grok's half waits for its tokens: its seat answers out of credit (HTTP 402) until the subscription's tokens return (owner, 2026-10-12: it stays in the panel and comes back by itself); this row flips when it has run, which first needs a grok seat in the live harness — `tests/live/lib/rows_judge.py` has none yet (parked on task 184)."
       ],
       "follow_up_phases": [
         3,
@@ -9453,7 +9452,7 @@
           "boundary": "live-platform",
           "negative_control": null,
           "limitations": [
-            "One real claude judge in a read-only sandbox on Linux ran five commands: a file outside the project read (/etc/hostname), an HTTPS request answered 200, a project write refused (`Read-only file system`), `.agent/chat_log.md` refused (`Permission denied`); its own answer reached the model API."
+            "One real claude judge in a read-only sandbox on Linux ran four commands: a file outside the project read (/etc/hostname), an HTTPS request answered 200, a project write refused (`Read-only file system`), `.agent/chat_log.md` refused (`Permission denied`); its own answer reached the model API. The host's bubblewrap was 0.6.1, which has no usable `--disable-userns` (it warns that nested user/mount namespaces can bypass read-only mounts): the refusal shown is what the judge's own write meets; a judge that first builds a nested user namespace is outside this run — PB-SANDBOX-WRITE's bound (22)."
           ]
         }
       ],
@@ -11001,7 +11000,7 @@
           "boundary": "live-platform",
           "negative_control": null,
           "limitations": [
-            "Containers of the official python images on Linux: every shipped .py file compiled and the CLI round trip run under 3.10 (the floor) and 3.14 (the newest); under 3.9 the seven shell entry points refuse before importing anything and the four python hooks say so and fail open. The hooks under 3.9 are run directly, not inside a provider session."
+            "Containers of the official python images on Linux: every shipped .py file compiled and the CLI round trip run under 3.10 (the floor) and 3.14 (the newest); under 3.9 the eight launchers (tasks, sandbox, init, playbook-codex, playbook-grok, playbook-agy, playbook-pi, monitor-lib/launch-monitor) refuse before importing anything (exit 1, the message); the command guard and codex's user-prompt and stop hooks say so and fail open (exit 0); codex's apply-patch hook keeps its per-event polarity — given a PreToolUse event it refuses the edit (exit 2, fail-closed), given a PostToolUse event or none it passes (exit 0). The hooks under 3.9 are run directly with those payloads, not inside a provider session."
           ]
         }
       ],
@@ -14338,7 +14337,7 @@
         "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending.",
         "Task 171 (PLAN S11; retro 107 R17): a grok pin found in `grok models` used to read OK with no call — the list is the account's entitlements and cannot see that its credit ran out (2026-09-29: every call 402 while the check said OK). A listed pin now gets one live turn — of the seat as pinned, with its effort — or LISTED where nothing is probed; the probe reads its answer (OK is exit 0 AND the one word it asked for AND nothing on stderr; anything else is not OK) and an effort the CLI rejects is BAD_EFFORT. Bound: `probe_codex_model` still takes exit 0 as the answer without reading it. Bound, unchanged: a BARE `grok`, `codex:` or `claude` seat (the provider's default model) still reads OK without a call; only a bare `agy` seat is probed (task 111). The live half of this row — recorded responses from the real providers — is still PLAN S11's gauntlet.",
         "LIVE, 2026-10-10 (task 171): the candidate's `tasks models check` at 03:58 printed `grok:grok-4.7:medium OK responds` (a real turn); at 04:59, the account's credit having run out in between, `UNKNOWN — probe failed …` — the case this row's fix is for, met by accident and recorded in task 171. One provider, one night: not the matrix PLAN S11's gauntlet asks for.",
-        "2026-10-12 (task 184, PLAN S11): claude and codex halves ran live, and grok's entitlement response (scenario PB-MODEL-AVAILABILITY). grok's half waits for its tokens: its seat answers out of credit (HTTP 402) until the subscription's tokens return (owner, 2026-10-12: it stays in the panel and comes back by itself); this row flips when it has run."
+        "2026-10-12 (task 184, PLAN S11): claude and codex halves ran live, and grok's entitlement response (scenario PB-MODEL-AVAILABILITY). grok's half waits for its tokens: its seat answers out of credit (HTTP 402) until the subscription's tokens return (owner, 2026-10-12: it stays in the panel and comes back by itself); this row flips when it has run, which first needs a grok seat in the live harness — `tests/live/lib/rows_judge.py` has none yet (parked on task 184)."
       ],
       "follow_up_phases": [
         8
@@ -17060,11 +17059,10 @@
       "status": "partially_evidenced",
       "missing_evidence_or_limitation": [
         "WAIVER 2026-10-12 PB-REVIEW-TRIAGE: grok's live half is deferred after the 1.6.1 release — the owner, 2026-10-12: «mai dureaza 3 zile pana o sa aiba grok iar tokene.. nu pot sa astept atata dupa el». The claude and codex halves ran live on the candidate (task 184, scenario PB-REVIEW-TRIAGE); grok stays in the panel.",
-        "The prompt contract is proved at the renderer boundary; no executable evidence shows a live judge obeying it or the agent performing the triage.",
-        "High mechanical claim has no executable integration proof at the review command boundary.",
+        "The prompt contract is proved at the renderer boundary and at the review command (tests/test_judge_paths_integration.py, task 184), and real claude and codex single judges were seen obeying it live (scenario PB-REVIEW-TRIAGE); nothing executable shows the AGENT performing the triage.",
         "Owner decision 2026-08-21: judge-seat is supported on claude, grok, and codex; antigravity and pi are experimental and removed from applicable_providers.",
         "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending.",
-        "2026-10-12 (task 184, PLAN S11): claude and codex halves ran live (scenario PB-REVIEW-TRIAGE). grok's half waits for its tokens: its seat answers out of credit (HTTP 402) until the subscription's tokens return (owner, 2026-10-12: it stays in the panel and comes back by itself); this row flips when it has run."
+        "2026-10-12 (task 184, PLAN S11): claude and codex halves ran live (scenario PB-REVIEW-TRIAGE). grok's half waits for its tokens: its seat answers out of credit (HTTP 402) until the subscription's tokens return (owner, 2026-10-12: it stays in the panel and comes back by itself); this row flips when it has run, which first needs a grok seat in the live harness — `tests/live/lib/rows_judge.py` has none yet (parked on task 184)."
       ],
       "follow_up_phases": [
         3,

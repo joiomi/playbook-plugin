@@ -47,8 +47,13 @@ codex seat (`gpt-6.1-sol` at `low`) — through the candidate's review paths. Ea
 CLI is reached through a recording shim placed first on PATH: it stands where the
 judge's CLI starts, inside the judge's sandbox, keeps the exact argv and prompt the
 review path sent, tries one harmless write into the project, and then runs the real
-CLI with the same arguments and prompt. Grok is a target of these rows; while its seat
-answers out of credit they end WAITING, not PASS.
+CLI with the same arguments and prompt. Grok is a target of these rows; they end WAITING,
+not PASS, and this harness has no grok seat yet: its half is new code (a shim like the other
+two, the seat in each scenario), written and reviewed once its credit returns.
+
+`selfcheck.py <artifacts-dir>` is the harness's own negative control, offline and free: each
+clause the impl panel found able to pass without its behaviour is a pure predicate, run on a
+committed artifact (it must PASS) and on a copy with exactly that behaviour removed (it must FAIL).
 
 `check_flips.py <artifacts-dir>` holds the ledger to the every-target rule: a row whose
 `required_live_evidence` names targets is verified only with a live proof bound to its
