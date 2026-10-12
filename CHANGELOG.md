@@ -99,7 +99,10 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   that is, or contains, a path the run must write; and one reached through a link that sits in a directory the
   run may write (what the link names can be kept, the link itself could be replaced). **`--rw-git-sources`**
   is your explicit permission to let an agent edit them — a tracked hooks directory you want changed, say; it
-  is not available with `--prompt`. A judge's read-only run is not affected. An ordinary repository — hooks
+  is not available with `--prompt`. A judge's read-only run stays read-only, and is refused only for such a
+  case in a place it may write (`/tmp`, the agents' home subdirectories, its `--rw` path), for a settings or
+  hook file with a second name that you could write, or for a repository git cannot answer for. An ordinary
+  repository — hooks
   and settings in `.git`, your global settings in your home — launches exactly as before. Four things the
   first form of this left open, found by its review and each measured with real bubblewrap before it was
   closed: (1) a read-only place is only as fixed as the directories above it — `mv tools t2`, then a new
@@ -117,8 +120,16 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   cannot be renamed or removed by the agent's own work either — `--rw-git-sources` lifts that for hooks and
   settings, not for git's own directories. Round-two repairs also keep empty default settings files,
   refuse unresolvable sources and multiply linked source files (including hook files), protect shadowed
-  hooks paths, and pin ancestors above the project inside broader writable areas. Those ancestor pins
-  precede project and record masks, preserving read-only judge runs. **Compatibility limitation:** where processes
+  hooks paths, and pin ancestors above the project inside broader writable areas. Found by the single judge
+  after that round, and measured before it was repaired: those pins bound a `code_roots` repository of a
+  READ-ONLY project onto itself after the project's read-only bind, and a judge's run could write it (never
+  released). A directory is now fixed only where the bind that governs it leaves it writable — under a
+  read-only one nothing can be renamed — so nothing inside a read-only project is writable but its `--rw`
+  paths; one that holds a later project bind or record mask is fixed before it. The second-name refusal is
+  for a file you could write or make writable: a hook that is a link to `perl` (one file under two names),
+  or a deduplicated system settings file, no longer stops every launch — a `cp -al` copy of a repository
+  still does, until its settings file and hooks are copies of their own. A read-only run's refusals no
+  longer name `--rw-git-sources`, which a review cannot pass. **Compatibility limitation:** where processes
   can create nested user/mount namespaces, they can detach the protected tree and replace Git metadata.
   This was measured with bubblewrap 0.6.1. Each launch probes the selected binary once: with working
   `--disable-userns`, it adds `--unshare-user --disable-userns` even with `--rw-git-sources`; otherwise it

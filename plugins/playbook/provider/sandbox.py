@@ -594,8 +594,12 @@ def build_bwrap_argv(
     write (what the link names is bound — the link itself could be replaced) — the
     launch is refused. A source file with multiple hard links also refuses the
     launch, including a file inside an already read-only hooks directory: another
-    name could still be writable. `git_sources_writable=True` is the owner's explicit
-    permission to let the agent edit them: nothing is added and nothing refused.
+    name could still be writable — where this user could write the file or make it
+    writable (its owner); a file of another owner that this user cannot write is
+    not changed through any name. `git_sources_writable=True` is the owner's explicit
+    permission to let the agent edit them: nothing is added and nothing refused. A
+    read-only run's refusals do not name that option: every review is such a run,
+    and the path the judges share cannot pass it.
 
     This is WRITE containment: `--ro-bind / /` leaves the whole filesystem
     READABLE (nothing outside the project is hidden), and by default there is NO
@@ -748,9 +752,12 @@ def build_bwrap_argv(
     # laid further down, with the rest of what is to be kept.
     kept: list[str] = []
     if not git_sources_writable:
-        allow = ("Point git at a place of its own for them (`core.hooksPath`, `include.path`), or pass "
-                 "--rw-git-sources to let this agent edit the hooks and settings git takes from there. "
-                 "Nothing was launched.")
+        # not offered to a read-only run: every review is one, and the path the judges
+        # share refuses the option (the single judge after round 2)
+        lift = (", or pass --rw-git-sources to let this agent edit the hooks and settings git takes "
+                "from there" if project_writable else "")
+        allow = ("Point git at a place of its own for them (`core.hooksPath`, `include.path`)" + lift
+                 + ". Nothing was launched.")
         unanswered = list(dict.fromkeys(str(s) for s in (git_sources_unanswered or [])))
         if unanswered:
             # git failed where there IS a repository — a settings file it cannot read,
@@ -761,8 +768,7 @@ def build_bwrap_argv(
                 f"{', '.join(unanswered)} — most likely a settings file it cannot read (`git status` there "
                 "names it). Nothing git would run there can be kept read-only while it cannot be asked, "
                 "and a file that cannot be read now could be repaired from inside with settings of the "
-                "agent's own. Repair it, or pass --rw-git-sources to let this agent edit the hooks and "
-                "settings git takes from there. Nothing was launched.")
+                "agent's own. Repair it" + lift + ". Nothing was launched.")
         decided = layers + [(g, False) for g in git_binds]
 
         def writable_then(path: str) -> "str | None":
@@ -775,9 +781,14 @@ def build_bwrap_argv(
         for source in dict.fromkeys(str(Path(s).resolve()) for s in (git_sources or [])):
             # Even a file already under read-only .git may have a writable name
             # for the same inode. A path bind cannot protect that other name.
+            # Only a file this user could change through it, though: one writable for
+            # this user, or theirs to make writable. `perl` under its two names as a
+            # hook, a deduplicated /etc/gitconfig — another owner's, not writable here —
+            # refused every launch, a judge's too (the single judge after round 2).
             try:
                 info = os.stat(source)
-                if os.path.isfile(source) and info.st_nlink > 1:
+                if (os.path.isfile(source) and info.st_nlink > 1
+                        and (info.st_uid == os.geteuid() or os.access(source, os.W_OK))):
                     raise RuntimeError(
                         f"git takes hooks or settings from {source}, which has {info.st_nlink} hard links; "
                         "a read-only bind on one name cannot keep the other names read-only. "
@@ -841,24 +852,22 @@ def build_bwrap_argv(
         for d in above:
             # (a directory that lies inside ANOTHER kept place is fixed like any other:
             # that place's read-only bind is laid after it, further down, and covers it)
-            if not any(w == d for w, _writable in layers):
+            # Only where the bind that governs it leaves it writable. Under a read-only
+            # one nothing can be renamed — and a bind laid there, after that one, made
+            # the directory WRITABLE: a code root inside a judge's read-only project
+            # (the single judge after round 2; measured).
+            if writable_at(d) is not None and not any(w == d for w, _writable in layers):
                 pins.setdefault(d, place)
     early_pins: list[str] = []
     late_pins: list[str] = []
     for d in sorted(pins, key=lambda p: p.count(os.sep)):
+        # One that holds another bind goes BEFORE the project's bind and all that
+        # follows it: laid later it would hide those binds — hooks beside a READ-ONLY
+        # project in one directory of /tmp, and that directory bound onto itself last,
+        # would lay the writable /tmp over the project. A bind that a later one covers
+        # still fixes its directory: the kernel refuses to rename what any mount of the
+        # namespace sits on (measured: "Device or resource busy").
         early = any(w != d and _covers(d, Path(w)) for w, _writable in layers)
-        inner = next((w for w, writable in layers if not writable and w != d and _covers(d, Path(w))
-                      and not _covers(w, Path(pins[d]))), None)
-        if inner is not None and not early:
-            # e.g. hooks beside a READ-ONLY project in one directory of /tmp: the
-            # directory bound onto itself would lay the writable /tmp over the project
-            raise RuntimeError(
-                f"{pins[d]} holds git metadata, hooks or settings and must be kept read-only; for that the "
-                f"directory {d} above it has to be fixed in place, and {inner}, which this run keeps "
-                "read-only or hidden, lies inside that directory — fixing it would open that place. Move "
-                "one of the two out of that directory"
-                + ("" if pins[d] in git_binds else ", or pass --rw-git-sources to let this agent edit the "
-                   "hooks and settings git takes from there") + ". Nothing was launched.")
         (early_pins if early else late_pins).extend(["--bind", d, d])
     argv[pin_index:pin_index] = early_pins
     argv += late_pins
