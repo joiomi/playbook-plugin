@@ -93,7 +93,7 @@
           "boundary": "live-provider",
           "negative_control": null,
           "limitations": [
-            "A real headless claude session (Claude Code 2.1.296, haiku) on the candidate: an edit with no active task refused (journaled), the same edit allowed once `tasks work 1` set a pending task, and refused again once the task was blocked, the refusal naming `tasks work 1`. Junk, stale, glob-bearing and done pointers stay unit/integration-proven."
+            "A real headless claude session (Claude Code 2.1.296, haiku) on the candidate: an edit with no active task refused (journaled), the same edit allowed once `tasks work 1` set a pending task, and refused again once the task was blocked, the refusal naming `tasks work 001`. Junk, stale, glob-bearing and done pointers stay unit/integration-proven."
           ]
         }
       ],
@@ -4447,8 +4447,8 @@
             "reference": "LegitimateRootLane.test_mixed_layout_without_a_marker_logs_to_the_root"
           },
           "limitations": [
-            "Executes the bundled bash-log.sh only, through bash, with BASH_ENV stripped so an installed logger cannot mask the result. bash-log.zsh carries the structurally identical correction but zsh is absent on this host: it is source-compared by ZshLoggerSourceParity, never executed.",
-            "Linux only; macOS/zsh and Windows/Git Bash remain unexercised (Phase 8)."
+            "Executes the bundled bash-log.sh only, through bash, with BASH_ENV stripped so an installed logger cannot mask the result. bash-log.zsh carries the structurally identical correction; zsh is absent on this host, so this test source-compares it (ZshLoggerSourceParity) and CI's real-zsh step executes it.",
+            "Linux only (macOS and Windows are not claimed since 2026-10-08)."
           ]
         },
         {
@@ -4461,8 +4461,8 @@
             "reference": "LegitimateRootLane.test_legacy_root_lane_logs_to_the_root"
           },
           "limitations": [
-            "Runs one nine-shape table through the bundled bash logger and the three reference implementations and asserts the DIRECTION of the difference: the logger may never write the root on a shape where a reference reports that a per-user lane exists. It does not claim parity, which the logger no longer has. Executes the Bash logger only; bash-log.zsh is source-compared, never executed (zsh absent on this host).",
-            "Linux only; macOS/zsh and Windows/Git Bash remain unexercised (Phase 8)."
+            "Runs one nine-shape table through the bundled bash logger and the three reference implementations and asserts the DIRECTION of the difference: the logger may never write the root on a shape where a reference reports that a per-user lane exists. It does not claim parity, which the logger no longer has. Executes the Bash logger only; bash-log.zsh is source-compared here (zsh absent on this host) and executed by CI's real-zsh step.",
+            "Linux only (macOS and Windows are not claimed since 2026-10-08)."
           ]
         },
         {
@@ -4497,8 +4497,8 @@
       ],
       "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "CORRECTED IN THE CANDIDATE BUNDLED ARTIFACT, NOT FULLY EVIDENCED. Neither bundled logger initialises the lane to the root any more, and each one now decides on exactly two filesystem facts: whether .agent/current_user is present and valid, and whether root .agent/tasks/ is a directory. A valid marker selects the validated user lane. No marker with a root .agent/tasks/ selects the root, which IS a real lane in the legacy and mixed layouts. Everything else writes nothing: no marker and no root tasks/, or a marker that is invalid or unusable. Nothing about the children of .agent/ is consulted, so the per-user-lane enumeration the previous candidate ran is deleted. That makes the loggers DELIBERATELY STRICTER than provider/paths.py::lanes_without_marker, tasks/core.py and gate-echo-lib.sh, and no parity with them is claimed here. The shapes it costs are the marker-absent ones with no root tasks/: a bare .agent/, a committed .agent/config.json and nothing else, a sessions/ directory only, and a child of .agent/ that has no tasks/ of its own. On each of those resolve_agent_dir still answers the root and tasks retro/tasks context still read <root>/.agent/bash_history, so nothing is written where the previous candidate wrote the root. That is a missing forensic log, never cross-user contamination, it is owner-ratified, and it heals as soon as anything creates .agent/tasks/ — which /playbook:init does. The direction of the difference is bound as a test rather than asserted in prose: TestResolverParity.test_logger_is_never_looser_than_lanes_without_marker runs one nine-shape table through all four implementations and requires that the logger never write the root on a shape where a reference reports that a per-user lane exists — the Critical fresh-clone case, which was reproduced red first and is green now. The enumeration was removed because it was this file's only glob and the file is sourced into a shell it does not control, so its result followed the HOST shell's globbing state. Measured on the previous candidate against .agent/alice/tasks/ with no marker, a shape that must skip: default options and shopt -s failglob skipped, while set -f, set -o noglob and GLOBIGNORE='*' each silently wrote the SHARED root. Those three preludes are now cells in tests/test_provider_multiuser.py::HostShellOptionMatrix, as the regression guard for the enumeration staying deleted; no broader invariance under arbitrary host shell state is claimed. Reproduced red first and then green by the hermetic logger cases in tests/test_provider_multiuser.py (MarkerAbsentWithLanes, ValidMarker, InvalidMarker, LegitimateRootLane), and tests/wrapper-multiuser-fixture.sh under the corrected bundled logger is 274 passed / 0 failed where it was 272 passed / 2 failed before.",
-        "plugins/playbook/scripts/bash-log.zsh received the structurally identical correction, but zsh is not installed on this host: it was neither executed nor syntax-checked. The zsh cell is a SOURCE-LEVEL claim only, held by tests/test_provider_multiuser.py::ZshLoggerSourceParity — lane-initialisation placement, that the bare root is assigned only under the .agent/tasks/ guard, the marker validation arms, the one-line marker contract, and that the unset line still clears every variable the file introduces — and its live execution is Phase 8 work.",
+        "CORRECTED in the bundled loggers. Neither bundled logger initialises the lane to the root any more, and each one now decides on exactly two filesystem facts: whether .agent/current_user is present and valid, and whether root .agent/tasks/ is a directory. A valid marker selects the validated user lane. No marker with a root .agent/tasks/ selects the root, which IS a real lane in the legacy and mixed layouts. Everything else writes nothing: no marker and no root tasks/, or a marker that is invalid or unusable. Nothing about the children of .agent/ is consulted, so the per-user-lane enumeration the previous candidate ran is deleted. That makes the loggers DELIBERATELY STRICTER than provider/paths.py::lanes_without_marker, tasks/core.py and gate-echo-lib.sh, and no parity with them is claimed here. The shapes it costs are the marker-absent ones with no root tasks/: a bare .agent/, a committed .agent/config.json and nothing else, a sessions/ directory only, and a child of .agent/ that has no tasks/ of its own. On each of those resolve_agent_dir still answers the root and tasks retro/tasks context still read <root>/.agent/bash_history, so nothing is written where the previous candidate wrote the root. That is a missing forensic log, never cross-user contamination, it is owner-ratified, and it heals as soon as anything creates .agent/tasks/ — which /playbook:init does. The direction of the difference is bound as a test rather than asserted in prose: TestResolverParity.test_logger_is_never_looser_than_lanes_without_marker runs one nine-shape table through all four implementations and requires that the logger never write the root on a shape where a reference reports that a per-user lane exists — the Critical fresh-clone case, which was reproduced red first and is green now. The enumeration was removed because it was this file's only glob and the file is sourced into a shell it does not control, so its result followed the HOST shell's globbing state. Measured on the previous candidate against .agent/alice/tasks/ with no marker, a shape that must skip: default options and shopt -s failglob skipped, while set -f, set -o noglob and GLOBIGNORE='*' each silently wrote the SHARED root. Those three preludes are now cells in tests/test_provider_multiuser.py::HostShellOptionMatrix, as the regression guard for the enumeration staying deleted; no broader invariance under arbitrary host shell state is claimed. Reproduced red first and then green by the hermetic logger cases in tests/test_provider_multiuser.py (MarkerAbsentWithLanes, ValidMarker, InvalidMarker, LegitimateRootLane), and tests/wrapper-multiuser-fixture.sh under the corrected bundled logger is 274 passed / 0 failed where it was 272 passed / 2 failed before.",
+        "plugins/playbook/scripts/bash-log.zsh received the structurally identical correction. zsh is not installed on this host, so the tests here compare its source — tests/test_provider_multiuser.py::ZshLoggerSourceParity: lane-initialisation placement, that the bare root is assigned only under the .agent/tasks/ guard, the marker validation arms, the one-line marker contract, and that the unset line still clears every variable the file introduces — and CI runs the real bash-log.zsh against the four lane shapes and asserts the files it writes (the `bash-log.zsh lane shapes (real zsh)` step of .github/workflows/verify.yml, which installs zsh first).",
         "The stale INSTALLED copy at ~/.claude/bash-log.sh is deliberately unchanged and still reproduces the original two S15 failures, measured on this host. Neither copy is identified here by digest: a hash of the bundled logger went stale three times inside this correction while the substantive claim — installed is older, and lacks the hook-suppression guard — stayed true throughout. Installation is out of this candidate's scope, so a host still running the previously installed logger keeps the old behavior until the plugin is re-installed.",
         "One exemption this correction must not break, and one that was deliberately given up. (1) wrapper-multiuser-fixture.sh scenario S6's mixed layout, where root .agent/tasks/ makes the root a real lane, is this entry's distinct negative_control (LegitimateRootLane.test_mixed_layout_without_a_marker_logs_to_the_root); a blanket \"never log to root\" implementation was measured red there and on the fixture's S16 legacy assertion, and still is. (2) A project with no per-user lane and no root tasks/ yet — reachably, a clone of a single-user project that committed .agent/config.json, since git tracks no empty tasks/ — used to log the root and now skips. The variant that skips whenever root .agent/tasks/ is absent was previously rejected as over-strict; it is the ratified behavior now, and its cost is named above. LegitimateRootLane.test_committed_config_only_writes_nothing pins that shape, and test_bare_agent_directory_writes_nothing, test_sessions_dir_only_writes_nothing and test_child_directory_without_tasks_writes_nothing pin its siblings.",
         "Bounded blast radius of the corrected defect, retained for the record: .agent/bash_history and .agent/*/bash_history are both in the init-seeded gitignore block (plugins/playbook/scripts/claude-md-merge.py::GITIGNORE_ENTRIES), so a stray root history file never propagated between clones, and it never created .agent/tasks/, so it could not cascade into the mixed-layout exemption.",
@@ -5665,7 +5665,7 @@
     {
       "id": "PB-JUDGE-BLIND-CONTEXT",
       "category": "judges-and-reviews",
-      "statement": "Review prompts for a TASK (plan-review, impl-review, panel-review <N>) are constructed from repository/task context without the front-agent conversation unless explicitly supplied as review steering; the task-less `panel-review --prompt` question deliberately includes the recent chat log as its project context (review.py `_build_payload`, taskless arm; `--bare` strips all context).",
+      "statement": "Review prompts for a TASK (plan-review, impl-review, panel-review <N>) are constructed from repository/task context without the front-agent conversation unless explicitly supplied as review steering; the task-less `panel-review --prompt` question deliberately includes the recent chat log as its project context (review.py `_build_payload`, taskless arm; `--bare` strips all context). The task record's own `### Recent Chat` — the user's messages captured when the task was activated, each up to 1000 characters (task 125) — is task context and reaches every review of that task by design.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/review.py",
@@ -5710,7 +5710,8 @@
           "boundary": "live-provider",
           "negative_control": null,
           "limitations": [
-            "Real judges through a recording shim placed where each judge CLI starts (it keeps the exact argv and prompt, then runs the real CLI): a TASK review (`tasks plan-review 1`) on claude (haiku) and codex (gpt-6.1-sol, low) carried the task's marker and never the canary written only into the chat log, and neither judge's answer carried it; the task-less `--prompt` question did carry it; `--bare` sent the question with the review protocol's time budget and nothing of the project."
+            "Real judges through a recording shim placed where each judge CLI starts (it keeps the exact argv and prompt, then runs the real CLI): a TASK review (`tasks plan-review 1`) on claude (haiku) and codex (gpt-6.1-sol, low) carried the task's marker and never the canary written only into the chat log, and neither judge's answer carried it; the task-less `--prompt` question did carry it; `--bare` sent the question with the review protocol's time budget and nothing of the project.",
+            "The reviewed task had never been activated, so it carried no Recent Chat; the activated path (a canary captured as a user message reaching the review through Recent Chat, by design) is not run — parked on task 184 with the grok seat."
           ]
         }
       ],
@@ -5726,10 +5727,10 @@
       "missing_evidence_or_limitation": [
         "WAIVER 2026-10-12 PB-JUDGE-BLIND-CONTEXT: grok's live half is deferred after the 1.6.1 release — the owner, 2026-10-12: «mai dureaza 3 zile pana o sa aiba grok iar tokene.. nu pot sa astept atata dupa el». The claude and codex halves ran live on the candidate (task 184, scenario PB-JUDGE-BLIND-CONTEXT); grok stays in the panel.",
         "Task 100 impl panel round 2 (2026-09-27) (codex-high): `panel-review --prompt` with no task number includes `.agent/chat_log.md` in the judge's context (review.py, the taskless arm of `_build_payload`) — by design, since a free question has no task to anchor on. The statement now names that arm as the exception; the blind-context claim is scoped to task reviews.",
-        "Live provider isolation from ambient conversation is not observed.",
+        "Observed live for the claude and codex judges (task 184): a canary written only into the chat log reached neither task review's prompt (the recording shim kept each prompt whole) nor either judge's answer; grok's half waits. The task reviewed had never been activated — see the statement on Recent Chat.",
         "Owner decision 2026-08-21: judge-seat is supported on claude, grok, and codex; antigravity and pi are experimental and removed from applicable_providers.",
-        "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending.",
-        "Task 100 (PLAN S8 binding audit, 2026-09-27): the only cited proof asserted the CONTEXT NOTE / trim notice, not the absence of conversation; rebound to the payload-construction proof. Bound worth stating: the judge process runs with the repository READABLE, and `.agent/chat_log.md` is a file in that tree — the PROMPT carries no conversation, but a judge that reads the chat log on its own is not prevented by construction; the canary test in required_live_evidence is what would measure it (S11).",
+        "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the live judge behaviour required_live_evidence asks for was observed on 2026-10-12 for the claude and codex seats (task 184 — live, not in CI); grok's half waits.",
+        "Task 100 (PLAN S8 binding audit, 2026-09-27): the only cited proof asserted the CONTEXT NOTE / trim notice, not the absence of conversation; rebound to the payload-construction proof. Bound worth stating: the judge process runs with the repository READABLE, and `.agent/chat_log.md` is a file in that tree — the PROMPT carries no conversation, but a judge that reads the chat log on its own is not prevented by construction where it runs UNCONTAINED; with bubblewrap the read-only judge sandbox masks the conversation records (task 125; PB-SANDBOX-READ-NETWORK, measured live by task 184). The canary run of task 184 measured the prompt, and the judge's answer by the canary's absence from it.",
         "2026-10-12 (task 184, PLAN S11): claude and codex halves ran live (scenario PB-JUDGE-BLIND-CONTEXT). grok's half waits for its tokens: its seat answers out of credit (HTTP 402) until the subscription's tokens return (owner, 2026-10-12: it stays in the panel and comes back by itself); this row flips when it has run, which first needs a grok seat in the live harness — `tests/live/lib/rows_judge.py` has none yet (parked on task 184)."
       ],
       "follow_up_phases": [
@@ -5835,7 +5836,7 @@
         "WAIVER 2026-10-12 PB-JUDGE-READONLY: grok's live half is deferred after the 1.6.1 release — the owner, 2026-10-12: «mai dureaza 3 zile pana o sa aiba grok iar tokene.. nu pot sa astept atata dupa el». The claude and codex halves ran live on the candidate (task 184, scenario PB-JUDGE-READONLY); grok stays in the panel.",
         "Where no bwrap is on PATH (or the judge runs nested inside another sandbox), project_writable=False is a no-op and judges run UNCONTAINED — the before/after working-tree tamper guard is the only defense there. A bwrap that is installed but cannot run is not detected: containment is reported and the judge launch fails. (Up to 1.5.47: macOS seatbelt, never run in CI; Windows had no backend at all.)",
         "Owner decision 2026-08-21: judge-seat is supported on claude, grok, and codex; antigravity and pi are experimental and removed from applicable_providers.",
-        "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending.",
+        "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the live judge behaviour required_live_evidence asks for was observed on 2026-10-12 for the claude and codex seats (task 184 — live, not in CI); grok's half waits.",
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
         "2026-10-08 (task 155, Linux-only): the macOS seatbelt backend (build_seatbelt_profile) was deleted; bubblewrap is the only backend.",
         "2026-10-12 (task 184, PLAN S11): claude and codex halves ran live (scenario PB-JUDGE-READONLY). Seen on the way, parked on task 184 after the 1.6.1 release: the SINGLE claude judge runs with every tool (`--dangerously-skip-permissions`, no `--tools` limit; review.py:3097) while the panel's claude seat asks for Read, Glob and Grep only — with bubblewrap the read-only mount refuses the write either way, which is all this row claims; without it (UNCONTAINED, announced) the single claude judge could write. grok's half waits for its tokens: its seat answers out of credit (HTTP 402) until the subscription's tokens return (owner, 2026-10-12: it stays in the panel and comes back by itself); this row flips when it has run, which first needs a grok seat in the live harness — `tests/live/lib/rows_judge.py` has none yet (parked on task 184)."
@@ -6093,7 +6094,7 @@
       "missing_evidence_or_limitation": [
         "WAIVER 2026-10-12 PB-PANEL-QUORUM: grok's live half is deferred after the 1.6.1 release — the owner, 2026-10-12: «mai dureaza 3 zile pana o sa aiba grok iar tokene.. nu pot sa astept atata dupa el». The claude and codex halves ran live on the candidate (task 184, scenario PB-PANEL-QUORUM); grok stays in the panel.",
         "Owner decision 2026-08-21: judge-seat is supported on claude, grok, and codex; antigravity and pi are experimental and removed from applicable_providers.",
-        "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending.",
+        "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the live judge behaviour required_live_evidence asks for was observed on 2026-10-12 for the claude and codex seats (task 184 — live, not in CI); grok's half waits.",
         "2026-10-12 (task 184, PLAN S11): claude and codex halves ran live (scenario PB-PANEL-QUORUM). grok's half waits for its tokens: its seat answers out of credit (HTTP 402) until the subscription's tokens return (owner, 2026-10-12: it stays in the panel and comes back by itself); this row flips when it has run, which first needs a grok seat in the live harness — `tests/live/lib/rows_judge.py` has none yet (parked on task 184)."
       ],
       "follow_up_phases": [
@@ -7553,16 +7554,6 @@
       "claim_kind": "mechanical",
       "proofs": [
         {
-          "type": "missing",
-          "path": null,
-          "reference": "No qualifying live-provider invocation proof exists",
-          "boundary": "none",
-          "negative_control": null,
-          "limitations": [
-            "Current tests invoke local hooks directly or fake provider CLIs; they do not prove real provider scheduling/trust."
-          ]
-        },
-        {
           "type": "executable integration",
           "path": "tests/test_hooks_invoked_integration.py",
           "reference": "WithNoActiveTask.test_the_task_gate_blocks_a_code_edit_and_journals_it",
@@ -8116,7 +8107,7 @@
       "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
         "Upgrade is snapshot-less: unlike scripts/init (now transactional — see PB-INSTALL-ROLLBACK), this is a Claude skill whose steps (pull a release clone, `claude plugin marketplace update`, `claude plugin update`, restart, re-init — in place since task 115/138) have no rollback wrapper. The reinit it triggers rolls itself back, but a failure inside Claude Code's own plugin update can still leave a mixed installation; a transactional upgrade is not claimed.",
-        "Task 100 (PLAN S8 binding audit, 2026-09-27) NARROWED `before fallback discovery` to `rather than by globbing`: the cited proof asserts the manifest installPath is read and a foreign plugin's path is not; no test asserts the ORDER of candidate_hooks_paths' sources. The update + re-init steps are the skill's prose (commands/upgrade.md), untested — see the snapshot-less bound above.",
+        "Task 100 (PLAN S8 binding audit, 2026-09-27) NARROWED `before fallback discovery` to `rather than by globbing`: the cited proof asserts the manifest installPath is read and a foreign plugin's path is not; no test asserts the ORDER of candidate_hooks_paths' sources. The update + re-init steps of the skill (commands/upgrade.md) ran live as written (task 184, scenario PB-UPGRADE-INSTALLED-COPY); the restart step and a failure inside the plugin manager's own update are not run — see the snapshot-less bound above.",
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
         "2026-10-12 (task 184, PLAN S11): the packaged upgrade ran live through the real plugin manager (scenario PB-UPGRADE-INSTALLED-COPY): manifest-not-glob selection with a newer copy on disk, the re-init against the manifest's copy, the project running the new version after it. The upgrade stays snapshot-less (next limitation)."
       ],
@@ -8218,7 +8209,7 @@
       "missing_evidence_or_limitation": [
         "scripts/init is now transactional (init_txn.py snapshots every file it may modify and, on any non-zero exit, restores the pre-init state and removes what it created), proven on the host OS by three induced-failure integration tests plus a negative control. Two boundaries remain unproved.",
         "Upgrade is a Claude skill (commands/upgrade.md), NOT scripts/init, and remains snapshot-less: it re-runs init (which now rolls itself back), but the skill's own in-place refresh (clone pull, marketplace update, plugin update) has no transactional wrapper, so a mid-upgrade failure is not proven rollback-safe here. See PB-UPGRADE-INSTALLED-COPY.",
-        "Interrupt coverage is a trapped SIGTERM on the host OS; real power-loss durability and a controlled interruption on windows-git-bash are the pending live-platform evidence.",
+        "Interrupt coverage, Linux: the tests' trapped SIGTERM, and live (task 184, scenario PB-INSTALL-ROLLBACK) three controlled interruptions of the re-init — a project write that fails, a read-only ~/.claude, a SIGTERM at the CLAUDE.md merge. Real power loss is not covered; Windows is not claimed since 2026-10-08.",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
         "2026-10-12 (task 184, PLAN S11): NARROWED — `A failed initialization or upgrade can be rolled back` claimed the upgrade as a whole; the plugin manager's copy step has no transaction (PB-UPGRADE-INSTALLED-COPY), so the statement now covers the re-initialization an upgrade runs and names the copy step as not covered. The re-init's rollback ran live (scenario PB-INSTALL-ROLLBACK)."
@@ -9672,7 +9663,7 @@
       "missing_evidence_or_limitation": [
         "2026-10-09 (task 164, owner ruling): the uncontained policy is decided for the LAUNCHER — it refuses (tests/test_sandbox_refuses_uncontained.py, live, with negative controls), also when bwrap vanishes after its check, and the monitor is refused before it writes — and for the judge paths the owner left the fallback as it is: uncontained, with the review's warning and the tamper guard. Limits: PLAYBOOK_SANDBOXED=1 set by hand is an operator's statement that an outer cage exists and nothing verifies it. The monitor's pre-flight and its launch are two checks: if bubblewrap breaks between them the launch still refuses, with the monitor's state already reset. Still without an integration test: a real review on a host with no bwrap (the warning it prints is source-read), and a real bubblewrap that cannot start (the launcher's probe is tested against a stand-in binary).",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
-        "Task 100 (PLAN S8 binding audit, 2026-09-27): this row cited only `test_environment.SandboxItemTest.test_unknown_os_has_no_primitive` — an advisory-text test of environment.py, not of the owner (sandbox.py). Rebound to tests/test_windows_uncontained_path.py (3 tests, cited nowhere before). Still asserted by NO test: nested-containment detection (`is_sandboxed`) and the operator-visible UNCONTAINED warning text (review.py gates it on containment_available(); source-read) — both stay in required_live_evidence.",
+        "Task 100 (PLAN S8 binding audit, 2026-09-27): this row cited only `test_environment.SandboxItemTest.test_unknown_os_has_no_primitive` — an advisory-text test of environment.py, not of the owner (sandbox.py). Rebound to tests/test_windows_uncontained_path.py (3 tests, cited nowhere before). Asserted by no hermetic test: nested-containment detection (`is_sandboxed`) and the operator-visible UNCONTAINED warning text (review.py gates it on containment_available()) — both are asserted by the live proof (task 184): inside the plugin's own sandbox the launch is the bare agent, and with no bubblewrap the judge path prints the UNCONTAINED warning before the judge starts.",
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
         "2026-10-08 (task 154, Linux-only): the two proofs were simulated-Windows tests (tests/test_windows_uncontained_path.py, deleted); rebound to the same three checks on a Linux host without bwrap (tests/test_sandbox_uncontained_fallback.py).",
         "2026-10-12 (task 184, PLAN S11): nested-containment detection and the operator-visible UNCONTAINED warning, until now asserted by no test, are asserted by the live run (scenario PB-SANDBOX-DETECTION-FALLBACK)."
@@ -10919,7 +10910,7 @@
     {
       "id": "PB-PYTHON-FLOOR",
       "category": "compatibility-and-package",
-      "statement": "The documented and diagnosed minimum Python version matches syntax used by every shipped module and incompatible interpreters fail clearly before import.",
+      "statement": "The documented and diagnosed minimum Python version matches syntax used by every shipped module, and the entry points that check the interpreter — the eight launchers and four hooks — fail clearly before import under an incompatible one; the six Claude hooks that do not check it are claimed only as far as the live run measured them (its limitation).",
       "owner": [
         {
           "path": "plugins/playbook/scripts/tasks",
@@ -10979,7 +10970,7 @@
             "reference": "ShellEntrypointFloorGuard.test_supported_interpreter_passes_guard"
           },
           "limitations": [
-            "A fake python3 on PATH reports 3.9 for the version probe; the real minimum interpreter is run in Phase 8."
+            "A fake python3 on PATH reports 3.9 for the version probe; real interpreters (3.9, 3.10, 3.14) are run by the live proof (task 184)."
           ]
         },
         {
@@ -11000,7 +10991,7 @@
           "boundary": "live-platform",
           "negative_control": null,
           "limitations": [
-            "Containers of the official python images on Linux: every shipped .py file compiled and the CLI round trip run under 3.10 (the floor) and 3.14 (the newest); under 3.9 the eight launchers (tasks, sandbox, init, playbook-codex, playbook-grok, playbook-agy, playbook-pi, monitor-lib/launch-monitor) refuse before importing anything (exit 1, the message); the command guard and codex's user-prompt and stop hooks say so and fail open (exit 0); codex's apply-patch hook keeps its per-event polarity — given a PreToolUse event it refuses the edit (exit 2, fail-closed), given a PostToolUse event or none it passes (exit 0). The hooks under 3.9 are run directly with those payloads, not inside a provider session."
+            "Containers of the official python images on Linux: every shipped .py file compiled and the CLI round trip run under 3.10 (the floor) and 3.14 (the newest image on Docker Hub, checked by the run: 3.15 and 3.16 absent on 2026-10-12); under 3.9 the eight launchers (tasks, sandbox, init, playbook-codex, playbook-grok, playbook-agy, playbook-pi, monitor-lib/launch-monitor) refuse before importing anything (exit 1, the message); the command guard and codex's user-prompt and stop hooks say so and fail open (exit 0); codex's apply-patch hook keeps its per-event polarity — given a PreToolUse event it refuses the edit (exit 2, fail-closed), given a PostToolUse event or none it passes (exit 0). The six Claude hooks.json commands that do not check the interpreter (task-gate, state-echo, stop, chat-log, session-start, session-end) were run under 3.9 on a project with no active task: each answered as under 3.10 (task-gate refused the edit, exit 2), with no traceback; their other paths under 3.9 are not claimed (parked on task 184). The hooks under 3.9 are run directly with those payloads, not inside a provider session."
           ]
         }
       ],
@@ -11313,16 +11304,6 @@
       "failure_consequence": "High",
       "claim_kind": "mechanical",
       "proofs": [
-        {
-          "type": "manual/human judgment",
-          "path": "docs/architecture.md",
-          "reference": "section:Layout",
-          "boundary": "human-review",
-          "negative_control": null,
-          "limitations": [
-            "No automated import/dependency inventory or clean minimal-host packaged test proves the claim."
-          ]
-        },
         {
           "type": "executable integration",
           "path": "tests/test_runtime_stdlib_integration.py",
@@ -14334,8 +14315,8 @@
         "WAIVER 2026-10-12 PB-MODEL-AVAILABILITY: grok's live half is deferred after the 1.6.1 release — the owner, 2026-10-12: «mai dureaza 3 zile pana o sa aiba grok iar tokene.. nu pot sa astept atata dupa el». The claude and codex halves ran live on the candidate (task 184, scenario PB-MODEL-AVAILABILITY); grok stays in the panel.",
         "No live provider availability/error-classification evidence in CI. Task 111 (2026-10-05): Antigravity is no longer unprobeable — agy 1.2.17 takes a model pin, so `tasks models check` runs one real turn for an agy pin; an id agy does not know is GONE, a missing or contradicted effort is BAD_EFFORT (a spec error, never a dead pin), and a missing sign-in or an exhausted quota is UNKNOWN with the cause. agy is an experimental judge seat and is not in applicable_providers; its proof replays output captured from agy 1.2.17 on one Linux account.",
         "Owner decision 2026-08-21: judge-seat is supported on claude, grok, and codex; antigravity and pi are experimental and removed from applicable_providers.",
-        "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending.",
-        "Task 171 (PLAN S11; retro 107 R17): a grok pin found in `grok models` used to read OK with no call — the list is the account's entitlements and cannot see that its credit ran out (2026-09-29: every call 402 while the check said OK). A listed pin now gets one live turn — of the seat as pinned, with its effort — or LISTED where nothing is probed; the probe reads its answer (OK is exit 0 AND the one word it asked for AND nothing on stderr; anything else is not OK) and an effort the CLI rejects is BAD_EFFORT. Bound: `probe_codex_model` still takes exit 0 as the answer without reading it. Bound, unchanged: a BARE `grok`, `codex:` or `claude` seat (the provider's default model) still reads OK without a call; only a bare `agy` seat is probed (task 111). The live half of this row — recorded responses from the real providers — is still PLAN S11's gauntlet.",
+        "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the live judge behaviour required_live_evidence asks for was observed on 2026-10-12 for the claude and codex seats (task 184 — live, not in CI); grok's half waits.",
+        "Task 171 (PLAN S11; retro 107 R17): a grok pin found in `grok models` used to read OK with no call — the list is the account's entitlements and cannot see that its credit ran out (2026-09-29: every call 402 while the check said OK). A listed pin now gets one live turn — of the seat as pinned, with its effort — or LISTED where nothing is probed; the probe reads its answer (OK is exit 0 AND the one word it asked for AND nothing on stderr; anything else is not OK) and an effort the CLI rejects is BAD_EFFORT. Bound: `probe_codex_model` still takes exit 0 as the answer without reading it. Bound, unchanged: a BARE `grok`, `codex:` or `claude` seat (the provider's default model) still reads OK without a call; only a bare `agy` seat is probed (task 111). The live half of this row — recorded responses from the real providers — ran in PLAN S11's gauntlet for claude and codex (task 184); grok's half waits.",
         "LIVE, 2026-10-10 (task 171): the candidate's `tasks models check` at 03:58 printed `grok:grok-4.7:medium OK responds` (a real turn); at 04:59, the account's credit having run out in between, `UNKNOWN — probe failed …` — the case this row's fix is for, met by accident and recorded in task 171. One provider, one night: not the matrix PLAN S11's gauntlet asks for.",
         "2026-10-12 (task 184, PLAN S11): claude and codex halves ran live, and grok's entitlement response (scenario PB-MODEL-AVAILABILITY). grok's half waits for its tokens: its seat answers out of credit (HTTP 402) until the subscription's tokens return (owner, 2026-10-12: it stays in the panel and comes back by itself); this row flips when it has run, which first needs a grok seat in the live harness — `tests/live/lib/rows_judge.py` has none yet (parked on task 184)."
       ],
@@ -14746,7 +14727,7 @@
           "boundary": "human-review",
           "negative_control": null,
           "limitations": [
-            "The ordering and gating are documented prose; no executable test drives the skill's push offer."
+            "The ordering and gating are the skill's prose; no hermetic test drives the push offer — the live proof (task 184) does, with a real session, both ways."
           ]
         },
         {
@@ -15745,7 +15726,7 @@
       ],
       "status": "partially_evidenced",
       "missing_evidence_or_limitation": [
-        "No executable test drives the layer collection, the blind extraction run, the reconciliation, or the INTENT.md write.",
+        "No hermetic test drives the layer collection, the blind extraction run, the reconciliation, or the INTENT.md write; the live proof (task 184) drives the first two with a real judge; the reconciliation and the INTENT.md write have not run (they are done with the owner).",
         "The extraction step needs a live judge provider, so its behavior is unproved offline.",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
         "Task 173 (owner's D3-C4): the cost question is a refusal with the flag to pass, not an interactive prompt — the CLI is run by an agent, and `commands/intent.md` tells that agent to put the line to the user before passing the flag; whether an agent does so is a prompt-file instruction, not something a test can hold (an agent can write the four figures itself without asking — the flag is a question, not a wall). What the flag DOES hold: the approval is the line's four figures — calls, seat, time limit, budget cap — so what runs is what was quoted or nothing, and the judge and cap that were checked are the ones the runner is given. It was `--yes` alone, then calls and seat, then an eight-digit digest of the four: each form fell to a reviewer (a layer that appears between quote and run; a raised limit or cap; two limits with one digest). Not covered: the line does not estimate tokens or money actually spent, the SIZE of the evidence behind an unchanged number of calls is not part of the quote, and what the judge's own CLI reads from its configuration at launch is outside this command.",
@@ -17061,7 +17042,7 @@
         "WAIVER 2026-10-12 PB-REVIEW-TRIAGE: grok's live half is deferred after the 1.6.1 release — the owner, 2026-10-12: «mai dureaza 3 zile pana o sa aiba grok iar tokene.. nu pot sa astept atata dupa el». The claude and codex halves ran live on the candidate (task 184, scenario PB-REVIEW-TRIAGE); grok stays in the panel.",
         "The prompt contract is proved at the renderer boundary and at the review command (tests/test_judge_paths_integration.py, task 184), and real claude and codex single judges were seen obeying it live (scenario PB-REVIEW-TRIAGE); nothing executable shows the AGENT performing the triage.",
         "Owner decision 2026-08-21: judge-seat is supported on claude, grok, and codex; antigravity and pi are experimental and removed from applicable_providers.",
-        "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the Phase 8 required_live_evidence (CI-observed judge behavior) remains pending.",
+        "Live evidence 2026-08-22 (owner Linux account): judge pins opus, sonnet, codex:gpt-5.6-terra:high, codex:gpt-5.6-sol:high, and grok:grok-4.6:high all responded on the `tasks init` live-check; the live judge behaviour required_live_evidence asks for was observed on 2026-10-12 for the claude and codex seats (task 184 — live, not in CI); grok's half waits.",
         "2026-10-12 (task 184, PLAN S11): claude and codex halves ran live (scenario PB-REVIEW-TRIAGE). grok's half waits for its tokens: its seat answers out of credit (HTTP 402) until the subscription's tokens return (owner, 2026-10-12: it stays in the panel and comes back by itself); this row flips when it has run, which first needs a grok seat in the live harness — `tests/live/lib/rows_judge.py` has none yet (parked on task 184)."
       ],
       "follow_up_phases": [

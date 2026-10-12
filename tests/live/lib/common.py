@@ -56,7 +56,7 @@ def clean_env(extra: "dict[str, str] | None" = None, drop: "tuple[str, ...]" = (
 
 
 def snapshot(root: Path) -> "dict[str, tuple[int, str]]":
-    """path -> (size, sha256 of the first 1 MiB) for every regular file under root, and
+    """path -> (size, sha256 of the whole file) for every regular file under root, and
     `path/` -> (-1, "dir") for every directory (an empty directory left behind is a change too)."""
     out: "dict[str, tuple[int, str]]" = {}
     if not root.exists():
@@ -70,8 +70,12 @@ def snapshot(root: Path) -> "dict[str, tuple[int, str]]":
             try:
                 if p.is_symlink() or not p.is_file():
                     continue
+                h = hashlib.sha256()
                 with p.open("rb") as fh:
-                    digest = hashlib.sha256(fh.read(1 << 20)).hexdigest()[:16]
+                    # the whole file: the rollback row asserts byte identity with this (impl panel round 2, T16)
+                    for chunk in iter(lambda: fh.read(1 << 20), b""):
+                        h.update(chunk)
+                digest = h.hexdigest()[:16]
                 out[str(p.relative_to(root))] = (p.stat().st_size, digest)
             except OSError:
                 continue
@@ -151,15 +155,26 @@ class Run:
         if env_shown:
             self.lines.append("env: " + " ".join(f"{k}={shlex.quote(v)}" for k, v in env_shown.items()))
         t0 = _dt.datetime.now()
+        # no step reads the harness's own stdin: given text, or nothing (a CLI that reads stdin sees EOF).
+        # Each step runs in its own session, so a timeout or an interrupted run can end everything it started,
+        # not only the direct child (impl panel round 2, T13)
+        p = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                             errors="replace", start_new_session=True,
+                             stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL)
         try:
-            # no step reads the harness's own stdin: given text, or nothing (a CLI that reads stdin sees EOF)
-            feed = {"input": stdin} if stdin is not None else {"stdin": subprocess.DEVNULL}
-            r = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True,
-                               timeout=timeout, errors="replace", **feed)
-        except subprocess.TimeoutExpired as exc:
-            out = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
-            err = exc.stderr.decode(errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
-            r = subprocess.CompletedProcess(cmd, 124, out, err + f"\n[timed out after {timeout} s]")
+            out, err = p.communicate(input=stdin, timeout=timeout)
+            r = subprocess.CompletedProcess(cmd, p.returncode, out, err)
+        except subprocess.TimeoutExpired:
+            ended = end_tree(p.pid)
+            try:
+                out, err = p.communicate(timeout=30)
+            except subprocess.TimeoutExpired:            # a process outside the tree still holds the pipes
+                p.kill()
+                out, err = "", "[the step's output could not be collected after the timeout]"
+            r = subprocess.CompletedProcess(cmd, 124, out, err + f"\n[timed out after {timeout} s; {ended} process(es) of the step ended]")
+        except BaseException:
+            end_tree(p.pid)
+            raise
         secs = (_dt.datetime.now() - t0).total_seconds()
         self.lines += [f"rc: {r.returncode}   ({secs:.1f} s)", "--- stdout ---", _cut(r.stdout).rstrip("\n"),
                        "--- stderr ---", _cut(r.stderr).rstrip("\n")]
@@ -323,6 +338,41 @@ def claude_session(run: "Run", title: str, project: Path, prompt: str, *, model:
         except ValueError:
             continue
     return r, events
+
+
+def _descendants(pid: int) -> "list[int]":
+    """Every live descendant of `pid`, read from /proc (a child that made its own session or group is one too)."""
+    children: "dict[int, list[int]]" = {}
+    for d in Path("/proc").iterdir():
+        if not d.name.isdigit():
+            continue
+        try:
+            stat = (d / "stat").read_text()
+            ppid = int(stat[stat.rindex(")") + 2:].split()[1])
+        except (OSError, ValueError, IndexError):
+            continue
+        children.setdefault(ppid, []).append(int(d.name))
+    out, todo = [], [pid]
+    while todo:
+        for c in children.get(todo.pop(), []):
+            out.append(c)
+            todo.append(c)
+    return out
+
+
+def end_tree(pid: int) -> int:
+    """SIGKILL a step's whole tree: its process group and every descendant, wherever it moved. Returns how many."""
+    victims = set(_descendants(pid)) | {pid}
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    for v in victims:
+        try:
+            os.kill(v, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+    return len(victims)
 
 
 def _end_group(run: "Run", pidfile: Path) -> None:

@@ -43,6 +43,17 @@ ENV_PROBE = ("for v in HOME XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME; do pri
              "grep -cE '(_API_KEY|_TOKEN|_SECRET|_PASSWORD)$|^(ANTHROPIC|OPENAI|XAI|GEMINI|GOOGLE)_')\"")
 
 
+def install_env(home: Path) -> "dict[str, str]":
+    """The environment of every command of the install group. CLAUDE_CONFIG_DIR would send the plugin manager's
+    writes to the owner's real configuration whatever HOME says, and the group needs no login: no
+    credential-like variable reaches it (impl panel I11, I12). One function, so the selfcheck tests THIS
+    construction, not a copy of it (round 2, T7)."""
+    env = clean_env({"HOME": str(home), "XDG_CONFIG_HOME": str(home / ".config"),
+                     "XDG_CACHE_HOME": str(home / ".cache"), "XDG_DATA_HOME": str(home / ".local/share"),
+                     "SHELL": "/bin/bash"}, drop=("CLAUDE_CONFIG_DIR",))
+    return {k: v for k, v in env.items() if not CREDENTIAL_LIKE.search(k)}
+
+
 class Install:
     """One disposable install: its HOME, its repositories, its project."""
 
@@ -51,12 +62,7 @@ class Install:
         self.home = root / "home"
         self.home.mkdir()
         (self.home / ".bashrc").write_text("# the user's own shell setup\nexport MY_VAR=1\n", encoding="utf-8")
-        # CLAUDE_CONFIG_DIR would send the plugin manager's writes to the owner's real configuration whatever HOME
-        # says, and the group needs no login: no credential-like variable reaches it (impl panel I11, I12)
-        env = clean_env({"HOME": str(self.home), "XDG_CONFIG_HOME": str(self.home / ".config"),
-                         "XDG_CACHE_HOME": str(self.home / ".cache"), "XDG_DATA_HOME": str(self.home / ".local/share"),
-                         "SHELL": "/bin/bash"}, drop=("CLAUDE_CONFIG_DIR",))
-        self.env = {k: v for k, v in env.items() if not CREDENTIAL_LIKE.search(k)}
+        self.env = install_env(self.home)
         self.shown = {k: self.env[k] for k in ("HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME")}
         self.bare, self.release, self.work, self.proj = root / "github.git", root / "release", root / "work", root / "proj"
 

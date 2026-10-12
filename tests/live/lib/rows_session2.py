@@ -303,13 +303,51 @@ def _calls_with_results(events: "list[dict]") -> "list[tuple[str, str, str]]":
     return out
 
 
+def _hunk_changes(section: str) -> "list[str] | None":
+    """The changed lines of one `diff --git` section, read the way git wrote them: each hunk's `@@ -a,b +c,d @@`
+    header says how many old and new lines follow, so output a combined command printed after the diff (an
+    `echo --verify`) is never taken for a removed line. None when a hunk is cut short."""
+    lines, out, i = section.splitlines(), [], 0
+    while i < len(lines):
+        m = re.match(r"@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@", lines[i])
+        i += 1
+        if not m:
+            continue
+        old = int(m.group(1)) if m.group(1) is not None else 1
+        new = int(m.group(2)) if m.group(2) is not None else 1
+        while (old > 0 or new > 0) and i < len(lines):
+            ln = lines[i]
+            if ln.startswith("-"):
+                old -= 1
+                out.append(ln)
+            elif ln.startswith("+"):
+                new -= 1
+                out.append(ln)
+            elif ln.startswith(" ") or ln == "":
+                old, new = old - 1, new - 1
+            elif not ln.startswith("\\"):                  # `\ No newline at end of file` counts for neither
+                break
+            i += 1
+        if old or new:
+            return None
+    return out
+
+
 def identity_green(result: str) -> bool:
-    """The code-identity diff ran and shows exactly the merge's incoming change — the feature's one hunk in
-    `src/b.py` — and nothing else: no error, no other file (impl panel I7: a command that merely matched,
-    `fatal: bad revision` included, used to count as green)."""
-    files = set(re.findall(r"(?m)^diff --git a/(\S+) b/", result))
-    return (re.search(r"(?m)^(fatal|error):", result) is None and files == {"src/b.py"}
-            and re.search(r"(?m)^\+B = 2$", result) is not None)
+    """The code-identity diff ran and shows exactly the merge's incoming change — the feature's one change in
+    `src/b.py` — and nothing else: no error, no other file, no other changed line in that file (impl panel I7:
+    a command that merely matched, `fatal: bad revision` included, used to count as green; round 2, T15: an
+    extra line inside `src/b.py` did). A command that printed the same diff twice is still that diff."""
+    if re.search(r"(?m)^(fatal|error):", result):
+        return False
+    sections = re.split(r"(?m)^(?=diff --git )", result)[1:]
+    if not sections:
+        return False
+    for s in sections:
+        head = re.match(r"diff --git a/(\S+) b/(\S+)", s)
+        if not head or head.groups() != ("src/b.py", "src/b.py") or _hunk_changes(s) != ["-B = 1", "+B = 2"]:
+            return False
+    return True
 
 
 # each gate: what its command looks like, and what its GREEN outcome prints (the skill's own tools' words) —

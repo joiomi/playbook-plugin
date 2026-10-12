@@ -54,6 +54,9 @@ two, the seat in each scenario), written and reviewed once its credit returns.
 `selfcheck.py <artifacts-dir>` is the harness's own negative control, offline and free: each
 clause the impl panel found able to pass without its behaviour is a pure predicate, run on a
 committed artifact (it must PASS) and on a copy with exactly that behaviour removed (it must FAIL).
+`gauntlet.sh` runs it at the end of every run, on the artifacts that run wrote (controls whose
+row was not run are skipped and said); a control that does not hold fails the run. A row that
+exits with anything but 0 or 3 — killed, crashed — fails the run too, and leaves no artifact.
 
 `check_flips.py <artifacts-dir>` holds the ledger to the every-target rule: a row whose
 `required_live_evidence` names targets is verified only with a live proof bound to its

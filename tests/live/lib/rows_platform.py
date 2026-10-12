@@ -3,7 +3,9 @@ real bubblewrap, a real judge run. Each function takes the output directory and
 returns the row's exit status (common.PASS / FAIL / WAITING)."""
 from __future__ import annotations
 
+import json
 import os
+import shlex
 import shutil
 import tempfile
 import uuid
@@ -18,6 +20,34 @@ FLOOR_ENTRY_POINTS = ("tasks", "sandbox", "init", "playbook-codex", "playbook-gr
                       "codex-stop-hook", "codex-apply-patch-hook")
 LAUNCHERS = FLOOR_ENTRY_POINTS[:8]           # refuse: exit 1 with the message
 HOOKS = FLOOR_ENTRY_POINTS[8:]               # a hook that cannot run lets the call through, loud (node [5])
+# The Claude hooks.json commands that do NOT check the interpreter (command-guard-hook, the seventh, does): under
+# 3.9 they are run on a project with no active task and must answer as on a supported interpreter (impl panel
+# round 2, T6) — that is all this run measures; their other paths under 3.9 are not claimed (parked on task 184).
+# hook -> (event, payload fields, exit status, a word its answer must hold), as measured under 3.10.
+UNCHECKED_CLAUDE_HOOKS = {
+    "session-start-hook": ("SessionStart", {"source": "startup"}, "0", ""),
+    "chat-log-hook": ("UserPromptSubmit", {"prompt": "hello"}, "0", ""),
+    "task-gate-hook": ("PreToolUse", {"tool_name": "Edit", "tool_input": {
+        "file_path": "/tmp/hp/src/a.py", "old_string": "x = 1", "new_string": "x = 2"}}, "2", "BLOCKED: No active task"),
+    "state-echo-hook": ("PostToolUse", {"tool_name": "Read", "tool_input": {"file_path": "/tmp/hp/src/a.py"},
+                                        "tool_response": {}}, "0", "No active task"),
+    "stop-hook": ("Stop", {"stop_hook_active": False}, "0", ""),
+    "session-end-hook": ("SessionEnd", {"reason": "exit"}, "0", ""),
+}
+NEXT_VERSIONS = ("3.15", "3.16")             # NEW_IMAGE is the newest only while neither of these images exists
+
+
+def _claude_hook_probe() -> str:
+    """Shell lines that run each unchecked Claude hook once with its real payload, in a project with no task."""
+    lines = ["mkdir -p /tmp/hp/src /tmp/hp/.agent/tasks && echo 'x = 1' > /tmp/hp/src/a.py && cd /tmp/hp",
+             "export CLAUDE_PLUGIN_ROOT=/pb CLAUDE_PROJECT_DIR=/tmp/hp"]
+    for hook, (event, fields, _rc, _word) in UNCHECKED_CLAUDE_HOOKS.items():
+        payload = json.dumps({"session_id": "0b0e5a1e-0000-4000-8000-000000000001", "cwd": "/tmp/hp",
+                              "hook_event_name": event, **fields})
+        lines.append(f"out=$(printf '%s' {shlex.quote(payload)} | timeout 30 bash /pb/scripts/{hook} 2>&1); rc=$?")
+        lines.append(f'echo "### claude:{hook} rc=$rc"; ' + "printf '%s\\n' \"$out\"")
+    lines.append("cd /tmp")
+    return "\n".join(lines)
 
 # Compile every shipped module without writing a byte (the plugin is mounted read-only).
 _COMPILE_ALL = r'''
@@ -79,8 +109,17 @@ def _docker(run: Run, title: str, image: str, script: str, *, network: bool = Fa
 def python_floor(out: Path) -> int:
     run = Run("PB-PYTHON-FLOOR", "the minimum and the newest Python, and one below the floor, on real interpreters",
               out, ["linux"])
-    run.note("Images: " + ", ".join((MIN_IMAGE, NEW_IMAGE, OLD_IMAGE)) + " (the newest stable image on Docker Hub today; "
-             "python:3.15-slim does not exist yet). The plugin tree is mounted read-only, no bytecode is written.")
+    run.note("Images: " + ", ".join((MIN_IMAGE, NEW_IMAGE, OLD_IMAGE)) + ". The plugin tree is mounted read-only, "
+             "no bytecode is written.")
+    # "the newest" is measured, not written down (impl panel round 2, T10): the registry is asked for the next two
+    # versions, and for NEW_IMAGE itself as the control that the registry answered at all
+    tags = [NEW_IMAGE] + [f"python:{v}-slim" for v in NEXT_VERSIONS]
+    r = run.step("which python images exist on Docker Hub today", " ".join(
+        f"docker manifest inspect {t} >/dev/null 2>&1 && echo '{t} exists' || echo '{t} absent';" for t in tags))
+    found = r.stdout.split()
+    run.clause(f"{NEW_IMAGE} is the newest python image today: it exists and {', '.join(tags[1:])} do not",
+               f"{NEW_IMAGE} exists" in r.stdout and all(f"{t} absent" in r.stdout for t in tags[1:]),
+               " / ".join(r.stdout.strip().splitlines()) or f"(no answer; {found})")
     expected = _python_files()
     run.note(f"python files in the plugin tree (modules + scripts whose first line runs python): {expected}")
     for image, label in ((MIN_IMAGE, "the minimum, 3.10"), (NEW_IMAGE, "the newest")):
@@ -110,7 +149,8 @@ done
 for ev in PreToolUse PostToolUse; do
   out=$(printf '{"hook_event_name": "%s"}' "$ev" | timeout 20 /pb/scripts/codex-apply-patch-hook 2>&1); rc=$?
   echo "### codex-apply-patch-hook@$ev rc=$rc"; printf '%s\n' "$out"
-done'''
+done
+''' + _claude_hook_probe()
     r = _docker(run, "each entry point under Python 3.9, one below the floor", OLD_IMAGE, probe, network=True)
     blocks = {}
     for chunk in r.stdout.split("### ")[1:]:
@@ -129,6 +169,12 @@ done'''
         rc, body = blocks.get(f"codex-apply-patch-hook@{ev}", ("?", ""))
         run.clause(f"under 3.9 `codex-apply-patch-hook` given a {ev} event exits {want_rc} ({word})",
                    rc == want_rc and word in body and "Traceback" not in body, f"rc={rc}: {body.strip()[:160]!r}")
+    for hook, (event, _fields, want_rc, word) in UNCHECKED_CLAUDE_HOOKS.items():
+        rc, body = blocks.get(f"claude:{hook}", ("?", ""))
+        run.clause(f"under 3.9 the Claude hook `{hook}` (no floor check of its own) answers a {event} with no active "
+                   f"task as on a supported interpreter: exit {want_rc}" + (f", `{word}`" if word else ""),
+                   rc == want_rc and word in body and "Traceback" not in body and "Error" not in body,
+                   f"rc={rc}: {body.strip()[:160]!r}")
     return run.finish()
 
 

@@ -25,7 +25,13 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   one echo of two parallel calls enough, a timeout matched in a line printed before the judge started, a merge gate
   counted green on a failed diff, …); each is now exact, and `tests/live/selfcheck.py` keeps a negative control for
   it. The Python floor's run now also gives codex's apply-patch hook a real event: below the floor it refuses an edit
-  (fail-closed), as the code says and the ledger had said the opposite of.
+  (fail-closed), as the code says and the ledger had said the opposite of. A second review found more of the ledger still
+  describing the time before these runs (rows that said "untested", "not observed" or "pending" next to the live
+  proof that now shows them) — every text of the twenty-two rows was re-read and corrected — and one claim too wide:
+  the Python floor's "incompatible interpreters fail clearly" holds for the twelve entry points that check the
+  interpreter; six of Claude's hooks do not check it and, under 3.9, simply run (measured on a project with no
+  active task), so the row now says exactly that. The harness also ends every process a timed-out or interrupted
+  step started, fails a run whose row was killed, and runs its own negative controls at the end of every run.
 
 - **The guarantee ledger no longer promises codex and grok as the agent that runs your session** (task 183;
   owner decision 2026-10-12). Claude is the only supported agent; codex and grok are supported as JUDGES.

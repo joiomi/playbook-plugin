@@ -18,6 +18,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
@@ -26,7 +27,7 @@ import rows_install  # noqa: E402
 import rows_judge  # noqa: E402
 import rows_session  # noqa: E402
 import rows_session2  # noqa: E402
-from common import clean_env, tempdir, tool_results  # noqa: E402
+from common import delta, snapshot, tempdir, tool_results  # noqa: E402
 
 FAILED: "list[str]" = []
 
@@ -146,7 +147,9 @@ def merge(d: Path) -> None:
           "push" in at and all(g in at and at[g] < at["push"] for g in rows_session2.GATES), True, json.dumps(at))
     for label, res in (("`fatal: bad revision`", "fatal: bad revision 'deadbeef'\n"),
                        ("a diff that also changes another file", idents[0][1] + "\ndiff --git a/src/a.py b/src/a.py\n-A = 2\n+A = 9\n"),
-                       ("an empty result", "")):
+                       ("an empty result", ""),
+                       ("an extra line inside src/b.py, its hunk header true",
+                        idents[0][1].replace("@@ -1 +1 @@\n-B = 1\n+B = 2", "@@ -1 +1,2 @@\n-B = 1\n+B = 2\n+raise RuntimeError('x')"))):
         check(f"I7 code identity — {label}", rows_session2.identity_green(res), False)
     bad = [(n, c, "fatal: bad revision 'deadbeef'\n" if re.search(rx, c) and n == "Bash" else r) for n, c, r in calls]
     at = rows_session2._gate_timeline(bad)
@@ -161,20 +164,21 @@ def names() -> None:
 
 
 def install_env() -> None:
+    """The install group's env as `rows_install.install_env` builds it — the function the installer calls, not a
+    copy of it (round 2, T7) — with a credential-like name and CLAUDE_CONFIG_DIR set around it."""
     extra = {"PB184_SELFCHECK_API_KEY": "x", "CLAUDE_CONFIG_DIR": "/nonexistent"}
     os.environ.update(extra)
     try:
         dirty = dict(os.environ)
-        env2 = clean_env({"HOME": "/tmp/pb184-selfcheck-home"}, drop=("CLAUDE_CONFIG_DIR",))
-        env2 = {k: v for k, v in env2.items() if not rows_install.CREDENTIAL_LIKE.search(k)}
+        built = rows_install.install_env(Path("/tmp/pb184-selfcheck-home"))
     finally:
         for k in extra:
             os.environ.pop(k, None)
     run = lambda e: subprocess.run(["bash", "-c", rows_install.ENV_PROBE], env=e, capture_output=True, text=True).stdout  # noqa: E731
-    good = run(env2)
-    check("I11/I12 the install group's env, with a key and CLAUDE_CONFIG_DIR set around it",
-          "CLAUDE_CONFIG_DIR is unset" in good and "credential-like variables: 0" in good and "BASH_ENV is unset" in good,
-          True, " / ".join(good.splitlines()))
+    good = run(built)
+    check("I11/I12/T7 rows_install.install_env with a key and CLAUDE_CONFIG_DIR set around it",
+          "HOME=/tmp/pb184-selfcheck-home" in good and "CLAUDE_CONFIG_DIR is unset" in good
+          and "credential-like variables: 0" in good and "BASH_ENV is unset" in good, True, " / ".join(good.splitlines()))
     raw = run(dirty)
     check("I11/I12 the same probe on the unfiltered env sees them",
           "CLAUDE_CONFIG_DIR is unset" in raw and "credential-like variables: 0" in raw, False, " / ".join(raw.splitlines()[-3:]))
@@ -182,12 +186,65 @@ def install_env() -> None:
           all(re.match(r"(HOME|XDG_\w+)=|\w+ is (unset|SET)$|credential-like variables: \d+$", x) for x in raw.splitlines()), True)
 
 
+def snapshot_whole() -> None:
+    """Two files of 2 MiB that differ only in their last byte must not snapshot alike (round 2, T16)."""
+    d = tempdir("pb184-snap-")
+    (d / "f").write_bytes(b"a" * (2 << 20))
+    before = snapshot(d)
+    (d / "f").write_bytes(b"a" * ((2 << 20) - 1) + b"b")
+    check("T16 a change in the last byte of a 2 MiB file is a change", bool(delta(before, snapshot(d))), True,
+          str(delta(before, snapshot(d))))
+
+
+def step_timeout() -> None:
+    """A step that times out ends everything it started — here a grandchild in its own session that ignores
+    SIGTERM (round 2, T13). The control: the same command through a bare `subprocess.run(timeout=…)`, which
+    leaves that grandchild running (it is then ended by hand)."""
+    d = tempdir("pb184-tmo-")
+    cmd = (f"setsid bash -c 'trap \"\" TERM; echo $$ > {d}/gc; exec sleep 300' & "
+           f"sleep 300")
+
+    def alive(pidfile: Path) -> bool:
+        for _ in range(50):
+            if pidfile.exists() and pidfile.read_text().strip():
+                break
+            time.sleep(0.1)
+        try:
+            os.kill(int(pidfile.read_text()), 0)
+            return True
+        except (OSError, ValueError):
+            return False
+
+    from common import Run, end_tree
+    r = Run("PB-SELFCHECK", "a step that times out", d / "out", [])
+    res = r.step("a step whose grandchild ignores SIGTERM in its own session", cmd, timeout=2)
+    time.sleep(0.5)
+    check("T13 Run.step timed out (124) and its grandchild is gone", res.returncode == 124 and not alive(d / "gc"),
+          True, (res.stderr.strip().splitlines() or [""])[-1])
+    (d / "gc").unlink(missing_ok=True)
+    try:
+        subprocess.run(["bash", "-c", cmd], timeout=2)
+    except subprocess.TimeoutExpired:
+        pass
+    left = alive(d / "gc")
+    check("T13 the OLD way (subprocess.run with a timeout) leaves the grandchild running", left, True)
+    if left:
+        end_tree(int((d / "gc").read_text()))
+
+
 def main(argv: "list[str]") -> int:
     if len(argv) != 1 or not Path(argv[0]).is_dir():
         print("usage: python3 -I tests/live/selfcheck.py <artifacts-dir>", file=sys.stderr)
         return 2
     d = Path(argv[0])
-    for f in (lambda: activate(d), lambda: echo(d), freehand, lambda: availability(d), lambda: merge(d), names, install_env):
+    needs = {activate: "PB-TASK-ACTIVATE", echo: "PB-HOOK-STATE-ECHO", availability: "PB-MODEL-AVAILABILITY",
+             merge: "PB-MERGE-PUSH-GATE"}
+    for f, row in needs.items():
+        if (d / f"{row}.txt").is_file():
+            f(d)
+        else:
+            print(f"skip {f.__name__}: no {row}.txt in {d} (that row was not run)")
+    for f in (freehand, names, install_env, snapshot_whole, step_timeout):
         f()
     print(f"selfcheck: {'every control holds' if not FAILED else f'{len(FAILED)} control(s) do not hold'}")
     return 1 if FAILED else 0

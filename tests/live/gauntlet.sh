@@ -10,7 +10,8 @@
 #   tests/live/gauntlet.sh --out <dir> [ROW-ID ...]     # no ROW-ID: every row
 #   tests/live/gauntlet.sh --list
 #
-# Exit status: 0 every selected row PASS; 1 a row FAILED; 3 none failed, a row is
+# Exit status: 0 every selected row PASS; 1 a row FAILED (any status but 0 and 3, a
+# killed row included) or a selfcheck control did not hold; 3 none failed, a row is
 # WAITING for a target that cannot run now (grok's credit, the owner's own step).
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -31,7 +32,25 @@ if [ ${#ROWS[@]} -eq 0 ]; then
     mapfile -t ROWS < <("${BASH_SOURCE[0]}" --list)
 fi
 
-row() { python3 -I "$HERE/lib/run_row.py" "$1" "$OUT"; }
+# A row runs in the background so a signal to this script reaches it: run_row.py turns SIGTERM/SIGHUP into an
+# exit that ends its steps' processes and a detached session first (impl panel round 2, T14). A row's old
+# artifact goes before it runs, so a row that dies leaves none behind to be read as its verdict (T12).
+child=""
+on_signal() {
+    [ -n "$child" ] && kill -TERM "$child" 2>/dev/null && wait "$child" 2>/dev/null
+    echo "gauntlet: interrupted" >&2
+    exit 143
+}
+trap on_signal TERM HUP INT
+row() {
+    rm -f "$OUT/$1.txt"
+    python3 -I "$HERE/lib/run_row.py" "$1" "$OUT" &
+    child=$!
+    wait "$child"
+    local rc=$?
+    child=""
+    return $rc
+}
 
 worst=0
 for id in "${ROWS[@]}"; do
@@ -105,8 +124,14 @@ for id in "${ROWS[@]}"; do
         *) echo "no live section for $id" >&2; false ;;
     esac
     rc=$?
-    if [ $rc -eq 1 ] || [ $rc -eq 2 ]; then worst=1
+    if [ $rc -ne 0 ] && [ $rc -ne 3 ]; then
+        [ $rc -ne 1 ] && echo "ROW $id: FAIL (the row exited $rc)"
+        worst=1
     elif [ $rc -eq 3 ] && [ $worst -eq 0 ]; then worst=3
     fi
 done
+# The harness's own negative controls, on what this run just wrote: a clause that has gone loose fails the run
+# (impl panel round 2, T11). Controls whose row was not run here are skipped and said so.
+echo "=== selfcheck: the harness's own negative controls on these artifacts"
+python3 -I "$HERE/selfcheck.py" "$OUT" || worst=1
 exit $worst
