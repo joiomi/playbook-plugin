@@ -543,6 +543,107 @@ class TheSingleJudgeAfterRoundTwo(_Sandboxed):
                 self.assertEqual(r.stdout.strip(), "launched", r.stderr)
 
 
+@unittest.skipUnless(bwrap_usable(), "no bubblewrap that can start a sandbox here")
+class SettingsFilesTheEnvironmentNames(_Sandboxed):
+    """Git's system and user settings files are where the ENVIRONMENT puts them: `GIT_CONFIG_SYSTEM`
+    and `GIT_CONFIG_GLOBAL` replace the defaults, `XDG_CONFIG_HOME` and `HOME` move the user's two
+    files, and `GIT_CONFIG_COUNT` with its keys and values can name an include. A file that gives no
+    value — empty, or not there yet — is in nothing git lists; round two looked for three fixed
+    names, and only where they existed. With such a file in a place the run may write, a sandboxed
+    command wrote or created it and the host's next git command, in the same environment, ran the
+    alias it had put there (the single judge after the panel, run 2 — measured by it for two of
+    these shapes, and here for each before anything was changed)."""
+
+    def environment(self, **env):
+        from unittest import mock
+        patch = mock.patch.dict(os.environ, {k: str(v) for k, v in env.items()})
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def write(self, path: Path) -> str:
+        return f"mkdir -p {shlex.quote(str(path.parent))} && " + ADD_ALIAS.format(path=shlex.quote(str(path)))
+
+    def kept(self, path: Path):
+        """A file that is there: the launch keeps it read-only, in a worker's run and in a judge's."""
+        for writable in (True, False):
+            with self.subTest(project_writable=writable):
+                path.write_text("", encoding="utf-8")       # each run from the same start
+                (self.p / MARKER).unlink(missing_ok=True)
+                self.refused(self.inside(self.write(path), project_writable=writable, mask_records=False), str(path))
+                self.assertFalse(self.alias_ran_it(), "the host's git ran the alias the sandboxed command wrote")
+        self.assertEqual(path.read_text(encoding="utf-8"), "")
+
+    def not_launched(self, path: Path):
+        """A file that is not there, where the run could create it: nothing is launched."""
+        for writable in (True, False):
+            with self.subTest(project_writable=writable):
+                path.unlink(missing_ok=True)                # each run from the same start
+                (self.p / MARKER).unlink(missing_ok=True)
+                try:
+                    r = self.inside(self.write(path), project_writable=writable, mask_records=False)
+                except RuntimeError as exc:
+                    self.assertIn(str(path), str(exc))
+                    self.assertIn("does not exist", str(exc))
+                else:
+                    self.fail(f"launched (rc {r.returncode}); the host's git ran the alias: {self.alias_ran_it()}")
+        self.assertFalse(path.exists())
+
+    def test_an_empty_user_file_named_by_GIT_CONFIG_GLOBAL(self):
+        path = self.base / "user.gitconfig"
+        path.write_text("", encoding="utf-8")
+        self.environment(GIT_CONFIG_GLOBAL=path)
+        self.kept(path)
+
+    def test_a_missing_user_file_named_by_GIT_CONFIG_GLOBAL(self):
+        self.environment(GIT_CONFIG_GLOBAL=self.base / "user.gitconfig")
+        self.not_launched(self.base / "user.gitconfig")
+
+    def test_an_empty_system_file_named_by_GIT_CONFIG_SYSTEM(self):
+        path = self.base / "system.gitconfig"
+        path.write_text("", encoding="utf-8")
+        self.environment(GIT_CONFIG_SYSTEM=path)
+        self.kept(path)
+
+    def test_a_missing_system_file_named_by_GIT_CONFIG_SYSTEM(self):
+        self.environment(GIT_CONFIG_SYSTEM=self.base / "system.gitconfig")
+        self.not_launched(self.base / "system.gitconfig")
+
+    def test_an_empty_user_file_under_XDG_CONFIG_HOME(self):
+        path = self.base / "xdg" / "git" / "config"
+        path.parent.mkdir(parents=True)
+        path.write_text("", encoding="utf-8")
+        self.environment(XDG_CONFIG_HOME=self.base / "xdg")
+        self.kept(path)
+
+    def test_a_missing_user_file_under_XDG_CONFIG_HOME(self):
+        self.environment(XDG_CONFIG_HOME=self.base / "xdg")
+        self.not_launched(self.base / "xdg" / "git" / "config")
+
+    def test_an_empty_include_named_by_the_environment(self):
+        path = self.base / "more.gitconfig"
+        path.write_text("", encoding="utf-8")
+        self.environment(GIT_CONFIG_COUNT=1, GIT_CONFIG_KEY_0="include.path", GIT_CONFIG_VALUE_0=path)
+        self.kept(path)
+
+    def test_a_missing_include_named_by_the_environment(self):
+        path = self.base / "more.gitconfig"
+        self.environment(GIT_CONFIG_COUNT=1, GIT_CONFIG_KEY_0="include.path", GIT_CONFIG_VALUE_0=path)
+        self.not_launched(path)
+
+    def test_a_home_the_run_may_write_with_no_user_file(self):
+        # HOME under /tmp (a container, a build job): the run could create `~/.gitconfig`
+        home = self.base / "home"
+        home.mkdir()
+        self.environment(HOME=home, XDG_CONFIG_HOME="")
+        self.not_launched(home / ".gitconfig")
+
+    def test_control_no_user_file_at_all_is_launched(self):
+        # /dev/null, as a hermetic environment sets it: nothing to keep, nothing to create
+        self.environment(GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_SYSTEM="/dev/null")
+        r = self.inside("echo launched")
+        self.assertEqual(r.stdout.strip(), "launched", r.stderr)
+
+
 class NamespaceProtection(_Repo):
     def test_supported_flags_are_added_once_even_with_git_source_permission(self):
         from unittest import mock
