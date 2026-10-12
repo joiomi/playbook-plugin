@@ -323,6 +323,18 @@ def model_availability(out: Path) -> int:
 EDIT_WORDS = re.compile(r"\b((edit|update|modify|rewrite)\s+(the\s+)?(task|task\.md|gates?)|check the box|tick(ed)?)\b", re.I)
 
 
+def names_the_defect(answer: str) -> bool:
+    """A finding marked Critical or Important that names `calc.py`, the planted defect's file, inside the finding —
+    its severity line or the lines under it, up to the next blank line. Read per finding, not per line: a judge may
+    write `**Critical** — src/calc.py:2 …` or `**Critical: …**` with the file on the next line (haiku did, task 170's
+    final run of 21:32 — the clause had read only the first form)."""
+    for m in re.finditer(r"(?m)^\s*\*\*(Critical|Important)\b", answer):
+        finding = re.split(r"\n\s*\n", answer[m.start():], maxsplit=1)[0]
+        if "calc.py" in finding:
+            return True
+    return False
+
+
 def review_triage(out: Path) -> int:
     run = Run("PB-REVIEW-TRIAGE", "real single judges asked for findings only", out, ["claude", "codex", "grok"])
     j = Judges("pb184-triage-")
@@ -350,7 +362,7 @@ def review_triage(out: Path) -> int:
             answer = log.read_text(encoding="utf-8", errors="replace") if log else r.stdout
             run.clause(f"{cli}: the judge answered with findings — the sign error in add — and no gate of the task was "
                        f"ticked or rewritten (the CLI records the review; triage is the agent's)",
-                       gates() == before and re.search(r"\*\*(Critical|Important)\*\*[^\n]*calc\.py", answer) is not None,
+                       gates() == before and names_the_defect(answer),
                        f"gate lines unchanged {gates() == before}; answer head {answer.strip()[:200]!r}")
         run.wait_for(*GROK_WAIT)
     finally:

@@ -445,6 +445,29 @@ def owner_distillation() -> None:
               "; ".join(f"{'PASS' if c[1] else 'FAIL'} {c[0][:50]}" for c in run.clauses if not c[1]) or "all clauses pass")
 
 
+HAIKU_ANSWER = ("## Implementation Review Findings\n\nBased on my review of the completed implementation against the "
+                "stated Intent (\"Add two numbers correctly in src/calc.py\"):\n\n**Critical: Function implements "
+                "subtraction instead of addition**  \nsrc/calc.py:2 — The `add` function returns `a - b` instead of "
+                "`a + b`.\n\n**Important: No test coverage for the core functionality**  \nNo test files exist.\n")
+CODEX_ANSWER = ("**Critical** — src/calc.py:2 subtracts instead of adding: executing `add(2, 3)` returns `-1`, violating "
+                "the stated Intent. Replace `return a - b` with `return a + b`.\n")
+
+
+def triage_answer() -> None:
+    """PB-REVIEW-TRIAGE's reading of a judge's answer (task 170): the planted defect named inside a Critical or
+    Important finding, in either form a real judge wrote it (haiku's, verbatim from the final run of 21:32, and
+    codex's); not without a severity marker, not when the finding does not name the file."""
+    for label, answer, want in (("haiku's real answer (`**Critical: …**`, the file on the next line)", HAIKU_ANSWER, True),
+                                ("codex's real answer (`**Critical** — src/calc.py:2 …`)", CODEX_ANSWER, True),
+                                ("the same finding with no severity marker",
+                                 HAIKU_ANSWER.replace("**Critical: ", "").replace("**Important: ", ""), False),
+                                ("a Critical finding that names another file",
+                                 "**Critical** — src/other.py:2 returns the wrong value.\n", False)):
+        check(f"REVIEW-TRIAGE the judge's answer — {label}", rows_judge.names_the_defect(answer), want)
+    check("REVIEW-TRIAGE the OLD reading on haiku's real answer (it failed the run: one line only)",
+          re.search(r"\*\*(Critical|Important)\*\*[^\n]*calc\.py", HAIKU_ANSWER) is not None, False)
+
+
 def gauntlet_windows() -> None:
     """Two windows the gauntlet's signal handler must cover (task 170, impl round 1), each widened in a copy of
     gauntlet.sh by a `sleep 2` so the signal lands in it every time: (P4) a selfcheck started but not yet held as
@@ -596,7 +619,7 @@ def main(argv: "list[str]") -> int:
         signal.signal(s, lambda signum, _f: sys.exit(128 + signum))
     for f in (freehand, names, install_env, snapshot_whole, step_timeout, step_detached, gauntlet_quarantine,
               registry_probe, docker_timeout, gauntlet_missing_and_lock, spawn_interrupted, gauntlet_interrupted,
-              owner_distillation, gauntlet_windows):
+              owner_distillation, gauntlet_windows, triage_answer):
         f()
     print(f"selfcheck: {'every control holds' if not FAILED else f'{len(FAILED)} control(s) do not hold'}")
     return 1 if FAILED else 0
