@@ -41,3 +41,16 @@ responses Claude Code reports with `--include-hook-events` — never the agent's
 account. Scratch directories are removed when the row ends; the sessions' transcripts
 stay where Claude Code keeps them (`~/.claude/projects/-tmp-pb184-*`), which the
 gauntlet does not touch.
+
+**The judge rows** (`lib/rows_judge.py`) run REAL judges — a claude seat (`haiku`) and a
+codex seat (`gpt-6.1-sol` at `low`) — through the candidate's review paths. Each judge
+CLI is reached through a recording shim placed first on PATH: it stands where the
+judge's CLI starts, inside the judge's sandbox, keeps the exact argv and prompt the
+review path sent, tries one harmless write into the project, and then runs the real
+CLI with the same arguments and prompt. Grok is a target of these rows; while its seat
+answers out of credit they end WAITING, not PASS.
+
+`check_flips.py <artifacts-dir>` holds the ledger to the every-target rule: a row whose
+`required_live_evidence` names targets is verified only with a live proof bound to its
+`scenario:<ROW-ID>` and an artifact that passed every target, waited for none, and was
+made on a clean candidate.

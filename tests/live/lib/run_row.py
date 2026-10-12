@@ -8,12 +8,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import rows_install  # noqa: E402
+import rows_judge  # noqa: E402
 import rows_platform  # noqa: E402
 import rows_session  # noqa: E402
 import rows_session2  # noqa: E402
 
 ROWS = {}
-for module in (rows_platform, rows_install, rows_session, rows_session2):
+for module in (rows_platform, rows_install, rows_session, rows_session2, rows_judge):
     ROWS.update(module.ROWS)
 
 

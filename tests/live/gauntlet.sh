@@ -84,6 +84,24 @@ for id in "${ROWS[@]}"; do
         PB-MERGE-PUSH-GATE)
             echo "=== PB-MERGE-PUSH-GATE: /playbook:merge --push on a disposable two-branch repository: pushed only after the four gates and GREEN; a failing verify pushes nothing"
             row "$id" ;;
+        PB-JUDGE-BLIND-CONTEXT)
+            echo "=== PB-JUDGE-BLIND-CONTEXT: real claude and codex judges: a canary only in the conversation never reaches a task review; the task-less question carries it; --bare carries nothing"
+            row "$id" ;;
+        PB-JUDGE-READONLY)
+            echo "=== PB-JUDGE-READONLY: real claude and codex judges, single and panel: launched read-only, a write from where each starts is denied"
+            row "$id" ;;
+        PB-PANEL-QUORUM)
+            echo "=== PB-PANEL-QUORUM: a controlled mixed-verdict panel (two real seats answer, one fails on purpose) under five quorum settings"
+            row "$id" ;;
+        PB-MODEL-AVAILABILITY)
+            echo "=== PB-MODEL-AVAILABILITY: pins against the real CLIs: supported, missing, entitlement; a removed pin stops a review; a timeout and a budget stop never read as removal"
+            row "$id" ;;
+        PB-REVIEW-TRIAGE)
+            echo "=== PB-REVIEW-TRIAGE: real single judges asked for findings only: no edit instruction sent, task.md untouched"
+            row "$id" ;;
+        PB-CLI-INTENT)
+            echo "=== PB-CLI-INTENT: tasks intent on a finished task: no spend without the exact approval; approved, blind extractions on a real claude judge"
+            row "$id" ;;
         *) echo "no live section for $id" >&2; false ;;
     esac
     rc=$?
