@@ -146,7 +146,13 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   This was measured with bubblewrap 0.6.1. Each launch probes the selected binary once: with working
   `--disable-userns`, it adds `--unshare-user --disable-userns` even with `--rw-git-sources`; otherwise it
   proceeds with one stderr warning naming the limit and the remedy (non-setuid bubblewrap >= 0.8.0).
-  `--print-argv` reports the same. This conditional behavior is the owner's compatibility choice.
+  `--print-argv` reports the same. This conditional behavior is the owner's compatibility choice. Where the
+  flags are added, nothing inside the sandbox can create a user namespace: a nested `bwrap`, `unshare -U`, a
+  rootless container or a browser's own namespace sandbox fail there. The agents are not stopped by it —
+  under bubblewrap 0.8.0 a real Claude and a real Codex judge started and answered. Not covered either: a
+  hook is kept as a file, and what it sources or runs from the project stays the project's — in the husky
+  layout the stub in `.husky/_` is read-only, the `.husky/pre-commit` it sources is not (any hook that runs a
+  linter, a test suite or a package script runs project code).
 - **A `PYTHONPATH` that covers the project no longer switches the destructive-command guard off** (task 180,
   PLAN S11 items 19 and 20; owner decisions 2026-10-10 and 2026-10-11). The helpers the hooks start as files —
   the command guard, the status reader, the payload normalizer and the others — read the user's `PYTHONPATH`,
