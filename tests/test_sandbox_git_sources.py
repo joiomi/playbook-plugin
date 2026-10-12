@@ -642,6 +642,10 @@ class SettingsFilesTheEnvironmentNames(_Sandboxed):
         home.mkdir()
         self.environment(HOME=home, XDG_CONFIG_HOME="")
         self.not_launched(home / ".gitconfig")
+        with self.assertRaises(RuntimeError) as cm:             # … and the refusal names both of them
+            self.plan("true")
+        self.assertIn(str(home / ".config" / "git" / "config"), str(cm.exception))
+        self.assertIn(str(home / ".gitconfig"), str(cm.exception))
         # … and BOTH of the user's files have to be there: made one at a time, the launch is refused
         # for the other, which the run could create as well (the single judge after the panel, run 3)
         (home / ".gitconfig").write_text("", encoding="utf-8")
@@ -657,6 +661,57 @@ class SettingsFilesTheEnvironmentNames(_Sandboxed):
         self.environment(GIT_CONFIG_GLOBAL="/dev/null", GIT_CONFIG_SYSTEM="/dev/null")
         r = self.inside("echo launched")
         self.assertEqual(r.stdout.strip(), "launched", r.stderr)
+
+
+@unittest.skipUnless(bwrap_usable(), "no bubblewrap that can start a sandbox here")
+class TheRecordsAReadOnlyRunCannotRead(_Sandboxed):
+    """A read-only run does not read the conversation records (task 125): they are masked after
+    the project's bind. A place git takes its hooks from is bound read-only LAST — and one that
+    is a directory ABOVE the project, in a place the run may write, was laid over the masks: a
+    judge's run read `.agent/chat_log.md` (the single judge after the panel, run 3 — measured by
+    it, and here on three trees: readable on this one and on the one the panel reviewed, hidden
+    on the tree before task 181 began; the task's own regression, never released). Such a launch
+    is refused, as it already was for git's own directories."""
+
+    def setUp(self):
+        super().setUp()
+        (self.p / ".agent").mkdir()
+        (self.p / ".agent" / "chat_log.md").write_text("THE-RECORD\n", encoding="utf-8")
+
+    def hidden(self, what):
+        try:
+            r = self.inside("cat .agent/chat_log.md", project_writable=False)
+        except RuntimeError as exc:
+            self.assertIn(str(self.base), str(exc))
+            self.assertIn("conversation records", str(exc))
+            self.assertNotIn("--rw-git-sources", str(exc))          # a read-only run: not its option
+            self.assertTrue(str(exc).endswith("Nothing was launched."), str(exc))
+        else:
+            self.assertNotIn("THE-RECORD", r.stdout, f"{what}: a read-only run read the conversation records")
+
+    def test_control_the_records_are_hidden_from_a_read_only_run(self):
+        r = self.inside("cat .agent/chat_log.md", project_writable=False)
+        self.assertNotIn("THE-RECORD", r.stdout)
+        self.assertNotEqual(r.returncode, 0)
+
+    def test_a_hooks_path_that_is_the_directory_above_the_project(self):
+        _git(self.p, "config", "core.hooksPath", str(self.base))
+        self.hidden("core.hooksPath, absolute")
+
+    def test_a_relative_hooks_path_that_leads_above_the_project(self):
+        _git(self.p, "config", "core.hooksPath", "..")
+        self.hidden("core.hooksPath, relative")
+
+    def test_a_hooks_link_that_leads_above_the_project(self):
+        shutil.rmtree(self.p / ".git" / "hooks")
+        os.symlink("../..", self.p / ".git" / "hooks")
+        self.hidden("`.git/hooks` as a link")
+
+    def test_control_a_run_that_keeps_the_records_is_launched(self):
+        # the monitor: nothing is hidden from it, so nothing can be shown
+        _git(self.p, "config", "core.hooksPath", str(self.base))
+        r = self.inside("cat .agent/chat_log.md", project_writable=False, mask_records=False)
+        self.assertEqual(r.stdout, "THE-RECORD\n", r.stderr)
 
 
 class NamespaceProtection(_Repo):
@@ -1142,6 +1197,34 @@ class WhereTheBindsGo(_Repo):
         with self.assertRaises(RuntimeError) as cm:
             self.argv(project_writable=False, mask_records=False, git_sources_unanswered=[str(self.p)])
         self.assertNotIn("--rw-git-sources", str(cm.exception))
+
+    # the single judge after round 2, run 3
+    def test_a_source_over_the_hidden_records_refuses_a_read_only_run(self):
+        (self.p / ".agent").mkdir()
+        (self.p / ".agent" / "chat_log.md").write_text("x\n", encoding="utf-8")
+        above = str(self.p.parent)
+        with self.assertRaises(RuntimeError) as cm:
+            self.argv(project_writable=False, git_sources=[above])
+        self.assertIn(above, str(cm.exception))
+        self.assertIn("conversation records", str(cm.exception))
+        # … with the records kept (the monitor) there is nothing to show: it is bound read-only, last
+        b = self.binds(self.argv(project_writable=False, mask_records=False, git_sources=[above]))
+        self.assertEqual(b[-1], ("--ro-bind", above))
+        # … and a worker's run is refused for another reason: it must write the project inside it
+        with self.assertRaisesRegex(RuntimeError, "must be able to write"):
+            self.argv(git_sources=[above])
+
+    def test_every_missing_place_the_run_could_create_is_named_in_one_refusal(self):
+        one, two = str(self.p / "later-hooks"), str(self.p / "later.gitconfig")
+        with self.assertRaises(RuntimeError) as cm:
+            self.argv(git_sources_missing=[one, str(self.p / ".git" / "not-creatable"), two])
+        said = str(cm.exception)
+        self.assertIn(one, said)
+        self.assertIn(two, said)
+        self.assertNotIn("not-creatable", said)                 # under the read-only git directory
+        self.assertIn("does not exist", said)
+        self.assertNotIn("is told to", said)                    # a default file nobody set is looked for too
+        self.assertTrue(said.endswith("Nothing was launched."), said)
 
 
 @unittest.skipUnless(bwrap_usable(), "no bubblewrap that can start a sandbox here")
