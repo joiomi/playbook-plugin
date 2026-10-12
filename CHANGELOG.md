@@ -5,6 +5,14 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 ## [Unreleased]
 
 ### Changed
+- **The guarantee ledger no longer promises codex and grok as the agent that runs your session** (task 183;
+  owner decision 2026-10-12). Claude is the only supported agent; codex and grok are supported as JUDGES.
+  The two rows about launching codex or grok as the agent (`PB-PROVIDER-BOOTSTRAP`, `PB-PROVIDER-HOOK-INSTALL`)
+  now say that surface is experimental, claim only what their tests assert, and no longer ask for a live
+  run: one clause each was dropped because no test asserted it (the launcher "injects bootstrap
+  instructions"; uninstalling is idempotent; the plugin root resolves the same from the mirror tree), and
+  one sentence that had become false since task 180 (Codex's hook install "asserted by no test") is now a
+  claim with that test. Nothing in the product changed.
 
 - **A background notification no longer wipes the stop hook's work count** (task 173; owner decision Q1 of
   2026-09-24). The stop hook lets a turn end with gates open when the session's counters say it was a chat reply: no
