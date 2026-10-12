@@ -7155,7 +7155,7 @@
     {
       "id": "PB-PROVIDER-BOOTSTRAP",
       "category": "providers-and-hooks",
-      "statement": "Experimental foreign-agent surface, not supported — Claude is the only supported agent (owner decisions 2026-08-21 and 2026-10-12, task 183); this row states what the code does, not a support claim: each foreign-provider launcher (`playbook-codex`, `playbook-grok`, `playbook-agy`, `playbook-pi`) exports the project root it finds — walking up from a subdirectory — and provisions exactly one session directory in the lane the project's `.agent/current_user` marker names; on a multi-user project without the marker, or with an invalid one, it exits 1, says why, creates no session directory and does not launch the agent.",
+      "statement": "Experimental foreign-agent surface, not supported — Claude is the only supported agent (owner decisions 2026-08-21 and 2026-10-12, task 183); this row states what the code does, not a support claim: each foreign-provider launcher (`playbook-codex`, `playbook-grok`, `playbook-agy`, `playbook-pi`) exports the project root it finds — walking up from a subdirectory — and provisions exactly one session directory in the lane the project's `.agent/current_user` marker names; on a multi-user project — per-user task lanes and no root `.agent/tasks/` — without the marker, or with an invalid one, it exits 1, says why, creates no session directory and does not launch the agent (a mixed project, root tasks beside the lanes, keeps launching on the root lane).",
       "owner": [
         {
           "path": "plugins/playbook/scripts/playbook-codex",
@@ -7214,6 +7214,19 @@
           "limitations": [
             "A multi-user project with no marker: every launcher exits 1, names the missing marker and the command that sets it, creates no session directory and never reaches its exec (the shim's `launched` line absent)."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/wrapper-multiuser-fixture.sh",
+          "reference": "scenario:S5",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/wrapper-multiuser-fixture.sh",
+            "reference": "scenario:S2"
+          },
+          "limitations": [
+            "Extended by task 183 after its panel: besides codex on a legacy layout, every launcher on a multi-user project with three invalid markers exits 1, names the problem, creates no session directory and never reaches its exec (48 new assertions; a pi launcher broken to ignore the marker turned three of them red)."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -7221,7 +7234,9 @@
       ],
       "applicable_providers": [
         "codex",
-        "grok"
+        "grok",
+        "antigravity",
+        "pi"
       ],
       "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
@@ -7229,11 +7244,10 @@
         "The launcher refusals this entry relies on are S15 assertions that pass in every logger condition; the two S15 assertions that failed under an active logger belong to the shell-logger surface and are recorded on PB-LANE-RESOLUTION, not counted again here; they are green under the corrected 1.5.34 bundled logger and still red under the stale installed copy.",
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is supported on Claude ONLY; this foreign-provider launcher/bootstrap path is EXPERIMENTAL — adapter code retained, no support claim, no live evidence.",
         "antigravity and pi removed as experimental (owner decision 2026-08-21); codex and grok are retained here only as the experimental foreign-agent surface.",
-        "2026-10-12 task 183 (owner, options dialog: \"Scot promisiunile (Recomandat)\" — \"claude o sa fie mereu agentul principal, cel care ruleaza in sesiunea in care vorbesc si fac develop... restul sunt doar judges\"): the live requirement for codex and grok run as AGENTS is removed — there is no support claim for it to prove; the row was narrowed to what its cited tests assert, clause by clause (task 100's method), and each clause was watched red on a break of its product line on a scratch copy (`break183.py`, 11 of 11 breaks caught, recorded in task 183). Narrowed: \"injects bootstrap instructions\" is gone — no test asserts it (the fixture's shims record the environment, never the argv or an AGENTS.md); the proof `scenario:S13` is gone from this row — it drives `launch-monitor`, the monitor's launcher, not a provider launcher (it stays the proof of what it asserts elsewhere); `scenario:S4` (no marker → refusal) is added. Breaks that turned the fixture red: no session directory (codex, grok), an empty project root, the root not walked up, the missing-marker refusal disabled, an invalid marker accepted."
+        "2026-10-12 task 183 (owner, options dialog: \"Scot promisiunile (Recomandat)\" — \"claude o sa fie mereu agentul principal, cel care ruleaza in sesiunea in care vorbesc si fac develop... restul sunt doar judges\"): the live requirement for codex and grok run as AGENTS is removed — there is no support claim for it to prove; the row was narrowed to what its cited tests assert, clause by clause (task 100's method), and each clause was watched red on a break of its product line on a scratch copy (`break183.py`, 11 of 11 breaks caught, recorded in task 183). Narrowed: \"injects bootstrap instructions\" is gone — no test asserts it (the fixture's shims record the environment, never the argv or an AGENTS.md); the proof `scenario:S13` is gone from this row — it drives `launch-monitor`, the monitor's launcher, not a provider launcher (it stays the proof of what it asserts elsewhere); `scenario:S4` (no marker → refusal) is added. Breaks that turned the fixture red: no session directory (codex, grok), an empty project root, the root not walked up, the missing-marker refusal disabled, an invalid marker accepted.",
+        "2026-10-12 task 183, after its panel (4/4 PASS, every judge on this row): the invalid-marker clause had only codex on a legacy layout behind it and no \"did not launch\" check — scenario S5 now runs all four launchers on a multi-user project and is cited as its own proof; the missing-marker clause is limited to projects with per-user task lanes and no root `.agent/tasks/` (S6 requires a mixed project to keep launching); `applicable_providers` names the four launchers the statement names, so the 2026-08-21 entry above (\"codex and grok are retained here only\") no longer describes this row; no follow-up phase is left."
       ],
-      "follow_up_phases": [
-        8
-      ],
+      "follow_up_phases": [],
       "required_live_evidence": [],
       "semantic_protocol": null,
       "violation_reproduction": null
@@ -7241,7 +7255,7 @@
     {
       "id": "PB-PROVIDER-HOOK-INSTALL",
       "category": "providers-and-hooks",
-      "statement": "Experimental foreign-agent surface, not supported — Claude is the only supported agent (owner decisions 2026-08-21 and 2026-10-12, task 183); this row states what the code does, not a support claim: `GrokAdapter.install_hooks` writes Grok's global enforcement file with a PreToolUse section, and a second install leaves it in place; `uninstall_hooks` removes it; the payload wires the destructive-command guard on Grok's shell-tool matcher (`Bash`, `Shell`, `run_terminal_command`); the plugin root it resolves is the plugin tree it runs from; Codex's project hook install (`install_project_hooks`) writes `.codex/hooks.json` with Playbook's hooks in place of an older form of its own commands, and a second install changes nothing. Asserted by no test, and not claimed: `tasks init --provider`'s bootstrap-file write, the spaced-path global copy, that Grok trusts the file, and resolution from the mirror tree.",
+      "statement": "Experimental foreign-agent surface, not supported — Claude is the only supported agent (owner decisions 2026-08-21 and 2026-10-12, task 183); this row states what the code does, not a support claim: `GrokAdapter.install_hooks` writes Grok's global enforcement file with a PreToolUse section, and a second install leaves it in place; `uninstall_hooks` removes it; the payload wires the destructive-command guard on Grok's shell-tool matcher (`Bash`, `Shell`, `run_terminal_command`); the plugin root it resolves is the plugin tree it runs from; Codex's project hook install (`install_project_hooks`) writes `.codex/hooks.json` with Playbook's hooks in place of an older form of its own commands that names the same plugin directory (a configuration written by an install in another directory keeps its commands beside the new ones — task 180's stated bound), and a second install leaves the same JSON document. Asserted by no test, and not claimed: `tasks init --provider`'s bootstrap-file write, the spaced-path global copy, that Grok trusts the file, and resolution from the mirror tree.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/project_setup.py",
@@ -7262,10 +7276,6 @@
         {
           "path": "plugins/playbook/provider/adapters/grok.py",
           "reference": "symbol:GrokAdapter.install_hooks"
-        },
-        {
-          "path": "plugins/playbook/provider/adapters/antigravity.py",
-          "reference": "symbol:AntigravityAdapter._build_plugin_manifest"
         }
       ],
       "failure_consequence": "Critical",
@@ -7305,7 +7315,7 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": [
-            "The real `install_project_hooks` on a temporary project holding an older form of Playbook's own commands (task 180): one install leaves exactly the current commands, a second leaves the file byte-identical."
+            "The real `install_project_hooks` on a temporary project holding an older form of Playbook's own commands (task 180): one install leaves exactly the current commands, a second leaves the same JSON document (compared parsed, not byte for byte), with paths that name one plugin directory."
           ]
         }
       ],
@@ -7322,12 +7332,10 @@
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is supported on Claude ONLY; this foreign-provider launcher/bootstrap path is EXPERIMENTAL — adapter code retained, no support claim, no live evidence.",
         "antigravity and pi removed as experimental (owner decision 2026-08-21); codex and grok are retained here only as the experimental foreign-agent surface.",
         "Task 100 (PLAN S8 binding audit, 2026-09-27) NARROWED the statement to what the three cited proofs establish. The earlier wording (`tasks init --provider writes the provider bootstrap file and installs supported hook integrations; Grok's required global enforcement copy is installed for spaced paths`) had no test for cmd_init's provider arm, for codex_hooks.install_project_hooks, or for a spaced install path. Experimental foreign-agent surface; the live install is already in required_live_evidence (S11).",
-        "2026-10-12 task 183 (owner, options dialog: \"Scot promisiunile (Recomandat)\" — \"claude o sa fie mereu agentul principal, cel care ruleaza in sesiunea in care vorbesc si fac develop... restul sunt doar judges\"): the live requirement for codex and grok run as AGENTS is removed — there is no support claim for it to prove; the row was narrowed to what its cited tests assert, clause by clause (task 100's method), and each clause was watched red on a break of its product line on a scratch copy (`break183.py`, 11 of 11 breaks caught, recorded in task 183). Narrowed: the old statement said Codex's `install_project_hooks` is \"asserted by no test\" — false since task 180, so it is now claimed with that test; \"uninstall removes it, idempotently\" became \"uninstall removes it\" (the test installs twice and uninstalls once); \"resolving the plugin root identically from the canonical and mirror trees\" became \"the plugin tree it runs from\" (the test checks only that the mirror file exists). The note above that the live install sits in `required_live_evidence` (S11) no longer holds. Breaks that turned a cited test red: no write, no removal, the guard swapped for the edit gate, a wrong plugin root, a Codex merge that appends instead of replacing."
+        "2026-10-12 task 183 (owner, options dialog: \"Scot promisiunile (Recomandat)\" — \"claude o sa fie mereu agentul principal, cel care ruleaza in sesiunea in care vorbesc si fac develop... restul sunt doar judges\"): the live requirement for codex and grok run as AGENTS is removed — there is no support claim for it to prove; the row was narrowed to what its cited tests assert, clause by clause (task 100's method), and each clause was watched red on a break of its product line on a scratch copy (`break183.py`, 11 of 11 breaks caught, recorded in task 183). Narrowed: the old statement said Codex's `install_project_hooks` is \"asserted by no test\" — false since task 180, so it is now claimed with that test; \"uninstall removes it, idempotently\" became \"uninstall removes it\" (the test installs twice and uninstalls once); \"resolving the plugin root identically from the canonical and mirror trees\" became \"the plugin tree it runs from\" (the test checks only that the mirror file exists). The note above that the live install sits in `required_live_evidence` (S11) no longer holds. Breaks that turned a cited test red: no write, no removal, the guard swapped for the edit gate, a wrong plugin root, a Codex merge that appends instead of replacing.",
+        "2026-10-12 task 183, after its panel: Codex's replacement holds only for commands that name the same plugin directory — an older installation's directory is kept beside the new one (12 registrations instead of 6, measured by the codex judge; task 180's bound), now said in the statement; \"byte-identical\" became \"the same JSON document\" (the test compares parsed JSON); the owner entry `AntigravityAdapter._build_plugin_manifest` is gone (nothing in the statement is Antigravity's); no follow-up phase is left."
       ],
-      "follow_up_phases": [
-        8,
-        11
-      ],
+      "follow_up_phases": [],
       "required_live_evidence": [],
       "semantic_protocol": null,
       "violation_reproduction": null

@@ -215,6 +215,19 @@ echo "=== S5: invalid marker fails loud and creates nothing ==="
         assert_contains "$out" "invalid username" "S5[$bad] names the problem"
         assert_eq "$(count_sessions "$d/.agent")" "0" "S5[$bad] creates NO session dir"
     done
+    # … and every launcher, on a multi-user project, never reaching its exec (task 183's
+    # panel: the row claims all four, and this scenario ran codex alone on a legacy layout)
+    for prov in $PROVIDERS; do
+        for bad in "../evil" "-dash" "has space"; do
+            d="$WORK/s5mu-$prov-$(echo "$bad" | tr -c 'a-zA-Z0-9' '_')"
+            build_project "$d" multi-user "$bad"
+            run_wrapper "$prov" "$d" $(wrapper_args "$prov"); out="$OUT"
+            assert_eq "$RC" "1" "S5/$prov[$bad] exits 1 on a multi-user project"
+            assert_contains "$out" "invalid username" "S5/$prov[$bad] names the problem"
+            assert_eq "$(count_sessions "$d/.agent")" "0" "S5/$prov[$bad] creates NO session dir"
+            case "$out" in *launched*) fail "S5/$prov[$bad] launched the agent anyway" ;; *) pass "S5/$prov[$bad] did not launch the agent" ;; esac
+        done
+    done
 }
 
 echo "=== S6: mixed layout (root tasks AND lanes, no marker) keeps working ==="
