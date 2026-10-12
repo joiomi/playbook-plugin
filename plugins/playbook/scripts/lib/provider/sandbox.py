@@ -1103,6 +1103,39 @@ def _repository_on_disk(root: Path) -> bool:
         here = here.parent
 
 
+def _default_settings_files(root: Path) -> "list[Path]":
+    """The system's and the user's settings files, where git looks for them in THIS
+    environment (git-config(1), FILES and ENVIRONMENT) — whether or not they exist:
+    `GIT_CONFIG_SYSTEM` in place of `/etc/gitconfig`, `GIT_CONFIG_GLOBAL` in place of
+    both of the user's files (set and empty: no file of that level), else
+    `~/.gitconfig` and `$XDG_CONFIG_HOME/git/config` (`~/.config` where that is unset
+    or empty). A relative name is read against `root`, the directory git is asked in.
+
+    Round two named the three default files only, and only where they existed: a
+    file the environment names, or one that is not there yet, in a place the run may
+    write was written or created from inside and read by the host's next git command
+    (the single judge after the panel, run 2; measured). Never raises."""
+    env = os.environ
+    files: "list[Path]" = []
+    system = env.get("GIT_CONFIG_SYSTEM")
+    if system is None:
+        files.append(Path("/etc/gitconfig"))
+    elif system:
+        files.append(root / system)
+    user = env.get("GIT_CONFIG_GLOBAL")
+    if user is None:
+        try:
+            home = Path.home()
+        except (RuntimeError, KeyError):
+            home = None                    # no home to be found: git has none to read from either
+        if home is not None:
+            files.append(home / ".gitconfig")
+            files.append(root / (env.get("XDG_CONFIG_HOME") or str(home / ".config")) / "git" / "config")
+    elif user:
+        files.append(root / user)
+    return files
+
+
 def _git_sources(project_dir: "Path | str") -> "tuple[list[str], list[str], list[str], list[str]]":
     """Where git takes its HOOKS and its SETTINGS from, for the project and for each
     repository `code_roots` names: (the places that exist, the places that do not,
@@ -1117,8 +1150,9 @@ def _git_sources(project_dir: "Path | str") -> "tuple[list[str], list[str], list
       * `git rev-parse --git-path hooks` — the hooks directory in effect
         (`core.hooksPath`, or `hooks` in the git directory, which may be a link),
         plus its direct files and the targets of links to them;
-      * the repository's config and config.worktree, and existing system/global
-        files, even when they are empty and emit no values;
+      * the repository's config and config.worktree, and the system's and the
+        user's files where the environment puts them (`_default_settings_files`),
+        even when they are empty and emit no values — or do not exist yet;
       * `git config --list --show-origin` — every settings FILE that gives a value
         (the repository's own, which may be a link; the user's; the system's; every
         include whose condition holds), plus ALL core.hooksPath values, including
@@ -1127,7 +1161,8 @@ def _git_sources(project_dir: "Path | str") -> "tuple[list[str], list[str], list
         directory below the top it named a file that does not exist, and every launch
         there was refused (impl round 1);
       * every `include.path` and `includeIf.<condition>.path` — read against the file
-        that names it, `~` expanded — whether or not the file gives a value, exists,
+        that names it, `~` expanded; one the environment names (`GIT_CONFIG_COUNT`)
+        has no file beside it — whether or not the file gives a value, exists,
         or its condition holds now: the condition is evaluated again on the host;
       * and, for each such file that is NOT in effect now, what the file itself names
         (`git config -f <file> --no-includes`): its own includes, in turn, and its
@@ -1224,10 +1259,11 @@ def _git_sources(project_dir: "Path | str") -> "tuple[list[str], list[str], list
                 path = root / config.rstrip("\n")
                 if name == "config" or os.path.lexists(path):
                     add(path)
-        for path in (Path("/etc/gitconfig"), Path.home() / ".gitconfig",
-                     Path(os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")) / "git/config"):
-            if os.path.lexists(path):
-                add(path)
+        # … and the system's and the user's, wherever this environment puts them and
+        # whether or not they are there: one that is missing where the run could
+        # create it refuses the launch, like any other place git is told to read
+        for path in _default_settings_files(root):
+            add(path)
         rc_list, listed = ask(root, "config", "--list", "--show-origin", "-z")
         # (`--get-regexp` answers 1 when nothing matches: that IS an answer)
         rc_inc, includes = ask(root, "config", "--show-origin", "-z", "--get-regexp",
@@ -1246,9 +1282,12 @@ def _git_sources(project_dir: "Path | str") -> "tuple[list[str], list[str], list
                     in_effect.add(resolved)
         todo: "list[str]" = []
         for origin, key, value in records(includes):
-            if not origin.startswith("file:") or not _INCLUDE_PATH_KEY.match(key) or not value:
+            if not _INCLUDE_PATH_KEY.match(key) or not value:
                 continue
-            resolved = add(named(value, (base / origin[5:]).parent))
+            # (one the environment names — origin "command line:" — has no file beside
+            # it; git takes only an absolute path there, and fails on any other)
+            beside = (base / origin[5:]).parent if origin.startswith("file:") else base
+            resolved = add(named(value, beside))
             if resolved:
                 todo.append(resolved)
         # what a file that is not in effect now names, in the file's own words

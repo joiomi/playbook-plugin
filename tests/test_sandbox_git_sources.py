@@ -88,6 +88,12 @@ class _Repo(unittest.TestCase):
         _git(p, "boom", check=False)
         return (p / MARKER).exists()
 
+    def own(self, paths, root=None):
+        """`paths` without the system's and the user's settings files of this environment:
+        those are named whether or not they exist, and which of them exist is the host's."""
+        usual = {str(f.resolve()) for f in sandbox._default_settings_files(Path(root or self.p))}
+        return [x for x in paths if x not in usual]
+
     def hooks_path(self, name=".githooks", make=True):
         if make:
             (self.p / name).mkdir()
@@ -723,7 +729,7 @@ class WhatGitIsAsked(_Repo):
 
     def sources(self, p=None):
         existing, missing, _link_dirs, _unanswered = sandbox._git_sources(p or self.p)
-        return set(existing), set(missing)
+        return set(existing), set(self.own(missing, p))
 
     def test_the_directories_that_hold_a_link_on_the_way(self):
         # `.git/hooks` as a link: the link is an entry of the git directory
@@ -822,6 +828,92 @@ class WhatGitIsAsked(_Repo):
         self.assertEqual([p for p in existing if p.startswith(str(plain))], [])
         self.assertEqual((missing, link_dirs), ([], []))
 
+    # the single judge after round 2, run 2: the system's and the user's files, where the environment puts them
+    def at_home(self, **env):
+        from unittest import mock
+        home = self.base / "home"
+        home.mkdir(exist_ok=True)
+        plain = {k: v for k, v in os.environ.items()
+                 if k not in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "XDG_CONFIG_HOME")
+                 and not k.startswith(("GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))}
+        patch = mock.patch.dict(os.environ, {**plain, "HOME": str(home), **{k: str(v) for k, v in env.items()}},
+                                clear=True)
+        patch.start()
+        self.addCleanup(patch.stop)
+        return home
+
+    def usual(self):
+        return [str(f) for f in sandbox._default_settings_files(self.p)]
+
+    def test_the_systems_and_the_users_files_are_named_whether_or_not_they_exist(self):
+        home = self.at_home()
+        self.assertEqual(self.usual(), ["/etc/gitconfig", str(home / ".gitconfig"),
+                                        str(home / ".config" / "git" / "config")])
+        existing, missing, _links, unanswered = sandbox._git_sources(self.p)
+        self.assertIn(str(home / ".gitconfig"), missing)
+        self.assertIn(str(home / ".config" / "git" / "config"), missing)
+        self.assertIn("/etc/gitconfig", existing + missing)
+        self.assertEqual(unanswered, [])
+        (home / ".gitconfig").write_text("", encoding="utf-8")       # empty: git lists nothing of it
+        existing, missing, _links, _unanswered = sandbox._git_sources(self.p)
+        self.assertIn(str(home / ".gitconfig"), existing)
+        self.assertNotIn(str(home / ".gitconfig"), missing)
+
+    def test_the_environment_puts_the_systems_and_the_users_files_elsewhere(self):
+        home = self.at_home()
+        user, xdg = str(home / ".gitconfig"), str(home / ".config" / "git" / "config")
+        for env, want in (
+                ({"GIT_CONFIG_GLOBAL": self.base / "u.gitconfig"}, ["/etc/gitconfig", str(self.base / "u.gitconfig")]),
+                ({"GIT_CONFIG_GLOBAL": ""}, ["/etc/gitconfig"]),                    # set and empty: no file of that level
+                ({"GIT_CONFIG_GLOBAL": "rel.gitconfig"}, ["/etc/gitconfig", str(self.p / "rel.gitconfig")]),
+                ({"GIT_CONFIG_SYSTEM": self.base / "s.gitconfig"}, [str(self.base / "s.gitconfig"), user, xdg]),
+                ({"GIT_CONFIG_SYSTEM": ""}, [user, xdg]),
+                ({"GIT_CONFIG_SYSTEM": "rel-system.gitconfig"}, [str(self.p / "rel-system.gitconfig"), user, xdg]),
+                ({"XDG_CONFIG_HOME": self.base / "xdg"}, ["/etc/gitconfig", user, str(self.base / "xdg" / "git" / "config")]),
+                ({"XDG_CONFIG_HOME": ""}, ["/etc/gitconfig", user, xdg]),           # empty: as if unset
+                ({"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null"}, ["/dev/null", "/dev/null"])):
+            with self.subTest(**{k: str(v) for k, v in env.items()}):
+                from unittest import mock
+                with mock.patch.dict(os.environ, {k: str(v) for k, v in env.items()}):
+                    self.assertEqual(self.usual(), want)
+                    # … and git, asked in that environment, is answered for: nothing is left unanswered
+                    existing, missing, _links, unanswered = sandbox._git_sources(self.p)
+                    self.assertEqual(unanswered, [])
+                    for path in want:
+                        self.assertIn(path, existing + missing)
+
+    def test_what_git_itself_reads_in_that_environment(self):
+        # the rule above is git's own, asked of the git on this machine: a file of each kind that
+        # gives a value is in what git lists exactly when `_default_settings_files` names it
+        home = self.at_home()
+        files = {"user": home / ".gitconfig", "xdg": home / ".config" / "git" / "config",
+                 "named": self.base / "named.gitconfig", "xdg2": self.base / "xdg" / "git" / "config"}
+        for name, path in files.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(f"[pb181]\n\t{name} = yes\n", encoding="utf-8")
+        for env in ({}, {"GIT_CONFIG_GLOBAL": files["named"]}, {"GIT_CONFIG_GLOBAL": ""},
+                    {"XDG_CONFIG_HOME": self.base / "xdg"}, {"XDG_CONFIG_HOME": ""}):
+            with self.subTest(**{k: str(v) for k, v in env.items()}):
+                from unittest import mock
+                with mock.patch.dict(os.environ, {k: str(v) for k, v in env.items()}):
+                    listed = _git(self.p, "config", "--list", "--show-origin").stdout
+                    read = {name for name, path in files.items() if f"file:{path}\t" in listed}
+                    named = {name for name, path in files.items() if str(path) in self.usual()}
+                    self.assertEqual(read, named)
+
+    def test_an_include_the_environment_names(self):
+        self.at_home()
+        empty, absent = self.base / "more.gitconfig", self.base / "later.gitconfig"
+        empty.write_text("", encoding="utf-8")
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"GIT_CONFIG_COUNT": "2",
+                                          "GIT_CONFIG_KEY_0": "include.path", "GIT_CONFIG_VALUE_0": str(empty),
+                                          "GIT_CONFIG_KEY_1": "include.path", "GIT_CONFIG_VALUE_1": str(absent)}):
+            existing, missing, _links, unanswered = sandbox._git_sources(self.p)
+        self.assertIn(str(empty), existing)
+        self.assertIn(str(absent), missing)
+        self.assertEqual(unanswered, [])
+
 
 class WhatGitIsAskedBelowTheTopAndBehindAnInclude(_Repo):
     """The same three, as what `_git_sources` answers."""
@@ -831,7 +923,7 @@ class WhatGitIsAskedBelowTheTopAndBehindAnInclude(_Repo):
         existing, missing, _links, unanswered = sandbox._git_sources(self.p / "pkg")
         self.assertIn(str(self.p / ".git" / "config"), existing)
         self.assertIn(str(self.p / ".git" / "hooks"), existing)
-        self.assertEqual((missing, unanswered), ([], []))
+        self.assertEqual((self.own(missing, self.p / "pkg"), unanswered), ([], []))
 
     def test_what_an_include_that_does_not_hold_names(self):
         (self.p / "tools").mkdir()

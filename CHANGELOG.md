@@ -129,7 +129,15 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   for a file you could write or make writable: a hook that is a link to `perl` (one file under two names),
   or a deduplicated system settings file, no longer stops every launch — a `cp -al` copy of a repository
   still does, until its settings file and hooks are copies of their own. A read-only run's refusals no
-  longer name `--rw-git-sources`, which a review cannot pass. **Compatibility limitation:** where processes
+  longer name `--rw-git-sources`, which a review cannot pass. Its second run found that the system's and
+  your own settings files were looked for under three fixed names, and only where they existed: one that
+  the environment names (`GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, `XDG_CONFIG_HOME`, a `HOME` under `/tmp`,
+  an include in `GIT_CONFIG_COUNT`) and that was empty or not there yet, in a place the run may write, was
+  written or created from inside and read by the host's next git command (measured, eight shapes). They
+  are now named where the environment of the launch puts them, whether or not they exist: an empty one is
+  kept read-only, and a missing one that the run could create refuses the launch — so a home under `/tmp`
+  with no `~/.gitconfig` is refused until the file exists (empty will do). **Compatibility limitation:**
+  where processes
   can create nested user/mount namespaces, they can detach the protected tree and replace Git metadata.
   This was measured with bubblewrap 0.6.1. Each launch probes the selected binary once: with working
   `--disable-userns`, it adds `--unshare-user --disable-userns` even with `--rw-git-sources`; otherwise it
