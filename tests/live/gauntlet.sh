@@ -28,6 +28,9 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$OUT" ] || { echo "--out <dir> is required" >&2; exit 2; }
 mkdir -p "$OUT"
+# one run per output directory: a second one would remove the first one's artifacts as its rows start (K3)
+exec 9>"$OUT/.gauntlet.lock"
+flock -n 9 || { echo "another gauntlet run is using $OUT" >&2; exit 2; }
 if [ ${#ROWS[@]} -eq 0 ]; then
     mapfile -t ROWS < <("${BASH_SOURCE[0]}" --list)
 fi
@@ -127,7 +130,10 @@ for id in "${ROWS[@]}"; do
     # an artifact counts only when its verdict is the one its row's exit status says: PASS 0, FAIL 1, WAITING 3.
     # Anything else — a row that died after writing a PASS — is set aside, so check_flips never reads it (J2)
     art="$OUT/$id.txt"
-    if [ -f "$art" ]; then
+    if [ ! -f "$art" ] && { [ $rc -eq 0 ] || [ $rc -eq 3 ]; }; then
+        echo "ROW $id: FAIL (exit $rc and no artifact: nothing says what was run)"
+        rc=1
+    elif [ -f "$art" ]; then
         got=$(sed -n "s/^ROW $id: \([A-Z]*\).*/\1/p" "$art" | tail -1)
         case "$rc:$got" in
             0:PASS|1:FAIL|3:WAITING) ;;

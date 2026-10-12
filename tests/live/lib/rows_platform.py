@@ -7,6 +7,7 @@ import json
 import os
 import shlex
 import shutil
+import subprocess
 import tempfile
 import uuid
 from pathlib import Path
@@ -116,13 +117,20 @@ if touch /pb/.pb184-write-probe 2>/dev/null; then echo "RO-PROBE: written"; else
 '''
 
 
-def _docker(run: Run, title: str, image: str, script: str, *, network: bool = False, extra_env=()):
-    argv = ["docker", "run", "--rm", "-v", f"{PLUGIN}:/pb:ro", "-e", "PYTHONDONTWRITEBYTECODE=1"]
+def _docker(run: Run, title: str, image: str, script: str, *, network: bool = False, extra_env=(),
+            timeout: float = 600):
+    # the container belongs to the docker daemon, not to the step: ending the client on a timeout leaves it running,
+    # so it gets a name of its own and is removed whatever happened (single judge after round 2, run 2, K1)
+    name = f"pb184-{uuid.uuid4().hex[:12]}"
+    argv = ["docker", "run", "--rm", "--name", name, "-v", f"{PLUGIN}:/pb:ro", "-e", "PYTHONDONTWRITEBYTECODE=1"]
     for e in extra_env:
         argv += ["-e", e]
     if not network:
         argv += ["--network", "none"]
-    return run.step(title, argv + [image, "bash", "-c", script], timeout=600)
+    try:
+        return run.step(title, argv + [image, "bash", "-c", script], timeout=timeout)
+    finally:
+        subprocess.run(["docker", "rm", "-f", name], capture_output=True, timeout=60)
 
 
 def python_floor(out: Path) -> int:

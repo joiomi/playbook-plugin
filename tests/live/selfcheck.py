@@ -16,6 +16,8 @@ import copy
 import json
 import os
 import re
+import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -28,7 +30,7 @@ import rows_judge  # noqa: E402
 import rows_platform  # noqa: E402
 import rows_session  # noqa: E402
 import rows_session2  # noqa: E402
-from common import delta, snapshot, tempdir, tool_results  # noqa: E402
+from common import delta, end_tree, snapshot, tempdir, tool_results  # noqa: E402
 
 FAILED: "list[str]" = []
 
@@ -231,15 +233,21 @@ def step_timeout() -> None:
     p = subprocess.Popen(["bash", "-c", cmd], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          stdin=subprocess.DEVNULL, start_new_session=True)
     try:
-        p.wait(timeout=2)
-    except subprocess.TimeoutExpired:
-        p.kill()
-        p.wait()
-    left = alive(d / "gc")
-    check("T13 the OLD way (only the direct child killed on the timeout) leaves the grandchild running", left, True)
-    end_tree(p.pid)                                    # the old way's leftovers: its group (the foreground sleep) …
-    if left:
-        end_tree(int((d / "gc").read_text()))          # … and the grandchild in its own session
+        try:
+            p.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.wait()
+        left = alive(d / "gc")
+        check("T13 the OLD way (only the direct child killed on the timeout) leaves the grandchild running", left, True)
+    finally:
+        # the old way's leftovers, whatever happened — an interrupted selfcheck included (K2): its group (the
+        # foreground sleep) and the grandchild in its own session
+        end_tree(p.pid)
+        try:
+            end_tree(int((d / "gc").read_text()))
+        except (OSError, ValueError):
+            pass
 
 
 def step_detached() -> None:
@@ -300,6 +308,52 @@ def registry_probe() -> None:
         check(f"J3 the newest-image clause with the registry answering {label}", ok, want, said)
 
 
+def docker_timeout() -> None:
+    """A container whose step times out is removed, not left to the daemon (K1). Skipped without docker."""
+    if not shutil.which("docker"):
+        print("skip docker_timeout: no docker")
+        return
+    d = tempdir("pb184-dk-")
+    from common import Run
+    run = Run("PB-SELFCHECK", "a container step that times out", d / "out", [])
+    seen = []
+    real_step = run.step
+
+    def step(title, argv, **kw):                       # record the container's name as the step starts it
+        seen.extend(a for a in argv if str(a).startswith("pb184-"))
+        return real_step(title, argv, **kw)
+    run.step = step
+    r = rows_platform._docker(run, "sleep past the limit", rows_platform.OLD_IMAGE, "sleep 300", timeout=8)
+    left = subprocess.run(["docker", "ps", "-a", "-q", "--filter", f"name={seen[0]}"], capture_output=True,
+                          text=True).stdout.strip() if seen else "?"
+    check("K1 a container step that timed out leaves no container behind", r.returncode == 124 and left == "", True,
+          f"rc {r.returncode}; container {seen[:1]} still there: {left!r}")
+
+
+def gauntlet_missing_and_lock() -> None:
+    """gauntlet.sh: a row that exits 0 and writes nothing fails the run; a second run on the same --out is
+    refused while the first holds it (K3)."""
+    d = tempdir("pb184-gm-")
+    (d / "lib").mkdir()
+    (d / "gauntlet.sh").write_text((Path(__file__).resolve().parent / "gauntlet.sh").read_text())
+    (d / "lib" / "run_row.py").write_text("import sys\nsys.exit(0)\n")
+    (d / "selfcheck.py").write_text("import sys\nsys.exit(0)\n")
+    out = d / "out"
+    r = subprocess.run(["bash", str(d / "gauntlet.sh"), "--out", str(out), "PB-PYTHON-FLOOR"], capture_output=True,
+                       text=True, timeout=60)
+    check("K3 a row that exits 0 with no artifact fails the run", r.returncode == 1 and "no artifact" in r.stdout, True,
+          f"rc {r.returncode}; " + " / ".join(x for x in r.stdout.splitlines() if x.startswith("ROW")))
+    holder = subprocess.Popen(["flock", str(out / ".gauntlet.lock"), "sleep", "30"], start_new_session=True)
+    try:
+        time.sleep(0.5)
+        r = subprocess.run(["bash", str(d / "gauntlet.sh"), "--out", str(out), "PB-PYTHON-FLOOR"],
+                           capture_output=True, text=True, timeout=60)
+        check("K3 a second run on an --out another run holds is refused (exit 2)", r.returncode == 2
+              and "another gauntlet run" in r.stderr, True, f"rc {r.returncode}; {r.stderr.strip()[:120]!r}")
+    finally:
+        end_tree(holder.pid)
+
+
 def main(argv: "list[str]") -> int:
     if len(argv) != 1 or not Path(argv[0]).is_dir():
         print("usage: python3 -I tests/live/selfcheck.py <artifacts-dir>", file=sys.stderr)
@@ -312,8 +366,10 @@ def main(argv: "list[str]") -> int:
             f(d)
         else:
             print(f"skip {f.__name__}: no {row}.txt in {d} (that row was not run)")
+    for s in (signal.SIGTERM, signal.SIGHUP):            # an interrupted selfcheck still runs its cleanups (K2)
+        signal.signal(s, lambda signum, _f: sys.exit(128 + signum))
     for f in (freehand, names, install_env, snapshot_whole, step_timeout, step_detached, gauntlet_quarantine,
-              registry_probe):
+              registry_probe, docker_timeout, gauntlet_missing_and_lock):
         f()
     print(f"selfcheck: {'every control holds' if not FAILED else f'{len(FAILED)} control(s) do not hold'}")
     return 1 if FAILED else 0
