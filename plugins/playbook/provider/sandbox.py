@@ -588,11 +588,12 @@ def build_bwrap_argv(
     refused) and
     `git_sources` / `git_sources_missing` / `git_source_links` (`_git_sources`, task
     181): the places git takes its hooks and its settings from. One the run could
-    write is bound read-only, last. Three cannot be kept: one that does not exist
+    write is bound read-only, last. Four cannot be kept: one that does not exist
     where the run could CREATE it; one that is, or contains, a path the run must
-    write; and one reached through a link that sits in a directory the run may
-    write (what the link names is bound — the link itself could be replaced) — the
-    launch is refused. A source file with multiple hard links also refuses the
+    write; one that is in or over a place where the run hides the conversation
+    records (its bind would be laid over the masks); and one reached through a link
+    that sits in a directory the run may write (what the link names is bound — the
+    link itself could be replaced) — the launch is refused. A source file with multiple hard links also refuses the
     launch, including a file inside an already read-only hooks directory: another
     name could still be writable — where this user could write the file or make it
     writable (its owner); a file of another owner that this user cannot write is
@@ -805,19 +806,35 @@ def build_bwrap_argv(
                     f"git takes its hooks or settings from {source}, and this run must be able to write "
                     f"{needed}, which is that place or lies inside it — it cannot be kept read-only, and "
                     "left writable the agent could change what git runs on this machine. " + allow)
-            # (No check against the hidden records here: a place the masks hide is not
-            # writable, so it never reaches this line, and one that COVERS a hidden place
-            # from a writable directory covers that directory's bind and was refused above.)
+            # What the masks hide stays hidden. A source that COVERS a hidden place — a
+            # hooks directory that is a directory above a judge's read-only project — is
+            # governed by a writable bind further up and holds no path the run must
+            # write, so nothing above refuses it; bound read-only last, it was laid OVER
+            # the masks and the run read the records (the single judge after round 2,
+            # run 3; measured — the comment that stood here said it could not happen).
+            touched = next((t for t in hidden if _overlaps(source, t)), None)
+            if touched is not None:
+                raise RuntimeError(
+                    f"git takes its hooks or settings from {source}, which is in or over a place where a "
+                    f"read-only run hides the conversation records ({touched}) — kept read-only there, it "
+                    "would show them. Pass --keep-records if this run may read the records. " + allow)
             kept.append(source)
             decided.append((source, False))
+        creatable: list[str] = []
         for absent in dict.fromkeys(str(Path(s).resolve()) for s in (git_sources_missing or [])):
             within = writable_then(absent)
             if within is not None:
-                raise RuntimeError(
-                    f"git is told to take its hooks or settings from {absent}, which does not exist — and "
-                    f"this run could create it (it lies in {within}, which the run may write): git would "
-                    "then run on this machine what the agent put there. Create it yourself (empty will do) "
-                    "so that it can be kept read-only. " + allow)
+                creatable.append(f"{absent} (in {within}, which the run may write)")
+        if creatable:
+            # All of them in one refusal: named one at a time, a home under /tmp was
+            # refused for `~/.gitconfig` and, once that was made, for `~/.config/git/config`
+            # (the single judge after round 2, run 3). And "looks for", not "is told to":
+            # the system's and the user's files are read without anyone naming them.
+            raise RuntimeError(
+                "git looks for its hooks or settings in a place that does not exist and that this run "
+                f"could create — {'; '.join(creatable)}: git would then run on this machine what the "
+                "agent put there. Create each one yourself (empty will do) so that it can be kept "
+                "read-only. " + allow)
         for holder in dict.fromkeys(str(Path(s).resolve()) for s in (git_source_links or [])):
             within = writable_then(holder)
             if within is not None:

@@ -137,7 +137,11 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   are now named where the environment of the launch puts them, whether or not they exist: an empty one is
   kept read-only, and a missing one that the run could create refuses the launch — so a home under `/tmp`
   is refused until BOTH of your settings files exist there, `~/.gitconfig` and `~/.config/git/config`
-  (empty will do; the refusal names one at a time). **Compatibility limitation:** where processes
+  (empty will do; one refusal names both). Its third run found a regression of this task's own first form:
+  a hooks directory that is a directory ABOVE a read-only project, in a place the run may write, was bound
+  read-only over what hides the conversation records from a judge, and the judge's run could read them
+  (measured on three trees; hidden before this task; never released). Such a launch is now refused, as it
+  already was for git's own directories. **Compatibility limitation:** where processes
   can create nested user/mount namespaces, they can detach the protected tree and replace Git metadata.
   This was measured with bubblewrap 0.6.1. Each launch probes the selected binary once: with working
   `--disable-userns`, it adds `--unshare-user --disable-userns` even with `--rw-git-sources`; otherwise it
