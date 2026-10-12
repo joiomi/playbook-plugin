@@ -48,6 +48,12 @@ for id in "${ROWS[@]}"; do
         PB-SANDBOX-READ-NETWORK)
             echo "=== PB-SANDBOX-READ-NETWORK: a real judge run reads outside the project and the network, cannot write it, cannot read the records"
             row "$id" ;;
+        PB-UPGRADE-INSTALLED-COPY)
+            echo "=== PB-UPGRADE-INSTALLED-COPY: a disposable v1.6.0 install upgraded to the candidate by the real plugin manager; init re-run from the manifest's copy"
+            row "$id" ;;
+        PB-INSTALL-ROLLBACK)
+            echo "=== PB-INSTALL-ROLLBACK: the upgraded copy's init interrupted three controlled ways; everything restored; a re-run recovers"
+            row "$id" ;;
         *) echo "no live section for $id" >&2; false ;;
     esac
     rc=$?
