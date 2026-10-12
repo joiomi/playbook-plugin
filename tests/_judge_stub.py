@@ -24,12 +24,22 @@ PLUGIN = ROOT / "plugins" / "playbook"
 TASKS = PLUGIN / "scripts" / "tasks"
 
 _STUB = r'''#!/bin/bash
-prompt="$(cat)"
 d="${PB_STUB_DIR:?PB_STUB_DIR unset}"
-n="$(date +%s%N)-$$"
 model=""
 prev=""
-for a in "$@"; do [ "$prev" = "--model" ] && model="$a"; prev="$a"; done
+probe=""
+for a in "$@"; do
+    [ "$prev" = "--model" ] && model="$a"; prev="$a"
+    [ "$a" = "reply with exactly: ok" ] && probe=1     # `tasks models check` / the review's dead-pin probe
+done
+gone="There's an issue with the selected model ($model). It may not exist or you may not have access to it."
+case " ${PB_STUB_GONE_MODELS:-} " in *" $model "*) echo "$gone"; exit 1 ;; esac
+if [ -n "$probe" ]; then echo "ok"; exit 0; fi
+case " ${PB_STUB_GONE_IN_REVIEW_ONLY:-} " in *" $model "*) echo "$gone"; exit 1 ;; esac
+case " ${PB_STUB_BUDGET_MODELS:-} " in *" $model "*) echo "Error: Exceeded USD budget (0.05)"; exit 1 ;; esac
+case " ${PB_STUB_TIMEOUT_MODELS:-} " in *" $model "*) echo "API Error: Request timed out."; exit 1 ;; esac
+prompt="$(cat)"
+n="$(date +%s%N)-$$"
 printf '%s' "$prompt" > "$d/prompt-$model-$n.txt"
 printf '%s\n' "$@" > "$d/argv-$model-$n.txt"
 if { echo "a judge was here" > "$PWD/judge-was-here.txt"; } 2> "$d/write-$model-$n.txt"; then
@@ -45,11 +55,25 @@ printf '**Important** — `src/x.py:1` a finding from the stand-in judge (%s).\n
 '''
 
 
-def stub_bin(directory: Path) -> Path:
+_AGY = r'''#!/bin/bash
+# a stand-in agy: `agy models` prints the 1.2.17 listing shape (`id<TAB>label`), nothing else answers
+if [ "${1:-}" = "models" ]; then
+    printf 'gemini-3.8-flash-high\tGemini 3.8 Flash (High)\ngemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)\n'
+    exit 0
+fi
+echo "stand-in agy: not a judge" >&2
+exit 1
+'''
+
+
+def stub_bin(directory: Path, *, agy: bool = False) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     claude = directory / "claude"
     claude.write_text(_STUB, encoding="utf-8")
     claude.chmod(0o755)
+    if agy:
+        (directory / "agy").write_text(_AGY, encoding="utf-8")
+        (directory / "agy").chmod(0o755)
     return directory
 
 
