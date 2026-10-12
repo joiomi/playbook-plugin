@@ -751,6 +751,15 @@ def installed_root() -> None:
         r = run({"playbook@m": entries}, "installed")
         check(f"installed root: {label}", r.returncode == 0 and f"PLUGIN {copy}" in r.stdout, want,
               (r.stdout.strip().replace("\n", " / ") or (r.stderr.strip().splitlines() or [""])[-1])[:120])
+    # of two entries naming the same copy, the one that records a commit is read — whichever comes first (impl r2, agy)
+    probe_sha = "import sys; sys.path.insert(0, sys.argv[1]); import common; print('SHA', common.INSTALLED.get('gitCommitSha'))"
+    (reg / "installed_plugins.json").write_text(json.dumps({"plugins": {"playbook@m": [
+        {"installPath": str(copy), "scope": "project"}, {"installPath": str(copy), "scope": "user", "gitCommitSha": "a" * 40}]}}),
+        encoding="utf-8")
+    r = subprocess.run([sys.executable, "-I", "-c", probe_sha, str(lib)], capture_output=True, text=True,
+                       env=dict(os.environ, HOME=str(home), PB_LIVE_ROOT="installed"))
+    check("installed root: the entry that records the copy's commit is the one read", r.returncode == 0
+          and r.stdout.strip() == "SHA " + "a" * 40, True, (r.stdout.strip() or r.stderr.strip())[:120])
     # what a row RUNS is the installed copy, not only what common.PLUGIN says (impl r1, codex): a row's own path is
     # executed (the fake copy's `tasks` prints a sentinel), and no rows module keeps a path on the candidate tree
     (reg / "installed_plugins.json").write_text(json.dumps({"plugins": {"playbook@m": [{"installPath": str(copy)}]}}),

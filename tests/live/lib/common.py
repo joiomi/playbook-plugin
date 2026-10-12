@@ -48,7 +48,8 @@ def installed_entry(home: "Path | None" = None) -> dict:
     paths = sorted({str(e.get("installPath") or "") for e in entries})
     if len(paths) != 1 or not paths[0] or not (Path(paths[0]) / "scripts" / "tasks").is_file():
         raise SystemExit(f"installed root: expected ONE playbook copy with scripts/tasks in {reg}, found {paths}")
-    return entries[0]
+    # of the entries naming that copy, the one that records its commit (impl panel r2, agy)
+    return next((e for e in entries if e.get("gitCommitSha")), entries[0])
 
 
 def installed_plugin_root(home: "Path | None" = None) -> Path:
