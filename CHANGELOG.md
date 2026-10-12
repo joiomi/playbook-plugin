@@ -4,6 +4,18 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+## [1.6.1] — 2026-10-13
+
+**The S11 batch: what the second live gauntlet found, fixed, and the ledger's live rows run for real** — PLAN S11,
+tasks 164-184 on `fix/1.6.1-batch`. The fixes below come from the gauntlet of 2026-10-01 (task 109) and from the
+reviews of those fixes; each landed after a judge panel. On 2026-10-11 the owner cut the batch to what is here: the
+rest is listed under *Known limitations* below, with what each costs you today, and is taken up after this release.
+The ledger rows that ask for a real run were run on this batch's tree (`tests/live/gauntlet.sh`, never by CI): the
+grok halves are waived for this release by the owner, grok being out of credit. The suite has 4327 tests (3712 at
+1.6.0); CI is the same two Linux lanes. **Upgrading:** `/playbook:upgrade`, then restart every Claude Code session and
+re-run `/playbook:init` in each project — the shell logger (`~/.claude/bash-log.sh`) and the project's
+`.claude/hooks/monitor-nudge.sh` changed, and only init replaces those copies.
+
 ### Changed
 - **The INTENT.md helper takes a lock** (task 170). `tasks.intent.append_intent` — the function that adds a
   ratified entry to the project's INTENT.md — read the file and replaced it with no lock: two calls at the same
