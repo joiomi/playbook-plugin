@@ -335,7 +335,9 @@ def names_the_defect(answer: str) -> bool:
         end = marks[i + 1].start() if i + 1 < len(marks) else len(answer)
         cap = re.search(r"(?m)^CAP:", answer[m.start():end])
         finding = answer[m.start():m.start() + cap.start()] if cap else answer[m.start():end]
-        if re.search(r"(?<![\w/.-])src/calc\.py\b", finding) and re.search(
+        # the file itself (not `src/calc.py.bak`), an affirmative account (not "unable to inspect … cannot determine")
+        if re.search(r"(?<![\w/.-])src/calc\.py(?!\w)(?!\.\w)", finding) and not re.search(
+                r"unable to|cannot|can't|could not|couldn't|not able to", finding, re.I) and re.search(
                 r"subtract|minus|a - b|returns? `?-1|instead of add|instead of `?a \+ b|\bsign\b", finding, re.I):
             return True
     return False

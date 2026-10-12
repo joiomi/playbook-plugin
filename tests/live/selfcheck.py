@@ -481,7 +481,15 @@ def triage_answer() -> None:
              "**Critical** — src/other_calc.py:2 subtracts instead of adding.\n", False),
             # task 170, post-D6 run 1: an unrelated finding on the right file whose words hold "sign"
             ("an unrelated finding on src/calc.py (its `signature`)",
-             "**Important** — src/calc.py:1 lacks a docstring describing its signature.\n", False)):
+             "**Important** — src/calc.py:1 lacks a docstring describing its signature.\n", False),
+            # post-D6 run 2 (codex): a hedge is no detection, and `src/calc.py.bak` is another file
+            ("a hedged finding that could not determine the defect",
+             "**Important** — Unable to inspect src/calc.py; cannot determine whether add subtracts instead of adding.\n",
+             False),
+            ("the defect described on src/calc.py.bak", "**Critical** — src/calc.py.bak:2 subtracts instead of adding.\n",
+             False),
+            ("the defect at the end of a sentence, `src/calc.py.`",
+             "**Critical** — add() subtracts instead of adding in src/calc.py.\n", True)):
         check(f"REVIEW-TRIAGE (Q2) — {label}", rows_judge.names_the_defect(answer), want)
 
 
