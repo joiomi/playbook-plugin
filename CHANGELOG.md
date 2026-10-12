@@ -31,7 +31,11 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   the Python floor's "incompatible interpreters fail clearly" holds for the twelve entry points that check the
   interpreter; six of Claude's hooks do not check it and, under 3.9, simply run (measured on a project with no
   active task), so the row now says exactly that. The harness also ends every process a timed-out or interrupted
-  step started, fails a run whose row was killed, and runs its own negative controls at the end of every run.
+  step started, fails a run whose row was killed, and runs its own negative controls at the end of every run. The
+  final run met one intermittent failure of the product, fail-closed: once in seven runs of the activation row an
+  edit after `tasks work 1` was refused with "no session identity" (the hooks' process-tree walk did not reach the
+  session); the next three runs passed. The cause is not established; the row states it as a bound, and it is
+  routed after this release.
 
 - **The guarantee ledger no longer promises codex and grok as the agent that runs your session** (task 183;
   owner decision 2026-10-12). Claude is the only supported agent; codex and grok are supported as JUDGES.

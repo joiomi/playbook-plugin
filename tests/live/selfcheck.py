@@ -222,14 +222,20 @@ def step_timeout() -> None:
     check("T13 Run.step timed out (124) and its grandchild is gone", res.returncode == 124 and not alive(d / "gc"),
           True, (res.stderr.strip().splitlines() or [""])[-1])
     (d / "gc").unlink(missing_ok=True)
+    # the old way: kill only the direct child on the timeout, as `subprocess.run(timeout=…)` does. Its own group
+    # and no pipe, so what it leaves behind can be ended here and holds no reader of this script's output open
+    p = subprocess.Popen(["bash", "-c", cmd], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         stdin=subprocess.DEVNULL, start_new_session=True)
     try:
-        subprocess.run(["bash", "-c", cmd], timeout=2)
+        p.wait(timeout=2)
     except subprocess.TimeoutExpired:
-        pass
+        p.kill()
+        p.wait()
     left = alive(d / "gc")
-    check("T13 the OLD way (subprocess.run with a timeout) leaves the grandchild running", left, True)
+    check("T13 the OLD way (only the direct child killed on the timeout) leaves the grandchild running", left, True)
+    end_tree(p.pid)                                    # the old way's leftovers: its group (the foreground sleep) …
     if left:
-        end_tree(int((d / "gc").read_text()))
+        end_tree(int((d / "gc").read_text()))          # … and the grandchild in its own session
 
 
 def main(argv: "list[str]") -> int:

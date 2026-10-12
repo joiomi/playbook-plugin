@@ -6,7 +6,7 @@
     {
       "id": "PB-TASK-ACTIVATE",
       "category": "task-lifecycle",
-      "statement": "tasks work resolves the active task from the per-session pointer, and the edit gate refuses to authorize a code edit when that pointer is junk, a stale number, glob-bearing, or points at a done task or at a blocked one (paused on the owner's decision; the refusal names `tasks work <N>` as the resume), while a real pending pointer authorizes. BOUND (PLAN §S11 item (23), deferred after the 1.6.1 release): the hooks find the active task's record with `find -path \"*/<N>-*/*\"`, which also matches every record when the PROJECT directory's own name starts with `<N>-`; in such a project the hook reads the first record `find` lists, which may be another task's.",
+      "statement": "tasks work resolves the active task from the per-session pointer, and the edit gate refuses to authorize a code edit when that pointer is junk, a stale number, glob-bearing, or points at a done task or at a blocked one (paused on the owner's decision; the refusal names `tasks work <N>` as the resume), while a real pending pointer authorizes. BOUND (PLAN §S11 item (23), deferred after the 1.6.1 release): the hooks find the active task's record with `find -path \"*/<N>-*/*\"`, which also matches every record when the PROJECT directory's own name starts with `<N>-`; in such a project the hook reads the first record `find` lists, which may be another task's. BOUND (task 184, impl round 2's full live run, 2026-10-12 18:00; deferred after the 1.6.1 release): the gate's session lookup can fail in a live session — once in seven live runs of this row the edit after `tasks work 1` was refused with \"playbook: no session identity — … the process-tree walk either reached the Claude Code background daemon (bg-pty-host) or could not read an ancestor process\" and the empty session id in the journal; the next three runs passed. It fails closed (the edit is refused, nothing is written), the cause is not established, and every hook that resolves its session by that walk can meet it.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/lifecycle.py",
@@ -93,7 +93,8 @@
           "boundary": "live-provider",
           "negative_control": null,
           "limitations": [
-            "A real headless claude session (Claude Code 2.1.296, haiku) on the candidate: an edit with no active task refused (journaled), the same edit allowed once `tasks work 1` set a pending task, and refused again once the task was blocked, the refusal naming `tasks work 001`. Junk, stale, glob-bearing and done pointers stay unit/integration-proven."
+            "A real headless claude session (Claude Code 2.1.296, haiku) on the candidate: an edit with no active task refused (journaled), the same edit allowed once `tasks work 1` set a pending task, and refused again once the task was blocked, the refusal naming `tasks work 001`. Junk, stale, glob-bearing and done pointers stay unit/integration-proven.",
+            "The failing run is kept in task 184's record (`live/failed/PB-TASK-ACTIVATE.full-run-1800.txt`); the bound above is what it showed."
           ]
         }
       ],
