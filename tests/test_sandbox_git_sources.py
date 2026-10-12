@@ -456,6 +456,93 @@ os.rename('replacement/.git', '.git', src_dir_fd=fd, dst_dir_fd=fd)
         self.assertNotEqual(r.returncode, 0, "nested user namespaces were allowed")
 
 
+@unittest.skipUnless(bwrap_usable(), "no bubblewrap that can start a sandbox here")
+class TheSingleJudgeAfterRoundTwo(_Sandboxed):
+    """Round 2 fixed the directories above a kept place counting from the OUTERMOST writable
+    bind over it (`/tmp`), and laid one that holds no other bind after everything else. A code
+    root inside a READ-ONLY project is such a directory: `--bind <project>/plugin` came after
+    `--ro-bind <project>`, and a judge's run could write the code root (the single judge after
+    the panel, run 1 — measured by it, and here before anything was changed: "the write went
+    through"). A directory is now fixed only where the bind that governs it leaves it writable:
+    under a read-only one nothing can be renamed anyway.
+
+    The two `…cannot_be_moved_aside` tests are CONTROLS, green before the repair too. A
+    directory that holds another bind is bound onto itself BEFORE the project's bind, which is
+    then laid over it — read from the argv, that looked like a directory nothing fixes any
+    more. Measured, it is not: the kernel refuses to rename a directory that any mount of the
+    namespace sits on, one hidden under a later mount too ("Device or resource busy")."""
+
+    def code_root(self):
+        nested = self.repo("proj/plugin")
+        (self.p / ".agent").mkdir()
+        (self.p / ".agent" / "config.json").write_text(json.dumps({"code_roots": ["plugin"]}), encoding="utf-8")
+        return nested
+
+    def test_a_read_only_run_cannot_write_inside_a_code_root(self):
+        nested = self.code_root()
+        for masks in (None, False):      # a judge's run hides the records, the monitor's keeps them
+            with self.subTest(mask_records=masks):
+                self.refused(self.inside("echo more >> plugin/a.txt", project_writable=False, mask_records=masks),
+                             "a code root in a read-only project")
+                self.assertEqual((nested / "a.txt").read_text(encoding="utf-8"), "a\n")
+                # … and what is not fixed there cannot be moved aside either: nothing can, in a read-only place
+                self.refused(self.inside("mv plugin p2", project_writable=False, mask_records=masks),
+                             "moving a code root of a read-only project aside")
+                self.assertTrue((nested / ".git").is_dir())
+
+    def test_a_read_only_run_keeps_its_outdir_inside_a_code_root(self):
+        nested = self.code_root()
+        out = nested / "out"
+        r = self.inside("echo verdict > plugin/out/v.txt; echo more >> plugin/a.txt; echo rc=$?",
+                        project_writable=False, extra_rw=[str(out)])
+        self.assertEqual((out / "v.txt").read_text(encoding="utf-8"), "verdict\n", r.stderr)
+        self.assertIn("Read-only file system", r.stdout + r.stderr)
+        self.assertEqual((nested / "a.txt").read_text(encoding="utf-8"), "a\n")
+
+    def test_a_directory_that_holds_a_writable_path_cannot_be_moved_aside(self):
+        (self.p / "a" / "hooks").mkdir(parents=True)
+        (self.p / "a" / "hooks" / "pre-commit").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        os.chmod(self.p / "a" / "hooks" / "pre-commit", 0o755)
+        _git(self.p, "config", "core.hooksPath", "a/hooks")
+        r = self.inside("mv a a2 && mkdir -p a/hooks && " + WRITE_HOOK.format(path="a/hooks/pre-commit"),
+                        extra_rw=[str(self.p / "a" / "out")])
+        self.assertNotEqual(r.returncode, 0, "the directory above the hooks was moved aside")
+        self.assertIn("Device or resource busy", r.stdout + r.stderr)
+        self.assertFalse(self.commit_ran_it())
+        r = self.inside("echo ok > a/out/f && echo ok > a/g", extra_rw=[str(self.p / "a" / "out")])
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_a_code_root_that_holds_a_writable_path_cannot_be_moved_aside(self):
+        nested = self.code_root()
+        r = self.inside("mv plugin p2 && mkdir plugin && cd plugin && git init -q && "
+                        + WRITE_HOOK.format(path=".git/hooks/pre-commit"), extra_rw=[str(nested / "out")])
+        self.assertNotEqual(r.returncode, 0, "the code root was moved aside")
+        self.assertIn("Device or resource busy", r.stdout + r.stderr)
+        self.assertFalse(self.commit_ran_it(nested))
+
+    def not_ours(self, path: Path) -> bool:
+        try:
+            info = os.lstat(path)
+        except OSError:
+            return False
+        import stat
+        return (stat.S_ISREG(info.st_mode) and info.st_nlink > 1 and info.st_uid != os.geteuid()
+                and not os.access(path, os.W_OK))
+
+    def test_a_hook_that_names_a_file_of_another_owner_with_two_names_is_launched(self):
+        # `perl` and `perl5.x.y` are one file on most hosts; a deduplicated /etc/gitconfig is
+        # another. No name of such a file can be written by this user: nothing to refuse — and
+        # the refusal stopped every launch there, a judge's too.
+        theirs = next((p for p in sorted(Path("/usr/bin").iterdir()) if self.not_ours(p)), None)
+        if theirs is None:
+            self.skipTest("no file under /usr/bin with a second name that this user cannot write")
+        (self.p / ".git" / "hooks" / "pre-commit").symlink_to(theirs)
+        for writable in (True, False):
+            with self.subTest(project_writable=writable):
+                r = self.inside("echo launched", project_writable=writable, mask_records=False)
+                self.assertEqual(r.stdout.strip(), "launched", r.stderr)
+
+
 class NamespaceProtection(_Repo):
     def test_supported_flags_are_added_once_even_with_git_source_permission(self):
         from unittest import mock
@@ -802,6 +889,57 @@ class WhereTheBindsGo(_Repo):
         self.argv(git_source_links=[str(self.p / ".git")])                      # the git directory: read-only
         self.argv(project_writable=False, mask_records=False, git_source_links=[str(self.p)])
         self.argv(git_source_links=[str(self.p)], git_sources_writable=True)    # the owner's permission
+
+    # the single judge after round 2, run 1
+    def test_nothing_is_bound_writable_inside_a_read_only_project(self):
+        nested = self.repo("proj/plugin")
+        b = self.binds(self.argv(project_writable=False, mask_records=False, git_readonly=[str(nested / ".git")]))
+        after = b[b.index(("--ro-bind", str(self.p))) + 1:]
+        self.assertEqual([x for x in after if x[0] == "--bind"], [])
+        self.assertIn(("--ro-bind", str(nested / ".git")), after)
+        # … while a path the run was GIVEN inside it stays writable, and is the only one
+        out = nested / "out"
+        b = self.binds(self.argv(project_writable=False, mask_records=False, extra_rw=[str(out)],
+                                 git_readonly=[str(nested / ".git")]))
+        after = b[b.index(("--ro-bind", str(self.p))) + 1:]
+        self.assertEqual([x for x in after if x[0] == "--bind"], [("--bind", str(out))])
+
+    def hard_linked(self):
+        hook = self.p / ".git" / "hooks" / "pre-commit"
+        hook.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        os.link(hook, self.p / "linked-hook")
+        return hook
+
+    def test_a_second_name_refuses_only_for_a_file_this_user_could_write_or_open_up(self):
+        from unittest import mock
+        hook = self.hard_linked()
+        owner, real_access = os.stat(hook).st_uid, os.access
+
+        def run(uid, writable):
+            def access(path, mode, **kw):
+                return writable if (str(path), mode) == (str(hook), os.W_OK) else real_access(path, mode, **kw)
+            with mock.patch.object(sandbox.os, "geteuid", return_value=uid), \
+                    mock.patch.object(sandbox.os, "access", side_effect=access):
+                return self.argv(git_sources=[str(hook)])
+
+        for uid, writable in ((owner, True), (owner, False), (owner + 1, True)):
+            with self.subTest(owner=uid == owner, writable=writable):
+                with self.assertRaisesRegex(RuntimeError, "hard links"):
+                    run(uid, writable)          # its owner could chmod it; anyone it is writable for can write it
+        self.assertIn("true", run(owner + 1, False))
+
+    def test_a_read_only_run_is_not_offered_the_option_it_cannot_pass(self):
+        # every review is such a run, and the path the judges share refuses --rw-git-sources
+        hook = self.hard_linked()
+        for kw, said in (({}, True), ({"project_writable": False, "mask_records": False}, False)):
+            with self.subTest(**kw):
+                with self.assertRaises(RuntimeError) as cm:
+                    self.argv(git_sources=[str(hook)], **kw)
+                self.assertEqual("--rw-git-sources" in str(cm.exception), said, str(cm.exception))
+                self.assertTrue(str(cm.exception).endswith("Nothing was launched."))
+        with self.assertRaises(RuntimeError) as cm:
+            self.argv(project_writable=False, mask_records=False, git_sources_unanswered=[str(self.p)])
+        self.assertNotIn("--rw-git-sources", str(cm.exception))
 
 
 @unittest.skipUnless(bwrap_usable(), "no bubblewrap that can start a sandbox here")
