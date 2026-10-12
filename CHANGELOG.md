@@ -15,8 +15,10 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   freehand, the hooks' invocation, the state echo (parallel tool calls included), the stop hook, lane resolution,
   hook payloads, Claude's capability cells and the slash commands; the merge skill's push order was observed once
   each way. Five judge rows passed on Claude and Codex judges; grok, out of credit for three more days, is waived for
-  this release by the owner's decision (its live half runs after the release, once the harness has a grok seat); `tasks intent` passed up to the distillation, which is done with
-  the owner. Statements were narrowed where a run showed them too wide: the state echo leaves an empty session
+  this release by the owner's decision (its live half runs after the release, once the harness has a grok seat); `tasks intent` passed
+  its extractions live, and its last step — reconciling the reports and writing INTENT.md — was done with the owner on
+  a real task (the first entry of the project's INTENT.md); the row now says that this step is the agent's and the
+  user's, not the CLI's, and that the extraction does not read a nested code repository (a limit, after this release). Statements were narrowed where a run showed them too wide: the state echo leaves an empty session
   folder at the root of a fresh multi-user clone, the claude adapter reports no transcript folder for a project path with `_`, `.` or a space,
   a project directory whose name starts with a task's number can make the hooks read another task's record, the
   stop hook's prompt-generation read has a narrow race, and an upgrade's rollback covers the re-initialization,

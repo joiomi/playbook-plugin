@@ -20,11 +20,14 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from common import PLUGIN, Run, clean_env, scratch_project
+from common import NESTED, PLUGIN, Run, clean_env, scratch_project
 
 TASKS = str(PLUGIN / "scripts" / "tasks")
 CLAUDE_SEAT = "haiku"
 CODEX_SEAT = "codex:gpt-6.1-sol:low"
+# PB-CLI-INTENT's last step — reconciling the four reports with the user and distilling INTENT.md — is a human act; it
+# was done WITH the owner on task 183's run (task 170 R8.2, 2026-10-12). The scenario checks that record.
+OWNER_DISTILLATION = (NESTED.parent, "183", "20261012-200430-994926")
 GROK_WAIT = ("grok", "its seat answers out of credit (HTTP 402) until the subscription's tokens return — the owner's "
                      "word of 2026-10-12: it stays in the panel and comes back by itself. This harness has no grok seat yet (`Judges` shims "
                      "claude and codex): its half is new code, written and reviewed once the credit returns")
@@ -374,6 +377,36 @@ def _quoted(text: str) -> "str | None":
     return shlex.split(m.group(1))[0] if m else None
 
 
+def _owner_distillation(run: Run, record: "tuple[Path, str, str]" = OWNER_DISTILLATION) -> None:
+    # the distillation is a human act, done WITH the owner (task 170 R8.2, his answers of 2026-10-12 ~20:43):
+    # this scenario checks its record — it does not redo it
+    proj, num, rid = record
+    rdirs = sorted(proj.glob(f".agent/tasks/{num}-*/intent/{rid}"))
+    rfiles = sorted(x.name for x in rdirs[0].iterdir()) if rdirs else []
+    reports_ok = rfiles == ["chat.md", "code.md", "review.md", "taskmd.md", "tests.md"] and all(
+        (rdirs[0] / f).stat().st_size > 0 for f in rfiles)
+    run.clause("the distillation done with the owner rests on a real run: its four layer reports and its grading "
+               "sheet are there", reports_ok, f"run {rid} of task {num}: {rfiles}")
+    r = run.step("the product reads the owner-ratified entry back as the task's baseline (`last_intent_entry`)",
+                 ["python3", "-I", "-c", "import sys; sys.path.insert(0, sys.argv[1]); from pathlib import Path; "
+                  "from tasks.intent import last_intent_entry; t = Path(sys.argv[2]).read_text(encoding='utf-8'); "
+                  "print('MARKER', sys.argv[4] in t); print('HEADING', ('## task ' + sys.argv[3] + ' · ' + sys.argv[5]) in t); "
+                  "b = last_intent_entry(Path(sys.argv[2]), sys.argv[3]); print('BODY'); print(b or '')",
+                  str(PLUGIN), str(proj / "INTENT.md"), num, f"<!-- intent:T{num}:{rid} -->", rid])
+    body = r.stdout.split("BODY\n", 1)[-1]
+    run.clause("INTENT.md holds that run's entry — `## task N · <run-id>` with its marker — ratified by the owner, "
+               "and the product's reader returns it as the task's baseline",
+               r.returncode == 0 and "MARKER True" in r.stdout and "HEADING True" in r.stdout
+               and "Ratified by the owner" in body and "**Confirmed**" in body,
+               f"rc {r.returncode}; {[x for x in r.stdout.splitlines() if x.startswith(('MARKER', 'HEADING'))]}; "
+               f"body {len(body)} chars")
+    review = (rdirs[0] / "review.md").read_text(encoding="utf-8") if rdirs else ""
+    seams = re.findall(r"(?m)^- \[(x| )\] aligned / \[(x| )\] drift — verdict: (.*)$", review)
+    run.clause("the three seams were graded with the owner (each has a verdict)",
+               len(seams) == 3 and all(v.strip() for _a, _d, v in seams),
+               f"{[(a, d, v[:40]) for a, d, v in seams]}")
+
+
 def cli_intent(out: Path) -> int:
     run = Run("PB-CLI-INTENT", "`tasks intent` on a finished task: the no-spend refusal, then the blind extractions on a "
               "real claude judge", out, ["claude"])
@@ -438,8 +471,7 @@ def cli_intent(out: Path) -> int:
         spent = _spend_records(j)
         run.note("spend records: " + json.dumps(spent))
         run.clause("each extraction is one spend record", len(spent) == 4, f"spend records {len(spent)}")
-        run.wait_for("owner", "reconciling the four reports and distilling INTENT.md is done WITH the owner — his answer "
-                              "of 2026-10-12, \"Îl facem împreună (Recomandat)\"")
+        _owner_distillation(run)
     finally:
         j.cleanup()
     return run.finish()

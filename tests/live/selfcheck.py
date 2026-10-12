@@ -394,6 +394,38 @@ def spawn_interrupted() -> None:
           f"spawned: {started}; still running: {left}")
 
 
+def owner_distillation() -> None:
+    """PB-CLI-INTENT's record check, on copies of the owner's record: the real one passes; a copy whose INTENT.md
+    lacks the run's marker, or whose grading sheet leaves a seam without a verdict, fails (task 170 R8.3)."""
+    from common import Run
+    proj, num, rid = rows_judge.OWNER_DISTILLATION
+    src = sorted(proj.glob(f".agent/tasks/{num}-*/intent/{rid}"))
+    if not src or not (proj / "INTENT.md").is_file():
+        print("skip owner_distillation: the owner's record is not in this checkout")
+        return
+    for label, doctor, want in (("the record as it is", None, True),
+                                ("INTENT.md without the run's marker", "marker", False),
+                                ("a seam left without a verdict", "seam", False)):
+        d = tempdir("pb170-od-")
+        run_dir = d / src[0].relative_to(proj)
+        run_dir.mkdir(parents=True)
+        for f in src[0].iterdir():
+            (run_dir / f.name).write_bytes(f.read_bytes())
+        text = (proj / "INTENT.md").read_text(encoding="utf-8")
+        if doctor == "marker":
+            text = text.replace(f"<!-- intent:T{num}:{rid} -->", "")
+        (d / "INTENT.md").write_text(text, encoding="utf-8")
+        if doctor == "seam":
+            sheet = run_dir / "review.md"
+            sheet.write_text(re.sub(r"(?m)^(- \[x\] aligned / \[ \] drift — verdict:).*$", r"\1", sheet.read_text(
+                encoding="utf-8"), count=1), encoding="utf-8")
+        run = Run("PB-SELFCHECK", "the owner's distillation record", d / "out", [])
+        rows_judge._owner_distillation(run, (d, num, rid))
+        ok = all(c[1] for c in run.clauses)
+        check(f"R8.3 PB-CLI-INTENT's record check — {label}", ok, want,
+              "; ".join(f"{'PASS' if c[1] else 'FAIL'} {c[0][:50]}" for c in run.clauses if not c[1]) or "all clauses pass")
+
+
 def _gauntlet_copy(run_row: str, selfcheck: str) -> Path:
     d = tempdir("pb184-gs-")
     (d / "lib").mkdir()
@@ -481,7 +513,8 @@ def main(argv: "list[str]") -> int:
     for s in (signal.SIGTERM, signal.SIGHUP):            # an interrupted selfcheck still runs its cleanups (K2)
         signal.signal(s, lambda signum, _f: sys.exit(128 + signum))
     for f in (freehand, names, install_env, snapshot_whole, step_timeout, step_detached, gauntlet_quarantine,
-              registry_probe, docker_timeout, gauntlet_missing_and_lock, spawn_interrupted, gauntlet_interrupted):
+              registry_probe, docker_timeout, gauntlet_missing_and_lock, spawn_interrupted, gauntlet_interrupted,
+              owner_distillation):
         f()
     print(f"selfcheck: {'every control holds' if not FAILED else f'{len(FAILED)} control(s) do not hold'}")
     return 1 if FAILED else 0

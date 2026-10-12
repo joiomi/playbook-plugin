@@ -51,6 +51,11 @@ CLI with the same arguments and prompt. Grok is a target of these rows; they end
 not PASS, and this harness has no grok seat yet: its half is new code (a shim like the other
 two, the seat in each scenario), written and reviewed once its credit returns.
 
+PB-CLI-INTENT's last step — reconciling the reports with the user and writing INTENT.md — is a
+human act: it was done with the owner on task 183 (2026-10-12), and the scenario checks that
+record (`rows_judge.OWNER_DISTILLATION`: the run's reports, the INTENT.md entry with its marker,
+the graded seams) instead of redoing it.
+
 `selfcheck.py <artifacts-dir>` is the harness's own negative control, offline and free: each
 clause the impl panel found able to pass without its behaviour is a pure predicate, run on a
 committed artifact (it must PASS) and on a copy with exactly that behaviour removed (it must FAIL).
