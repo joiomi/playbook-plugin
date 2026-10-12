@@ -711,7 +711,8 @@ def installed_root() -> None:
     home = tempdir("pb185-ir-")
     copy = home / "cache" / "playbook" / "9.9.9"
     (copy / "scripts").mkdir(parents=True)
-    (copy / "scripts" / "tasks").write_text("#!/bin/bash\n", encoding="utf-8")
+    (copy / "scripts" / "tasks").write_text("#!/bin/bash\necho INSTALLED-SENTINEL\n", encoding="utf-8")
+    (copy / "scripts" / "tasks").chmod(0o755)
     reg = home / ".claude" / "plugins"
     reg.mkdir(parents=True)
 
@@ -742,6 +743,32 @@ def installed_root() -> None:
                            env=dict(os.environ, HOME=str(home), PB_LIVE_ROOT="installed"))
         check(f"installed root: {label}", r.returncode == 0 and r.stdout.strip() == "OK", want,
               (r.stdout.strip() or (r.stderr.strip().splitlines() or [""])[-1])[:120])
+    # a user and a project scope naming the SAME copy are one copy; two different copies are refused (impl r1, agy)
+    for entries, want, label in (([{"installPath": str(copy), "scope": "user"}, {"installPath": str(copy), "scope": "project"}],
+                                  True, "two scopes naming the same copy are one copy"),
+                                 ([{"installPath": str(copy)}, {"installPath": str(home / "other")}], False,
+                                  "two different copies are refused")):
+        r = run({"playbook@m": entries}, "installed")
+        check(f"installed root: {label}", r.returncode == 0 and f"PLUGIN {copy}" in r.stdout, want,
+              (r.stdout.strip().replace("\n", " / ") or (r.stderr.strip().splitlines() or [""])[-1])[:120])
+    # what a row RUNS is the installed copy, not only what common.PLUGIN says (impl r1, codex): a row's own path is
+    # executed (the fake copy's `tasks` prints a sentinel), and no rows module keeps a path on the candidate tree
+    (reg / "installed_plugins.json").write_text(json.dumps({"plugins": {"playbook@m": [{"installPath": str(copy)}]}}),
+                                                encoding="utf-8")
+    probe_rows = ("import sys, subprocess, importlib, pathlib; sys.path.insert(0, sys.argv[1]); import common\n"
+                  "import rows_judge\n"
+                  "print(subprocess.run([rows_judge.TASKS, '--version'], capture_output=True, text=True).stdout.strip())\n"
+                  "cand = str(common.CANDIDATE_PLUGIN)\n"
+                  "for f in sorted(pathlib.Path(sys.argv[1]).glob('rows_*.py')):\n"
+                  "    mod = importlib.import_module(f.stem)\n"
+                  "    for k, v in vars(mod).items():\n"
+                  "        if isinstance(v, (str, pathlib.PurePath)) and str(v).startswith(cand):\n"
+                  "            print('CANDIDATE PATH', f.stem, k)\n")
+    r = subprocess.run([sys.executable, "-I", "-c", probe_rows, str(lib)], capture_output=True, text=True,
+                       env=dict(os.environ, HOME=str(home), PB_LIVE_ROOT="installed"))
+    check("installed root: a row's own path runs the installed copy, and no rows module keeps a candidate path",
+          r.returncode == 0 and r.stdout.splitlines()[:1] == ["INSTALLED-SENTINEL"] and "CANDIDATE PATH" not in r.stdout,
+          True, (r.stdout.strip().replace("\n", " / ") or (r.stderr.strip().splitlines() or [""])[-1])[:160])
 
 
 def _gauntlet_copy(run_row: str, selfcheck: str) -> Path:

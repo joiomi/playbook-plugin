@@ -137,7 +137,13 @@ class Install:
         old = data["version"]
         data["version"] = NEW_VERSION
         pj.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-        self.run.note(f"(scratch clone only) plugin.json version {old} -> {NEW_VERSION} on top of candidate {head[:12]}")
+        # the CLI's own version moves with the manifest, or the scratch release is two versions at once and
+        # `tasks doctor` fails its parity check (impl panel r1, agy; the downgrade measurement showed it)
+        core = self.work / "plugins" / "playbook" / "tasks" / "core.py"
+        text = core.read_text(encoding="utf-8")
+        assert len(re.findall(r'^VERSION = "[^"]*"$', text, re.M)) == 1, "core.py has no single VERSION line"
+        core.write_text(re.sub(r'^VERSION = "[^"]*"$', f'VERSION = "{NEW_VERSION}"', text, flags=re.M), encoding="utf-8")
+        self.run.note(f"(scratch clone only) plugin.json and core.py version {old} -> {NEW_VERSION} on top of candidate {head[:12]}")
         # a candidate that already carries the version (the release commit itself) has nothing to commit: it is pushed as
         # it is (task 185, plan panel A5 — the commit used to fail and nothing reached 'GitHub')
         self.step("the release commit, pushed to 'GitHub'", "{ git diff --quiet || git -c user.email=r@r -c user.name=release "

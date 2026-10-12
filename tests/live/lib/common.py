@@ -44,7 +44,8 @@ def installed_entry(home: "Path | None" = None) -> dict:
     reg = (home or Path(os.path.expanduser("~"))) / ".claude" / "plugins" / "installed_plugins.json"
     data = json.loads(reg.read_text(encoding="utf-8"))
     entries = [e for k, v in (data.get("plugins") or {}).items() if k.startswith("playbook@") for e in v]
-    paths = [e.get("installPath") for e in entries]
+    # a user and a project scope may both name the SAME copy: one copy, however many entries (impl panel r1, agy)
+    paths = sorted({str(e.get("installPath") or "") for e in entries})
     if len(paths) != 1 or not paths[0] or not (Path(paths[0]) / "scripts" / "tasks").is_file():
         raise SystemExit(f"installed root: expected ONE playbook copy with scripts/tasks in {reg}, found {paths}")
     return entries[0]
