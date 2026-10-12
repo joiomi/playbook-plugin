@@ -336,7 +336,7 @@ def names_the_defect(answer: str) -> bool:
         cap = re.search(r"(?m)^CAP:", answer[m.start():end])
         finding = answer[m.start():m.start() + cap.start()] if cap else answer[m.start():end]
         if re.search(r"(?<![\w/.-])src/calc\.py\b", finding) and re.search(
-                r"subtract|minus|a - b|returns? `?-1|instead of add|instead of `?a \+ b|sign", finding, re.I):
+                r"subtract|minus|a - b|returns? `?-1|instead of add|instead of `?a \+ b|\bsign\b", finding, re.I):
             return True
     return False
 

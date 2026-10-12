@@ -179,6 +179,10 @@ class Run:
                 SPAWNING = False
             if PENDING is not None:
                 signum, PENDING = PENDING, None
+                # raised as run_row's handler raises it: a second signal from here on is ignored, so it cannot abort
+                # the cleanup this exit starts (task 170, post-D6 run 1)
+                for s in (signal.SIGTERM, signal.SIGHUP):
+                    signal.signal(s, signal.SIG_IGN)
                 raise SystemExit(128 + signum)
             out, err = p.communicate(input=stdin, timeout=timeout)
             r = subprocess.CompletedProcess(cmd, p.returncode, out, err)

@@ -478,7 +478,10 @@ def triage_answer() -> None:
             ("a finding that could not read the file",
              "**Important: Unable to inspect src/calc.py**\nThe sandbox refused the read.\n", False),
             ("a finding about another file whose name ends in calc.py",
-             "**Critical** — src/other_calc.py:2 subtracts instead of adding.\n", False)):
+             "**Critical** — src/other_calc.py:2 subtracts instead of adding.\n", False),
+            # task 170, post-D6 run 1: an unrelated finding on the right file whose words hold "sign"
+            ("an unrelated finding on src/calc.py (its `signature`)",
+             "**Important** — src/calc.py:1 lacks a docstring describing its signature.\n", False)):
         check(f"REVIEW-TRIAGE (Q2) — {label}", rows_judge.names_the_defect(answer), want)
 
 
@@ -592,6 +595,34 @@ def pre_exec_signal() -> None:
     if left:
         end_tree(started[0])
     check("Q5 a signal during the spawn (child without its token) still ends the child", bool(started) and not left,
+          True, f"spawned {started}; still running {left}")
+    # post-D6 run 1 (codex): the held signal, once raised, must keep the repeated-signal protection — a second
+    # SIGTERM that lands while its cleanup runs must not abort it
+    started.clear()
+    for s in saved:
+        signal.signal(s, run_row._exit_on)
+    real_end = common.end_tree
+
+    def end_with_second_signal(pid, token=None):
+        os.kill(os.getpid(), signal.SIGTERM)           # the second signal lands as the cleanup starts
+        time.sleep(0.05)
+        return real_end(pid, token)
+    run = common.Run("PB-SELFCHECK", "a held signal, then a second one", d / "out2", [])
+    common.subprocess.Popen, common.end_tree = Bare, end_with_second_signal
+    try:
+        try:
+            run.step("a step", "true", timeout=60)
+        except SystemExit:
+            pass
+    finally:
+        common.subprocess.Popen, common.end_tree = real, real_end
+        for s, h in saved.items():
+            signal.signal(s, h)
+    time.sleep(0.3)
+    left = bool(started) and _running(started[0])
+    if left:
+        end_tree(started[0])
+    check("Q5 a held signal, then a second one during its cleanup: the child is still ended", bool(started) and not left,
           True, f"spawned {started}; still running {left}")
 
 
