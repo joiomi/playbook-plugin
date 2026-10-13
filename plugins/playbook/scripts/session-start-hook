@@ -183,7 +183,12 @@ print(t if isinstance(t, str) and t and '\n' not in t and '\r' not in t else '')
     if [ -d "$SESSIONS_DIR" ] && ! _pb_inside_project "$PROJECT_DIR" "$SESSIONS_DIR"; then
         echo "[playbook] WARNING: $SESSIONS_DIR (or a directory above it in the project) is a link — no session sweep there; remove the link if it is not yours." >&2
     elif [ -d "$SESSIONS_DIR" ]; then
-        for d in "$SESSIONS_DIR"/*; do
+        # Swept from INSIDE the directory, by relative names (task 194, impl panel r2, codex —
+        # reproduced: with the check by path and the delete by path, a swap of `sessions` for a link
+        # in between made the delete follow it). The `cd` holds the directory; `_pb_cwd_is` proves it
+        # is the one inside the project; a leaf swapped for a link later is removed as a link.
+        ( cd "$SESSIONS_DIR" 2>/dev/null && _pb_cwd_is "$PROJECT_DIR" "$SESSIONS_DIR" || exit 0
+        for d in ./*; do
             # NO trailing slash in the glob, and symlinks are skipped outright:
             # `rm -rf "link/"` follows the link and destroys the TARGET (measured:
             # the target directory itself was removed and the symlink left
@@ -228,15 +233,17 @@ print(t if isinstance(t, str) and t and '\n' not in t and '\r' not in t else '')
 
             # Fail-open: this hook runs under `set -e`, so an undeletable dir
             # (perms, read-only mount) must not abort session start.
-            rm -rf "$d" 2>/dev/null || true
-        done
+            rm -rf -- "$d" 2>/dev/null || true
+        done ) || true
     fi
 
     # GC: sweep aged wrapper temps left by a create_wrapper killed between its
     # write and its atomic rename (>24h so a live writer's fresh tmp is never hit).
-    if [ -d "$PROJECT_DIR/.claude/bin" ]; then
-        find "$PROJECT_DIR/.claude/bin" -maxdepth 1 -name '*.tmp.*' -mtime +0 \
-            -delete 2>/dev/null || true
+    # Only inside the project, from inside the directory (task 194, impl panel r2, opus: with `.claude`
+    # a link, the old sweep deleted `*.tmp.*` files of the link's target).
+    if [ -d "$PROJECT_DIR/.claude/bin" ] && _pb_inside_project "$PROJECT_DIR" "$PROJECT_DIR/.claude/bin"; then
+        ( cd "$PROJECT_DIR/.claude/bin" 2>/dev/null && _pb_cwd_is "$PROJECT_DIR" "$PROJECT_DIR/.claude/bin" || exit 0
+          find . -maxdepth 1 -name '*.tmp.*' -mtime +0 -delete 2>/dev/null ) || true
     fi
 fi
 

@@ -17,7 +17,6 @@ tasks.core + tasks.shared + tasks.template; never a command module
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -1098,14 +1097,10 @@ def cmd_work(cmd_args):
             # PLAYBOOK_SESSION_ID is not set when called from Bash tool, so scan all sessions.
             # Intentional partial delete: only sessions pointing at prev_task are removed;
             # sessions for other tasks are left intact.
-            sessions_dir = agent_dir / "sessions"  # agent_dir already resolved above
-            if sessions_dir.exists():
-                for sf in sessions_dir.glob("*/current_state"):
-                    try:
-                        if sf.read_text(encoding="utf-8", errors="replace").strip() == prev_task:
-                            shutil.rmtree(sf.parent, ignore_errors=True)
-                    except OSError:
-                        pass
+            # Inside the project only, through descriptors (task 194, impl panel r2, opus and sonnet: the
+            # `glob` + `rmtree` here followed a linked `.agent/sessions` into its target).
+            from tasks.shared import _remove_sessions_of_task
+            _remove_sessions_of_task(Path(project_path), agent_dir, prev_task)  # agent_dir already resolved above
             print(f"Task {prev_task} done.")
 
             # P9: surface this task's OPEN parked items at close so they are

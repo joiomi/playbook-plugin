@@ -4297,7 +4297,7 @@
     {
       "id": "PB-SESSION-CLEANUP",
       "category": "sessions-and-attribution",
-      "statement": "Session garbage collection reclaims dead-PID session directories, keeps the current and live-PID sessions, applies a bounded mtime fallback to legacy names, and deletes nothing behind a link: a symbolic link among the session directories is skipped, and a sessions directory that does not lie physically inside the project — `.agent`, a lane or `sessions` itself a link — is not swept at all, by either sweeper (session-start's and the CLI's, which runs before every verb); session-start says so. Until task 194 a linked `.agent/sessions` made both sweepers remove every directory of the link's target that was not a live session (measured: `photos/ projects/ notes/ pid-999999/` gone at the first session start or CLI call; a cloned repository can ship the link).",
+      "statement": "Session garbage collection reclaims dead-PID session directories, keeps the current and live-PID sessions, applies a bounded mtime fallback to legacy names, and deletes nothing behind a link: a symbolic link among the session directories is skipped, and a sessions directory that does not lie physically inside the project — `.agent`, a lane or `sessions` itself a link — is not swept at all, by either sweeper (session-start's and the CLI's, which runs before every verb); session-start says so. Each removal holds the directory it checked — bash from a `cd` into it verified with `pwd -P`, on relative names; Python through descriptors opened from the project root without following a link — so a swap of the path after the check changes nothing (task 194, impl panel r2, codex: reproduced before — the delete followed a swap made between the check and it). The close (`tasks work done`, removing the closed task's sessions) and session-start's `.claude/bin` temp sweep work the same way. Until task 194 a linked `.agent/sessions` made both sweepers remove every directory of the link's target that was not a live session (measured: `photos/ projects/ notes/ pid-999999/` gone at the first session start or CLI call; a cloned repository can ship the link).",
       "owner": [
         {
           "path": "plugins/playbook/tasks/shared.py",
@@ -4316,12 +4316,24 @@
           "reference": "whole-file"
         },
         {
+          "path": "plugins/playbook/scripts/gate-echo-lib.sh",
+          "reference": "function:_pb_inside_project"
+        },
+        {
           "path": "plugins/playbook/tasks/shared.py",
-          "reference": "symbol:_inside_project"
+          "reference": "symbol:_open_dir_inside"
+        },
+        {
+          "path": "plugins/playbook/tasks/shared.py",
+          "reference": "symbol:_remove_tree_at"
+        },
+        {
+          "path": "plugins/playbook/tasks/shared.py",
+          "reference": "symbol:_remove_sessions_of_task"
         },
         {
           "path": "plugins/playbook/scripts/gate-echo-lib.sh",
-          "reference": "function:_pb_inside_project"
+          "reference": "function:_pb_cwd_is"
         }
       ],
       "failure_consequence": "High",
@@ -4390,6 +4402,65 @@
         },
         {
           "type": "executable integration",
+          "path": "tests/test_session_gc_links.py",
+          "reference": "TheDeletionsHoldTheirDirectory.test_the_session_start_sweep_holds_its_directory_when_sessions_is_swapped",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_session_gc_links.py",
+            "reference": "TheSweepersFollowNoLink.test_control_a_plain_project_is_swept_as_before"
+          },
+          "limitations": [
+            "A fake `rm` on PATH swaps `.agent/sessions` for a link to the victim right before its first run (the test asserts the swap ran); red on nested `2956845`."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_gc_links.py",
+          "reference": "TheDeletionsHoldTheirDirectory.test_the_cli_sweep_holds_its_directory_when_sessions_is_swapped",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_session_gc_links.py",
+            "reference": "TheSweepersFollowNoLink.test_control_a_plain_project_is_swept_as_before"
+          },
+          "limitations": [
+            "The swap made inside `_session_is_dead`, between the check and the removal; red on `2956845`."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_gc_links.py",
+          "reference": "TheDeletionsHoldTheirDirectory.test_the_close_removes_nothing_through_a_linked_sessions_directory",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_session_gc_links.py",
+            "reference": "TheDeletionsHoldTheirDirectory.test_control_the_close_and_merge_prep_in_a_plain_project"
+          },
+          "limitations": [
+            "`tasks new/work/work done --force` through the tree CLI; red on `2956845` (another checkout's session on the closed number removed in the target)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_gc_links.py",
+          "reference": "TheDeletionsHoldTheirDirectory.test_the_wrapper_temp_sweep_holds_its_directory_when_claude_is_swapped",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "A fake `find` swaps `.claude` before the sweep's run; red on `2956845`."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_gc_links.py",
+          "reference": "TheDeletionsHoldTheirDirectory.test_a_linked_claude_gets_no_temp_sweep",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Red on `2956845`."
+          ]
+        },
+        {
+          "type": "executable integration",
           "path": "tests/wrapper-multiuser-fixture.sh",
           "reference": "scenario:S18",
           "boundary": "subprocess",
@@ -4427,7 +4498,8 @@
         "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21).",
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
         "2026-10-08 (task 156, Linux-only): the Windows/MSYS branches this row described (`pid-win-fallback`, the skipped walk, the keep-all GC) were deleted; the statement now describes Linux only.",
-        "2026-10-14 (task 194, impl panel r1 — grave, pre-existing since the sweep's liveness rules of task 027): the claim \"does not delete a symlink target\" held only for a link AMONG the session directories; the sessions directory itself, `.agent` and a lane were never asked. Fixed by `_inside_project` / `_pb_inside_project` (no link in any component below the project root). Above the project root nothing is asked: a project reached through a link is the user's own. The installed 1.6.1 has the hole until a release."
+        "2026-10-14 (task 194, impl panel r1 — grave, pre-existing since the sweep's liveness rules of task 027): the claim \"does not delete a symlink target\" held only for a link AMONG the session directories; the sessions directory itself, `.agent` and a lane were never asked. Fixed by `_inside_project` / `_pb_inside_project` (no link in any component below the project root). Above the project root nothing is asked: a project reached through a link is the user's own. The installed 1.6.1 has the hole until a release.",
+        "2026-10-14 (task 194, impl panel r2): the swap race codex reproduced is closed by holding the checked directory (no race BOUND is claimed for deletions). BOUND: session-start's wrapper provisioning (`create_wrapper`, the gate's `heal_empty_wrappers`) still writes through a linked `.claude` — new or empty playbook-marked files only, nothing removed; a linked `.claude` can be a shared configuration folder, so it is not refused."
       ],
       "follow_up_phases": [
         3,
@@ -10266,11 +10338,15 @@
     {
       "id": "PB-MERGE-PREP",
       "category": "merge",
-      "statement": "tasks prepare-merge computes collision-free, pad-preserving task renumbers and rewrites task and session-pointer references so the renumbered tasks stay glob-reachable.",
+      "statement": "tasks prepare-merge computes collision-free, pad-preserving task renumbers and rewrites task and session-pointer references so the renumbered tasks stay glob-reachable. Its clearing of the sessions' `chat_log_offset` removes nothing through a link: only session directories physically inside the project, through descriptors (task 194, impl panel r2, sonnet).",
       "owner": [
         {
           "path": "plugins/playbook/tasks/merge_prep.py",
           "reference": "symbol:cmd_prepare_merge"
+        },
+        {
+          "path": "plugins/playbook/tasks/shared.py",
+          "reference": "symbol:_clear_in_sessions"
         }
       ],
       "failure_consequence": "High",
@@ -10320,6 +10396,19 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_gc_links.py",
+          "reference": "TheDeletionsHoldTheirDirectory.test_merge_prep_unlinks_nothing_through_a_linked_sessions_directory",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_session_gc_links.py",
+            "reference": "TheDeletionsHoldTheirDirectory.test_control_the_close_and_merge_prep_in_a_plain_project"
+          },
+          "limitations": [
+            "`_rename_colliding_tasks` with no renames (only the clearing runs); red on `2956845`."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -13377,7 +13466,7 @@
     {
       "id": "PB-HOOK-STATE-ECHO",
       "category": "task-lifecycle",
-      "statement": "After applicable tool calls, state echo reports the current active gate and records transcript binding without allowing malformed payloads to corrupt session state. The step that notices a ticked gate — read the previous gate from the session's counters, log its completion, write the new one — is one hold of the session's counters lock, and the gate it compares is read from task.md under that hold, so tool calls whose hooks overlap log a gate's completion ONCE, each add one to its repeat count, and a tick that lands between two of them does not make the slower one log the open gate; the entry is appended under the chat log's lock, which is tried and not waited for, and where it is not given neither the entry nor the new gate is written — the next call tries again; a chat log that cannot be written is said (task 182; on a host with no lock to take the step runs without one, as before). The echo writes nothing through a link or into a file that is not a regular one — its transcript pointer, the gate entry in `chat_log.md` and that log's lock, the counters — and nothing inside a session directory that is a link or whose `sessions` directory is one (it says so and stops; impl panel r1: a linked `.agent/sessions` is committable — `.gitignore`'s `.agent/sessions/` matches directories only — and needs no session id); a gate entry so refused is said as the write failure it is and the gate moves on (task 194; measured before: the pointer and the entry written through links, the lock's link truncating its target, a FIFO holding the echo to the host's limit, a linked session directory written into). Its two writers' temp paths are checked as well (`counters.tmp.<pid>`; a refused counters write is said). BOUNDS: a swap of a file between the check and the write is not closed; a link ABOVE `sessions` — `.agent` itself, a lane — is not asked for writes: the whole `.agent` state then lives in the target, the CLI's too (deletions ask the whole chain: PB-SESSION-CLEANUP). Below Python 3.10 the echo says so and writes and counts nothing but the `counts_unsure` mark (PB-PYTHON-FLOOR). The hooks find the active task's record by the task directory's own name (task 192; the `find -path` BOUND this row carried — PLAN §S11 item (23) — is closed, see PB-TASK-ACTIVATE).",
+      "statement": "After applicable tool calls, state echo reports the current active gate and records transcript binding without allowing malformed payloads to corrupt session state. The step that notices a ticked gate — read the previous gate from the session's counters, log its completion, write the new one — is one hold of the session's counters lock, and the gate it compares is read from task.md under that hold, so tool calls whose hooks overlap log a gate's completion ONCE, each add one to its repeat count, and a tick that lands between two of them does not make the slower one log the open gate; the entry is appended under the chat log's lock, which is tried and not waited for, and where it is not given neither the entry nor the new gate is written — the next call tries again; a chat log that cannot be written is said (task 182; on a host with no lock to take the step runs without one, as before). The echo writes nothing through a link or into a file that is not a regular one — its transcript pointer, the gate entry in `chat_log.md` and that log's lock, the counters — and nothing inside a session directory that is a link or whose `sessions` directory is one (it says so and stops — an Edit/Write still reaches the write log, which lives under HOME: impl panel r2, fable; impl panel r1: a linked `.agent/sessions` is committable — `.gitignore`'s `.agent/sessions/` matches directories only — and needs no session id); a gate entry so refused is said as the write failure it is and the gate moves on (task 194; measured before: the pointer and the entry written through links, the lock's link truncating its target, a FIFO holding the echo to the host's limit, a linked session directory written into). Its two writers' temp paths are checked as well (`counters.tmp.<pid>`; a refused counters write is said). BOUNDS: a swap of a file between the check and the write is not closed; a link ABOVE `sessions` — `.agent` itself, a lane — is not asked for writes: the whole `.agent` state then lives in the target, the CLI's too (deletions ask the whole chain: PB-SESSION-CLEANUP). Below Python 3.10 the echo says so and writes and counts nothing but the `counts_unsure` mark (PB-PYTHON-FLOOR). The hooks find the active task's record by the task directory's own name (task 192; the `find -path` BOUND this row carried — PLAN §S11 item (23) — is closed, see PB-TASK-ACTIVATE).",
       "owner": [
         {
           "path": "plugins/playbook/scripts/state-echo-hook",
@@ -13531,6 +13620,19 @@
             "reference": "TheWritersTempPaths.test_control_the_writers_on_plain_paths"
           },
           "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_state_echo_sinks.py",
+          "reference": "ALinkedSessionsDirectory.test_the_write_log_is_still_kept",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_state_echo_sinks.py",
+            "reference": "TheEchosSinks.test_control_a_plain_session_is_written"
+          },
+          "limitations": [
+            "Red on `2956845`."
+          ]
         },
         {
           "type": "live-provider test",
@@ -16987,7 +17089,7 @@
     {
       "id": "PB-SESSION-END-PRESERVE",
       "category": "sessions-and-attribution",
-      "statement": "The SessionEnd hook removes the session directory for logout, prompt_input_exit, other, and exit, and preserves it for clear, resume, and any unknown or unparseable reason so a same-PID continuation keeps its active-task pointer. Where the hook can walk its process chain (/proc, or `ps` where /proc is missing), a `pid-N` directory is removed only when the exiting process is N — the lowest agent in that chain — so a claude started inside another claude's session (which resolves to the outer `pid-N`) keeps the outer session's directory, and with no agent visible in the chain it is kept for the liveness GC (task 126, owner Q-D (b)). It removes nothing through a link: a session directory that does not lie physically inside the project (`.agent`, a lane or `sessions` a link) is left as it is (task 194; measured before: the directory of that name in a linked `sessions`' target was removed).",
+      "statement": "The SessionEnd hook removes the session directory for logout, prompt_input_exit, other, and exit, and preserves it for clear, resume, and any unknown or unparseable reason so a same-PID continuation keeps its active-task pointer. Where the hook can walk its process chain (/proc, or `ps` where /proc is missing), a `pid-N` directory is removed only when the exiting process is N — the lowest agent in that chain — so a claude started inside another claude's session (which resolves to the outer `pid-N`) keeps the outer session's directory, and with no agent visible in the chain it is kept for the liveness GC (task 126, owner Q-D (b)). It removes nothing through a link: a session directory that does not lie physically inside the project (`.agent`, a lane or `sessions` a link) is left as it is (task 194; measured before: the directory of that name in a linked `sessions`' target was removed), and the removal runs from inside `sessions` on the relative name, so a swap after the check changes nothing (impl panel r2, codex); an empty or path-like session id removes nothing.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/session-end-hook",
@@ -17000,6 +17102,10 @@
         {
           "path": "plugins/playbook/scripts/gate-echo-lib.sh",
           "reference": "function:_pb_inside_project"
+        },
+        {
+          "path": "plugins/playbook/scripts/gate-echo-lib.sh",
+          "reference": "function:_pb_cwd_is"
         }
       ],
       "failure_consequence": "High",
@@ -17070,6 +17176,19 @@
             "reference": "TheSweepersFollowNoLink.test_control_session_end_removes_its_own_plain_directory"
           },
           "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_gc_links.py",
+          "reference": "TheDeletionsHoldTheirDirectory.test_session_end_holds_its_directory_when_sessions_is_swapped",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_session_gc_links.py",
+            "reference": "TheSweepersFollowNoLink.test_control_session_end_removes_its_own_plain_directory"
+          },
+          "limitations": [
+            "A fake `rm` swaps `.agent/sessions` right before the removal; red on `2956845`."
+          ]
         }
       ],
       "applicable_platforms": [

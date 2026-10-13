@@ -1165,9 +1165,10 @@ _gc_dead_sessions(Path(sys.argv[1]))' "$d2" 2>&1)"; pyrc=$?
 
     # Negative control: restore the trailing-slash glob and the target dies —
     # `rm -rf "link/"` FOLLOWS a real symlink into its target.
-    sed 's|for d in "$SESSIONS_DIR"/\*; do|for d in "$SESSIONS_DIR"/*/; do|' \
+    # (since task 194 the sweep runs from inside the directory: its loop is `for d in ./*; do`)
+    sed 's|for d in \./\*; do|for d in ./*/; do|' \
         "$HOOK" > "$MUT/session-start-hook"
-    assert_eq "$(grep -c 'SESSIONS_DIR"/\*/; do' "$MUT/session-start-hook")" "1" \
+    assert_eq "$(grep -c 'for d in \./\*/; do' "$MUT/session-start-hook")" "1" \
         "S18 symlink NC: mutant restored the trailing-slash glob"
     d9="$WORK/s18 symlink nc"; build_project "$d9" legacy
     mkdir -p "$d9/.agent/sessions" "$d9/precious"

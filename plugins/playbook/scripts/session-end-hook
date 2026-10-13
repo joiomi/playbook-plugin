@@ -111,6 +111,11 @@ if ! _pb_inside_project "$PROJECT_DIR" "$SESSION_DIR"; then
     echo "[playbook] $SESSION_DIR lies behind a link — not removed" >&2
     exit 0
 fi
-rm -rf "$SESSION_DIR"
+# ...and removed from INSIDE `sessions`, by its relative name (impl panel r2, codex: a swap between the
+# check and an `rm` by path redirected it). Never an empty or a path-like name: `./` would be them all.
+case "$SESSION_ID" in ''|.|..|*/*) exit 0 ;; esac
+( cd "$AGENT_DIR/sessions" 2>/dev/null && _pb_cwd_is "$PROJECT_DIR" "$AGENT_DIR/sessions" || exit 0
+  [ -L "./$SESSION_ID" ] && exit 0
+  rm -rf -- "./$SESSION_ID" ) 2>/dev/null || true
 
 exit 0

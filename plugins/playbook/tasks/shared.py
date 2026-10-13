@@ -11,8 +11,8 @@ modules import from here, one direction (design-1.5.9.md §4).
 """
 from __future__ import annotations
 
+import fnmatch
 import os
-import shutil
 import time
 from pathlib import Path
 from tasks.core import resolve_agent_dir, resolve_session_id
@@ -98,21 +98,132 @@ def _session_is_dead(session_dir: Path, own_session: str, cutoff: float) -> bool
     return True
 
 
-def _inside_project(project_path: Path, path: Path) -> bool:
-    """True when `path` is under `project_path` and no component of it below the project root is a symbolic link —
-    the path lies physically inside the project. Asked before anything DELETES (task 194, impl panel r1 — grave,
-    measured: with `.agent/sessions` a link, this sweep removed every directory of the link's target; a cloned
-    repository can ship that link). The bash twin is `_pb_inside_project` in scripts/gate-echo-lib.sh."""
+_DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0)
+
+
+def _open_dir_inside(project_path: Path, path: Path) -> "int | None":
+    """A descriptor for the directory `path`, opened from the project root one component at a time with O_NOFOLLOW —
+    so no link below the root is followed. What is then read or removed THROUGH the descriptor stays in that
+    directory, whatever is swapped in its path later (task 194: impl panel r1 — grave, measured: with
+    `.agent/sessions` a link, the sweep removed every directory of the link's target; impl panel r2, codex,
+    reproduced — a check by path then a delete by path followed a swap made in between). None when `path` is not
+    under the root, or a component is missing, a link or not a directory. Above the root nothing is asked: a project
+    reached through a link is the user's own. The bash twins: `_pb_inside_project` and `_pb_cwd_is`."""
     try:
         rel = path.relative_to(project_path)
     except ValueError:
-        return False
-    cur = project_path
+        return None
+    try:
+        fd = os.open(project_path, _DIR_FLAGS)
+    except OSError:
+        return None
     for part in rel.parts:
-        cur = cur / part
-        if cur.is_symlink():
+        try:
+            nfd = os.open(part, _DIR_FLAGS | os.O_NOFOLLOW, dir_fd=fd)
+        except OSError:
+            os.close(fd)
+            return None
+        os.close(fd)
+        fd = nfd
+    return fd
+
+
+def _remove_tree_at(dir_fd: int, name: str) -> bool:
+    """Remove the entry `name` of the open directory `dir_fd`, through descriptors only: a directory with what it
+    holds, a link (at `name` or anywhere below) as a link, never what it points at. True when it is gone."""
+    try:
+        fd = os.open(name, _DIR_FLAGS | os.O_NOFOLLOW, dir_fd=dir_fd)
+    except OSError:
+        try:
+            os.unlink(name, dir_fd=dir_fd)      # not a directory (or a link put in its place): the entry itself
+            return True
+        except OSError:
             return False
-    return True
+    try:
+        with os.scandir(fd) as it:
+            entries = [(e.name, e.is_dir(follow_symlinks=False)) for e in it]
+        for ename, is_dir in entries:
+            if is_dir:
+                _remove_tree_at(fd, ename)
+            else:
+                try:
+                    os.unlink(ename, dir_fd=fd)
+                except OSError:
+                    pass
+    finally:
+        os.close(fd)
+    try:
+        os.rmdir(name, dir_fd=dir_fd)
+        return True
+    except OSError:
+        return False
+
+
+def _session_dirs_at(sessions_fd: int) -> "list[str]":
+    """The names of the real directories in the open sessions directory — a link among them is not one."""
+    try:
+        with os.scandir(sessions_fd) as it:
+            return sorted(e.name for e in it if e.is_dir(follow_symlinks=False))
+    except OSError:
+        return []
+
+
+def _read_at(dir_fd: int, name: str, file: str) -> "str | None":
+    """The text of `<name>/<file>` inside the open directory, neither of them followed through a link."""
+    try:
+        dfd = os.open(name, _DIR_FLAGS | os.O_NOFOLLOW, dir_fd=dir_fd)
+    except OSError:
+        return None
+    try:
+        ffd = os.open(file, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0), dir_fd=dfd)
+    except OSError:
+        os.close(dfd)
+        return None
+    try:
+        with os.fdopen(ffd, "r", encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    except OSError:
+        return None
+    finally:
+        os.close(dfd)
+
+
+def _remove_sessions_of_task(project_path: Path, agent_dir: Path, task: str) -> None:
+    """At a close: remove the session directories whose `current_state` names `task` — inside the project only,
+    through descriptors (task 194, impl panel r2, opus and sonnet: the close's `glob` + `rmtree` followed a linked
+    `sessions`)."""
+    sfd = _open_dir_inside(project_path, agent_dir / "sessions")
+    if sfd is None:
+        return
+    try:
+        for name in _session_dirs_at(sfd):
+            text = _read_at(sfd, name, "current_state")
+            if text is not None and text.strip() == task:
+                _remove_tree_at(sfd, name)
+    finally:
+        os.close(sfd)
+
+
+def _clear_in_sessions(project_path: Path, agent_dir: Path, file: str) -> None:
+    """Remove `<session>/<file>` from every session directory — inside the project only, through descriptors (task
+    194, impl panel r2, sonnet: merge-prep's offset clearing followed a linked `sessions`)."""
+    sfd = _open_dir_inside(project_path, agent_dir / "sessions")
+    if sfd is None:
+        return
+    try:
+        for name in _session_dirs_at(sfd):
+            try:
+                dfd = os.open(name, _DIR_FLAGS | os.O_NOFOLLOW, dir_fd=sfd)
+            except OSError:
+                continue
+            try:
+                os.unlink(file, dir_fd=dfd)
+            except OSError:
+                pass
+            finally:
+                os.close(dfd)
+    finally:
+        os.close(sfd)
 
 
 def _gc_dead_sessions(project_path: Path) -> list[str]:
@@ -141,36 +252,46 @@ def _gc_dead_sessions(project_path: Path) -> list[str]:
     """
     agent_dir = resolve_agent_dir(project_path)
     sessions_dir = agent_dir / "sessions"
-    # Nothing is removed behind a link: not the legacy files of a linked `.agent` or lane, not the session
-    # directories of a linked `sessions` (task 194; `_inside_project`).
-    if not _inside_project(project_path, sessions_dir):
-        return []
-
-    # Clean legacy flat files from pre-migration layout
-    for pattern in (".hook_counters.*", "current_state", "current_state.*"):
-        for f in agent_dir.glob(pattern):
-            if f.is_file():
-                try:
-                    f.unlink()
-                except OSError:
-                    pass
-
-    # Clean dead session dirs (see _session_is_dead)
     reclaimed: list[str] = []
-    if not sessions_dir.exists():
+    # Nothing is removed behind a link, nor through a path swapped after a check: `.agent` (or the lane) and
+    # `sessions` are opened from the project root without following a link, and every removal goes through those
+    # descriptors (task 194; `_open_dir_inside`). A sessions directory that is not physically inside the project
+    # is not swept at all.
+    afd = _open_dir_inside(project_path, agent_dir)
+    if afd is None:
         return reclaimed
-    cutoff = time.time() - 86400
-    own_session = _own_session_id()
-    for session_dir in sessions_dir.iterdir():
-        # Skip symlinks explicitly. rmtree already refuses to follow one, but the
-        # bash twin must skip them too (there, `rm -rf "link/"` destroys the
-        # TARGET), so stating it keeps the two policies visibly identical.
-        if session_dir.is_symlink() or not session_dir.is_dir():
-            continue
-        if _session_is_dead(session_dir, own_session, cutoff):
-            shutil.rmtree(session_dir, ignore_errors=True)
-            if not session_dir.exists():
-                reclaimed.append(session_dir.name)
+    try:
+        # Clean legacy flat files from pre-migration layout
+        try:
+            with os.scandir(afd) as it:
+                legacy = [e.name for e in it if e.is_file(follow_symlinks=False)
+                          and any(fnmatch.fnmatchcase(e.name, pat)
+                                  for pat in (".hook_counters.*", "current_state", "current_state.*"))]
+        except OSError:
+            legacy = []
+        for name in legacy:
+            try:
+                os.unlink(name, dir_fd=afd)
+            except OSError:
+                pass
+
+        # Clean dead session dirs (see _session_is_dead). A link among them is skipped (the bash twin skips it
+        # too: there, `rm -rf "link/"` destroys the TARGET).
+        try:
+            sfd = os.open("sessions", _DIR_FLAGS | os.O_NOFOLLOW, dir_fd=afd)
+        except OSError:
+            return reclaimed
+        try:
+            cutoff = time.time() - 86400
+            own_session = _own_session_id()
+            for name in _session_dirs_at(sfd):
+                if _session_is_dead(sessions_dir / name, own_session, cutoff):
+                    if _remove_tree_at(sfd, name):
+                        reclaimed.append(name)
+        finally:
+            os.close(sfd)
+    finally:
+        os.close(afd)
     RECLAIMED_SESSIONS.extend(reclaimed)
     return reclaimed
 

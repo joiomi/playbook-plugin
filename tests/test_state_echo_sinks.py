@@ -283,6 +283,20 @@ class ALinkedSessionsDirectory(unittest.TestCase):
         self.assertEqual((plain / ".agent" / "sessions" / SID / "transcript_path").read_text(encoding="utf-8").strip(),
                          str(self.tmp / "t.jsonl"))
 
+    def test_the_write_log_is_still_kept(self):
+        # impl panel r2 (fable): the out-of-tree write log (under HOME, checked by write_log.py) is not session state —
+        # the echo's stop for a linked `sessions` must not switch it off for every Edit/Write
+        target = self.tmp / "first" / "proj" / "src" / "a.py"
+        target.parent.mkdir(parents=True)
+        target.write_text("x = 1\n", encoding="utf-8")          # a PostToolUse runs after the Write: the file is there
+        r = self.run_hook("state-echo-hook", {"hook_event_name": "PostToolUse", "tool_name": "Write",
+                                              "tool_input": {"file_path": str(target), "content": "x = 1\n"}})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        logs = [f for f in (self.tmp / ".local").rglob("*") if f.is_file()] if (self.tmp / ".local").exists() else []
+        self.assertTrue(any(str(target) in f.read_text(encoding="utf-8", errors="replace") for f in logs),
+                        f"no write-log entry for the Write: {logs}")
+        self.assertEqual(sorted(x.name for x in self.victim.iterdir()), [])
+
     def test_the_stop_hook_holds_on_a_linked_sessions_directory(self):
         # what a planted session would read: counts that release (0 and 0) — the stop must hold
         (self.victim / SID).mkdir()

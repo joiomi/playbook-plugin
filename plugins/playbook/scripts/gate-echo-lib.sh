@@ -1316,6 +1316,18 @@ _pb_inside_project() {
     return 0
 }
 
+# _pb_cwd_is ROOT PATH — true when the directory this shell stands in is PATH as it lies physically
+# inside ROOT (ROOT's physical path + PATH's part below ROOT). Asked AFTER a `cd` into PATH: from
+# then on the shell holds that directory, and what it deletes by RELATIVE names stays there — a
+# swap of PATH, or of a directory above it, after the check changes nothing (task 194, impl panel
+# r2, codex — reproduced: a sweep that checked by path and deleted by path followed a swap).
+_pb_cwd_is() {
+    local root_p
+    case "$2" in "$1"/?*) ;; *) return 1 ;; esac
+    root_p=$(cd "$1" 2>/dev/null && pwd -P) || return 1
+    [ "$(pwd -P)" = "$root_p/${2#"$1"/}" ]
+}
+
 # _pb_sink_ok DIR FILE — true when DIR is not a symbolic link and FILE is absent or a regular file that is not a
 # link: a log written there stays inside the lane and never blocks on a FIFO. (Residual: a swap between this check
 # and the write — the window pb_journal.py states too.)

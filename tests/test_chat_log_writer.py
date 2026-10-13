@@ -31,6 +31,12 @@ class _ChatLogFixture(unittest.TestCase):
         env = dict(os.environ)
         env["PLAYBOOK_SESSION_ID"] = SID
         env.pop("BASH_ENV", None)
+        env.pop("PLAYBOOK_SANDBOXED", None)
+        # a /proc with no agent in it (task 194, impl panel r2, gemini): under a nested agent — a judge running the
+        # suite — the hook saw two agents in the host's chain and reset nothing
+        proc = Path(self._tmp.name) / "proc-no-agent"
+        (proc / "self").mkdir(parents=True, exist_ok=True)
+        env["PLAYBOOK_PROC_ROOT"] = str(proc)
         if provider:
             env["PLAYBOOK_PROVIDER"] = provider
         env.update(extra_env or {})

@@ -212,6 +212,11 @@ SESSION_DIR="$AGENT_DIR/sessions/$SESSION_ID"
 # was logged again at every call). Nothing is written or counted; the stop hook holds
 # its low-activity releases on such a directory (task 193).
 if ! _pb_session_dir_ok "$SESSION_DIR"; then     # it, or `.agent/sessions` itself (task 194, impl panel r1)
+    # The write log is not session state (it lives under HOME; write_log.py checks its sink): an
+    # Edit/Write is still recorded (impl panel r2, fable — the stop had switched it off).
+    if [ "$AGENT_WRITABLE" = true ]; then
+        case "$TOOL_NAME" in Edit|Write) write_log_append "$INPUT" "$PROJECT_DIR" ;; esac
+    fi
     echo '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"# ⚠ this session'"'"'s directory under .agent/sessions/ (or .agent/sessions itself) is a link — not written, not counted (the stop hook holds this turn like one that wrote)."}}'
     exit 0
 fi

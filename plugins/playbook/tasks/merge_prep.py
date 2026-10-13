@@ -215,13 +215,10 @@ def _rename_colliding_tasks(project_path: Path, agent_dir: Path,
             atomic_write(task_md, text)
 
     # Clear chat_log_offset for all sessions — stale after renames + upcoming ref rewrite
-    sessions_dir = agent_dir / "sessions"
-    if sessions_dir.exists():
-        for session_dir in sessions_dir.iterdir():
-            if session_dir.is_dir():
-                offset_file = session_dir / "chat_log_offset"
-                if offset_file.exists():
-                    offset_file.unlink()
+    # (inside the project only, through descriptors — task 194, impl panel r2, sonnet: this loop
+    # followed a linked `.agent/sessions` and a linked session directory)
+    from tasks.shared import _clear_in_sessions
+    _clear_in_sessions(project_path, agent_dir, "chat_log_offset")
 
 
 def _session_is_live(session_dir: Path) -> bool:

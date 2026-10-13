@@ -64,7 +64,12 @@ class _Project(unittest.TestCase):
         subprocess.run(["git", "init", "-q"], cwd=self.p, check=True)
         self.env = {k: v for k, v in os.environ.items()
                     if not k.startswith(("PLAYBOOK_", "CLAUDE_CODE_", "CLAUDECODE")) and k != "BASH_ENV"}
-        self.env.update(CLAUDE_PLUGIN_ROOT=str(PLUGIN), PLAYBOOK_SESSION_ID=SESSION, CLAUDE_PROJECT_DIR=str(self.p))
+        # a /proc with no agent in it (task 194, impl panel r2, gemini): under a nested agent — a judge running the
+        # suite — the chat hook saw two agents in the host's chain and reset nothing
+        proc = self.p.parent / "proc-no-agent"
+        (proc / "self").mkdir(parents=True, exist_ok=True)
+        self.env.update(CLAUDE_PLUGIN_ROOT=str(PLUGIN), PLAYBOOK_SESSION_ID=SESSION, CLAUDE_PROJECT_DIR=str(self.p),
+                        PLAYBOOK_PROC_ROOT=str(proc))
 
     def fire(self, event: str, payload: dict, tool: "str | None" = None) -> "list[subprocess.CompletedProcess]":
         cmds = registered(event, tool)
