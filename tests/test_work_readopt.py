@@ -531,6 +531,19 @@ class TestGateCountGuard(WorkReadoptBase):
         self.assertEqual(r.returncode, 0, r.stderr)   # prose no longer counts as a gate
         self.assertEqual(status_of(tf), "done")
 
+    def test_a_bold_lead_in_does_not_block_a_complete_task(self):
+        # Task 190 (PLAN S14 T2c, #50; impl panel r1, fable): the WoW project's task 018 shape — every gate
+        # checked, then bold lead-ins that introduce lists. The real close, through the CLI, must not read them.
+        tf = self._task("087",
+            "# 087 - g\n\n## Status\npending\n\n## Work Plan\n"
+            "- [x] real gate one\n- [x] real gate two\n\n## Notes\n"
+            "  - **The rebuild**, in scratch:\n    - step one\n- **Ceva**, în scratch:\n")
+        self.assertEqual(self.run_tasks("work", "087").returncode, 0)
+        r = self.run_tasks("work", "done")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("open gate(s)", r.stderr)
+        self.assertEqual(status_of(tf), "done")
+
     def test_real_open_gate_still_blocks_on_the_count(self):
         self._task("086",
             "# 086 - g\n\n## Status\npending\n\n## Work Plan\n"

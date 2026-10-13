@@ -4481,30 +4481,19 @@ def _extract_problem(task_file: Path) -> str:
 
 
 def _extract_head_position(task_file: Path) -> str:
-    """Find the first unchecked checkbox or empty required field. The GATE comes
-    from the shared scan `_live_gate_scan` (task 055, round-1 panel: this used to
-    re-walk the file with `line.strip().startswith("- [ ]")`, so an NBSP-led
-    marker was a head-position gate but not a counted gate). The one documented
-    extra: an empty required field (`- **Field**:`) that sits BEFORE the first
-    live OPEN gate is reported instead — `tasks status` may therefore stop earlier
-    than the hook's first gate, never on a different gate. With no open gate the
-    head is `(all gates checked)`, as the hook says: the scan used to run to EOF
-    and a user's lead-in line (`- **Ceva**, în scratch:`) refused the close —
-    no template emits an empty field (task 190, owner ruling (a) of 2026-10-13)."""
+    """The head position: the first live open gate, from the shared scan
+    `_live_gate_scan` (task 055, round-1 panel: this used to re-walk the file with
+    `line.strip().startswith("- [ ]")`, so an NBSP-led marker was a head-position
+    gate but not a counted gate), or `(all gates checked)` when none is open — the
+    same answer as the hook's. Task 190 (owner ruling (a) of 2026-10-13; impl panel
+    r1): the head no longer stops at an "empty required field" (`- **Field**:`). No
+    template emits one, and the check caught a user's bold lead-in line
+    (`- **Ceva**, în scratch:`): with every gate checked it refused the close with
+    "0 open gate(s)", and with gates open it named the prose as the next gate."""
     try:
         lines = _physical_lines(task_file.read_text(encoding="utf-8", errors="replace"))
-        unchecked, _total, first, first_index = _live_gate_scan(lines)
-        if first_index < 0:
-            return "(all gates checked)"
-        fenced = _iter_fenced_flags(lines, unclosed_is_live=True, track_indented_code=False)
-        for i in range(first_index):
-            if fenced[i]:
-                continue
-            stripped = lines[i].rstrip("\r").strip()
-            # Empty required field (line ending with : and nothing after)
-            if stripped.endswith(":") and stripped.startswith("- **"):
-                return stripped
-        return first
+        _unchecked, _total, first, first_index = _live_gate_scan(lines)
+        return first if first_index >= 0 else "(all gates checked)"
     except Exception:
         return "(error reading)"
 

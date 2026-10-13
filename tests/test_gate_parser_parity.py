@@ -129,7 +129,7 @@ CASES = [
      "- [ ]\n- [ ] Freehand — work is done\n", True),
     ("NBSP-leading marker is not a gate for ANY reader (sonnet/grok round 1)",
      "- [x] a\n\u00a0- [ ] not a gate\n", False),
-    ("empty required field before a gate: head stops at the field, the gate is still the first gate",
+    ("a bold lead-in before an open gate is not the head: the gate is (task 190, impl panel r1)",
      "- **Owner**:\n- [ ] g\n", True),
     ("U+0085 is NOT a line boundary — physical lines only, like grep (codex round 1)",
      "prose\u0085- [ ] x\n- [x] a\n", False),
@@ -179,35 +179,26 @@ class GateParserParity(unittest.TestCase):
                 checked, total = _gate_counts(content)
                 progress_open = total > checked
                 head = _extract_head_position(tf)
-                # head_open = "the head is an open GATE". An empty required field
-                # (`- **Field**:`) is the head's one documented extra — it is not
-                # a gate, so it does not count as open here; pinned below.
-                head_is_field = head.startswith("- **")
-                head_open = not head.startswith("(") and not head_is_field
-                if head_is_field:
-                    self.assertTrue(head.endswith(":"), f"head field shape: {label}")
+                # Task 190 (impl panel r1): the head is the first live open gate or
+                # `(all gates checked)` — never a bold lead-in line; the "empty required
+                # field" extra is gone (no template emits one).
+                self.assertFalse(head.startswith("- **"), f"head is a lead-in line: {label}")
+                head_open = not head.startswith("(")
                 _status, hook_count, hook_first, _release = hook_fields(tf)
                 hook_open = hook_count > 0
                 cli_unchecked, cli_total, cli_first = _live_gate_state(_physical_lines(content))
 
                 self.assertEqual(progress_open, expect_open, f"progress: {label}")
                 self.assertEqual(hook_open, expect_open, f"stop-hook: {label}")
-                if head_is_field:
-                    # The head stopped EARLY at a required field: it says nothing
-                    # about gates; the count and the hook still carry the truth.
-                    self.assertEqual(progress_open, hook_open, f"count vs hook: {label}")
-                else:
-                    self.assertEqual(head_open, expect_open, f"head: {label}")
-                    # The property itself: all three identical.
-                    self.assertEqual({progress_open, head_open, hook_open}, {expect_open},
-                                     f"consumers disagree: {label}")
+                self.assertEqual(head_open, expect_open, f"head: {label}")
+                # The property itself: all three identical.
+                self.assertEqual({progress_open, head_open, hook_open}, {expect_open},
+                                 f"consumers disagree: {label}")
                 # The hook's count and FIRST_GATE ARE the CLI's (`_live_gate_state`,
-                # same function, same fixture). `tasks status`'s head position takes
-                # its gate from the same scan but may stop EARLIER at an empty
-                # required field (`- **Field**:`) — the one documented difference.
+                # same function, same fixture), and so is `tasks status`'s head (task 190).
                 self.assertEqual(hook_count, total - checked, f"hook count != CLI count: {label}")
                 self.assertEqual((hook_count, hook_first), (cli_unchecked, cli_first), f"hook != CLI: {label}")
-                if expect_open and not head_is_field:
+                if expect_open:
                     self.assertEqual(head, hook_first, f"head != hook first gate: {label}")
                 if not expect_open:
                     self.assertEqual(hook_first, "", f"no open gate → empty first: {label}")

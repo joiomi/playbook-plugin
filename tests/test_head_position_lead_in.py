@@ -67,6 +67,15 @@ class GateBounceReadsTheGates(unittest.TestCase):
         self.assertTrue(blocked)
         self.assertIn("has ? open gate(s)", err)
 
+    def test_a_lead_in_above_an_open_gate_is_not_the_head(self):
+        # Impl panel r1 (fable, opus): with a gate still open, a bold lead-in ABOVE it is not the next gate either.
+        p = self._file(HEAD + "- **Constraint**, from the owner:\n  - z\n\n## Work Plan\n- [x] A — done\n- [ ] B\n")
+        self.assertEqual(core._extract_head_position(p), "B")
+        blocked, err = self.bounce(p)
+        self.assertTrue(blocked)
+        self.assertIn("has 1 open gate(s)", err)
+        self.assertIn("Next open gate: B", err)
+
     def test_a_lead_in_after_an_open_gate_is_not_the_head(self):
         # With a gate still open, a bold lead-in BELOW it is never reported as the next gate.
         p = self._file(HEAD + "x\n\n## Work Plan\n- [x] A — done\n- [ ] B\n\n## Notes\n- **Ceva**, în scratch:\n")
