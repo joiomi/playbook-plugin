@@ -5113,21 +5113,26 @@ def _compose_handoff(lines: "list[str]", section: str) -> str:
         # fence and archived the following sections; Gemini #19 of task 188)
         return _writer_section_span(lines, title)
 
+    # 0. A handoff MOVES the current note (into `## Handoff history`) and APPENDS sections,
+    #    so it runs only on a task.md with no unclosed fence anywhere (task 189: impl panel
+    #    r1 — fable, opus, codex — and the post-D6 single judge's runs 1 and 2, codex). With
+    #    one, an appended section lands inside it and is hidden; a moved note's open fence
+    #    pairs with a closed fence further down; a moved note's closed fence CLOSES it — each
+    #    hides the sections in between from every reader. The two fence scans disagree
+    #    exactly on an unclosed opener and what follows it.
+    closed = _iter_fenced_flags(lines, unclosed_is_live=True)
+    strict = _iter_fenced_flags(lines, unclosed_is_live=False)
+    opener = next((i for i in range(len(lines)) if strict[i] and not closed[i]), None)
+    if opener is not None:
+        raise ValueError(
+            f"an unclosed code fence in task.md (opened by {lines[opener].strip()!r}, line "
+            f"{opener + 1}) — a handoff moves the current note and appends sections, which "
+            "would change what that fence hides; close the fence by hand, nothing was changed")
+
     # 1. Archive any existing `## Handoff` block (verbatim, heading demoted).
     archived: "list[str] | None" = None
     ho = _section_span("## Handoff")
     if ho:
-        # An open fence in the note is never moved (task 189, post-D6 single judge, codex):
-        # archived at the top of `## Handoff history` it pairs with a closed fence further
-        # down and hides every section in between, while the fresh `## Handoff` stays live.
-        closed = _iter_fenced_flags(lines, unclosed_is_live=True)
-        strict = _iter_fenced_flags(lines, unclosed_is_live=False)
-        opener = next((i for i in range(ho[0], ho[1]) if strict[i] and not closed[i]), None)
-        if opener is not None:
-            raise ValueError(
-                f"an unclosed code fence inside the current `## Handoff` (opened by "
-                f"{lines[opener].strip()!r}, line {opener + 1}) — archiving it would hide the "
-                "sections after it; close the fence by hand, nothing was changed")
         old = list(lines[ho[0]:ho[1]])
         while old and old[-1].strip() == "":
             old.pop()
@@ -5153,25 +5158,8 @@ def _compose_handoff(lines: "list[str]", section: str) -> str:
     #    replace boundary never reaches the history section above it).
     while lines and lines[-1].strip() == "":
         lines.pop()
-    head = len(lines) + 1
     lines += ["", section.rstrip(), ""]
-    out = "\n".join(lines) + "\n"
-    # 4. The fresh `## Handoff` must be LIVE where it was appended (task 189, impl panel r1:
-    #    fable, opus, codex). An unclosed fence above it — in the note just archived (a LAST
-    #    `## Handoff` hides no section, so the span check passes it), the history, or any
-    #    earlier section — fences it for every fail-closed writer and reader: the next handoff
-    #    cannot archive it and appends another, the block written with it is not found.
-    new = out.splitlines()
-    sp = _live_section_span(new, "## Handoff")
-    if sp is None or sp[0] != head:
-        closed = _iter_fenced_flags(new, unclosed_is_live=True)
-        strict = _iter_fenced_flags(new, unclosed_is_live=False)
-        opener = next((i for i in range(head) if strict[i] and not closed[i]), None)
-        where = f" (opened by {new[opener].strip()!r})" if opener is not None else ""
-        raise ValueError(
-            f"an unclosed code fence{where} above the new `## Handoff` would hide it — "
-            "refusing to write the handoff; close the fence by hand, nothing was changed")
-    return out
+    return "\n".join(lines) + "\n"
 
 
 def _extract_block_reason(task_file: Path) -> "str | None":
