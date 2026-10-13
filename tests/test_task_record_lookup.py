@@ -50,6 +50,7 @@ class _Project(unittest.TestCase):
     def env(self, **extra):
         env = {k: v for k, v in os.environ.items() if k not in ("PLAYBOOK_SESSION_ID", "BASH_ENV", "CLAUDE_ENV_FILE")}
         env["PLAYBOOK_SESSION_ID"] = SID
+        env["HOME"] = self._tmp.name
         env.update(extra)
         return env
 
@@ -125,6 +126,9 @@ class TheActiveTaskAmongOthers(_Project):
         self.record("012-gamma", OPEN)
         r = self.gate()
         self.assertEqual(r.returncode, 2, f"a pointer to a DONE task authorized a code edit: {r.stderr}")
+        rows = [json.loads(x) for x in (self.project / ".agent" / "journal" / "enforcement.jsonl")
+                .read_text(encoding="utf-8").splitlines() if x.strip()]
+        self.assertEqual([x["reason"] for x in rows if x.get("hook") == "task-gate"], ["pointer to done task"])
 
     def test_a_real_active_record_still_authorizes(self):
         # Negative control: the lookup still finds the active task.

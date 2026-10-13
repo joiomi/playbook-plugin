@@ -262,5 +262,29 @@ class ShellEntrypointFloorGuard(unittest.TestCase):
                          f"safe command blocked on a supported interpreter: {err!r}")
 
 
+class LiveFloorRowCoversEveryEntryPoint(unittest.TestCase):
+    """The live row PB-PYTHON-FLOOR (tests/live/lib/rows_platform.py) runs every entry point that checks the
+    interpreter in its `FLOOR_ENTRY_POINTS`, and every Claude hook that does not in `UNCHECKED_CLAUDE_HOOKS`. Both
+    lists are bound to today's scripts here (task 192: two hooks gained the check and had to move)."""
+
+    def test_the_lists_match_the_scripts(self):
+        sys.path.insert(0, str(_HERE / "live" / "lib"))
+        try:
+            import rows_platform
+        finally:
+            sys.path.remove(str(_HERE / "live" / "lib"))
+        probe = "sys.version_info >= (3,10)"
+        checked = {str(p.relative_to(SCRIPTS)) for p in SCRIPTS.rglob("*")
+                   if p.is_file() and "__pycache__" not in p.parts and p.suffix in ("", ".sh")
+                   and probe in p.read_text(encoding="utf-8", errors="replace")}
+        codex = {"codex-user-prompt-hook", "codex-stop-hook", "codex-apply-patch-hook"}   # Python: `_floor_ok`
+        self.assertEqual(set(rows_platform.FLOOR_ENTRY_POINTS), checked | codex)
+        import json as _json
+        hooks = _json.loads((PLUGIN / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
+        claude = {h["command"].split("/scripts/")[1].rstrip('"') for evs in hooks.values() for m in evs
+                  for h in m["hooks"] if "/scripts/" in h.get("command", "")}
+        self.assertEqual(set(rows_platform.UNCHECKED_CLAUDE_HOOKS), claude - checked)
+
+
 if __name__ == "__main__":
     unittest.main()

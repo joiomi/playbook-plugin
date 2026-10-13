@@ -548,15 +548,21 @@ class GuaranteeLedgerValidation(_LedgerFixture):
         of tests/live/gauntlet.sh). What is still not executed is said IN THE
         STATEMENT, not left to the status: the zsh logger is run with a real zsh
         by CI only (this host has none) and held to the bash one by a
-        source-level test, and the state echo's empty per-session directory at
-        the root of a fresh clone is a stated BOUND.
+        source-level test. The state echo's empty per-session directory at the
+        root of a fresh clone was a stated BOUND until task 192 removed the
+        directory (#41): the statement no longer carries it, and the closure is
+        recorded among the row's limitations.
         macOS/Windows are not claimed (Linux-only since 2026-10-08).
         """
         entry = next(e for e in self.ledger["guarantees"]
                      if e["id"] == "PB-LANE-RESOLUTION")
         self.assertEqual("verified_by_current_executable_evidence", entry["status"])
-        for named in ("zsh one is run with a real zsh", "by CI", "BOUND", ".agent/sessions/<id>/"):
+        for named in ("zsh one is run with a real zsh", "by CI", "session state is written at the root"):
             self.assertIn(named, entry["statement"])
+        self.assertNotIn("BOUND", entry["statement"])
+        self.assertTrue(any("task 192" in x and "#41" in x for x in entry["missing_evidence_or_limitation"]))
+        self.assertIn("EchoAtAFreshClone.test_no_session_directory_at_the_root",
+                      [p["reference"] for p in entry["proofs"]])
         live = [p for p in entry["proofs"] if p["path"] == "tests/live/gauntlet.sh"]
         self.assertEqual(["scenario:PB-LANE-RESOLUTION"], [p["reference"] for p in live])
         self.assertIsNone(entry["violation_reproduction"],

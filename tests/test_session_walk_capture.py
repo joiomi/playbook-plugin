@@ -100,7 +100,8 @@ class HooksJournalTheWalk(_FakePsMixin):
         (self.project / ".agent" / "tasks").mkdir(parents=True)
 
     def run_hook(self, name, payload, **extra):
-        r = subprocess.run([bash_or_skip(), str(SCRIPTS / name)], cwd=self.project, env=self.env(**extra),
+        r = subprocess.run([bash_or_skip(), str(SCRIPTS / name)], cwd=self.project,
+                           env=self.env(HOME=str(self.tmp), **extra),
                            input=json.dumps(payload), capture_output=True, text=True, timeout=60)
         return r
 

@@ -6,7 +6,7 @@
     {
       "id": "PB-TASK-ACTIVATE",
       "category": "task-lifecycle",
-      "statement": "tasks work resolves the active task from the per-session pointer, and the edit gate refuses to authorize a code edit when that pointer is junk, a stale number, glob-bearing, or points at a done task or at a blocked one (paused on the owner's decision; the refusal names `tasks work <N>` as the resume), while a real pending pointer authorizes. BOUND (PLAN §S11 item (23), deferred after the 1.6.1 release): the hooks find the active task's record with `find -path \"*/<N>-*/*\"`, which also matches every record when the PROJECT directory's own name starts with `<N>-`; in such a project the hook reads the first record `find` lists, which may be another task's. BOUND (task 184, impl round 2's full live run, 2026-10-12 18:00; deferred after the 1.6.1 release): the gate's session lookup can fail in a live session — once in seven live runs of this row the edit after `tasks work 1` was refused with \"playbook: no session identity — … the process-tree walk either reached the Claude Code background daemon (bg-pty-host) or could not read an ancestor process\" and the empty session id in the journal; the next three runs passed. It fails closed (the edit is refused, nothing is written), the cause is not established, and every hook that resolves its session by that walk can meet it.",
+      "statement": "tasks work resolves the active task from the per-session pointer, and the edit gate refuses to authorize a code edit when that pointer is junk, a stale number, glob-bearing, or points at a done task or at a blocked one (paused on the owner's decision; the refusal names `tasks work <N>` as the resume), while a real pending pointer authorizes. The gate, the stop hook and the state echo find that record by the task DIRECTORY's own name (`<tasks>/<N>-*/task.md`, first in the CLI's sorted order), so a project directory named like a task (`007-proj`) never lends them another task's record, nor a record to a pointer whose task has none (task 192; before it `find -path \"*/<N>-*/*\"` matched the whole path, and the gate authorized a code edit for such a pointer). BOUND (task 184, impl round 2's full live run, 2026-10-12 18:00; deferred after the 1.6.1 release): the gate's session lookup can fail in a live session — once in seven live runs of this row the edit after `tasks work 1` was refused with \"playbook: no session identity — … the process-tree walk either reached the Claude Code background daemon (bg-pty-host) or could not read an ancestor process\" and the empty session id in the journal; the next three runs passed. It fails closed (the edit is refused, nothing is written), the cause is not established, and every hook that resolves its session by that walk can meet it. Measured by task 192: the owner's two projects' transcripts (to 2026-10-13) hold 134 such notices in 54,095 runs of the two per-call hooks (state echo 105, gate 29), and in 132 the other hook of the same tool call resolved the session — a transient. Since task 192 the gate and the echo journal, where they may write, what the walk read on such a miss (a `session-walk` record: every hop's pid, name and state, where it stopped, what a walk right then resolves), and every call of a live gauntlet session does; its capture window (task 192, 2026-10-13 21:00-21:08: ten live PB-TASK-ACTIVATE runs on the clean candidate, 125 walks journaled, every one `sh < claude < bash < systemd`) saw no miss — at the transcripts' rate a window that size sees none 73% of the time, so the window bounds nothing; the capture in the owner's own sessions, once a release carrying it is installed, is what will trace it.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/lifecycle.py",
@@ -23,6 +23,14 @@
         {
           "path": "plugins/playbook/scripts/task-gate-hook",
           "reference": "whole-file"
+        },
+        {
+          "path": "plugins/playbook/scripts/gate-echo-lib.sh",
+          "reference": "function:task_record_file"
+        },
+        {
+          "path": "plugins/playbook/scripts/gate-echo-lib.sh",
+          "reference": "function:session_walk_trace"
         }
       ],
       "failure_consequence": "High",
@@ -87,6 +95,32 @@
           ]
         },
         {
+          "type": "executable integration",
+          "path": "tests/test_task_record_lookup.py",
+          "reference": "NoRecordOfTheActiveTask.test_the_gate_refuses_a_code_edit",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_task_record_lookup.py",
+            "reference": "TheActiveTaskAmongOthers.test_a_real_active_record_still_authorizes"
+          },
+          "limitations": [
+            "Hermetic: the real hooks as subprocesses in a project directory named `007-proj`; red on nested `0253fac` (the gate authorized the edit, the stop counted another record's gates, the echo showed another gate)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_walk_capture.py",
+          "reference": "HooksJournalTheWalk.test_the_gate_journals_an_unresolved_walk_and_still_refuses",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_session_walk_capture.py",
+            "reference": "HooksJournalTheWalk.test_a_resolved_walk_is_not_journaled_by_default"
+          },
+          "limitations": [
+            "A faked /proc tree (PLAYBOOK_PROC_ROOT); the trace's result is held to resolve_session_id on every vector of tests/test_session_daemon_identity.py (TraceResultParity, both paths). The capture says what was read; it does not establish the cause."
+          ]
+        },
+        {
           "type": "live-provider test",
           "path": "tests/live/gauntlet.sh",
           "reference": "scenario:PB-TASK-ACTIVATE",
@@ -109,7 +143,8 @@
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
         "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21).",
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
-        "2026-10-12 (task 184, PLAN S11): the live claude cell ran (scenario PB-TASK-ACTIVATE)."
+        "2026-10-12 (task 184, PLAN S11): the live claude cell ran (scenario PB-TASK-ACTIVATE).",
+        "2026-10-13 (task 192, PLAN S14 T3): the `find -path` BOUND (item #25) is closed — the hooks match the task directory's own name; the session-identity BOUND (item #48) stays, now with its capture and the window above."
       ],
       "follow_up_phases": [
         8
@@ -4351,7 +4386,7 @@
     {
       "id": "PB-LANE-RESOLUTION",
       "category": "sessions-and-attribution",
-      "statement": "Every surface that reads or writes runtime state resolves the per-user lane — the tasks CLI, the shell wrapper, the shared shell library, the provider hooks, the monitor, and the bash and zsh command loggers (the zsh one is run with a real zsh against the four lane shapes by CI, the `bash-log.zsh lane shapes (real zsh)` step of .github/workflows/verify.yml, and held to the bash one by a source-level test here, where zsh is not installed) — and on a fresh multi-user clone whose gitignored .agent/current_user marker is absent, no surface invents a root lane: no task, chat log, journal, shell history or session state is written at the root. BOUND: the state echo leaves an EMPTY `.agent/sessions/<id>/` directory there on each tool call (nothing is written into it, and lane detection reads only `.agent/<name>/tasks`).",
+      "statement": "Every surface that reads or writes runtime state resolves the per-user lane — the tasks CLI, the shell wrapper, the shared shell library, the provider hooks, the monitor, and the bash and zsh command loggers (the zsh one is run with a real zsh against the four lane shapes by CI, the `bash-log.zsh lane shapes (real zsh)` step of .github/workflows/verify.yml, and held to the bash one by a source-level test here, where zsh is not installed) — and on a fresh multi-user clone whose gitignored .agent/current_user marker is absent, no surface invents a root lane: no task, chat log, journal, shell history or session state is written at the root.",
       "owner": [
         {
           "path": "plugins/playbook/provider/paths.py",
@@ -4480,6 +4515,19 @@
           ]
         },
         {
+          "type": "executable integration",
+          "path": "tests/test_echo_fresh_clone_root.py",
+          "reference": "EchoAtAFreshClone.test_no_session_directory_at_the_root",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_echo_fresh_clone_root.py",
+            "reference": "EchoAtAFreshClone.test_a_picked_lane_gets_its_session_directory"
+          },
+          "limitations": [
+            "Hermetic: the real state-echo hook as a subprocess on a two-lane clone with no marker; red on nested `0253fac` (root entries alice, bob, sessions)."
+          ]
+        },
+        {
           "type": "live-provider test",
           "path": "tests/live/gauntlet.sh",
           "reference": "scenario:PB-LANE-RESOLUTION",
@@ -4508,7 +4556,8 @@
         "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21).",
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
         "2026-10-12 (task 184, PLAN S11): the zsh cell, until now named unexecuted, IS executed — by CI, which installs zsh on the Linux runner and runs the real bash-log.zsh against the four lane shapes (valid marker, no marker with root tasks/, no marker without, an unusable marker; .github/workflows/verify.yml); a workflow step is not a ledger proof path, so the statement names it. Not on this host, which has no zsh.",
-        "2026-10-12 (task 184, PLAN S11): live provider lane handoff observed on claude (scenario PB-LANE-RESOLUTION). NARROWED with a bound it found: `scripts/state-echo-hook:176` makes the session directory before it checks the fresh-clone shape (task-gate-hook and session-start-hook skip it); the directory stays empty. Parked on task 184 after the 1.6.1 release (not grave, older than this batch: 2026-07-20)."
+        "2026-10-12 (task 184, PLAN S11): live provider lane handoff observed on claude (scenario PB-LANE-RESOLUTION). NARROWED with a bound it found: `scripts/state-echo-hook:176` makes the session directory before it checks the fresh-clone shape (task-gate-hook and session-start-hook skip it); the directory stays empty. Parked on task 184 after the 1.6.1 release (not grave, older than this batch: 2026-07-20).",
+        "2026-10-13 (task 192, PLAN S14 T3, item #41): the bound above is closed — the state echo makes the session directory only where it may write (`AGENT_WRITABLE`), so a fresh clone's root gets none; the live scenario now asserts it (`no hook leaves a session directory at the root`)."
       ],
       "follow_up_phases": [
         4,
@@ -10911,7 +10960,7 @@
     {
       "id": "PB-PYTHON-FLOOR",
       "category": "compatibility-and-package",
-      "statement": "The documented and diagnosed minimum Python version matches syntax used by every shipped module, and the entry points that check the interpreter — the eight launchers and four hooks — fail clearly before import under an incompatible one; the six Claude hooks that do not check it are claimed only as far as the live run measured them (its limitation).",
+      "statement": "The documented and diagnosed minimum Python version matches syntax used by every shipped module, and the entry points that check the interpreter — the eight launchers and six hooks — fail clearly before import under an incompatible one; the four Claude hooks that do not check it are claimed only as far as the live run measured them (its limitation).",
       "owner": [
         {
           "path": "plugins/playbook/scripts/tasks",
@@ -10932,6 +10981,14 @@
         {
           "path": "docs/architecture.md",
           "reference": "section:Layout"
+        },
+        {
+          "path": "plugins/playbook/scripts/session-start-hook",
+          "reference": "whole-file"
+        },
+        {
+          "path": "plugins/playbook/scripts/session-end-hook",
+          "reference": "whole-file"
         }
       ],
       "failure_consequence": "High",
@@ -10986,6 +11043,30 @@
           "limitations": []
         },
         {
+          "type": "executable integration",
+          "path": "tests/test_python_floor.py",
+          "reference": "ShellEntrypointFloorGuard.test_session_start_hook_fails_open_loudly",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_python_floor.py",
+            "reference": "ShellEntrypointFloorGuard.test_supported_interpreter_passes_guard"
+          },
+          "limitations": [
+            "A fake python3 on PATH reports 3.9; by hand under the real python:3.9-slim (task 192's evidence) the old hooks exported an id, provisioned wrappers and deleted the session directory silently, the new ones said the floor and did none of it."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_python_floor.py",
+          "reference": "ShellEntrypointFloorGuard.test_session_end_hook_fails_open_loudly_and_keeps_the_session",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_python_floor.py",
+            "reference": "ShellEntrypointFloorGuard.test_supported_interpreter_passes_guard"
+          },
+          "limitations": []
+        },
+        {
           "type": "live-platform test",
           "path": "tests/live/gauntlet.sh",
           "reference": "scenario:PB-PYTHON-FLOOR",
@@ -11008,7 +11089,8 @@
       "missing_evidence_or_limitation": [
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
-        "2026-10-12 (task 184, PLAN S11): the live interpreter matrix ran on Linux (scenario PB-PYTHON-FLOOR of tests/live/gauntlet.sh). A floor issue the matrix does not see, parked on task 184 after the 1.6.1 release: the codex adapter reads ~/.codex/config.toml with `tomllib` (standard from 3.11) inside `except Exception`, so on 3.10 `_codex_hooks_enabled` answers False whatever the file says — the experimental codex AGENT path only; judges are not affected."
+        "2026-10-12 (task 184, PLAN S11): the live interpreter matrix ran on Linux (scenario PB-PYTHON-FLOOR of tests/live/gauntlet.sh). A floor issue the matrix does not see, parked on task 184 after the 1.6.1 release: the codex adapter reads ~/.codex/config.toml with `tomllib` (standard from 3.11) inside `except Exception`, so on 3.10 `_codex_hooks_enabled` answers False whatever the file says — the experimental codex AGENT path only; judges are not affected.",
+        "2026-10-13 (task 192, PLAN S14 T3, item #46): session-start-hook and session-end-hook check the floor (advisory: they say so and exit 0 having done nothing); the live row runs them with the checked hooks. task-gate, state-echo, stop and chat-log get it in PLAN S14 T4/T5; until then the live proof's limitation above (written for the 2026-10-12 run, when six hooks did not check) covers those four."
       ],
       "follow_up_phases": [
         8

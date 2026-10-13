@@ -32,6 +32,7 @@ class EchoAtAFreshClone(unittest.TestCase):
     def echo(self):
         env = {k: v for k, v in os.environ.items() if k not in ("PLAYBOOK_SESSION_ID", "BASH_ENV", "CLAUDE_ENV_FILE")}
         env["PLAYBOOK_SESSION_ID"] = SID
+        env["HOME"] = self._tmp.name
         r = subprocess.run([bash_or_skip(), str(SCRIPTS / "state-echo-hook")], cwd=self.project, env=env,
                            input=json.dumps({"tool_name": "Read", "tool_input": {"file_path": "x"}}),
                            capture_output=True, text=True, timeout=60)
