@@ -212,7 +212,7 @@ class BootstrapSurfacing(_Base):
         r = _cli(d, "bootstrap")
         out = r.stdout
         self.assertIn("handoff", out.lower())
-        self.assertIn("001", out)                  # names the task
+        self.assertIn("Task 1 (", out)              # the banner names the task (not the pending table's 001; task 189, Gemini #16)
         self.assertIn("tasks work 1", out)         # resume hint
 
     def test_bootstrap_quiet_without_handoff(self):

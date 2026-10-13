@@ -1504,6 +1504,31 @@ def _live_section_span(lines: "list[str]", title: str) -> "tuple[int, int] | Non
     return (start, end)
 
 
+def _writer_section_span(lines: "list[str]", title: str) -> "tuple[int, int] | None":
+    """`_live_section_span` for a WRITER that splices at or replaces the span — or a
+    ValueError, nothing written, when an UNCLOSED fence inside the section hides a
+    following section (task 189, Gemini #10 #13 #18 #19 of task 188).
+
+    The fail-closed scan fences every line after an unclosed opener, so the span then
+    runs to EOF: a replace deleted the sections after it, a splice at the span's end
+    landed past them (or inside `### Archived handoff`), and a reason added there was
+    invisible to the fail-open reader. The fail-OPEN scan sees those headings; where
+    the two disagree inside the span, a following section exists that the writer would
+    damage — refuse, as the status splice does. A fence that hides no heading (the
+    section is the last one) is not refused: nothing after it can be lost."""
+    sp = _live_section_span(lines, title)
+    if sp is None:
+        return None
+    hidden = next((i for i, _s in _iter_nonfenced(lines, unclosed_is_live=True)
+                   if sp[0] < i < sp[1] and _atx_h2_text(lines[i]) is not None), None)
+    if hidden is not None:
+        raise ValueError(
+            f"an unclosed code fence inside `{title}` hides the section after it "
+            f"(`{lines[hidden].strip()}`, line {hidden + 1}) — refusing to rewrite "
+            f"`{title}`; close the fence by hand, nothing was changed")
+    return sp
+
+
 def extract_risk_from_text(text: str) -> str:
     """`extract_risk` for a buffer already in hand (task 058, plan panel P2).
 
@@ -4857,7 +4882,7 @@ def _compose_blocked(text: str, clean_reason: str, ts: str) -> str:
     # the recorded one — it used to be replaced, and the first reason was lost. (After a
     # resume the old pause is resolved: a new block starts a new record, as before.)
     if _src == "blocked":
-        sp = _live_section_span(out, "## Blocked")
+        sp = _writer_section_span(out, "## Blocked")
         if sp is not None:
             end = sp[1]
             while end > sp[0] + 1 and out[end - 1].strip() == "":
@@ -4866,7 +4891,7 @@ def _compose_blocked(text: str, clean_reason: str, ts: str) -> str:
             return "\n".join(out).rstrip("\n") + "\n"
     _splice_status_value(out, pair, "blocked")
     while True:
-        sp = _live_section_span(out, "## Blocked")
+        sp = _writer_section_span(out, "## Blocked")
         if sp is None:
             break
         out = out[:sp[0]] + out[sp[1]:]
@@ -4929,7 +4954,7 @@ def resume_blocked_task(task_file: Path) -> None:
         # `## Blocked` example. The stamp lands at the end of the section's body
         # (right before the next live H2 / EOF), byte-identical to the pre-fix
         # placement. No live section → the status flip alone is the whole change.
-        sp = _live_section_span(out, "## Blocked")
+        sp = _writer_section_span(out, "## Blocked")
         if sp is not None:
             out = out[:sp[1]] + [f"> Resumed {ts}"] + out[sp[1]:]
         return "\n".join(out) + "\n"
@@ -4969,7 +4994,8 @@ def _git_repo_summary(repo_path: Path, *,
                               capture_output=True, text=True)
         dirty = (len([ln for ln in porc.stdout.splitlines() if ln.strip()])
                  if porc.returncode == 0 else None)
-        return (br or "(detached)", sha, dirty)
+        # `rev-parse --abbrev-ref HEAD` prints `HEAD` on a detached HEAD (task 189, Gemini #14 #17)
+        return ("(detached)" if br in ("", "HEAD") else br, sha, dirty)
     except (OSError, subprocess.SubprocessError):
         return None
 
@@ -5083,18 +5109,9 @@ def _compose_handoff(lines: "list[str]", section: str) -> str:
     """The handoff splice, as a pure function of the lines just read (task 058)."""
 
     def _section_span(title: str) -> "tuple[int, int] | None":
-        # [start, end) of a non-fenced level-2 section, or None. `end` is the
-        # first non-fenced H2 strictly after start (a fenced heading, or the
-        # section's own H3s, never end it). Strict ATX matcher on the raw line
-        # (V5): `##\tX` is a boundary, a >=4-space `## X` is not — writer and
-        # reader must agree so no splice runs into the wrong heading.
-        nf = [i for i, _s in _iter_nonfenced(lines)]
-        start = next((i for i in nf if _atx_h2_text(lines[i]) == title), None)
-        if start is None:
-            return None
-        end = next((i for i in nf if i > start and _atx_h2_text(lines[i]) is not None),
-                   len(lines))
-        return (start, end)
+        # the shared writer span (task 189: its own copy ran to EOF past an unclosed
+        # fence and archived the following sections; Gemini #19 of task 188)
+        return _writer_section_span(lines, title)
 
     # 1. Archive any existing `## Handoff` block (verbatim, heading demoted).
     archived: "list[str] | None" = None
@@ -5133,6 +5150,8 @@ def _extract_block_reason(task_file: Path) -> "str | None":
     """The one-line reason from a task's `## Blocked` blockquote (the trailing
     `(since …)` / `Resumed …` stamp stripped), or None when not blocked.
     Fence-aware (impl-panel C1): a fenced `## Blocked` example is not live."""
+    if not _is_blocked(task_file):     # a resumed task keeps its ## Blocked as history (task 189, Gemini #15)
+        return None
     try:
         lines = task_file.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
