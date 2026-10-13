@@ -909,6 +909,14 @@ counters_unlock() {
 write_counter() {
     local file="$1" key="$2" value="$3"
     local tmp="${file}.tmp.$$"
+    # Not inside a linked session directory, not over a link or a non-regular counters
+    # file (task 194): the temp file and its rename landed in the link's target. The count
+    # is not made, and a count not made is marked (the stop hook also holds its releases
+    # on a linked session directory, task 193).
+    if ! _pb_sink_ok "$(_counters_dir "$file")" "$file"; then
+        case "$key" in tools|writes) _counters_mark "$file" ;; esac
+        return 0
+    fi
     counters_lock "$file"
     if [ "$PLAYBOOK_COUNTERS_UNLOCKED" = true ]; then
         # there is a lock and it was not given: nothing is written without it —
@@ -989,8 +997,10 @@ reset_counters() {
 write_session_mark() {
     local file="$1" value="$2"
     # never renamed onto a link or a directory — `mv` moved the temp file INTO one (task 193, the
-    # single judge after round 2, codex); such a target keeps what it is, and no mark is written
-    _pb_sink_ok "" "$file" || return 0
+    # single judge after round 2, codex); such a target keeps what it is, and no mark is written.
+    # Nor inside a session directory that is a link (task 194, measured: the stop hook's
+    # `turn_end` landed in the link's target) — no mark, the stricter case for each reader.
+    _pb_sink_ok "$(_counters_dir "$file")" "$file" || return 0
     local tmp="${file}.tmp.$$"
     if ! { printf '%s\n' "$value" > "$tmp" 2>/dev/null && mv "$tmp" "$file" 2>/dev/null; }; then
         rm -f "$tmp" 2>/dev/null || true

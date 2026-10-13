@@ -295,6 +295,163 @@ class ShellEntrypointFloorGuard(unittest.TestCase):
         self.assertFalse((self.proj / ".agent" / "chat_log.md").exists(), "a log line was written below the floor")
         self.assertEqual((sess / "counters").read_text(encoding="utf-8"), "tools=9\nwrites=9\n")
 
+    # -- task 194 (#46): the task gate keeps its polarity below the floor — it fails closed: no call but a shell
+    #    command is let through (what authorizes an edit runs on python3: the task's status, Guard 0, the batch
+    #    check), and a shell command keeps only the guards that need none (the judge's; the task-dir trigger, which
+    #    then refuses without the helper that narrows it); no session id is injected. The state echo is advisory:
+    #    it says so, writes nothing and counts nothing — and marks the count it did not make, so the stop hook
+    #    holds the turn instead of reading old counts. --
+    def _working_old_python(self):
+        """A python3 that answers the floor probe as 3.9 and otherwise runs the real one (the stdlib one-liners
+        of a real 3.9 work), writing down every call."""
+        log = self.tmp / "python-calls"
+        shim = self.tmp / "py39bin"
+        shim.mkdir(exist_ok=True)
+        real = shutil.which("python3")
+        (shim / "python3").write_text(
+            '#!/bin/bash\nprintf "%s\\n" "$*" >> "' + str(log) + '"\n'
+            'for a in "$@"; do case "$a" in --version|-V) echo "Python 3.9.18"; exit 0 ;; esac; done\n'
+            'case "$*" in *version_info*) exit 1 ;; esac\n'
+            'exec "' + real + '" "$@"\n', encoding="utf-8")
+        (shim / "python3").chmod(0o755)
+        return f"{shim}:{os.environ.get('PATH', '')}", log
+
+    def _gate(self, path, payload, sid="floor-sess"):
+        env = dict(os.environ)
+        env.update(PATH=path, HOME=str(self.tmp / "home"), PLAYBOOK_SESSION_ID=sid)
+        env.pop("PLAYBOOK_ROLE", None)
+        (self.tmp / "home").mkdir(exist_ok=True)
+        import json as _json
+        return subprocess.run([self.bash, str(self.scr / "task-gate-hook")], input=_json.dumps(payload).encode(),
+                              cwd=str(self.proj), env=env, capture_output=True, timeout=60)
+
+    def _gate_project(self):
+        sess = self._stop_project()
+        (self.proj / "src").mkdir()
+        (self.proj / "src" / "a.py").write_text("x = 1\n", encoding="utf-8")
+        (self.proj / "README.md").write_text("r\n", encoding="utf-8")
+        return sess
+
+    def test_task_gate_refuses_every_edit_below_the_floor(self):
+        self._gate_project()
+        path, log = self._working_old_python()
+        edits = [("Edit", {"file_path": str(self.proj / "src" / "a.py"), "old_string": "x = 1", "new_string": "x = 2"}),
+                 ("Write", {"file_path": str(self.proj / "README.md"), "content": "doc\n"}),
+                 ("Edit", {"file_path": str(self.proj / ".agent" / "tasks" / "001-x" / "task.md"),
+                           "old_string": "- [ ] open", "new_string": "- [x] open"}),
+                 ("NotebookEdit", {"notebook_path": str(self.proj / "n.ipynb"), "new_source": "x"})]
+        for tool, ti in edits:
+            with self.subTest(tool=tool, path=ti.get("file_path") or ti.get("notebook_path")):
+                r = self._gate(path, {"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": ti})
+                err = r.stderr.decode("utf-8", "replace")
+                self.assertEqual(r.returncode, 2, f"an edit was let through below the floor: {err!r}")
+                self.assertIn(FLOOR_MSG, err)
+        calls = log.read_text(encoding="utf-8")
+        for helper in ("task-status.py", "task-dir-target.py", "gate-batch-check.py"):
+            self.assertNotIn(helper, calls, "a check that runs on python3 was run below the floor")
+        journal = (self.proj / ".agent" / "journal" / "enforcement.jsonl").read_text(encoding="utf-8")
+        self.assertEqual(journal.count('"reason":"python3 below 3.10"'), len(edits), journal)
+        # a python3 that reads nothing (no stdlib that works) is refused the same way, the floor said first
+        r = self._gate(self.oldpath, {"hook_event_name": "PreToolUse", "tool_name": "Write",
+                                      "tool_input": {"file_path": str(self.proj / "README.md"), "content": "d"}})
+        self.assertEqual(r.returncode, 2)
+        self.assertIn(FLOOR_MSG, r.stderr.decode("utf-8", "replace"))
+
+    def test_task_gate_lets_a_shell_command_through_below_the_floor(self):
+        self._gate_project()
+        path, log = self._working_old_python()
+        bash = lambda cmd: {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": cmd}}
+        r = self._gate(path, bash("ls -la"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(FLOOR_MSG, r.stderr.decode("utf-8", "replace"))
+        r = self._gate(path, bash(".claude/bin/tasks status"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn(b"updatedInput", r.stdout, "a session id was injected below the floor")
+        # a task directory named by a temp path outside the project: the helper allows it on a supported interpreter
+        # (the control below); below the floor the trigger alone decides
+        outside = str(self.tmp / "elsewhere" / ".agent" / "tasks" / "001-x")
+        r = self._gate(path, bash(f"mkdir -p {outside}"))
+        self.assertEqual(r.returncode, 2, "the task-dir trigger was narrowed below the floor")
+        self.assertIn("below python3 3.10 the check that tells a task directory apart is not run",
+                      r.stderr.decode("utf-8", "replace"))
+        journal = (self.proj / ".agent" / "journal" / "enforcement.jsonl").read_text(encoding="utf-8")
+        self.assertIn('"reason":"python3 below 3.10: task-dir trigger"', journal)
+        self.assertNotIn("manual task dir creation", journal)
+        r = self._gate(path, bash("awk '{print $1}' README.md"))
+        self.assertEqual(r.returncode, 2, "a brace is a trigger: refused below the floor, said why")
+        self.assertIn("is not run", r.stderr.decode("utf-8", "replace"))
+        self.assertNotIn("task-dir-target.py", log.read_text(encoding="utf-8"))
+        r = self._gate(path, bash("tasks new build x"), sid="judge")
+        self.assertEqual(r.returncode, 2, "the judge's guard was dropped below the floor")
+
+    def test_control_task_gate_on_a_supported_interpreter(self):
+        self._gate_project()
+        real = os.environ.get("PATH", "")
+        r = self._gate(real, {"hook_event_name": "PreToolUse", "tool_name": "Write",
+                              "tool_input": {"file_path": str(self.proj / "README.md"), "content": "doc\n"}})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn(FLOOR_MSG, r.stderr.decode("utf-8", "replace"))
+        outside = str(self.tmp / "elsewhere" / ".agent" / "tasks" / "001-x")
+        r = self._gate(real, {"hook_event_name": "PreToolUse", "tool_name": "Bash",
+                              "tool_input": {"command": f"mkdir -p {outside}"}})
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_state_echo_says_the_floor_marks_the_count_and_writes_nothing(self):
+        import json as _json
+        for name, which in (("works", None), ("reads nothing", "fake")):
+            with self.subTest(python=name):
+                sess = self.proj / ".agent" / "sessions" / "floor-sess"
+                if sess.exists():
+                    shutil.rmtree(self.proj / ".agent")
+                sess = self._stop_project()
+                path, log = self._working_old_python()
+                if which == "fake":
+                    path = self.oldpath
+                env = dict(os.environ)
+                env.update(PATH=path, HOME=str(self.tmp / "home"), PLAYBOOK_SESSION_ID="floor-sess")
+                env.pop("PLAYBOOK_ROLE", None)
+                (self.tmp / "home").mkdir(exist_ok=True)
+                if log.exists():
+                    log.unlink()
+                payload = {"hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": {"command": "ls"},
+                           "transcript_path": str(self.tmp / "t.jsonl")}
+                r = subprocess.run([self.bash, str(self.scr / "state-echo-hook")], input=_json.dumps(payload).encode(),
+                                   cwd=str(self.proj), env=env, capture_output=True, timeout=60)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertIn(FLOOR_MSG, _json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"])
+                self.assertEqual((sess / "counters").read_text(encoding="utf-8"), "tools=9\nwrites=9\n")
+                self.assertTrue((sess / "counts_unsure").is_file(), "the count not made was not marked")
+                self.assertFalse((sess / "transcript_path").exists())
+                self.assertFalse((self.proj / ".agent" / "chat_log.md").exists())
+                if which is None:
+                    calls = [c for c in log.read_text(encoding="utf-8").splitlines() if "version" not in c]
+                    self.assertEqual(calls, [], "the echo ran python3 below the floor")
+
+    def test_the_stop_hook_holds_a_turn_the_echo_did_not_count(self):
+        # why the echo marks: a user's prompt below the floor resets nothing either (the chat hook does nothing), so
+        # counts of 0 and 0 stay 0 while shell commands run — the stop hook's low-activity release would end the
+        # turn with its gate open. The mark holds it; without the mark the same counts release it (the control).
+        import json as _json
+        path, _log = self._working_old_python()
+        payload = _json.dumps({"hook_event_name": "PostToolUse", "tool_name": "Bash",
+                               "tool_input": {"command": "rm -rf build"}}).encode()
+        for marked in (True, False):
+            with self.subTest(marked=marked):
+                if (self.proj / ".agent").exists():
+                    shutil.rmtree(self.proj / ".agent")
+                sess = self._stop_project()
+                (sess / "counters").write_text("tools=0\nwrites=0\n", encoding="utf-8")
+                env = dict(os.environ)
+                env.update(PATH=path, HOME=str(self.tmp / "home"), PLAYBOOK_SESSION_ID="floor-sess")
+                env.pop("PLAYBOOK_ROLE", None)
+                (self.tmp / "home").mkdir(exist_ok=True)
+                subprocess.run([self.bash, str(self.scr / "state-echo-hook")], input=payload, cwd=str(self.proj),
+                               env=env, capture_output=True, timeout=60)
+                if not marked:
+                    (sess / "counts_unsure").unlink()
+                r = self._hook_old_python("stop-hook", b'{"hook_event_name":"Stop","stop_hook_active":false}')
+                self.assertEqual(r.returncode, 2 if marked else 0, r.stderr.decode("utf-8", "replace"))
+
     # -- negative control: on the REAL (>= 3.10) interpreter the guard does NOT
     #    fire — no floor message, safe command still allowed (exit 0). Proves the
     #    guard is a floor check, not a blanket refusal. --

@@ -19,20 +19,29 @@ MIN_IMAGE, NEW_IMAGE, OLD_IMAGE = "python:3.10-slim", "python:3.15-slim", "pytho
 FLOOR_ENTRY_POINTS = ("tasks", "sandbox", "init", "playbook-codex", "playbook-grok", "playbook-agy", "playbook-pi",
                       "monitor-lib/launch-monitor", "command-guard-hook", "codex-user-prompt-hook",
                       "codex-stop-hook", "codex-apply-patch-hook", "session-start-hook", "session-end-hook",
-                      "stop-hook", "chat-log-hook")
+                      "stop-hook", "chat-log-hook", "task-gate-hook", "state-echo-hook")
 LAUNCHERS = FLOOR_ENTRY_POINTS[:8]           # refuse: exit 1 with the message
 HOOKS = FLOOR_ENTRY_POINTS[8:]               # a hook that cannot run lets the call through, loud (node [5])
-# The Claude hooks.json commands that do NOT check the interpreter (command-guard-hook does, and since task 192
-# session-start-hook, session-end-hook, and since task 193 stop-hook and chat-log-hook — they are in HOOKS
-# above): under
-# 3.9 they are run on a project with no active task and must answer as on a supported interpreter (impl panel
-# round 2, T6) — that is all this run measures; their other paths under 3.9 are not claimed (parked on task 184).
-# hook -> (event, payload fields, exit status, a word its answer must hold), as measured under 3.10.
-UNCHECKED_CLAUDE_HOOKS = {
-    "task-gate-hook": ("PreToolUse", {"tool_name": "Edit", "tool_input": {
-        "file_path": "/tmp/hp/src/a.py", "old_string": "x = 1", "new_string": "x = 2"}}, "2", "BLOCKED: No active task"),
-    "state-echo-hook": ("PostToolUse", {"tool_name": "Read", "tool_input": {"file_path": "/tmp/hp/src/a.py"},
-                                        "tool_response": {}}, "0", "No active task"),
+# The Claude hooks.json commands that do NOT check the interpreter: none since task 194 (command-guard-hook checked
+# first; session-start-hook and session-end-hook since task 192, stop-hook and chat-log-hook since task 193,
+# task-gate-hook and state-echo-hook since task 194). Kept, bound to hooks.json by the binding test, so a new hook
+# without the check shows here. hook -> (event, payload fields, exit status, a word its answer must hold).
+UNCHECKED_CLAUDE_HOOKS: "dict[str, tuple]" = {}
+# Under 3.9 the two hooks of task 194 are also run with a real payload, in a project whose session is known and
+# has a task with an open gate, for their polarity: the enforcing gate refuses an edit it lets through on a
+# supported interpreter (a non-code file, no task needed) and lets a shell command through; the echo writes no
+# count and marks the one it did not make. label -> (hook, event, payload fields, exit status, words its answer
+# must hold, a shell check after the call, printed into the answer).
+FLOOR_CLAUDE_CALLS = {
+    "task-gate-hook@Write": ("task-gate-hook", "PreToolUse", {"tool_name": "Write", "tool_input": {
+        "file_path": "/tmp/hp/README.md", "content": "doc"}}, "2", ("python3 >= 3.10", "BLOCKED"), ""),
+    "task-gate-hook@Bash": ("task-gate-hook", "PreToolUse", {"tool_name": "Bash", "tool_input": {"command": "ls"}},
+                            "0", ("python3 >= 3.10",), ""),
+    "state-echo-hook": ("state-echo-hook", "PostToolUse", {"tool_name": "Bash", "tool_input": {"command": "ls"},
+                                                           "tool_response": {}},
+                        "0", ("python3 >= 3.10", "COUNTS tools=9 writes=9 MARKED"),
+                        "printf 'COUNTS %s %s' $(cat .agent/sessions/floor-live/counters); "
+                        "[ -f .agent/sessions/floor-live/counts_unsure ] && echo ' MARKED'"),
 }
 NEXT_VERSIONS = ("3.16", "3.17")             # NEW_IMAGE is the newest only while neither of these images exists
 
@@ -57,7 +66,8 @@ def newest_verdict(stdout: str, tags: "list[str]") -> "tuple[bool, str]":
 
 
 def _claude_hook_probe() -> str:
-    """Shell lines that run each unchecked Claude hook once with its real payload, in a project with no task."""
+    """Shell lines that run each unchecked Claude hook once with its real payload, in a project with no task, and
+    each of FLOOR_CLAUDE_CALLS in a project with an open task (session `floor-live`, counts 9 and 9)."""
     lines = ["mkdir -p /tmp/hp/src /tmp/hp/.agent/tasks && echo 'x = 1' > /tmp/hp/src/a.py && cd /tmp/hp",
              "export CLAUDE_PLUGIN_ROOT=/pb CLAUDE_PROJECT_DIR=/tmp/hp"]
     for hook, (event, fields, _rc, _word) in UNCHECKED_CLAUDE_HOOKS.items():
@@ -65,6 +75,15 @@ def _claude_hook_probe() -> str:
                               "hook_event_name": event, **fields})
         lines.append(f"out=$(printf '%s' {shlex.quote(payload)} | timeout 30 bash /pb/scripts/{hook} 2>&1); rc=$?")
         lines.append(f'echo "### claude:{hook} rc=$rc"; ' + "printf '%s\\n' \"$out\"")
+    lines += ["mkdir -p .agent/tasks/001-x .agent/sessions/floor-live",
+              "printf '# 001\\n\\n## Status\\nin_progress\\n\\n## Work Plan\\n- [ ] open\\n' > .agent/tasks/001-x/task.md",
+              "echo 001 > .agent/sessions/floor-live/current_state",
+              "printf 'tools=9\\nwrites=9\\n' > .agent/sessions/floor-live/counters"]
+    for label, (hook, event, fields, _rc, _words, after) in FLOOR_CLAUDE_CALLS.items():
+        payload = json.dumps({"session_id": "floor-live", "cwd": "/tmp/hp", "hook_event_name": event, **fields})
+        lines.append(f"out=$(printf '%s' {shlex.quote(payload)} | PLAYBOOK_SESSION_ID=floor-live timeout 30 "
+                     f"bash /pb/scripts/{hook} 2>&1); rc=$?")
+        lines.append(f'echo "### claude:{label} rc=$rc"; ' + "printf '%s\\n' \"$out\"" + (f"; {after}" if after else ""))
     lines.append("cd /tmp")
     return "\n".join(lines)
 
@@ -192,6 +211,12 @@ done
         rc, body = blocks.get(f"codex-apply-patch-hook@{ev}", ("?", ""))
         run.clause(f"under 3.9 `codex-apply-patch-hook` given a {ev} event exits {want_rc} ({word})",
                    rc == want_rc and word in body and "Traceback" not in body, f"rc={rc}: {body.strip()[:160]!r}")
+    for label, (hook, event, _fields, want_rc, words, _after) in FLOOR_CLAUDE_CALLS.items():
+        rc, body = blocks.get(f"claude:{label}", ("?", ""))
+        run.clause(f"under 3.9 `{label}` in a project with an open task answers its {event} with exit {want_rc}, "
+                   + ", ".join(f"`{w}`" for w in words),
+                   rc == want_rc and all(w in body for w in words) and "Traceback" not in body,
+                   f"rc={rc}: {body.strip()[:200]!r}")
     for hook, (event, _fields, want_rc, word) in UNCHECKED_CLAUDE_HOOKS.items():
         rc, body = blocks.get(f"claude:{hook}", ("?", ""))
         run.clause(f"under 3.9 the Claude hook `{hook}` (no floor check of its own) answers a {event} with no active "

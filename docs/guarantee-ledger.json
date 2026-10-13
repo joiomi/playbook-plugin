@@ -2167,7 +2167,7 @@
     {
       "id": "PB-TASK-DIR-GUARD",
       "category": "hook-payload-and-paths",
-      "statement": "task-gate-hook refuses a Bash command that creates a task directory by hand inside the project — a `mkdir` naming `.agent[/<lane>]/tasks/…` in any shell spelling the decoder can resolve from the text (quoted, backslash-escaped, `$'…'`, brace-expanded, a glob in the PATH), judged by scripts/task-dir-target.py after the shell's own decoding — allows the same command when every named target is a literal absolute path OUTSIDE the project (a temp fixture), and, once the trigger fires (a `mkdir` word after quote/backslash stripping, a `$'`, or a `{` anywhere in the text), allows a command whose every mkdir word is provably inert — inside masked data (a heredoc a non-shell reads, an echo/printf literal) or among the arguments of a known read/print command (echo, printf, grep, cat, the `tasks` CLI, `git commit/log/show/diff/…` without `-c`), found through command_guard's walker (segments, wrappers, payloads, `sh -c`, eval, `$(…)`, herestrings, `find -exec`); any other command carrying the word, and every command whose NAME is unresolved (`$M`, `$(…)`, a backtick), counts as running it (task 110 and its impl panel round 1), and a mention is inert only while EVERY command of the call is one the helper knows to read, print or write text (a closed list — echo, printf, grep, cat, head, tail, wc, tee, cd, ls, cut, tr, the `tasks` CLI, git's read subcommands — that holds for a tool named bare in the environment the call found: no pager, no sorter, no command with an output-file operand; any environment change in the call — an assignment, a prefix, `printf -v`, an expansion that assigns, an arithmetic expression — takes the whole call off it; a path-qualified name, git and `tasks` count only when the call writes no file, a write being `tee` or any unquoted `>` not aimed at the null device or a descriptor; plus a non-shell interpreter whose program IS a quoted heredoc: given no program by `-c`, `-e`, `-m` or a script operand, its stdin not redirected from elsewhere) — with a shell, a sourcer, a path, or any program the helper does not know in the same call, text that one command writes or prints could be run by another, so the released answer stands (impl panel round 2: the first narrowing allowed a script written through a file-sink heredoc or by echo/printf and then run, a read command's output piped into a shell, and a quoted heredoc whose reader it could not name — a regression against 1.5.45) — and otherwise refuses to judge anything but one simple mkdir: a compound command, a pipe, a subshell, a background job, a prefix assignment or an expansion that could repoint the path is blocked, never narrowed. A word holding an unresolved expansion (a variable, `$(…)`, a backtick, or a shell special parameter such as `$@` — task 110) counts as naming a task dir only when it can still spell one: `tasks` is visible, or an expansion follows the `.ag` hint, or the `.ag` is not a whole `.agent` component — so `\"$N/.agent\"` is allowed (task 110, a regression against 1.5.45) while `.$D/tasks/…` and `.agent/$T/…` are refused. A command NAME that exists only after the shell evaluates it — assembled in a variable (`D=mk; D+=dir; \"$D\" -p …`) or a glob on the binary itself (`/bin/mk?ir`) — is outside the guard, the same architectural bound as PB-COMMAND-DANGEROUS.",
+      "statement": "task-gate-hook refuses a Bash command that creates a task directory by hand inside the project — a `mkdir` naming `.agent[/<lane>]/tasks/…` in any shell spelling the decoder can resolve from the text (quoted, backslash-escaped, `$'…'`, brace-expanded, a glob in the PATH), judged by scripts/task-dir-target.py after the shell's own decoding — allows the same command when every named target is a literal absolute path OUTSIDE the project (a temp fixture), and, once the trigger fires (a `mkdir` word after quote/backslash stripping, a `$'`, or a `{` anywhere in the text), allows a command whose every mkdir word is provably inert — inside masked data (a heredoc a non-shell reads, an echo/printf literal) or among the arguments of a known read/print command (echo, printf, grep, cat, the `tasks` CLI, `git commit/log/show/diff/…` without `-c`), found through command_guard's walker (segments, wrappers, payloads, `sh -c`, eval, `$(…)`, herestrings, `find -exec`); any other command carrying the word, and every command whose NAME is unresolved (`$M`, `$(…)`, a backtick), counts as running it (task 110 and its impl panel round 1), and a mention is inert only while EVERY command of the call is one the helper knows to read, print or write text (a closed list — echo, printf, grep, cat, head, tail, wc, tee, cd, ls, cut, tr, the `tasks` CLI, git's read subcommands — that holds for a tool named bare in the environment the call found: no pager, no sorter, no command with an output-file operand; any environment change in the call — an assignment, a prefix, `printf -v`, an expansion that assigns, an arithmetic expression — takes the whole call off it; a path-qualified name, git and `tasks` count only when the call writes no file, a write being `tee` or any unquoted `>` not aimed at the null device or a descriptor; plus a non-shell interpreter whose program IS a quoted heredoc: given no program by `-c`, `-e`, `-m` or a script operand, its stdin not redirected from elsewhere) — with a shell, a sourcer, a path, or any program the helper does not know in the same call, text that one command writes or prints could be run by another, so the released answer stands (impl panel round 2: the first narrowing allowed a script written through a file-sink heredoc or by echo/printf and then run, a read command's output piped into a shell, and a quoted heredoc whose reader it could not name — a regression against 1.5.45) — and otherwise refuses to judge anything but one simple mkdir: a compound command, a pipe, a subshell, a background job, a prefix assignment or an expansion that could repoint the path is blocked, never narrowed. A word holding an unresolved expansion (a variable, `$(…)`, a backtick, or a shell special parameter such as `$@` — task 110) counts as naming a task dir only when it can still spell one: `tasks` is visible, or an expansion follows the `.ag` hint, or the `.ag` is not a whole `.agent` component — so `\"$N/.agent\"` is allowed (task 110, a regression against 1.5.45) while `.$D/tasks/…` and `.agent/$T/…` are refused. A command NAME that exists only after the shell evaluates it — assembled in a variable (`D=mk; D+=dir; \"$D\" -p …`) or a glob on the binary itself (`/bin/mk?ir`) — is outside the guard, the same architectural bound as PB-COMMAND-DANGEROUS. Below Python 3.10 the decoder is not run: once the trigger fires the command is refused, the narrowing above does not apply, and the refusal says why (task 194, PB-PYTHON-FLOOR).",
       "owner": [
         {
           "path": "plugins/playbook/scripts/task-gate-hook",
@@ -2181,6 +2181,19 @@
       "failure_consequence": "High",
       "claim_kind": "mechanical",
       "proofs": [
+        {
+          "type": "executable integration",
+          "path": "tests/test_python_floor.py",
+          "reference": "ShellEntrypointFloorGuard.test_task_gate_lets_a_shell_command_through_below_the_floor",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_python_floor.py",
+            "reference": "ShellEntrypointFloorGuard.test_control_task_gate_on_a_supported_interpreter"
+          },
+          "limitations": [
+            "Below the floor: a mkdir of a task directory outside the project and an `awk '{…}'` are refused with the reason; on a supported interpreter the same mkdir passes (the control)."
+          ]
+        },
         {
           "type": "executable integration",
           "path": "tests/test_gate_path_traversal.py",
@@ -2520,7 +2533,8 @@
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
         "Row added by task 166 (PLAN S11 fix batch, item 5; owner 2026-10-09: \"Adaug rândul în S11 (Recomandat)\"). The guard is older than the ledger and its tests date from task 158; until this row it was enforced and tested, and stated nowhere here.",
         "Task 171 (PLAN S11; retro 107 R6): the guard has a project scope. Until then a `Write` creating `<anywhere>/.agent/tasks/<dir>/task.md` was refused too, and this row stated that as a bound. Bound that remains, measured in that task and older than it: the pattern reads the path's TEXT, so a path that reaches this project's `.agent` through a symlink whose name is not `.agent` (`<link>/tasks/<dir>/task.md`) is not seen by this guard.",
-        "Bound: only a payload whose tool is `Write` is judged by this guard. One of another tool (`Edit`, `MultiEdit`, `NotebookEdit`) that names a task.md which does not exist is not refused here; whether such a tool can create a file at all is the host's behaviour and is not checked. Making a task DIRECTORY through the shell is `PB-TASK-DIR-GUARD`'s subject, not this row's."
+        "Bound: only a payload whose tool is `Write` is judged by this guard. One of another tool (`Edit`, `MultiEdit`, `NotebookEdit`) that names a task.md which does not exist is not refused here; whether such a tool can create a file at all is the host's behaviour and is not checked. Making a task DIRECTORY through the shell is `PB-TASK-DIR-GUARD`'s subject, not this row's.",
+        "2026-10-14 (task 194): below Python 3.10 the task gate refuses every edit tool call before this guard runs (PB-PYTHON-FLOOR) — a Write over an existing task.md included."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],
@@ -5604,7 +5618,8 @@
       "missing_evidence_or_limitation": [
         "The mtime-guess fallback (used only when NO transcript pointer exists) does not work on Windows: the Claude project-slug scheme (tr '/' '-' in bootstrap.sh) has no analogue for a Windows drive/backslash project path, so the fallback locates no JSONL. Its negative control test_no_pointer_falls_back_loudly is therefore win32-skipped (fix/windows-residual), and the sensor-loop wait_once uses os.kill(pid, 0), which is not a portable liveness probe on Windows (CPython routes it through TerminateProcess), so dead-pid exit is unexercised there. The PRIMARY pointer-based binding — the guarantee's core, test_pointer_beats_newer_mtime_decoy — is unaffected and runs on Windows. Confirmed on Windows CI (run 32402622190).",
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
-        "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21)."
+        "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21).",
+        "2026-10-14 (task 194): the echo does not write the pointer where `transcript_path` is a link or not a regular file, or the session directory is a link (PB-HOOK-STATE-ECHO); the monitor then reads what stands there — its read of a planted pointer is not hardened (not claimed)."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],
@@ -10982,7 +10997,7 @@
     {
       "id": "PB-PYTHON-FLOOR",
       "category": "compatibility-and-package",
-      "statement": "The documented and diagnosed minimum Python version matches syntax used by every shipped module, and the entry points that check the interpreter — the eight launchers and eight hooks — fail clearly before import under an incompatible one; the two Claude hooks that do not check it are claimed only as far as the live run measured them (its limitation).",
+      "statement": "The documented and diagnosed minimum Python version matches syntax used by every shipped module, and the entry points that check the interpreter — the eight launchers and all ten hooks — fail clearly before import under an incompatible one, each hook with its own polarity: the task gate fails closed (no call but a shell command passes; a shell command keeps the judge's guard and the task-dir trigger, which then refuses without its helper), the stop hook counts the gates without Python and still blocks, codex's apply-patch hook refuses a PreToolUse edit; the others say so and do nothing — the state echo marks the count it did not make, so the stop hook holds the turn (task 194).",
       "owner": [
         {
           "path": "plugins/playbook/scripts/tasks",
@@ -11018,6 +11033,14 @@
         },
         {
           "path": "plugins/playbook/scripts/chat-log-hook",
+          "reference": "whole-file"
+        },
+        {
+          "path": "plugins/playbook/scripts/task-gate-hook",
+          "reference": "whole-file"
+        },
+        {
+          "path": "plugins/playbook/scripts/state-echo-hook",
           "reference": "whole-file"
         }
       ],
@@ -11121,13 +11144,61 @@
           "limitations": []
         },
         {
+          "type": "executable integration",
+          "path": "tests/test_python_floor.py",
+          "reference": "ShellEntrypointFloorGuard.test_task_gate_refuses_every_edit_below_the_floor",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_python_floor.py",
+            "reference": "ShellEntrypointFloorGuard.test_control_task_gate_on_a_supported_interpreter"
+          },
+          "limitations": [
+            "A python3 that answers the floor probe as 3.9 and runs the real stdlib otherwise (and the fake that reads nothing): a code Edit, a README Write, a gate tick in task.md and a NotebookEdit each exit 2 with the floor; the call log shows no task-status.py, task-dir-target.py or gate-batch-check.py. Red on nested `fe6387c` (the README write and the tick went through, the helpers ran)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_python_floor.py",
+          "reference": "ShellEntrypointFloorGuard.test_task_gate_lets_a_shell_command_through_below_the_floor",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_python_floor.py",
+            "reference": "ShellEntrypointFloorGuard.test_control_task_gate_on_a_supported_interpreter"
+          },
+          "limitations": [
+            "`ls` passes with the floor said; `tasks status` gets no injected session id; a task directory outside the project, which the helper allows on a supported interpreter (the control), is refused; the judge's guard holds."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_python_floor.py",
+          "reference": "ShellEntrypointFloorGuard.test_state_echo_says_the_floor_marks_the_count_and_writes_nothing",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_python_floor.py",
+            "reference": "ShellEntrypointFloorGuard.test_supported_interpreter_passes_guard"
+          },
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_python_floor.py",
+          "reference": "ShellEntrypointFloorGuard.test_the_stop_hook_holds_a_turn_the_echo_did_not_count",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Its control is in the test: with the echo's mark removed the same 0/0 counts release the stop (exit 0)."
+          ]
+        },
+        {
           "type": "live-platform test",
           "path": "tests/live/gauntlet.sh",
           "reference": "scenario:PB-PYTHON-FLOOR",
           "boundary": "live-platform",
           "negative_control": null,
           "limitations": [
-            "Containers of the official python images on Linux: every shipped .py file compiled and the CLI round trip run under 3.10 (the floor) and 3.14 (the newest image on Docker Hub, checked by the run: 3.15 and 3.16 absent on 2026-10-12); under 3.9 the eight launchers (tasks, sandbox, init, playbook-codex, playbook-grok, playbook-agy, playbook-pi, monitor-lib/launch-monitor) refuse before importing anything (exit 1, the message); the command guard and codex's user-prompt and stop hooks say so and fail open (exit 0); codex's apply-patch hook keeps its per-event polarity — given a PreToolUse event it refuses the edit (exit 2, fail-closed), given a PostToolUse event or none it passes (exit 0). The six Claude hooks.json commands that do not check the interpreter (task-gate, state-echo, stop, chat-log, session-start, session-end) were run under 3.9 on a project with no active task: each answered as under 3.10 (task-gate refused the edit, exit 2), with no traceback; their other paths under 3.9 are not claimed (parked on task 184). The hooks under 3.9 are run directly with those payloads, not inside a provider session."
+            "Containers of the official python images on Linux: every shipped .py file compiled and the CLI round trip run under 3.10 (the floor) and 3.14 (the newest image on Docker Hub, checked by the run: 3.15 and 3.16 absent on 2026-10-12); under 3.9 the eight launchers (tasks, sandbox, init, playbook-codex, playbook-grok, playbook-agy, playbook-pi, monitor-lib/launch-monitor) refuse before importing anything (exit 1, the message); the command guard and codex's user-prompt and stop hooks say so and fail open (exit 0); codex's apply-patch hook keeps its per-event polarity — given a PreToolUse event it refuses the edit (exit 2, fail-closed), given a PostToolUse event or none it passes (exit 0). On 2026-10-12 the six Claude hooks.json commands that did not check the interpreter then (task-gate, state-echo, stop, chat-log, session-start, session-end) were run under 3.9 on a project with no active task: each answered as under 3.10 (task-gate refused the edit, exit 2), with no traceback; their other paths under 3.9 are not claimed (parked on task 184). The hooks under 3.9 are run directly with those payloads, not inside a provider session.",
+            "Since task 194 every Claude hook checks: the run of 2026-10-14 (nested `fe6387c` plus task 194's working tree) runs all ten hooks under 3.9 with no input, and the task gate and the state echo also with a real payload in a project with an open task — the gate refused a README Write (exit 2, BLOCKED and the floor) and let `ls` through (exit 0, the floor), the echo answered exit 0 with the floor, its counts unchanged (9 and 9) and `counts_unsure` made: PASS, 30 clauses. The same probe on `fe6387c`: the write passed silently, the echo counted."
           ]
         }
       ],
@@ -11145,7 +11216,8 @@
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
         "2026-10-12 (task 184, PLAN S11): the live interpreter matrix ran on Linux (scenario PB-PYTHON-FLOOR of tests/live/gauntlet.sh). A floor issue the matrix does not see, parked on task 184 after the 1.6.1 release: the codex adapter reads ~/.codex/config.toml with `tomllib` (standard from 3.11) inside `except Exception`, so on 3.10 `_codex_hooks_enabled` answers False whatever the file says — the experimental codex AGENT path only; judges are not affected.",
         "2026-10-13 (task 192, PLAN S14 T3, item #46): session-start-hook and session-end-hook check the floor (advisory: they say so and exit 0 having done nothing); the live row runs them with the checked hooks. task-gate, state-echo, stop and chat-log get it in PLAN S14 T4/T5; until then the live proof's limitation above (written for the 2026-10-12 run, when six hooks did not check) covers those four.",
-        "2026-10-13 (task 193, PLAN S14 T4, item #46): stop-hook (its polarity: the python-free, fail-closed count and the regex valve) and chat-log-hook (advisory: says it, does nothing) check the floor; the live row runs them with the checked hooks. task-gate and state-echo get it in PLAN S14 T5."
+        "2026-10-13 (task 193, PLAN S14 T4, item #46): stop-hook (its polarity: the python-free, fail-closed count and the regex valve) and chat-log-hook (advisory: says it, does nothing) check the floor; the live row runs them with the checked hooks. task-gate and state-echo get it in PLAN S14 T5.",
+        "2026-10-14 (task 194, PLAN S14 T5, item #46): task-gate-hook (fails closed) and state-echo-hook (advisory, marks the count it did not make) check the floor — every Claude hook now does; the live row runs them (`FLOOR_ENTRY_POINTS`, `FLOOR_CLAUDE_CALLS`) and `UNCHECKED_CLAUDE_HOOKS` is empty, still bound to hooks.json. The two notes above that name hooks without the check are history."
       ],
       "follow_up_phases": [
         8
@@ -13248,7 +13320,7 @@
     {
       "id": "PB-HOOK-STATE-ECHO",
       "category": "task-lifecycle",
-      "statement": "After applicable tool calls, state echo reports the current active gate and records transcript binding without allowing malformed payloads to corrupt session state. The step that notices a ticked gate — read the previous gate from the session's counters, log its completion, write the new one — is one hold of the session's counters lock, and the gate it compares is read from task.md under that hold, so tool calls whose hooks overlap log a gate's completion ONCE, each add one to its repeat count, and a tick that lands between two of them does not make the slower one log the open gate; the entry is appended under the chat log's lock, which is tried and not waited for, and where it is not given neither the entry nor the new gate is written — the next call tries again; a chat log that cannot be written is said (task 182; on a host with no lock to take the step runs without one, as before). The hooks find the active task's record by the task directory's own name (task 192; the `find -path` BOUND this row carried — PLAN §S11 item (23) — is closed, see PB-TASK-ACTIVATE).",
+      "statement": "After applicable tool calls, state echo reports the current active gate and records transcript binding without allowing malformed payloads to corrupt session state. The step that notices a ticked gate — read the previous gate from the session's counters, log its completion, write the new one — is one hold of the session's counters lock, and the gate it compares is read from task.md under that hold, so tool calls whose hooks overlap log a gate's completion ONCE, each add one to its repeat count, and a tick that lands between two of them does not make the slower one log the open gate; the entry is appended under the chat log's lock, which is tried and not waited for, and where it is not given neither the entry nor the new gate is written — the next call tries again; a chat log that cannot be written is said (task 182; on a host with no lock to take the step runs without one, as before). The echo writes nothing through a link or into a file that is not a regular one — its transcript pointer, the gate entry in `chat_log.md` and that log's lock, the counters — and nothing inside a session directory that is a link (it says so and stops); a gate entry so refused is said as the write failure it is and the gate moves on (task 194; measured before: the pointer and the entry written through links, the lock's link truncating its target, a FIFO holding the echo to the host's limit, a linked session directory written into). BOUND: a swap of a file between the check and the write is not closed. Below Python 3.10 the echo says so and writes and counts nothing (PB-PYTHON-FLOOR). The hooks find the active task's record by the task directory's own name (task 192; the `find -path` BOUND this row carried — PLAN §S11 item (23) — is closed, see PB-TASK-ACTIVATE).",
       "owner": [
         {
           "path": "plugins/playbook/scripts/state-echo-hook",
@@ -13265,6 +13337,14 @@
         {
           "path": "plugins/playbook/scripts/gate-echo-lib.sh",
           "reference": "function:counters_lock"
+        },
+        {
+          "path": "plugins/playbook/scripts/gate-echo-lib.sh",
+          "reference": "function:write_counter"
+        },
+        {
+          "path": "plugins/playbook/scripts/gate-echo-lib.sh",
+          "reference": "function:_pb_sink_ok"
         }
       ],
       "failure_consequence": "Medium",
@@ -13327,6 +13407,30 @@
           ]
         },
         {
+          "type": "executable integration",
+          "path": "tests/test_state_echo_sinks.py",
+          "reference": "TheEchosSinks.test_no_write_through_a_link_and_no_wait_on_a_fifo",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_state_echo_sinks.py",
+            "reference": "TheEchosSinks.test_control_a_plain_session_is_written"
+          },
+          "limitations": [
+            "The real echo as a subprocess with a link or a FIFO at the pointer, the chat log and its lock, a gate completion due; red on nested `fe6387c` (writes through, the lock's target truncated, three 60 s hangs)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_state_echo_sinks.py",
+          "reference": "TheEchosSinks.test_a_linked_session_directory_is_not_written",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_state_echo_sinks.py",
+            "reference": "TheEchosSinks.test_control_a_plain_session_is_written"
+          },
+          "limitations": []
+        },
+        {
           "type": "live-provider test",
           "path": "tests/live/gauntlet.sh",
           "reference": "scenario:PB-HOOK-STATE-ECHO",
@@ -13348,7 +13452,8 @@
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
         "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21).",
         "2026-10-12 (task 184, PLAN S11): PostToolUse scheduling and the echo's rendering observed live on claude, parallel calls included (scenario PB-HOOK-STATE-ECHO).",
-        "2026-10-13 (task 192, PLAN S14 T3, item #25; impl panel r1, opus): the `find -path` BOUND is closed — the hooks match the task directory's own name, in `_find_active_task`'s order (tests/test_task_record_lookup.py; impl panel r2: the bounds with two directories of one number are in PB-TASK-ACTIVATE)."
+        "2026-10-13 (task 192, PLAN S14 T3, item #25; impl panel r1, opus): the `find -path` BOUND is closed — the hooks match the task directory's own name, in `_find_active_task`'s order (tests/test_task_record_lookup.py; impl panel r2: the bounds with two directories of one number are in PB-TASK-ACTIVATE).",
+        "2026-10-14 (task 194, PLAN S14 T5): the echo's own writes and `write_counter` checked with `_pb_sink_ok` — the class tasks 192 and 193 measured and routed here. A FIFO or other non-regular `counters` reads as zero counts (`read_counter` needs a regular file, so nothing hangs); its reach is a session directory named by the host's session id, which a cloned repository cannot know — a Phase B input (task 194's Parked)."
       ],
       "follow_up_phases": [
         8
@@ -13386,6 +13491,10 @@
         {
           "path": "plugins/playbook/tasks/core.py",
           "reference": "symbol:_live_gate_state"
+        },
+        {
+          "path": "plugins/playbook/scripts/gate-echo-lib.sh",
+          "reference": "function:write_session_mark"
         }
       ],
       "failure_consequence": "Critical",
@@ -14067,6 +14176,19 @@
           ]
         },
         {
+          "type": "executable integration",
+          "path": "tests/test_state_echo_sinks.py",
+          "reference": "TheEchosSinks.test_the_stop_hooks_mark_is_not_written_into_a_linked_session_directory",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_state_echo_sinks.py",
+            "reference": "TheEchosSinks.test_control_the_stop_hooks_mark_in_a_plain_session"
+          },
+          "limitations": [
+            "A stop let through (every gate ticked) in a session directory that is a link: no `turn_end` in the target (red on nested `fe6387c`: it was there)."
+          ]
+        },
+        {
           "type": "live-provider test",
           "path": "tests/live/gauntlet.sh",
           "reference": "scenario:PB-HOOK-STOP-CLOSE",
@@ -14100,7 +14222,8 @@
         "Task 173, BOUND left open at its close (the single judge's third run, 2026-10-10; PLAN S11 item (18)): the stop hook reads the prompt generation only after it has read its input, parsed it and resolved the session. A user's prompt whose hook runs to its end in that window — after the stop hook of the turn before it has started, before it reaches that read — gives that stop the NEW generation; its mark then counts in the user's turn, and a notification before the first tool call of that turn is taken for a start, so a read-only turn of the user's could end with gates open. Not reproduced by a test here (the tested orderings are the prompt landing at the mark's rename and while the hook decides after that read). Reading the generation first thing would shrink the window, not close it; a turn identity from the host in both payloads would close it.",
         "2026-10-12 (task 184, PLAN S11): claude's real Stop semantics observed live (scenario PB-HOOK-STOP-CLOSE). On the way the batch-close guard refused a three-gate write with short notes — the product right.",
         "2026-10-13 (task 192, PLAN S14 T3, item #25; impl panel r1, opus): the `find -path` BOUND is closed — the hooks match the task directory's own name, in `_find_active_task`'s order (tests/test_task_record_lookup.py; impl panel r2: the bounds with two directories of one number are in PB-TASK-ACTIVATE).",
-        "2026-10-13 (task 193, PLAN S14 T4): #28 narrowed (the generation read before the input) and the host's turn identity found (`prompt_id` in the Stop and UserPromptSubmit payloads; the design is in task 193's record); #38 measured live and fixed (a nested agent's prompt resets nothing)."
+        "2026-10-13 (task 193, PLAN S14 T4): #28 narrowed (the generation read before the input) and the host's turn identity found (`prompt_id` in the Stop and UserPromptSubmit payloads; the design is in task 193's record); #38 measured live and fixed (a nested agent's prompt resets nothing).",
+        "2026-10-14 (task 194): `write_session_mark` refuses a session directory that is a link (the stop hook's `turn_end` was renamed into the link's target); no mark is the stricter case — a later notification is read as landing mid-turn."
       ],
       "follow_up_phases": [
         8

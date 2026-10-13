@@ -673,7 +673,7 @@ class EveryShippedInlinePythonIsIsolated(unittest.TestCase):
         problems, _, _, _ = sweep()
         self.assertEqual(problems, [], "\n" + "\n".join(problems))
 
-    # Every isolated inline call the sweep sees, file by file — 55 when this was written, 57 since task 192, 59 since task 193.
+    # Every isolated inline call the sweep sees, file by file — 55 when this was written, 57 since task 192, 59 since task 193, 61 since task 194.
     # A rule that stopped SEEING some of them would still find "nothing wrong" (impl
     # panel r1, sonnet: the first guard here asked only for "at least 40", and a rule
     # that lost the eight stdin programs passed it). Adding or removing a call means
@@ -695,9 +695,9 @@ class EveryShippedInlinePythonIsIsolated(unittest.TestCase):
         "scripts/sandbox": 2,
         "scripts/session-end-hook": 2,     # +1: the Python floor probe (task 192, #46)
         "scripts/session-start-hook": 2,   # +1: the Python floor probe (task 192, #46)
-        "scripts/state-echo-hook": 8,
+        "scripts/state-echo-hook": 9,      # +1: the Python floor probe (task 194, #46)
         "scripts/stop-hook": 4,            # +1: the Python floor probe (task 193, #46)
-        "scripts/task-gate-hook": 12,
+        "scripts/task-gate-hook": 13,      # +1: the Python floor probe (task 194, #46)
         "scripts/tasks": 2,
         "tasks/plugin_copies.py": 1,
     }
@@ -706,7 +706,7 @@ class EveryShippedInlinePythonIsIsolated(unittest.TestCase):
         _, counts, inline, _ = sweep()
         self.assertEqual(inline, self.ISOLATED_INLINE_CALLS)
         self.assertEqual(counts.get("ok-inline"), sum(self.ISOLATED_INLINE_CALLS.values()))
-        self.assertEqual(sum(self.ISOLATED_INLINE_CALLS.values()), 59)   # 55 + the floor probes of tasks 192 (2) and 193 (2)
+        self.assertEqual(sum(self.ISOLATED_INLINE_CALLS.values()), 61)   # 55 + the floor probes of tasks 192 (2), 193 (2) and 194 (2)
 
     # Every call that starts a FILE of the plugin's, file by file — 22 when task 180
     # isolated them (18 in the hooks and scripts, 4 that the merge skill gives the agent).

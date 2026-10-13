@@ -82,6 +82,17 @@ classify_tool() {
     esac
 }
 
+# The Python floor (task 194, PLAN S14 T5, #46), advisory: below 3.10 the echo says so,
+# reads no payload, writes and counts nothing — and MARKS the count it did not make
+# (`counts_unsure`, below), so the stop hook holds the turn instead of releasing it on
+# counts that stopped moving. The launchers' one-line probe.
+PB_PY_FLOOR=true
+if ! python3 -I -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null; then
+    PB_PY_FLOOR=false
+    PB_PY_FOUND="$(python3 --version 2>/dev/null | head -1 | tr -cd 'A-Za-z0-9._ -')"
+    echo "playbook: needs python3 >= 3.10 (found: ${PB_PY_FOUND:-no python3 on PATH}) — no gate echo, this call not counted; upgrade python3" >&2
+fi
+
 # Source shared lib (same directory)
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$HOOK_DIR/gate-echo-lib.sh"
@@ -122,6 +133,7 @@ PB_NORM=""
 PB_CMD=""
 PB_TRANSCRIPT=""
 PB_FRAME_COMPLETE=true
+if [ "$PB_PY_FLOOR" = true ]; then
 {
     IFS= read -r -d '' PB_SENTINEL   || PB_FRAME_COMPLETE=false
     IFS= read -r -d '' TOOL_NAME     || PB_FRAME_COMPLETE=false
@@ -143,6 +155,7 @@ else
     fi
     TOOL_NAME=$(echo "$INPUT" | python3 -I -c "import sys,json; print(json.loads(sys.stdin.read()).get('tool_name',''))" 2>/dev/null || echo "")
 fi
+fi    # (below the floor no payload is read)
 export PB_FUSED PB_PATH PB_CMD
 
 # Task 192 (#48): the id and what the resolver's own walk read, from ONE call (a
@@ -160,6 +173,16 @@ fi
 # `sessions/` + "" (the sessions dir itself). One line, nothing else written.
 if [ -z "$SESSION_ID" ]; then
     session_unresolved_notice
+    exit 0
+fi
+
+# Below the floor: nothing written, nothing counted — the count not made is marked (the
+# mark refuses a link and a linked directory, as everywhere). Said to the agent.
+if [ "$PB_PY_FLOOR" != true ]; then
+    if [ "$AGENT_WRITABLE" = true ] && [ -d "$AGENT_DIR/sessions/$SESSION_ID" ]; then
+        _counters_mark "$AGENT_DIR/sessions/$SESSION_ID/counters"
+    fi
+    echo "{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"# ⚠ playbook needs python3 >= 3.10 (found: ${PB_PY_FOUND:-no python3 on PATH}) — no gate echo, and this call was not counted: the stop hook holds this turn like one that wrote. Upgrade python3.\"}}"
     exit 0
 fi
 
@@ -182,6 +205,14 @@ fi
 # below. Exported so the sourced lib's assignment is visible here.
 PLAYBOOK_WRITE_FAILED=false
 SESSION_DIR="$AGENT_DIR/sessions/$SESSION_ID"
+# A session directory that is a link is not this session's (task 194, measured: the
+# pointer and the counts were written into the link's target, and the gate read there
+# was logged again at every call). Nothing is written or counted; the stop hook holds
+# its low-activity releases on such a directory (task 193).
+if [ -L "$SESSION_DIR" ]; then
+    echo '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"# ⚠ this session'"'"'s directory under .agent/sessions/ is a link — not written, not counted (the stop hook holds this turn like one that wrote)."}}'
+    exit 0
+fi
 # Task 192 (#41): only where this hook may write. On a fresh multi-user clone
 # AGENT_DIR is the ROOT `.agent` and the mkdir left an empty sessions/<id>/ there on
 # every call; task-gate-hook and session-start-hook already skip it in that shape.
@@ -209,7 +240,10 @@ t = json.loads(sys.stdin.read()).get('transcript_path', '')
 print(t if isinstance(t, str) and t and '\n' not in t and '\r' not in t else '')
 " 2>/dev/null || echo "")
 fi
-if [ -n "$TRANSCRIPT_PATH" ] && [ "$AGENT_WRITABLE" = true ]; then
+# Never through a link or into a FIFO, nor inside a linked session directory (task 194;
+# tasks 192/193 measured the class: a link was written through, a FIFO held the hook).
+if [ -n "$TRANSCRIPT_PATH" ] && [ "$AGENT_WRITABLE" = true ] \
+   && _pb_sink_ok "$SESSION_DIR" "$SESSION_DIR/transcript_path"; then
     printf '%s\n' "$TRANSCRIPT_PATH" > "$SESSION_DIR/transcript_path" 2>/dev/null || true
 fi
 
@@ -364,6 +398,14 @@ _gate_append() {
 _log_gate_entry() {
     local rc=0
     [ "$PLAYBOOK_COUNTERS_UNLOCKED" != true ] || return 3
+    # A chat log or its lock that is a link or not a regular file is not ours (task 194,
+    # measured: the gate entry was appended to a link's target, the lock's link TRUNCATED
+    # its target, a FIFO held the echo): the entry is not written — said as the write
+    # failure it is — and the gate moves on.
+    if ! _pb_sink_ok "" "$GATE_LOG" || ! _pb_sink_ok "" "$AGENT_DIR/chat_log_counter.lock"; then
+        PLAYBOOK_WRITE_FAILED=true
+        return 0
+    fi
     # (a host whose `flock` cannot wait with a limit has no lock to take: the entry
     # is appended without one, as where there is no `flock` — post-panel run 2)
     if command -v flock &>/dev/null && [ "$_PB_COUNTERS_NOLOCK" != true ]; then
