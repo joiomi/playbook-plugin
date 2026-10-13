@@ -210,35 +210,121 @@ class HooksJournalTheWalk(_FakePsMixin):
     def today(self):
         return datetime.date.today().isoformat()
 
-    def test_the_record_that_reaches_the_cap_says_so_and_the_next_is_not_written(self):
-        self.set_tree(self.UNRESOLVED)
+    # a transient-looking miss: the claude ancestor's status cannot be read (the walk stops `unreadable`)
+    def unreadable(self):
+        self.set_tree(self.RESOLVED, omit_status=(400,))
+
+    def write_counter(self, text):
         self.counter().parent.mkdir(parents=True, exist_ok=True)
-        self.counter().write_text(f"{self.today()} 99\n", encoding="utf-8")
+        self.counter().write_text(text, encoding="utf-8")
+
+    def test_the_record_that_reaches_the_cap_says_so_and_the_next_is_not_written(self):
+        self.unreadable()
+        self.write_counter(f"{self.today()} 99 0\n")
         self.echo()
         self.echo()
         w = self.walks()
         self.assertEqual(len(w), 1, w)
-        self.assertIn("the day's cap of 100 records is reached", w[0]["reason"])
-        self.assertEqual(self.counter().read_text(encoding="utf-8"), f"{self.today()} 100\n")
+        self.assertIn("the day's cap of 100 records of this kind is reached", w[0]["reason"])
+        self.assertEqual(self.counter().read_text(encoding="utf-8"), f"{self.today()} 100 0\n")
 
-    def test_another_day_counts_from_zero(self):
+    def test_an_old_one_number_line_reads_as_the_others(self):
+        self.unreadable()
+        self.write_counter(f"{self.today()} 100\n")
+        self.echo()
+        self.assertEqual(self.walks(), [])
+        # ... and the daemon's count starts at 0
         self.set_tree(self.UNRESOLVED)
-        self.counter().parent.mkdir(parents=True, exist_ok=True)
-        self.counter().write_text("2000-01-01 100\n", encoding="utf-8")
         self.echo()
         self.assertEqual(len(self.walks()), 1)
-        self.assertEqual(self.counter().read_text(encoding="utf-8"), f"{self.today()} 1\n")
+        self.assertEqual(self.counter().read_text(encoding="utf-8"), f"{self.today()} 100 1\n")
+
+    def test_another_day_counts_from_zero(self):
+        self.unreadable()
+        self.write_counter("2000-01-01 100 20\n")
+        self.echo()
+        self.assertEqual(len(self.walks()), 1)
+        self.assertEqual(self.counter().read_text(encoding="utf-8"), f"{self.today()} 1 0\n")
+
+    def test_the_daemon_shape_has_its_own_cap(self):
+        # impl panel r2 (sonnet): a walk that stops at the daemon repeats on every call — it must not use up the
+        # day of the transient misses #48 is after
+        self.set_tree(self.UNRESOLVED)
+        self.write_counter(f"{self.today()} 0 19\n")
+        self.echo()
+        self.echo()
+        w = self.walks()
+        self.assertEqual(len(w), 1, w)
+        self.assertIn("the day's cap of 20 records of this kind is reached", w[0]["reason"])
+        self.assertEqual(self.counter().read_text(encoding="utf-8"), f"{self.today()} 0 20\n")
+        self.unreadable()
+        self.echo()
+        w = self.walks()
+        self.assertEqual(len(w), 2, w)
+        self.assertIn("stop: 400 unreadable", w[1]["reason"])
+        self.assertEqual(self.counter().read_text(encoding="utf-8"), f"{self.today()} 1 20\n")
 
     def test_trace_mode_is_not_capped(self):
         # an UNRESOLVED walk (the only kind the cap counts) past the cap, in trace mode, is still journaled
         self.set_tree(self.UNRESOLVED)
-        self.counter().parent.mkdir(parents=True, exist_ok=True)
-        self.counter().write_text(f"{self.today()} 100\n", encoding="utf-8")
+        self.write_counter(f"{self.today()} 100 20\n")
         self.echo(PLAYBOOK_WALK_TRACE="1")
         w = self.walks()
         self.assertEqual(len(w), 1, w)
         self.assertEqual(w[0]["session_id"], "")
-        self.assertEqual(self.counter().read_text(encoding="utf-8"), f"{self.today()} 100\n")
+        self.assertEqual(self.counter().read_text(encoding="utf-8"), f"{self.today()} 100 20\n")
+
+    # impl panel r2 (codex, opus), measured: a FIFO at a journal path stalled the ENFORCING gate (the host's hook
+    # timeout then lets the edit through), and a link wrote through to its target — the counter truncated it, the
+    # pre-existing journal writer appended to it. Neither may happen: no write, and the gate decides at once.
+    def test_no_write_through_a_link_or_into_a_fifo(self):
+        import os
+        import time
+        for leaf in ("enforcement.jsonl", "session-walk.count"):
+            for kind in ("link", "fifo"):
+                with self.subTest(leaf=leaf, kind=kind):
+                    jdir = self.project / ".agent" / "journal"
+                    shutil.rmtree(jdir, ignore_errors=True)
+                    jdir.mkdir(parents=True)
+                    victim = self.tmp / f"victim-{leaf}-{kind}"
+                    victim.write_text("keep\n", encoding="utf-8")
+                    if kind == "link":
+                        (jdir / leaf).symlink_to(victim)
+                    else:
+                        os.mkfifo(jdir / leaf)
+                    self.set_tree(self.UNRESOLVED)
+                    t0 = time.monotonic()
+                    r = self.gate()
+                    self.assertLess(time.monotonic() - t0, 4.0, "the gate stalled on the journal")
+                    self.assertEqual(r.returncode, 2, r.stderr)
+                    self.assertIn("No active task", r.stderr)
+                    self.assertEqual(victim.read_text(encoding="utf-8"), "keep\n")
+
+    def test_a_counter_that_cannot_be_replaced_journals_nothing(self):
+        # the counter is replaced by rename; when the rename fails the walk is not journaled (it was not counted)
+        front = self.tmp / "failmv"
+        front.mkdir()
+        (front / "mv").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        (front / "mv").chmod(0o755)
+        self.unreadable()
+        env = self.env(HOME=str(self.tmp))
+        r = subprocess.run([bash_or_skip(), str(SCRIPTS / "state-echo-hook")], cwd=self.project,
+                           env=dict(env, PATH=f"{front}:{env['PATH']}"),
+                           input=json.dumps({"tool_name": "Read", "tool_input": {"file_path": "x"}}),
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.walks(), [])
+        self.assertEqual([p.name for p in (self.project / ".agent" / "journal").iterdir()
+                          if p.name.startswith(".session-walk")], [], "the temp file was left behind")
+
+    def test_no_write_into_a_linked_journal_directory(self):
+        elsewhere = self.tmp / "elsewhere"
+        elsewhere.mkdir()
+        (self.project / ".agent" / "journal").symlink_to(elsewhere, target_is_directory=True)
+        self.set_tree(self.UNRESOLVED)
+        r = self.gate()
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertEqual(sorted(p.name for p in elsewhere.iterdir()), [])
 
     def test_an_unreadable_counter_never_stops_the_gate(self):
         # the gate runs under `set -e`: a failing read of the counter must not end it (exit 1 lets the edit through)
@@ -275,6 +361,32 @@ class TheJournaledWalkIsTheResolversOwn(_FakePsMixin):
         self.assertEqual(len(w), 1, rows)
         self.assertIn("stop: 400 unreadable argv", w[0]["reason"])
         self.assertIn("| again=pid-400", w[0]["reason"])
+
+
+class TheJournalDocDescribesTheWriter(unittest.TestCase):
+    """Impl panel r2 (sonnet): docs/enforcement-journal.md is the format readers (playbook-lens) follow; it names
+    the session-walk family, the counter and the writer's own caps and stop reasons."""
+
+    def test_the_doc_matches_the_writer(self):
+        import re
+        lib = GATE_LIB.read_text(encoding="utf-8")
+        doc = (GATE_LIB.parents[3] / "docs" / "enforcement-journal.md").read_text(encoding="utf-8")
+        self.assertIn("`decision` = `session-walk`", doc)
+        self.assertIn("journal/session-walk.count", doc)
+        for var in ("PB_WALK_DAY_CAP", "PB_WALK_DAEMON_DAY_CAP"):
+            m = re.search(rf"^{var}=(\d+)$", lib, re.M)
+            self.assertIsNotNone(m, var)
+            cap = m.group(1) if m else ""
+            self.assertIn(f"{cap} ", doc.split("## Family 3", 1)[1], var)
+        # every stop reason the walk writes (its literal in the lib) is named in the doc
+        stops = {'why="$pid gone"': "`<pid> gone`", 'why="$pid unreadable"': "`<pid> unreadable`",
+                 'why="$pid unreadable argv"': "`<pid> unreadable argv`", 'why="$pid daemon"': "`<pid> daemon`",
+                 'why="$pid own parent"': "`<pid> own parent`", 'why="20 hops"': "`20 hops`",
+                 'why="top $pid"': "`top <pid>`", 'why="no ps"': "`no ps`"}
+        self.assertEqual(set(re.findall(r'\bwhy="[^"]+"', lib)), set(stops))
+        for literal, named in stops.items():
+            self.assertIn(literal, lib)
+            self.assertIn(named, doc)
 
 
 if __name__ == "__main__":

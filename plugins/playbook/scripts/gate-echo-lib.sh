@@ -421,13 +421,18 @@ _pb_sid_out() {
 # Task 192 (#48): journal a `session-walk` record — `read: <READ>`, what the resolver's own walk read (READ is the
 # part after the TAB of `resolve_session_id trace`) — on an unresolved id, then `again=` what a walk right after
 # resolves; and, when PLAYBOOK_WALK_TRACE=1 (the live gauntlet sets it), on every call. Unresolved records are
-# capped at PB_WALK_DAY_CAP a day (impl panel r1: a hook that always runs unresolved must not grow the journal
-# without bound), counted in `journal/session-walk.count` (`<day> <n>`); the record that reaches the cap says so.
-# Log-only and best-effort like journal_enforcement: every step swallows its error (the gate runs under
-# `set -e`), it never changes a decision, it returns 0.
+# capped per day (impl panel r1: a hook that always runs unresolved must not grow the journal without bound): a
+# walk that stopped at the daemon — a shape that repeats on every call — at PB_WALK_DAEMON_DAY_CAP, any other
+# (the transient misses #48 is after) at PB_WALK_DAY_CAP, so a daemon burst cannot use up the day of the others
+# (impl panel r2). Counted in `journal/session-walk.count` (`<day> <others> <daemon>`, replaced by rename; an
+# unreadable or foreign-day line counts from 0); the record that reaches a cap says so. The counter takes no lock,
+# so hooks running side by side can lose an increment: the caps bound growth, not an exact count. Log-only and
+# best-effort like journal_enforcement: every step swallows its error (the gate runs under `set -e`), it never
+# changes a decision, it returns 0.
 PB_WALK_DAY_CAP=100
+PB_WALK_DAEMON_DAY_CAP=20
 journal_session_walk() {
-    local all="" reason again cnt day line n
+    local all="" reason again cnt day line rest a b n cap tmp
     if [ "${PLAYBOOK_WALK_TRACE:-}" = 1 ]; then all=1; fi
     if [ -n "$3" ] && [ -z "$all" ]; then return 0; fi
     if [ -z "$1" ] || [ ! -d "$1" ]; then return 0; fi
@@ -438,23 +443,39 @@ journal_session_walk() {
         if [ -z "$all" ]; then
             cnt="$1/journal/session-walk.count"
             if [ ! -d "$1/journal" ]; then mkdir -p "$1/journal" 2>/dev/null || return 0; fi
+            # a linked or non-regular counter is not ours (impl panel r2, measured: a link was truncated through,
+            # a FIFO stalled the gate): no record at all; the counter is replaced by rename, never written in place
+            _pb_sink_ok "$1/journal" "$cnt" || return 0
             day=$(date +%Y-%m-%d 2>/dev/null) || day=""
             line=""
             if [ -f "$cnt" ]; then IFS= read -r line < "$cnt" 2>/dev/null || :; fi
-            n=0
+            a=0; b=0
             case "$line" in
-                "$day "*) n="${line#"$day "}" ;;
+                "$day "*)
+                    rest="${line#"$day "}"
+                    a="${rest%% *}"
+                    b="${rest#* }"
+                    if [ "$b" = "$rest" ]; then b=0; fi ;;
             esac
-            case "$n" in
-                ""|*[!0-9]*) n=0 ;;
+            case "$a" in ""|*[!0-9]*) a=0 ;; esac
+            case "$b" in ""|*[!0-9]*) b=0 ;; esac
+            if [ "${#a}" -gt 6 ]; then a=0; fi
+            if [ "${#b}" -gt 6 ]; then b=0; fi
+            a=$((10#$a)); b=$((10#$b))
+            case "${5:-}" in
+                *"| stop: "*" daemon") cap=$PB_WALK_DAEMON_DAY_CAP; n=$b ;;
+                *) cap=$PB_WALK_DAY_CAP; n=$a ;;
             esac
-            if [ "${#n}" -gt 6 ]; then n=0; fi
-            n=$((10#$n))
-            if [ "$n" -ge "$PB_WALK_DAY_CAP" ]; then return 0; fi
+            if [ "$n" -ge "$cap" ]; then return 0; fi
             n=$((n + 1))
-            printf '%s %s\n' "$day" "$n" > "$cnt" 2>/dev/null || :
-            if [ "$n" -eq "$PB_WALK_DAY_CAP" ]; then
-                reason="$reason | the day's cap of $PB_WALK_DAY_CAP records is reached: no more today"
+            if [ "$cap" = "$PB_WALK_DAEMON_DAY_CAP" ]; then b=$n; else a=$n; fi
+            tmp=$(mktemp "$1/journal/.session-walk.XXXXXX" 2>/dev/null) || return 0
+            if ! { printf '%s %s %s\n' "$day" "$a" "$b" > "$tmp" && mv -f "$tmp" "$cnt"; } 2>/dev/null; then
+                rm -f "$tmp" 2>/dev/null || :
+                return 0
+            fi
+            if [ "$n" -eq "$cap" ]; then
+                reason="$reason | the day's cap of $cap records of this kind is reached: no more today"
             fi
         fi
     fi
@@ -1212,6 +1233,16 @@ _json_str() {
     printf '%s' "$s"
 }
 
+# _pb_sink_ok DIR FILE — true when DIR is not a symbolic link and FILE is absent or a regular file that is not a
+# link: a log written there stays inside the lane and never blocks on a FIFO. (Residual: a swap between this check
+# and the write — the window pb_journal.py states too.)
+_pb_sink_ok() {
+    [ -L "$1" ] && return 1
+    [ -L "$2" ] && return 1
+    if [ -e "$2" ] && [ ! -f "$2" ]; then return 1; fi
+    return 0
+}
+
 # journal_enforcement AGENT_DIR HOOK DECISION REASON [SESSION_ID] [TOOL] [PATH] [COMMAND]
 # Best-effort append-only enforcement-journal record. HARD CONTRACT (mirrors
 # pb_journal.py): a journal failure must NEVER change a decision, so every step
@@ -1227,6 +1258,10 @@ journal_enforcement() {
     [ -n "$agent_dir" ] && [ -d "$agent_dir" ] || return 0
     local jdir="$agent_dir/journal"
     [ -d "$jdir" ] || mkdir -p "$jdir" 2>/dev/null || return 0
+    # Hostile-tree safe like pb_journal.py (task 192, impl panel r2, measured): a FIFO at the journal path stalled
+    # the ENFORCING gate past its timeout (the host then lets the call through), and a link wrote the record into
+    # whatever it points at — a cloned repository can ship either under `.agent/`. Such a sink is skipped.
+    _pb_sink_ok "$jdir" "$jdir/enforcement.jsonl" || return 0
     local ts
     ts=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) || return 0
     local line

@@ -15,7 +15,10 @@ processes (parallel panel seats, multi-lane) do not interleave while a record
 stays under that bound (≥512 bytes everywhere; 4096 on Linux). String fields are
 byte-capped so real records stay well under 512 bytes. The journal is only ever
 created inside an already-existing playbook-managed lane — `.agent` itself is
-never minted as a side effect.
+never minted as a side effect. Both writers skip a sink that is not the lane's own — a linked `journal/`
+directory, a linked `enforcement.jsonl`, or one that is not a regular file (a FIFO would hang the writing hook):
+`pb_journal.py` since task 042, the bash twin since task 192 (it hung the gate on a FIFO and appended through a
+link before, measured).
 
 Writers live in `scripts/pb_journal.py` (`append`, `append_review`) and its bash
 twin `scripts/gate-echo-lib.sh::journal_enforcement`. Guarantees:
@@ -31,7 +34,7 @@ Every record carries these keys:
 | `ts`         | string | UTC timestamp, `YYYY-MM-DDTHH:MM:SSZ`                          |
 | `session_id` | string | emitting session id (may be empty)                            |
 | `hook`       | string | which surface emitted it (see below)                          |
-| `decision`   | string | one of `allow` \| `block` \| `record`                         |
+| `decision`   | string | one of `allow` \| `block` \| `record` \| `session-walk`        |
 | `reason`     | string | short fixed reason string                                     |
 
 A reader MUST tolerate unknown future keys and unknown `hook`/`decision` values
@@ -198,3 +201,18 @@ a **panel** it is the iteration this panel becomes; for **single** and
 **tail-cert** it is an approximate spend-correlation hint (those do not add a
 `judge.md` round), not an exact iteration index. `0` means it could not be
 determined.
+
+## Family 3 — session walks (`decision` = `session-walk`, task 192)
+
+Emitted by `state-echo` and `task-gate` (bash, `gate-echo-lib.sh::journal_session_walk`) when the session id is
+UNRESOLVED ("playbook: no session identity"), and on every call when the environment has `PLAYBOOK_WALK_TRACE=1`
+(the live gauntlet sets it). `session_id` is the id the hook resolved (empty when unresolved); `tool` the call's
+tool. `reason` is `read: ppid=<P> env=<id or unset> walk: <pid> <name> <state> > … | stop: <where>` — what the
+resolver's OWN walk read, hop by hop (a claude process shows its argument count `argc=<n>`, never its words; names
+are reduced to `[A-Za-z0-9._+-]`, `?` for the rest), `<where>` one of `<pid> gone`, `<pid> unreadable`,
+`<pid> unreadable argv`, `<pid> daemon`, `<pid> own parent`, `top <pid>`, `20 hops`, `no ps`; for an
+honoured `PLAYBOOK_SESSION_ID` the read says so instead of a walk. An unresolved record then adds
+`| again=<id or unresolved>` (a walk right after) and, on the record that reaches a day's cap, `| the day's cap of
+<N> records of this kind is reached: no more today`. Unresolved records are capped per day: 20 for a walk that
+stopped at the daemon, 100 for the rest, counted in `journal/session-walk.count` (`<day> <others> <daemon>`; no
+lock — the caps bound growth, not an exact count); trace-mode records are not capped.
