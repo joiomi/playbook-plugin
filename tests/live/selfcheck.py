@@ -294,9 +294,10 @@ def registry_probe() -> None:
     """The newest-image probe with a stand-in `docker` first on PATH: the registry's own "no such manifest" is
     absence; a timeout or another error is UNKNOWN and fails the clause (single judge after round 2, J3)."""
     tags = [rows_platform.NEW_IMAGE] + [f"python:{v}-slim" for v in rows_platform.NEXT_VERSIONS]
+    new = rows_platform.NEW_IMAGE.split(":")[1].split("-")[0]   # the stand-in follows NEW_IMAGE (python 3.15 came out, 2026-10-13)
     for label, body, want in (
-            ("not-found for the next two", 'case "$3" in *3.14*) exit 0;; *) echo "no such manifest: docker.io/library/$3" >&2; exit 1;; esac', True),
-            ("an error for the next two", 'case "$3" in *3.14*) exit 0;; *) echo "net/http: TLS handshake timeout" >&2; exit 1;; esac', False),
+            ("not-found for the next two", f'case "$3" in *{new}*) exit 0;; *) echo "no such manifest: docker.io/library/$3" >&2; exit 1;; esac', True),
+            ("an error for the next two", f'case "$3" in *{new}*) exit 0;; *) echo "net/http: TLS handshake timeout" >&2; exit 1;; esac', False),
             ("no answer at all", "exit 1", False)):
         d = tempdir("pb184-reg-")
         (d / "docker").write_text("#!/bin/bash\n" + body + "\n")

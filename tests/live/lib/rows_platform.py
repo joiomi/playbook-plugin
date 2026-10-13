@@ -14,7 +14,7 @@ from pathlib import Path
 
 from common import PLUGIN, Run, clean_env, judge_runs, scratch_project
 
-MIN_IMAGE, NEW_IMAGE, OLD_IMAGE = "python:3.10-slim", "python:3.14-slim", "python:3.9-slim"
+MIN_IMAGE, NEW_IMAGE, OLD_IMAGE = "python:3.10-slim", "python:3.15-slim", "python:3.9-slim"
 # Every shipped script that starts by checking the interpreter (grep `version_info >= (3,10)` in scripts/).
 FLOOR_ENTRY_POINTS = ("tasks", "sandbox", "init", "playbook-codex", "playbook-grok", "playbook-agy", "playbook-pi",
                       "monitor-lib/launch-monitor", "command-guard-hook", "codex-user-prompt-hook",
@@ -35,7 +35,7 @@ UNCHECKED_CLAUDE_HOOKS = {
     "stop-hook": ("Stop", {"stop_hook_active": False}, "0", ""),
     "session-end-hook": ("SessionEnd", {"reason": "exit"}, "0", ""),
 }
-NEXT_VERSIONS = ("3.15", "3.16")             # NEW_IMAGE is the newest only while neither of these images exists
+NEXT_VERSIONS = ("3.16", "3.17")             # NEW_IMAGE is the newest only while neither of these images exists
 
 
 def newest_probe(tags: "list[str]") -> str:
