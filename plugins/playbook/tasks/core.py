@@ -5142,8 +5142,25 @@ def _compose_handoff(lines: "list[str]", section: str) -> str:
     #    replace boundary never reaches the history section above it).
     while lines and lines[-1].strip() == "":
         lines.pop()
+    head = len(lines) + 1
     lines += ["", section.rstrip(), ""]
-    return "\n".join(lines) + "\n"
+    out = "\n".join(lines) + "\n"
+    # 4. The fresh `## Handoff` must be LIVE where it was appended (task 189, impl panel r1:
+    #    fable, opus, codex). An unclosed fence above it — in the note just archived (a LAST
+    #    `## Handoff` hides no section, so the span check passes it), the history, or any
+    #    earlier section — fences it for every fail-closed writer and reader: the next handoff
+    #    cannot archive it and appends another, the block written with it is not found.
+    new = out.splitlines()
+    sp = _live_section_span(new, "## Handoff")
+    if sp is None or sp[0] != head:
+        closed = _iter_fenced_flags(new, unclosed_is_live=True)
+        strict = _iter_fenced_flags(new, unclosed_is_live=False)
+        opener = next((i for i in range(head) if strict[i] and not closed[i]), None)
+        where = f" (opened by {new[opener].strip()!r})" if opener is not None else ""
+        raise ValueError(
+            f"an unclosed code fence{where} above the new `## Handoff` would hide it — "
+            "refusing to write the handoff; close the fence by hand, nothing was changed")
+    return out
 
 
 def _extract_block_reason(task_file: Path) -> "str | None":

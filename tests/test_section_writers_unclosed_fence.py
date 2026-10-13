@@ -55,15 +55,57 @@ class UnclosedFenceInsideASection(unittest.TestCase):
         p = self._file("# T\n\n## Status\nin_progress\n\n## Handoff\nold note\n```\nunclosed code\n" + TAIL)
         self.refuses(p, lambda f: core.write_handoff(f, "## Handoff\nnew note\n"))
 
-    def test_handoff_and_block_together_refuse_as_one(self):
+    def test_the_handoff_verb_refuses_on_the_handoff_span(self):
+        # the handoff half refuses here; that the PAIR lands as one when the block half refuses after a composed
+        # handoff is `test_blocked_state.py::test_a_handoff_that_lands_after_the_close_refuses` (impl panel r1, fable)
         p = self._file("# T\n\n## Status\nin_progress\n\n## Handoff\nold note\n```\nunclosed code\n" + TAIL)
         self.refuses(p, lambda f: core.write_handoff_and_block(f, "## Handoff\nnew note\n"))
 
-    def test_a_fence_that_hides_nothing_is_not_refused(self):
-        # the section is the LAST one: no section can be lost, the writers keep working as before
-        p = self._file("# T\n\n## Status\nin_progress\n\n## Blocked\n> r1\n```\nunclosed\n")
-        core.set_task_blocked(p, "r2")
-        self.assertEqual(core._extract_status(p), "blocked")
+    def test_a_last_handoff_holding_an_unclosed_fence_refuses_the_next_handoff(self):
+        # impl panel r1 (fable, opus, codex): a LAST `## Handoff` hides no section, but archiving it moved its open
+        # fence above the fresh `## Handoff` and `## Blocked`, which then no writer or fail-closed reader could find.
+        # Opus's sequence through the real functions: a task already blocked gets a handoff (it lands LAST), the
+        # agent's notes leave a fence open, the task is resumed, the next handoff refuses.
+        p = self._file("# T\n\n## Status\nin_progress\n\n## Work Plan\n- [ ] G\n")
+        core.set_task_blocked(p, "waiting")
+        core.write_handoff_and_block(p, "## Handoff\nfirst\n\n### Agent notes\n")
+        with p.open("a", encoding="utf-8") as fh:
+            fh.write("```python\nhalf a snippet\n")
+        heads = [ln for ln in p.read_text(encoding="utf-8").splitlines() if ln.startswith("## ")]
+        self.assertEqual(heads, ["## Status", "## Work Plan", "## Blocked", "## Handoff"])   # the handoff is LAST
+        core.resume_blocked_task(p)
+        self.refuses(p, lambda f: core.write_handoff_and_block(f, "## Handoff\nsecond\n"))
+        self.refuses(p, lambda f: core.write_handoff(f, "## Handoff\nsecond\n"))
+
+    def test_a_handoff_archived_under_an_existing_history_refuses_too(self):
+        # codex's shape: the history already exists, the archived note is inserted at its top
+        p = self._file("# T\n\n## Status\nin_progress\n")
+        core.write_handoff(p, "## Handoff\nfirst\n")
+        core.write_handoff(p, "## Handoff\nsecond\n")
+        with p.open("a", encoding="utf-8") as fh:
+            fh.write("```\nunclosed\n")
+        self.refuses(p, lambda f: core.write_handoff(f, "## Handoff\nthird\n"))
+
+    def test_a_handoff_below_an_open_fence_elsewhere_refuses(self):
+        # the property, not the one shape: the `## Handoff` just written must be LIVE, wherever the open fence is
+        p = self._file("# T\n\n## Status\nin_progress\n\n## Notes\n```\nunclosed\n")
+        self.refuses(p, lambda f: core.write_handoff(f, "## Handoff\nnote\n"))
+
+    def test_a_blocked_section_that_hides_nothing_keeps_working(self):
+        # `## Blocked` LAST with an open fence: the replace path deletes the fence with the section, the append path
+        # and the resume stamp land inside the section, where the fail-open readers read them — pinned on what the
+        # readers see, not only on the status
+        p = self._file("# T\n\n## Status\nblocked\n\n## Blocked\n> r1\n```\nunclosed\n")
+        core.set_task_blocked(p, "r2")                                     # already blocked → append path
+        self.assertEqual(core._block_reasons(p), ["r1", "r2"])
+        core.resume_blocked_task(p)
+        self.assertFalse(core._is_blocked(p))
+        self.assertTrue(p.read_text(encoding="utf-8").rstrip().splitlines()[-1].startswith("> Resumed "))
+        core.set_task_blocked(p, "r3")                                     # resumed → replace path
+        lines = p.read_text(encoding="utf-8").splitlines()
+        self.assertIsNotNone(core._live_section_span(lines, "## Blocked"), "the new `## Blocked` is hidden")
+        self.assertEqual(core._block_reasons(p), ["r3"])
+        self.assertNotIn("```", p.read_text(encoding="utf-8"))
 
     def test_the_section_after_a_closed_fence_survives_every_writer(self):
         # the normal case, pinned structurally (task 188's lesson: order, not substring presence)
@@ -72,6 +114,13 @@ class UnclosedFenceInsideASection(unittest.TestCase):
         core.resume_blocked_task(p)
         heads = [ln for ln in p.read_text(encoding="utf-8").splitlines() if ln.startswith("## ")]
         self.assertEqual(heads, ["## Status", "## Parked", "## Blocked"])
+        core.write_handoff_and_block(p, "## Handoff\nnote\n")              # impl panel r1, opus: the handoff too
+        heads = [ln for ln in p.read_text(encoding="utf-8").splitlines() if ln.startswith("## ")]
+        self.assertEqual(heads, ["## Status", "## Parked", "## Handoff", "## Blocked"])   # resumed → block replaced
+        core.write_handoff_and_block(p, "## Handoff\nnote 2\n")            # already blocked → reason appended
+        heads = [ln for ln in p.read_text(encoding="utf-8").splitlines() if ln.startswith("## ")]
+        self.assertEqual(heads, ["## Status", "## Parked", "## Blocked", "## Handoff history", "## Handoff"])
+        self.assertEqual(core._block_reasons(p), ["handoff", "handoff"])
 
 
 class DetachedHeadLabel(unittest.TestCase):
