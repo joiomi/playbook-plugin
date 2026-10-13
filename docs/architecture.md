@@ -13,7 +13,7 @@ The plugin (`plugins/playbook/` in this repo) has four user-visible parts plus t
 - `tasks/` — the Python package behind the `tasks` CLI. The launcher (`scripts/tasks`) runs it isolated: `python3 -I`, with the plugin directory put on `sys.path` by the launch line itself, so nothing in the project's own directory can be imported in a plugin module's place (see "How the plugin's Python is started" below).
 - `provider/` — provider adapters and judge-dispatch machinery ([providers](providers.md)).
 
-Everything is plain files — bash entry points, Python 3.10+ stdlib, markdown as the runtime language. No build step, no dependencies. Python 3.10 is the declared floor everywhere (shipped modules use 3.10-only `match` syntax): every launcher refuses an older interpreter up front, and so does every hook but four — `task-gate-hook`, `state-echo-hook`, `stop-hook` and `chat-log-hook` run without the check until PLAN S14 T4/T5 add it (a hook that checks fails open or closed by its own polarity) — and `tasks doctor` diagnoses it.
+Everything is plain files — bash entry points, Python 3.10+ stdlib, markdown as the runtime language. No build step, no dependencies. Python 3.10 is the declared floor everywhere (shipped modules use 3.10-only `match` syntax): every launcher refuses an older interpreter up front, and so does every hook but two — `task-gate-hook` and `state-echo-hook` run without the check until PLAN S14 T5 adds it (a hook that checks keeps its own polarity: the stop hook counts the gates without python and still blocks, the advisory ones say so and do nothing) — and `tasks doctor` diagnoses it.
 
 ## How the plugin's Python is started
 

@@ -264,12 +264,27 @@ class ShellEntrypointFloorGuard(unittest.TestCase):
 
     def test_stop_hook_says_the_floor_and_fails_closed(self):
         self._stop_project()
-        r = self._hook_old_python("stop-hook", b'{"hook_event_name":"Stop","stop_hook_active":false}')
-        err = r.stderr.decode("utf-8", "replace")
-        self.assertIn(FLOOR_MSG, err, f"the stop hook was silent about the floor: {err!r}")
-        self.assertEqual(r.returncode, 2, f"an open gate was let through below the floor: {err!r}")
-        r = self._hook_old_python("stop-hook", b'{"hook_event_name":"Stop","stop_hook_active":true}')
-        self.assertEqual(r.returncode, 0, "the one-shot valve did not end the re-issued stop below the floor")
+        # a python3 in front of the fake one that writes down every call: below the floor the hook runs only the
+        # probe and the version — not the task reader, not the JSON valve (its python-free path decides)
+        log = self.tmp / "python-calls"
+        shim = self.tmp / "logbin"
+        shim.mkdir()
+        (shim / "python3").write_text(f'#!/bin/bash\nprintf "%s\\n" "$*" >> "{log}"\nexec "{self.oldpath}/python3" "$@"\n',
+                                      encoding="utf-8")
+        (shim / "python3").chmod(0o755)
+        saved = self.oldpath
+        self.oldpath = f"{shim}:{saved}"
+        try:
+            r = self._hook_old_python("stop-hook", b'{"hook_event_name":"Stop","stop_hook_active":false}')
+            err = r.stderr.decode("utf-8", "replace")
+            self.assertIn(FLOOR_MSG, err, f"the stop hook was silent about the floor: {err!r}")
+            self.assertEqual(r.returncode, 2, f"an open gate was let through below the floor: {err!r}")
+            r = self._hook_old_python("stop-hook", b'{"hook_event_name":"Stop","stop_hook_active":true}')
+            self.assertEqual(r.returncode, 0, "the one-shot valve did not end the re-issued stop below the floor")
+        finally:
+            self.oldpath = saved
+        calls = log.read_text(encoding="utf-8").splitlines()
+        self.assertFalse([c for c in calls if "task-status.py" in c or "json" in c], calls)
 
     def test_chat_log_hook_says_the_floor_and_does_nothing(self):
         sess = self._stop_project()

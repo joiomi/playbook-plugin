@@ -672,6 +672,16 @@ class ANestedAgentsPromptIsNotTheUsers(_Session):
         self.assertEqual(self.turn_end.read_text(encoding="utf-8") if self.turn_end.exists() else None, mark)
         self.assertEqual(self.stop().returncode, 2, "the user's turn was released as a chat reply")
 
+    def test_a_nested_prompt_the_log_drops_removes_no_mark_either(self):
+        # a prompt that is empty once the IDE tags are filtered out takes the hook's other path (no log line, the
+        # marks dropped all the same for the user's) — a nested agent's must not drop them there either
+        self.a_turn_that_ended()
+        mark = self.turn_end.read_text(encoding="utf-8")
+        gen = self.prompt_gen.read_text(encoding="utf-8")
+        self.nested_prompt("<ide_selection>x</ide_selection>")
+        self.assertEqual(self.turn_end.read_text(encoding="utf-8"), mark)
+        self.assertEqual(self.prompt_gen.read_text(encoding="utf-8"), gen)
+
     def test_control_the_sessions_own_prompt_resets(self):
         for root in (self.proc_root, self._single_agent_proc_root()):
             with self.subTest(chain=root.name):

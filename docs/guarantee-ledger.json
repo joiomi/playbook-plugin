@@ -4584,7 +4584,7 @@
     {
       "id": "PB-CHAT-LOG",
       "category": "sessions-and-attribution",
-      "statement": "User messages append in sequence to the lane chat log with a provider attribution suffix that is not leaked into the message text, and legacy unsuffixed entries still parse; a prompt whose body BEGINS (after leading whitespace) with a harness marker — `<task-notification>`, `<local-command-caveat>`, `<command-name>` or `[SYSTEM NOTIFICATION` — is a harness event, not the user's words, and is not logged, while a prompt that merely mentions a marker is (task 088, PLAN S5a).",
+      "statement": "User messages append in sequence to the lane chat log with a provider attribution suffix that is not leaked into the message text, and legacy unsuffixed entries still parse; a prompt whose body BEGINS (after leading whitespace) with a harness marker — `<task-notification>`, `<local-command-caveat>`, `<command-name>` or `[SYSTEM NOTIFICATION` — is a harness event, not the user's words, and is not logged, while a prompt that merely mentions a marker is (task 088, PLAN S5a). The hook writes nothing through a link or into a file that is not a regular one at the log, its counter, the counter's lock or the migration's `.new`/`.bak` — a cloned repository can ship any of them under `.agent/`; such a file is named on stderr and the prompt is not logged (task 193, measured before: the prompt appended to a link's target, the counter's target truncated, a FIFO held the prompt). BOUND: a swap of the file between the check and the write is not closed.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/chat-log-hook",
@@ -4597,6 +4597,10 @@
         {
           "path": "plugins/playbook/tasks/history.py",
           "reference": "symbol:cmd_log"
+        },
+        {
+          "path": "plugins/playbook/scripts/gate-echo-lib.sh",
+          "reference": "function:_pb_sink_ok"
         }
       ],
       "failure_consequence": "Medium",
@@ -4681,6 +4685,19 @@
           "negative_control": null,
           "limitations": [
             "Identical consecutive prompts are deduplicated by the hook, so the proof submits two different messages."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_chat_log_sinks.py",
+          "reference": "TheChatHooksSinks.test_no_write_through_a_link_and_no_wait_on_a_fifo",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_chat_log_sinks.py",
+            "reference": "TheChatHooksSinks.test_control_a_plain_project_is_logged"
+          },
+          "limitations": [
+            "The real chat hook as a subprocess with a link or a FIFO at each of the five files; red on nested `2537bcd` (three hangs, writes through)."
           ]
         }
       ],
@@ -10965,7 +10982,7 @@
     {
       "id": "PB-PYTHON-FLOOR",
       "category": "compatibility-and-package",
-      "statement": "The documented and diagnosed minimum Python version matches syntax used by every shipped module, and the entry points that check the interpreter — the eight launchers and six hooks — fail clearly before import under an incompatible one; the four Claude hooks that do not check it are claimed only as far as the live run measured them (its limitation).",
+      "statement": "The documented and diagnosed minimum Python version matches syntax used by every shipped module, and the entry points that check the interpreter — the eight launchers and eight hooks — fail clearly before import under an incompatible one; the two Claude hooks that do not check it are claimed only as far as the live run measured them (its limitation).",
       "owner": [
         {
           "path": "plugins/playbook/scripts/tasks",
@@ -10993,6 +11010,14 @@
         },
         {
           "path": "plugins/playbook/scripts/session-end-hook",
+          "reference": "whole-file"
+        },
+        {
+          "path": "plugins/playbook/scripts/stop-hook",
+          "reference": "whole-file"
+        },
+        {
+          "path": "plugins/playbook/scripts/chat-log-hook",
           "reference": "whole-file"
         }
       ],
@@ -11072,6 +11097,30 @@
           "limitations": []
         },
         {
+          "type": "executable integration",
+          "path": "tests/test_python_floor.py",
+          "reference": "ShellEntrypointFloorGuard.test_stop_hook_says_the_floor_and_fails_closed",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_python_floor.py",
+            "reference": "ShellEntrypointFloorGuard.test_supported_interpreter_passes_guard"
+          },
+          "limitations": [
+            "A fake python3 reports 3.9 and a shim logs every call: below the floor the stop hook runs neither the task reader nor the JSON valve; by hand under the real python:3.9-slim (task 193's evidence) the old stop hook blocked silently and the old chat hook logged and reset the counts, the new ones said the floor, the stop still blocked and its valve still ended, the chat hook did nothing."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_python_floor.py",
+          "reference": "ShellEntrypointFloorGuard.test_chat_log_hook_says_the_floor_and_does_nothing",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_python_floor.py",
+            "reference": "ShellEntrypointFloorGuard.test_supported_interpreter_passes_guard"
+          },
+          "limitations": []
+        },
+        {
           "type": "live-platform test",
           "path": "tests/live/gauntlet.sh",
           "reference": "scenario:PB-PYTHON-FLOOR",
@@ -11095,7 +11144,8 @@
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
         "2026-10-12 (task 184, PLAN S11): the live interpreter matrix ran on Linux (scenario PB-PYTHON-FLOOR of tests/live/gauntlet.sh). A floor issue the matrix does not see, parked on task 184 after the 1.6.1 release: the codex adapter reads ~/.codex/config.toml with `tomllib` (standard from 3.11) inside `except Exception`, so on 3.10 `_codex_hooks_enabled` answers False whatever the file says — the experimental codex AGENT path only; judges are not affected.",
-        "2026-10-13 (task 192, PLAN S14 T3, item #46): session-start-hook and session-end-hook check the floor (advisory: they say so and exit 0 having done nothing); the live row runs them with the checked hooks. task-gate, state-echo, stop and chat-log get it in PLAN S14 T4/T5; until then the live proof's limitation above (written for the 2026-10-12 run, when six hooks did not check) covers those four."
+        "2026-10-13 (task 192, PLAN S14 T3, item #46): session-start-hook and session-end-hook check the floor (advisory: they say so and exit 0 having done nothing); the live row runs them with the checked hooks. task-gate, state-echo, stop and chat-log get it in PLAN S14 T4/T5; until then the live proof's limitation above (written for the 2026-10-12 run, when six hooks did not check) covers those four.",
+        "2026-10-13 (task 193, PLAN S14 T4, item #46): stop-hook (its polarity: the python-free, fail-closed count and the regex valve) and chat-log-hook (advisory: says it, does nothing) check the floor; the live row runs them with the checked hooks. task-gate and state-echo get it in PLAN S14 T5."
       ],
       "follow_up_phases": [
         8
@@ -13319,7 +13369,7 @@
     {
       "id": "PB-HOOK-STOP-CLOSE",
       "category": "risk-and-close",
-      "statement": "Stop enforcement blocks a first stop while task completion requirements remain, fails closed on an unknowable lane, and uses its one-shot valve to avoid permanently trapping the session. The blocked-task release reads `## Status`, and the gate count + first unchecked gate are read, through the CLI's own fence-aware Python readers in ONE spawn (scripts/task-status.py --fields → core._extract_status + core._live_gate_state + core._freehand_release_allowed as a 4-line frame), never an independent awk/grep rule — the Freehand waiver is decided in Python, not by a bash prefix test on the gate text; when that reader cannot run the status is unreadable, the Freehand release is disabled, and gates are counted by a fence-blind LINE grep that is BOM-tolerant like the Python reader (`^(U+FEFF)*[[:space:]]*- \\[ \\]`, byte-wise under LC_ALL=C) and whose exit code is read — a grep failure (exit >= 2, unreadable file, unsupported regex, missing binary) counts as at least one open gate — so over the fixture table the fallback count is >= the Python count and the arm never releases on a count it could not take or under-counts the CLI (fail closed, loud). The one-shot `stop_hook_active` valve is read with a bash-builtin regex when python3 cannot run (no python3, no grep), so a no-python session blocked by this arm can still end its re-issued stop. BOUND, on both arms: the counter-gated conversational bypass (session writes=0 and tools<5, counted from the last USER prompt) releases a low-activity turn of a COUNTED tree regardless of open gates — it is a release for chat replies, not a fail-closed path — and it is disarmed when the fallback count itself failed. An automatic notification — a prompt that begins with `<task-notification>` or `[SYSTEM NOTIFICATION` — does not reset those counters (owner's Q1, 2026-09-24; task 173): one that lands in the middle of a turn changes nothing, so the work of that turn still holds its stop. The same block releases one more turn, by the owner's exception: a turn that a notification STARTED — no tool call had run since the last stop this hook let through for the session's OWN agent (an agent nested under it shares the session, and its stop ends no turn), in the same prompt generation — and that has made no write since — no Edit, Write, MultiEdit, NotebookEdit or Bash call — however many other tool calls it made; one such write and it is held like any other turn. The echo of a command the user ran (`<command-name>`, `<local-command-caveat>`) still resets the counters, as a prompt of theirs does. The counters are written under ONE lock per session (`counters.lock`, flock): a tool call's count, the reset at a prompt and every single write of a key are each one hold of it, so tool calls whose hooks the host runs side by side are each counted (task 182, PLAN S11 item 17). The lock has a time limit (2 seconds; 1 or 2 by `PLAYBOOK_COUNTERS_LOCK_WAIT`; one limit for a hook's two holds together). Where a lock exists and is NOT given — not in time, something that is no plain file in its place, or a lock file that cannot be opened where it could have been made — the call is NOT counted, nothing is written to the counters without the lock, and the session is marked (`counts_unsure` beside the counters): the chat-reply release and the notification exception are both OFF until a prompt of the user's has reset the counts under the lock (task 182, impl rounds 1 to 3). BOUND: on a host with no `flock`, or whose `flock` cannot wait with a limit, there is no lock to take, a call is counted without one and a count can be lost, as before. BOUND (PLAN §S11 item (18), deferred after the 1.6.1 release): the stop hook reads the prompt generation only after it has read its input and resolved the session; a user's prompt whose hook completes in that window gives the stop of the turn before it the new generation, and a notification early in the user's turn is then taken for a turn's start, so a read-only turn of the user's can end with gates open — not reproduced by a test. The hooks find the active task's record by the task directory's own name (task 192; the `find -path` BOUND this row carried — PLAN §S11 item (23) — is closed, see PB-TASK-ACTIVATE).",
+      "statement": "Stop enforcement blocks a first stop while task completion requirements remain, fails closed on an unknowable lane, and uses its one-shot valve to avoid permanently trapping the session. The blocked-task release reads `## Status`, and the gate count + first unchecked gate are read, through the CLI's own fence-aware Python readers in ONE spawn (scripts/task-status.py --fields → core._extract_status + core._live_gate_state + core._freehand_release_allowed as a 4-line frame), never an independent awk/grep rule — the Freehand waiver is decided in Python, not by a bash prefix test on the gate text; when that reader cannot run the status is unreadable, the Freehand release is disabled, and gates are counted by a fence-blind LINE grep that is BOM-tolerant like the Python reader (`^(U+FEFF)*[[:space:]]*- \\[ \\]`, byte-wise under LC_ALL=C) and whose exit code is read — a grep failure (exit >= 2, unreadable file, unsupported regex, missing binary) counts as at least one open gate — so over the fixture table the fallback count is >= the Python count and the arm never releases on a count it could not take or under-counts the CLI (fail closed, loud). The one-shot `stop_hook_active` valve is read with a bash-builtin regex when python3 cannot run (no python3, no grep), so a no-python session blocked by this arm can still end its re-issued stop. BOUND, on both arms: the counter-gated conversational bypass (session writes=0 and tools<5, counted from the last USER prompt) releases a low-activity turn of a COUNTED tree regardless of open gates — it is a release for chat replies, not a fail-closed path — and it is disarmed when the fallback count itself failed. An automatic notification — a prompt that begins with `<task-notification>` or `[SYSTEM NOTIFICATION` — does not reset those counters (owner's Q1, 2026-09-24; task 173): one that lands in the middle of a turn changes nothing, so the work of that turn still holds its stop. The same block releases one more turn, by the owner's exception: a turn that a notification STARTED — no tool call had run since the last stop this hook let through for the session's OWN agent (an agent nested under it shares the session, and its stop ends no turn), in the same prompt generation — and that has made no write since — no Edit, Write, MultiEdit, NotebookEdit or Bash call — however many other tool calls it made; one such write and it is held like any other turn. The echo of a command the user ran (`<command-name>`, `<local-command-caveat>`) still resets the counters, as a prompt of theirs does. The counters are written under ONE lock per session (`counters.lock`, flock): a tool call's count, the reset at a prompt and every single write of a key are each one hold of it, so tool calls whose hooks the host runs side by side are each counted (task 182, PLAN S11 item 17). The lock has a time limit (2 seconds; 1 or 2 by `PLAYBOOK_COUNTERS_LOCK_WAIT`; one limit for a hook's two holds together). Where a lock exists and is NOT given — not in time, something that is no plain file in its place, or a lock file that cannot be opened where it could have been made — the call is NOT counted, nothing is written to the counters without the lock, and the session is marked (`counts_unsure` beside the counters): the chat-reply release and the notification exception are both OFF until a prompt of the user's has reset the counts under the lock (task 182, impl rounds 1 to 3). BOUND: on a host with no `flock`, or whose `flock` cannot wait with a limit, there is no lock to take, a call is counted without one and a count can be lost, as before. The stop hook resolves the session and reads the prompt generation BEFORE it reads its input (task 193; a held-input test shows a user's prompt that lands while it waits no longer lends it the new generation). BOUND (PLAN §S11 item (18), narrowed by task 193): a user's prompt whose hook completes during the stop hook's start-up, before that read, still gives the stop of the turn before it the new generation, and a notification early in the user's turn is then taken for a turn's start — not reproduced. Claude Code's Stop and UserPromptSubmit payloads carry a `prompt_id` (measured 2026-10-13) that would close it; using it is the owner's to schedule. A prompt of an agent nested under the session — a `claude -p` the session's agent starts, which resolves to the same session — resets no count, removes no mark and begins no generation: only the session's own agent (one agent in the hook's chain, or none visible) starts a new count (task 193, #38; measured live before the fix: the nested prompt took the outer turn's `writes=2 tools=3` to 0). The hooks find the active task's record by the task directory's own name (task 192; the `find -path` BOUND this row carried — PLAN §S11 item (23) — is closed, see PB-TASK-ACTIVATE).",
       "owner": [
         {
           "path": "plugins/playbook/scripts/stop-hook",
@@ -13994,13 +14044,37 @@
           ]
         },
         {
+          "type": "executable integration",
+          "path": "tests/test_notification_turn.py",
+          "reference": "ANestedAgentsPromptIsNotTheUsers.test_a_nested_agents_prompt_resets_nothing",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_notification_turn.py",
+            "reference": "ANestedAgentsPromptIsNotTheUsers.test_control_the_sessions_own_prompt_resets"
+          },
+          "limitations": [
+            "A faked /proc chain (PLAYBOOK_PROC_ROOT): two agents = nested; the live third session of scenario PB-HOOK-STOP-CLOSE runs a real nested `claude -p` (task 193: `tools` 3 before, 8 after)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_notification_turn.py",
+          "reference": "TheStopHookReadsTheGenerationFirst.test_a_prompt_that_lands_while_the_stop_hook_reads_its_input_does_not_lend_it_its_generation",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The hook held on its stdin for 1.5 s while a user's prompt runs; the start-up window before the read is not tested (the BOUND)."
+          ]
+        },
+        {
           "type": "live-provider test",
           "path": "tests/live/gauntlet.sh",
           "reference": "scenario:PB-HOOK-STOP-CLOSE",
           "boundary": "live-provider",
           "negative_control": null,
           "limitations": [
-            "Real headless claude sessions: with gates open after a turn that wrote, the first stop blocked by the hook's own line and the re-issued stop let through (the session ended, rc 0); with every gate ticked one edit at a time, the first stop let through. The fallback arms stay integration-proven."
+            "Real headless claude sessions: with gates open after a turn that wrote, the first stop blocked by the hook's own line and the re-issued stop let through (the session ended, rc 0); with every gate ticked one edit at a time, the first stop let through. The fallback arms stay integration-proven.",
+            "Since task 193 a third session: the agent starts a nested `claude -p` (with the candidate as its plugin) mid-turn and the outer `tools` count is higher after it than before (PASS on nested `dffbef0`: 3 → 8)."
           ]
         }
       ],
@@ -14025,7 +14099,8 @@
         "Task 173: `one agent in the chain = the session's own stop` was MEASURED on one live session (Claude Code 2.1.296, Linux, 2026-10-10: a command the session runs walks up to exactly one agent, the session's). A host that started its hooks from a helper process of its own that is also named `claude` would make every stop look nested, and the owner's exception would then never apply — the stricter side, and not seen. The walk stops at the Claude Code daemon and reads `/proc` (or `PLAYBOOK_PROC_ROOT`, which the tests use to pin it).",
         "Task 173, BOUND left open at its close (the single judge's third run, 2026-10-10; PLAN S11 item (18)): the stop hook reads the prompt generation only after it has read its input, parsed it and resolved the session. A user's prompt whose hook runs to its end in that window — after the stop hook of the turn before it has started, before it reaches that read — gives that stop the NEW generation; its mark then counts in the user's turn, and a notification before the first tool call of that turn is taken for a start, so a read-only turn of the user's could end with gates open. Not reproduced by a test here (the tested orderings are the prompt landing at the mark's rename and while the hook decides after that read). Reading the generation first thing would shrink the window, not close it; a turn identity from the host in both payloads would close it.",
         "2026-10-12 (task 184, PLAN S11): claude's real Stop semantics observed live (scenario PB-HOOK-STOP-CLOSE). On the way the batch-close guard refused a three-gate write with short notes — the product right.",
-        "2026-10-13 (task 192, PLAN S14 T3, item #25; impl panel r1, opus): the `find -path` BOUND is closed — the hooks match the task directory's own name, in `_find_active_task`'s order (tests/test_task_record_lookup.py; impl panel r2: the bounds with two directories of one number are in PB-TASK-ACTIVATE)."
+        "2026-10-13 (task 192, PLAN S14 T3, item #25; impl panel r1, opus): the `find -path` BOUND is closed — the hooks match the task directory's own name, in `_find_active_task`'s order (tests/test_task_record_lookup.py; impl panel r2: the bounds with two directories of one number are in PB-TASK-ACTIVATE).",
+        "2026-10-13 (task 193, PLAN S14 T4): #28 narrowed (the generation read before the input) and the host's turn identity found (`prompt_id` in the Stop and UserPromptSubmit payloads; the design is in task 193's record); #38 measured live and fixed (a nested agent's prompt resets nothing)."
       ],
       "follow_up_phases": [
         8
