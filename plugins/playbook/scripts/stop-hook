@@ -342,7 +342,8 @@ fi
 # (task 193), so there an uncounted call could leave no mark (impl panel r2, opus, codex).
 COUNTER_FILE="$SESSION_DIR/counters"
 PB_COUNTS_SURE=true
-if [ -e "$SESSION_DIR/counts_unsure" ] || [ -L "$SESSION_DIR/counts_unsure" ] || [ -L "$SESSION_DIR" ]; then
+if [ -e "$SESSION_DIR/counts_unsure" ] || [ -L "$SESSION_DIR/counts_unsure" ] \
+   || ! _pb_session_dir_ok "$SESSION_DIR"; then    # or a linked `sessions` (task 194, impl panel r1)
     PB_COUNTS_SURE=false
 fi
 if [ -f "$COUNTER_FILE" ] && [ "${PB_GREP_RC:-0}" -le 1 ] && [ "$PB_COUNTS_SURE" = true ]; then

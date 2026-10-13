@@ -80,7 +80,7 @@ fi
 # only ever takes a release away.
 pb_skip_prompt() {
     local dir="$AGENT_DIR/sessions/$SESSION_ID"
-    if [ -n "$SESSION_ID" ] && [ "$PB_OWN_AGENT" = true ] && [ -d "$dir" ] && [ ! -L "$dir" ]; then
+    if [ -n "$SESSION_ID" ] && [ "$PB_OWN_AGENT" = true ] && [ -d "$dir" ] && _pb_session_dir_ok "$dir"; then
         new_prompt_generation "$dir"
         rm -f "$dir/turn_end" "$dir/notif_start" 2>/dev/null || true
     fi
@@ -250,7 +250,7 @@ drop_notification_marks() {
     [ "$PB_OWN_AGENT" = true ] || return 0
     local dir="$AGENT_DIR/sessions/$SESSION_ID"
     [ -d "$dir" ] || return 0
-    [ ! -L "$dir" ] || return 0     # never through a linked session dir (task 193, impl panel r2, fable)
+    _pb_session_dir_ok "$dir" || return 0   # never through a linked session dir or `sessions` (tasks 193, 194)
     new_prompt_generation "$dir"
     rm -f "$dir/turn_end" "$dir/notif_start" 2>/dev/null || true
 }
@@ -258,6 +258,7 @@ reset_session_counters() {
     [ -n "$SESSION_ID" ] || return 0
     [ "$PB_OWN_AGENT" = true ] || return 0
     local session_dir="$AGENT_DIR/sessions/$SESSION_ID"
+    _pb_session_dir_ok "$session_dir" || return 0   # nothing made through a link (task 194, impl panel r1)
     mkdir -p "$session_dir"
     reset_counters "$session_dir/counters"
     drop_notification_marks
@@ -290,7 +291,7 @@ note_notification() {
     [ -n "$SESSION_ID" ] || return 0
     local dir="$AGENT_DIR/sessions/$SESSION_ID"
     [ -f "$dir/counters" ] || return 0
-    [ ! -L "$dir" ] || return 0     # never through a linked session dir (task 193)
+    _pb_session_dir_ok "$dir" || return 0   # never through a linked session dir or `sessions` (tasks 193, 194)
     local mark ended nonce snapshot tools writes
     mark=$(read_session_mark "$dir/turn_end")
     [ -n "$mark" ] || return 0

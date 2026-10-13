@@ -105,6 +105,12 @@ esac
 
 # Remove entire session directory (state + counters + offset)
 SESSION_DIR="$AGENT_DIR/sessions/$SESSION_ID"
+# Never through a link between the project and the session's directory (task 194, grave, measured:
+# with `.agent/sessions` a link, the directory of that name in the link's target was removed).
+if ! _pb_inside_project "$PROJECT_DIR" "$SESSION_DIR"; then
+    echo "[playbook] $SESSION_DIR lies behind a link — not removed" >&2
+    exit 0
+fi
 rm -rf "$SESSION_DIR"
 
 exit 0

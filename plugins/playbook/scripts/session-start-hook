@@ -135,17 +135,22 @@ if [ -n "$PROJECT_DIR" ]; then
         } >&2
     else
         SESSION_DIR="$AGENT_DIR/sessions/$SESSION_ID"
-        mkdir -p "$SESSION_DIR"
-        # F19: bind the session to its OWN transcript from the very first
-        # moment (state-echo refreshes it per tool call thereafter) — the
-        # monitor reads this pointer instead of guessing newest-by-mtime.
-        TRANSCRIPT_PATH=$(echo "$INPUT" | python3 -I -c "
+        if ! _pb_session_dir_ok "$SESSION_DIR"; then
+            # nothing made through a link (task 194, impl panel r1)
+            echo "[playbook] WARNING: $SESSION_DIR (or .agent/sessions itself) is a link — this session's state is not recorded there; remove the link if it is not yours." >&2
+        else
+            mkdir -p "$SESSION_DIR"
+            # F19: bind the session to its OWN transcript from the very first
+            # moment (state-echo refreshes it per tool call thereafter) — the
+            # monitor reads this pointer instead of guessing newest-by-mtime.
+            TRANSCRIPT_PATH=$(echo "$INPUT" | python3 -I -c "
 import sys, json
 t = json.loads(sys.stdin.read()).get('transcript_path', '')
 print(t if isinstance(t, str) and t and '\n' not in t and '\r' not in t else '')
 " 2>/dev/null || echo "")
-        if [ -n "$TRANSCRIPT_PATH" ]; then
-            printf '%s\n' "$TRANSCRIPT_PATH" > "$SESSION_DIR/transcript_path" 2>/dev/null || true
+            if [ -n "$TRANSCRIPT_PATH" ] && _pb_sink_ok "" "$SESSION_DIR/transcript_path"; then
+                printf '%s\n' "$TRANSCRIPT_PATH" > "$SESSION_DIR/transcript_path" 2>/dev/null || true
+            fi
         fi
     fi
 
@@ -172,7 +177,12 @@ print(t if isinstance(t, str) and t and '\n' not in t and '\r' not in t else '')
     #      and is removed — matching Python's ValueError→remove arm.
     #   3. anything else (legacy UUIDs, "default"): 24h `current_state` mtime.
     SESSIONS_DIR="$AGENT_DIR/sessions"
-    if [ -d "$SESSIONS_DIR" ]; then
+    # Only a sessions directory that lies physically inside the project is swept (task 194, grave,
+    # measured: with `.agent/sessions` — or `.agent`, or a lane — a link, every directory of the
+    # link's target that was not a live session was removed).
+    if [ -d "$SESSIONS_DIR" ] && ! _pb_inside_project "$PROJECT_DIR" "$SESSIONS_DIR"; then
+        echo "[playbook] WARNING: $SESSIONS_DIR (or a directory above it in the project) is a link — no session sweep there; remove the link if it is not yours." >&2
+    elif [ -d "$SESSIONS_DIR" ]; then
         for d in "$SESSIONS_DIR"/*; do
             # NO trailing slash in the glob, and symlinks are skipped outright:
             # `rm -rf "link/"` follows the link and destroys the TARGET (measured:

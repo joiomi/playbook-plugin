@@ -27,6 +27,10 @@ HOOKS = FLOOR_ENTRY_POINTS[8:]               # a hook that cannot run lets the c
 # task-gate-hook and state-echo-hook since task 194). Kept, bound to hooks.json by the binding test, so a new hook
 # without the check shows here. hook -> (event, payload fields, exit status, a word its answer must hold).
 UNCHECKED_CLAUDE_HOOKS: "dict[str, tuple]" = {}
+# Hooks that ask the floor only inside a project (task 194, impl panel r1, opus: the echo is bound to `.*`, and a
+# probe before the project check started python3 at every tool call of every project). Run with no input outside a
+# project they exit 0 at once and say nothing; their floor is measured in a project by FLOOR_CLAUDE_CALLS.
+PROJECT_ONLY_HOOKS = ("task-gate-hook", "state-echo-hook")
 # Under 3.9 the two hooks of task 194 are also run with a real payload, in a project whose session is known and
 # has a task with an open gate, for their polarity: the enforcing gate refuses an edit it lets through on a
 # supported interpreter (a non-code file, no task needed) and lets a shell command through; the echo writes no
@@ -205,6 +209,11 @@ done
                    and "Traceback" not in body, f"rc={rc}: {body.strip()[:160]!r}")
     for s in HOOKS:
         rc, body = blocks.get(s, ("?", ""))
+        if s in PROJECT_ONLY_HOOKS:
+            run.clause(f"under 3.9 outside a project the hook `{s}` exits 0 and says nothing (its floor is asked in a "
+                       "project — the calls below)", rc == "0" and "3.10" not in body and "Traceback" not in body,
+                       f"rc={rc}: {body.strip()[:160]!r}")
+            continue
         run.clause(f"under 3.9 the hook `{s}` says so and does not fail with a traceback", rc == "0"
                    and "3.10" in body and "Traceback" not in body, f"rc={rc}: {body.strip()[:160]!r}")
     for ev, want_rc, word in (("PreToolUse", "2", "fail-closed"), ("PostToolUse", "0", "fail-open")):

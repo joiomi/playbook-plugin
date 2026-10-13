@@ -884,8 +884,10 @@ _counters_unsure() {
 
 # _counters_mark FILE — leave the mark beside FILE. Never fails the caller.
 _counters_mark() {
-    # never through a link or into a FIFO (task 193, impl panel r1: `: >` truncated a link's target)
-    _pb_sink_ok "$(_counters_dir "$1")" "$(_counters_dir "$1")/counts_unsure" || return 0
+    # never through a link or into a FIFO (task 193, impl panel r1: `: >` truncated a link's target),
+    # nor through a linked `sessions` (task 194)
+    _pb_session_dir_ok "$(_counters_dir "$1")" || return 0
+    _pb_sink_ok "" "$(_counters_dir "$1")/counts_unsure" || return 0
     : > "$(_counters_dir "$1")/counts_unsure" 2>/dev/null || true
 }
 
@@ -913,8 +915,13 @@ write_counter() {
     # file (task 194): the temp file and its rename landed in the link's target. The count
     # is not made, and a count not made is marked (the stop hook also holds its releases
     # on a linked session directory, task 193).
-    if ! _pb_sink_ok "$(_counters_dir "$file")" "$file"; then
+    # Nor through a linked `sessions` (task 194, impl panel r1), nor over a temp path that is a
+    # link or not a regular file (codex, reproduced: a link planted at `counters.tmp.<pid>` was
+    # written through, then renamed onto the counters). A refused write is said (gemini).
+    if ! _pb_session_dir_ok "$(_counters_dir "$file")" || ! _pb_sink_ok "" "$file" \
+       || ! _pb_sink_ok "" "$tmp"; then
         case "$key" in tools|writes) _counters_mark "$file" ;; esac
+        PLAYBOOK_WRITE_FAILED=true
         return 0
     fi
     counters_lock "$file"
@@ -950,7 +957,8 @@ reset_counters() {
     # is not ours (task 193, impl panel r1, fable and sonnet; measured: the reset wrote
     # `tools=0` through a link, a FIFO held the prompt): no reset — the counts of the turn
     # before stay, the side that holds a stop.
-    _pb_sink_ok "$(_counters_dir "$file")" "$file" || return 0
+    _pb_session_dir_ok "$(_counters_dir "$file")" || return 0     # nor a linked `sessions` (task 194)
+    _pb_sink_ok "" "$file" || return 0
     counters_lock "$file"
     if [ "$PLAYBOOK_COUNTERS_UNLOCKED" = true ]; then
         # not reset without the lock either: the counts stay those of the turn
@@ -1000,8 +1008,11 @@ write_session_mark() {
     # single judge after round 2, codex); such a target keeps what it is, and no mark is written.
     # Nor inside a session directory that is a link (task 194, measured: the stop hook's
     # `turn_end` landed in the link's target) — no mark, the stricter case for each reader.
-    _pb_sink_ok "$(_counters_dir "$file")" "$file" || return 0
+    _pb_session_dir_ok "$(_counters_dir "$file")" || return 0
+    _pb_sink_ok "" "$file" || return 0
     local tmp="${file}.tmp.$$"
+    # nor over a temp path that is a link or not a regular file (impl panel r1, codex, reproduced)
+    _pb_sink_ok "" "$tmp" || return 0
     if ! { printf '%s\n' "$value" > "$tmp" 2>/dev/null && mv "$tmp" "$file" 2>/dev/null; }; then
         rm -f "$tmp" 2>/dev/null || true
     fi
@@ -1274,6 +1285,35 @@ _json_str() {
     s="${s//$'\r'/}"           # CR dropped
     s="${s//$'\n'/ }"          # newline -> space (keep the record one line)
     printf '%s' "$s"
+}
+
+# _pb_session_dir_ok DIR — true when the session directory DIR and its parent, `sessions`, are not symbolic
+# links (task 194, impl panel r1 — fable, opus, codex reproduced it: with `.agent/sessions` a link, the leaf
+# check saw a real `sessions/<id>` and every hook wrote into the link's target; `.gitignore`'s
+# `.agent/sessions/` matches directories only, so the link is committable). For what WRITES session state;
+# links above `sessions` (`.agent`, a lane) hold the whole state, the CLI's too — not asked here.
+_pb_session_dir_ok() {
+    [ -L "$1" ] && return 1
+    [ -L "${1%/*}" ] && return 1
+    return 0
+}
+
+# _pb_inside_project ROOT PATH — true when PATH is ROOT/… and no component of it below ROOT is a symbolic
+# link, so PATH lies physically inside the project. For what DELETES (task 194, impl panel r1 — grave, measured:
+# with `.agent/sessions` a link, the session sweep removed every directory of the link's target; a cloned
+# repository can ship that link). Above ROOT nothing is asked: a project reached through a link is the user's.
+_pb_inside_project() {
+    local root="$1" rest cur part
+    case "$2" in "$root"/?*) rest="${2#"$root"/}" ;; *) return 1 ;; esac
+    cur="$root"
+    while [ -n "$rest" ]; do
+        part="${rest%%/*}"
+        cur="$cur/$part"
+        [ -L "$cur" ] && return 1
+        [ "$rest" = "$part" ] && break
+        rest="${rest#*/}"
+    done
+    return 0
 }
 
 # _pb_sink_ok DIR FILE — true when DIR is not a symbolic link and FILE is absent or a regular file that is not a

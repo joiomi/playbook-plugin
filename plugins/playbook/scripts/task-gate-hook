@@ -16,17 +16,6 @@ if [ "${PLAYBOOK_ROLE:-}" = "monitor" ]; then
     exit 0
 fi
 
-# The Python floor (task 194, PLAN S14 T5, #46), with this hook's polarity: it fails
-# closed. Below 3.10 it says so, reads the payload with the stdlib one-liners as before,
-# and lets no call through but a shell command (Guard F below). The launchers' one-line
-# probe; no python3 lands here too (the payload is then unreadable: refused, as before).
-PB_PY_FLOOR=true
-if ! python3 -I -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null; then
-    PB_PY_FLOOR=false
-    PB_PY_FOUND="$(python3 --version 2>/dev/null | head -1 | tr -cd 'A-Za-z0-9._ -')"
-    echo "playbook: needs python3 >= 3.10 (found: ${PB_PY_FOUND:-no python3 on PATH}) — the task gate lets no file edit through without it; upgrade python3" >&2
-fi
-
 # Source shared lib (same directory)
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$HOOK_DIR/gate-echo-lib.sh"
@@ -39,6 +28,19 @@ PROJECT_DIR=$(find_project_root)
 if [ -z "$PROJECT_DIR" ]; then
     cat > /dev/null
     exit 0
+fi
+
+# The Python floor (task 194, PLAN S14 T5, #46), with this hook's polarity: it fails
+# closed. Below 3.10 it says so, reads the payload with the stdlib one-liners as before,
+# and lets no call through but a shell command (Guard F below). The launchers' one-line
+# probe; no python3 lands here too (the payload is then unreadable: refused, as before).
+# Asked only inside a project (impl panel r1, opus: before the project check every tool
+# call of every project started python3).
+PB_PY_FLOOR=true
+if ! python3 -I -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null; then
+    PB_PY_FLOOR=false
+    PB_PY_FOUND="$(python3 --version 2>/dev/null | head -1 | tr -cd 'A-Za-z0-9._ -')"
+    echo "playbook: needs python3 >= 3.10 (found: ${PB_PY_FOUND:-no python3 on PATH}) — the task gate lets no file edit through without it; upgrade python3" >&2
 fi
 
 # Self-heal any 0-byte wrapper before the tool (esp. a Bash `tasks …` call) runs,
@@ -235,7 +237,8 @@ fi
 # the correct answer when we cannot tell whose lane this is). Never exit here:
 # a hook that aborts takes the whole session down.
 PB_FRESH_CLONE_LANES="$(lanes_without_marker "$PROJECT_DIR")"
-if [ -z "$PB_FRESH_CLONE_LANES" ] && [ -n "$SESSION_DIR" ]; then
+# (and never through a link at the session directory or at `sessions` — task 194, impl panel r1)
+if [ -z "$PB_FRESH_CLONE_LANES" ] && [ -n "$SESSION_DIR" ] && _pb_session_dir_ok "$SESSION_DIR"; then
     # NEW-2: guard the mkdir — under `set -e` an unwritable/full (ENOSPC,
     # read-only, wrong-perms) sessions dir made this abort with exit 1, a
     # NON-blocking code, so the ENFORCING gate stopped enforcing globally

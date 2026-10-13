@@ -98,6 +98,23 @@ def _session_is_dead(session_dir: Path, own_session: str, cutoff: float) -> bool
     return True
 
 
+def _inside_project(project_path: Path, path: Path) -> bool:
+    """True when `path` is under `project_path` and no component of it below the project root is a symbolic link —
+    the path lies physically inside the project. Asked before anything DELETES (task 194, impl panel r1 — grave,
+    measured: with `.agent/sessions` a link, this sweep removed every directory of the link's target; a cloned
+    repository can ship that link). The bash twin is `_pb_inside_project` in scripts/gate-echo-lib.sh."""
+    try:
+        rel = path.relative_to(project_path)
+    except ValueError:
+        return False
+    cur = project_path
+    for part in rel.parts:
+        cur = cur / part
+        if cur.is_symlink():
+            return False
+    return True
+
+
 def _gc_dead_sessions(project_path: Path) -> list[str]:
     """Remove dead session dirs and legacy flat files.
 
@@ -124,6 +141,10 @@ def _gc_dead_sessions(project_path: Path) -> list[str]:
     """
     agent_dir = resolve_agent_dir(project_path)
     sessions_dir = agent_dir / "sessions"
+    # Nothing is removed behind a link: not the legacy files of a linked `.agent` or lane, not the session
+    # directories of a linked `sessions` (task 194; `_inside_project`).
+    if not _inside_project(project_path, sessions_dir):
+        return []
 
     # Clean legacy flat files from pre-migration layout
     for pattern in (".hook_counters.*", "current_state", "current_state.*"):

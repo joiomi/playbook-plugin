@@ -320,6 +320,7 @@ class ShellEntrypointFloorGuard(unittest.TestCase):
         env = dict(os.environ)
         env.update(PATH=path, HOME=str(self.tmp / "home"), PLAYBOOK_SESSION_ID=sid)
         env.pop("PLAYBOOK_ROLE", None)
+        env.pop("PLAYBOOK_SANDBOXED", None)        # impl panel r1 (gemini): a sandboxed run says less
         (self.tmp / "home").mkdir(exist_ok=True)
         import json as _json
         return subprocess.run([self.bash, str(self.scr / "task-gate-hook")], input=_json.dumps(payload).encode(),
@@ -384,6 +385,41 @@ class ShellEntrypointFloorGuard(unittest.TestCase):
         r = self._gate(path, bash("tasks new build x"), sid="judge")
         self.assertEqual(r.returncode, 2, "the judge's guard was dropped below the floor")
 
+    def test_outside_a_project_the_gate_and_the_echo_start_no_python3(self):
+        # impl panel r1 (opus): the probe ran before the project check, so every tool call of EVERY project started
+        # python3 (the echo is bound to `.*`, the install is user-scope). Outside a project there is nothing to guard.
+        import json as _json
+        path, log = self._working_old_python()
+        elsewhere = self.tmp / "not-a-project"
+        elsewhere.mkdir()
+        env = dict(os.environ)
+        env.update(PATH=path, HOME=str(self.tmp / "home"), PLAYBOOK_SESSION_ID="floor-sess")
+        for k in ("PLAYBOOK_ROLE", "CLAUDE_PROJECT_DIR", "PLAYBOOK_SANDBOXED"):
+            env.pop(k, None)
+        (self.tmp / "home").mkdir(exist_ok=True)
+        for hook, payload in (("task-gate-hook", {"tool_name": "Write", "tool_input": {"file_path": "x", "content": "y"}}),
+                              ("state-echo-hook", {"tool_name": "Read", "tool_input": {"file_path": "x"}})):
+            with self.subTest(hook=hook):
+                if log.exists():
+                    log.unlink()
+                r = subprocess.run([self.bash, str(self.scr / hook)], input=_json.dumps(payload).encode(),
+                                   cwd=str(elsewhere), env=env, capture_output=True, timeout=60)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertNotIn(FLOOR_MSG, r.stderr.decode("utf-8", "replace"))
+                self.assertFalse(log.exists() and log.read_text(encoding="utf-8").strip(),
+                                 "python3 was started outside a project")
+
+    def test_with_no_usable_python3_even_a_shell_command_is_refused(self):
+        # impl panel r1 (fable): with a python3 that reads nothing the payload is unreadable — a shell command too is
+        # refused (`block_unreadable_payload`), the floor said first; PB-PYTHON-FLOOR says so
+        self._gate_project()
+        r = self._gate(self.oldpath, {"hook_event_name": "PreToolUse", "tool_name": "Bash",
+                                      "tool_input": {"command": "ls"}})
+        err = r.stderr.decode("utf-8", "replace")
+        self.assertEqual(r.returncode, 2, err)
+        self.assertIn(FLOOR_MSG, err)
+        self.assertIn("could not read a complete tool payload", err)
+
     def test_control_task_gate_on_a_supported_interpreter(self):
         self._gate_project()
         real = os.environ.get("PATH", "")
@@ -410,6 +446,7 @@ class ShellEntrypointFloorGuard(unittest.TestCase):
                 env = dict(os.environ)
                 env.update(PATH=path, HOME=str(self.tmp / "home"), PLAYBOOK_SESSION_ID="floor-sess")
                 env.pop("PLAYBOOK_ROLE", None)
+                env.pop("PLAYBOOK_SANDBOXED", None)
                 (self.tmp / "home").mkdir(exist_ok=True)
                 if log.exists():
                     log.unlink()
@@ -444,6 +481,7 @@ class ShellEntrypointFloorGuard(unittest.TestCase):
                 env = dict(os.environ)
                 env.update(PATH=path, HOME=str(self.tmp / "home"), PLAYBOOK_SESSION_ID="floor-sess")
                 env.pop("PLAYBOOK_ROLE", None)
+                env.pop("PLAYBOOK_SANDBOXED", None)
                 (self.tmp / "home").mkdir(exist_ok=True)
                 subprocess.run([self.bash, str(self.scr / "state-echo-hook")], input=payload, cwd=str(self.proj),
                                env=env, capture_output=True, timeout=60)
