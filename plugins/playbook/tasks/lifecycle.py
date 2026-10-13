@@ -267,11 +267,11 @@ def _gate_bounce(task_id: str, task_file, action: str) -> bool:
     # The decision and the count come from THE gate reader (`_live_gate_scan`, what the hooks
     # read): a line that is not a live gate — a `- **X**…:` lead-in, a fenced `- [ ]` example —
     # never refuses a close (task 190, owner ruling (a) of 2026-10-13: "0 open gate(s) … Next
-    # open gate: - **Ceva**, în scratch:"). Unreadable → refuse, as before.
+    # open gate: - **Ceva**, în scratch:"). Unreadable or unscannable → an unknown count, and refuse.
     try:
         open_count = _live_gate_scan(_physical_lines(
             task_file.read_text(encoding="utf-8", errors="replace")))[0]
-    except OSError:
+    except Exception:
         open_count = None
     if open_count == 0:
         return False

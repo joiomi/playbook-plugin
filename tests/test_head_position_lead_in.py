@@ -49,6 +49,32 @@ class GateBounceReadsTheGates(unittest.TestCase):
         p = self._file(HEAD + "x\n\n## Work Plan\n- [x] A — done\n\n```\n- [ ] an example\n```\n")
         self.assertEqual(self.bounce(p), (False, ""))
 
+    def test_an_unreadable_record_still_refuses(self):
+        # A record that cannot be read is not "no open gate": the close is refused, with an unknown count.
+        p = self._file(HEAD + "x\n\n## Work Plan\n- [x] A — done\n")
+        p.unlink()
+        p.mkdir()
+        blocked, err = self.bounce(p)
+        self.assertTrue(blocked)
+        self.assertIn("has ? open gate(s)", err)
+
+    def test_a_scan_error_still_refuses(self):
+        # Not only an OSError: any failure of the gate scan is an unknown count, and the close is refused.
+        from unittest import mock
+        p = self._file(HEAD + "x\n\n## Work Plan\n- [x] A — done\n")
+        with mock.patch.object(core, "_live_gate_scan", side_effect=ValueError("scan broke")):
+            blocked, err = self.bounce(p)
+        self.assertTrue(blocked)
+        self.assertIn("has ? open gate(s)", err)
+
+    def test_a_lead_in_after_an_open_gate_is_not_the_head(self):
+        # With a gate still open, a bold lead-in BELOW it is never reported as the next gate.
+        p = self._file(HEAD + "x\n\n## Work Plan\n- [x] A — done\n- [ ] B\n\n## Notes\n- **Ceva**, în scratch:\n")
+        self.assertEqual(core._extract_head_position(p), "B")
+        blocked, err = self.bounce(p)
+        self.assertTrue(blocked)
+        self.assertIn("Next open gate: B", err)
+
     def test_the_refusal_counts_the_live_gates(self):
         p = self._file(HEAD + "x\n\n## Work Plan\n- [x] A — done\n- [ ] B\n\n```\n- [ ] an example\n```\n")
         blocked, err = self.bounce(p)
