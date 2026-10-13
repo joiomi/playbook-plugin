@@ -264,13 +264,17 @@ def stop_close(out: Path) -> int:
             reads.append((int(tools_m.group(1)), int(writes_m.group(1)), gen_m.group(1)))
     issued = any("claude -p" in i.get("command", "") and "--plugin-dir" in i.get("command", "")
                  for n, i in tool_calls(ev3) if n == "Bash")
-    answered = issued and any(out.strip() == "OK" for out in tool_results(ev3))
+    # the nested prompt's own hook ran and saw a nested agent: its journal record (task 193, impl panel r1, codex:
+    # evidence that the hook ran, not only that the command was issued — the nested model may answer anything,
+    # and on 2026-10-14 one was held by the outer task's gates and did not answer `OK`)
+    answered = issued and any(x.get("hook") == "chat-log" and x.get("decision") == "record"
+                              and "nested agent" in str(x.get("reason", "")) for x in journal(p3))
     held = (len(reads) >= 2 and reads[-1][2] == reads[0][2] and reads[-1][0] > reads[0][0]
             and reads[-1][1] >= reads[0][1])
-    run.clause("a nested `claude -p`'s prompt leaves the outer turn as it was (task 193, #38): the nested call "
-               "answered, and between the reads before and after it the prompt generation is the same, `tools` rose "
-               "and `writes` did not go down", answered and held,
-               f"nested call answered: {answered}; (tools, writes, generation) before/after: {reads}")
+    run.clause("a nested `claude -p`'s prompt leaves the outer turn as it was (task 193, #38): its prompt hook ran "
+               "and journaled the nested agent, and between the reads before and after it the prompt generation is "
+               "the same, `tools` rose and `writes` did not go down", answered and held,
+               f"nested prompt hook journaled: {answered}; (tools, writes, generation) before/after: {reads}")
     return run.finish()
 
 
