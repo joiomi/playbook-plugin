@@ -376,8 +376,10 @@ def claude_session(run: "Run", title: str, project: Path, prompt: str, *, model:
               f"cat {shlex.quote(str(work / 'out'))}; cat {shlex.quote(str(work / 'err'))} >&2; exit $(cat {shlex.quote(str(work / 'rc'))})")
     run.note(f"session prompt:\n{prompt.rstrip()}")
     try:
-        r = run.step(title + " (claude " + " ".join(claude[1:]) + ")", waiter, cwd=project, env=clean_env(),
-                     timeout=timeout + 60, watch=[project / ".agent", project / "src"])
+        # every hook of the session journals what its session walk read (task 192, #48 — an intermittent
+        # "no session identity"): the walk records are the capture, and their count shows the walk ran
+        r = run.step(title + " (claude " + " ".join(claude[1:]) + ")", waiter, cwd=project, env=clean_env(WALK_TRACE),
+                     env_shown=WALK_TRACE, timeout=timeout + 60, watch=[project / ".agent", project / "src"])
     finally:
         # a session cut by the timeout, or by an interrupted gauntlet, must not keep running (and spending)
         # after its project is gone (impl panel I13): its whole process group is ended before cleanup
@@ -389,7 +391,35 @@ def claude_session(run: "Run", title: str, project: Path, prompt: str, *, model:
             events.append(json.loads(line))
         except ValueError:
             continue
+    run.note(walk_summary(project))
     return r, events
+
+
+WALK_TRACE = {"PLAYBOOK_WALK_TRACE": "1"}
+
+
+def walk_records(project: Path) -> "list[dict]":
+    """Every `session-walk` record the hooks journaled in this project, the root's and each lane's (task 192)."""
+    rows = []
+    for f in sorted(project.glob(".agent/journal/enforcement.jsonl")) + sorted(project.glob(".agent/*/journal/enforcement.jsonl")):
+        for x in f.read_text(encoding="utf-8").splitlines():
+            try:
+                rec = json.loads(x)
+            except ValueError:
+                continue
+            if rec.get("decision") == "session-walk":
+                rows.append(rec)
+    return rows
+
+
+def walk_summary(project: Path) -> str:
+    rows = walk_records(project)
+    unresolved = [x for x in rows if not x.get("session_id")]
+    lines = [f"session walks journaled in this project so far: {len(rows)} (unresolved: {len(unresolved)})"]
+    lines += [f"  UNRESOLVED {json.dumps(x, ensure_ascii=False)}" for x in unresolved]
+    if rows:
+        lines.append(f"  last: {rows[-1].get('reason', '')}")
+    return "\n".join(lines)
 
 
 def _descendants(pid: int) -> "list[int]":

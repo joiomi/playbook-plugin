@@ -13,6 +13,15 @@ if [ "${PLAYBOOK_ROLE:-}" = "monitor" ]; then
     exit 0
 fi
 
+# The Python floor (task 192, #46), advisory: below 3.10 say so and delete nothing —
+# an interpreter fault must never cost a session's pointer; the liveness GC
+# reclaims the directory once the session is gone. The launchers' probe.
+if ! python3 -I -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null; then
+    PB_PY_FOUND="$(python3 --version 2>/dev/null | head -1 | tr -cd 'A-Za-z0-9._ -')"
+    echo "playbook: needs python3 >= 3.10 (found: ${PB_PY_FOUND:-no python3 on PATH}) — session cleanup skipped; upgrade python3" >&2
+    exit 0
+fi
+
 # Source shared lib (same directory)
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$HOOK_DIR/gate-echo-lib.sh"

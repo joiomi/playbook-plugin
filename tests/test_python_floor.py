@@ -203,6 +203,44 @@ class ShellEntrypointFloorGuard(unittest.TestCase):
         self.assertIn(FLOOR_MSG, err,
                       f"fail-open was silent about the floor: {err!r}")
 
+    # -- the session hooks (task 192, #46): advisory — say the floor, exit 0, do NOTHING else (start: no
+    #    exported id, no session directory, no wrapper; end: the session directory kept). --
+    def _session_project(self):
+        (self.proj / ".agent" / "tasks").mkdir(parents=True)
+        (self.proj / ".agent" / "sessions" / "pid-1234").mkdir(parents=True)
+        env_file = self.tmp / "claude-env"
+        env_file.write_text("", encoding="utf-8")
+        return env_file
+
+    def _run_session_hook(self, name, payload, env_file):
+        env = dict(os.environ)
+        env.update(PATH=self.oldpath, HOME=str(self.tmp / "home"), CLAUDE_ENV_FILE=str(env_file),
+                   PLAYBOOK_SESSION_ID="pid-1234")
+        env.pop("PLAYBOOK_ROLE", None)
+        (self.tmp / "home").mkdir(exist_ok=True)
+        return subprocess.run([self.bash, str(self.scr / name)], input=payload, cwd=str(self.proj), env=env,
+                              capture_output=True, timeout=60)
+
+    def test_session_start_hook_fails_open_loudly(self):
+        env_file = self._session_project()
+        r = self._run_session_hook("session-start-hook", b'{"hook_event_name":"SessionStart","source":"startup"}',
+                                   env_file)
+        err = r.stderr.decode("utf-8", "replace")
+        self.assertEqual(r.returncode, 0, f"session-start-hook must fail OPEN on < 3.10: {err!r}")
+        self.assertIn(FLOOR_MSG, err, f"fail-open was silent about the floor: {err!r}")
+        self.assertIn(FLOOR_MSG, r.stdout.decode("utf-8", "replace"), "the host is not told (systemMessage)")
+        self.assertEqual(env_file.read_text(encoding="utf-8"), "", "an id was exported below the floor")
+        self.assertFalse((self.proj / ".claude" / "bin").exists(), "wrappers were provisioned below the floor")
+
+    def test_session_end_hook_fails_open_loudly_and_keeps_the_session(self):
+        env_file = self._session_project()
+        r = self._run_session_hook("session-end-hook", b'{"hook_event_name":"SessionEnd","reason":"exit"}', env_file)
+        err = r.stderr.decode("utf-8", "replace")
+        self.assertEqual(r.returncode, 0, f"session-end-hook must fail OPEN on < 3.10: {err!r}")
+        self.assertIn(FLOOR_MSG, err, f"fail-open was silent about the floor: {err!r}")
+        self.assertTrue((self.proj / ".agent" / "sessions" / "pid-1234").is_dir(),
+                        "the session directory was removed below the floor")
+
     # -- negative control: on the REAL (>= 3.10) interpreter the guard does NOT
     #    fire — no floor message, safe command still allowed (exit 0). Proves the
     #    guard is a floor check, not a blanket refusal. --

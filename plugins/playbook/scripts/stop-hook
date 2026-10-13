@@ -176,16 +176,16 @@ if [ ! -f "$STATE_FILE" ]; then
 fi
 
 TASK=$(head -1 "$STATE_FILE" | tr -d '[:space:]')
-# N2: task pointers are numeric — a non-digit value (incl. a glob metachar that
-# would match a real task under the `-path "*/${TASK}-*/*"` find below) is not a
-# valid pointer. Blank it so it reads as "no active task".
+# N2: task pointers are numeric — a non-digit value (incl. a glob metachar, which
+# matched a real task under the `find -path` this hook used before task 192) is not
+# a valid pointer. Blank it so it reads as "no active task".
 case "$TASK" in *[!0-9]*) TASK="" ;; esac
 if [ -z "$TASK" ]; then
     exit 0
 fi
 
 # Find task file
-TASK_FILE=$(find "$AGENT_DIR/tasks" -maxdepth 2 -name "task.md" -path "*/${TASK}-*/*" 2>/dev/null | head -1)
+TASK_FILE=$(task_record_file "$AGENT_DIR" "$TASK")
 
 # Unresolvable pointer (task file not found — a stale/hand-written pointer to a
 # deleted or renamed task dir) => ALLOW the stop. There are no gates to enforce,

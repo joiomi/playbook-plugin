@@ -35,12 +35,29 @@ esac
 # then carry on: a warning, never a block. 1.5.47 (branch `multiplatform`, tag
 # `last-multiplatform`) is the last version tested on macOS and Windows/Git Bash.
 PB_PLATFORM="$(uname -s 2>/dev/null | tr -cd 'A-Za-z0-9._ -')"
+PB_PLATFORM_MSG=""
 if [ "$PB_PLATFORM" != "Linux" ]; then
     PB_PLATFORM_MSG="playbook: unsupported platform (${PB_PLATFORM:-unknown}); Linux only since 2026-10-08 — on Windows/macOS use the \`multiplatform\` branch (1.5.47)"
     echo "$PB_PLATFORM_MSG" >&2
-    # PB_PLATFORM is reduced to [A-Za-z0-9._ -] above, so the message needs no JSON escaping.
+fi
+# The Python floor (task 192, #46), with this hook's advisory polarity: below 3.10
+# the tasks CLI refuses to run, so nothing below has a use — say so on stderr and
+# to the host, then exit 0 having done nothing (no exported id, no wrapper, no
+# sweep). The launchers' one-line probe (scripts/tasks); no python3 lands here too.
+PB_FLOOR_MSG=""
+if ! python3 -I -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null; then
+    PB_PY_FOUND="$(python3 --version 2>/dev/null | head -1 | tr -cd 'A-Za-z0-9._ -')"
+    PB_FLOOR_MSG="playbook: needs python3 >= 3.10 (found: ${PB_PY_FOUND:-no python3 on PATH}) — the tasks CLI refuses to run, and this session start did nothing; upgrade python3"
+    echo "$PB_FLOOR_MSG" >&2
+fi
+# Both messages are built from [A-Za-z0-9._ -] and fixed text, so they need no JSON escaping.
+PB_HOST_MSG="${PB_PLATFORM_MSG}${PB_PLATFORM_MSG:+${PB_FLOOR_MSG:+ — }}${PB_FLOOR_MSG}"
+if [ -n "$PB_HOST_MSG" ]; then
     printf '{"systemMessage":"%s","hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' \
-        "$PB_PLATFORM_MSG" "$PB_PLATFORM_MSG"
+        "$PB_HOST_MSG" "$PB_HOST_MSG"
+fi
+if [ -n "$PB_FLOOR_MSG" ]; then
+    exit 0
 fi
 
 # Source shared lib (same directory)

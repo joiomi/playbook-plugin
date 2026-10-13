@@ -234,6 +234,9 @@ fi
 # journalling; journal_enforcement no-ops on an empty dir.
 PB_JOURNAL_DIR=""
 [ -z "$PB_FRESH_CLONE_LANES" ] && PB_JOURNAL_DIR="$AGENT_DIR"
+# Task 192 (#48): what the session walk read, on an unresolved id (and on every
+# call under PLAYBOOK_WALK_TRACE=1). Log-only; returns 0.
+journal_session_walk "$PB_JOURNAL_DIR" task-gate "$SESSION_ID" "$TOOL_NAME"
 
 # --- Eval mode: skip guards if pretool_guard=off (keep session injection in Guard 2) ---
 if [ -n "$PLAYBOOK_EVAL_CONFIG" ] && [ -f "$PLAYBOOK_EVAL_CONFIG" ]; then
@@ -424,15 +427,15 @@ MSG
     # NNN-*/task.md resolution the state-echo/stop hooks use.
     if [ -f "$STATE_FILE" ]; then
         TASK=$(head -1 "$STATE_FILE" | tr -d '[:space:]')
-        # N2: the pointer feeds a `find -path "*/${TASK}-*/*"` GLOB, so a bare
-        # glob metacharacter (`*`, `?`, `[…]`) in the gate-exempt current_state
-        # matched a real task and self-authorized. Task pointers are numeric —
-        # reject anything non-digit before it reaches the glob.
+        # N2: the pointer fed a `find -path "*/${TASK}-*/*"` GLOB (until task 192),
+        # so a bare glob metacharacter (`*`, `?`, `[…]`) in the gate-exempt
+        # current_state matched a real task and self-authorized. Task pointers are
+        # numeric — reject anything non-digit before it reaches the lookup.
         case "$TASK" in
             ''|*[!0-9]*) ;;   # empty or non-digit → not a valid pointer; fall through to block
             *)
-                RESOLVED=$(find "$AGENT_DIR/tasks" -maxdepth 2 -name "task.md" \
-                    -path "*/${TASK}-*/*" 2>/dev/null | head -1)
+                # Task 192 (#25): matched on the task directory's own name (gate-echo-lib.sh).
+                RESOLVED=$(task_record_file "$AGENT_DIR" "$TASK")
                 if [ -n "$RESOLVED" ]; then
                     # F3 (defense in depth): a pointer that resolves to a DONE
                     # task must not keep the gate open. Normal close clears the

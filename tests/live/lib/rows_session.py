@@ -308,10 +308,11 @@ def lane_resolution(out: Path) -> int:
                and not [f for f in (rootq / "sessions").rglob("*") if not f.is_dir()],
                f"root entries: {sorted(x.name for x in rootq.iterdir())}; files under a root sessions/: "
                f"{[str(f.relative_to(q)) for f in (rootq / 'sessions').rglob('*') if not f.is_dir()]}")
-    # the known bound (parked on task 184, after the 1.6.1 release): the state echo leaves an EMPTY per-session
-    # directory at the root. Recorded as seen, and held to "empty" — anything in it would be a lane's state.
+    # task 192 (#41): the state echo used to leave an EMPTY per-session directory at the root on every call (the
+    # bound task 184 recorded here); it now makes none there
     left = sorted(str(d.relative_to(q)) for d in (rootq / "sessions").glob("*")) if (rootq / "sessions").exists() else []
-    run.note("the known bound — empty per-session directories the state echo left at the root: " + (", ".join(left) or "none"))
+    run.clause("…and no hook leaves a session directory at the root (task 192, #41)", not (rootq / "sessions").exists(),
+               "root sessions/: " + (", ".join(left) or ("present, empty" if (rootq / "sessions").exists() else "absent")))
     run.clause("…and the session is told why (the missing marker is named)", "current_user" in " ".join(tool_results(ev2))
                + json.dumps(hook_responses(ev2, "SessionStart")) + json.dumps(hook_responses(ev2, "PreToolUse")),
                "the marker named in a tool result or a hook response")

@@ -146,9 +146,14 @@ fi
 export PB_FUSED PB_PATH PB_CMD
 
 SESSION_ID="$(resolve_session_id)"
+# Task 192 (#48): what the walk read, journaled on an unresolved id (and on every
+# call under PLAYBOOK_WALK_TRACE=1) — never where this hook may not write.
+if [ "$AGENT_WRITABLE" = true ]; then
+    journal_session_walk "$AGENT_DIR" state-echo "$SESSION_ID" "$TOOL_NAME"
+fi
 # Task 105: unresolved (under the Claude Code background daemon, no
 # PLAYBOOK_SESSION_ID) — no session to echo or count; writing would compose
-# `sessions/` + "" (the sessions dir itself). One line, nothing written.
+# `sessions/` + "" (the sessions dir itself). One line, nothing else written.
 if [ -z "$SESSION_ID" ]; then
     session_unresolved_notice
     exit 0
@@ -173,7 +178,12 @@ fi
 # below. Exported so the sourced lib's assignment is visible here.
 PLAYBOOK_WRITE_FAILED=false
 SESSION_DIR="$AGENT_DIR/sessions/$SESSION_ID"
-mkdir -p "$SESSION_DIR" 2>/dev/null || PLAYBOOK_WRITE_FAILED=true
+# Task 192 (#41): only where this hook may write. On a fresh multi-user clone
+# AGENT_DIR is the ROOT `.agent` and the mkdir left an empty sessions/<id>/ there on
+# every call; task-gate-hook and session-start-hook already skip it in that shape.
+if [ "$AGENT_WRITABLE" = true ]; then
+    mkdir -p "$SESSION_DIR" 2>/dev/null || PLAYBOOK_WRITE_FAILED=true
+fi
 STATE_FILE="$SESSION_DIR/current_state"
 COUNTER_FILE="$SESSION_DIR/counters"
 
@@ -247,7 +257,7 @@ if [ -z "$TASK" ]; then
 fi
 
 # Find task file matching the task number
-TASK_FILE=$(find "$AGENT_DIR/tasks" -maxdepth 2 -name "task.md" -path "*/${TASK}-*/*" 2>/dev/null | head -1)
+TASK_FILE=$(task_record_file "$AGENT_DIR" "$TASK")
 
 if [ -z "$TASK_FILE" ]; then
     CONTEXT="# [${TASK}] — task file not found"
