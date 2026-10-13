@@ -73,11 +73,15 @@ fi
 
 # pb_skip_prompt — leave without logging this prompt (task 193, impl panel r1, sonnet and
 # codex: an exit that skipped the marks let a notification's baseline from before release
-# the user's next turn with its gates open). For the session's own agent the two marks
-# go first — removing a mark only ever takes a release away, whatever the prompt was.
+# the user's next turn with its gates open). For the session's own agent it does what any
+# prompt of the user's does to the marks: a new prompt generation FIRST — so a mark that a
+# stop hook still running publishes afterwards is of the old one and starts nothing (impl
+# panel r2, gemini, sonnet, codex) — then the two marks go. Whatever the prompt was, this
+# only ever takes a release away.
 pb_skip_prompt() {
     local dir="$AGENT_DIR/sessions/$SESSION_ID"
     if [ -n "$SESSION_ID" ] && [ "$PB_OWN_AGENT" = true ] && [ -d "$dir" ] && [ ! -L "$dir" ]; then
+        new_prompt_generation "$dir"
         rm -f "$dir/turn_end" "$dir/notif_start" 2>/dev/null || true
     fi
     exit 0
@@ -246,6 +250,7 @@ drop_notification_marks() {
     [ "$PB_OWN_AGENT" = true ] || return 0
     local dir="$AGENT_DIR/sessions/$SESSION_ID"
     [ -d "$dir" ] || return 0
+    [ ! -L "$dir" ] || return 0     # never through a linked session dir (task 193, impl panel r2, fable)
     new_prompt_generation "$dir"
     rm -f "$dir/turn_end" "$dir/notif_start" 2>/dev/null || true
 }
@@ -285,6 +290,7 @@ note_notification() {
     [ -n "$SESSION_ID" ] || return 0
     local dir="$AGENT_DIR/sessions/$SESSION_ID"
     [ -f "$dir/counters" ] || return 0
+    [ ! -L "$dir" ] || return 0     # never through a linked session dir (task 193)
     local mark ended nonce snapshot tools writes
     mark=$(read_session_mark "$dir/turn_end")
     [ -n "$mark" ] || return 0

@@ -85,6 +85,9 @@ class TheChatHooksSinks(unittest.TestCase):
                 self.assertLess(secs, 4.0, "the reset waited on the counters")
                 self.assertEqual(r.returncode, 0, r.stderr)
                 self.assertEqual(victim.read_text(encoding="utf-8"), "keep\n")
+                if kind == "linked-dir":
+                    # impl panel r2 (fable): no mark or generation either, through the linked session dir
+                    self.assertEqual(sorted(x.name for x in elsewhere.iterdir()), ["counters"])
 
     def test_the_unsure_mark_is_not_written_through_a_link(self):
         p = self.project("unsure-link")

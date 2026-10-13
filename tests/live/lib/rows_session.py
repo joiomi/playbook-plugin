@@ -266,7 +266,7 @@ def stop_close(out: Path) -> int:
                  for n, i in tool_calls(ev3) if n == "Bash")
     # the nested prompt's own hook ran and saw a nested agent: its journal record (task 193, impl panel r1, codex:
     # evidence that the hook ran, not only that the command was issued — the nested model may answer anything,
-    # and on 2026-10-14 one was held by the outer task's gates and did not answer `OK`)
+    # and on 2026-10-13 23:11 one was held by the outer task's gates and did not answer `OK`)
     answered = issued and any(x.get("hook") == "chat-log" and x.get("decision") == "record"
                               and "nested agent" in str(x.get("reason", "")) for x in journal(p3))
     held = (len(reads) >= 2 and reads[-1][2] == reads[0][2] and reads[-1][0] > reads[0][0]

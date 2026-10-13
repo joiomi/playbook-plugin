@@ -337,8 +337,15 @@ fi
 # `counts_unsure`; a `writes` that is behind would read here as a chat reply.
 # The mark goes when a prompt of the user's has reset the counts under the lock.
 # It also holds the notification exception below, which reads `writes`.
+# Any `counts_unsure` entry holds them — a dangling link too, which `-e` reads as absent —
+# and so does a linked session directory: `_counters_mark` refuses to write through a link
+# (task 193), so there an uncounted call could leave no mark (impl panel r2, opus, codex).
 COUNTER_FILE="$SESSION_DIR/counters"
-if [ -f "$COUNTER_FILE" ] && [ "${PB_GREP_RC:-0}" -le 1 ] && [ ! -e "$SESSION_DIR/counts_unsure" ]; then
+PB_COUNTS_SURE=true
+if [ -e "$SESSION_DIR/counts_unsure" ] || [ -L "$SESSION_DIR/counts_unsure" ] || [ -L "$SESSION_DIR" ]; then
+    PB_COUNTS_SURE=false
+fi
+if [ -f "$COUNTER_FILE" ] && [ "${PB_GREP_RC:-0}" -le 1 ] && [ "$PB_COUNTS_SURE" = true ]; then
     # read_counter_int (not read_counter): coerce the .agent/-resident counter
     # bytes to integers before the `[ -eq ]`/`[ -lt ]` tests — parity with the
     # C5 hardening elsewhere (the `[` builtin doesn't command-substitute like

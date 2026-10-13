@@ -726,6 +726,48 @@ class APromptTheChatHookCannotLogStillEndsTheNotificationsTurn(_Session):
         self.assertFalse(self.turn_end.exists())
         self._then_the_users_turn_is_held()
 
+    def _skipped_prompt(self, how):
+        """A user's prompt the chat hook cannot log: a planted link at its lock, or python below the floor."""
+        if how == "sink":
+            victim = Path(self._tmp.name) / "victim"
+            victim.write_text("keep\n", encoding="utf-8")
+            lock = self.project / ".agent" / "chat_log_counter.lock"
+            lock.unlink(missing_ok=True)
+            lock.symlink_to(victim)
+            self.prompt("the user's prompt, skipped")
+            lock.unlink()
+            return
+        from tests._oldpython import make_oldpython_path
+        old = make_oldpython_path(Path(self._tmp.name) / f"oldbin-{id(self)}")
+        env = dict(os.environ, PLAYBOOK_SESSION_ID=SID, HOME=self._tmp.name, PLAYBOOK_PROC_ROOT=str(self.proc_root),
+                   PATH=old)
+        for k in ("BASH_ENV", "PLAYBOOK_ROLE", "PLAYBOOK_EVAL_CONFIG"):
+            env.pop(k, None)
+        r = subprocess.run([bash_or_skip(), str(SCRIPTS / "chat-log-hook")], cwd=self.project, env=env, text=True,
+                           input=json.dumps({"prompt": "the user's prompt, skipped"}), capture_output=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_a_mark_a_running_stop_hook_publishes_after_a_skipped_prompt_starts_nothing(self):
+        # Impl panel r2 (gemini, sonnet, codex): a stop hook that started before the skipped prompt publishes its
+        # mark AFTER it, carrying the generation it started in. The skip begins a new one, so that mark is stale
+        # and a notification does not take it for a start.
+        for how in ("sink", "floor"):
+            with self.subTest(how=how):
+                self.setUp()
+                self.prompt()
+                self.tools("Bash", "Bash")
+                started_in = self.prompt_gen.read_text(encoding="utf-8").split()[1]
+                tools, _writes = self.counts()
+                self._skipped_prompt(how)
+                self.assertNotEqual(self.prompt_gen.read_text(encoding="utf-8").split()[1], started_in,
+                                    "the skipped prompt began no new generation")
+                # the running stop hook's late mark, as it writes it: `<tools> <generation>-<nonce>`
+                self.turn_end.write_text(f"{tools} {started_in}-0123456789ab\n", encoding="utf-8")
+                self.prompt(NOTIFICATIONS[0])
+                self.assertFalse(self.notif_start.exists(), "a stale mark was taken for a notification's start")
+                self.tools(*["Read"] * 6)
+                self.assertEqual(self.stop().returncode, 2, "the user's turn ended with its gates open")
+
     def test_below_the_python_floor(self):
         from tests._oldpython import make_oldpython_path
         self._a_notification_started_a_turn()
@@ -741,6 +783,24 @@ class APromptTheChatHookCannotLogStillEndsTheNotificationsTurn(_Session):
         self.assertFalse(self.notif_start.exists())
         self.assertFalse(self.turn_end.exists())
         self._then_the_users_turn_is_held()
+
+
+class AnUnsureCountThatCannotBeMarkedStillHoldsTheStop(_Session):
+    """Task 193, impl panel r2 (opus, codex — codex ran it): `_counters_mark` refuses a sink that is a link, so with
+    `counts_unsure` a dangling link and the counters lock not given, a tool call went uncounted AND unmarked, and the
+    stop hook (which read only `-e`) took `writes=0` for a chat reply. Any `counts_unsure` entry — a dangling link
+    included — or a linked session directory now holds both low-activity releases."""
+
+    def test_a_dangling_unsure_link_holds_the_stop(self):
+        self.prompt()
+        lock = self.session_dir / "counters.lock"
+        lock.unlink(missing_ok=True)
+        lock.mkdir()                                      # no plain file in the lock's place: not given
+        (self.session_dir / "counts_unsure").unlink(missing_ok=True)
+        (self.session_dir / "counts_unsure").symlink_to(Path(self._tmp.name) / "nowhere")
+        self.tools("Bash")                                # uncounted, and the mark refused
+        self.assertEqual(self.counts(), (0, 0))
+        self.assertEqual(self.stop().returncode, 2, "an uncounted write was let through as a chat reply")
 
 
 class TheStopHookReadsTheGenerationFirst(_Session):
