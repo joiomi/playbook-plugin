@@ -276,8 +276,14 @@ class TheDeletionsHoldTheirDirectory(unittest.TestCase):
         (p / ".agent" / "sessions").symlink_to(v, target_is_directory=True)
         cli = [bash_or_skip(), str(SCRIPTS / "tasks")]
         env = self.env()
-        for args in (["new", "quick", "x"], ["work", "1"], ["work", "done", "--force", "--reason", "test of a close"]):
+        for args in (["new", "quick", "x"], ["work", "1"]):
             subprocess.run(cli + args, cwd=p, env=env, text=True, capture_output=True, timeout=120)
+        # the precondition (impl panel r3, fable): the session's pointer names 001 behind the link, so the close's
+        # removal has something to match — without it this test would pass vacuously
+        self.assertEqual((v / "sweep-sess" / "current_state").read_text(encoding="utf-8").strip(), "001")
+        r = subprocess.run(cli + ["work", "done", "--force", "--reason", "test of a close"], cwd=p, env=env, text=True,
+                           capture_output=True, timeout=120)
+        self.assertIn("Task 001 done.", r.stdout + r.stderr)
         self.assertTrue((v / "other" / "keep.txt").is_file(), "the close removed a directory through the link")
 
     def test_merge_prep_unlinks_nothing_through_a_linked_sessions_directory(self):
@@ -293,6 +299,53 @@ class TheDeletionsHoldTheirDirectory(unittest.TestCase):
                            capture_output=True, timeout=60)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue((v / "other" / "chat_log_offset").is_file(), "merge-prep unlinked through the link")
+
+    def cd_swapping(self, at, path, to):
+        """An env whose bash `cd` (an exported function) swaps `path` for a link to `to` just before the first `cd` to
+        `at` — the window between the containment check and the `cd` that only `_pb_cwd_is` closes (impl panel r3,
+        sonnet: no hook-level test covered it)."""
+        env = self.env()
+        env["PB_SWAP_AT"], env["PB_SWAP_PATH"], env["PB_SWAP_TO"] = str(at), str(path), str(to)
+        env["PB_SWAP_DONE"] = str(self.tmp / "swapped-cd")
+        env["BASH_FUNC_cd%%"] = ('() { if [ ! -e "$PB_SWAP_DONE" ] && [ "$1" = "$PB_SWAP_AT" ]; then '
+                                 ': > "$PB_SWAP_DONE"; mv "$PB_SWAP_PATH" "$PB_SWAP_PATH.orig" && '
+                                 'ln -s "$PB_SWAP_TO" "$PB_SWAP_PATH"; fi; builtin cd "$@"; }')
+        return env
+
+    def test_a_swap_before_the_cd_is_caught_by_the_physical_check(self):
+        for site in ("session-start sweep", "session-end", "temp sweep"):
+            with self.subTest(site=site):
+                base = self.tmp / site.replace(" ", "-")
+                p = base / "p"
+                (p / ".agent" / "tasks").mkdir(parents=True)
+                done = self.tmp / "swapped-cd"
+                if done.exists():
+                    done.unlink()
+                if site == "temp sweep":
+                    v = base / "victim-claude"
+                    (v / "bin").mkdir(parents=True)
+                    keep = v / "bin" / "notes.tmp.1"
+                    keep.write_text("the owner's data\n", encoding="utf-8")
+                    os.utime(keep, (1_000_000_000, 1_000_000_000))
+                    (p / ".claude" / "bin").mkdir(parents=True)
+                    env = self.cd_swapping(p / ".claude" / "bin", p / ".claude", v)
+                    self.hook("session-start-hook", p, env, {"hook_event_name": "SessionStart", "source": "startup"})
+                else:
+                    v = base / "victim"
+                    name = "photos" if site == "session-start sweep" else "sweep-sess"
+                    (v / name).mkdir(parents=True)
+                    keep = v / name / "keep.txt"
+                    keep.write_text("the owner's data\n", encoding="utf-8")
+                    (p / ".agent" / "sessions" / name).mkdir(parents=True)
+                    env = self.cd_swapping(p / ".agent" / "sessions", p / ".agent" / "sessions", v)
+                    if site == "session-start sweep":
+                        self.hook("session-start-hook", p, env, {"hook_event_name": "SessionStart",
+                                                                 "source": "startup"})
+                    else:
+                        self.hook("session-end-hook", p, env, {"hook_event_name": "SessionEnd", "reason": "exit",
+                                                               "session_id": "sweep-sess"})
+                self.assertTrue(done.exists(), "the swap did not run: the test proves nothing")
+                self.assertTrue(keep.is_file(), f"{site}: deleted in the directory a swap before the cd put there")
 
     def test_a_link_inside_a_dead_session_is_removed_as_a_link(self):
         # the descriptor-based removal never follows a link below the directory it removes: a link inside a dead
