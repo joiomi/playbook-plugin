@@ -988,6 +988,9 @@ reset_counters() {
 # Never fails the caller; a mark that cannot be written is simply not there.
 write_session_mark() {
     local file="$1" value="$2"
+    # never renamed onto a link or a directory — `mv` moved the temp file INTO one (task 193, the
+    # single judge after round 2, codex); such a target keeps what it is, and no mark is written
+    _pb_sink_ok "" "$file" || return 0
     local tmp="${file}.tmp.$$"
     if ! { printf '%s\n' "$value" > "$tmp" 2>/dev/null && mv "$tmp" "$file" 2>/dev/null; }; then
         rm -f "$tmp" 2>/dev/null || true
@@ -1029,6 +1032,18 @@ read_prompt_generation() {
     else
         printf 'none'
     fi
+}
+
+# prompt_generation_unreadable SESSION_DIR — true when `prompt_gen` is there but holds no
+# generation (a directory, a link, a FIFO, garbage): `none` then is NOT the generation of a
+# session that has seen no prompt of the user's, and it starts or releases no turn (task 193,
+# the single judge after round 2, codex — a planted `prompt_gen` directory kept it at `none`).
+prompt_generation_unreadable() {
+    if [ -e "$1/prompt_gen" ] || [ -L "$1/prompt_gen" ]; then
+        [ -z "$(read_session_mark "$1/prompt_gen")" ] && return 0
+        [ -L "$1/prompt_gen" ] && return 0
+    fi
+    return 1
 }
 
 # new_prompt_generation SESSION_DIR — begin a new one: twelve characters of a

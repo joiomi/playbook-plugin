@@ -785,6 +785,47 @@ class APromptTheChatHookCannotLogStillEndsTheNotificationsTurn(_Session):
         self._then_the_users_turn_is_held()
 
 
+class AGenerationThatCannotBeReadStartsNoTurn(_Session):
+    """Task 193, the single judge after round 2 (codex, reproduced): with `prompt_gen` a planted directory, a new
+    generation could not be written and `read_prompt_generation` answered `none` — and both the notification's start
+    and the stop's exception took `none` as the current generation: skipped prompt → a late stop mark `<tools>
+    none-<nonce>` → a notification → six Reads → the first stop let through with gates open. An unreadable generation
+    now starts no turn and releases none, and a mark is never renamed onto a link or a directory."""
+
+    def test_a_planted_generation_directory_releases_nothing(self):
+        self.prompt()
+        self.tools("Bash", "Bash")
+        self.prompt_gen.unlink(missing_ok=True)
+        self.prompt_gen.mkdir()                           # planted: the generation cannot be written or read
+        self.prompt("the user's next prompt")
+        tools, _ = self.counts()
+        self.turn_end.write_text(f"{tools} none-0123456789ab\n", encoding="utf-8")   # a stop hook's late mark
+        self.prompt(NOTIFICATIONS[0])
+        self.assertFalse(self.notif_start.exists(), "an unreadable generation was taken for the current one")
+        self.tools(*["Read"] * 6)
+        self.assertEqual(self.stop().returncode, 2, "the user's turn ended with its gates open")
+
+    def test_the_stops_exception_takes_no_unreadable_generation_either(self):
+        # the stop hook's own check, without the chat hook: a mark and a baseline of generation `none` beside a
+        # planted `prompt_gen` directory release nothing (with `prompt_gen` ABSENT the same pair is a session's
+        # first turn, and does — the control of test_a_baseline_counts_only_beside_the_mark_it_was_taken_from)
+        self.counters_file.write_text("tools=9\nwrites=0\n", encoding="utf-8")
+        self.turn_end.write_text("9 none-A\n", encoding="utf-8")
+        self.notif_start.write_text("0 none-A\n", encoding="utf-8")
+        self.prompt_gen.unlink(missing_ok=True)
+        self.prompt_gen.mkdir()
+        self.assertEqual(self.stop().returncode, 2)
+
+    def test_a_mark_is_not_renamed_into_a_linked_directory(self):
+        elsewhere = Path(self._tmp.name) / "elsewhere"
+        elsewhere.mkdir()
+        self.prompt()
+        self.prompt_gen.unlink(missing_ok=True)
+        self.prompt_gen.symlink_to(elsewhere, target_is_directory=True)
+        self.prompt("the user's next prompt")
+        self.assertEqual(list(elsewhere.iterdir()), [], "a mark's temp file landed in the link's target")
+
+
 class AnUnsureCountThatCannotBeMarkedStillHoldsTheStop(_Session):
     """Task 193, impl panel r2 (opus, codex — codex ran it): `_counters_mark` refuses a sink that is a link, so with
     `counts_unsure` a dangling link and the counters lock not given, a tool call went uncounted AND unmarked, and the

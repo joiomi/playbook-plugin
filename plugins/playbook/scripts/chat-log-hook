@@ -298,6 +298,9 @@ note_notification() {
     nonce="${mark#* }"
     # A mark of another prompt generation is not this turn's: the stop hook that
     # wrote it started before the user's last prompt (post-D6 run 2).
+    # A `prompt_gen` that is there but holds no generation starts no turn (task 193, the
+    # single judge after round 2, codex — a planted directory kept it at `none`).
+    if prompt_generation_unreadable "$dir"; then return 0; fi
     [ "${nonce%%-*}" = "$(read_prompt_generation "$dir")" ] || return 0
     snapshot=$(cat "$dir/counters" 2>/dev/null) || return 0
     tools=$(printf '%s\n' "$snapshot" | sed -n 's/^tools=//p' | head -1)

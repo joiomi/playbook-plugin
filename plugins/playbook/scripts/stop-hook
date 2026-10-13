@@ -368,12 +368,14 @@ if [ -f "$COUNTER_FILE" ] && [ "${PB_GREP_RC:-0}" -le 1 ] && [ "$PB_COUNTS_SURE"
     # hook that a user's prompt overtook — releases nothing (post-D6 run 1).
     # And the mark itself must be of the session's CURRENT prompt generation (the
     # head of its nonce): one made before the user's last prompt is not this
-    # turn's, whenever it reached the disk (post-D6 run 2).
+    # turn's, whenever it reached the disk (post-D6 run 2). A `prompt_gen` that is there but
+    # holds no generation (a planted directory, task 193) releases nothing.
     PB_NOTIF_START=$(read_session_mark "$SESSION_DIR/notif_start")
     PB_TURN_END=$(read_session_mark "$SESSION_DIR/turn_end")
     PB_TURN_NONCE="${PB_TURN_END#* }"
     if [ -n "$PB_NOTIF_START" ] && [ -n "$PB_TURN_END" ] \
        && [ "${PB_NOTIF_START#* }" = "$PB_TURN_NONCE" ] \
+       && ! prompt_generation_unreadable "$SESSION_DIR" \
        && [ "${PB_TURN_NONCE%%-*}" = "$(read_prompt_generation "$SESSION_DIR")" ] \
        && [ "$WRITES" -eq "$((10#${PB_NOTIF_START%% *}))" ]; then
         exit 0
