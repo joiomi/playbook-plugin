@@ -5117,6 +5117,17 @@ def _compose_handoff(lines: "list[str]", section: str) -> str:
     archived: "list[str] | None" = None
     ho = _section_span("## Handoff")
     if ho:
+        # An open fence in the note is never moved (task 189, post-D6 single judge, codex):
+        # archived at the top of `## Handoff history` it pairs with a closed fence further
+        # down and hides every section in between, while the fresh `## Handoff` stays live.
+        closed = _iter_fenced_flags(lines, unclosed_is_live=True)
+        strict = _iter_fenced_flags(lines, unclosed_is_live=False)
+        opener = next((i for i in range(ho[0], ho[1]) if strict[i] and not closed[i]), None)
+        if opener is not None:
+            raise ValueError(
+                f"an unclosed code fence inside the current `## Handoff` (opened by "
+                f"{lines[opener].strip()!r}, line {opener + 1}) — archiving it would hide the "
+                "sections after it; close the fence by hand, nothing was changed")
         old = list(lines[ho[0]:ho[1]])
         while old and old[-1].strip() == "":
             old.pop()

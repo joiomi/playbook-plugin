@@ -32,11 +32,11 @@ class UnclosedFenceInsideASection(unittest.TestCase):
         p.write_text(text, encoding="utf-8")
         return p
 
-    def refuses(self, p, write):
+    def refuses(self, p, write, msg="unclosed code fence"):
         before = p.read_bytes()
         with self.assertRaises(ValueError) as cm:
             write(p)
-        self.assertIn("unclosed code fence", str(cm.exception))
+        self.assertIn(msg, str(cm.exception))
         self.assertEqual(p.read_bytes(), before, "the refused write changed the file")
 
     def test_blocking_again_after_a_resume_refuses_instead_of_deleting(self):
@@ -89,7 +89,19 @@ class UnclosedFenceInsideASection(unittest.TestCase):
     def test_a_handoff_below_an_open_fence_elsewhere_refuses(self):
         # the property, not the one shape: the `## Handoff` just written must be LIVE, wherever the open fence is
         p = self._file("# T\n\n## Status\nin_progress\n\n## Notes\n```\nunclosed\n")
-        self.refuses(p, lambda f: core.write_handoff(f, "## Handoff\nnote\n"))
+        self.refuses(p, lambda f: core.write_handoff(f, "## Handoff\nnote\n"), "above the new `## Handoff`")
+
+    def test_an_open_fence_in_the_handoff_is_never_archived(self):
+        # post-D6 single judge (codex, 16:21): the archived note moves UP into `## Handoff history`; its open fence
+        # then pairs with a CLOSED fence further down (here the Notes snippet), the fresh `## Handoff` stays live,
+        # and `## Blocked` / `## Parked` / `## Notes` vanish for every reader — the block writer then replaced the
+        # visible reasons with `handoff` alone. A note holding an open fence is refused before it is moved.
+        p = self._file("# T\n\n## Status\nin_progress\n\n## Handoff history\n\n### Archived handoff\nolder\n\n"
+                       "## Blocked\n> r1\n\n## Parked\n- keep me\n\n## Notes\n```python\nx = 1\n```\n\n"
+                       "## Handoff\nlast note\n```python\nhalf a snippet\n")
+        self.refuses(p, lambda f: core.write_handoff(f, "## Handoff\nnew\n"), "inside the current `## Handoff`")
+        self.refuses(p, lambda f: core.write_handoff_and_block(f, "## Handoff\nnew\n"),
+                     "inside the current `## Handoff`")
 
     def test_a_blocked_section_that_hides_nothing_keeps_working(self):
         # `## Blocked` LAST with an open fence: the replace path deletes the fence with the section, the append path
