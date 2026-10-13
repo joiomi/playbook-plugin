@@ -635,13 +635,17 @@ echo "=== S15: NO surface mints a root lane on a fresh clone (impl-panel I2) ===
 
     run_in_repo "tasks init" "$SCRIPTS/tasks" init
     assert_eq "$S15_RC" "1" "S15 tasks init refuses"
+    assert_contains "$S15_OUT" "echo '<your-username>'" "S15 tasks init explains"   # its own refusal, not just rc 1 (task 187, fable)
 
     run_in_repo "bash init" bash "$SCRIPTS/init"
     assert_eq "$S15_RC" "1" "S15 bash init refuses"
+    assert_contains "$S15_OUT" "echo '<your-username>'" "S15 bash init explains"
 
     run_in_repo "launch-monitor" env PLAYBOOK_PROJECT_DIR="$d" \
         bash "$SCRIPTS/monitor-lib/launch-monitor"
     assert_eq "$S15_RC" "1" "S15 launch-monitor refuses"
+    # launch-monitor exits 1 anyway when no agent is alive (S13): only its refusal TEXT proves the guard ran
+    assert_contains "$S15_OUT" "echo '<your-username>'" "S15 launch-monitor explains"
 
     # Hooks must SKIP, never exit non-zero — aborting would brick the session.
     set +e

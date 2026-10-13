@@ -14,6 +14,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tests._bashcheck import bash_or_skip   # the project's bash policy (impl panel r1, agy)
+
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURE = ROOT / "tests" / "wrapper-multiuser-fixture.sh"
 PLUGIN = ROOT / "plugins" / "playbook"
@@ -25,7 +27,6 @@ def snapshot(home: Path) -> dict:
             for p in sorted(home.rglob("*")) if p.is_file() or p.is_symlink()}
 
 
-@unittest.skipUnless(shutil.which("bash"), "bash is required")
 class FixtureNeverWritesTheCallersHome(unittest.TestCase):
     def test_a_broken_refusal_writes_only_the_fixtures_own_home(self):
         tmp = Path(tempfile.mkdtemp(prefix="pb187-"))
@@ -50,13 +51,17 @@ class FixtureNeverWritesTheCallersHome(unittest.TestCase):
 
         env = {k: v for k, v in os.environ.items() if k not in ("BASH_ENV", "ZDOTDIR", "CLAUDE_CONFIG_DIR")}
         env["HOME"] = str(home)
-        r = subprocess.run(["bash", str(copy / "tests" / FIXTURE.name)], cwd=tmp, env=env,
+        r = subprocess.run([bash_or_skip(), str(copy / "tests" / FIXTURE.name)], cwd=tmp, env=env,
                            capture_output=True, text=True, timeout=600)
         out = r.stdout + r.stderr
-        self.assertIn("FAIL  S15 bash init refuses", out,
-                      "the mutation did not break init's refusal — this control would prove nothing:\n" + out[-1500:])
-        self.assertEqual(snapshot(home), before,
-                         "the fixture wrote the caller's HOME:\n" + out[-1500:])
+        self.assertTrue("FAIL  S15 bash init refuses" in out,
+                        "the mutation did not break init's refusal — this control would prove nothing:\n" + out[-1500:])
+        # S15 must see the broken refusal on every creator that goes through `require_lane_marker`, not only where
+        # the exit code happens to differ: launch-monitor exits 1 anyway when no agent is alive (impl panel r1, fable).
+        # (`tasks init` refuses in Python, outside this mutation: its own "explains" line is checked by the fixture.)
+        for who in ("bash init", "launch-monitor"):
+            self.assertTrue(f"FAIL  S15 {who} explains" in out, f"S15 does not notice {who}'s refusal is gone:\n" + out[-1500:])
+        self.assertEqual(snapshot(home), before, "the fixture wrote the caller's HOME:\n" + out[-1500:])
 
 
 if __name__ == "__main__":
