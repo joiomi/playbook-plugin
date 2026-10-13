@@ -247,16 +247,30 @@ def stop_close(out: Path) -> int:
         "1. Run: .claude/bin/tasks new quick nest-probe \"a probe task\"\n"
         "2. Run: .claude/bin/tasks work 1\n"
         "3. Read src/app.py.\n"
-        "4. Run exactly: cat .agent/sessions/*/counters\n"
+        "4. Run exactly: cat .agent/sessions/*/counters .agent/sessions/*/prompt_gen\n"
         f"5. Run exactly: {nested}\n"
-        "6. Run exactly: cat .agent/sessions/*/counters\n"
+        "6. Run exactly: cat .agent/sessions/*/counters .agent/sessions/*/prompt_gen\n"
         "Then reply DONE.\n"), timeout=600)
-    seen = [int(m.group(1)) for out in tool_results(ev3) for m in [re.search(r"(?m)^tools=(\d+)$", out)] if m]
-    nested_ran = any("--plugin-dir" in i.get("command", "") and "claude -p" in i.get("command", "")
-                     for n, i in tool_calls(ev3) if n == "Bash")
-    run.clause("a nested `claude -p`'s prompt leaves the outer turn's counts as they were (task 193, #38): the "
-               "count read after it is higher than the one read before it", nested_ran and len(seen) >= 2
-               and seen[-1] > seen[0], f"nested call issued: {nested_ran}; `tools` read before/after: {seen}")
+    # impl panel r1 (fable, opus, codex): `tools` alone also rises after a reset (the nested agent's own calls count
+    # into the same file) or after a nested call that failed. A reset of the user's kind also begins a new prompt
+    # generation, so the generation must be the same before and after; the nested call must have answered; `writes`
+    # (the other number of the chat-reply release) must not go down.
+    reads = []
+    for out in tool_results(ev3):
+        tools_m = re.search(r"(?m)^tools=(\d+)$", out)
+        writes_m = re.search(r"(?m)^writes=(\d+)$", out)
+        gen_m = re.search(r"(?m)^0 ([A-Za-z0-9]+)$", out)
+        if tools_m and writes_m and gen_m:
+            reads.append((int(tools_m.group(1)), int(writes_m.group(1)), gen_m.group(1)))
+    issued = any("claude -p" in i.get("command", "") and "--plugin-dir" in i.get("command", "")
+                 for n, i in tool_calls(ev3) if n == "Bash")
+    answered = issued and any(out.strip() == "OK" for out in tool_results(ev3))
+    held = (len(reads) >= 2 and reads[-1][2] == reads[0][2] and reads[-1][0] > reads[0][0]
+            and reads[-1][1] >= reads[0][1])
+    run.clause("a nested `claude -p`'s prompt leaves the outer turn as it was (task 193, #38): the nested call "
+               "answered, and between the reads before and after it the prompt generation is the same, `tools` rose "
+               "and `writes` did not go down", answered and held,
+               f"nested call answered: {answered}; (tools, writes, generation) before/after: {reads}")
     return run.finish()
 
 

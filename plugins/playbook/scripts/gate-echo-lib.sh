@@ -884,6 +884,8 @@ _counters_unsure() {
 
 # _counters_mark FILE — leave the mark beside FILE. Never fails the caller.
 _counters_mark() {
+    # never through a link or into a FIFO (task 193, impl panel r1: `: >` truncated a link's target)
+    _pb_sink_ok "$(_counters_dir "$1")" "$(_counters_dir "$1")/counts_unsure" || return 0
     : > "$(_counters_dir "$1")/counts_unsure" 2>/dev/null || true
 }
 
@@ -936,6 +938,11 @@ write_counter() {
 # file holds when it is let in, and no tool call's count is renamed over the zeros.
 reset_counters() {
     local file="$1"
+    # A counters file that is a link or not a regular one, or a linked session directory,
+    # is not ours (task 193, impl panel r1, fable and sonnet; measured: the reset wrote
+    # `tools=0` through a link, a FIFO held the prompt): no reset — the counts of the turn
+    # before stay, the side that holds a stop.
+    _pb_sink_ok "$(_counters_dir "$file")" "$file" || return 0
     counters_lock "$file"
     if [ "$PLAYBOOK_COUNTERS_UNLOCKED" = true ]; then
         # not reset without the lock either: the counts stay those of the turn

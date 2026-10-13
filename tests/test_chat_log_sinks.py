@@ -59,6 +59,46 @@ class TheChatHooksSinks(unittest.TestCase):
                     self.assertEqual(victim.read_text(encoding="utf-8"), "keep\n")
                     self.assertIn(leaf, r.stderr)
 
+    # impl panel r1 (fable, sonnet): the reset writes the session's own files too — `counters` in place, and
+    # `counts_unsure` when the counters lock is not given
+    def test_the_session_counters_are_not_written_through_a_link_or_into_a_fifo(self):
+        for kind in ("link", "fifo", "linked-dir"):
+            with self.subTest(kind=kind):
+                p = self.project(f"counters-{kind}")
+                sessions = p / ".agent" / "sessions"
+                sessions.mkdir()
+                victim = p.parent / "victim"
+                victim.write_text("keep\n", encoding="utf-8")
+                if kind == "linked-dir":
+                    elsewhere = p.parent / "elsewhere"
+                    elsewhere.mkdir()
+                    (elsewhere / "counters").write_text("keep\n", encoding="utf-8")
+                    (sessions / "chat-sinks").symlink_to(elsewhere, target_is_directory=True)
+                    victim = elsewhere / "counters"
+                else:
+                    (sessions / "chat-sinks").mkdir()
+                    if kind == "link":
+                        (sessions / "chat-sinks" / "counters").symlink_to(victim)
+                    else:
+                        os.mkfifo(sessions / "chat-sinks" / "counters")
+                r, secs = self.hook(p)
+                self.assertLess(secs, 4.0, "the reset waited on the counters")
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertEqual(victim.read_text(encoding="utf-8"), "keep\n")
+
+    def test_the_unsure_mark_is_not_written_through_a_link(self):
+        p = self.project("unsure-link")
+        sess = p / ".agent" / "sessions" / "chat-sinks"
+        sess.mkdir(parents=True)
+        (sess / "counters.lock").mkdir()            # no plain file in the lock's place: the lock is not given
+        victim = p.parent / "victim"
+        victim.write_text("keep\n", encoding="utf-8")
+        (sess / "counts_unsure").symlink_to(victim)
+        r, secs = self.hook(p)
+        self.assertLess(secs, 6.0)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(victim.read_text(encoding="utf-8"), "keep\n")
+
     def test_control_a_plain_project_is_logged(self):
         p = self.project("plain")
         r, _ = self.hook(p)

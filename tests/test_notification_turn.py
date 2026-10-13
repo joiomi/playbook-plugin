@@ -668,6 +668,11 @@ class ANestedAgentsPromptIsNotTheUsers(_Session):
         gen = self.prompt_gen.read_text(encoding="utf-8")
         self.nested_prompt()
         self.assertEqual(self.counts(), (3, 2), "a nested agent's prompt reset the session's turn")
+        # said and journaled (impl panel r1, fable): a misread chain must leave a trace
+        jf = self.project / ".agent" / "journal" / "enforcement.jsonl"
+        rows = [json.loads(x) for x in jf.read_text(encoding="utf-8").splitlines() if x.strip()] if jf.exists() else []
+        self.assertEqual([(x["hook"], x["decision"]) for x in rows if "nested" in x.get("reason", "")],
+                         [("chat-log", "record")], rows)
         self.assertEqual(self.prompt_gen.read_text(encoding="utf-8"), gen, "it began a new generation")
         self.assertEqual(self.turn_end.read_text(encoding="utf-8") if self.turn_end.exists() else None, mark)
         self.assertEqual(self.stop().returncode, 2, "the user's turn was released as a chat reply")
@@ -690,6 +695,52 @@ class ANestedAgentsPromptIsNotTheUsers(_Session):
                 r = self._hook("chat-log-hook", {"prompt": f"the user again, {root.name}"}, proc_root=root)
                 self.assertEqual(r.returncode, 0, r.stderr)
                 self.assertEqual(self.counts(), (0, 0))
+
+
+class APromptTheChatHookCannotLogStillEndsTheNotificationsTurn(_Session):
+    """Task 193, impl panel r1 (sonnet, codex — codex reproduced it): the two early exits task 193 added to the chat
+    hook — below the Python floor, and at a planted link or FIFO — left BEFORE a user's prompt drops the notification
+    marks. A notification's baseline from before then still matched, and the stop hook released the user's next turn
+    with its gates open (codex: tools=8 writes=2, the first stop let through). Both exits now drop the two marks for
+    the session's own agent first: removing a mark only ever takes a release away."""
+
+    def _a_notification_started_a_turn(self):
+        self.a_turn_that_ended()
+        self.prompt(NOTIFICATIONS[0])
+        self.assertTrue(self.notif_start.exists(), "the notification did not start a turn")
+
+    def _then_the_users_turn_is_held(self):
+        self.tools(*["Read"] * 6)
+        self.assertEqual(self.stop().returncode, 2, "the user's turn ended with its gates open")
+
+    def test_at_a_planted_sink(self):
+        self._a_notification_started_a_turn()
+        victim = Path(self._tmp.name) / "victim"
+        victim.write_text("keep\n", encoding="utf-8")
+        lock = self.project / ".agent" / "chat_log_counter.lock"      # the earlier prompts made it: replace it
+        lock.unlink(missing_ok=True)
+        lock.symlink_to(victim)
+        r = self.prompt("the user's next prompt")
+        self.assertIn("chat_log_counter.lock", r.stderr)
+        self.assertFalse(self.notif_start.exists())
+        self.assertFalse(self.turn_end.exists())
+        self._then_the_users_turn_is_held()
+
+    def test_below_the_python_floor(self):
+        from tests._oldpython import make_oldpython_path
+        self._a_notification_started_a_turn()
+        old = make_oldpython_path(Path(self._tmp.name) / "oldbin")
+        env = dict(os.environ, PLAYBOOK_SESSION_ID=SID, HOME=self._tmp.name, PLAYBOOK_PROC_ROOT=str(self.proc_root),
+                   PATH=old)
+        for k in ("BASH_ENV", "PLAYBOOK_ROLE", "PLAYBOOK_EVAL_CONFIG"):
+            env.pop(k, None)
+        r = subprocess.run([bash_or_skip(), str(SCRIPTS / "chat-log-hook")], cwd=self.project, env=env, text=True,
+                           input=json.dumps({"prompt": "the user's next prompt"}), capture_output=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("python3 >= 3.10", r.stderr)
+        self.assertFalse(self.notif_start.exists())
+        self.assertFalse(self.turn_end.exists())
+        self._then_the_users_turn_is_held()
 
 
 class TheStopHookReadsTheGenerationFirst(_Session):
