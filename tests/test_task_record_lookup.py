@@ -165,6 +165,39 @@ class TheCliOrder(_Project):
 
 
 class TheLookupFunction(unittest.TestCase):
+    def lookup(self, agent, task):
+        r = subprocess.run([bash_or_skip(), "-c", 'source "$1"; task_record_file "$2" "$3"', "_",
+                            str(SCRIPTS / "gate-echo-lib.sh"), str(agent), task],
+                           capture_output=True, text=True, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout.strip()
+
+    def test_a_pointer_that_is_not_a_number_finds_nothing(self):
+        # Impl panel r1 (fable): the function itself refuses a glob or an empty number — the N2 self-authorization
+        # must not rest on every caller's own digit check. (The quoted prefix already kept a glob literal; an EMPTY
+        # number matched any directory named `-…`, the case the old function returned.)
+        with tempfile.TemporaryDirectory() as t:
+            agent = Path(t) / "proj" / ".agent"
+            for name in ("001-a", "002-b", "-x"):
+                (agent / "tasks" / name).mkdir(parents=True)
+                (agent / "tasks" / name / "task.md").write_text("x", encoding="utf-8")
+            for bad in ("*", "?", "[0-9]*", "", "00*", "1 2"):
+                with self.subTest(task=bad):
+                    self.assertEqual(self.lookup(agent, bad), "")
+            self.assertEqual(self.lookup(agent, "001"), str(agent / "tasks" / "001-a" / "task.md"))
+
+    def test_a_name_that_extends_another_is_ordered_as_the_cli_orders_it(self):
+        # Impl panel r1 (opus), measured: bash sorted `007-fix-2/task.md` before `007-fix/task.md` (`-` < `/`) while
+        # the CLI's sorted(Path) compares the directory names and takes `007-fix`.
+        with tempfile.TemporaryDirectory() as t:
+            agent = Path(t) / "proj" / ".agent"
+            for name in ("007-fix-2", "007-fix"):
+                (agent / "tasks" / name).mkdir(parents=True)
+                (agent / "tasks" / name / "task.md").write_text("x", encoding="utf-8")
+            cli = sorted((agent / "tasks").glob("*/task.md"))[0]
+            self.assertEqual(cli.parent.name, "007-fix")
+            self.assertEqual(self.lookup(agent, "007"), str(cli))
+
     def test_only_the_directory_name_is_matched(self):
         with tempfile.TemporaryDirectory() as t:
             agent = Path(t) / "007-proj" / ".agent"

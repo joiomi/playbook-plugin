@@ -170,7 +170,12 @@ _agent_walk() {
     # `_agent_walk all` prints EVERY agent pid below any daemon (bottom-up,
     # space-separated; empty when none) instead of the root — for the env-id
     # check (task 106), mirroring core.py _walk_agent_chain.
-    local mode="${1:-}" agents=""
+    # `_agent_walk trace` (task 192, #48) prints the default answer, a TAB, and
+    # what THIS walk read: each hop `<pid> <name> <state>` (a claude* process's
+    # argument COUNT, never its words — a `claude -p` argv holds the prompt), then
+    # `| stop: …` where it stopped. Names are reduced to [A-Za-z0-9._+-?] so the
+    # line stays one parseable journal field (impl panel r1).
+    local mode="${1:-}" agents="" tr="" why=""
     local use_proc=""
     [ -d "${PLAYBOOK_PROC_ROOT:-/proc}/self" ] && use_proc=1
     local pid=$PPID
@@ -188,6 +193,7 @@ _agent_walk() {
             fi
         else
             if [ "$count" -eq 0 ] && ! command -v ps >/dev/null 2>&1; then
+                why="no ps"
                 break   # no ps binary at all (minimal container): legacy fallback
             fi
             info=$(_ps_field "$pid" ppid=,comm=)
@@ -200,35 +206,64 @@ _agent_walk() {
         if [ -z "$ppid" ] || [ -z "$comm" ]; then
             # An ancestor we cannot read, on any hop: it could be the shared
             # daemon — never fall back to a made-up pid. Mirrors core.py.
-            if [ "$mode" = all ]; then echo "${agents# }"; elif [ -n "$last_agent" ]; then echo "$last_agent"; else echo "daemon"; fi
+            if [ "$mode" = trace ]; then
+                if [ -n "$use_proc" ] && [ ! -e "${PLAYBOOK_PROC_ROOT:-/proc}/$pid" ]; then why="$pid gone"; else why="$pid unreadable"; fi
+            fi
+            _pb_walk_out "$mode" "$agents" "${last_agent:-daemon}" "$tr | stop: $why"
             return 0
         fi
         comm="${comm##*/}"  # parameter expansion: strip path; safe for "-zsh" (basename would error)
+        if [ "$mode" = trace ]; then
+            tr="$tr > $pid ${comm//[^A-Za-z0-9._+-]/?}"
+            if [ -n "$use_proc" ]; then tr="$tr ${_PB_STATE//[^A-Za-z]/?}"; fi
+        fi
         case "$comm" in
             claude*)
                 # Task 105: the daemon's processes are `claude.exe` too; they are
                 # shared by every hosted session — stop, never climb past them.
                 # An unreadable argv counts as the boundary (round-1 R1-1).
+                why=""
                 if [ -n "$use_proc" ]; then
-                    if ! _proc_argv "$pid" || _is_daemon_argv "${_PB_ARGV[@]}"; then
-                        if [ "$mode" = all ]; then echo "${agents# }"; elif [ -n "$last_agent" ]; then echo "$last_agent"; else echo "daemon"; fi
-                        return 0
+                    if ! _proc_argv "$pid"; then
+                        why="$pid unreadable argv"
+                    elif _is_daemon_argv "${_PB_ARGV[@]}"; then
+                        why="$pid daemon"
                     fi
+                    if [ "$mode" = trace ]; then tr="$tr argc=${#_PB_ARGV[@]}"; fi
                 else
                     args=$(_ps_field "$pid" args=)
-                    if [ -z "$args" ] || _is_daemon_args "$args"; then
-                        if [ "$mode" = all ]; then echo "${agents# }"; elif [ -n "$last_agent" ]; then echo "$last_agent"; else echo "daemon"; fi
-                        return 0
+                    if [ -z "$args" ]; then
+                        why="$pid unreadable argv"
+                    elif _is_daemon_args "$args"; then
+                        why="$pid daemon"
                     fi
+                fi
+                if [ -n "$why" ]; then
+                    _pb_walk_out "$mode" "$agents" "${last_agent:-daemon}" "$tr | stop: $why"
+                    return 0
                 fi
                 last_agent=$pid; agents="$agents $pid" ;;
             codex|agy|grok|pi) last_agent=$pid; agents="$agents $pid" ;;
         esac
-        [ "$ppid" = "$pid" ] && break
+        if [ "$ppid" = "$pid" ]; then why="$pid own parent"; break; fi
         pid=$ppid
         count=$((count + 1))
     done
-    if [ "$mode" = all ]; then echo "${agents# }"; else echo "$last_agent"; fi
+    if [ -z "$why" ]; then
+        if [ "$count" -ge 20 ]; then why="20 hops"; else why="top $pid"; fi
+    fi
+    _pb_walk_out "$mode" "$agents" "$last_agent" "$tr | stop: $why"
+}
+
+# _pb_walk_out MODE AGENTS VALUE TRACE — how `_agent_walk` answers where it stops:
+# the agent list (`all`), the value and a TAB and what the walk read (`trace`),
+# or the value.
+_pb_walk_out() {
+    case "$1" in
+        all) echo "${2# }" ;;
+        trace) printf '%s\t%s\n' "$3" "${4# > }" ;;
+        *) echo "$3" ;;
+    esac
 }
 
 # find_agent_root_pid
@@ -314,6 +349,11 @@ _env_pid_is_stale() {
 # resolve_session_id() in tasks/core.py — Python and bash converge on the same
 # value when env var is unset.
 resolve_session_id() {
+    # `resolve_session_id trace` (task 192, #48): the same id, a TAB, and what decided it — for the walk, the
+    # hops THIS walk read (`_agent_walk trace`), so a transient failure is journaled as it happened.
+    local _pb_t="${1:-}" _pb_e="${PLAYBOOK_SESSION_ID:-unset}"
+    _pb_e="${_pb_e//[^A-Za-z0-9._-]/?}"
+    _pb_e="ppid=$PPID env=${_pb_e:0:40}"
     if [ -n "${PLAYBOOK_SESSION_ID:-}" ]; then
         # Sanitize (C4): this value becomes a path component in `rm -rf
         # .agent/sessions/<id>` and in every hook. An unsanitized `../tasks`
@@ -339,124 +379,86 @@ resolve_session_id() {
                     local _pb_w _pb_n="${PLAYBOOK_SESSION_ID#pid-}"
                     case "$PLAYBOOK_SESSION_ID" in
                         pid-*) ;;
-                        *) echo "$PLAYBOOK_SESSION_ID"; return 0 ;;      # not a pid id
+                        *) _pb_sid_out "$_pb_t" "$PLAYBOOK_SESSION_ID" "$_pb_e: honored, not a pid id"; return 0 ;;
                     esac
                     case "$_pb_n" in
-                        ""|*[!0-9]*) echo "$PLAYBOOK_SESSION_ID"; return 0 ;;
+                        ""|*[!0-9]*) _pb_sid_out "$_pb_t" "$PLAYBOOK_SESSION_ID" "$_pb_e: honored, not a pid id"; return 0 ;;
                     esac
                     _pb_w=$(_agent_walk all)
                     if [ -z "$_pb_w" ]; then
-                        echo "$PLAYBOOK_SESSION_ID"; return 0
+                        _pb_sid_out "$_pb_t" "$PLAYBOOK_SESSION_ID" "$_pb_e: honored, no agent in the walk"; return 0
                     fi
                     if [ "${#_pb_n}" -le 10 ]; then
                         _pb_n=$((10#$_pb_n))
                         case " $_pb_w " in
-                            *" $_pb_n "*) echo "$PLAYBOOK_SESSION_ID"; return 0 ;;
+                            *" $_pb_n "*) _pb_sid_out "$_pb_t" "$PLAYBOOK_SESSION_ID" "$_pb_e: honored, an agent of the walk"; return 0 ;;
                         esac
                     fi
                 fi ;;
         esac
     fi
-    local agent_pid
-    agent_pid=$(_agent_walk)
-    case "$agent_pid" in
-        daemon) echo "" ;;
-        "") echo "pid-$PPID" ;;
-        *) echo "pid-$agent_pid" ;;
-    esac
-}
-
-# session_walk_trace
-# Task 192 (#48): one line saying what the session walk reads from this hook's parent up, for the journal —
-# `ppid=<P> env=<PLAYBOOK_SESSION_ID or unset> walk: <hop> > <hop> … | stop: <where> | result=<id>`. A hop is
-# `<pid> <name> <state>` (+ `argc=<n>` for a claude* process: its argument COUNT, never its words — a `claude -p`
-# argv holds the prompt); the walk stops at `<pid> gone` (no such process), `<pid> unreadable` (status or argv not
-# readable), `<pid> daemon`, the top, or 20 hops; `result=` is what resolve_session_id makes of this walk with no
-# PLAYBOOK_SESSION_ID (`unresolved` for its ""). It WALKS AGAIN — the resolver's walk ran in a command
-# substitution, its reads are gone — so right after an unresolved id a result that resolves says the miss was
-# transient. Mirrors `_agent_walk` hop for hop (parity with resolve_session_id pinned over every vector of
-# tests/test_session_daemon_identity.py by tests/test_session_walk_capture.py). Never a decision input.
-session_walk_trace() {
-    local root="${PLAYBOOK_PROC_ROOT:-/proc}" use_proc="" pid=$PPID count=0 last_agent="" hops="" stop=""
-    local ppid comm info args hop
-    [ -d "$root/self" ] && use_proc=1
-    while [ -n "$pid" ] && [ "$pid" != "0" ] && [ "$pid" != "1" ] && [ "$count" -lt 20 ]; do
-        if [ -n "$use_proc" ]; then
-            if _proc_status "$pid"; then
-                ppid=$_PB_PPID; comm=$_PB_NAME
-            else
-                ppid=""; comm=""
-            fi
-        else
-            if [ "$count" -eq 0 ] && ! command -v ps >/dev/null 2>&1; then
-                stop="no ps"; break
-            fi
-            info=$(_ps_field "$pid" ppid=,comm=)
-            ppid=$(echo "$info" | awk '{print $1}')
-            comm=$(echo "$info" | awk '{$1=""; sub(/^ +/, ""); print}')
-            case "$ppid" in
-                ""|*[!0-9]*) ppid="" ;;
-            esac
-        fi
-        if [ -z "$ppid" ] || [ -z "$comm" ]; then
-            if [ -n "$use_proc" ] && [ ! -e "$root/$pid" ]; then stop="$pid gone"; else stop="$pid unreadable"; fi
-            [ -n "$last_agent" ] || last_agent=daemon
-            break
-        fi
-        comm="${comm##*/}"
-        hop="$pid $comm${_PB_STATE:+ $_PB_STATE}"
-        [ -n "$use_proc" ] || hop="$pid $comm"
-        case "$comm" in
-            claude*)
-                if [ -n "$use_proc" ]; then
-                    if ! _proc_argv "$pid"; then
-                        hops="$hops > $hop"; stop="$pid unreadable argv"
-                        [ -n "$last_agent" ] || last_agent=daemon
-                        break
-                    fi
-                    hop="$hop argc=${#_PB_ARGV[@]}"
-                    if _is_daemon_argv "${_PB_ARGV[@]}"; then
-                        hops="$hops > $hop"; stop="$pid daemon"
-                        [ -n "$last_agent" ] || last_agent=daemon
-                        break
-                    fi
-                else
-                    args=$(_ps_field "$pid" args=)
-                    if [ -z "$args" ] || _is_daemon_args "$args"; then
-                        hops="$hops > $hop"
-                        if [ -z "$args" ]; then stop="$pid unreadable argv"; else stop="$pid daemon"; fi
-                        [ -n "$last_agent" ] || last_agent=daemon
-                        break
-                    fi
-                fi
-                last_agent=$pid ;;
-            codex|agy|grok|pi) last_agent=$pid ;;
-        esac
-        hops="$hops > $hop"
-        if [ "$ppid" = "$pid" ]; then stop="$pid own parent"; break; fi
-        pid=$ppid
-        count=$((count + 1))
-    done
-    if [ -z "$stop" ]; then
-        if [ "$count" -ge 20 ]; then stop="20 hops"; else stop="top $pid"; fi
+    local agent_pid _pb_read=""
+    if [ "$_pb_t" = trace ]; then
+        agent_pid=$(_agent_walk trace)
+        _pb_read="${agent_pid#*$'\t'}"
+        agent_pid="${agent_pid%%$'\t'*}"
+    else
+        agent_pid=$(_agent_walk)
     fi
-    local result
-    case "$last_agent" in
-        daemon) result="unresolved" ;;
-        "") result="pid-$PPID" ;;
-        *) result="pid-$last_agent" ;;
+    case "$agent_pid" in
+        daemon) _pb_sid_out "$_pb_t" "" "$_pb_e walk: $_pb_read" ;;
+        "") _pb_sid_out "$_pb_t" "pid-$PPID" "$_pb_e walk: $_pb_read" ;;
+        *) _pb_sid_out "$_pb_t" "pid-$agent_pid" "$_pb_e walk: $_pb_read" ;;
     esac
-    local env_id="${PLAYBOOK_SESSION_ID:-unset}"
-    printf 'ppid=%s env=%s walk: %s | stop: %s | result=%s\n' "$PPID" "${env_id:0:40}" "${hops# > }" "$stop" "$result"
 }
 
-# journal_session_walk AGENT_DIR HOOK SESSION_ID [TOOL]
-# Task 192 (#48): journal what the session walk read (`session_walk_trace`) as a `session-walk` record — on an
-# unresolved id always; on every call when PLAYBOOK_WALK_TRACE=1 (the live gauntlet sets it, so a capture window
-# shows the walk ran). Log-only and best-effort like journal_enforcement: never changes a decision, returns 0.
+# _pb_sid_out TRACE? ID WHAT — the resolver's answer: the id, or (`trace`) the id, a TAB and what decided it.
+_pb_sid_out() {
+    if [ "$1" = trace ]; then printf '%s\t%s\n' "$2" "$3"; else echo "$2"; fi
+}
+
+# journal_session_walk AGENT_DIR HOOK SESSION_ID TOOL READ
+# Task 192 (#48): journal a `session-walk` record — `read: <READ>`, what the resolver's own walk read (READ is the
+# part after the TAB of `resolve_session_id trace`) — on an unresolved id, then `again=` what a walk right after
+# resolves; and, when PLAYBOOK_WALK_TRACE=1 (the live gauntlet sets it), on every call. Unresolved records are
+# capped at PB_WALK_DAY_CAP a day (impl panel r1: a hook that always runs unresolved must not grow the journal
+# without bound), counted in `journal/session-walk.count` (`<day> <n>`); the record that reaches the cap says so.
+# Log-only and best-effort like journal_enforcement: every step swallows its error (the gate runs under
+# `set -e`), it never changes a decision, it returns 0.
+PB_WALK_DAY_CAP=100
 journal_session_walk() {
-    if [ -n "$3" ] && [ "${PLAYBOOK_WALK_TRACE:-}" != 1 ]; then return 0; fi
-    journal_enforcement "$1" "$2" session-walk "$(session_walk_trace 2>/dev/null)" "$3" "${4:-}"
+    local all="" reason again cnt day line n
+    if [ "${PLAYBOOK_WALK_TRACE:-}" = 1 ]; then all=1; fi
+    if [ -n "$3" ] && [ -z "$all" ]; then return 0; fi
+    if [ -z "$1" ] || [ ! -d "$1" ]; then return 0; fi
+    reason="read: ${5:-}"
+    if [ -z "$3" ]; then
+        again=$(resolve_session_id 2>/dev/null) || again=""
+        reason="$reason | again=${again:-unresolved}"
+        if [ -z "$all" ]; then
+            cnt="$1/journal/session-walk.count"
+            if [ ! -d "$1/journal" ]; then mkdir -p "$1/journal" 2>/dev/null || return 0; fi
+            day=$(date +%Y-%m-%d 2>/dev/null) || day=""
+            line=""
+            if [ -f "$cnt" ]; then IFS= read -r line < "$cnt" 2>/dev/null || :; fi
+            n=0
+            case "$line" in
+                "$day "*) n="${line#"$day "}" ;;
+            esac
+            case "$n" in
+                ""|*[!0-9]*) n=0 ;;
+            esac
+            if [ "${#n}" -gt 6 ]; then n=0; fi
+            n=$((10#$n))
+            if [ "$n" -ge "$PB_WALK_DAY_CAP" ]; then return 0; fi
+            n=$((n + 1))
+            printf '%s %s\n' "$day" "$n" > "$cnt" 2>/dev/null || :
+            if [ "$n" -eq "$PB_WALK_DAY_CAP" ]; then
+                reason="$reason | the day's cap of $PB_WALK_DAY_CAP records is reached: no more today"
+            fi
+        fi
+    fi
+    journal_enforcement "$1" "$2" session-walk "$reason" "$3" "${4:-}"
     return 0
 }
 
@@ -593,19 +595,24 @@ agent_dir_writable() {
 
 # task_record_file AGENT_DIR TASK
 # The record of task TASK: `AGENT_DIR/tasks/<TASK>-*/task.md`, matched on the task DIRECTORY's own name, the first
-# in byte order (the CLI's `sorted()`), or nothing. Task 192 (#25): the hooks used `find … -path "*/${TASK}-*/*"`,
-# which matches the WHOLE path — in a project directory named `007-proj` every record matched pointer 007, and
-# with no 007 record another task's record still resolved. As `find` did: a linked task directory is not
-# followed, and any entry named task.md counts. Always returns 0 (callers run under `set -e`).
+# directory in byte order of the NAMES (the CLI's `sorted(Path)`, which compares components: `007-fix` before
+# `007-fix-2` — globbing `…/task.md` whole sorted `-` before `/`, impl panel r1), or nothing. TASK must be digits
+# (the callers check it too). Task 192 (#25): the hooks used `find … -path "*/${TASK}-*/*"`, which matches the WHOLE
+# path — in a project directory named `007-proj` every record matched pointer 007, and with no 007 record another
+# task's record still resolved. As `find` did: a linked task directory is not followed, and any entry named task.md
+# counts. Always returns 0 (callers run under `set -e`).
 task_record_file() {
-    local d="$1/tasks" f
+    local d="$1/tasks" e
+    case "$2" in
+        ''|*[!0-9]*) return 0 ;;
+    esac
     [ -d "$d" ] || return 0
     (
         LC_ALL=C
-        for f in "$d/$2"-*/task.md; do
-            [ -e "$f" ] || [ -L "$f" ] || continue
-            [ -L "${f%/task.md}" ] && continue
-            printf '%s\n' "$f"
+        for e in "$d/$2"-*; do
+            [ -L "$e" ] && continue
+            [ -e "$e/task.md" ] || [ -L "$e/task.md" ] || continue
+            printf '%s\n' "$e/task.md"
             break
         done
     )

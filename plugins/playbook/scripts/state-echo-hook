@@ -145,11 +145,15 @@ else
 fi
 export PB_FUSED PB_PATH PB_CMD
 
-SESSION_ID="$(resolve_session_id)"
-# Task 192 (#48): what the walk read, journaled on an unresolved id (and on every
-# call under PLAYBOOK_WALK_TRACE=1) — never where this hook may not write.
+# Task 192 (#48): the id and what the resolver's own walk read, from ONE call (a
+# second walk would not show a transient failure of the first).
+PB_WALK_READ="$(resolve_session_id trace)"
+SESSION_ID="${PB_WALK_READ%%$'\t'*}"
+PB_WALK_READ="${PB_WALK_READ#*$'\t'}"
+# Journaled on an unresolved id (and on every call under PLAYBOOK_WALK_TRACE=1) —
+# never where this hook may not write.
 if [ "$AGENT_WRITABLE" = true ]; then
-    journal_session_walk "$AGENT_DIR" state-echo "$SESSION_ID" "$TOOL_NAME"
+    journal_session_walk "$AGENT_DIR" state-echo "$SESSION_ID" "$TOOL_NAME" "$PB_WALK_READ"
 fi
 # Task 105: unresolved (under the Claude Code background daemon, no
 # PLAYBOOK_SESSION_ID) — no session to echo or count; writing would compose

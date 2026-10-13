@@ -199,7 +199,11 @@ case "$TOOL_NAME" in
 esac
 
 # Session ID: env var → ancestor-scan → pid-$PPID (see gate-echo-lib.sh::resolve_session_id)
-SESSION_ID="$(resolve_session_id)"
+# Task 192 (#48): the id and what the resolver's own walk read, from ONE call (a
+# second walk would not show a transient failure of the first).
+PB_WALK_READ="$(resolve_session_id trace)"
+SESSION_ID="${PB_WALK_READ%%$'\t'*}"
+PB_WALK_READ="${PB_WALK_READ#*$'\t'}"
 
 SESSION_DIR="$AGENT_DIR/sessions/$SESSION_ID"
 STATE_FILE="$SESSION_DIR/current_state"
@@ -236,7 +240,7 @@ PB_JOURNAL_DIR=""
 [ -z "$PB_FRESH_CLONE_LANES" ] && PB_JOURNAL_DIR="$AGENT_DIR"
 # Task 192 (#48): what the session walk read, on an unresolved id (and on every
 # call under PLAYBOOK_WALK_TRACE=1). Log-only; returns 0.
-journal_session_walk "$PB_JOURNAL_DIR" task-gate "$SESSION_ID" "$TOOL_NAME"
+journal_session_walk "$PB_JOURNAL_DIR" task-gate "$SESSION_ID" "$TOOL_NAME" "$PB_WALK_READ"
 
 # --- Eval mode: skip guards if pretool_guard=off (keep session injection in Guard 2) ---
 if [ -n "$PLAYBOOK_EVAL_CONFIG" ] && [ -f "$PLAYBOOK_EVAL_CONFIG" ]; then
