@@ -63,6 +63,14 @@ assert_contains() {
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
+# Every scenario runs under a HOME of its own (task 187, PLAN S14 T1): a product whose refusal is broken — a
+# regression, or a mutation run on purpose — may only ever write this temp HOME, never the caller's ~/.claude
+# (on 2026-10-12 a mutation run went through S15's `init` and replaced the owner's live shell logger).
+# tests/test_fixture_home_isolation.py runs that broken refusal against a sentinel HOME.
+export HOME="$WORK/home"
+mkdir -p "$HOME"
+unset XDG_CONFIG_HOME XDG_DATA_HOME XDG_CACHE_HOME ZDOTDIR CLAUDE_CONFIG_DIR BASH_ENV
+
 # ── Provider binary shims ────────────────────────────────────────────────────
 # Each records the env the wrapper handed it, so we can assert on PROJECT_ROOT
 # without launching a real agent. "launched" in the marker file is the proof the
