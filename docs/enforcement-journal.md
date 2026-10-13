@@ -18,7 +18,8 @@ created inside an already-existing playbook-managed lane — `.agent` itself is
 never minted as a side effect. Both writers skip a sink that is not the lane's own — a linked `journal/`
 directory, a linked `enforcement.jsonl`, or one that is not a regular file (a FIFO would hang the writing hook):
 `pb_journal.py` since task 042, the bash twin since task 192 (it hung the gate on a FIFO and appended through a
-link before, measured).
+link before, measured). The bash twin checks and then writes, so a process that swaps the file for a FIFO
+between the two can still hang it; the Python writer opens non-blocking and without following a link.
 
 Writers live in `scripts/pb_journal.py` (`append`, `append_review`) and its bash
 twin `scripts/gate-echo-lib.sh::journal_enforcement`. Guarantees:
