@@ -1055,6 +1055,17 @@ new_prompt_generation() {
     word="${word//-/}"
     [ "${#word}" -le 12 ] || word="${word: -12}"
     write_session_mark "$1/prompt_gen" "0 $word"
+    # A generation that could not be published is withdrawn (task 193, the single judge
+    # after round 2, run 2, codex: with the rename failed the OLD one stayed readable, and
+    # a stop hook's late mark of it was taken for current). With no `prompt_gen` the
+    # generation reads `none`, which no mark of an older generation matches; an entry
+    # that is not a plain file stays and reads as unreadable (prompt_generation_unreadable).
+    if [ "$(read_session_mark "$1/prompt_gen")" != "0 $word" ]; then
+        if [ -f "$1/prompt_gen" ] || [ -L "$1/prompt_gen" ]; then
+            rm -f "$1/prompt_gen" 2>/dev/null || true
+        fi
+    fi
+    return 0
 }
 
 # new_session_nonce — a value that does not repeat from one mark to the next:

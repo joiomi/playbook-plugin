@@ -816,6 +816,33 @@ class AGenerationThatCannotBeReadStartsNoTurn(_Session):
         self.prompt_gen.mkdir()
         self.assertEqual(self.stop().returncode, 2)
 
+    def test_a_generation_that_could_not_be_written_is_withdrawn(self):
+        # the single judge's run 2 (codex, reproduced with failed writes): the new generation's rename fails, the OLD
+        # one stays readable, and a stop hook's late mark of it was taken for current. Now an unpublished generation
+        # is withdrawn, so that mark is of another generation.
+        self.prompt()
+        self.tools("Bash", "Bash")
+        started_in = self.prompt_gen.read_text(encoding="utf-8").split()[1]
+        tools, _ = self.counts()
+        failmv = Path(self._tmp.name) / "failmv"
+        failmv.mkdir()
+        (failmv / "mv").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        (failmv / "mv").chmod(0o755)
+        env = dict(os.environ, PLAYBOOK_SESSION_ID=SID, HOME=self._tmp.name, PLAYBOOK_PROC_ROOT=str(self.proc_root),
+                   PATH=f"{failmv}{os.pathsep}{os.environ['PATH']}")
+        for k in ("BASH_ENV", "PLAYBOOK_ROLE", "PLAYBOOK_EVAL_CONFIG"):
+            env.pop(k, None)
+        r = subprocess.run([bash_or_skip(), str(SCRIPTS / "chat-log-hook")], cwd=self.project, env=env, text=True,
+                           input=json.dumps({"prompt": "the user's next prompt"}), capture_output=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        gen_now = self.prompt_gen.read_text(encoding="utf-8").split()[1] if self.prompt_gen.exists() else "none"
+        self.assertNotEqual(gen_now, started_in, "the old generation stayed in place")
+        self.turn_end.write_text(f"{tools} {started_in}-0123456789ab\n", encoding="utf-8")   # the late mark
+        self.prompt(NOTIFICATIONS[0])
+        self.assertFalse(self.notif_start.exists(), "a mark of the old generation was taken for a start")
+        self.tools(*["Read"] * 6)
+        self.assertEqual(self.stop().returncode, 2, "the user's turn ended with its gates open")
+
     def test_a_mark_is_not_renamed_into_a_linked_directory(self):
         elsewhere = Path(self._tmp.name) / "elsewhere"
         elsewhere.mkdir()
