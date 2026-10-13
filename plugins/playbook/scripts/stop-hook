@@ -51,9 +51,11 @@ else
     MARKER_INVALID=false
 fi
 
-# The session and the prompt generation FIRST, before the input is read (task 193, PLAN S14 T4, #28): a user's
-# prompt whose hook ran to its end while this hook waited for its input gave the stop of the turn BEFORE that
-# prompt the new generation (the single judge's run 3 of task 173). Now the window is the hook's start-up.
+# The session and the prompt generation before the input is read (task 193, PLAN S14 T4, #28): a user's
+# prompt whose hook ran to its end while this hook read its input (and parsed the valve with python)
+# gave the stop of the turn BEFORE that prompt the new generation (the single judge's run 3 of task
+# 173). Only that wait moved: bash's start, the lib, the project and the session walk still come
+# first, so the window is close to the old one (impl panel r1, opus).
 # Claude Code's Stop and UserPromptSubmit payloads both carry a `prompt_id` (measured by task 193) — the turn
 # identity that would close the window; using it rewrites task 173's marks, so it is the owner's to schedule.
 SESSION_ID="$(resolve_session_id)"
