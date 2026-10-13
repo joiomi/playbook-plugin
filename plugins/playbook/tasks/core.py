@@ -4486,23 +4486,25 @@ def _extract_head_position(task_file: Path) -> str:
     re-walk the file with `line.strip().startswith("- [ ]")`, so an NBSP-led
     marker was a head-position gate but not a counted gate). The one documented
     extra: an empty required field (`- **Field**:`) that sits BEFORE the first
-    live gate is reported instead — `tasks status` may therefore stop earlier
-    than the hook's first gate, never on a different gate."""
+    live OPEN gate is reported instead — `tasks status` may therefore stop earlier
+    than the hook's first gate, never on a different gate. With no open gate the
+    head is `(all gates checked)`, as the hook says: the scan used to run to EOF
+    and a user's lead-in line (`- **Ceva**, în scratch:`) refused the close —
+    no template emits an empty field (task 190, owner ruling (a) of 2026-10-13)."""
     try:
         lines = _physical_lines(task_file.read_text(encoding="utf-8", errors="replace"))
         unchecked, _total, first, first_index = _live_gate_scan(lines)
+        if first_index < 0:
+            return "(all gates checked)"
         fenced = _iter_fenced_flags(lines, unclosed_is_live=True, track_indented_code=False)
-        stop = first_index if first_index >= 0 else len(lines)
-        for i in range(stop):
+        for i in range(first_index):
             if fenced[i]:
                 continue
             stripped = lines[i].rstrip("\r").strip()
             # Empty required field (line ending with : and nothing after)
             if stripped.endswith(":") and stripped.startswith("- **"):
                 return stripped
-        if first_index >= 0:
-            return first
-        return "(all gates checked)"
+        return first
     except Exception:
         return "(error reading)"
 

@@ -263,19 +263,22 @@ def _gate_bounce(task_id: str, task_file, action: str) -> bool:
     return True (the caller should abort). Returns False when all gates are
     checked. The `--force` decision is the caller's — this only reports.
     """
-    from tasks.core import _extract_head_position
-    head = _extract_head_position(task_file)
-    if head == "(all gates checked)":
-        return False
+    from tasks.core import _extract_head_position, _live_gate_scan, _physical_lines
+    # The decision and the count come from THE gate reader (`_live_gate_scan`, what the hooks
+    # read): a line that is not a live gate — a `- **X**…:` lead-in, a fenced `- [ ]` example —
+    # never refuses a close (task 190, owner ruling (a) of 2026-10-13: "0 open gate(s) … Next
+    # open gate: - **Ceva**, în scratch:"). Unreadable → refuse, as before.
     try:
-        open_count = sum(
-            1 for ln in task_file.read_text(encoding="utf-8", errors="replace").splitlines()
-            if ln.strip().startswith("- [ ]")
-        )
+        open_count = _live_gate_scan(_physical_lines(
+            task_file.read_text(encoding="utf-8", errors="replace")))[0]
     except OSError:
-        open_count = 0
+        open_count = None
+    if open_count == 0:
+        return False
+    head = _extract_head_position(task_file)
     print(
-        f"Blocked: task {task_id} has {open_count} open gate(s) — {action} needs them finalized.",
+        f"Blocked: task {task_id} has {'?' if open_count is None else open_count} open gate(s) — "
+        f"{action} needs them finalized.",
         file=sys.stderr,
     )
     print(f"  Next open gate: {head}", file=sys.stderr)

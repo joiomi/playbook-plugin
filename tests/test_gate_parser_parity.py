@@ -135,10 +135,13 @@ CASES = [
      "prose\u0085- [ ] x\n- [x] a\n", False),
     ("U+2028 / VT / FF are NOT line boundaries either",
      "p\u2028- [ ] x\x0b- [ ] y\x0c- [ ] z\n- [x] a\n", False),
-    # Round-2 panel (opus): all gates checked but an empty required field remains —
-    # no GATE is open (all readers agree), the head reports the field (documented extra).
-    ("all checked + empty required field: no open gate, head shows the field",
+    # Round-2 panel (opus) pinned the head on an empty required field when every gate was checked. Task 190 (PLAN
+    # S14 T2c, owner ruling (a) of 2026-10-13): no template emits such a field, the line is user prose, and the close
+    # refused on it ("0 open gate(s)") — with no open gate the head is `(all gates checked)`, as the hook says.
+    ("all checked + empty required field above the gate: no open gate, head says all checked",
      "- **Owner**:\n- [x] a\n", False),
+    ("all checked + a bold lead-in after the gates (the WoW project's task 018): head says all checked",
+     "- [x] a\n\n## Notes\n  - **The rebuild**, in scratch:\n    - x\n", False),
     # Task 072 (070 release panel): every task.md reader strips a leading U+FEFF
     # per line (core._live_gate_scan), so a BOM-prefixed gate is LIVE for the CLI
     # and the Python-backed hook. The no-python grep fallback missed it (pattern
@@ -208,6 +211,8 @@ class GateParserParity(unittest.TestCase):
                     self.assertEqual(head, hook_first, f"head != hook first gate: {label}")
                 if not expect_open:
                     self.assertEqual(hook_first, "", f"no open gate → empty first: {label}")
+                    # task 190: no open gate → the head never stops at a field (the close reads it)
+                    self.assertEqual(head, "(all gates checked)", f"no open gate → head: {label}")
                 # The no-python fallback may only OVER-count (fail closed).
                 self.assertGreaterEqual(grep_fallback_unchecked(tf), hook_count,
                                         f"grep fallback under-counted: {label}")
