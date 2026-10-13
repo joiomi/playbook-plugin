@@ -19,6 +19,15 @@ if [ "${PLAYBOOK_ROLE:-}" = "monitor" ]; then
     exit 0
 fi
 
+# The Python floor (task 193, PLAN S14 T4, #46), advisory: below 3.10 say so and do
+# nothing — no log line, no counter reset (the stop hook then counts the turn from the
+# last reset it saw: stricter, never looser). The launchers' one-line probe.
+if ! python3 -I -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null; then
+    PB_PY_FOUND="$(python3 --version 2>/dev/null | head -1 | tr -cd 'A-Za-z0-9._ -')"
+    echo "playbook: needs python3 >= 3.10 (found: ${PB_PY_FOUND:-no python3 on PATH}) — this prompt was not logged; upgrade python3" >&2
+    exit 0
+fi
+
 # Source shared lib (same directory)
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$HOOK_DIR/gate-echo-lib.sh"
@@ -38,6 +47,20 @@ fi
 
 LOCAL_LOG="$AGENT_DIR/chat_log.md"
 COUNTER_FILE="$AGENT_DIR/chat_log_counter"
+
+# Task 193 (task 192's class, measured on the candidate): with the log a link the
+# user's prompt was appended to the link's target, with the counter a link the
+# target was TRUNCATED, and a FIFO at either held the prompt until the hook was
+# killed — a cloned repository can ship any of them under `.agent/`. Every file this
+# hook writes is checked first; one that is a link or not a regular file is not
+# ours: say so and log nothing (the prompt itself goes through, the counts are not
+# reset — the stricter side for the stop hook). (`_pb_sink_ok`, gate-echo-lib.sh.)
+for _pb_f in "$LOCAL_LOG" "$COUNTER_FILE" "$COUNTER_FILE.lock" "$LOCAL_LOG.new" "$LOCAL_LOG.bak"; do
+    if ! _pb_sink_ok "" "$_pb_f"; then
+        echo "playbook: $_pb_f is a link or not a regular file — the chat log was not written (remove it if it is not yours)" >&2
+        exit 0
+    fi
+done
 
 # Create agent directory if it doesn't exist
 mkdir -p "$AGENT_DIR"
@@ -176,6 +199,18 @@ fi
 # (tagged `no-session`), but no session counters are touched.
 SESSION_ID="$(resolve_session_id)"
 [ -z "$SESSION_ID" ] && session_unresolved_notice
+# Task 193 (PLAN S14 T4, #38): only the session's OWN agent starts a new turn here —
+# the stop hook's rule: one agent in this hook's chain, or none visible. A `claude -p`
+# that the session's agent runs resolves to the same session (the root agent), and
+# its prompt reset the outer turn's counts — measured live, `writes=2 tools=3` → 0 —
+# so a turn that had worked could end as a chat reply with its gates open. Such a
+# prompt is still logged; it resets no count, removes no mark, begins no generation.
+_pb_words() { echo "$#"; }
+PB_OWN_AGENT=true
+if [ -n "$SESSION_ID" ]; then
+    # shellcheck disable=SC2046  # word-splitting is the count
+    if [ "$(_pb_words $(_agent_walk all))" -gt 1 ]; then PB_OWN_AGENT=false; fi
+fi
 # A user's prompt ends whatever a notification began (task 173): it begins a new
 # prompt generation — FIRST, so that a mark published by a stop hook still in
 # flight is already of an older one — and the stop hook's mark and the
@@ -183,6 +218,7 @@ SESSION_ID="$(resolve_session_id)"
 # the hook logs nothing for further down.
 drop_notification_marks() {
     [ -n "$SESSION_ID" ] || return 0
+    [ "$PB_OWN_AGENT" = true ] || return 0
     local dir="$AGENT_DIR/sessions/$SESSION_ID"
     [ -d "$dir" ] || return 0
     new_prompt_generation "$dir"
@@ -190,6 +226,7 @@ drop_notification_marks() {
 }
 reset_session_counters() {
     [ -n "$SESSION_ID" ] || return 0
+    [ "$PB_OWN_AGENT" = true ] || return 0
     local session_dir="$AGENT_DIR/sessions/$SESSION_ID"
     mkdir -p "$session_dir"
     reset_counters "$session_dir/counters"

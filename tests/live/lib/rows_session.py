@@ -11,7 +11,7 @@ import json
 import re
 from pathlib import Path
 
-from common import Run, claude_session, journal, session_project, tempdir, tool_calls, tool_results
+from common import PLUGIN, Run, claude_session, journal, session_project, tempdir, tool_calls, tool_results
 
 RULES = ("This is a test of the Playbook plugin's hooks in a scratch project made for it. Do EXACTLY the numbered "
          "steps, in order, with your tools. If a hook blocks a step, do NOT retry it, do NOT work around it and do NOT "
@@ -237,6 +237,26 @@ def stop_close(out: Path) -> int:
     run.clause("with every gate checked, the first stop is let through", not open_gates and bool(stops2)
                and not blocked(stops2[0]), f"open gate lines left: {len(open_gates)}; "
                f"stops blocked: {[blocked(s) for s in stops2]}")
+    # task 193 (PLAN S14 T4, #38): a `claude -p` the session's agent starts resolves to the SAME session, and its
+    # prompt reset the outer turn's counts (measured before the fix: `writes=2 tools=3`, then 0) — a turn that had
+    # worked could end as a chat reply with its gates open. Its prompt must leave them as they were.
+    p3 = _proj("pb193-nest-")
+    nested = (f"claude -p --plugin-dir {PLUGIN} --model haiku --setting-sources project,local "
+              "--dangerously-skip-permissions 'Reply with the single word OK.'")
+    _r3, ev3 = claude_session(run, "the agent starts a nested claude -p in the middle of its turn", p3, RULES + (
+        "1. Run: .claude/bin/tasks new quick nest-probe \"a probe task\"\n"
+        "2. Run: .claude/bin/tasks work 1\n"
+        "3. Read src/app.py.\n"
+        "4. Run exactly: cat .agent/sessions/*/counters\n"
+        f"5. Run exactly: {nested}\n"
+        "6. Run exactly: cat .agent/sessions/*/counters\n"
+        "Then reply DONE.\n"), timeout=600)
+    seen = [int(m.group(1)) for out in tool_results(ev3) for m in [re.search(r"(?m)^tools=(\d+)$", out)] if m]
+    nested_ran = any("--plugin-dir" in i.get("command", "") and "claude -p" in i.get("command", "")
+                     for n, i in tool_calls(ev3) if n == "Bash")
+    run.clause("a nested `claude -p`'s prompt leaves the outer turn's counts as they were (task 193, #38): the "
+               "count read after it is higher than the one read before it", nested_ran and len(seen) >= 2
+               and seen[-1] > seen[0], f"nested call issued: {nested_ran}; `tools` read before/after: {seen}")
     return run.finish()
 
 

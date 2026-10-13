@@ -640,6 +640,78 @@ class ANestedAgentsStopIsNotTheSessionsTurnEnd(_Session):
         self.assertEqual(self.turn_end.read_text(encoding="utf-8"), before)
 
 
+class ANestedAgentsPromptIsNotTheUsers(_Session):
+    """Task 193 (PLAN S14 T4, #38), measured live on the candidate (evidence of task 193): a `claude -p` that the
+    session's agent starts resolves to the SAME session, and its prompt's hook reset the outer turn's counts
+    (`writes=2 tools=3` → 0) — a turn that had worked could then be released as a chat reply with gates open. The
+    chat hook now applies the stop hook's rule: only the session's OWN agent (one agent in the hook's chain, or none
+    visible) starts a new count; a nested agent's prompt resets nothing, removes no mark, begins no generation."""
+
+    def _single_agent_proc_root(self):
+        root = Path(self._tmp.name) / "proc-one-agent"
+        (root / "self").mkdir(parents=True, exist_ok=True)
+        d = root / str(os.getpid())
+        d.mkdir(exist_ok=True)
+        (d / "status").write_text("Name:\tclaude\nState:\tS (sleeping)\nPPid:\t1\n", encoding="utf-8")
+        (d / "cmdline").write_bytes(b"claude\0")
+        return root
+
+    def nested_prompt(self, text="Reply with the single word OK."):
+        r = self._hook("chat-log-hook", {"prompt": text}, proc_root=self._nested_proc_root())
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_a_nested_agents_prompt_resets_nothing(self):
+        self.a_turn_that_ended()                     # a mark of the last stop, a generation
+        self.prompt()
+        self.tools("Bash", "Bash", "Read")           # the user's turn has worked
+        mark = self.turn_end.read_text(encoding="utf-8") if self.turn_end.exists() else None
+        gen = self.prompt_gen.read_text(encoding="utf-8")
+        self.nested_prompt()
+        self.assertEqual(self.counts(), (3, 2), "a nested agent's prompt reset the session's turn")
+        self.assertEqual(self.prompt_gen.read_text(encoding="utf-8"), gen, "it began a new generation")
+        self.assertEqual(self.turn_end.read_text(encoding="utf-8") if self.turn_end.exists() else None, mark)
+        self.assertEqual(self.stop().returncode, 2, "the user's turn was released as a chat reply")
+
+    def test_control_the_sessions_own_prompt_resets(self):
+        for root in (self.proc_root, self._single_agent_proc_root()):
+            with self.subTest(chain=root.name):
+                self.prompt()
+                self.tools("Bash", "Bash", "Read")
+                r = self._hook("chat-log-hook", {"prompt": f"the user again, {root.name}"}, proc_root=root)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertEqual(self.counts(), (0, 0))
+
+
+class TheStopHookReadsTheGenerationFirst(_Session):
+    """Task 193 (PLAN S14 T4, #28; the single judge's run 3 of task 173): the stop hook read the prompt generation
+    only after it had read its input (`INPUT=$(cat)`), so a user's prompt whose hook ran to its end while the stop
+    hook waited for that input gave the stop of the turn BEFORE it the new generation. It now reads the generation
+    first: the window is the hook's start-up. Held here on its stdin, deterministically."""
+
+    def test_a_prompt_that_lands_while_the_stop_hook_reads_its_input_does_not_lend_it_its_generation(self):
+        import time
+        self.prompt()
+        self.tools("Bash")
+        before = self.prompt_gen.read_text(encoding="utf-8").split()[1]     # the file is a mark: `0 <word>`
+        env = dict(os.environ, PLAYBOOK_SESSION_ID=SID, HOME=self._tmp.name, PLAYBOOK_PROC_ROOT=str(self.proc_root))
+        for k in ("BASH_ENV", "PLAYBOOK_ROLE", "PLAYBOOK_EVAL_CONFIG"):
+            env.pop(k, None)
+        hook = subprocess.Popen([bash_or_skip(), str(SCRIPTS / "stop-hook")], cwd=self.project, env=env, text=True,
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            time.sleep(1.5)                          # the hook is up and waiting for its input
+            self.prompt()                            # the user's next prompt: a new generation
+            after = self.prompt_gen.read_text(encoding="utf-8").split()[1]
+            self.assertNotEqual(after, before)
+            _, err = hook.communicate(json.dumps({"stop_hook_active": True}), timeout=60)
+        finally:
+            if hook.poll() is None:
+                hook.kill()
+        self.assertEqual(hook.returncode, 0, err)
+        mark = self.turn_end.read_text(encoding="utf-8").split()
+        self.assertEqual(mark[1].split("-", 1)[0], before, "the stop's mark carries the generation of the prompt after it")
+
+
 class AStopHookOvertakenByAUsersPrompt(_Session):
     """Post-D6 run 2, the judge's ordering: a stop hook that is still running when the
     user's next prompt arrives publishes its mark AFTER that prompt removed the old

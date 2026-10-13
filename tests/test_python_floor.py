@@ -241,6 +241,45 @@ class ShellEntrypointFloorGuard(unittest.TestCase):
         self.assertTrue((self.proj / ".agent" / "sessions" / "pid-1234").is_dir(),
                         "the session directory was removed below the floor")
 
+    # -- task 193 (#46): the stop hook keeps its polarity below the floor — it says so and counts the gates with
+    #    its python-free, fail-closed path (an open gate blocks, the one-shot valve still ends the re-issued stop);
+    #    the chat hook is advisory — it says so and does nothing (no log line, no counter reset). --
+    def _stop_project(self):
+        task = self.proj / ".agent" / "tasks" / "001-x"
+        task.mkdir(parents=True)
+        (task / "task.md").write_text("# 001\n\n## Status\nin_progress\n\n## Work Plan\n- [ ] open\n", encoding="utf-8")
+        sess = self.proj / ".agent" / "sessions" / "floor-sess"     # not a pid id: honoured as it is
+        sess.mkdir(parents=True)
+        (sess / "current_state").write_text("001\n", encoding="utf-8")
+        (sess / "counters").write_text("tools=9\nwrites=9\n", encoding="utf-8")
+        return sess
+
+    def _hook_old_python(self, name, payload):
+        env = dict(os.environ)
+        env.update(PATH=self.oldpath, HOME=str(self.tmp / "home"), PLAYBOOK_SESSION_ID="floor-sess")
+        env.pop("PLAYBOOK_ROLE", None)
+        (self.tmp / "home").mkdir(exist_ok=True)
+        return subprocess.run([self.bash, str(self.scr / name)], input=payload, cwd=str(self.proj), env=env,
+                              capture_output=True, timeout=60)
+
+    def test_stop_hook_says_the_floor_and_fails_closed(self):
+        self._stop_project()
+        r = self._hook_old_python("stop-hook", b'{"hook_event_name":"Stop","stop_hook_active":false}')
+        err = r.stderr.decode("utf-8", "replace")
+        self.assertIn(FLOOR_MSG, err, f"the stop hook was silent about the floor: {err!r}")
+        self.assertEqual(r.returncode, 2, f"an open gate was let through below the floor: {err!r}")
+        r = self._hook_old_python("stop-hook", b'{"hook_event_name":"Stop","stop_hook_active":true}')
+        self.assertEqual(r.returncode, 0, "the one-shot valve did not end the re-issued stop below the floor")
+
+    def test_chat_log_hook_says_the_floor_and_does_nothing(self):
+        sess = self._stop_project()
+        r = self._hook_old_python("chat-log-hook", b'{"hook_event_name":"UserPromptSubmit","prompt":"hello"}')
+        err = r.stderr.decode("utf-8", "replace")
+        self.assertEqual(r.returncode, 0, err)
+        self.assertIn(FLOOR_MSG, err, f"the chat hook was silent about the floor: {err!r}")
+        self.assertFalse((self.proj / ".agent" / "chat_log.md").exists(), "a log line was written below the floor")
+        self.assertEqual((sess / "counters").read_text(encoding="utf-8"), "tools=9\nwrites=9\n")
+
     # -- negative control: on the REAL (>= 3.10) interpreter the guard does NOT
     #    fire — no floor message, safe command still allowed (exit 0). Proves the
     #    guard is a floor check, not a blanket refusal. --

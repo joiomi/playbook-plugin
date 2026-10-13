@@ -18,21 +18,21 @@ MIN_IMAGE, NEW_IMAGE, OLD_IMAGE = "python:3.10-slim", "python:3.15-slim", "pytho
 # Every shipped script that starts by checking the interpreter (grep `version_info >= (3,10)` in scripts/).
 FLOOR_ENTRY_POINTS = ("tasks", "sandbox", "init", "playbook-codex", "playbook-grok", "playbook-agy", "playbook-pi",
                       "monitor-lib/launch-monitor", "command-guard-hook", "codex-user-prompt-hook",
-                      "codex-stop-hook", "codex-apply-patch-hook", "session-start-hook", "session-end-hook")
+                      "codex-stop-hook", "codex-apply-patch-hook", "session-start-hook", "session-end-hook",
+                      "stop-hook", "chat-log-hook")
 LAUNCHERS = FLOOR_ENTRY_POINTS[:8]           # refuse: exit 1 with the message
 HOOKS = FLOOR_ENTRY_POINTS[8:]               # a hook that cannot run lets the call through, loud (node [5])
 # The Claude hooks.json commands that do NOT check the interpreter (command-guard-hook does, and since task 192
-# session-start-hook and session-end-hook — they are in HOOKS above): under
+# session-start-hook, session-end-hook, and since task 193 stop-hook and chat-log-hook — they are in HOOKS
+# above): under
 # 3.9 they are run on a project with no active task and must answer as on a supported interpreter (impl panel
 # round 2, T6) — that is all this run measures; their other paths under 3.9 are not claimed (parked on task 184).
 # hook -> (event, payload fields, exit status, a word its answer must hold), as measured under 3.10.
 UNCHECKED_CLAUDE_HOOKS = {
-    "chat-log-hook": ("UserPromptSubmit", {"prompt": "hello"}, "0", ""),
     "task-gate-hook": ("PreToolUse", {"tool_name": "Edit", "tool_input": {
         "file_path": "/tmp/hp/src/a.py", "old_string": "x = 1", "new_string": "x = 2"}}, "2", "BLOCKED: No active task"),
     "state-echo-hook": ("PostToolUse", {"tool_name": "Read", "tool_input": {"file_path": "/tmp/hp/src/a.py"},
                                         "tool_response": {}}, "0", "No active task"),
-    "stop-hook": ("Stop", {"stop_hook_active": False}, "0", ""),
 }
 NEXT_VERSIONS = ("3.16", "3.17")             # NEW_IMAGE is the newest only while neither of these images exists
 
