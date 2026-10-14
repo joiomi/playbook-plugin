@@ -23,12 +23,13 @@ import sys
 
 
 def _canon(path: str) -> str:
-    """Lexical form: forward slashes and `..` collapsed."""
-    return posixpath.normpath(path.replace("\\", "/"))
+    """Lexical form: `..` collapsed. A backslash is a character of a name on Linux, never a separator (task 198, #24:
+    rewritten to a slash, `<dir>/proj\\other` read as inside `<dir>/proj`)."""
+    return posixpath.normpath(path)
 
 
 def _is_absolute(token: str) -> bool:
-    return token.replace("\\", "/").startswith("/")
+    return token.startswith("/")
 
 
 def _under(path: str, root: str) -> bool:
@@ -51,8 +52,7 @@ def _existing_ancestor(path: str) -> str | None:
 
 def _physically_inside(path: str, project: str) -> bool:
     proj_real = _canon(os.path.realpath(project))
-    candidates = {os.path.realpath(path),
-                  os.path.realpath(posixpath.normpath(path.replace("\\", "/")))}
+    candidates = {os.path.realpath(path), os.path.realpath(posixpath.normpath(path))}
     for cand in candidates:
         if _under(_canon(cand), proj_real):
             return True

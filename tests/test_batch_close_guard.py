@@ -427,6 +427,142 @@ class AnotherSpellingOfThePathIsStillGuarded(unittest.TestCase):
                 self.assertEqual(r.returncode, want, r.stderr.decode())
 
 
+class AnAliasOfTheRecordIsStillGuarded(unittest.TestCase):
+    """Task 198 (#26, PLAN S14 T5b): Guards 0 and 0.5 matched the record pattern on the path's TEXT, so a path that
+    reaches the record through a link with another name passed both — a link to `.agent`, a file link named
+    `record.md`, a task-directory link with another number. The resolved path is matched too, and the active record is
+    read from it (task 197's plan panel: P8 — in the fused frame, not a shell-out; P9 — identity from the resolved
+    candidate)."""
+
+    def _alias(self, f, kind):
+        base = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, base, True)
+        if kind == "a link to .agent":
+            (base / "alias").symlink_to(f.proj / ".agent")
+            return base / "alias" / "tasks" / "001-thing" / "task.md"
+        if kind == "a file link named record.md":
+            (base / "record.md").symlink_to(f.task_file)
+            return base / "record.md"
+        (f.proj / ".agent" / "tasks" / "009-alias").symlink_to(f.task_file.parent)      # another number
+        return f.proj / ".agent" / "tasks" / "009-alias" / "task.md"
+
+    KINDS = ("a link to .agent", "a file link named record.md", "a task-directory link with another number")
+
+    def test_a_bare_batch_through_an_alias_is_blocked(self):
+        for kind in self.KINDS:
+            with self.subTest(kind=kind):
+                f = ProjectFixture()
+                payload = f.edit_payload(G[:3], [checked(g) for g in G[:3]])
+                payload["tool_input"]["file_path"] = str(self._alias(f, kind))
+                r = f.run_hook(payload)
+                self.assertEqual(r.returncode, 2, r.stderr.decode())
+                self.assertIn(b"outcome note", r.stderr)
+
+    def test_control_an_annotated_batch_through_an_alias_passes(self):
+        for kind in self.KINDS:
+            with self.subTest(kind=kind):
+                f = ProjectFixture()
+                payload = f.edit_payload(G[:3], [checked(g, NOTE) for g in G[:3]])
+                payload["tool_input"]["file_path"] = str(self._alias(f, kind))
+                r = f.run_hook(payload)
+                self.assertEqual(r.returncode, 0, r.stderr.decode())
+
+    def test_the_active_records_own_directory_being_a_link_keeps_it_guarded(self):
+        # my own trap-checklist pass: reading the active record from the RESOLVED path alone would let through the
+        # active record whose own directory is a link to a directory with another number (it was guarded before)
+        f = ProjectFixture()
+        other = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, other, True)
+        target = other / "store" / ".agent" / "tasks" / "005-y"
+        target.parent.mkdir(parents=True)
+        shutil.move(str(f.task_file.parent), str(target))
+        f.task_file.parent.symlink_to(target)
+        payload = f.edit_payload(G[:3], [checked(g) for g in G[:3]])
+        r = f.run_hook(payload)
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+        self.assertIn(b"outcome note", r.stderr)
+
+    def _write_new(self, f, path):
+        return f.run_hook({"hook_event_name": "PreToolUse", "tool_name": "Write",
+                           "tool_input": {"file_path": str(path), "content": "# 002 - by hand\n"}})
+
+    def test_creating_a_task_md_through_a_link_to_the_lane_is_blocked(self):
+        f = ProjectFixture()
+        alias = self._alias(f, "a link to .agent").parent.parent.parent        # <base>/alias
+        new = alias / "tasks" / "002-by-hand" / "task.md"
+        r = self._write_new(f, new)
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+        self.assertIn(b"creates task.md files", r.stderr)
+        self.assertFalse((f.proj / ".agent" / "tasks" / "002-by-hand").exists())
+
+    def test_control_a_link_to_another_projects_lane_is_not_this_guards(self):
+        f = ProjectFixture()
+        other = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, other, True)
+        (other / "elsewhere" / ".agent" / "tasks").mkdir(parents=True)
+        (other / "alias").symlink_to(other / "elsewhere" / ".agent")
+        r = self._write_new(f, other / "alias" / "tasks" / "003-x" / "task.md")
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+
+    def test_the_recovery_path_resolves_the_alias_too(self):
+        # the fused frame answers nothing (a COPY of scripts/): the per-field recovery must resolve the path as well
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        scripts = tmp / "scripts"
+        shutil.copytree(PLUGIN / "scripts", scripts, ignore=shutil.ignore_patterns("__pycache__"))
+        norm = scripts / "hook-payload-normalize.py"
+        src = norm.read_text(encoding="utf-8")
+        marker = 'if __name__ == "__main__":'
+        norm.write_text(src.replace(
+            marker, 'if "--emit-fields" in sys.argv[1:]:\n    sys.exit(0)\n' + marker), encoding="utf-8")
+        f = ProjectFixture()
+        env = dict(os.environ, PLAYBOOK_SESSION_ID=SESSION)
+        env.pop("PLAYBOOK_ROLE", None)
+        alias = self._alias(f, "a link to .agent")
+        for note, want in (("", 2), (NOTE, 0)):
+            with self.subTest(annotated=bool(note)):
+                payload = f.edit_payload(G[:3], [checked(g, note) for g in G[:3]])
+                payload["tool_input"]["file_path"] = str(alias)
+                r = subprocess.run([bash_or_skip(), str(scripts / "task-gate-hook")],
+                                   input=json.dumps(payload).encode(), cwd=f.proj, env=env,
+                                   capture_output=True, timeout=60)
+                self.assertEqual(r.returncode, want, r.stderr.decode())
+
+
+class ABackslashIsACharacterOfAName(unittest.TestCase):
+    """Task 198 (#24, PLAN S14 T5b; task 171's single judge, run 3, measured): `task-dir-target.py` rewrote a backslash
+    to a slash, so a record under the SEPARATE directory `<tmp>/proj\\other` was judged inside `<tmp>/proj` and Guard 0
+    refused it. On Linux a backslash is a character of a name."""
+
+    def _helper(self, mode, path, project):
+        return subprocess.run([sys.executable, "-E", "-s", str(PLUGIN / "scripts" / "task-dir-target.py"), mode],
+                              input=str(path), text=True, capture_output=True, timeout=60,
+                              env=dict(os.environ, PB_PROJECT=str(project)))
+
+    def test_a_sibling_whose_name_holds_a_backslash_is_another_directory(self):
+        base = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, base, True)
+        proj = base / "proj"
+        (proj / ".agent" / "tasks").mkdir(parents=True)
+        sib = base / "proj\\other"
+        (sib / ".agent" / "tasks").mkdir(parents=True)
+        for mode in ("--creates", "--path"):
+            with self.subTest(mode=mode):
+                r = self._helper(mode, sib / ".agent" / "tasks" / "001-a" / "task.md", proj)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                r = self._helper(mode, proj / ".agent" / "tasks" / "001-a" / "task.md", proj)    # control
+                self.assertEqual(r.returncode, 1, r.stderr)
+
+    def test_guard_zero_lets_a_record_of_the_sibling_be_written(self):
+        f = ProjectFixture()
+        sib = f.proj.parent / "proj\\other"
+        (sib / ".agent" / "tasks").mkdir(parents=True)
+        r = f.run_hook({"hook_event_name": "PreToolUse", "tool_name": "Write",
+                        "tool_input": {"file_path": str(sib / ".agent" / "tasks" / "002-x" / "task.md"),
+                                       "content": "# 002\n"}})
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+
+
 class MultiEditIsJudgedLikeAWrite(unittest.TestCase):
     """PLAN S11 item 6 (task 166; from task 158). The batch-close guard looked at `Edit` and
     `Write` only: three gates ticked with no outcome note in ONE `MultiEdit` went through,

@@ -41,8 +41,8 @@ _HERE = Path(__file__).resolve().parent
 SCRIPTS = _HERE.parent / "plugins/playbook/scripts"
 NORMALIZER = SCRIPTS / "hook-payload-normalize.py"
 
-SENTINEL = "pb-fields-v2"
-N_FIELDS = 7  # sentinel, tool_name, path, normpath, command, transcript, payload
+SENTINEL = "pb-fields-v3"
+N_FIELDS = 8  # sentinel, tool_name, path, normpath, command, transcript, payload, resolved path (task 198)
 
 # Every payload shape the three hooks actually meet.
 PAYLOADS = {
@@ -187,6 +187,20 @@ def oracle(value: str) -> str:
 
 
 class WireFormat(unittest.TestCase):
+    def test_the_last_record_is_the_path_with_its_links_followed(self):
+        # task 198 (#26): the guards that decide on a task record match the resolved path too
+        with tempfile.TemporaryDirectory() as tmp:
+            real = Path(tmp) / "proj" / ".agent"
+            (real / "tasks" / "001-x").mkdir(parents=True)
+            (Path(tmp) / "alias").symlink_to(real)
+            path = str(Path(tmp) / "alias" / "tasks" / "001-x" / "task.md")
+            fields = emit_fields(json.dumps({"tool_name": "Edit", "tool_input": {"file_path": path}}))
+            self.assertEqual(fields[2], path)                                   # as written
+            self.assertEqual(fields[7], os.path.realpath(path))
+            self.assertTrue(fields[7].endswith("/proj/.agent/tasks/001-x/task.md"), fields[7])
+            fields = emit_fields(json.dumps({"tool_name": "Bash", "tool_input": {"command": "ls"}}))
+            self.assertEqual(fields[7], "")                                     # no path, no resolved path
+
     def test_every_payload_yields_the_full_record_set(self):
         for name, payload in PAYLOADS.items():
             with self.subTest(payload=name):
@@ -198,13 +212,13 @@ class WireFormat(unittest.TestCase):
     def test_non_json_emits_an_error_sentinel_and_the_raw_payload(self):
         """Malformed JSON is not a successful enforcing-field read."""
         fields = emit_fields("this is not json")
-        self.assertEqual(fields[0], "pb-fields-error-v2")
+        self.assertEqual(fields[0], "pb-fields-error-v3")
         self.assertEqual(fields[1:6], ["", "", "", "", ""])
         self.assertEqual(fields[6], "this is not json")
 
     def test_empty_stdin(self):
         fields = emit_fields("")
-        self.assertEqual(fields[0], "pb-fields-error-v2")
+        self.assertEqual(fields[0], "pb-fields-error-v3")
         self.assertEqual(fields[6], "")
 
 
@@ -458,12 +472,12 @@ class EnforcingGateConsumesTheWholeFrame(unittest.TestCase):
 
     def test_sentinel_only_output_falls_back_and_blocks(self):
         scripts = self._scripts_with_emitter(
-            '        sys.stdout.write("pb-fields-v2\\0")\n')
+            '        sys.stdout.write("pb-fields-v3\\0")\n')
         self.assertEqual(self._gate(self._edit(), scripts).returncode, 2)
 
     def test_mid_record_truncation_falls_back_and_blocks(self):
         scripts = self._scripts_with_emitter(
-            '        sys.stdout.write("pb-fields-v2\\0Edit\\0src/a.py\\0")\n')
+            '        sys.stdout.write("pb-fields-v3\\0Edit\\0src/a.py\\0")\n')
         self.assertEqual(self._gate(self._edit(), scripts).returncode, 2)
 
     def test_missing_python_blocks_instead_of_becoming_empty_truth(self):

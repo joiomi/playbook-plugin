@@ -146,6 +146,7 @@ PB_PAYLOAD=""
 TOOL_NAME=""
 FILE_PATH=""
 NORM_PATH=""
+REAL_PATH=""
 PB_CMD=""
 PB_TRANSCRIPT=""
 PB_FRAME_COMPLETE=true
@@ -157,9 +158,10 @@ PB_FRAME_COMPLETE=true
     IFS= read -r -d '' PB_CMD        || PB_FRAME_COMPLETE=false
     IFS= read -r -d '' PB_TRANSCRIPT || PB_FRAME_COMPLETE=false
     IFS= read -r -d '' PB_PAYLOAD    || PB_FRAME_COMPLETE=false
+    IFS= read -r -d '' REAL_PATH     || PB_FRAME_COMPLETE=false
 } < <(printf '%s' "$INPUT" | python3 -E -s "$HOOK_DIR/hook-payload-normalize.py" --emit-fields 2>/dev/null) || true
 
-if [ "$PB_SENTINEL" = "pb-fields-v2" ] && [ "$PB_FRAME_COMPLETE" = true ]; then
+if [ "$PB_SENTINEL" = "pb-fields-v3" ] && [ "$PB_FRAME_COMPLETE" = true ]; then
     PB_FUSED=1
     INPUT="$PB_PAYLOAD"
 else
@@ -169,7 +171,7 @@ else
     # enforcing hook, and unreadable input cannot authorize work.
     # dialects (grok camelCase + renamed tools → claude snake_case; identity for
     # claude payloads), then read the fields the guards below need up front.
-    TOOL_NAME=""; FILE_PATH=""; NORM_PATH=""; PB_CMD=""
+    TOOL_NAME=""; FILE_PATH=""; NORM_PATH=""; REAL_PATH=""; PB_CMD=""
     NORMALIZED=""
     if NORMALIZED=$(printf '%s' "$INPUT" | python3 -E -s "$HOOK_DIR/hook-payload-normalize.py" 2>/dev/null) \
        && [ -n "$NORMALIZED" ]; then
@@ -187,6 +189,12 @@ else
     fi
     if ! NORM_PATH=$(FP="$FILE_PATH" python3 -I -c \
         "import os,sys; sys.stdout.write(os.path.normpath(os.environ['FP']))" \
+        2>/dev/null); then
+        block_unreadable_payload
+    fi
+    # the resolved path, as the fused frame gives it (task 198, #26)
+    if ! REAL_PATH=$(FP="$FILE_PATH" python3 -I -c \
+        "import os,sys; p=os.environ['FP']; sys.stdout.write(os.path.realpath(p) if p else '')" \
         2>/dev/null); then
         block_unreadable_payload
     fi
@@ -295,6 +303,25 @@ if [ -n "$PLAYBOOK_EVAL_CONFIG" ] && [ -f "$PLAYBOOK_EVAL_CONFIG" ]; then
     fi
 fi
 
+# pb_task_md_path — the path Guards 0 and 0.5 judge as a task record, or "" when it names none: the RESOLVED path
+# when it ends `.agent[/<lane>]/tasks/<dir>/task.md` (links followed — task 198, #26: a link to `.agent` with another
+# name, a file link to a record, a task-directory link with another number passed the pattern on the text; the record
+# and the active task's number are read from it — task 197's plan panel P9), else the normalised path when IT does
+# (task 158).
+pb_task_md_path() {
+    local p
+    for p in "$REAL_PATH" "${NORM_PATH:-$FILE_PATH}"; do
+        if pb_is_task_md "$p"; then
+            printf '%s' "$p"
+            return 0
+        fi
+    done
+    return 0
+}
+pb_is_task_md() {
+    [ -n "$1" ] && printf '%s\n' "$1" | grep -qE '\.agent(/[^/]+)?/tasks/[^/]+/task\.md$'
+}
+
 # --- Guard 0: Write — block creating new task.md files (only tasks new CLI does that) ---
 if [ "$TOOL_NAME" = "Write" ]; then
     if [ -z "$PB_FUSED" ]; then
@@ -305,8 +332,8 @@ if [ "$TOOL_NAME" = "Write" ]; then
     # the NORMALISED path, like Guard 1 (task 158): `…/N-x/./task.md`, a doubled
     # slash or an `x/..` hop name the same file, and the raw spelling matched no
     # pattern here while Guard 1 exempted it as an `.agent/` path.
-    TASK_MD_PATH="${NORM_PATH:-$FILE_PATH}"
-    if echo "$TASK_MD_PATH" | grep -qE '\.agent(/[^/]+)?/tasks/[^/]+/task\.md$'; then
+    TASK_MD_PATH=$(pb_task_md_path)
+    if [ -n "$TASK_MD_PATH" ]; then
         # Task 171 (retro 107 R6): only a task record of THIS project is `tasks new`'s
         # to create — the pattern alone also refused a task.md of another project,
         # where this project's CLI creates nothing. `task-dir-target.py --creates`
@@ -360,8 +387,8 @@ if [ "$TOOL_NAME" = "Edit" ] || [ "$TOOL_NAME" = "Write" ] || [ "$TOOL_NAME" = "
 
     # Check if this targets the active task's task.md — on the normalised path,
     # for the reason given at Guard 0 (task 158).
-    TASK_MD_PATH="${NORM_PATH:-$FILE_PATH}"
-    if [ -f "$STATE_FILE" ] && echo "$TASK_MD_PATH" | grep -qE '\.agent(/[^/]+)?/tasks/[^/]+/task\.md$'; then
+    TASK_MD_PATH=$(pb_task_md_path)
+    if [ -f "$STATE_FILE" ] && [ -n "$TASK_MD_PATH" ]; then
         ACTIVE_TASK=$(head -1 "$STATE_FILE" | tr -d '[:space:]')
         # … and it is THIS project's record (task 171, impl panel r2): another project's
         # `…/tasks/<the same number>-x/task.md` matched too, and a new one born with ticked
@@ -373,12 +400,18 @@ if [ "$TOOL_NAME" = "Edit" ] || [ "$TOOL_NAME" = "Write" ] || [ "$TOOL_NAME" = "
         # matched a project that lives in a directory called `001-project`, and then every
         # task record of it was judged by task 001's batch rule. The pattern above has
         # already made sure the path ends `…/tasks/<dir>/task.md`; this reads `<dir>`.
-        PB_TASK_DIR_NAME="${TASK_MD_PATH%/task.md}"
-        PB_TASK_DIR_NAME="${PB_TASK_DIR_NAME##*/}"
-        case "$PB_TASK_DIR_NAME" in
-            "$ACTIVE_TASK"-*) PB_IS_ACTIVE_RECORD=true ;;
-            *) PB_IS_ACTIVE_RECORD=false ;;
-        esac
+        # Either reading names it (task 198): the resolved path (a link to the record, a task-directory link with
+        # another number — task 197's plan panel P9) or the normalised one (the active record's own directory may be
+        # a link to a directory with another number).
+        PB_IS_ACTIVE_RECORD=false
+        for PB_CAND in "$REAL_PATH" "${NORM_PATH:-$FILE_PATH}"; do
+            pb_is_task_md "$PB_CAND" || continue
+            PB_TASK_DIR_NAME="${PB_CAND%/task.md}"
+            PB_TASK_DIR_NAME="${PB_TASK_DIR_NAME##*/}"
+            case "$PB_TASK_DIR_NAME" in
+                "$ACTIVE_TASK"-*) PB_IS_ACTIVE_RECORD=true ;;
+            esac
+        done
         if [ -n "$ACTIVE_TASK" ] && [ "$PB_IS_ACTIVE_RECORD" = true ] \
            && ! printf '%s' "$FILE_PATH" | PB_PROJECT="$PROJECT_DIR" python3 -E -s "$HOOK_DIR/task-dir-target.py" --path 2>/dev/null; then
             # "The guard could not run" => fail OPEN, loudly (uniform policy).

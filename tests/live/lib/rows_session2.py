@@ -5,6 +5,7 @@ captured payloads, transcripts, hook responses, the remote's refs."""
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -84,12 +85,15 @@ def payload_normalize(out: Path) -> int:
     for f, b, d in caught:
         parts = _normalize(b, "--emit-fields").split(b"\0")
         ti = d.get("tool_input") or {}
-        want = [b"pb-fields-v2", str(d.get("tool_name") or "").encode(), str(ti.get("file_path") or "").encode()]
-        if len(parts) < 7 or parts[:3] != want or parts[4] != str(ti.get("command") or "").encode() \
-                or parts[5] != str(d.get("transcript_path") or "").encode() or parts[6] != b:
+        want = [b"pb-fields-v3", str(d.get("tool_name") or "").encode(), str(ti.get("file_path") or "").encode()]
+        fp = str(ti.get("file_path") or "")
+        if len(parts) < 8 or parts[:3] != want or parts[4] != str(ti.get("command") or "").encode() \
+                or parts[5] != str(d.get("transcript_path") or "").encode() or parts[6] != b \
+                or parts[7] != (os.path.realpath(fp) if fp else "").encode():
             bad.append(f.name)
     run.clause("the fields the gate reads (`--emit-fields`) are the payload's own: tool, path, command, transcript, "
-               "and the payload itself unchanged", bool(caught) and not bad, f"mismatched: {bad}")
+               "the payload itself unchanged, and the path with its links followed (v3, task 198)",
+               bool(caught) and not bad, f"mismatched: {bad}")
     # the control: the comparison sees a change when there is one — a foreign (camelCase) dialect of a captured Edit
     edit = next((d for _f, _b, d in caught if d.get("hook_event_name") == "PreToolUse" and d.get("tool_name") == "Edit"), None)
     if edit:

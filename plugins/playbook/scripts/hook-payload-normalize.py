@@ -150,7 +150,10 @@ def normalize(payload):
 # fused path ran" from "python is missing / the script died", and fall back to
 # the original per-field extraction in that case rather than treating an empty
 # tool_name as fact — a gate that cannot read its payload must not fail open.
-FIELDS_SENTINEL = "pb-fields-v2"
+# v3 (task 198, #26): the path RESOLVED (links followed) comes last, after the
+# payload, so every earlier record keeps its place; a reader of v2's seven
+# records leaves it unread.
+FIELDS_SENTINEL = "pb-fields-v3"
 
 
 def _wire_safe(value: str) -> str:
@@ -185,6 +188,20 @@ def _wire_safe(value: str) -> str:
         "\ufffd" if 0xD800 <= ord(ch) <= 0xDFFF else ch
         for ch in value
     )
+
+
+def resolved(path: str) -> str:
+    """The path with its links followed (`os.path.realpath`; a missing tail kept as written), "" for no path — the
+    guards that decide on a task record's path match this too (task 198, #26: a link to `.agent` with another name, a
+    file link to a record, a task-directory link with another number all passed the pattern on the text; task 197's
+    plan panel P8: computed here, in the fused frame, not by a `realpath` shell-out under `set -e`). On an error, the
+    normalised path."""
+    if not path:
+        return ""
+    try:
+        return os.path.realpath(path)
+    except (OSError, ValueError):
+        return os.path.normpath(path)
 
 
 def extract_fields(payload):
@@ -228,7 +245,7 @@ def extract_fields(payload):
 
 
 def emit_fields(raw):
-    """Write the sentinel, the four fields, then the payload — all NUL-delimited.
+    """Write the sentinel, the five fields, the payload, then the resolved path — all NUL-delimited.
 
     The payload record honours the same byte-identity contract as the plain
     mode: a native claude payload is echoed back exactly as received.
@@ -240,12 +257,12 @@ def emit_fields(raw):
         # sentinel so the enforcing hook takes its recovery path and blocks if
         # the raw payload still cannot be decoded.  State-echo is advisory and
         # simply retains its old best-effort behavior on the same path.
-        out = ["pb-fields-error-v2", "", "", "", "", "", raw]
+        out = ["pb-fields-error-v3", "", "", "", "", "", raw, ""]
     else:
         fields = extract_fields(normalize(payload))
         body = raw if not needs_normalize(payload) else json.dumps(
             normalize(payload), separators=(",", ":"))
-        out = [FIELDS_SENTINEL, *fields, body]
+        out = [FIELDS_SENTINEL, *fields, body, _wire_safe(resolved(fields[1]))]
     sys.stdout.write("\0".join(out) + "\0")
 
 

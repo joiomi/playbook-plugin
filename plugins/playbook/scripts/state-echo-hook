@@ -154,7 +154,7 @@ if [ "$PB_PY_FLOOR" = true ]; then
     IFS= read -r -d '' PB_PAYLOAD    || PB_FRAME_COMPLETE=false
 } < <(printf '%s' "$INPUT" | python3 -E -s "$HOOK_DIR/hook-payload-normalize.py" --emit-fields 2>/dev/null) || true
 
-if [ "$PB_SENTINEL" = "pb-fields-v2" ] && [ "$PB_FRAME_COMPLETE" = true ]; then
+if [ "$PB_SENTINEL" = "pb-fields-v3" ] && [ "$PB_FRAME_COMPLETE" = true ]; then     # its 8th record (the resolved path) is the gate's
     PB_FUSED=1
     INPUT="$PB_PAYLOAD"
 else
