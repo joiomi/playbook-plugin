@@ -1054,11 +1054,39 @@ class SingleQuotesKeepASubstitutionLiteral(unittest.TestCase):
             with self.subTest(cmd=cmd):
                 self.assertEqual(cg.classify_command(cmd)[0], "block", cmd)
 
+    def test_what_impl_panel_round_2_found(self):
+        """Task 199, impl panel r2 — each run in bash with a harmless command in its place: it RUNS. Bash reads a
+        single-quoted string again in arithmetic, subscripts, `let`/`declare`/`printf -v`/`read`/`[[ -v`, a pipe into
+        a shell or an eval of a variable, so single quotes are literal only in the arguments of data commands.
+        Fifteen were refused by 98e9119 and 1.6.1 (regressions of this task's first forms); four were allowed by both,
+        older: `echo $'it\\'s'; …` (the segment splitter knew no `$'…'`), `bash -c 2>&1 '…'`, and `(true)#'⏎…` and
+        `"$(printf "#…")" && …` (the comment reader)."""
+        D = self.D
+        for cmd in (f"echo $(echo $'it\\'s' && {D})", f"echo $'it\\'s'; {D}",          # gemini (Critical)
+                    f"bash -c 2>&1 '{D}'",                                               # gemini
+                    f"a['$({D})']=1", f"echo ${{a['$({D})']}}", f"let 'a[$({D})]=1'",     # fable
+                    f"x=abc; echo ${{x:'$({D})'}}", f"declare 'a[$({D})]=1'", f"[[ -v 'a[$({D})]' ]]",
+                    f"read 'a[$({D})]' <<< x", f"printf -v 'a[$({D})]' x",               # codex
+                    f"echo '$({D})' | bash", f"x='$({D})'; eval \"$x\"",              # mine
+                    f"bash -oc pipefail 'echo $({D})'", f"bash -c - 'echo $({D})'",      # codex
+                    f"cat <<EOF\n$(( '$({D})' ))\nEOF",                                 # codex
+                    f"(true)#'\necho $({D}) 'x'", f"(true)#'\n{D} 'x'",                 # sonnet
+                    f'echo "$(printf "fix #12")" && {D}',                               # opus
+                    f"echo '$({D})' |\nbash", f"bash -c - '{D}'", f"bash -oc pipefail '{D}'",   # (the mutation run)
+                    f"bash -ce '{D}'"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(cg.classify_command(cmd)[0], "block", cmd)
+
     def test_controls_of_round_1(self):
         D = self.D
         for cmd in ("echo $$", f"echo $$ '$({D})'", "echo \"a # b\" ok", "bash -c 'echo hi'",
-                    f"bash -ce 'echo hi' '$({D})'",           # the words after the script are its arguments
-                    f"git commit -m \"$(cat <<'EOF'\nDon't run `{D}`\nEOF\n)\""):   # the commit-message shape
+                    f"git commit -m \"$(cat <<'EOF'\nDon't run `{D}`\nEOF\n)\"",   # the commit-message shape
+                    f"echo 'a `{D}`' | tail -1", f"printf '%s' '$({D})' | grep x",   # data filters downstream
+                    f"echo \"$(printf 'fix #12')\" ok",
+                    # a LOGICAL line: the eval string's table rows end with `|`, its body is python's (the corpus)
+                    "eval 'python3 - <<'\"'\"'PY'\"'\"'\nT = \"\"\"| a |\n| `" + D + "` |\"\"\"\nPY'",
+                    f"grep 'x <<EOF' n.md\necho 'y `{D}`'", f"grep $'it\\'s <<EOF' n.md\necho 'y `{D}`'",   # `<<`
+                    f"grep \"x <<EOF\" n.md\necho 'y `{D}`'"):                                         # in quotes
             with self.subTest(cmd=cmd):
                 self.assertEqual(cg.classify_command(cmd)[0], "allow", cmd)
 
@@ -1104,7 +1132,16 @@ class ANonShellQuotedHeredocBodyIsData(unittest.TestCase):
                        "hash -p /bin/bash cat\ncat <<'EOF'", "PATH=/tmp/x:$PATH python3 - <<'EOF'",  # renamed
                        "cat > s.sh <<'EOF'; bash s.sh", "tee f <<'EOF' >/dev/null && sh f",   # it runs what it wrote
                        "cat > /tmp/s.sh <<'EOF' && chmod +x /tmp/s.sh && /tmp/s.sh", "sh s.sh & cat > s.sh <<'EOF'",
-                       "F=s.sh; cat > s.sh <<'EOF'; bash \"$F\""):            # a shell, the file named by a variable
+                       "F=s.sh; cat > s.sh <<'EOF'; bash \"$F\"",            # a shell, the file named by a variable
+                       "shopt -s expand_aliases; command alias cat=bash\ncat <<'EOF'",         # impl panel r2:
+                       "shopt -s expand_aliases\nX=1 alias cat=bash\ncat <<'EOF'",             # renamed through a
+                       "shopt -s expand_aliases; eval 'alias cat=bash'\ncat <<'EOF'",          # wrapper, eval or a
+                       "eval 'python3() { bash; }'\npython3 - <<'EOF'",                         # sourced file
+                       "command hash -p /bin/bash python3\npython3 - <<'EOF'", ". ./env.sh\npython3 - <<'EOF'",
+                       "cat <<'EOF' > Makefile; make", "cat > /dev/shm/s.sh <<'EOF'; bash /dev/shm/s.sh",
+                       "cat <<'EOF' 1<>s.sh; bash s.sh", "python3 - <<'EOF'; bash out.sh",   # what the program wrote
+                       "cat <<'EOF' 1<>Makefile; make", "cat > /dev/shm/Makefile <<'EOF'; make -f /dev/shm/Makefile",
+                       "tee mk <<'EOF' >/dev/null; make -f mk"):
             with self.subTest(opener=opener):
                 self.assertEqual(cg.classify_command(opener + body)[1], "pipe-to-shell", opener)
 
@@ -1135,7 +1172,8 @@ class ANonShellQuotedHeredocBodyIsData(unittest.TestCase):
                     f"git commit -m \"$(bash <<'EOF'\n{pipe}\nEOF\n)\"",
                     f"V=$(cat <<'EOF'\n{pipe}\nEOF\n)\neval \"$V\"",
                     f"cat \"<<'X'\"\n{{ cat <<'Y'\n{pipe}\nY\n}} | bash\nX",          # a heredoc operator in quotes
-                    f"cat <<A; python3 - <<'EOF'\n$({pipe})\nA\nprint(1)\nEOF"):     # a second, unquoted body
+                    f"cat <<A; python3 - <<'EOF'\n$({pipe})\nA\nprint(1)\nEOF",      # a second, unquoted body
+                    f"echo \"\ncat <<'EOF'\n\" ; {pipe}\nEOF"):      # an opener inside a string is none (opus, r2)
             with self.subTest(cmd=cmd):
                 self.assertEqual(cg.classify_command(cmd)[1], "pipe-to-shell", cmd)
 
@@ -1147,6 +1185,8 @@ class ANonShellQuotedHeredocBodyIsData(unittest.TestCase):
                            (f"{_PSQL} <<'SQL'\n{_DROP};\nSQL", None),                 # a DB client runs its body
                            (f"sudo -u postgres {_PSQL} <<'SQL'\n{_DROP};\nSQL", None),
                            (f"cat > q.sql <<'SQL'; {_PSQL} -f q.sql\n{_DROP};\nSQL", None),   # fable
+                           (f"cat > q.sql <<'SQL'; {_PSQL} -fq.sql\n{_DROP};\nSQL", None),    # codex, r2
+                           (f"cat > q.sql <<'SQL'; Q=q.sql; {_PSQL} -f \"$Q\"\n{_DROP};\nSQL", None),
                            ("bash <<'EOF'\nfly deploy --now\nEOF", [r"fly deploy\b"])):
             with self.subTest(cmd=cmd):
                 self.assertEqual(cg.classify_command(cmd, extra)[0], "block", cmd)

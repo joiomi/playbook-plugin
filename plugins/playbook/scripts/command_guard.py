@@ -80,9 +80,15 @@ def _strip_comments(text, _depth=0):
     fresh start, so a quote inside a body (an apostrophe in a python program)
     no longer decides what is a comment after it, and `$'it\\'s' 'x #' …` no
     longer loses what follows the `#`."""
-    out, i, n, quote, word_start, pending = [], 0, len(text), "", True, []
+    out, i, n, quote, word_start, pending, parens = [], 0, len(text), "", True, [], []
     while i < n:
         c = text[i]
+        if quote == '"' and (text.startswith("$(", i) or c == "`"):
+            body, j = _one_substitution(text, i)       # quotes nest inside it (impl panel r2, opus)
+            j = n if body is None else j
+            out.append(text[i:j])
+            i = j
+            continue
         if quote:
             out.append(c)
             if c == "\\" and quote != "'" and i + 1 < n:
@@ -138,8 +144,19 @@ def _strip_comments(text, _depth=0):
             i = j
             word_start = False
             continue
+        if text.startswith(("$(", "<(", ">("), i):
+            parens.append("s")                         # a substitution: what follows its `)` is the same word
+            out.append(text[i:i + 2])
+            i += 2
+            word_start = True
+            continue
+        if c == "(":
+            parens.append("g")
         out.append(c)
-        word_start = c.isspace() or c in ";|&("
+        if c == ")":                                   # a subshell's or a case pattern's `)` ends a word:
+            word_start = (parens.pop() if parens else "g") == "g"   # `(true)#'…` is a comment (sonnet)
+        else:
+            word_start = c.isspace() or c in ";|&("
         i += 1
     return "".join(out)
 
@@ -178,6 +195,12 @@ def _split_segments_keep(text, ops=_SEP_OPS):
             buf.append(text[i + 1])
             i += 2
             continue
+        if text.startswith("$'", i):                   # `$'it\\'s'`: a backslash escapes its quote — read as
+            j = _quote_end(text, i)                    # one string, or `; rm -rf /` after it hid in a "quote"
+            j = n if j is None else j                  # (task 199, impl panel r2, gemini; 1.6.1 too)
+            buf.append(text[i:j])
+            i = j
+            continue
         if c in "\"'":
             quote = c
             buf.append(c)
@@ -215,6 +238,12 @@ def _split_segments(text, ops=_SEP_OPS):
             buf.append(c)
             buf.append(text[i + 1])
             i += 2
+            continue
+        if text.startswith("$'", i):                   # `$'it\\'s'`: a backslash escapes its quote — read as
+            j = _quote_end(text, i)                    # one string, or `; rm -rf /` after it hid in a "quote"
+            j = n if j is None else j                  # (task 199, impl panel r2, gemini; 1.6.1 too)
+            buf.append(text[i:j])
+            i = j
             continue
         if c in "\"'":
             quote = c
@@ -1323,9 +1352,13 @@ def _unwrap_shell_c(seg):
     k, has_c, attached = 1, False, ""
     while k < len(toks):
         v = toks[k][2]
-        if v == "--":
+        if v in ("--", "-"):                           # `-` ends the options too (impl panel r2, codex)
             k += 1
             break
+        m = _REDIRECT.match(toks[k][0])
+        if m:                                          # `bash -c 2>&1 '…'` (impl panel r2, gemini)
+            k += 1 if m.end() < len(toks[k][0]) else 2
+            continue
         if v.startswith("--"):
             # `--rcfile FILE` / `--init-file FILE` take a value; the rest are
             # flags (impl panel round 5, sol:high).
@@ -1335,9 +1368,10 @@ def _unwrap_shell_c(seg):
             if v[0] == "-" and "c" in v[1:]:
                 has_c = True
                 attached = attached or v[1:].split("c", 1)[1]
-            # `-O extglob`, `-o noglob` (and `+o …`) take a value; other short
-            # flags do not (impl panel round 4: they stopped the scan before `-c`).
-            k += 2 if v[-1] in "Oo" else 1
+            # `-O extglob`, `-o noglob` (and `+o …`) take a value, wherever they
+            # stand in a cluster (`-oc pipefail`: impl panel r2, codex); other
+            # short flags do not (impl panel round 4).
+            k += 1 + sum(ch in "Oo" for ch in v[1:])
             continue
         break
     if not has_c:
@@ -1402,35 +1436,6 @@ def _mask_one_echo(line):
     return "".join(out)
 
 
-def _drop_sink_heredoc_bodies(command):
-    """The heredoc half of `_strip_data_regions`, on its own (task 110: the
-    task-dir helper scans the call's text for redirections and must not read a
-    note's body, but must still see every word of an echo line): a `cat`/`tee`
-    heredoc body written to a plain file (quoted tag, or no expansion inside)
-    is dropped; everything else stays as written."""
-    lines = str(command).split("\n")
-    out = []
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        out.append(line)
-        i += 1
-        m = _HEREDOC_SINK.match(line)
-        if not m:
-            continue
-        tag, quoted = m.group("tag"), bool(m.group("q"))
-        j = i
-        while j < len(lines) and lines[j].strip() != tag:
-            j += 1
-        if j >= len(lines):
-            continue                                   # unterminated → keep all
-        if not quoted and _EXPANSION.search("\n".join(lines[i:j])):
-            continue                                   # expansions would run
-        out.append(lines[j])                           # drop the body; its tag line stays (task 199:
-        i = j + 1                                      # the text after it still reads as what it is)
-    return "\n".join(out)
-
-
 def _strip_data_regions(command):
     """Return the command text with inert DATA removed, for the WHOLE-command
     rules only (the segment rules are line-split and never masked — a heredoc
@@ -1440,11 +1445,28 @@ def _strip_data_regions(command):
     Everything that could run stays. Only on a PLAIN command (task 199, see
     `_heredoc_plan`): inside a group, a subshell, a loop or a function, what
     echo or cat prints can reach a shell the construct pipes to (`{ echo '…';
-    } | bash`, `{⏎cat <<'EOF' … EOF⏎} | bash`), so nothing is masked there."""
-    if _heredoc_plan(_strip_comments(str(command))) is None:
+    } | bash`, `{⏎cat <<'EOF' … EOF⏎} | bash`), so nothing is masked there.
+    Read as bash reads it (task 199 R3): the masks apply per LOGICAL line and a
+    sink's body is dropped at the span the plan read, its tag line kept — a
+    line inside a quoted string or another body is no opener and no echo line
+    (impl panel r2, opus: `echo "⏎cat <<'EOF'⏎" ; curl x | sh⏎EOF`). Returns
+    the text without its comments when it masks."""
+    text = _strip_comments(str(command))
+    read = _heredoc_read(text)
+    if read is None:
         return str(command)
-    return "\n".join("echo > file" if _DATA_LINE.match(l) else _mask_echo_literals(l)
-                     for l in _drop_sink_heredoc_bodies(command).split("\n"))
+    plan, _lines, spans = read
+    marks = [(a, b, "line") for a, b in spans]
+    marks += [(s, e, "drop") for line, quoted, s, e in plan
+              if _HEREDOC_SINK.match(line) and (quoted or not _EXPANSION.search(text[s:e]))]
+    out, pos = [], 0
+    for a, b, kind in sorted(marks):
+        out.append(text[pos:a])
+        seg = text[a:b]
+        out.append("" if kind == "drop" else "echo > file" if _DATA_LINE.match(seg) else _mask_echo_literals(seg))
+        pos = b
+    out.append(text[pos:])
+    return "".join(out)
 
 
 # The pipe rule had its OWN wrapper list (`sudo|env|command|nice|nohup` with
@@ -1500,28 +1522,58 @@ def _pipes_downloader_into_shell(text):
     return False
 
 
+# Single quotes keep a substitution literal only where bash never reads the quoted text again (task 199, impl panel
+# r2, each run in bash): `let`, `declare`, `typeset`, `local`, `printf -v`, `read`, `unset`, `test -v`, `[[ -eq`,
+# `trap`, an assignment, a subscript, `${x:…}`, `(( … ))`, a pipe into a shell, a capture — all read it again. So the
+# quote-aware scan runs on a PLAIN command whose every pipeline holding a single quote is made of these, which take
+# their arguments as data (`eval`'s is classified as the command it is), and the quote-blind scan everywhere else.
+_LITERAL_ARG_COMMANDS = frozenset({"echo", "printf", "eval"})
+_DATA_FILTERS = frozenset({"cat", "tee", "head", "tail", "grep", "egrep", "fgrep", "rg", "wc", "sort", "uniq", "cut",
+                           "tr", "column", "nl", "less", "more"})
+
+
+def _takes_data(seg):
+    rest, _executes, payloads = _walk_prefix(seg)
+    lexed = _lex(rest)
+    if not lexed:                                      # `eval '…'`: the walk took its string as the payload
+        return bool(payloads) and _command_name((_lex(seg) or [("", 0, "", False)])[0][2]) == "eval"
+    name, words = _command_name(lexed[0][2]), _words(lexed)
+    if name == "printf":
+        return not any(w.startswith("-v") for w in words)
+    if name == "git":
+        return _git_subcommand(words) == "commit"
+    return name in _LITERAL_ARG_COMMANDS or name in _DATA_FILTERS
+
+
+def _single_quotes_are_literal(text):
+    read = _heredoc_read(text)
+    if read is None:
+        return False
+    _plan, lines, _spans = read
+    if any(line.rstrip().endswith(("|", "&&", "|&")) for line in lines):
+        return False
+    for segs in _pipelines("\n".join(lines)):
+        if any("'" in s for s in segs) and not all(_takes_data(s) for s in segs):
+            return False
+    return True
+
+
 def _command_substitutions(text):
     """The contents of every `$( … )`, backtick and `<( … )`/`>( … )` substitution that RUNS. Their bodies run whatever
-    surrounds them — `echo "$(rm -rf /)"` deletes the disk — so each is classified as a command in its own right; but
-    inside single quotes and `$'…'` bash keeps them literal (task 199, #10: a single-quoted note quoting a dangerous
-    command in backticks was refused). Outside quotes and inside double quotes they run; a heredoc opened outside quotes
-    has its body read QUOTE-BLIND, as before (in an unquoted body `'` is a literal character and the substitutions run;
-    a quoted body still here is a shell's script, the non-shell ones having been stripped by the caller; a body whose
-    closing tag a data stripper removed runs to the end, read the same way); an unterminated quote leaves the rest of
-    the text to the quote-blind scan, and so does an unclosed substitution (the rest after its opener) and an
-    arithmetic opener outside single quotes (`$((`, `((`, `$[`: the rest, read blind down through every body — inside
-    arithmetic a single quote does not keep `$( … )` from running; task 199, impl panel r1, codex). Conservative
-    everywhere it cannot tell."""
-    out = []
-    i, n = 0, len(text)
-    pending = []                                   # heredocs opened on this line: (tag, `<<-`, quoted)
+    surrounds them — `echo "$(rm -rf /)"` deletes the disk — so each is classified as a command in its own right. Read
+    quote-blind, as before task 199, except where single quotes are literal (`_single_quotes_are_literal`, task 199
+    #10 as its impl panel r2 narrowed it): there the command is PLAIN, so it holds no substitution outside its heredoc
+    bodies — read quote-blind, in an unquoted body `'` is a literal character and the substitutions run, and a quoted
+    body still here is a sink's script — and outside an arithmetic `$[ … ]`, inside which a single quote keeps nothing
+    literal (the rest is read blind, down through every body). Its single-quoted text is passed over."""
+    if not _single_quotes_are_literal(text):
+        return _command_substitutions_blind(text)
+    out, i, n, pending = [], 0, len(text), []
     while i < n:
         c = text[i]
-        if c == "\n":
-            i += 1
-            if pending:
-                i = _heredoc_bodies(text, i, pending, out)
-                pending = []
+        if c == "\n" and pending:
+            i = _heredoc_bodies(text, i + 1, pending, out)
+            pending = []
             continue
         if c == "\\":
             i += 2
@@ -1529,36 +1581,16 @@ def _command_substitutions(text):
         if text.startswith("$$", i):
             i += 2                                 # `$$'a'` is `$$` then 'a', not `$'…'` (impl panel r1, opus)
             continue
-        if c == "'" or text.startswith("$'", i):
-            j = _quote_end(text, i)
-            if j is None:
+        if c == "'" or text.startswith("$'", i) or c == '"':
+            j = _quote_end(text, i) if c != '"' else _dq_end(text, i)
+            if j is None:                          # a PLAIN command has none; read the rest blind if it ever does
                 out.extend(_command_substitutions_blind(text[i:]))
                 break
             i = j
             continue
-        if c == '"':
-            j = i + 1
-            while j < n and text[j] != '"':
-                if text[j] == "\\":
-                    j += 2
-                    continue
-                if text.startswith(("$((", "$["), j):
-                    out.extend(_command_substitutions_blind_deep(text[j:]))
-                    return out
-                if text.startswith("$(", j) or text[j] == "`":
-                    k = j
-                    body, j = _one_substitution(text, k)
-                    if body is None:               # unclosed: the rest, quote-blind (impl panel r1, opus)
-                        out.extend(_command_substitutions_blind(text[k + 1:]))
-                        return out
-                    out.append(body)
-                    continue
-                j += 1
-            if j >= n:
-                out.extend(_command_substitutions_blind(text[i:]))
-                break
-            i = j + 1
-            continue
+        if text.startswith("$[", i):
+            out.extend(_command_substitutions_blind_deep(text[i:]))
+            break
         if text.startswith("<<<", i):
             i += 3                                 # a herestring (its shell payload: `_herestring_payloads`)
             continue
@@ -1567,17 +1599,6 @@ def _command_substitutions(text):
             if tag:
                 pending.append((tag, dash, quoted))
             i = j
-            continue
-        if text.startswith(("$((", "((", "$["), i):
-            out.extend(_command_substitutions_blind_deep(text[i:]))
-            return out
-        if text.startswith(("<(", ">(", "$("), i) or c == "`":
-            k = i
-            body, i = _one_substitution(text, k)
-            if body is None:
-                out.extend(_command_substitutions_blind(text[k + 1:]))
-                return out
-            out.append(body)
             continue
         i += 1
     return out
@@ -1696,7 +1717,13 @@ def _one_substitution(text, i):
                 pending.append((tag, dash, quoted))
             j = k
             continue
-        elif c in "\"'":
+        elif c == "'" or text.startswith("$'", j):     # `$'it\\'s'` (impl panel r2, gemini)
+            k = _quote_end(text, j)
+            if k is None:
+                return None, n
+            j = k
+            continue
+        elif c == '"':
             quote = c
         elif c == "(":
             depth += 1
@@ -1777,10 +1804,77 @@ _PYTHONS = frozenset({"python", "python3"})
 _PYTHON_FLAGS = frozenset({"-B", "-b", "-bb", "-d", "-E", "-I", "-O", "-OO", "-P", "-q", "-s", "-S", "-u", "-v"})
 _PYTHON_VALUED = frozenset({"-W", "-X"})
 _GIT_GLOBAL_VALUED = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace"})
-# A command starting with one of these is not PLAIN: a compound command, `exec` (it redirects what follows), or one
-# that changes which program a NAME runs (`alias cat=bash` with expand_aliases, `hash -p /bin/bash cat`, `enable`).
+# A command starting with one of these is not PLAIN: a compound command, or `exec` (it redirects what follows).
 _UNPLAIN_WORDS = frozenset({"if", "then", "elif", "else", "fi", "case", "esac", "for", "select", "while", "until",
-                            "do", "done", "function", "coproc", "exec", "alias", "hash", "enable"})
+                            "do", "done", "function", "coproc", "exec"})
+# What can change which program a NAME runs, so that a reader's name no longer says what reads its body (task 199,
+# K1; impl panel r2, fable, opus, codex): `alias` (with expand_aliases), `hash -p`, `enable`, a function definition,
+# a sourced file, a PATH the command sets — found through wrappers (`command`, `builtin`, an assignment prefix) and
+# inside what `eval` runs.
+_REBINDING_WORDS = frozenset({"alias", "hash", "enable", "function", "source", "."})
+
+
+def _unquoted_text(text, keep_quotes=False):
+    """`text` with its quoted spans and heredoc bodies blanked — what bash reads as syntax (`keep_quotes`: the bodies
+    only, so the segments read as bash reads them)."""
+    out, i, n, pending = [], 0, len(text), []
+    while i < n:
+        c = text[i]
+        if c == "\n" and pending:
+            out.append(c)
+            i += 1
+            for _quoted, _start, _tag_start, after, _ended in _body_spans(text, i, pending):
+                out.append(" " * (after - i))
+                i = after
+            pending = []
+            continue
+        if c == "\\":
+            out.append(text[i:i + 2] if keep_quotes else "  ")
+            i += 2
+            continue
+        if c == "'" or text.startswith("$'", i) or c == '"':
+            j = _quote_end(text, i) if c != '"' else _dq_end(text, i)
+            j = n if j is None else j
+            out.append(text[i:j] if keep_quotes else " " * (j - i))
+            i = j
+            continue
+        if text.startswith("<<", i) and not text.startswith("<<<", i):
+            tag, dash, quoted, j = _heredoc_tag(text, i)
+            if tag:
+                pending.append((tag, dash, quoted))
+            out.append(text[i:j])
+            i = j
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _dq_end(text, i):
+    """The index after the `"…"` that starts at `i` (a backslash escapes the next character), or None."""
+    j, n = i + 1, len(text)
+    while j < n and text[j] != '"':
+        j += 2 if text[j] == "\\" else 1
+    return j + 1 if j < n else None
+
+
+def _rebinds(text, _depth=0):
+    """Whether `text` may change which program a name runs (see `_REBINDING_WORDS`)."""
+    if _depth > 8 or re.search(r"\(\s*\)", _unquoted_text(text)):
+        return True                                    # a function definition, `f() { …; }`
+    for seg in _split_segments(_unquoted_text(text, keep_quotes=True)):   # a heredoc's body is not a command
+        lexed = _lex(seg)
+        if not lexed:
+            continue
+        if any(tok[2].startswith("PATH=") for tok in lexed):
+            return True
+        rest, _executes, payloads = _walk_prefix(seg)
+        inner = _lex(rest)
+        if any(_command_name(v) in _REBINDING_WORDS for v in [lexed[0][2]] + ([inner[0][2]] if inner else [])):
+            return True
+        if any(p and not p.startswith("\x00") and _rebinds(p, _depth + 1) for p in payloads):
+            return True
+    return False
 _HEREDOC_OP = re.compile(r"(?<!<)<<(?!<)")
 _REDIRECT = re.compile(r"^(?:\d+|&)?(?:<<-?|<>|<&|>&|>>|>\||<|>)")
 
@@ -1842,11 +1936,13 @@ def _reads_heredoc_as_data(seg):
     return name in _HEREDOC_DATA_READERS
 
 
-_WRITE_REDIRECT = re.compile(r"^(?:\d+|&)?(?:>>|>\||>)(?!&)(.*)$")
+_WRITE_REDIRECT = re.compile(r"^(?:\d+|&)?(?:>>|>\||<>|>)(?!&)(.*)$")
+_HARMLESS_SINKS = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/fd/1", "/dev/fd/2"})
 
 
 def _files_written(seg):
-    """The files a reader's segment writes: its `>`/`>>`/`>|`/`&>` targets, and `tee`'s operands (not `/dev/…`)."""
+    """The files a reader's segment writes: its `>`/`>>`/`>|`/`&>`/`<>` targets, and `tee`'s operands — all but
+    `/dev/null` and the standard streams (`/dev/shm/s.sh` is a file: impl panel r2, opus)."""
     rest, _executes, _payloads = _walk_prefix(seg)
     lexed = _lex(rest)
     out, i = set(), 1
@@ -1864,58 +1960,63 @@ def _files_written(seg):
         if lexed and _command_name(lexed[0][2]) == "tee" and not value.startswith("-"):
             out.add(value)
         i += 1
-    return {posixpath.basename(posixpath.normpath(f)) for f in out if f and not f.startswith("/dev/")}
+    return {f for f in out if f and posixpath.normpath(f) not in _HARMLESS_SINKS}
 
 
-def _runs_a_written_file(seg, written):
-    """Whether a segment after the reader may run a file it wrote: a shell or a sourcer (whatever its words), or any
-    word that names one of them (`./s.sh`, `bash < s.sh`, `psql -f q.sql`, `sh -c '. s.sh'`)."""
-    rest, _executes, payloads = _walk_prefix(seg)
-    lexed = _lex(rest)
-    if lexed and _command_name(lexed[0][2]) in (_SHELLS | _SOURCERS):
-        return True
-    words = [t[2] for t in lexed] + [w for p in payloads if p and not p.startswith("\x00") for w in p.split()]
-    for w in words:
-        for piece in re.split(r"[\s;&|<>()=`'\"]+", w):
-            if piece and posixpath.basename(posixpath.normpath(piece)) in written:
-                return True
-    return False
+def _pipelines(text):
+    """The pipelines of `text`: its non-empty segments grouped by `|`, `|&` and `&` (a background job is grouped too:
+    it runs beside what follows it)."""
+    runs, run = [], []
+    for seg, op in _split_segments_keep(text):
+        if seg.strip():
+            run.append(seg)
+        if op not in ("|", "&"):
+            runs.append(run)
+            run = []
+    return [r for r in runs if r]
 
 
 def _reader_pipeline_reads_data(line):
     """Whether the pipeline of `line` that holds a heredoc operator — its commands joined by `|`, `|&` or `&` — is made
-    of known data readers only, and nothing after it on the line may run a file it wrote (`cat > s.sh <<'EOF'; bash
-    s.sh`, `tee f <<'EOF' >/dev/null && sh f` — task 199, impl panel r1, fable; `git commit -F - <<'MSG' && git push`
-    writes none). A line that ENDS with `|`, `|&`, `||` or `&&` goes on after the bodies (`cat <<'EOF' |⏎…⏎EOF⏎bash`
+    of known data readers only, no shell or sourcer runs after it on the line, and — once it wrote a file — nothing but
+    known readers does (`cat > s.sh <<'EOF'; bash s.sh`, `tee f … && sh f`: impl panel r1, fable; `> Makefile; make`,
+    `; ./s*`, `psql -fq.sql`: r2, fable, opus, codex; `git commit -F - <<'MSG' && git push` writes none). A line that ENDS with `|`, `|&`, `||` or `&&` goes on after the bodies (`cat <<'EOF' |⏎…⏎EOF⏎bash`
     runs the body in bash — sonnet, codex and my own probe): its pipeline cannot be read here, so it is not one."""
     if line.rstrip().endswith(("|", "&&", "|&")):
         return False
-    runs, run = [], []
-    for seg, op in _split_segments_keep(line):
-        run.append(seg)
-        if op not in ("|", "&"):
-            runs.append(run)
-            run = []
+    runs = _pipelines(line)
     holding = [k for k, r in enumerate(runs) if any(_HEREDOC_OP.search(s) for s in r)]
-    if not holding or not all(_reads_heredoc_as_data(s) for k in holding for s in runs[k] if s.strip()):
+    if not holding or not all(_reads_heredoc_as_data(s) for k in holding for s in runs[k]):
         return False
-    written = set().union(*(_files_written(s) for k in holding for s in runs[k] if s.strip()))
-    later = [s for r in runs[holding[0] + 1:] for s in r if s.strip()]
-    return not (written and any(_runs_a_written_file(s, written) for s in later))
+    written = set().union(*(_files_written(s) for k in holding for s in runs[k]))
+    later = [s for r in runs[holding[0] + 1:] for s in r]
+    if any(_lex(rest) and _command_name(_lex(rest)[0][2]) in (_SHELLS | _SOURCERS)
+           for rest in (_walk_prefix(s)[0] for s in later)):
+        return False
+    return not (written and not all(_reads_heredoc_as_data(s) for s in later))
 
 
 def _heredoc_plan(text):
+    """The heredocs of `text` (`_heredoc_read`), or None when it is not PLAIN."""
+    read = _heredoc_read(text)
+    return read[0] if read else None
+
+
+def _heredoc_read(text):
     """Every heredoc of `text` as (its opener's logical line, whether the tag is quoted, where the body starts, where
     its tag line starts), read as bash reads them — operators outside quotes,
     bodies after the line, each to the line that is its tag (tabs stripped for `<<-`). None when `text` is not PLAIN
-    (see above), or holds an unterminated quote, an empty tag or a body that does not end: nothing is removed then."""
-    plan, skeleton = [], []
+    (see above), or holds an unterminated quote, an empty tag or a body that does not end: nothing is removed then.
+    Returned with the text's skeleton — its LOGICAL lines (a quoted string may span physical ones), bodies left out —
+    and each logical line's span in `text`."""
+    plan, skeleton, spans = [], [], []
     i, n, line_start, pending = 0, len(text), 0, []
     while i < n:
         c = text[i]
         if c == "\n":
             line = text[line_start:i]
             skeleton.append(line)
+            spans.append((line_start, i))
             i += 1
             for quoted, start, tag_start, after, ended in _body_spans(text, i, pending):
                 if not ended:
@@ -1966,11 +2067,15 @@ def _heredoc_plan(text):
     if pending:
         return None                                    # an opener on the last line: no body to read
     skeleton.append(text[line_start:])
-    for seg in _split_segments("\n".join(skeleton)):
+    spans.append((line_start, n))
+    skel = "\n".join(skeleton)
+    for seg in _split_segments(skel):
         lexed = _lex(seg)
-        if lexed and (lexed[0][2] in _UNPLAIN_WORDS or any(t[2].startswith("PATH=") for t in lexed)):
-            return None                                # … or a PATH the command sets itself
-    return plan
+        if lexed and lexed[0][2] in _UNPLAIN_WORDS:
+            return None
+    if _rebinds(skel):
+        return None                                    # … or a name made to run another program
+    return plan, skeleton, spans
 
 
 def _strip_quoted_heredoc_bodies(text):
