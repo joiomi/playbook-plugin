@@ -155,6 +155,16 @@ class StaleCloseBound(_BoundFixture):
         self.assertFalse(self._done(r))
         self.assertIn(".agent/config.json changed after the post-D6 PASS", r.stderr)
 
+    def test_a_head_move_after_the_pass_says_why_the_delta_cannot_be_computed(self):   # task 202, D3
+        # HEAD moves after the PASS and no file differs from the tree it reviewed: finding A
+        self._post_d6()
+        _git(self.d, "commit", "-q", "--allow-empty", "-m", "HEAD moves, the tree does not")
+        r = self._close("--stale-panel-ok", "--reason", "the PASS stands")
+        self.assertFalse(self._done(r), r.stdout)
+        self.assertIn("cannot be computed exactly (", r.stderr)
+        self.assertIn("scope .: HEAD moved", r.stderr)
+        self.assertNotIn("scope change, git error, or an unexplained change", r.stderr)
+
     def test_owner_ok_is_recorded(self):
         r = self._close("--owner-ok", "--reason", "owner ruled 2026-10-08: close")
         self.assertTrue(self._done(r), r.stdout + r.stderr)

@@ -2205,7 +2205,10 @@ def _git_diff_text(repo, args, rel, exclude):
     import subprocess
     try:
         r = subprocess.run(
-            ["git", "diff", "--text", "--no-ext-diff", *args, "--", rel, *exclude],
+            # task 202 (D4, Gemini #7): a user's colour, a local textconv driver or
+            # `diff.noprefix` must not shape what the certifying judge reads
+            ["git", "diff", "--text", "--no-ext-diff", "--no-color", "--no-textconv",
+             "--src-prefix=a/", "--dst-prefix=b/", *args, "--", rel, *exclude],
             cwd=repo, capture_output=True, text=True,
             encoding="utf-8", errors="replace")
         if r.returncode != 0:
@@ -2386,6 +2389,9 @@ def _tail_cert_prompt(non_behavioral, panel_summary, diff_text, nonce) -> str:
     carries a per-invocation `nonce` so nothing in the reviewed CONTENT can forge
     it (impl-panel r2 grok#2)."""
     files = "\n".join(f"  - {p}" for p in non_behavioral) or "  (none listed)"
+    # task 202 (D5, Gemini #6): more backticks than the longest run in the payload —
+    # a doc (raw content goes here too) holding a fence cannot close this one
+    fence = "`" * max(3, max((len(m) for m in re.findall(r"`+", diff_text or "")), default=0) + 1)
     return (
         "You are a TAIL-CERTIFICATION judge. A full multi-model panel already "
         "reviewed and PASSED this task's IMPLEMENTATION at an earlier tree state "
@@ -2397,7 +2403,7 @@ def _tail_cert_prompt(non_behavioral, panel_summary, diff_text, nonce) -> str:
         f"The panel's verdict summary:\n{panel_summary}\n\n"
         f"The non-behavioral files changed since F0:\n{files}\n\n"
         "The exact delta diff (F0 → the tree being closed):\n"
-        "```diff\n" + (diff_text or "(empty)") + "\n```\n\n"
+        + fence + "diff\n" + (diff_text or "(empty)") + "\n" + fence + "\n\n"
         "YOUR TASK: decide whether this non-behavioral delta is consistent with "
         "the panel's PASS — i.e. it does not introduce a FALSE or UNSUPPORTED "
         "claim, does not contradict the code the panel approved, and does not "

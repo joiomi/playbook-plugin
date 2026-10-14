@@ -452,8 +452,14 @@ certification saves its judge's output as `tail-cert.log` in the task directory;
 (the default judge's adapter cannot be built, or its program is not installed) the file holds the reason under a first line that says `NO JUDGE
 RAN`, and no spend record is written (task 178). When it does not certify, the
 close says why. Two refusals come before any certification: a code path in the delta, and a panel snapshot that
-can no longer be compared (it is missing, the code roots changed, git failed) — the latter is reported as
-"tail certification unavailable", without its cause. For a documentation-only delta the close says which of
+can no longer be compared — since 1.6.2 (task 202) reported as "tail certification unavailable — <its cause> — fresh
+panel required": the snapshot or the round's stamp missing or not matching, a scope moved, without a commit or a
+dirty-file list, the scope set or the exclude set changed (both named), an owner exclude over source code, which git
+call failed, code that passed through an owner exclude, or — for a stale tree where no file differs from the reviewed
+one — whether HEAD moved and which files that move changed (from a post-D6 PASS's tree that is still the same, the
+bound close `--stale-panel-ok` is named). The re-check after a judge's PASS names which of its conditions discarded it.
+The certifying judge's diff is asked for without colour, a textconv driver or a user's prefixes, and its fence is
+longer than any backtick run in it. For a documentation-only delta the close says which of
 three things happened: no judge ran — the delta could not be put before one (its size against the 98,304-byte
 payload one judge can be sent, or the file that could not be read), the tamper snapshot could not be taken, or
 the judge's adapter could not be resolved or built, or its program is not installed; the judge returned FAIL; or there is no usable verdict, with

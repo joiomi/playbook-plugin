@@ -816,7 +816,7 @@ def cmd_work(cmd_args):
                         and _carries and _impl is not None and _freshness
                         and _freshness.get("verdict") == "STALE"):
                     from tasks.core import (
-                        tail_cert_delta, tail_cert_gate_decision,
+                        _cause_paths, tail_cert_delta_why, tail_cert_gate_decision,
                     )
                     from tasks.review import run_tail_cert_judge, tail_cert_unavailable
                     _snap = _impl.get("snapshot") if _impl else None
@@ -827,8 +827,10 @@ def cmd_work(cmd_args):
                     _pd6_base = post_d6_pass_base(Path(project_path), task_file.parent)
                     if _pd6_base:
                         _snap, _snap_fp, _ = _pd6_base
-                    _tc_can, _tc_beh, _tc_non = tail_cert_delta(
-                        project_path, _snap, _snap_fp)
+                    # task 202 (#17): the cause of a refusal, naming the reviewed tree's base
+                    _tc_base = f"post-D6 PASS {_pd6_base[2]}" if _pd6_base else ""
+                    _tc_can, _tc_beh, _tc_non, _tc_cause = tail_cert_delta_why(
+                        project_path, _snap, _snap_fp, base=_tc_base)
                     _tc_verdict = None
                     # Task 165 (PLAN S11 item 11): can the delta be put before a
                     # judge at all? Asked first, so that "no judge was called" is
@@ -895,20 +897,31 @@ def cmd_work(cmd_args):
                             # doesn't re-validate a code_root removal or an exclude
                             # change made during the judge call).
                             _recheck_fp = tree_state_fingerprint(project_path)
-                            _r_can, _r_beh, _r_non = tail_cert_delta(
-                                project_path, _snap, _snap_fp)
+                            _r_can, _r_beh, _r_non, _r_cause = tail_cert_delta_why(
+                                project_path, _snap, _snap_fp, base=_tc_base)
                             if (_recheck_fp != _now_fp or not _r_can or _r_beh
                                     or _r_non != _tc_non):
                                 _tc_verdict = None
-                                _tc_noverdict = ("the tree or its scope changed while the "
-                                                 "judge ran — its PASS was discarded")
-                                print("  ⚠ tree/scope changed during certification "
-                                      "— not certifying (fresh panel required)",
+                                # task 202 (plan triage 5): which of the four discarded it
+                                _gone = []
+                                if _recheck_fp != _now_fp:
+                                    _gone.append("the tree moved while the judge ran")
+                                if not _r_can:
+                                    _gone.append(f"it can no longer certify — {_r_cause}")
+                                elif _r_beh:
+                                    _gone.append("a code path changed since the reviewed tree ("
+                                                 + _cause_paths(_r_beh) + ")")
+                                elif _r_non != _tc_non:
+                                    _gone.append("the files it read are no longer the delta (now: "
+                                                 + _cause_paths(_r_non) + ")")
+                                _tc_noverdict = "its PASS was discarded — " + "; ".join(_gone)
+                                print(f"  ⚠ changed during certification: {'; '.join(_gone)} — not certifying "
+                                      "(fresh panel required)",
                                       file=sys.stderr, flush=True)
                     _tc_allowed, _tc_clause = tail_cert_gate_decision(
                         can_certify=_tc_can, behavioral_nonempty=bool(_tc_beh),
                         cert_verdict=_tc_verdict, non_behavioral=_tc_non,
-                        unavailable=_tc_unavail, no_verdict=_tc_noverdict)
+                        unavailable=_tc_unavail, no_verdict=_tc_noverdict, cause=_tc_cause)
                     if _tc_allowed:
                         _f_allowed = True
                         _freshness = {

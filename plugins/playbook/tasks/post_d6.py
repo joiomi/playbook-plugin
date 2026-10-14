@@ -423,7 +423,7 @@ def scope_delta(repo: Path, base: str, exclude: "list[str]", with_tree: bool = F
         # the short form of a gitlink's change: with `diff.submodule=log` or `diff` a
         # nested repository's move is a "Submodule …" line with no header line at all
         # (impl round 1: measured, the whole scope then went out unsorted)
-        d = _git(repo, ["diff", "--text", "--no-ext-diff", "--no-color", "-M",
+        d = _git(repo, ["diff", "--text", "--no-ext-diff", "--no-color", "--no-textconv", "-M",
                         "--src-prefix=a/", "--dst-prefix=b/", "--submodule=short",
                         base, cur, "--", ".", *exclude])
         if d.returncode != 0:

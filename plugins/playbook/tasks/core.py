@@ -2644,13 +2644,115 @@ def _enumerate_scope_delta(repo: Path, f0_commit: str, f0_dirty: dict,
 
 def tail_cert_delta(project_path: Path, snapshot: "dict | None",
                     round_tree_fp: str) -> "tuple[bool, list[str], list[str]]":
-    """The tail-cert delta gate's I/O half (SAFETY-CRITICAL). Returns
-    `(can_certify, behavioral, non_behavioral)` — both lists scope-prefixed for
-    display, classified per-scope on scope-relative paths. PRECONDITION: called
-    only when the tree is STALE vs `round_tree_fp` (the newest impl round's stamp).
+    """`tail_cert_delta_why` without its cause: `(can_certify, behavioral,
+    non_behavioral)`."""
+    can, beh, non, _why = tail_cert_delta_why(project_path, snapshot, round_tree_fp)
+    return can, beh, non
 
-    Fails CLOSED — `(False, [], [])` — on every ambiguity, so a code path can never
-    slip through unreviewed:
+
+def _printable_cause(text) -> str:
+    """Text a terminal shows as it is (task 202): every character that is not
+    printable — a path's line break or escape sequence, a surrogate from a name that
+    is not UTF-8 — as `\\xNN` (`\\uNNNN` above 0xff)."""
+    return "".join(ch if ch.isprintable() else (f"\\x{ord(ch):02x}" if ord(ch) < 0x100 else f"\\u{ord(ch):04x}")
+                   for ch in str(text))
+
+
+def _cause_paths(paths) -> str:
+    """The first three paths of a cause, printable, then "…"."""
+    paths = list(paths)
+    return ", ".join(_printable_cause(p) for p in paths[:3]) + (", …" if len(paths) > 3 else "")
+
+
+def _owner_exclude_walk_cause(repo: Path, f0_commit: str, specs: "list[str]", label: str, name: str) -> str:
+    """Task 060 r2 (grok #1): code that passed THROUGH an owner exclude between F0
+    and HEAD (committed under `journal/`, deleted again before close) never enters
+    the `:(exclude)`-filtered delta and is gone from the ls-files/ls-tree check. A
+    two-endpoint `F0..HEAD` diff misses it too (added then removed = net nothing), so
+    walk EVERY commit since F0 and ask each one what it touched under the owner's
+    raw specs; any source hit → refuse. Bounded: more than 500 commits since F0 →
+    refuse. "" when nothing refuses, else the cause (task 202) — a scope's own."""
+    try:
+        # Only commits that TOUCH the owner's specs (r3 opus #3: a bare
+        # rev-list counted every commit of a busy monorepo since F0).
+        rl = subprocess.run(["git", "rev-list", f"{f0_commit}..HEAD", "--", *specs],
+                            cwd=repo, capture_output=True, text=True,
+                            errors="surrogateescape", timeout=120)
+        if rl.returncode != 0:
+            return f"scope {label}: `git rev-list` failed while checking the owner's excludes"
+        commits = [c for c in rl.stdout.split() if c]
+        if len(commits) > 500:
+            return f"scope {label}: more than 500 commits since the reviewed tree touch an owner exclude"
+        top = _git_toplevel(repo)
+        pre = _toplevel_prefix(repo, top) if top is not None else None
+        if pre is None:
+            return f"scope {label}: its git top level cannot be resolved"   # cannot classify git names (r3 grok)
+        through: "set[str]" = set()
+        for c in commits:
+            rx = subprocess.run(["git", "diff-tree", "--no-commit-id", "--name-only", "-z",
+                                 "-r", "-m", c, "--", *specs],
+                                cwd=repo, capture_output=True, timeout=60)
+            if rx.returncode != 0:
+                return f"scope {label}: `git diff-tree` failed on {c[:12]}"
+            through |= {_project_relative(os.fsdecode(t), pre) for t in rx.stdout.split(b"\0") if t}
+    except (OSError, subprocess.SubprocessError):
+        return f"scope {label}: git error while checking the owner's excludes"
+    beh, _ = classify_delta_paths(sorted(through), is_outer_scope=(name == ""))
+    code = [b for b in beh if not b.lower().endswith(_BOOKKEEPING_SUFFIXES)]
+    if code:
+        return (f"scope {label}: code passed through an owner exclude since the reviewed tree ("
+                + _cause_paths(code) + ")")
+    return ""
+
+
+def _finding_a_cause(project_path: Path, live_scopes: dict, snap_scopes: dict, round_tree_fp: str,
+                     base: str) -> str:
+    """Finding A's cause (task 202, plan triage 2-3): the tree is stale, yet no file
+    of the reviewed scopes differs from the reviewed tree — say what moved: nothing
+    at all (the tree IS the reviewed one — from a post-D6 base the bound close
+    applies), HEAD (per scope, with the files that move changed), or neither (a
+    staging or fingerprint-only change)."""
+    head = "the tree is stale, yet no file in the reviewed scopes differs from the reviewed tree"
+    try:
+        same = tree_state_fingerprint(Path(project_path)) == round_tree_fp
+    except Exception:
+        same = False
+    if same:
+        return head + ": it IS the reviewed tree" + (
+            f" — the close bound to {base} (`--stale-panel-ok`) applies" if base else "")
+    moved = []
+    for name, repo in live_scopes.items():
+        f0 = ((snap_scopes.get(name) or {}) if isinstance(snap_scopes.get(name), dict) else {}).get("commit") or ""
+        try:
+            h = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, timeout=30)
+            cur = h.stdout.strip() if h.returncode == 0 else ""
+            if not (f0 and cur and cur != f0):
+                continue
+            n = subprocess.run(["git", "diff", "--name-only", "-z", "--no-renames", f0, cur],
+                               cwd=repo, capture_output=True, timeout=60)
+            paths = [os.fsdecode(x) for x in n.stdout.split(b"\0") if x] if n.returncode == 0 else []
+        except (OSError, subprocess.SubprocessError):
+            continue
+        moved.append(f"scope {_printable_cause(name or '.')}: HEAD moved {f0[:7]} → {cur[:7]}"
+                     + (f", and the files it changed ({_cause_paths(paths)}) hold the reviewed tree's content "
+                        "or are excluded from the delta" if paths else " with an identical tree"))
+    if moved:
+        return head + ": " + "; ".join(moved)
+    return head + ": no scope's HEAD moved: a staging or fingerprint-only change"
+
+
+def tail_cert_delta_why(project_path: Path, snapshot: "dict | None", round_tree_fp: str,
+                        base: str = "") -> "tuple[bool, list[str], list[str], str]":
+    """The tail-cert delta gate's I/O half (SAFETY-CRITICAL). Returns
+    `(can_certify, behavioral, non_behavioral, why)` — both lists scope-prefixed for
+    display, classified per-scope on scope-relative paths; `why` is a refusal's own
+    cause in the words the close prints, one printable line, "" when it can certify
+    (task 202, #17). `base` names the reviewed tree when it is not the impl panel's
+    (a post-D6 PASS). PRECONDITION: called only when the tree is STALE vs
+    `round_tree_fp` (the reviewed tree's stamp).
+
+    Fails CLOSED — `(False, [], [], <cause>)` — on every ambiguity, so a code path
+    can never slip through unreviewed:
       * a missing/malformed descriptor, or one whose `tree_fp` ≠ the round stamp
         (finding: the snapshot must authenticate to THIS round);
       * a live scope-set that differs from the descriptor's (finding C: a
@@ -2658,50 +2760,67 @@ def tail_cert_delta(project_path: Path, snapshot: "dict | None",
       * a scope with no recorded F0 commit (cannot anchor the F0→HEAD diff);
       * ANY git error during enumeration;
       * a stale tree with an EMPTY attributable delta (finding A)."""
-    if not isinstance(snapshot, dict) or not round_tree_fp:
-        return (False, [], [])
+    def no(why: str):
+        return (False, [], [], _printable_cause(" ".join(why.split())))
+    if not isinstance(snapshot, dict):
+        return no("the newest impl round recorded no panel snapshot")
+    if not round_tree_fp:
+        return no("the newest impl round carries no tree stamp")
     if snapshot.get("tree_fp") != round_tree_fp:
-        return (False, [], [])
+        return no(f"the panel snapshot's fingerprint ({snapshot.get('tree_fp') or 'none'}) is not the newest "
+                  f"impl round's stamp ({round_tree_fp})")
     snap_scopes = snapshot.get("scopes")
     if not isinstance(snap_scopes, dict):
-        return (False, [], [])
+        return no("the snapshot of the reviewed tree lists no scopes")
     try:
         cfg = load_config(Path(project_path))
     except Exception:
         cfg = {}
     live_scopes = _tail_cert_scopes(Path(project_path), cfg)
     if set(live_scopes.keys()) != set(snap_scopes.keys()):
-        return (False, [], [])          # finding C: scope-set must match exactly
+        # finding C: scope-set must match exactly
+        return no("the scope set changed since the reviewed tree (then: "
+                  + _cause_paths(sorted(n or "." for n in snap_scopes)) + "; now: "
+                  + _cause_paths(sorted(n or "." for n in live_scopes)) + ")")
     exclude = _fingerprint_exclude_pathspecs(cfg)
     # r4 codex:terra#1: the exclusion set must not have changed since F0, or a
     # post-panel `fingerprint_exclude` addition could hide a behavioral path.
     if sorted(exclude) != (snapshot.get("exclude") or []):
-        return (False, [], [])
+        return no("the fingerprint's exclude set (`fingerprint_exclude`) changed since the reviewed tree")
     # Task 060: an owner exclude that covers a SOURCE path (unchanged since F0,
     # so it passed the set check above) hides that source from the delta —
     # refuse; the close gate blocks this case before tail-cert is reached, this
     # is the second line.
     _covers, _hits = owner_exclude_covers_behavioral(Path(project_path), cfg)
     if _covers:
-        return (False, [], [])
+        _err = ": git error"
+        _paths = [h for h in _hits if not str(h).endswith(_err)]
+        if _paths:
+            return no("an owner `fingerprint_exclude` covers source code (" + _cause_paths(_paths) + ")")
+        # its sentinel hits: git failed for a scope (plan triage 7, sonnet)
+        return no("git failed while checking whether an owner exclude covers source code ("
+                  + _cause_paths([str(h)[:-len(_err)] for h in _hits]) + ")")
     all_behavioral: "list[str]" = []
     all_non: "list[str]" = []
     for name, repo in live_scopes.items():
+        label = _printable_cause(name or ".")
         rec = snap_scopes.get(name)
         if not isinstance(rec, dict):
-            return (False, [], [])
+            return no(f"scope {label}: the snapshot of the reviewed tree holds no record of it")
         # Task 060: the scope must be the SAME resolved directory it was at F0
         # (a repoint to a same-HEAD clone is not certifiable; an older descriptor
         # without the key fails closed too).
         if rec.get("identity") != _scope_identity(Path(project_path), repo):
-            return (False, [], [])
+            return no(f"scope {label}: it points at a different directory than at the reviewed tree")
         f0_commit = rec.get("commit") or ""
         f0_dirty = rec.get("dirty")
-        if not f0_commit or not isinstance(f0_dirty, dict):
-            return (False, [], [])
+        if not f0_commit:
+            return no(f"scope {label}: the snapshot of the reviewed tree recorded no commit for it")
+        if not isinstance(f0_dirty, dict):
+            return no(f"scope {label}: the snapshot of the reviewed tree recorded no dirty-file list for it")
         scope_paths = _enumerate_scope_delta(repo, f0_commit, f0_dirty, exclude)
         if scope_paths is None:
-            return (False, [], [])      # any git error → fail closed
+            return no(f"scope {label}: git could not list its changes since the reviewed tree")   # fail closed
         # Task 060 r2 (grok #1): code that passed THROUGH an owner exclude between
         # F0 and HEAD (committed under `journal/`, deleted again before close)
         # never enters the `:(exclude)`-filtered delta and is gone from the
@@ -2711,46 +2830,18 @@ def tail_cert_delta(project_path: Path, snapshot: "dict | None",
         # hit → refuse. Bounded: more than 500 commits since F0 → refuse.
         _specs = _owner_exclude_specs(cfg)
         if _specs:
-            try:
-                # Only commits that TOUCH the owner's specs (r3 opus #3: a bare
-                # rev-list counted every commit of a busy monorepo since F0).
-                rl = subprocess.run(["git", "rev-list", f"{f0_commit}..HEAD",
-                                     "--", *_specs],
-                                    cwd=repo, capture_output=True, text=True,
-                                    errors="surrogateescape", timeout=120)
-                if rl.returncode != 0:
-                    return (False, [], [])
-                _commits = [c for c in rl.stdout.split() if c]
-                if len(_commits) > 500:
-                    return (False, [], [])
-                _top = _git_toplevel(repo)
-                _pre = _toplevel_prefix(repo, _top) if _top is not None else None
-                if _pre is None:
-                    return (False, [], [])   # cannot classify git names → refuse (r3 grok)
-                _through: "set[str]" = set()
-                for _c in _commits:
-                    rx = subprocess.run(
-                        ["git", "diff-tree", "--no-commit-id", "--name-only", "-z",
-                         "-r", "-m", _c, "--", *_specs],
-                        cwd=repo, capture_output=True, timeout=60)
-                    if rx.returncode != 0:
-                        return (False, [], [])
-                    _through |= {_project_relative(os.fsdecode(t), _pre)
-                                 for t in rx.stdout.split(b"\0") if t}
-            except (OSError, subprocess.SubprocessError):
-                return (False, [], [])
-            _beh_through, _ = classify_delta_paths(sorted(_through),
-                                                   is_outer_scope=(name == ""))
-            if any(not b.lower().endswith(_BOOKKEEPING_SUFFIXES) for b in _beh_through):
-                return (False, [], [])
+            _walk = _owner_exclude_walk_cause(repo, f0_commit, _specs, label, name)
+            if _walk:
+                return no(_walk)
         beh, non = classify_delta_paths(sorted(scope_paths),
                                         is_outer_scope=(name == ""))
         prefix = (name + "/") if name else ""
         all_behavioral += [prefix + p for p in beh]
         all_non += [prefix + p for p in non]
     if not all_behavioral and not all_non:
-        return (False, [], [])          # finding A: stale but unexplained
-    return (True, sorted(all_behavioral), sorted(all_non))
+        # finding A: stale but unexplained
+        return no(_finding_a_cause(Path(project_path), live_scopes, snap_scopes, round_tree_fp, base))
+    return (True, sorted(all_behavioral), sorted(all_non), "")
 
 
 def config_sha(project_path: Path) -> str:
@@ -2907,10 +2998,10 @@ def bound_stale_close(project_path: Path, task_dir: Path, *,
     now_fp = tree_state_fingerprint(Path(project_path))
     if now_fp and now_fp == snap["tree_fp"]:
         return True, "", f"bound to post-D6 PASS {last.get('id')} on tree {now_fp} (unchanged since)"
-    can, beh, non = tail_cert_delta(Path(project_path), snap, snap["tree_fp"])
+    can, beh, non, why = tail_cert_delta_why(Path(project_path), snap, snap["tree_fp"])
     if not can:
         return False, (f"the delta since the post-D6 PASS ({last.get('id')}) cannot be computed "
-                       "exactly (scope change, git error, or an unexplained change).\n" + exits), ""
+                       f"exactly ({why}).\n" + exits), ""
     other = beh + [x for x in non if not re.fullmatch(r"MIND_MAP[^/]*\.md", x)]
     if other:
         return False, (f"changed since the post-D6 PASS ({last.get('id')}): {', '.join(other[:8])}"
@@ -2979,7 +3070,8 @@ def tail_cert_gate_decision(*, can_certify: bool, behavioral_nonempty: bool,
                             cert_verdict: "str | None",
                             non_behavioral: "list[str]",
                             unavailable: str = "",
-                            no_verdict: str = "") -> "tuple[bool, str]":
+                            no_verdict: str = "",
+                            cause: str = "") -> "tuple[bool, str]":
     """PURE tail-cert policy → (allowed, receipt_clause). No I/O. Reached ONLY when
     the existing freshness gate would otherwise BLOCK (stale + carrying panel +
     assertive/irreversible/unclassified + no --force/--stale-panel-ok).
@@ -2997,9 +3089,12 @@ def tail_cert_gate_decision(*, can_certify: bool, behavioral_nonempty: bool,
     an unreadable file — or the runner's own `no-judge` reason); it never certifies,
     whatever `cert_verdict` holds. `no_verdict` is why a judge that WAS called left
     no verdict (it did not answer, no verdict line, its answer discarded). Before,
-    all of these and a judge's FAIL read "tail certification did not return PASS"."""
+    all of these and a judge's FAIL read "tail certification did not return PASS".
+    `cause` is why the delta could not be certified at all (`tail_cert_delta_why`,
+    task 202): flattened and printable here too."""
     if not can_certify:
-        return (False, "tail certification unavailable — fresh panel required")
+        _c = _printable_cause(" ".join(str(cause or "").split()))
+        return (False, "tail certification unavailable — " + (f"{_c} — " if _c else "") + "fresh panel required")
     if behavioral_nonempty:
         return (False, "code-path delta since the panel — fresh full panel required")
     if unavailable:
