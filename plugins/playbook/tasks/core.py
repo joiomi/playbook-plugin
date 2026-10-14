@@ -3061,8 +3061,9 @@ def parse_tail_cert_verdict(raw: "str | None",
 _ROUND_HEAD_RE = re.compile(r"^# Panel (Plan|Impl) Review\b", re.MULTILINE)
 # Task 200 (#3, PLAN §S14 T7): the round format 1.6.2 writes — the H1 and, on the very next line, the writer's mark —
 # with every line of every judge's text QUOTED (`quote_judge_text`), so no line a judge wrote can open a round or be
-# a header field, a gate, a ruling or a triage bullet. In a file that holds such a round only its heads open rounds:
-# an old-style heading counts only in a file with none (task 186, rule 10).
+# a header field, a gate, a ruling or a triage bullet. The mark is a provenance LABEL (`format` 2: this round's judge
+# lines are quoted), honoured only in a file's leading run of headings so a mark a 1.6.1 judge wrote labels nothing;
+# no reader decides on it — the defence is the quoting and the header-only, anchored fields.
 ROUND_FORMAT_MARK = "**Round-format:** 2"
 
 
@@ -3210,6 +3211,7 @@ def _archive_judge_overflow(archive_path: Path,
     preserved as one verbatim block, the same rule `stack_judge_round` applies to
     judge.md itself. Returns the total round-or-block count now in the archive."""
     prior: "list[str]" = []
+    apre = ""
     if archive_path.exists():
         # Let an IO error propagate: the caller keeps the overflow in judge.md
         # instead, so nothing is lost. errors="replace" tolerates bad bytes
@@ -3218,7 +3220,10 @@ def _archive_judge_overflow(archive_path: Path,
         # Its generated header comment is regenerated below — only that comment is dropped, never text after it
         # (impl panel round 1, I-1: dropping the whole leading block deleted what had been archived under it).
         body = re.sub(r"\A\s*<!-- Judge round archive\..*?-->\s*", "", raw, count=1, flags=re.S)
-        prior_blocks = split_judge_blocks(body)
+        # Text above its first round stays ABOVE them, outside the de-dup set (impl panel round 2, II-2: written after
+        # the fresh rounds it was glued into one, whose key then no longer matched and a retry archived it twice).
+        apre = judge_preamble(body).rstrip()
+        prior_blocks = split_judge_blocks(body, preamble=False)
         if prior_blocks:
             prior = [_TRIM_POINTER_RE.sub("", b).rstrip() for b in prior_blocks]
         elif body.strip():
@@ -3244,7 +3249,7 @@ def _archive_judge_overflow(archive_path: Path,
               "retention window, kept VERBATIM, newest first. The TRUE panel "
               "round count for this task = round headings here + round headings "
               "in judge.md. Never edit or delete by hand. -->\n\n")
-    _atomic_write(archive_path, header + "\n\n".join(kept) + "\n")
+    _atomic_write(archive_path, header + (apre + "\n\n" if apre else "") + "\n\n".join(kept) + "\n")
     return len(kept)
 
 
@@ -3287,7 +3292,7 @@ def stack_judge_round(judge_md: Path, round_text: str,
             # Impl panel round 1, I-6 (PRE-EXISTING): a judge.md that cannot be READ is never replaced — the error
             # propagates and both files stay as they are (an empty read used to let the write erase its history).
             old_text = judge_md.read_text(encoding="utf-8", errors="replace")
-            pre = judge_preamble(old_text).strip()
+            pre = judge_preamble(old_text).rstrip()   # never lstrip: an indented `# Panel …` must stay indented (II-1)
             old_blocks = split_judge_blocks(old_text, preamble=False)
             if old_blocks:
                 # Strip the previous end-of-file overflow pointer off whichever

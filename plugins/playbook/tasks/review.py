@@ -800,7 +800,7 @@ SINGLE_JUDGE_FILE = "judge-single.md"
 
 
 def _append_review_to_judge_md(task_dir, review_mode: str, seat: str, findings: str,
-                               why: str):
+                               why: str, receipt: str = ""):
     """Append a single-judge review to the task's `judge-single.md` (task 117) and
     return its path, or None when it cannot be written.
 
@@ -817,8 +817,9 @@ def _append_review_to_judge_md(task_dir, review_mode: str, seat: str, findings: 
     from tasks.core import quote_judge_text
     quoted = quote_judge_text(findings)
     block = (f"## Single-judge {review_mode} review — {stamp} (`{seat}`)\n\n"
-             f"Recorded here by the CLI: task.md has no place for these findings ({why}). "
-             f"The review, verbatim, every line quoted:\n\n{quoted}\n")
+             f"Recorded here by the CLI: task.md has no place for these findings ({why})."
+             + (f"\n\n{receipt}\n\n" if receipt else " ")        # the CLI's own receipt: its line, not quoted (II-3)
+             + f"The review, verbatim, every line quoted:\n\n{quoted}\n")
     try:
         with task_lock(path):
             old = path.read_text(encoding="utf-8") if path.exists() else ""
@@ -829,7 +830,7 @@ def _append_review_to_judge_md(task_dir, review_mode: str, seat: str, findings: 
     return path
 
 
-def _write_review_findings(task_file: Path, review_mode: str, findings: str) -> str | None:
+def _write_review_findings(task_file: Path, review_mode: str, findings: str, receipt: str = "") -> str | None:
     """Write a single judge's findings into task.md. Returns None on success,
     else a human-readable reason it refused.
 
@@ -857,12 +858,13 @@ def _write_review_findings(task_file: Path, review_mode: str, findings: str) -> 
     except Exception as _lock_err:      # noqa: BLE001 — never block a delivered review
         return f"could not lock {task_file.name}: {_lock_err}"
     try:
-        return _write_review_findings_locked(task_file, review_mode, findings)
+        return _write_review_findings_locked(task_file, review_mode, findings, receipt)
     finally:
         _lock_cm.__exit__(None, None, None)
 
 
-def _write_review_findings_locked(task_file: Path, review_mode: str, findings: str) -> "str | None":
+def _write_review_findings_locked(task_file: Path, review_mode: str, findings: str,
+                                  receipt: str = "") -> "str | None":
     """The body of `_write_review_findings`, run with the task lock held."""
     section = _REVIEW_SECTIONS.get(review_mode)
     if section is None:
@@ -874,6 +876,9 @@ def _write_review_findings_locked(task_file: Path, review_mode: str, findings: s
     # judge's `## Status` + `blocked` released the stop hook).
     from tasks.core import quote_judge_text
     body = quote_judge_text(_neutralise_markers(findings.strip(), review_mode))
+    # The CLI's own receipt (a degraded tamper guard) is the writer's line: unquoted, right after its marker (II-3).
+    if receipt:
+        body = _neutralise_markers(receipt.strip(), review_mode) + "\n\n" + body
     block = f"{open_m}\n{body}\n{close_m}"
 
     try:
@@ -3627,9 +3632,9 @@ def _cmd_single_review(cmd, cmd_args):
         # Task 059: a degraded guard is stamped on the findings themselves so the
         # task record says what was and was not verified (clean adds nothing).
         _findings_text = saved_review_text
-        if _tamper_changes["cautions"]:
-            _findings_text = f"**Tamper guard: {_tamper_receipt}**\n\n" + saved_review_text
-        refusal = _write_review_findings(task_file, review_mode, _findings_text)
+        # The receipt goes on as the CLI's own line, apart from the judge's quoted text (II-3).
+        _receipt = f"**Tamper guard: {_tamper_receipt}**" if _tamper_changes["cautions"] else ""
+        refusal = _write_review_findings(task_file, review_mode, _findings_text, receipt=_receipt)
         if refusal is None:
             print(f"Findings written to {task_file.relative_to(project_path)} "
                   f"(## {'Plan' if review_mode == 'plan' else 'Implementation'} Review)",
@@ -3640,7 +3645,7 @@ def _cmd_single_review(cmd, cmd_args):
             # write into it — but the review succeeded, so it lands in the task's
             # judge.md instead of waiting for someone to paste it by hand.
             landed = _append_review_to_judge_md(task_file.parent, review_mode, _spend_seat,
-                                                _findings_text, refusal)
+                                                _findings_text, refusal, receipt=_receipt)
             if landed:
                 print(f"Findings written to {landed.relative_to(project_path)} "
                       f"(task.md has no place for them: {refusal})", flush=True)
