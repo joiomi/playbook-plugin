@@ -1026,6 +1026,102 @@ class TheDeltaFilesList(unittest.TestCase):
         self.assertIn("DELTA FILES (2): new_name.py, old_name.py", text)
 
 
+
+class TheFieldIsCheckedOnTheRealPath(unittest.TestCase):
+    """Task 201, impl round 1 (codex R1-3): membership on the real path — a spelling or a link that names a file the
+    delta changed counts; a path that resolves out of the project counts; a real unchanged file does not."""
+
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp(prefix="pb201-real-"))
+        self.addCleanup(shutil.rmtree, self.d, True)
+        out = Path(tempfile.mkdtemp(prefix="pb201-out-"))
+        self.addCleanup(shutil.rmtree, out, True)
+        (self.d / "src").mkdir()
+        (self.d / "src" / "x.py").write_text("x = 1\n", encoding="utf-8")
+        (self.d / "README.md").write_text("# r\n", encoding="utf-8")
+        os.symlink("src", self.d / "alias")
+        (out / "elsewhere.py").write_text("e = 1\n", encoding="utf-8")
+        os.symlink(out / "elsewhere.py", self.d / "out.py")
+        os.symlink("../README.md", self.d / "src" / "readme-link.md")
+
+    def counted(self, field):
+        exists = getattr(post_d6, "real_path", None)
+        pred = (lambda rel: exists(self.d, rel)) if exists else (lambda rel: (self.d / rel).is_file())
+        v = _verdict_with(f"**Important** [PRE-EXISTING] [file: {field}] — x\n\nCAP: 1/5 reported, exhausted\n",
+                          {"src/x.py"}, pred)
+        return v["important"]
+
+    def test_spellings_and_links(self):
+        for field, counted in (("src/./x.py", 1), ("src//x.py", 1), ("alias/x.py", 1), ("out.py", 1),
+                               ("README.md", 0), ("src/readme-link.md", 0)):
+            with self.subTest(field=field):
+                self.assertEqual(self.counted(field), counted)
+
+    def test_the_delta_named_through_a_link(self):
+        # a scope reached through a link (the delta names `alias/x.py`): its real path is the listed file too
+        v = _verdict_with("**Important** [PRE-EXISTING] [file: src/x.py] — x\n\nCAP: 1/5 reported, exhausted\n",
+                          {"alias/x.py"}, lambda rel: post_d6.real_path(self.d, rel))
+        self.assertEqual(v["important"], 1)
+
+    def test_real_path(self):
+        self.assertEqual(post_d6.real_path(self.d, "alias/x.py"), "src/x.py")
+        self.assertEqual(post_d6.real_path(self.d, "src/./x.py"), "src/x.py")
+        self.assertEqual(post_d6.real_path(self.d, "out.py"), "")              # out of the project
+        self.assertEqual(post_d6.real_path(self.d, "nowhere.py"), "")
+        self.assertEqual(post_d6.real_path(self.d, "src"), "")                 # a directory is no file
+
+    def test_the_prompt_says_file_level(self):                               # R1-5
+        from tasks import template
+        clause = template.post_d6_clauses(delta=True)
+        self.assertIn("cites no file of the delta at a line", clause)
+        self.assertNotIn("cites no line the delta changed", clause)
+
+
+class NamesThatAreNotText(unittest.TestCase):
+    """Task 201, impl round 1 (codex R1-4): a changed file whose name is not UTF-8, or holds a line break, is printed
+    escaped — the delta text always encodes — and the verdict's set holds both the raw and the printed name."""
+
+    def _delta(self, names, cap):
+        import tasks.core as core
+        from unittest import mock
+        d = _scoped_repo(self, "pb201-bytes-")
+        for n in names:
+            (d / n).write_text("v = 1\n" * 300, encoding="utf-8")
+        _git(d, "add", "-A")
+        _git(d, "commit", "-qm", "c0")
+        base = post_d6.worktree_tree(d, [])
+        for n in names:
+            (d / n).write_text("v = 2\n" * 300, encoding="utf-8")
+        snap = {"scopes": {"": {"base": base, "identity": core._scope_identity(d, d)}}, "exclude": []}
+        files: set = set()
+        with mock.patch("tasks.core._tail_cert_scopes", lambda p, c: {"": d}):
+            text, note = post_d6.delta_text(d, snap, cap, files_out=files)
+        return text, note, files
+
+    def test_a_name_that_is_not_utf8(self):
+        bad = os.fsdecode(b"bad-\xff.py")
+        for cap in (10 ** 6, 1_500):
+            with self.subTest(cap=cap):
+                text, note, files = self._delta([bad], cap)
+                text.encode("utf-8")                                         # no UnicodeEncodeError
+                self.assertIn("DELTA FILES (1): bad-\\xff.py", text)
+                self.assertIn(bad, files)
+                self.assertIn("bad-\\xff.py", files)
+
+    def test_the_printed_name_is_cited_too(self):
+        # the judge cites the name as the text prints it: 1.6.1's prose check must see it
+        bad = os.fsdecode(b"bad-\xff.py")
+        text, note, files = self._delta([bad], 10 ** 6)
+        v = post_d6.parse_verdict("**Important** [PRE-EXISTING] [file: README.md] — the caller `bad-\\xff.py:3`.\n\n"
+                                  "CAP: 1/5 reported, exhausted\n", delta_files=files, exists=lambda rel: True)
+        self.assertEqual(v["important"], 1)
+
+    def test_a_name_with_a_line_break(self):
+        text, note, files = self._delta(["a\nb.py"], 10 ** 6)
+        self.assertIn("DELTA FILES (1): a\\x0ab.py\n", text)
+        self.assertIn("a\nb.py", files)
+
+
 class EndToEnd(unittest.TestCase):
     """Drives `cmd_panel_review` and `tasks impl-review` in a git project with
     faked judges: the panel's payload carries the SETTLED block, the panel round
@@ -1264,6 +1360,27 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(code, 0, err)
         self.assertIn("POST-PANEL DELTA", self.single_calls[-1])
         self.assertNotIn("HEAD-CLAMPED", self.single_calls[-1], err)
+
+    def test_a_cut_delta_with_a_name_that_is_not_utf8(self):              # impl round 1, R1-4 (codex)
+        from unittest import mock
+        self._panel()
+        bad = os.fsdecode(b"bad-\xff.py")
+        (self.d / bad).write_text("".join(f"v{i} = {i}\n" for i in range(4000)), encoding="utf-8")
+        with mock.patch("tasks.core.resolve_review_context_chars", return_value=20_000):
+            code, err, out = self._single(
+                "**Important** [PRE-EXISTING] [file: bad-\\xff.py] — x\n\nCAP: 1/5 reported, exhausted\n")
+        self.assertTrue(self.single_calls, err)
+        self.assertIn("POST-D6 VERDICT: FAIL", out, err)                    # the printed name is in the delta
+        rid = self._single_runs()[-1]["id"]
+        self.assertTrue((self.tf.parent / f"post-d6-delta-{rid}.patch").is_file())
+
+    def test_a_link_to_a_changed_file_counts(self):                         # impl round 1, R1-3 (codex)
+        os.symlink("edit.py", self.d / "edit-link.py")
+        self._panel()
+        (self.d / "edit.py").write_text("v = 2\n", encoding="utf-8")
+        code, err, out = self._single(
+            "**Important** [PRE-EXISTING] [file: edit-link.py] — x\n\nCAP: 1/5 reported, exhausted\n")
+        self.assertIn("POST-D6 VERDICT: FAIL", out, err)
 
     def test_a_delta_that_fits_writes_no_patch_file(self):                  # plan triage 10
         self._panel()

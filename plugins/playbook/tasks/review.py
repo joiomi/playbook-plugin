@@ -3644,13 +3644,11 @@ def _cmd_single_review(cmd, cmd_args):
     # SETTLED + DELTA parts the judge received are kept beside the log.
     if (_pd6_round is not None and _pd6_panel_fp and not _log_save_failed
             and saved_review_text and saved_review_text.strip()):
-        def _pd6_exists(rel: str) -> bool:
-            # a finding's `[file: …]` names a real file, from the project root (task 201,
-            # #6; the parser has already refused an absolute path and one with `..`)
-            return (Path(project_path) / rel).is_file()
+        # a finding's `[file: …]` names a real file, from the project root, by its real
+        # path (task 201, #6; impl round 1: a spelling or a link names the file it reaches)
         _v = _pd6.parse_verdict(saved_review_text,
                                 delta_files=(_pd6_files or _pd6.delta_files(_pd6_delta)) if _pd6_delta else None,
-                                exists=_pd6_exists)
+                                exists=lambda _rel: _pd6.real_path(project_path, _rel))
         print("\n" + _pd6.verdict_line(_v), flush=True)
         try:
             _pd6.finish_run(task_file.parent, _pd6_rid, {

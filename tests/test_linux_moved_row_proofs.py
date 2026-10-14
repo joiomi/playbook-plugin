@@ -1118,6 +1118,9 @@ class TheExitCodesTheReferenceStates(unittest.TestCase):
     STATED = {
         "exits non-zero on error-severity findings": "test_audit_exits_non_zero_on_an_error_severity_finding",
         "is refused (exit 2, nothing spent)": ("tests/test_post_d6.py", "EndToEnd", "test_protocol_end_to_end"),
+        # task 201 (#9): an empty post-D6 delta
+        "the run is refused before anything is spent or written (exit 2)":
+            ("tests/test_post_d6.py", "EndToEnd", "test_an_empty_delta_runs_no_judge_and_writes_nothing"),
         "Exits 1 when a pin can't run as configured": "test_models_check_exits_1_when_a_pin_cannot_run",
         "A dead pin aborts (exit 1) unless `--force` is passed":
             ("tests/test_model_availability.py", "SetTest", "test_dead_pin_refused_unless_force"),

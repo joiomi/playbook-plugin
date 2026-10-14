@@ -197,21 +197,65 @@ def _field_path(raw: str) -> str:
     return v
 
 
-def _outside_delta(path: str, files: "set[str]", exists) -> bool:
+def real_path(project_path, rel: str) -> str:
+    """`rel`'s path from the project's real root when it names an existing regular
+    file, links resolved (task 201, impl round 1: a spelling or a link must not hide
+    a file the delta changed) — "" for anything else, a path that resolves out of
+    the project included."""
+    try:
+        root = os.path.realpath(str(project_path))
+        full = os.path.realpath(os.path.join(root, rel))
+        if not os.path.isfile(full):
+            return ""
+        out = os.path.relpath(full, root)
+    except (OSError, ValueError):
+        return ""
+    return "" if out == ".." or out.startswith("../") or os.path.isabs(out) else out
+
+
+def _as_real(path: str, exists) -> str:
+    """What `exists` says of a path: its real path (a string), the path as written
+    (True), or "" — no real file."""
+    r = exists(path)
+    return path if r is True else (r if isinstance(r, str) else "")
+
+
+def _in_delta(path: str, files: "set[str]") -> bool:
+    """A listed path, its diff side's spelling (`a/`, `b/`), or the end of one."""
+    return (path in files or (path[:2] in ("a/", "b/") and path[2:] in files)
+            or any(f.endswith("/" + path) for f in files))
+
+
+def _real_files(files: "set[str]", exists) -> "set[str]":
+    """The real paths of the delta's files that still exist (a link or a nested
+    scope's link names the file the judge may write by its real path)."""
+    out: "set[str]" = set()
+    for f in files:
+        try:
+            r = _as_real(f, exists)
+        except Exception:
+            continue
+        if r:
+            out.add(r)
+    return out
+
+
+def _outside_delta(path: str, files: "set[str]", exists,
+                   real_files: "set[str] | frozenset[str]" = frozenset()) -> bool:
     """Does a finding's declared file lie OUTSIDE the delta (task 201, #6)? Only a
-    real file of the project (`exists`) that the delta did not change. A listed path
-    — also as a diff side (`a/`, `b/`) or as the end of a listed one — a path found
-    nowhere, an absolute one, one with `..`, or no field at all: in it."""
+    real file of the project (`exists`) that the delta did not change — compared as
+    written AND by its real path against the listed files' real paths. A listed
+    path, a path found nowhere, an absolute one, one with `..`, or no field at all:
+    in it."""
     if not path or exists is None or path.startswith("/") or ".." in path.split("/"):
         return False
-    if path in files or (path[:2] in ("a/", "b/") and path[2:] in files):
-        return False
-    if any(f.endswith("/" + path) for f in files):
+    if _in_delta(path, files):
         return False
     try:
-        return bool(exists(path))
+        real = _as_real(path, exists)
     except Exception:
         return False
+    return bool(real) and not _in_delta(real, set(files) | set(real_files))
 
 
 def parse_verdict(text: str, delta_files: "set[str] | None" = None, exists=None) -> dict:
@@ -223,6 +267,7 @@ def parse_verdict(text: str, delta_files: "set[str] | None" = None, exists=None)
     counts = {"critical": 0, "important": 0, "settled": 0, "contradicted": 0,
               "pre_existing": 0}
     found = 0
+    real_files = None       # the delta's files by their real paths, built when a field first needs them
     lines = (text or "").splitlines()
     marks = [(i, m) for i, ln in enumerate(lines) for m in _FINDING_RE.finditer(ln)]
     for k, (i, m) in enumerate(marks):
@@ -245,7 +290,10 @@ def parse_verdict(text: str, delta_files: "set[str] | None" = None, exists=None)
         if t == "PRE-EXISTING" and delta_files is not None:
             seg_end = marks[k + 1][1].start() if k + 1 < len(marks) and marks[k + 1][0] == i else len(ln)
             field = _FILE_FIELD_RE.search(ln, m.end(), seg_end)
-            if (_outside_delta(_field_path(field.group(1)) if field else "", delta_files, exists)
+            if field and exists is not None and real_files is None:
+                real_files = _real_files(delta_files, exists)
+            if (_outside_delta(_field_path(field.group(1)) if field else "", delta_files, exists,
+                               real_files or frozenset())
                     and not _cites_delta(span, delta_files)):
                 counts["pre_existing"] += 1
                 continue
@@ -453,6 +501,16 @@ def _pair_parts(entries, parts: "list[str]") -> "list[tuple[tuple, str]] | None"
     return out if j == len(parts) else None
 
 
+def _printable(name: str) -> str:
+    """A path as the text shows it (task 201, impl round 1): the bytes of a name that
+    is not UTF-8 (`os.fsdecode`'s surrogates) and every character that is not
+    printable as `\\xNN` (`\\uNNNN` above 0xff) — a surrogate cannot be encoded for the
+    judge, a line break would break the list."""
+    s = name.encode("utf-8", "surrogateescape").decode("utf-8", "backslashreplace")
+    return "".join(ch if ch.isprintable() else (f"\\x{ord(ch):02x}" if ord(ch) < 0x100 else f"\\u{ord(ch):04x}")
+                   for ch in s)
+
+
 def _listing(label: str, names: "list[str]", budget: int) -> str:
     """`label (N): a, b … and K more` — every name counted, as many written as fit."""
     if not names:
@@ -547,8 +605,9 @@ def delta_parts(project_path: Path, snapshot: "dict | None",
         for paths in entries or []:
             for p in paths:
                 shown = p if name == "" else f"{name}/{p}"
-                files.update((p, shown))       # the judge copies the prefixed name (task 201, #6)
-                listed.add(shown)
+                # the judge copies the prefixed name as the text prints it (task 201, #6; impl r1)
+                files.update((p, shown, _printable(p), _printable(shown)))
+                listed.add(_printable(shown))
         scope_lines.append(f"### scope {label} — git -C {label} diff {base} {cur}"
                            + ("" if text.strip() else " — no change in this scope") + "\n")
         paired = _pair_parts(entries, _split_patch(text)) if entries is not None else None
@@ -559,7 +618,7 @@ def delta_parts(project_path: Path, snapshot: "dict | None",
             for file_no, (paths, part) in enumerate(paired):
                 units.append((min(_file_class(p, name == "") for p in paths), scope_no,
                               len(part), file_no,
-                              paths[-1] if name == "" else f"{name}/{paths[-1]}", part))
+                              _printable(paths[-1] if name == "" else f"{name}/{paths[-1]}"), part))
         # stat of the SAME two trees (untracked files included — codex r1)
         st = _git(repo, ["diff", "--no-color", "--stat=200", "-M", base, cur, "--", ".", *exclude])
         stats.append(f"scope {label} — git -C {label} diff --stat {base} {cur}:\n"

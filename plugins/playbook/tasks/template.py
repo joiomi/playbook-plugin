@@ -341,8 +341,8 @@ def post_d6_clauses(settled: bool = False, delta: bool = False) -> str:
               "and the tag: `[file: <path>]` — the path copied exactly from the delta's DELTA FILES "
               "list, or, for a file the delta did not change, that file's path from the project root. "
               "A [PRE-EXISTING] finding is parked only when that field names a real file the delta "
-              "did not change and the finding cites no line the delta changed; without the field it "
-              "counts. ")
+              "did not change and the finding cites no file of the delta at a line (`<file>:<line>`); "
+              "without the field it counts. ")
     return s
 
 
