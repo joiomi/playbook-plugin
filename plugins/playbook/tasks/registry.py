@@ -257,10 +257,12 @@ def _is_dir(path: Path) -> bool:
     try:
         return stat.S_ISDIR(os.stat(path).st_mode)
     except FileNotFoundError:
-        return False
+        return False                      # gone, or a dangling link
     except OSError as e:
-        if os.path.islink(path):
-            return False                  # a dangling or looping link is no folder
+        if e.errno in (errno.ELOOP, errno.ENOTDIR):
+            return False                  # a looping link, or a component that is no directory: no folder
+        # a permission or I/O error is no answer (the single judge's run 1, K3, codex: EACCES on a linked folder's
+        # target read as "gone" released its hold and let the close overlook it)
         raise LaneUnreadable(f"{path} cannot be examined: {e}") from e
 
 

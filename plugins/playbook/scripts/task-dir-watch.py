@@ -73,6 +73,7 @@ from tasks import registry  # noqa: E402
 
 FLAG = "task_dir_flag"
 FLAG_LOCK = "task_dir_flag.lock"
+PENDING = "task_dir_flag.pending."            # a detection whose post could not have the lock (the judge's K1)
 BEFORE = "task_dirs_before"
 SNAPSHOT_MAX_AGE = 86400                      # a call another hook denied (it never ran) leaves its snapshot
 GIT_TIMEOUT = 1.0                             # the hook entries allow 20 s; git stops asking at its first timeout
@@ -233,8 +234,10 @@ def _flag_lock(sfd: int):
 
 def _record_flag(sfd: int, lane_rel: str, folders: "list[str]") -> "str | None":
     """Add `folders` to the session's flag; None when recorded, else why not. Under the flag's lock — and when that
-    lock is not had within its wait, without it (impl panel r2 J5/J8, sonnet, codex: a hold the lock kept from being
-    written held nothing): the write is still all-or-nothing, only a concurrent post's folder could be lost then."""
+    lock is not had within its wait (impl panel r2 J5/J8: a hold the lock kept from being written held nothing), as a
+    PENDING entry under a name of its own, which the hook and `_pre` count as a flag and the next re-check merges under
+    the lock (the single judge's run 1, K1, codex: a write without the lock raced a re-check that had read the flag
+    before it, and the re-check removed the whole flag — the folder left unflagged)."""
     def merge() -> None:
         try:
             old = _read_json(sfd, FLAG)
@@ -248,10 +251,22 @@ def _record_flag(sfd: int, lane_rel: str, folders: "list[str]") -> "str | None":
             with _flag_lock(sfd):
                 merge()
         except Unsafe:
-            merge()
+            _write_json(sfd, f"{PENDING}{os.getpid()}.{time.time_ns()}",
+                        {"v": 1, "folders": sorted(set(folders)), "since": _now()})
         return None
     except OSError as e:
         return str(e)
+
+
+def _pending(sfd: int) -> "list[str]":
+    try:
+        return sorted(n for n in os.listdir(sfd) if n.startswith(PENDING))
+    except OSError:
+        return []
+
+
+def _flag_present(sfd: int) -> bool:
+    return _lexists(sfd, FLAG) or bool(_pending(sfd))
 
 
 def _sweep_snapshots(sfd: int) -> None:
@@ -470,13 +485,20 @@ def _recheck(project: Path, lane: Path, sfd: int) -> "tuple[list[str], str, str]
     stand flagged — nothing knows them (impl panel r1 I6, fable: the hold ended there silently)."""
     lane_rel = _lane_rel(project, lane)
     with _flag_lock(sfd):
-        if not _lexists(sfd, FLAG):
+        pending = _pending(sfd)
+        if not _lexists(sfd, FLAG) and not pending:
             return [], "ok", ""
         try:
-            data = _read_json(sfd, FLAG)
+            data = _read_json(sfd, FLAG) if _lexists(sfd, FLAG) else {"v": 1, "folders": []}
         except ValueError:
             data = None
         names = _flagged_names(data, lane_rel)
+        for pend in pending:                      # merged under the lock; removed below only once read (K1)
+            try:
+                more = _flagged_names(_read_json(sfd, pend), lane_rel)
+            except ValueError:
+                more = None
+            names = None if names is None or more is None else sorted(set(names) | set(more))
         state, note = "ok", ""
         if not _registry_present(lane):
             state = "gone"
@@ -488,10 +510,12 @@ def _recheck(project: Path, lane: Path, sfd: int) -> "tuple[list[str], str, str]
             return [], "unreadable", registry.unreadable_message(e)
         if not left:
             _unlink(sfd, FLAG)
-            return [], state, note
-        folders = [f"{lane_rel}/tasks/{n}" for n in left]
-        if not isinstance(data, dict) or data.get("folders") != folders:
-            _write_json(sfd, FLAG, {"v": 1, "folders": folders, "since": _now()})
+        else:
+            folders = [f"{lane_rel}/tasks/{n}" for n in left]
+            if pending or not isinstance(data, dict) or data.get("folders") != folders:
+                _write_json(sfd, FLAG, {"v": 1, "folders": folders, "since": _now()})
+        for pend in pending:                      # only the entries read above — a newer one stands
+            _unlink(sfd, pend)
         return left, state, note
 
 
@@ -593,7 +617,7 @@ def _pre(watched: bool, p: dict, project: Path, lane: Path, sfd: int, inside: bo
     cmd = _str(_dict(p, "tool_input"), "command")
     cwd = _str(p, "cwd")
     cwd = cwd if os.path.isabs(cwd) else str(project)
-    if _lexists(sfd, FLAG):
+    if _flag_present(sfd):
         left, state, note = _recheck(project, lane, sfd)
         if state == "unreadable":                 # impl panel r1 I7: journaled (not held — its repair must run)
             _journal(lane, "record", "task registry unreadable", sid, tool, "", cmd)

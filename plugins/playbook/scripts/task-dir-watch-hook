@@ -47,7 +47,8 @@ SESSION_DIR="$AGENT_DIR/sessions/$SESSION_ID"
 FLAG="$SESSION_DIR/task_dir_flag"
 
 PB_FLAGGED=false
-{ [ -e "$FLAG" ] || [ -L "$FLAG" ]; } && PB_FLAGGED=true
+# a flag, or a pending entry a post wrote when it could not have the flag's lock (the single judge's K1)
+{ [ -e "$FLAG" ] || [ -L "$FLAG" ] || compgen -G "$FLAG.pending.*" > /dev/null; } && PB_FLAGGED=true
 if [ "$PB_FLAGGED" != true ]; then
     # Claude's Edit/MultiEdit of an EXISTING file, with no flag: nothing to hold, nothing it could make — an empty
     # old_string creates the file and its folders (task 196 I12, measured), so that one goes on to python

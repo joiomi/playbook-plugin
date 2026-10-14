@@ -360,8 +360,11 @@ class FlaggedAfterTheCall(_Project):
         with open(sd / "task_dir_flag.lock", "a") as fh:
             fcntl.flock(fh, fcntl.LOCK_EX)
             self.shell_call("cp -r", lambda: self._task(self.lane, "999-x"), tuid="toolu_LK")
+            self.assertTrue(list(sd.glob("task_dir_flag.pending.*")))   # recorded as a pending entry (K1)
+            self.assertTrue(self.edit()[0])                              # which holds, the lock still not had
+        self.assertTrue(self.edit()[0])                                  # merged under the lock: still held
         self.assertEqual(self.flagged(), [".agent/tasks/999-x"])
-        self.assertTrue(self.edit()[0])
+        self.assertEqual(list(sd.glob("task_dir_flag.pending.*")), [])
 
     def test_a_flag_that_cannot_be_written_is_said_with_its_folder(self):
         # the session directory not writable: nothing persists — the agent is told WHICH folder, and the close refuses
@@ -647,6 +650,48 @@ class HeldUntilResolved(_Project):
             blocked, err, _ = self.edit()
             self.assertLess(time.monotonic() - t0, 15)
         self.assertTrue(blocked, err)
+
+    def _watch_module(self):
+        from importlib import util
+        spec = util.spec_from_file_location("tdw_k1", PLUGIN / "scripts" / "task-dir-watch.py")
+        mod = util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_a_detection_made_while_a_recheck_runs_is_never_lost(self):
+        # the single judge's run 1, K1 (codex): a post that cannot have the lock (a re-check holds it) records its
+        # folder; the re-check, which read the flag BEFORE that, must not remove it. Reproduced in-process: the post
+        # happens inside the re-check, while the lock is held.
+        mod = self._watch_module()
+        mod.LOCK_WAIT = 0.2
+        shutil.rmtree(self.lane / "tasks" / "999-x")          # the flagged folder is gone: the re-check will clear
+        self._task(self.lane, "998-y")                         # the folder the racing post finds
+        sfd, _inside = mod._open_session(self.proj, self.lane, SID)
+        self.addCleanup(os.close, sfd)
+        real = mod._unknown
+
+        def racing(project, lane, names):
+            mod._record_flag(sfd, ".agent", [".agent/tasks/998-y"])
+            return real(project, lane, names)
+        mod._unknown = racing
+        mod._recheck(self.proj, self.lane, sfd)
+        mod._unknown = real
+        left, _state, _note = mod._recheck(self.proj, self.lane, sfd)
+        self.assertEqual(left, ["998-y"])
+        self.assertTrue(self.edit()[0])
+
+    def test_a_linked_folder_whose_target_cannot_be_examined_stays_held(self):
+        # the single judge's run 1, K3 (codex): EACCES on a linked folder's target read as "gone" — the hold cleared
+        target_parent = self.base / "elsewhere"
+        (target_parent / "real").mkdir(parents=True)
+        (target_parent / "real" / "task.md").write_text("# x\n", encoding="utf-8")
+        shutil.rmtree(self.lane / "tasks" / "999-x")          # the fixture's hold ends at the next call
+        self.shell_call("ln -s", lambda: os.symlink(target_parent / "real", self.lane / "tasks" / "998-l"),
+                        tuid="toolu_K3")
+        self.assertIn(".agent/tasks/998-l", self.flagged())
+        target_parent.chmod(0o600)
+        self.addCleanup(target_parent.chmod, 0o755)
+        self.assertTrue(self.edit()[0])
 
     def test_a_watch_that_cannot_run_holds_a_flagged_session(self):
         # fail closed while a flag stands, as the gate holds on a status it cannot read; a post is never held
