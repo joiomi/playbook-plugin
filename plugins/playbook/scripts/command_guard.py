@@ -2012,7 +2012,31 @@ def _reads_heredoc_as_data(seg):
 
 
 _HARMLESS_SINKS = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/fd/1", "/dev/fd/2"})
-_WRITE_ANYWHERE = re.compile(r"(?:&>>|&>|>>|>\||>&|>)\s*(\S*)")          # `<>` too: its `>`
+_WRITE_OP = re.compile(r"&>>|&>|>>|>\||>&|>")                     # `<>` too: its `>`
+
+
+def _write_targets(text):
+    """The target of every write redirection outside quotes in `text`, glued to another word or not
+    (`<<'EOF'>Makefile`), read from the text AS WRITTEN — a quoted target keeps its quotes (`>'s.sh' /dev/null` writes
+    `'s.sh'`: the single judge's run 2); `>&N` and `>&-` are descriptors and left out."""
+    blank, kept = _unquoted_text(text), _unquoted_text(text, keep_quotes=True)
+    out = []
+    for m in _WRITE_OP.finditer(blank):
+        j = m.end()
+        while j < len(kept) and kept[j] in " \t":
+            j += 1
+        k = j
+        while k < len(kept) and kept[k] not in " \t\n;&|<>()":
+            if kept[k] in "'\"":
+                e = kept.find(kept[k], k + 1)
+                k = len(kept) if e == -1 else e + 1
+                continue
+            k += 1
+        target = kept[j:k]
+        if m.group(0) == ">&" and re.fullmatch(r"\d*-?", target):
+            continue                                   # `2>&1`, `>&-`
+        out.append(target)
+    return out
 
 
 def _files_written(seg):
@@ -2021,13 +2045,10 @@ def _files_written(seg):
     rest, _executes, _payloads = _walk_prefix(seg)
     lexed = _lex(rest)
     out = set()
-    # Every write redirection outside quotes, glued to another word or not (`<<'EOF'>Makefile`: impl panel r3,
-    # codex); a target in quotes or built by an expansion is unknown, and counts.
-    for m in _WRITE_ANYWHERE.finditer(_unquoted_text(rest)):
-        target = m.group(1).rstrip(";&|")
-        if m.group(0).startswith(">&") and re.fullmatch(r"\d*-?", target):
-            continue                                   # `2>&1`, `>&-`: a descriptor, no file
-        out.add(target if target and not re.search(r"[$`]", target) else "?")
+    # Every write redirection outside quotes (impl panel r3, codex; the single judge's run 2); a target in quotes or
+    # built by an expansion is unknown, and counts.
+    for target in _write_targets(rest):
+        out.add(target if target and not re.search(r"[$`'\"]", target) else "?")
     if lexed and _command_name(lexed[0][2]) == "tee":
         out |= {t[2] for t in _lex(rest)[1:] if not t[2].startswith("-") and not _REDIRECT.match(t[0])}
     return {f for f in out if f and posixpath.normpath(f) not in _HARMLESS_SINKS}
@@ -2148,12 +2169,70 @@ def _heredoc_read(text):
     return plan, skeleton, spans
 
 
+# The builtins that set a variable without an `=` word (`read PATH <<< …`, `printf -v PATH …`), or run text as code
+# (`eval '…'`, `trap '…' DEBUG` before every command): each may set PATH before a reader runs (task 199, my own probe
+# after the single judge's run 2 — 1.6.1 refuses them all).
+_SETS_VARIABLES = frozenset({"read", "readarray", "mapfile", "declare", "typeset", "local", "export", "readonly",
+                             "getopts", "let", "eval", "trap", "wait"})
+
+
+def _syntax_joined(text):
+    """`text` as bash reads its syntax: heredoc bodies, quoted spans and escapes blanked, and the line continuations
+    outside them removed — `PA\\⏎TH=…` is `PATH=…` (the single judge's run 2); a body is blanked BEFORE the join, so a
+    body line ending in `\\` does not swallow its delimiter."""
+    kept, out, i = _unquoted_text(text, keep_quotes=True), [], 0
+    n = len(kept)
+    while i < n:
+        c = kept[i]
+        if kept.startswith("\\\n", i):
+            i += 2
+            continue
+        if c == "\\" or kept.startswith("$$", i):
+            out.append("  " if c == "\\" else "$$")
+            i += 2
+            continue
+        if c == "'" or kept.startswith("$'", i) or c == '"':
+            j = _quote_end(kept, i) if c != '"' else _dq_end(kept, i)
+            j = n if j is None else j
+            out.append(" " * (j - i))
+            i = j
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _doubtful_for_readers(text):
+    """The owner's ruling of 2026-10-14 19:07 (task 199, after the single judge's run 2 — a `PA\\⏎TH=` assignment, a
+    quoted write target, a `$'E\\qOF'` delimiter): no body is removed from a command that sets a variable (an
+    assignment word, its line continuations joined, or a builtin of `_SETS_VARIABLES`, `printf -v`), writes a file
+    that another command may then run, or has a delimiter in `$'…'`/`$"…"` quoting — prudence over precision: the
+    class goes, not only the case. A write counts when another command follows it or a background job (`&`) runs
+    beside it (the owner, 19:38): a file only written, as 1.6.1 lets it be, runs in no later part of this command."""
+    syntax = _syntax_joined(text)
+    if re.search(r"(?:^|[\s;&|])\w+(?:\[[^\]]*\])?\+?=", syntax):
+        return True
+    kept = _unquoted_text(text, keep_quotes=True)
+    if any(kept.startswith(("$'", '$"'), m.end()) for m in re.finditer(r"(?<!<)<<(?!<)-?\s*", _unquoted_text(text))):
+        return True
+    for seg in _split_segments(kept):
+        values = [tok[2] for tok in _lex(seg)]
+        if any(_command_name(v) in _SETS_VARIABLES for v in values) or (
+                "printf" in map(_command_name, values) and any(v.startswith("-v") for v in values)):
+            return True
+    segs = [(seg, op) for seg, op in _split_segments_keep(kept) if seg.strip()]
+    writes = [k for k, (seg, _op) in enumerate(segs)
+              if any(posixpath.normpath(t) not in _HARMLESS_SINKS for t in _write_targets(seg))]
+    return bool(writes) and (writes[0] < len(segs) - 1 or any(op == "&" for _seg, op in segs))
+
+
 def _strip_quoted_heredoc_bodies(text):
     """`text` without the bodies of the quoted heredocs that known data readers read (see above; each tag line stays,
-    so the text after it still reads as the command it is); `text` itself when the command is not PLAIN."""
+    so the text after it still reads as the command it is); `text` itself when the command is not PLAIN or is
+    doubtful (`_doubtful_for_readers`)."""
     text = str(text)
     plan = _heredoc_plan(text)
-    if not plan:
+    if not plan or _doubtful_for_readers(text):
         return text
     out, last = [], 0
     for line, quoted, body_start, tag_start in plan:
@@ -2180,6 +2259,8 @@ def _herestring_payloads(text):
             lexed = _lex(rest)
             if lexed and _command_name(lexed[0][2]) in _SHELLS:
                 out.append(_unquote(m.group(1).strip()))
+                operand = _lex(seg[seg.index("<<<") + 3:])   # and its one word, decoded: `'…' 2>/dev/null`,
+                out.extend(operand[:1] and [operand[0][2]])   # `$'…'` (the single judge's run 2; 1.6.1 too)
     return out
 
 
