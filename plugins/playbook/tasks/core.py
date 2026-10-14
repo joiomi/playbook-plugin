@@ -2658,6 +2658,12 @@ def _printable_cause(text) -> str:
                    for ch in str(text))
 
 
+def _is_object_id(value) -> bool:
+    """A full git object id (40 hex, or 64 under sha256) — what a snapshot's `commit` must be before git reads it:
+    a judge.md the agent can edit could hold `--output=<path>`, an option (task 202, impl round 1, R1-1)."""
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", value) is not None
+
+
 def _cause_paths(paths) -> str:
     """The first three paths of a cause, printable, then "…"."""
     paths = list(paths)
@@ -2722,20 +2728,34 @@ def _finding_a_cause(project_path: Path, live_scopes: dict, snap_scopes: dict, r
             f" — the close bound to {base} (`--stale-panel-ok`) applies" if base else "")
     moved = []
     for name, repo in live_scopes.items():
-        f0 = ((snap_scopes.get(name) or {}) if isinstance(snap_scopes.get(name), dict) else {}).get("commit") or ""
+        label = _printable_cause(name or ".")
+        rec = snap_scopes.get(name)
+        f0 = rec.get("commit") if isinstance(rec, dict) else ""        # a full object id: checked by the caller
         try:
             h = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, timeout=30)
-            cur = h.stdout.strip() if h.returncode == 0 else ""
-            if not (f0 and cur and cur != f0):
-                continue
-            n = subprocess.run(["git", "diff", "--name-only", "-z", "--no-renames", f0, cur],
-                               cwd=repo, capture_output=True, timeout=60)
-            paths = [os.fsdecode(x) for x in n.stdout.split(b"\0") if x] if n.returncode == 0 else []
         except (OSError, subprocess.SubprocessError):
+            h = None
+        cur = h.stdout.strip() if h is not None and h.returncode == 0 else ""
+        if not _is_object_id(cur):
+            # a failure is said as one, never as a fact (impl round 1, R1-2)
+            moved.append(f"scope {label}: git could not compare the reviewed commit with HEAD")
             continue
-        moved.append(f"scope {_printable_cause(name or '.')}: HEAD moved {f0[:7]} → {cur[:7]}"
-                     + (f", and the files it changed ({_cause_paths(paths)}) hold the reviewed tree's content "
-                        "or are excluded from the delta" if paths else " with an identical tree"))
+        if cur == f0:
+            continue
+        try:
+            # `--relative`: what moved INSIDE the scope, named from it (a project below its git top level)
+            n = subprocess.run(["git", "diff", "--name-only", "-z", "--no-renames", "--relative", f0, cur],
+                               cwd=repo, capture_output=True, timeout=60)
+        except (OSError, subprocess.SubprocessError):
+            n = None
+        if n is None or n.returncode != 0:
+            moved.append(f"scope {label}: git could not list what HEAD's move changed ({f0[:7]} → {cur[:7]})")
+            continue
+        paths = [os.fsdecode(x) for x in n.stdout.split(b"\0") if x]
+        # a committed path the delta compares always enters it: what is left is what it excludes
+        moved.append(f"scope {label}: HEAD moved {f0[:7]} → {cur[:7]}"
+                     + (f", and the files it changed ({_cause_paths(paths)}) are excluded from the delta" if paths
+                        else ", with no file of the scope changed"))
     if moved:
         return head + ": " + "; ".join(moved)
     return head + ": no scope's HEAD moved: a staging or fingerprint-only change"
@@ -2794,6 +2814,8 @@ def tail_cert_delta_why(project_path: Path, snapshot: "dict | None", round_tree_
     _covers, _hits = owner_exclude_covers_behavioral(Path(project_path), cfg)
     if _covers:
         _err = ": git error"
+        if "<scopes>: could not enumerate fingerprint scopes" in _hits:      # its other sentinel (impl round 1)
+            return no("the owner-exclude check could not enumerate the fingerprint's scopes")
         _paths = [h for h in _hits if not str(h).endswith(_err)]
         if _paths:
             return no("an owner `fingerprint_exclude` covers source code (" + _cause_paths(_paths) + ")")
@@ -2816,6 +2838,10 @@ def tail_cert_delta_why(project_path: Path, snapshot: "dict | None", round_tree_
         f0_dirty = rec.get("dirty")
         if not f0_commit:
             return no(f"scope {label}: the snapshot of the reviewed tree recorded no commit for it")
+        if not _is_object_id(f0_commit):
+            # before ANY git call: `--output=<path>` is an option to git — it wrote a file and hid a code
+            # commit from this enumeration (impl round 1, R1-1: measured on 1.6.1 too)
+            return no(f"scope {label}: the snapshot of the reviewed tree records an unusable commit id for it")
         if not isinstance(f0_dirty, dict):
             return no(f"scope {label}: the snapshot of the reviewed tree recorded no dirty-file list for it")
         scope_paths = _enumerate_scope_delta(repo, f0_commit, f0_dirty, exclude)
@@ -3071,7 +3097,9 @@ def tail_cert_gate_decision(*, can_certify: bool, behavioral_nonempty: bool,
                             non_behavioral: "list[str]",
                             unavailable: str = "",
                             no_verdict: str = "",
-                            cause: str = "") -> "tuple[bool, str]":
+                            cause: str = "",
+                            behavioral: "list[str] | None" = None,
+                            base: str = "") -> "tuple[bool, str]":
     """PURE tail-cert policy → (allowed, receipt_clause). No I/O. Reached ONLY when
     the existing freshness gate would otherwise BLOCK (stale + carrying panel +
     assertive/irreversible/unclassified + no --force/--stale-panel-ok).
@@ -3091,12 +3119,16 @@ def tail_cert_gate_decision(*, can_certify: bool, behavioral_nonempty: bool,
     no verdict (it did not answer, no verdict line, its answer discarded). Before,
     all of these and a judge's FAIL read "tail certification did not return PASS".
     `cause` is why the delta could not be certified at all (`tail_cert_delta_why`,
-    task 202): flattened and printable here too."""
+    task 202): flattened and printable here too; `behavioral` names the code paths
+    of a code-path refusal, and `base` the reviewed tree when it is a post-D6 PASS's
+    (impl round 1, R1-4)."""
+    _b = f" (measured from {_printable_cause(' '.join(str(base).split()))})" if base else ""
     if not can_certify:
-        _c = _printable_cause(" ".join(str(cause or "").split()))
+        _c = (_printable_cause(" ".join(str(cause or "").split())) + _b).strip()
         return (False, "tail certification unavailable — " + (f"{_c} — " if _c else "") + "fresh panel required")
     if behavioral_nonempty:
-        return (False, "code-path delta since the panel — fresh full panel required")
+        _p = f" ({_cause_paths(behavioral)})" if behavioral else ""
+        return (False, f"code-path delta since the reviewed tree{_p}{_b} — fresh full panel required")
     if unavailable:
         return (False, f"tail certification could not run — {' '.join(unavailable.split())}; "
                        "no judge was called — fresh panel required")

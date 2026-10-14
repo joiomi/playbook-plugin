@@ -921,7 +921,8 @@ def cmd_work(cmd_args):
                     _tc_allowed, _tc_clause = tail_cert_gate_decision(
                         can_certify=_tc_can, behavioral_nonempty=bool(_tc_beh),
                         cert_verdict=_tc_verdict, non_behavioral=_tc_non,
-                        unavailable=_tc_unavail, no_verdict=_tc_noverdict, cause=_tc_cause)
+                        unavailable=_tc_unavail, no_verdict=_tc_noverdict, cause=_tc_cause,
+                        behavioral=_tc_beh, base=_tc_base)
                     if _tc_allowed:
                         _f_allowed = True
                         _freshness = {

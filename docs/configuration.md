@@ -458,8 +458,9 @@ dirty-file list, the scope set or the exclude set changed (both named), an owner
 call failed, code that passed through an owner exclude, or — for a stale tree where no file differs from the reviewed
 one — whether HEAD moved and which files that move changed (from a post-D6 PASS's tree that is still the same, the
 bound close `--stale-panel-ok` is named). The re-check after a judge's PASS names which of its conditions discarded it.
-The certifying judge's diff is asked for without colour, a textconv driver or a user's prefixes, and its fence is
-longer than any backtick run in it. For a documentation-only delta the close says which of
+The certifying judge's diff is asked for without colour, a textconv driver or a user's prefixes, and sits between
+two lines that carry the run's nonce, which no content can forge. A scope's commit in the snapshot must be a full
+object id before git reads it (a forged `--output=…` hid a code commit and wrote a file, in 1.6.1 too). For a documentation-only delta the close says which of
 three things happened: no judge ran — the delta could not be put before one (its size against the 98,304-byte
 payload one judge can be sent, or the file that could not be read), the tamper snapshot could not be taken, or
 the judge's adapter could not be resolved or built, or its program is not installed; the judge returned FAIL; or there is no usable verdict, with
