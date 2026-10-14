@@ -195,6 +195,10 @@ def _split_segments_keep(text, ops=_SEP_OPS):
             buf.append(text[i + 1])
             i += 2
             continue
+        if text.startswith("$$", i):                   # `$$'a'` is `$$` then 'a' (impl panel r3)
+            buf.append("$$")
+            i += 2
+            continue
         if text.startswith("$'", i):                   # `$'it\\'s'`: a backslash escapes its quote — read as
             j = _quote_end(text, i)                    # one string, or `; rm -rf /` after it hid in a "quote"
             j = n if j is None else j                  # (task 199, impl panel r2, gemini; 1.6.1 too)
@@ -237,6 +241,10 @@ def _split_segments(text, ops=_SEP_OPS):
         if c == "\\" and i + 1 < n:
             buf.append(c)
             buf.append(text[i + 1])
+            i += 2
+            continue
+        if text.startswith("$$", i):                   # `$$'a'` is `$$` then 'a' (impl panel r3)
+            buf.append("$$")
             i += 2
             continue
         if text.startswith("$'", i):                   # `$'it\\'s'`: a backslash escapes its quote — read as
@@ -1529,19 +1537,42 @@ def _pipes_downloader_into_shell(text):
 # their arguments as data (`eval`'s is classified as the command it is), and the quote-blind scan everywhere else.
 _LITERAL_ARG_COMMANDS = frozenset({"echo", "printf", "eval"})
 _DATA_FILTERS = frozenset({"cat", "tee", "head", "tail", "grep", "egrep", "fgrep", "rg", "wc", "sort", "uniq", "cut",
-                           "tr", "column", "nl", "less", "more"})
+                           "tr", "column", "nl"})              # not less/more: LESSOPEN runs a shell (r3, opus)
 
 
-def _takes_data(seg):
+def _sets_environment(seg, rest):
+    """Whether the words the wrapper walk took before `rest` hand the program an environment value — an assignment
+    prefix, `env` — which a program may give to a shell (`GIT_EDITOR='…' git commit`, `LESSOPEN='|…' less`)."""
+    raw, kept = _lex(seg), _lex(rest)
+    return any(_ASSIGN.match(tok[0]) or _command_name(tok[2]) == "env" for tok in raw[:len(raw) - len(kept)])
+
+
+def _git_commit(words, from_stdin=False):
+    """`git commit` with no `-c`/`--config-env` (a config value such as `core.editor` is run by a shell) — and, for a
+    reader of a heredoc, taking the message from stdin (`-F -`) with no editor (`-e`)."""
+    if _git_subcommand(words) != "commit" or any(w in ("-c", "--config-env") or w.startswith("--config-env=")
+                                                 for w in words[:words.index("commit")]):
+        return False
+    if not from_stdin:
+        return True
+    rest = words[words.index("commit") + 1:]
+    stdin = any(a in ("-F", "--file") and b == "-" for a, b in zip(rest, rest[1:])) or "--file=-" in rest or "-F-" in rest
+    return stdin and not any(w in ("-e", "--edit") for w in rest)
+
+
+def _takes_data(seg, first=True):
     rest, _executes, payloads = _walk_prefix(seg)
     lexed = _lex(rest)
-    if not lexed:                                      # `eval '…'`: the walk took its string as the payload
-        return bool(payloads) and _command_name((_lex(seg) or [("", 0, "", False)])[0][2]) == "eval"
+    if _sets_environment(seg, rest):
+        return False                                   # impl panel r3, opus, codex, fable
+    if not lexed:                                      # `eval '…'`: the walk took its string as the payload —
+        return (first and bool(payloads)               # data only at a pipeline's head: `… | eval bash` runs bash
+                and _command_name((_lex(seg) or [("", 0, "", False)])[0][2]) == "eval")   # on it (r3, opus)
     name, words = _command_name(lexed[0][2]), _words(lexed)
     if name == "printf":
         return not any(w.startswith("-v") for w in words)
     if name == "git":
-        return _git_subcommand(words) == "commit"
+        return _git_commit(words)
     return name in _LITERAL_ARG_COMMANDS or name in _DATA_FILTERS
 
 
@@ -1552,9 +1583,13 @@ def _single_quotes_are_literal(text):
     _plan, lines, _spans = read
     if any(line.rstrip().endswith(("|", "&&", "|&")) for line in lines):
         return False
+    wrote = False                                  # a quoted text a data command wrote to a file
     for segs in _pipelines("\n".join(lines)):
-        if any("'" in s for s in segs) and not all(_takes_data(s) for s in segs):
-            return False
+        data = all(_takes_data(s, first=k == 0) for k, s in enumerate(segs))
+        if (wrote or any("'" in s for s in segs)) and not data:
+            return False                           # `echo '$(…)' > s.sh; bash s.sh` (impl panel r3)
+        if any("'" in s for s in segs) and any(_files_written(s) for s in segs):
+            wrote = True
     return True
 
 
@@ -1631,6 +1666,15 @@ def _heredoc_tag(text, i):
     tag, quoted = [], False
     while j < n and text[j] not in " \t\n;&|<>()":
         ch = text[j]
+        if text.startswith(("$'", '$"'), j):          # `<<$'EOF'` ends at `EOF` (impl panel r3, codex)
+            k = _quote_end(text, j) if text[j + 1] == "'" else (text.find('"', j + 2) + 1 or None)
+            if k is None:
+                break
+            body = text[j + 2:k - 1]
+            tag.append(_ansi_c_decode(body) if text[j + 1] == "'" else body)
+            quoted = True
+            j = k
+            continue
         if ch in "'\"":
             k = text.find(ch, j + 1)
             if k == -1:
@@ -1716,6 +1760,9 @@ def _one_substitution(text, i):
             if tag:
                 pending.append((tag, dash, quoted))
             j = k
+            continue
+        elif text.startswith("$$", j):
+            j += 2
             continue
         elif c == "'" or text.startswith("$'", j):     # `$'it\\'s'` (impl panel r2, gemini)
             k = _quote_end(text, j)
@@ -1828,8 +1875,8 @@ def _unquoted_text(text, keep_quotes=False):
                 i = after
             pending = []
             continue
-        if c == "\\":
-            out.append(text[i:i + 2] if keep_quotes else "  ")
+        if c == "\\" or text.startswith("$$", i):
+            out.append(text[i:i + 2] if keep_quotes or c == "$" else "  ")
             i += 2
             continue
         if c == "'" or text.startswith("$'", i) or c == '"':
@@ -1866,8 +1913,8 @@ def _rebinds(text, _depth=0):
         lexed = _lex(seg)
         if not lexed:
             continue
-        if any(tok[2].startswith("PATH=") for tok in lexed):
-            return True
+        if any(tok[2].startswith(("PATH=", "BASH_CMDS", "BASH_ALIASES")) for tok in lexed):
+            return True                                # `BASH_CMDS[python3]=/bin/bash` (impl panel r3, codex)
         rest, _executes, payloads = _walk_prefix(seg)
         inner = _lex(rest)
         if any(_command_name(v) in _REBINDING_WORDS for v in [lexed[0][2]] + ([inner[0][2]] if inner else [])):
@@ -1931,13 +1978,13 @@ def _reads_heredoc_as_data(seg):
     name, words = _command_name(lexed[0][2]), _words(lexed)
     if name in _PYTHONS:
         return _python_program_on_stdin(words)
-    if name == "git":
-        return _git_subcommand(words) == "commit"
+    if name == "git":                                  # `GIT_EDITOR='sh -s' git commit <<'EOF'`, `git -c core.editor=…`
+        return _git_commit(words, from_stdin=True) and not _sets_environment(seg, rest)   # (r3, fable)
     return name in _HEREDOC_DATA_READERS
 
 
-_WRITE_REDIRECT = re.compile(r"^(?:\d+|&)?(?:>>|>\||<>|>)(?!&)(.*)$")
 _HARMLESS_SINKS = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/fd/1", "/dev/fd/2"})
+_WRITE_ANYWHERE = re.compile(r"(?:&>>|&>|>>|>\||>)(?!&)\s*(\S*)")          # `<>` too: its `>`
 
 
 def _files_written(seg):
@@ -1945,21 +1992,14 @@ def _files_written(seg):
     `/dev/null` and the standard streams (`/dev/shm/s.sh` is a file: impl panel r2, opus)."""
     rest, _executes, _payloads = _walk_prefix(seg)
     lexed = _lex(rest)
-    out, i = set(), 1
-    while i < len(lexed):
-        raw, _start, value, _quoted = lexed[i]
-        m = _WRITE_REDIRECT.match(raw)
-        if m:
-            target = m.group(1) or (lexed[i + 1][2] if i + 1 < len(lexed) else "")
-            out.add(_unquote(target) if m.group(1) else target)
-            i += 1 if m.group(1) else 2
-            continue
-        if _REDIRECT.match(raw):
-            i += 1 if _REDIRECT.match(raw).end() < len(raw) else 2
-            continue
-        if lexed and _command_name(lexed[0][2]) == "tee" and not value.startswith("-"):
-            out.add(value)
-        i += 1
+    out = set()
+    # Every write redirection outside quotes, glued to another word or not (`<<'EOF'>Makefile`: impl panel r3,
+    # codex); a target in quotes or built by an expansion is unknown, and counts.
+    for m in _WRITE_ANYWHERE.finditer(_unquoted_text(rest)):
+        target = m.group(1).rstrip(";&|")
+        out.add(target if target and not re.search(r"[$`]", target) else "?")
+    if lexed and _command_name(lexed[0][2]) == "tee":
+        out |= {t[2] for t in _lex(rest)[1:] if not t[2].startswith("-") and not _REDIRECT.match(t[0])}
     return {f for f in out if f and posixpath.normpath(f) not in _HARMLESS_SINKS}
 
 
@@ -2102,13 +2142,14 @@ _HERESTRING = re.compile(r"<<<\s*(.+)$", re.S)
 def _herestring_payloads(text):
     out = []
     for line in str(text).split("\n"):
-        m = _HERESTRING.search(line)
-        if not m:
-            continue
-        rest, _executes, _payloads = _walk_prefix(line.split("<<<")[0])
-        lexed = _lex(rest)
-        if lexed and _command_name(lexed[0][2]) in _SHELLS:
-            out.append(_unquote(m.group(1).strip()))
+        for seg in _split_segments(line):              # `true; bash <<< '…'` (impl panel r3, gemini; 1.6.1 too)
+            m = _HERESTRING.search(seg)
+            if not m:
+                continue
+            rest, _executes, _payloads = _walk_prefix(seg.split("<<<")[0])
+            lexed = _lex(rest)
+            if lexed and _command_name(lexed[0][2]) in _SHELLS:
+                out.append(_unquote(m.group(1).strip()))
     return out
 
 

