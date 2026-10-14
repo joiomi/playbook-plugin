@@ -1547,17 +1547,39 @@ def _sets_environment(seg, rest):
     return any(_ASSIGN.match(tok[0]) or _command_name(tok[2]) == "env" for tok in raw[:len(raw) - len(kept)])
 
 
+# The `git commit` options that open no editor and run nothing (task 199, the single judge's run 1): any other option
+# (`-e`, `-qe`, `-c`, `-C`, `-t`, `--fixup`, …) may start the configured editor — a shell command — on the message.
+_GIT_COMMIT_QUIET = frozenset({"-q", "--quiet", "-a", "--all", "-s", "--signoff", "-n", "--no-verify", "--allow-empty",
+                               "--allow-empty-message", "--no-edit", "--amend", "-v", "--verbose", "--no-gpg-sign"})
+
+
 def _git_commit(words, from_stdin=False):
-    """`git commit` with no `-c`/`--config-env` (a config value such as `core.editor` is run by a shell) — and, for a
-    reader of a heredoc, taking the message from stdin (`-F -`) with no editor (`-e`)."""
-    if _git_subcommand(words) != "commit" or any(w in ("-c", "--config-env") or w.startswith("--config-env=")
-                                                 for w in words[:words.index("commit")]):
-        return False
-    if not from_stdin:
-        return True
-    rest = words[words.index("commit") + 1:]
-    stdin = any(a in ("-F", "--file") and b == "-" for a, b in zip(rest, rest[1:])) or "--file=-" in rest or "-F-" in rest
-    return stdin and not any(w in ("-e", "--edit") for w in rest)
+    """`git commit` with no `-c`/`--config-env` before the subcommand (a config value such as `core.editor` is run by
+    a shell), its message given (`-m`, or `-F` — from stdin for a reader of a heredoc) and no option outside
+    `_GIT_COMMIT_QUIET`."""
+    sub, at = _git_subcommand_at(words)
+    if sub != "commit" or any(w.startswith("--config-env") or (w == "-c" and not v.startswith("user."))
+                              for w, v in zip(words[:at], words[1:at] + [""])):
+        return False                                   # `-c user.name=…` sets no command
+    rest, i, message, stdin = words[at + 1:], 0, False, False
+    while i < len(rest):
+        w = rest[i]
+        nxt = rest[i + 1] if i + 1 < len(rest) else None
+        if re.fullmatch(r"-[qasnv]*[Fm]", w) or w in ("--file", "--message"):
+            message, stdin = True, stdin or (w.endswith("F") or w == "--file") and nxt == "-"
+            i += 2
+            continue
+        if w.startswith(("--file=", "--message=")) or re.fullmatch(r"-[qasnv]*[Fm].+", w):
+            message, stdin = True, stdin or w in ("--file=-", "-F-")
+            i += 1
+            continue
+        if w in _GIT_COMMIT_QUIET or re.fullmatch(r"-[qasnv]+", w) or w.startswith("--cleanup="):
+            i += 1
+            continue
+        if w.startswith("-"):
+            return False                               # it may open the editor
+        i += 1                                         # a pathspec
+    return stdin if from_stdin else message
 
 
 def _takes_data(seg, first=True):
@@ -1585,7 +1607,7 @@ def _single_quotes_are_literal(text):
         return False
     wrote = False                                  # a quoted text a data command wrote to a file
     for segs in _pipelines("\n".join(lines)):
-        data = all(_takes_data(s, first=k == 0) for k, s in enumerate(segs))
+        data = all(_takes_data(s, first=k == 0 and not wrote) for k, s in enumerate(segs))
         if (wrote or any("'" in s for s in segs)) and not data:
             return False                           # `echo '$(…)' > s.sh; bash s.sh` (impl panel r3)
         if any("'" in s for s in segs) and any(_files_written(s) for s in segs):
@@ -1859,6 +1881,7 @@ _UNPLAIN_WORDS = frozenset({"if", "then", "elif", "else", "fi", "case", "esac", 
 # a sourced file, a PATH the command sets — found through wrappers (`command`, `builtin`, an assignment prefix) and
 # inside what `eval` runs.
 _REBINDING_WORDS = frozenset({"alias", "hash", "enable", "function", "source", "."})
+_REBINDING_ASSIGN = re.compile(r"(?:PATH|BASH_CMDS|BASH_ALIASES)(?:\[[^\]]*\])?\+?=")
 
 
 def _unquoted_text(text, keep_quotes=False):
@@ -1913,7 +1936,7 @@ def _rebinds(text, _depth=0):
         lexed = _lex(seg)
         if not lexed:
             continue
-        if any(tok[2].startswith(("PATH=", "BASH_CMDS", "BASH_ALIASES")) for tok in lexed):
+        if any(_REBINDING_ASSIGN.match(tok[0]) for tok in lexed):
             return True                                # `BASH_CMDS[python3]=/bin/bash` (impl panel r3, codex)
         rest, _executes, payloads = _walk_prefix(seg)
         inner = _lex(rest)
@@ -1954,6 +1977,11 @@ def _python_program_on_stdin(words):
 
 
 def _git_subcommand(words):
+    return _git_subcommand_at(words)[0]
+
+
+def _git_subcommand_at(words):
+    """(git's subcommand, its index in `words`) — past the global options, `--namespace commit` included."""
     i = 0
     while i < len(words):
         w = words[i]
@@ -1962,8 +1990,8 @@ def _git_subcommand(words):
         elif w.startswith("-"):
             i += 1
         else:
-            return w
-    return None
+            return w, i
+    return None, len(words)
 
 
 def _reads_heredoc_as_data(seg):
@@ -1984,7 +2012,7 @@ def _reads_heredoc_as_data(seg):
 
 
 _HARMLESS_SINKS = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/fd/1", "/dev/fd/2"})
-_WRITE_ANYWHERE = re.compile(r"(?:&>>|&>|>>|>\||>)(?!&)\s*(\S*)")          # `<>` too: its `>`
+_WRITE_ANYWHERE = re.compile(r"(?:&>>|&>|>>|>\||>&|>)\s*(\S*)")          # `<>` too: its `>`
 
 
 def _files_written(seg):
@@ -1997,6 +2025,8 @@ def _files_written(seg):
     # codex); a target in quotes or built by an expansion is unknown, and counts.
     for m in _WRITE_ANYWHERE.finditer(_unquoted_text(rest)):
         target = m.group(1).rstrip(";&|")
+        if m.group(0).startswith(">&") and re.fullmatch(r"\d*-?", target):
+            continue                                   # `2>&1`, `>&-`: a descriptor, no file
         out.add(target if target and not re.search(r"[$`]", target) else "?")
     if lexed and _command_name(lexed[0][2]) == "tee":
         out |= {t[2] for t in _lex(rest)[1:] if not t[2].startswith("-") and not _REDIRECT.match(t[0])}
