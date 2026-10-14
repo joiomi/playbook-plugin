@@ -1907,7 +1907,7 @@ def _repo_fingerprint_material(repo_path: Path, exclude: "list[str]", *,
         # -uall enumerates untracked files INDIVIDUALLY (a bare `?? dir/`
         # hides everything inside the directory from the hash below).
         porcelain_r = subprocess.run(
-            ["git", "status", "--porcelain", "-uall", "--", ".", *exclude],
+            ["git", "status", "--porcelain", "-uall", "--ignore-submodules=none", "--", ".", *exclude],
             cwd=repo_path, capture_output=True, text=True,
             errors="surrogateescape")
         # R2/1.5.39: a SECOND, NUL-delimited status supplies the raw (un-quoted)
@@ -1922,13 +1922,13 @@ def _repo_fingerprint_material(repo_path: Path, exclude: "list[str]", *,
         # empty fingerprint now BLOCKS a high-consequence close (UNREADABLE), so
         # unavailable material is the honest answer, not a weaker parse.
         z_r = subprocess.run(
-            ["git", "status", "--porcelain", "-uall", "-z", "--", ".", *exclude],
+            ["git", "status", "--porcelain", "-uall", "-z", "--ignore-submodules=none", "--", ".", *exclude],
             cwd=repo_path, capture_output=True)
         if z_r.returncode != 0:
             return None
         z_out = z_r.stdout
         diff_r = subprocess.run(
-            ["git", "diff", "HEAD", "--", ".", *exclude],
+            ["git", "diff", "--ignore-submodules=none", "HEAD", "--", ".", *exclude],
             cwd=repo_path, capture_output=True, text=True,
             errors="surrogateescape")
         if porcelain_r.returncode != 0 or diff_r.returncode != 0:
@@ -2395,7 +2395,7 @@ def _dirty_path_content_map(repo_path: Path,
     paths: "list[str]" = []
     try:
         z = subprocess.run(
-            ["git", "status", "--porcelain", "-uall", "-z", "--", ".", *exclude],
+            ["git", "status", "--porcelain", "-uall", "-z", "--ignore-submodules=none", "--", ".", *exclude],
             cwd=repo_path, capture_output=True)
         if z.returncode != 0:
             return None
@@ -2603,7 +2603,7 @@ def _enumerate_scope_delta(repo: Path, f0_commit: str, f0_dirty: dict,
     # working-tree diffs compare to the NEW HEAD and would miss these.
     try:
         r = subprocess.run(
-            ["git", "diff", "--name-status", "-z", "-M",
+            ["git", "diff", "--name-status", "-z", "-M", "--ignore-submodules=none",
              f"{f0_commit}..HEAD", "--", ".", *exclude],
             cwd=repo, capture_output=True)
         if r.returncode != 0:
@@ -2730,7 +2730,10 @@ def _finding_a_cause(project_path: Path, live_scopes: dict, snap_scopes: dict, r
     for name, repo in live_scopes.items():
         label = _printable_cause(name or ".")
         rec = snap_scopes.get(name)
-        f0 = rec.get("commit") if isinstance(rec, dict) else ""        # a full object id: checked by the caller
+        f0 = rec.get("commit") if isinstance(rec, dict) else ""
+        if not _is_object_id(f0):         # checked by the caller too; never an option to git (impl round 2)
+            moved.append(f"scope {label}: the snapshot of the reviewed tree records an unusable commit id for it")
+            continue
         try:
             h = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, timeout=30)
         except (OSError, subprocess.SubprocessError):
@@ -3130,7 +3133,7 @@ def tail_cert_gate_decision(*, can_certify: bool, behavioral_nonempty: bool,
         _p = f" ({_cause_paths(behavioral)})" if behavioral else ""
         return (False, f"code-path delta since the reviewed tree{_p}{_b} — fresh full panel required")
     if unavailable:
-        return (False, f"tail certification could not run — {' '.join(unavailable.split())}; "
+        return (False, f"tail certification could not run — {' '.join(unavailable.split())}{_b}; "
                        "no judge was called — fresh panel required")
     # Collapse whitespace WITHIN each filename before joining (impl-review r12b F1):
     # a git-`-z`-decoded path may legally contain NEWLINES, and this clause is
@@ -3144,10 +3147,10 @@ def tail_cert_gate_decision(*, can_certify: bool, behavioral_nonempty: bool,
         return (True, f"non-behavioral tail certified by single judge "
                       f"(delta: {files})")
     if cert_verdict == "FAIL":
-        return (False, "the tail-certifying judge returned FAIL (its reasons: tail-cert.log "
+        return (False, f"the tail-certifying judge returned FAIL{_b} (its reasons: tail-cert.log "
                        "beside task.md) — fresh panel required")
     if no_verdict:
-        return (False, f"tail certification gave no usable verdict — {' '.join(no_verdict.split())} "
+        return (False, f"tail certification gave no usable verdict — {' '.join(no_verdict.split())}{_b} "
                        "— fresh panel required")
     return (False, "tail certification gave no usable verdict — fresh panel required")
 

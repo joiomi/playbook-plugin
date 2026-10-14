@@ -460,7 +460,11 @@ one — whether HEAD moved and which files that move changed (from a post-D6 PAS
 bound close `--stale-panel-ok` is named). The re-check after a judge's PASS names which of its conditions discarded it.
 The certifying judge's diff is asked for without colour, a textconv driver or a user's prefixes, and sits between
 two lines that carry the run's nonce, which no content can forge. A scope's commit in the snapshot must be a full
-object id before git reads it (a forged `--output=…` hid a code commit and wrote a file, in 1.6.1 too). For a documentation-only delta the close says which of
+object id before git reads it: a value that is a git option (`--output=…` made git write a file and lose sight
+of the commits it should have listed, in 1.6.1 too) is refused — the snapshot itself is the agent's record and
+is not authenticated. A submodule move is listed whatever a local `diff.ignoreSubmodules` or a `.gitmodules`
+`ignore=` says (`--ignore-submodules=none`), by tail certification, the freshness fingerprint and the post-D6
+delta alike (1.6.1 hid it: tail certification certified over it, the fingerprint read FRESH). For a documentation-only delta the close says which of
 three things happened: no judge ran — the delta could not be put before one (its size against the 98,304-byte
 payload one judge can be sent, or the file that could not be read), the tamper snapshot could not be taken, or
 the judge's adapter could not be resolved or built, or its program is not installed; the judge returned FAIL; or there is no usable verdict, with

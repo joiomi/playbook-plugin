@@ -412,6 +412,10 @@ def scope_delta(repo: Path, base: str, exclude: "list[str]", with_tree: bool = F
     base no longer in the object store is reported, not guessed."""
     def out(text, why, cur=""):
         return (text, why, cur) if with_tree else (text, why)
+    from tasks.core import _is_object_id
+    if base and not _is_object_id(base):
+        # never an option to git (task 202, impl round 2: R2-3)
+        return out(None, "the panel's base tree is not an object id")
     try:
         if not base or _git(repo, ["cat-file", "-e", f"{base}^{{tree}}"]).returncode != 0:
             return out(None, f"base tree {base or '(none)'} is not in the object store (pruned by gc?)")
@@ -423,7 +427,7 @@ def scope_delta(repo: Path, base: str, exclude: "list[str]", with_tree: bool = F
         # the short form of a gitlink's change: with `diff.submodule=log` or `diff` a
         # nested repository's move is a "Submodule …" line with no header line at all
         # (impl round 1: measured, the whole scope then went out unsorted)
-        d = _git(repo, ["diff", "--text", "--no-ext-diff", "--no-color", "--no-textconv", "-M",
+        d = _git(repo, ["diff", "--text", "--no-ext-diff", "--no-color", "--no-textconv", "--ignore-submodules=none", "-M",
                         "--src-prefix=a/", "--dst-prefix=b/", "--submodule=short",
                         base, cur, "--", ".", *exclude])
         if d.returncode != 0:
@@ -454,7 +458,8 @@ def _name_status_entries(repo: Path, base: str, cur: str, exclude: "list[str]"):
     entry per changed file: `(path,)`, or `(old, new)` for a rename or a copy.
     None when git could not say."""
     try:
-        nm = subprocess.run(["git", "diff", "--no-color", "--name-status", "-z", "-M", base, cur,
+        nm = subprocess.run(["git", "diff", "--no-color", "--ignore-submodules=none", "--name-status", "-z", "-M",
+                             base, cur,
                              "--", ".", *exclude], cwd=str(repo), capture_output=True,
                             timeout=_GIT_TIMEOUT)
     except (OSError, subprocess.SubprocessError, ValueError):
@@ -639,7 +644,8 @@ def delta_parts(project_path: Path, snapshot: "dict | None",
                               len(part), file_no,
                               _printable(paths[-1] if name == "" else f"{name}/{paths[-1]}"), part))
         # stat of the SAME two trees (untracked files included — codex r1)
-        st = _git(repo, ["diff", "--no-color", "--stat=200", "-M", base, cur, "--", ".", *exclude])
+        st = _git(repo, ["diff", "--no-color", "--ignore-submodules=none", "--stat=200", "-M", base, cur, "--", ".",
+                         *exclude])
         stats.append(f"scope {label} — git -C {label} diff --stat {base} {cur}:\n"
                      + (st.stdout if st.returncode == 0 else "(stat unavailable)\n"))
     labels = [name or "." for name in live]

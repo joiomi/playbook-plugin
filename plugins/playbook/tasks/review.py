@@ -2207,7 +2207,7 @@ def _git_diff_text(repo, args, rel, exclude):
         r = subprocess.run(
             # task 202 (D4, Gemini #7): a user's colour, a local textconv driver or
             # `diff.noprefix` must not shape what the certifying judge reads
-            ["git", "diff", "--text", "--no-ext-diff", "--no-color", "--no-textconv",
+            ["git", "diff", "--text", "--no-ext-diff", "--no-color", "--no-textconv", "--ignore-submodules=none",
              "--src-prefix=a/", "--dst-prefix=b/", *args, "--", rel, *exclude],
             cwd=repo, capture_output=True, text=True,
             encoding="utf-8", errors="replace")
@@ -2391,7 +2391,9 @@ def _tail_cert_prompt(non_behavioral, panel_summary, diff_text, nonce) -> str:
     a false claim, and emit a single structured verdict line. The verdict token
     carries a per-invocation `nonce` so nothing in the reviewed CONTENT can forge
     it (impl-panel r2 grok#2)."""
-    files = "\n".join(f"  - {p}" for p in non_behavioral) or "  (none listed)"
+    from tasks.core import _printable_cause
+    # a name may hold a line break (git's -z names): printed escaped, it breaks no line (impl round 2, R2-2)
+    files = "\n".join(f"  - {_printable_cause(p)}" for p in non_behavioral) or "  (none listed)"
     # task 202 (D5, Gemini #6; impl round 1, R1-5): the delta goes between two lines that
     # carry this run's nonce — a doc (raw content goes here too) cannot forge them, and
     # they cost the same whatever the payload holds (a fence as long as its longest
