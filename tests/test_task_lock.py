@@ -189,9 +189,6 @@ class NoUnapprovedDirectWriters(unittest.TestCase):
     APPROVED = {
         # task 195: every task CREATION goes through registry.create_task_dir — `new`, `freehand`
         # and `retro` no longer write task.md themselves
-        ("registry.py", 'atomic_write(tmp / "task.md", render(num, name))'):
-            "task CREATION writes a brand-new file into a temporary directory it just made in the "
-            "lane, under the lane lock; nothing else knows that directory until it is renamed in",
         ("registry.py", "atomic_write(registry_path(agent_dir)"):
             "the task registry — its own file, not a task record — written under the lane lock",
         ("core.py", "_atomic_write(archive_path, header"):

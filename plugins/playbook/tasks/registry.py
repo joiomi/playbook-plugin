@@ -264,39 +264,50 @@ class _Collision(Exception):
     from a template's own read is an error, not a reason to take the next number)."""
 
 
-def _make_temp(agent_dir: Path) -> Path:
-    """A fresh temporary directory in the lane — a leftover of the same name (one the sweep could not remove) is
-    stepped over, never an error (task 195, impl panel r1). Its name does not carry the task's: a 230-byte folder name
-    must not make a temp name past the 255-byte limit (impl panel r2, sonnet)."""
+_DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0)
+
+
+def _make_temp_at(afd: int) -> str:
+    """A fresh temporary directory in the lane held open as `afd`; its name. A leftover of the same name (one the
+    sweep could not remove) is stepped over, never an error (impl panel r1). The name does not carry the task's: a
+    230-byte folder name must not make a temp name past the 255-byte limit (impl panel r2, sonnet)."""
     for k in range(100):
-        tmp = agent_dir / f"{TEMP_PREFIX}{os.getpid()}.{k}"
+        name = f"{TEMP_PREFIX}{os.getpid()}.{k}"
         try:
-            os.mkdir(tmp)
-            return tmp
+            os.mkdir(name, dir_fd=afd)
+            return name
         except FileExistsError:
             continue
-    raise RuntimeError(f"no free temporary directory name in {agent_dir}")
+    raise RuntimeError("no free temporary directory name in the lane")
 
 
-def _drop_temp(project_path, agent_dir: Path, tmp: "Path | None") -> None:
-    """Remove this creator's own temporary directory through the lane opened from the project root without following
-    a link (task 195, impl panel r2 — codex, Critical, reproduced: removed by path, a lane swapped for a link sent the
-    delete into the replacement tree). A lane that is a link keeps its temp — harmless, swept by the next creator."""
-    if tmp is None:
-        return
-    from tasks.shared import _open_dir_inside, _remove_tree_at
-    afd = _open_dir_inside(Path(project_path), Path(agent_dir))
-    if afd is None:
-        return
+def _write_task_md_at(afd: int, tmpname: str, text: str) -> None:
+    """Write `<temp>/task.md` through the held lane — a new file in a directory only this creator knows (it becomes
+    visible only by the rename), so no temp-and-replace is needed; flushed to disk before the rename."""
+    dfd = os.open(tmpname, _DIR_FLAGS | os.O_NOFOLLOW, dir_fd=afd)
     try:
-        _remove_tree_at(afd, tmp.name)
+        fd = os.open("task.md", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+                     0o666, dir_fd=dfd)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
     finally:
-        os.close(afd)
+        os.close(dfd)
 
 
-def _publish(tmp: Path, final: Path) -> None:
-    """Put the built directory in place. (A test replaces this to kill the creator at exactly this point.)"""
-    os.rename(tmp, final)
+def _exists_at(dfd: int, name: str) -> bool:
+    try:
+        os.stat(name, dir_fd=dfd, follow_symlinks=False)
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def _publish(afd: int, tmpname: str, tfd: int, name: str) -> None:
+    """Put the built directory in place, lane to `tasks/`, both held. (A test replaces this to kill the creator at
+    exactly this point.)"""
+    os.rename(tmpname, name, src_dir_fd=afd, dst_dir_fd=tfd)
 
 
 def create_task_dir(project_path, agent_dir, slug: str, origin: str,
@@ -307,10 +318,16 @@ def create_task_dir(project_path, agent_dir, slug: str, origin: str,
     that stands under `tasks/` when the built directory is to be renamed in is never published over (POSIX `rename`
     replaces an EMPTY directory: a hand-made one would be laundered; plan panel T6): that number stays reserved and the
     next is taken. `number`, when given (`tasks new NNN-name`), must be the next one, read under the lock, or
-    NumberTaken is raised. Raises RegistryUnreadable before creating anything."""
+    NumberTaken is raised. Raises RegistryUnreadable before creating anything.
+
+    The lane and its `tasks/` are opened ONCE, under the lock, and held through the build and its cleanup: the temp
+    is made, its task.md written, the final name checked, the rename done and a failed build's temp removed all
+    through those descriptors, so a swap of either path afterwards changes nothing this creator writes, renames or
+    removes (task 195, impl panel r3 — codex, Critical, reproduced: a cleanup that reopened the lane by path deleted
+    inside the directory a swap had put there)."""
     from tasks import core
-    from tasks.atomic import atomic_write
     from tasks.filelock import named_lock
+    from tasks.shared import _remove_tree_at
     agent_dir = Path(agent_dir)
     tasks_dir = agent_dir / "tasks"
     tasks_dir.mkdir(parents=True, exist_ok=True)
@@ -323,38 +340,49 @@ def create_task_dir(project_path, agent_dir, slug: str, origin: str,
     with named_lock(lock_path(agent_dir)):
         rows = _rows_locked(agent_dir)
         _sweep_temps_locked(project_path, agent_dir)
-        for _attempt in range(1000):
-            num = core._next_task_number(tasks_dir)
-            if number is not None and number != num:
-                raise NumberTaken(number, num)
-            name = f"{num:03d}-{slug}"
-            rows.append([name, "reserved", _now()])
-            _write(agent_dir, rows)
-            final = tasks_dir / name
-            tmp = None
-            try:
-                tmp = _make_temp(agent_dir)
-                atomic_write(tmp / "task.md", render(num, name))
-                if os.path.lexists(final):                 # stands there (made meanwhile): never published over
-                    raise _Collision()
+        afd = os.open(agent_dir, _DIR_FLAGS)
+        try:
+            tfd = os.open("tasks", _DIR_FLAGS | os.O_NOFOLLOW, dir_fd=afd)
+        except OSError:
+            os.close(afd)
+            raise
+        try:
+            for _attempt in range(1000):
+                num = core._next_task_number(tasks_dir)
+                if number is not None and number != num:
+                    raise NumberTaken(number, num)
+                name = f"{num:03d}-{slug}"
+                rows.append([name, "reserved", _now()])
+                _write(agent_dir, rows)
+                tmpname = None
                 try:
-                    _publish(tmp, final)
-                except OSError as e:
-                    # rename(2) onto a folder made meanwhile: EEXIST, or ENOTEMPTY for a full one (impl panel r1)
-                    if e.errno in (errno.EEXIST, errno.ENOTEMPTY):
-                        raise _Collision() from e
+                    tmpname = _make_temp_at(afd)
+                    _write_task_md_at(afd, tmpname, render(num, name))
+                    if _exists_at(tfd, name):              # stands there (made meanwhile): never published over
+                        raise _Collision()
+                    try:
+                        _publish(afd, tmpname, tfd, name)
+                    except OSError as e:
+                        # rename(2) onto a folder made meanwhile: EEXIST, or ENOTEMPTY for a full one (impl panel r1)
+                        if e.errno in (errno.EEXIST, errno.ENOTEMPTY):
+                            raise _Collision() from e
+                        raise
+                except _Collision:
+                    if tmpname is not None:
+                        _remove_tree_at(afd, tmpname)
+                    if number is not None:
+                        raise NumberTaken(number, num + 1)
+                    continue
+                except BaseException:
+                    if tmpname is not None:
+                        _remove_tree_at(afd, tmpname)
                     raise
-            except _Collision:
-                _drop_temp(project_path, agent_dir, tmp)
-                if number is not None:
-                    raise NumberTaken(number, num + 1)
-                continue
-            except BaseException:
-                _drop_temp(project_path, agent_dir, tmp)
-                raise
-            rows[-1] = [name, origin, rows[-1][2]]
-            _write(agent_dir, rows)
-            return final
+                rows[-1] = [name, origin, rows[-1][2]]
+                _write(agent_dir, rows)
+                return tasks_dir / name
+        finally:
+            os.close(tfd)
+            os.close(afd)
     raise RuntimeError("no free task number after 1000 tries")
 
 

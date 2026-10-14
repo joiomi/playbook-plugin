@@ -206,6 +206,8 @@ class TheRenameTarget(_Project):
         self.assertTrue((self.tasks / "001-x").is_dir() and not any((self.tasks / "001-x").iterdir()))
         self.assertFalse(reg.is_known(self.p, self.agent, "001-x"), "the hand-made empty dir was laundered")
         self.assertTrue(reg.is_known(self.p, self.agent, "002-x"))
+        self.assertFalse([x for x in self.agent.iterdir() if x.name.startswith(reg.TEMP_PREFIX)],
+                         "the collided attempt's temp directory was left behind")
 
 
 class Enrolment(_Project):
@@ -451,11 +453,11 @@ class RoundOneFixes(_Project):
         real = reg._publish
         calls = []
 
-        def publish(tmp, final):
+        def publish(*args):
             if not calls:
-                calls.append(final)
-                raise OSError(errno.ENOTEMPTY, "Directory not empty", str(final))
-            return real(tmp, final)
+                calls.append(args)
+                raise OSError(errno.ENOTEMPTY, "Directory not empty")
+            return real(*args)
         reg._publish = publish
         try:
             final = reg.create_task_dir(self.p, self.agent, "x", "new", lambda n, name: f"# {n:03d}\n")
@@ -470,12 +472,14 @@ class RoundOneFixes(_Project):
         real = reg._sweep_temps_locked
         reg._sweep_temps_locked = lambda *a, **k: None          # as with a linked `.agent`: nothing swept
         try:
-            (self.agent / f"{reg.TEMP_PREFIX}{os.getpid()}.0.001-x").mkdir()      # the name it would take first
+            planted = self.agent / f"{reg.TEMP_PREFIX}{os.getpid()}.0"      # the temp name it would take first
+            planted.mkdir()
             final = reg.create_task_dir(self.p, self.agent, "x", "new", lambda n, name: f"# {n:03d}\n")
         finally:
             reg._sweep_temps_locked = real
         self.assertEqual(final.name, "001-x")
         self.assertTrue((final / "task.md").is_file())
+        self.assertTrue(planted.is_dir(), "the leftover was not stepped over")
 
 
 
@@ -501,6 +505,25 @@ class RoundTwoFixes(_Project):
             reg.create_task_dir(self.p, self.agent, "x", "new", render)
         kept = [x for x in victim.iterdir() if x.name.startswith(reg.TEMP_PREFIX)]
         self.assertTrue(kept and (kept[0] / "keep.txt").is_file(), "the delete followed the swapped lane")
+
+    def test_a_lane_replaced_by_another_real_directory_keeps_its_contents(self):
+        # K1 (codex, Critical, round 3, reproduced): the cleanup REOPENED the lane — a real directory put in its place,
+        # holding a folder of the temp's name, lost that folder's contents
+        reg = self.registry_module()
+
+        def render(num, name):
+            temp = next(x.name for x in self.agent.iterdir() if x.name.startswith(reg.TEMP_PREFIX))
+            self.agent.rename(self.agent.with_name(".agent.orig"))
+            (self.agent / temp).mkdir(parents=True)
+            (self.agent / temp / "keep.txt").write_text("the owner's data\n", encoding="utf-8")
+            raise RuntimeError("the template failed")
+        with self.assertRaises(RuntimeError):
+            reg.create_task_dir(self.p, self.agent, "x", "new", render)
+        kept = [x for x in self.agent.iterdir() if x.name.startswith(reg.TEMP_PREFIX)]
+        self.assertTrue(kept and (kept[0] / "keep.txt").is_file(), "the cleanup removed through the replaced lane")
+        orig = self.agent.with_name(".agent.orig")
+        self.assertFalse([x for x in orig.iterdir() if x.name.startswith(reg.TEMP_PREFIX)],
+                         "the creator's own temp was left in the lane it built in")
 
     def test_a_long_title_is_created(self):
         # J6 (sonnet): the temp name carried the task's name, ~25 bytes longer — ENAMETOOLONG for a 230-byte name
