@@ -69,22 +69,54 @@ import sys
 _SEP_OPS = ("&&", "||", ";", "\n", "|", "&")
 
 
-def _strip_comments(text):
+def _strip_comments(text, _depth=0):
     """Drop an unquoted `#` word and the rest of its line. Without this, an
     inert `echo ok # <anything>` was classified as if the comment ran (impl
-    panel round 4, sol:medium)."""
-    out, i, n, quote, word_start = [], 0, len(text), "", True
+    panel round 4, sol:medium). Task 199 (impl panel r1, fable + opus): read as
+    bash reads it — `$'…'` and `"…"` with their backslash escapes, `$$` as one
+    word, a herestring as no heredoc, and a heredoc's body as a body: an
+    UNQUOTED body is copied as it is (the shell expands it, a `#` line too —
+    `# $(rm -rf /)` runs), a quoted one has its own comments dropped from a
+    fresh start, so a quote inside a body (an apostrophe in a python program)
+    no longer decides what is a comment after it, and `$'it\\'s' 'x #' …` no
+    longer loses what follows the `#`."""
+    out, i, n, quote, word_start, pending = [], 0, len(text), "", True, []
     while i < n:
         c = text[i]
         if quote:
             out.append(c)
-            if c == quote:
+            if c == "\\" and quote != "'" and i + 1 < n:
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if c == quote[-1]:
                 quote = ""
             i += 1
+            continue
+        if c == "\n" and pending:
+            out.append(c)
+            i += 1
+            for quoted, start, tag_start, after, _ended in _body_spans(text, i, pending):
+                body = text[start:tag_start]
+                out.append(_strip_comments(body, _depth + 1) if quoted and _depth < 8 else body)
+                out.append(text[tag_start:after])
+                i = after
+            pending, word_start = [], True
             continue
         if c == "\\" and i + 1 < n:
             out.append(c)
             out.append(text[i + 1])
+            i += 2
+            word_start = False
+            continue
+        if text.startswith(("$$", "<<<"), i):
+            out.append(text[i:i + (2 if c == "$" else 3)])
+            i += 2 if c == "$" else 3
+            word_start = False
+            continue
+        if text.startswith("$'", i):
+            quote = "$'"
+            out.append(quote)
             i += 2
             word_start = False
             continue
@@ -97,6 +129,14 @@ def _strip_comments(text):
         if c == "#" and word_start:
             while i < n and text[i] != "\n":
                 i += 1
+            continue
+        if text.startswith("<<", i):
+            tag, dash, quoted, j = _heredoc_tag(text, i)
+            if tag:
+                pending.append((tag, dash, quoted))
+            out.append(text[i:j])
+            i = j
+            word_start = False
             continue
         out.append(c)
         word_start = c.isspace() or c in ";|&("
@@ -1268,36 +1308,41 @@ _SHELL_C = re.compile(r"^(?:sh|bash|zsh|ksh|dash)\b[^;]*?\s-[a-z]*c\s*(.+)$")
 
 
 def _unwrap_shell_c(seg):
-    """`bash -lc "<script>"` → `<script>`. POSIX is `sh -c string [name [args]]`,
-    so ONLY the operand right after `-c` is the script — round 2 took everything
-    to end-of-line as one string, which meant a trailing `argv0` made the whole
-    thing stop looking like a script (impl panel round 3, sol:high + grok)."""
+    """`bash -lc "<script>"` → `<script>`. Bash reads `-c` as a flag and takes
+    the command string from the first argument after ALL its options — `bash
+    -ce '…'`, `bash -c -x '…'`, `bash -c -- '…'` (task 199, impl panel r1, opus:
+    the letters after `c` were taken for the script, and `--` was returned) —
+    and POSIX's `sh -c string [name [args]]` leaves the words after it as
+    arguments, so only that one operand is the script (impl panel round 3,
+    sol:high + grok). Text ATTACHED to the `-c` cluster (`bash -c'…'`) is no
+    script to bash — it rejects the cluster — and is judged only when no
+    operand follows, conservatively, as task 077 pinned it."""
     toks = _lex(seg.strip())
     if not toks or _command_name(toks[0][2]) not in _SHELLS:
         return None
-    k = 1
+    k, has_c, attached = 1, False, ""
     while k < len(toks):
         v = toks[k][2]
         if v == "--":
             k += 1
-            continue
+            break
         if v.startswith("--"):
             # `--rcfile FILE` / `--init-file FILE` take a value; the rest are
             # flags (impl panel round 5, sol:high).
             k += 2 if v in _SHELL_VALUE_LONG else 1
             continue
-        if v.startswith("-") and len(v) > 1:
-            if "c" in v[1:]:
-                attached = v[1:].split("c", 1)[1]
-                if attached:
-                    return attached
-                return toks[k + 1][2] if k + 1 < len(toks) else None
-            # `-O extglob`, `-o noglob` take a value; other short flags do not
-            # (impl panel round 4: they stopped the scan before `-c` was seen).
+        if len(v) > 1 and v[0] in "-+":
+            if v[0] == "-" and "c" in v[1:]:
+                has_c = True
+                attached = attached or v[1:].split("c", 1)[1]
+            # `-O extglob`, `-o noglob` (and `+o …`) take a value; other short
+            # flags do not (impl panel round 4: they stopped the scan before `-c`).
             k += 2 if v[-1] in "Oo" else 1
             continue
         break
-    return None
+    if not has_c:
+        return None
+    return toks[k][2] if k < len(toks) else (attached or None)
 
 
 # Task 073 data-region masking, tightened by the impl panel (round 1):
@@ -1463,10 +1508,13 @@ def _command_substitutions(text):
     has its body read QUOTE-BLIND, as before (in an unquoted body `'` is a literal character and the substitutions run;
     a quoted body still here is a shell's script, the non-shell ones having been stripped by the caller; a body whose
     closing tag a data stripper removed runs to the end, read the same way); an unterminated quote leaves the rest of
-    the text to the quote-blind scan. Conservative everywhere it cannot tell."""
+    the text to the quote-blind scan, and so does an unclosed substitution (the rest after its opener) and an
+    arithmetic opener outside single quotes (`$((`, `((`, `$[`: the rest, read blind down through every body — inside
+    arithmetic a single quote does not keep `$( … )` from running; task 199, impl panel r1, codex). Conservative
+    everywhere it cannot tell."""
     out = []
     i, n = 0, len(text)
-    pending = []                                   # heredocs opened on this line: (tag, strip_tabs)
+    pending = []                                   # heredocs opened on this line: (tag, `<<-`, quoted)
     while i < n:
         c = text[i]
         if c == "\n":
@@ -1477,6 +1525,9 @@ def _command_substitutions(text):
             continue
         if c == "\\":
             i += 2
+            continue
+        if text.startswith("$$", i):
+            i += 2                                 # `$$'a'` is `$$` then 'a', not `$'…'` (impl panel r1, opus)
             continue
         if c == "'" or text.startswith("$'", i):
             j = _quote_end(text, i)
@@ -1491,9 +1542,14 @@ def _command_substitutions(text):
                 if text[j] == "\\":
                     j += 2
                     continue
+                if text.startswith(("$((", "$["), j):
+                    out.extend(_command_substitutions_blind_deep(text[j:]))
+                    return out
                 if text.startswith("$(", j) or text[j] == "`":
-                    body, j = _one_substitution(text, j)
-                    if body is None:
+                    k = j
+                    body, j = _one_substitution(text, k)
+                    if body is None:               # unclosed: the rest, quote-blind (impl panel r1, opus)
+                        out.extend(_command_substitutions_blind(text[k + 1:]))
                         return out
                     out.append(body)
                     continue
@@ -1507,14 +1563,19 @@ def _command_substitutions(text):
             i += 3                                 # a herestring (its shell payload: `_herestring_payloads`)
             continue
         if text.startswith("<<", i):
-            tag, dash, _quoted, j = _heredoc_tag(text, i)
+            tag, dash, quoted, j = _heredoc_tag(text, i)
             if tag:
-                pending.append((tag, dash))
+                pending.append((tag, dash, quoted))
             i = j
             continue
+        if text.startswith(("$((", "((", "$["), i):
+            out.extend(_command_substitutions_blind_deep(text[i:]))
+            return out
         if text.startswith(("<(", ">(", "$("), i) or c == "`":
-            body, i = _one_substitution(text, i)
+            k = i
+            body, i = _one_substitution(text, k)
             if body is None:
+                out.extend(_command_substitutions_blind(text[k + 1:]))
                 return out
             out.append(body)
             continue
@@ -1566,38 +1627,53 @@ def _heredoc_tag(text, i):
     return "".join(tag), dash, quoted, j
 
 
-def _heredoc_bodies(text, i, pending, out):
-    """Read the bodies of the heredocs opened on the line that ended before `i`, in order: each up to the line that is
-    its tag (tabs stripped first for `<<-`), or to the end of the text. Each body is scanned QUOTE-BLIND (in an
-    unquoted body `'` is a literal character) and its substitutions added to `out`. Returns the index after them."""
+def _body_spans(text, i, pending):
+    """The bodies of the heredocs `pending` — (tag, `<<-`, quoted) — opened on the line that ended before `i`, read as
+    bash reads them: in order, each up to the line that is its tag (tabs stripped first for `<<-`). A list of (quoted,
+    the body's start, its tag line's start, the index after the tag line, whether it ended); a body that does not end
+    runs to the end of the text, and none after it is read."""
     n = len(text)
-    for tag, dash in pending:
+    spans = []
+    for tag, dash, quoted in pending:
         start = i
-        while i < n:
+        while True:
+            if i >= n:
+                spans.append((quoted, start, n, n, False))
+                return spans
             e = text.find("\n", i)
             e = n if e == -1 else e
-            line = text[i:e]
-            if (line.lstrip("\t") if dash else line) == tag:
-                out.extend(_command_substitutions_blind(text[start:i]))
-                i = e + 1
+            if (text[i:e].lstrip("\t") if dash else text[i:e]) == tag:
+                spans.append((quoted, start, i, min(e + 1, n), True))
+                i = min(e + 1, n)
                 break
             i = e + 1
-        else:
-            out.extend(_command_substitutions_blind(text[start:]))
-            return n
+    return spans
+
+
+def _heredoc_bodies(text, i, pending, out):
+    """Read the bodies of the heredocs opened on the line that ended before `i` (`_body_spans`). Each body is scanned
+    QUOTE-BLIND (in an unquoted body `'` is a literal character) and its substitutions added to `out`. Returns the
+    index after them."""
+    for _quoted, start, tag_start, after, _ended in _body_spans(text, i, pending):
+        out.extend(_command_substitutions_blind(text[start:tag_start]))
+        i = after
     return i
 
 
 def _one_substitution(text, i):
     """(the body, the index after it) of the substitution that starts at `i` — `$( … )`, `<( … )`, `>( … )` or a
-    backtick span —, or (None, len(text)) when it does not close (the scan stops there, as it always did)."""
+    backtick span —, or (None, len(text)) when it does not close. Parentheses are balanced OUTSIDE quotes: `$(rm -rf
+    /var/lib/app '(')` closed early for a quote-blind counter (impl panel round 1, sol:high #5); a backslash outside
+    quotes escapes the next character (`$(rm -rf / \\' )` was read as unclosed — task 199, impl panel r1, gemini), and
+    a heredoc inside it has its body passed over (`$(cat <<'EOF'⏎Don't⏎EOF⏎)`, the commit-message shape: the apostrophe
+    left it unclosed — task 199 R1)."""
     n = len(text)
     if text[i] == "`":
         j = text.find("`", i + 1)
         if j == -1:
             return None, n
         return text[i + 1:j], j + 1
-    depth, j, quote = 1, i + 2, ""
+    depth, j, quote, pending = 1, i + 2, "", []
     while j < n and depth:
         c = text[j]
         if quote:
@@ -1605,6 +1681,21 @@ def _one_substitution(text, i):
                 j += 1
             elif c == quote:
                 quote = ""
+        elif c == "\\":
+            j += 1
+        elif c == "\n" and pending:
+            j = _body_spans(text, j + 1, pending)[-1][3]
+            pending = []
+            continue
+        elif text.startswith("<<<", j):
+            j += 3
+            continue
+        elif text.startswith("<<", j):
+            tag, dash, quoted, k = _heredoc_tag(text, j)
+            if tag:
+                pending.append((tag, dash, quoted))
+            j = k
+            continue
         elif c in "\"'":
             quote = c
         elif c == "(":
@@ -1617,63 +1708,35 @@ def _one_substitution(text, i):
     return text[i + 2:j - 1], j
 
 
+def _command_substitutions_blind_deep(text, _depth=0):
+    """The quote-blind scan, and the same scan of every body it finds, down: inside `$(( '$(rm -rf /)' ))` the inner
+    substitution runs, but the body `( '…' )` read as a command keeps its quotes."""
+    out = _command_substitutions_blind(text)
+    if _depth < 8:
+        for body in list(out):
+            out.extend(_command_substitutions_blind_deep(body, _depth + 1))
+    return out
+
+
 def _command_substitutions_blind(text):
     """The quote-blind scan (the whole of `_command_substitutions` until task 199): every `$( … )`, backtick and
     `<( … )`/`>( … )` body, quotes ignored. For the text the quote-aware scan cannot read as a script — a heredoc
-    body, the rest after an unterminated quote."""
+    body, the rest after an unterminated quote. An opener that does not close is passed over and the scan reads on
+    (task 199: it stopped there, and nothing after it was seen)."""
     out = []
     i, n = 0, len(text)
     while i < n:
         # `<( … )` and `>( … )` run their body too, and `. <(…)` sources the
         # result — the same command position as a `$( … )` substitution.
-        if text.startswith("<(", i) or text.startswith(">(", i):
-            depth, j, quote = 1, i + 2, ""
-            while j < n and depth:
-                c = text[j]
-                if quote:
-                    if c == quote:
-                        quote = ""
-                elif c in "\"'":
-                    quote = c
-                elif c == "(":
-                    depth += 1
-                elif c == ")":
-                    depth -= 1
-                j += 1
-            if depth == 0:
-                out.append(text[i + 2:j - 1])
+        if text.startswith(("<(", ">(", "$("), i) or text[i] == "`":
+            body, j = _one_substitution(text, i)
+            if body is None:
+                i += 1 if text[i] == "`" else 2
+                continue
+            out.append(body)
             i = j
             continue
-        if text.startswith("$(", i):
-            # Balance parentheses OUTSIDE quotes: `$(rm -rf /var/lib/app '(')`
-            # closed early for a quote-blind counter (impl panel round 1,
-            # sol:high #5), which left the real body unclassified.
-            depth, j, quote = 1, i + 2, ""
-            while j < n and depth:
-                c = text[j]
-                if quote:
-                    if c == "\\" and quote == '"' and j + 1 < n:
-                        j += 1
-                    elif c == quote:
-                        quote = ""
-                elif c in "\"'":
-                    quote = c
-                elif c == "(":
-                    depth += 1
-                elif c == ")":
-                    depth -= 1
-                j += 1
-            if depth == 0:
-                out.append(text[i + 2:j - 1])
-            i = j
-        elif text[i] == "`":
-            j = text.find("`", i + 1)
-            if j == -1:
-                break
-            out.append(text[i + 1:j])
-            i = j + 1
-        else:
-            i += 1
+        i += 1
     return out
 
 
@@ -1714,8 +1777,10 @@ _PYTHONS = frozenset({"python", "python3"})
 _PYTHON_FLAGS = frozenset({"-B", "-b", "-bb", "-d", "-E", "-I", "-O", "-OO", "-P", "-q", "-s", "-S", "-u", "-v"})
 _PYTHON_VALUED = frozenset({"-W", "-X"})
 _GIT_GLOBAL_VALUED = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace"})
-_COMPOUND_WORDS = frozenset({"if", "then", "elif", "else", "fi", "case", "esac", "for", "select", "while", "until",
-                             "do", "done", "function", "coproc", "exec"})
+# A command starting with one of these is not PLAIN: a compound command, `exec` (it redirects what follows), or one
+# that changes which program a NAME runs (`alias cat=bash` with expand_aliases, `hash -p /bin/bash cat`, `enable`).
+_UNPLAIN_WORDS = frozenset({"if", "then", "elif", "else", "fi", "case", "esac", "for", "select", "while", "until",
+                            "do", "done", "function", "coproc", "exec", "alias", "hash", "enable"})
 _HEREDOC_OP = re.compile(r"(?<!<)<<(?!<)")
 _REDIRECT = re.compile(r"^(?:\d+|&)?(?:<<-?|<>|<&|>&|>>|>\||<|>)")
 
@@ -1761,14 +1826,14 @@ def _git_subcommand(words):
 
 
 def _reads_heredoc_as_data(seg):
-    """Whether segment `seg` runs a known data reader: its name read through the wrapper walk, never named by an
-    expansion, delegating to nothing else."""
+    """Whether segment `seg` runs a known data reader: its name read through the wrapper walk, a bare name (never
+    built by an expansion, never a path — `./python3` may be any program), delegating to nothing else."""
     rest, executes, payloads = _walk_prefix(seg)
     if not executes or any(payloads):
         return False                                   # `env -S '…'`, `sudo sh -c …`: a second command
     lexed = _lex(rest)
-    if not lexed or re.search(r"[$`]", lexed[0][0]):
-        return False                                   # an assignment alone, `$SHELL`, `$(which bash)`
+    if not lexed or re.search(r"[$`/]", lexed[0][0]):
+        return False                                   # an assignment alone, `$SHELL`, `$(which bash)`, `./cat`
     name, words = _command_name(lexed[0][2]), _words(lexed)
     if name in _PYTHONS:
         return _python_program_on_stdin(words)
@@ -1777,17 +1842,66 @@ def _reads_heredoc_as_data(seg):
     return name in _HEREDOC_DATA_READERS
 
 
+_WRITE_REDIRECT = re.compile(r"^(?:\d+|&)?(?:>>|>\||>)(?!&)(.*)$")
+
+
+def _files_written(seg):
+    """The files a reader's segment writes: its `>`/`>>`/`>|`/`&>` targets, and `tee`'s operands (not `/dev/…`)."""
+    rest, _executes, _payloads = _walk_prefix(seg)
+    lexed = _lex(rest)
+    out, i = set(), 1
+    while i < len(lexed):
+        raw, _start, value, _quoted = lexed[i]
+        m = _WRITE_REDIRECT.match(raw)
+        if m:
+            target = m.group(1) or (lexed[i + 1][2] if i + 1 < len(lexed) else "")
+            out.add(_unquote(target) if m.group(1) else target)
+            i += 1 if m.group(1) else 2
+            continue
+        if _REDIRECT.match(raw):
+            i += 1 if _REDIRECT.match(raw).end() < len(raw) else 2
+            continue
+        if lexed and _command_name(lexed[0][2]) == "tee" and not value.startswith("-"):
+            out.add(value)
+        i += 1
+    return {posixpath.basename(posixpath.normpath(f)) for f in out if f and not f.startswith("/dev/")}
+
+
+def _runs_a_written_file(seg, written):
+    """Whether a segment after the reader may run a file it wrote: a shell or a sourcer (whatever its words), or any
+    word that names one of them (`./s.sh`, `bash < s.sh`, `psql -f q.sql`, `sh -c '. s.sh'`)."""
+    rest, _executes, payloads = _walk_prefix(seg)
+    lexed = _lex(rest)
+    if lexed and _command_name(lexed[0][2]) in (_SHELLS | _SOURCERS):
+        return True
+    words = [t[2] for t in lexed] + [w for p in payloads if p and not p.startswith("\x00") for w in p.split()]
+    for w in words:
+        for piece in re.split(r"[\s;&|<>()=`'\"]+", w):
+            if piece and posixpath.basename(posixpath.normpath(piece)) in written:
+                return True
+    return False
+
+
 def _reader_pipeline_reads_data(line):
-    """Whether every pipeline of `line` that holds a heredoc operator — its commands joined by `|`, `|&` or `&` — is
-    made of known data readers only."""
+    """Whether the pipeline of `line` that holds a heredoc operator — its commands joined by `|`, `|&` or `&` — is made
+    of known data readers only, and nothing after it on the line may run a file it wrote (`cat > s.sh <<'EOF'; bash
+    s.sh`, `tee f <<'EOF' >/dev/null && sh f` — task 199, impl panel r1, fable; `git commit -F - <<'MSG' && git push`
+    writes none). A line that ENDS with `|`, `|&`, `||` or `&&` goes on after the bodies (`cat <<'EOF' |⏎…⏎EOF⏎bash`
+    runs the body in bash — sonnet, codex and my own probe): its pipeline cannot be read here, so it is not one."""
+    if line.rstrip().endswith(("|", "&&", "|&")):
+        return False
     runs, run = [], []
     for seg, op in _split_segments_keep(line):
         run.append(seg)
         if op not in ("|", "&"):
             runs.append(run)
             run = []
-    holding = [r for r in runs if any(_HEREDOC_OP.search(s) for s in r)]
-    return bool(holding) and all(_reads_heredoc_as_data(s) for r in holding for s in r if s.strip())
+    holding = [k for k, r in enumerate(runs) if any(_HEREDOC_OP.search(s) for s in r)]
+    if not holding or not all(_reads_heredoc_as_data(s) for k in holding for s in runs[k] if s.strip()):
+        return False
+    written = set().union(*(_files_written(s) for k in holding for s in runs[k] if s.strip()))
+    later = [s for r in runs[holding[0] + 1:] for s in r if s.strip()]
+    return not (written and any(_runs_a_written_file(s, written) for s in later))
 
 
 def _heredoc_plan(text):
@@ -1803,22 +1917,18 @@ def _heredoc_plan(text):
             line = text[line_start:i]
             skeleton.append(line)
             i += 1
-            for tag, dash, quoted in pending:
-                start = i
-                while True:
-                    if i >= n:
-                        return None                    # the body does not end
-                    e = text.find("\n", i)
-                    e = n if e == -1 else e
-                    if (text[i:e].lstrip("\t") if dash else text[i:e]) == tag:
-                        plan.append((line, quoted, start, i))
-                        i = min(e + 1, n)
-                        break
-                    i = e + 1
+            for quoted, start, tag_start, after, ended in _body_spans(text, i, pending):
+                if not ended:
+                    return None                        # the body does not end
+                plan.append((line, quoted, start, tag_start))
+                i = after
             pending = []
             line_start = i
             continue
         if c == "\\":
+            i += 2
+            continue
+        if text.startswith("$$", i):
             i += 2
             continue
         if c == "'" or text.startswith("$'", i):
@@ -1858,8 +1968,8 @@ def _heredoc_plan(text):
     skeleton.append(text[line_start:])
     for seg in _split_segments("\n".join(skeleton)):
         lexed = _lex(seg)
-        if lexed and lexed[0][2] in _COMPOUND_WORDS:
-            return None
+        if lexed and (lexed[0][2] in _UNPLAIN_WORDS or any(t[2].startswith("PATH=") for t in lexed)):
+            return None                                # … or a PATH the command sets itself
     return plan
 
 
