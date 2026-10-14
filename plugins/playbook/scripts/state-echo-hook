@@ -116,6 +116,14 @@ fi
 
 # Read stdin (PostToolUse JSON)
 INPUT=$(cat)
+# A call that FAILED reaches this hook as PostToolUseFailure (task 196, measured on Claude Code 2.1.296: a command
+# that exits non-zero fires only that event). It is COUNTED like any other call — the stop hook's turn rules read the
+# counts, and before, a turn whose only call was `sed -i … && false` (the file changed) read as a chat reply and
+# ended with its gates open — and gets no gate echo and no write-log entry. Read from the payload's own key (only a
+# top-level key can match unescaped; grok's camelCase too); an unmatched payload is a PostToolUse, as before.
+PB_HOOK_EVENT=PostToolUse
+PB_FAILURE_RE='"(hook_event_name|hookEventName)"[[:space:]]*:[[:space:]]*"PostToolUseFailure"'
+[[ "$INPUT" =~ $PB_FAILURE_RE ]] && PB_HOOK_EVENT=PostToolUseFailure
 
 # Normalize provider payload dialects (grok camelCase + renamed tools →
 # claude snake_case; identity for claude payloads; fail-open on any error).
@@ -184,7 +192,7 @@ if [ "$PB_PY_FLOOR" != true ]; then
     if [ "$AGENT_WRITABLE" = true ] && [ -d "$AGENT_DIR/sessions/$SESSION_ID" ]; then
         _counters_mark "$AGENT_DIR/sessions/$SESSION_ID/counters"
     fi
-    echo "{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"# ⚠ playbook needs python3 >= 3.10 (found: ${PB_PY_FOUND:-no python3 on PATH}) — no gate echo, and this call was not counted: the stop hook holds this turn like one that wrote. Upgrade python3.\"}}"
+    echo "{\"hookSpecificOutput\":{\"hookEventName\":\"${PB_HOOK_EVENT}\",\"additionalContext\":\"# ⚠ playbook needs python3 >= 3.10 (found: ${PB_PY_FOUND:-no python3 on PATH}) — no gate echo, and this call was not counted: the stop hook holds this turn like one that wrote. Upgrade python3.\"}}"
     exit 0
 fi
 
@@ -214,10 +222,10 @@ SESSION_DIR="$AGENT_DIR/sessions/$SESSION_ID"
 if ! _pb_session_dir_ok "$SESSION_DIR"; then     # it, or `.agent/sessions` itself (task 194, impl panel r1)
     # The write log is not session state (it lives under HOME; write_log.py checks its sink): an
     # Edit/Write is still recorded (impl panel r2, fable — the stop had switched it off).
-    if [ "$AGENT_WRITABLE" = true ]; then
+    if [ "$AGENT_WRITABLE" = true ] && [ "$PB_HOOK_EVENT" = PostToolUse ]; then
         case "$TOOL_NAME" in Edit|Write) write_log_append "$INPUT" "$PROJECT_DIR" ;; esac
     fi
-    echo '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"# ⚠ this session'"'"'s directory under .agent/sessions/ (or .agent/sessions itself) is a link — not written, not counted (the stop hook holds this turn like one that wrote)."}}'
+    printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"# ⚠ this session'"'"'s directory under .agent/sessions/ (or .agent/sessions itself) is a link — not written, not counted (the stop hook holds this turn like one that wrote)."}}\n' "$PB_HOOK_EVENT"
     exit 0
 fi
 # Task 192 (#41): only where this hook may write. On a fresh multi-user clone
@@ -277,12 +285,18 @@ if [ "$AGENT_WRITABLE" = true ]; then
             ;;
     esac
     counters_unlock
-    # Write log: persist file content after Write/Edit
-    case "$TOOL_NAME" in
-        Edit|Write)
-            write_log_append "$INPUT" "$PROJECT_DIR"
-            ;;
-    esac
+    # Write log: persist file content after Write/Edit — a call that succeeded (a failed Write wrote nothing)
+    if [ "$PB_HOOK_EVENT" = PostToolUse ]; then
+        case "$TOOL_NAME" in
+            Edit|Write)
+                write_log_append "$INPUT" "$PROJECT_DIR"
+                ;;
+        esac
+    fi
+fi
+# A failed call: counted above, no gate echo (task 196).
+if [ "$PB_HOOK_EVENT" = PostToolUseFailure ]; then
+    exit 0
 fi
 
 # Read task number

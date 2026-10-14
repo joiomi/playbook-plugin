@@ -112,6 +112,9 @@ for id in "${ROWS[@]}"; do
         PB-LANE-RESOLUTION)
             echo "=== PB-LANE-RESOLUTION: real sessions: a two-lane repository stays in its lane; a fresh clone with no marker invents no root lane"
             row "$id" ;;
+        PB-TASK-DIR-WATCH)
+            echo "=== PB-TASK-DIR-WATCH: a real session: a task folder copied by hand is flagged after the call, the next Edit held, the removal lets it go; a copy by a FAILING command caught (PostToolUseFailure), the next call held, \`tasks adopt\` releases it"
+            row "$id" ;;
         PB-PAYLOAD-NORMALIZE)
             echo "=== PB-PAYLOAD-NORMALIZE: real hook payloads captured in a session and fed to the normalizer: native bytes unchanged, fields its own; a foreign dialect rewritten"
             row "$id" ;;

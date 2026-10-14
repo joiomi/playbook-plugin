@@ -22,11 +22,15 @@ FLOOR_ENTRY_POINTS = ("tasks", "sandbox", "init", "playbook-codex", "playbook-gr
                       "stop-hook", "chat-log-hook", "task-gate-hook", "state-echo-hook")
 LAUNCHERS = FLOOR_ENTRY_POINTS[:8]           # refuse: exit 1 with the message
 HOOKS = FLOOR_ENTRY_POINTS[8:]               # a hook that cannot run lets the call through, loud (node [5])
-# The Claude hooks.json commands that do NOT check the interpreter: none since task 194 (command-guard-hook checked
-# first; session-start-hook and session-end-hook since task 192, stop-hook and chat-log-hook since task 193,
-# task-gate-hook and state-echo-hook since task 194). Kept, bound to hooks.json by the binding test, so a new hook
-# without the check shows here. hook -> (event, payload fields, exit status, a word its answer must hold).
-UNCHECKED_CLAUDE_HOOKS: "dict[str, tuple]" = {}
+# The Claude hooks.json commands that do NOT check the interpreter themselves (command-guard-hook checked first;
+# session-start-hook and session-end-hook since task 192, stop-hook and chat-log-hook since task 193, task-gate-hook
+# and state-echo-hook since task 194). Bound to hooks.json by the binding test, so a new hook without the check shows
+# here. task-dir-watch-hook (task 196) asks no floor in bash: its python, task-dir-watch.py, exits 0 below 3.10 —
+# nothing is watched or held there — and it calls python only in a lane with a task registry. hook -> (event, payload
+# fields, exit status, a word its answer must hold).
+UNCHECKED_CLAUDE_HOOKS: "dict[str, tuple]" = {
+    "task-dir-watch-hook": ("PreToolUse", {"tool_name": "Bash", "tool_input": {"command": "ls"}}, "0", ""),
+}
 # Hooks that ask the floor only inside a project (task 194, impl panel r1, opus: the echo is bound to `.*`, and a
 # probe before the project check started python3 at every tool call of every project). Run with no input outside a
 # project they exit 0 at once and say nothing; their floor is measured in a project by FLOOR_CLAUDE_CALLS.

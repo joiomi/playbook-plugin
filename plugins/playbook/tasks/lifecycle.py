@@ -288,6 +288,37 @@ def _gate_bounce(task_id: str, task_file, action: str) -> bool:
     return True
 
 
+def _unknown_dirs_bounce(project_path, agent_dir) -> bool:
+    """If the lane holds a task folder the CLI did not make — not registered (a `reserved` line not counting, a
+    creation in progress skipped), not committed: `registry.unknown_now`, the reader the watch uses — print what and
+    the way out, and return True (the caller aborts). The owner's "la închidere" (2026-10-13 12:27, task 196 W4): the
+    watch sees a folder made during a session's shell call or Write; the close sees every folder of the lane, however
+    it was made. No registry → nothing (no provenance to judge by — plan panel P2). An unreadable registry refuses,
+    naming its repair (P9: the watch never holds on it, so the close is where it stops)."""
+    from tasks.registry import RegistryUnreadable, unknown_now, unreadable_message
+    try:
+        left = unknown_now(project_path, agent_dir)
+    except RegistryUnreadable as e:
+        print(f"Blocked: {unreadable_message(e)}", file=sys.stderr)
+        print("  The close checks this lane's task folders against the task registry. Nothing changed.",
+              file=sys.stderr)
+        return True
+    if not left:
+        return False
+    try:
+        rel = Path(agent_dir).relative_to(project_path).as_posix()
+    except ValueError:
+        rel = str(agent_dir)
+    print("Blocked: this lane holds task folder(s) the playbook CLI did not make (the task registry does not name "
+          "them and they are not committed):", file=sys.stderr)
+    for n in left:
+        print(f"  {rel}/tasks/{n!r}" if any(ord(c) < 32 for c in n) else f"  {rel}/tasks/{n}", file=sys.stderr)
+    print("  Keep one:   .claude/bin/tasks adopt <folder>   (it must hold a task.md and a free number)\n"
+          "  Remove one: rm -r <folder>   (removing deletes its content — it may be someone's work)\n"
+          "  Then retry `tasks work done` — or override with --force --reason. Nothing changed.", file=sys.stderr)
+    return True
+
+
 def _prepare_pointer(session_state: Path, task_num: str) -> Path:
     """Create the session directory and a prepared copy of the pointer beside it
     (through the one atomic writer). Raises OSError — before anything else is
@@ -435,6 +466,10 @@ def cmd_work(cmd_args):
             # avoid reindenting the whole close body — so nothing downstream can
             # read an unbound `task_file` (the original C1 crash).
             task_file = matches[0]
+            # Task 196 W4: a hand-made task folder in this lane refuses the close, before anything is read or written
+            # for it (`--force --reason` overrides, as for the gates).
+            if not force and _unknown_dirs_bounce(project_path, agent_dir):
+                sys.exit(1)
             # V7b (task 043, round-1 panel): a close whose `done` cannot land
             # must not run verify, write a receipt, clear the session and print
             # "done" — preflight the live `## Status` value line FIRST and refuse

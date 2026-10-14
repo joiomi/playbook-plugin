@@ -44,8 +44,12 @@ truth.
 
 ## Family 1 — enforcement decisions (`decision` = `allow` / `block` / `record`)
 
-Emitted by the gate/guard/stop/batch hooks and by the close path. `hook` is one
-of `task-gate`, `command-guard`, `stop`, `gate-batch-check`, or `close`.
+Emitted by the gate/guard/stop/batch hooks, the task-folder watch and the close path. `hook` is one
+of `task-gate`, `command-guard`, `stop`, `gate-batch-check`, `task-dir-watch` (task 196) or `close`.
+`task-dir-watch` writes a `record` with `reason="unknown task folder"` and the folder as `path` for each task
+folder it flags after a call (also `"task registry unreadable"` and `"task registry removed during this call"`),
+`block` with `reason="unknown task folder"` when it holds a flagged session's call, and `allow` with
+`reason="unknown task folder: the way out"` for the removal or `tasks` call it lets through;
 `task-gate` writes `allow` or `block` (its Bash task-dir refusal too, as
 `reason="manual task dir creation"`, since task 110); `command-guard` writes
 `block`, and `allow` for an acknowledged dangerous command with

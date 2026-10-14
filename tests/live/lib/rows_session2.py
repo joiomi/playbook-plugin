@@ -422,7 +422,66 @@ def merge_push_gate(out: Path) -> int:
     return run.finish()
 
 
+def task_dir_watch(out: Path) -> int:
+    """Task 196 (PLAN S14 T5b, B31): a task folder made by hand in a real session is flagged after the call, the next
+    action is held, the way out releases it — also after a command that FAILS (measured: Claude Code fires only
+    PostToolUseFailure then)."""
+    run = Run("PB-TASK-DIR-WATCH", "a task folder made by hand is caught after the call and holds the session", out,
+              ["claude"])
+    p = _proj("pb196-watch-")
+    (p / "notes.md").write_text("a\n", encoding="utf-8")
+    _r, ev = claude_session(run, "a folder copied by hand, an edit, the removal, a failing copy, adopt", p, RULES + (
+        "1. Run: .claude/bin/tasks new quick watch-probe \"a probe task\"\n"
+        "2. Run exactly: cp -r .agent/tasks/001-watch-probe .agent/tasks/002-by-hand\n"
+        "3. Edit notes.md: change `a` to `b` (read it first).\n"
+        "4. Run exactly: rm -r .agent/tasks/002-by-hand\n"
+        "5. Edit notes.md: change its text to `c` (read it first).\n"
+        "6. Run exactly: cp -r .agent/tasks/001-watch-probe .agent/tasks/003-by-hand; false\n"
+        "7. Run exactly: ls\n"
+        "8. Run exactly: .claude/bin/tasks adopt .agent/tasks/003-by-hand\n"
+        "9. Run exactly: ls\n"
+        "Then reply DONE.\n"))
+    post = [str(x.get("output") or "") for x in hook_responses(ev, "PostToolUse")]
+    fail = [str(x.get("output") or "") for x in hook_responses(ev, "PostToolUseFailure")]
+    pre = hook_responses(ev, "PreToolUse")
+    held = [x for x in pre if x.get("exit_code") == 2 and "task folder appeared" in str(x.get("output") or "")
+            + str(x.get("stderr") or "")]
+    held_names = [str(x.get("hook_name", "")) for x in held]
+    run.note("PreToolUse refusals by the watch: " + json.dumps(
+        [(str(x.get("hook_name")), (str(x.get("stderr") or x.get("output") or ""))[:160]) for x in held]))
+    run.clause("the copy made by hand is flagged by the watch after the shell call, and the agent is told",
+               any("002-by-hand" in o and "did not make" in o for o in post),
+               f"{len(post)} PostToolUse responses; naming 002-by-hand: {sum('002-by-hand' in o for o in post)}")
+    run.clause("the next Edit is held, naming the folder and the way out",
+               any(n.startswith("PreToolUse:Edit") for n in held_names)
+               and any("rm -r .agent/tasks/002-by-hand" in str(x.get("stderr") or x.get("output") or "")
+                       for x in held), f"held: {held_names}")
+    notes = (p / "notes.md").read_text(encoding="utf-8")
+    run.clause("the exact removal is let through, and the Edit after it goes through",
+               not (p / ".agent" / "tasks" / "002-by-hand").exists() and notes.strip() == "c",
+               f"002-by-hand present: {(p / '.agent' / 'tasks' / '002-by-hand').exists()}; notes.md: {notes!r}")
+    run.clause("a copy made by a command that FAILS is caught through PostToolUseFailure",
+               any("003-by-hand" in o for o in fail), f"{len(fail)} PostToolUseFailure responses: "
+               + json.dumps([o[:120] for o in fail]))
+    run.clause("the call after it is held (the `ls`)", any(n.startswith("PreToolUse:Bash") for n in held_names),
+               f"held: {held_names}")
+    reg = (p / ".agent" / "task-registry").read_text(encoding="utf-8") if (p / ".agent" / "task-registry").exists() \
+        else ""
+    flag = p / ".agent" / "sessions"
+    flags = [f for f in flag.glob("*/task_dir_flag")] if flag.exists() else []
+    run.clause("`tasks adopt` is let through, registers the folder and releases the session",
+               "003-by-hand\tadopt\t" in reg and not flags, f"registry rows for 003: "
+               f"{[l for l in reg.splitlines() if l.startswith('003-')]}; flags left: {[str(f) for f in flags]}")
+    rows = journal(p)
+    run.clause("the watch journals the flag and the hold", any(j.get("hook") == "task-dir-watch"
+               and j.get("decision") == "record" and j.get("reason") == "unknown task folder" for j in rows) and any(j.get("hook") == "task-dir-watch"
+               and j.get("decision") == "block" for j in rows),
+               f"watch records: {[(j.get('decision'), j.get('path')) for j in rows if j.get('hook') == 'task-dir-watch']}")
+    return run.finish()
+
+
 ROWS = {
+    "PB-TASK-DIR-WATCH": task_dir_watch,
     "PB-PAYLOAD-NORMALIZE": payload_normalize,
     "PB-PROVIDER-CAPABILITY-DEGRADE": capability_degrade,
     "PB-SLASH-COMMANDS": slash_commands,

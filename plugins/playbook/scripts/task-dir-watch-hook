@@ -1,0 +1,88 @@
+#!/bin/bash
+# task-dir-watch-hook — the task-folder watch (task 196, PLAN S14 T5b, B31 = #12)
+#   PreToolUse, a shell call or a Write: hold a flagged session (exit 2), else snapshot the lane's tasks/
+#   PreToolUse, an edit: hold a flagged session
+#   PostToolUse / PostToolUseFailure, a shell call or a Write: flag a task folder the call made by hand
+#
+# The decisions are scripts/task-dir-watch.py's (with tasks.registry, on the parsed payload); this script finds the
+# project, the session's lane and its directory, and calls python only when there is something to decide: a flag
+# standing, or — for a shell call or a Write — a registry in the lane or a snapshot of a call. The event and the tool
+# are read here only to skip python for an edit with no flag (an edit makes no folder); hooks.json passes no argument
+# (the dual-host form, `tasks/hooks_check.py`), and a payload this read misjudges reaches python, which decides. No `set -e`: a failure here leaves no snapshot (the post then flags every unknown
+# folder present) — and a crash while a flag stands holds the call (fail closed).
+
+if [ "${PLAYBOOK_ROLE:-}" = "monitor" ]; then
+    cat > /dev/null
+    exit 0
+fi
+
+HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$HOOK_DIR/gate-echo-lib.sh"
+
+PROJECT_DIR=$(find_project_root)
+if [ -z "$PROJECT_DIR" ]; then
+    cat > /dev/null
+    exit 0
+fi
+# The fresh-clone shape (lanes, no marker): whose lane this is cannot be told — the gate's rule too.
+if [ -n "$(lanes_without_marker "$PROJECT_DIR")" ]; then
+    cat > /dev/null
+    exit 0
+fi
+# A malformed marker makes resolve_agent_dir exit: the task gate refuses edits then; nothing to watch here.
+AGENT_DIR=$( (resolve_agent_dir "$PROJECT_DIR") 2>/dev/null ) || AGENT_DIR=""
+if [ -z "$AGENT_DIR" ] || [ ! -d "$AGENT_DIR" ]; then
+    cat > /dev/null
+    exit 0
+fi
+
+INPUT=$(cat)
+
+PB_WALK_READ="$(resolve_session_id trace)"
+SESSION_ID="${PB_WALK_READ%%$'\t'*}"
+# No session (the background daemon): nothing to watch or hold (a bound, task 196 W5).
+[ -n "$SESSION_ID" ] || exit 0
+SESSION_DIR="$AGENT_DIR/sessions/$SESSION_ID"
+FLAG="$SESSION_DIR/task_dir_flag"
+
+PB_FLAGGED=false
+{ [ -e "$FLAG" ] || [ -L "$FLAG" ]; } && PB_FLAGGED=true
+if [ "$PB_FLAGGED" != true ]; then
+    # an edit (never a Write) before it runs, with no flag: nothing to hold, nothing it could make
+    PB_KEY='"(tool_name|toolName)"[[:space:]]*:[[:space:]]*"(Edit|MultiEdit|NotebookEdit|search_replace|StrReplace)"'
+    [[ "$INPUT" =~ $PB_KEY ]] && exit 0
+    if [ ! -e "$AGENT_DIR/task-registry" ] && [ ! -L "$AGENT_DIR/task-registry" ] \
+       && ! compgen -G "$SESSION_DIR/task_dirs_before*" > /dev/null; then
+        exit 0
+    fi
+fi
+# A session directory that is a link (or `sessions` itself) is not this session's (task 194): not read, not written.
+_pb_session_dir_ok "$SESSION_DIR" || exit 0
+
+PB_OUT=$(printf '%s' "$INPUT" | python3 -E -s "$HOOK_DIR/task-dir-watch.py" "$PROJECT_DIR" "$AGENT_DIR" \
+         "$SESSION_DIR" "$SESSION_ID")
+PB_RC=$?
+[ -n "$PB_OUT" ] && printf '%s\n' "$PB_OUT"
+case "$PB_RC" in
+    0) exit 0 ;;
+    2) exit 2 ;;
+esac
+# The watch did not run (no python3, a crash): a standing flag holds the call, as the gate holds on a status it
+# cannot read (task 055); nothing stands — nothing to hold.
+PB_POST='"(hook_event_name|hookEventName)"[[:space:]]*:[[:space:]]*"(PostToolUse[A-Za-z]*)"'
+if [[ "$INPUT" =~ $PB_POST ]]; then
+    # after a call: nothing to hold — said, so a folder this call made is known to wait for the close
+    printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"⚠ playbook: the task-folder watch could not run after this call (task-dir-watch.py ended with exit %s); a task folder made by hand is still refused at `tasks work done`."}}\n' \
+        "${BASH_REMATCH[2]}" "$PB_RC"
+    exit 0
+fi
+if [ "$PB_FLAGGED" = true ]; then
+    cat >&2 <<MSG
+BLOCKED: this session is held for a task folder the playbook CLI did not make, and the check that would
+release it could not run (the watch's helper, task-dir-watch.py, ended with exit $PB_RC).
+Restore a python3 of 3.10 or newer and the Playbook plugin; a person can also remove the folder named
+in $FLAG and that file.
+MSG
+    exit 2
+fi
+exit 0

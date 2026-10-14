@@ -2,7 +2,8 @@
 
 B31's provenance, by the owner's answer of 2026-10-13 12:27 — "Registru scris de CLI, folder creat atomic
 (Recomandat)": a directory under `tasks/` that the registry does not name is hand-made. Detecting one after a shell
-command, and what then, is the next task's (the detector); this module is what it reads.
+command or a Write, and holding the session that made it, is task 196's watch (`scripts/task-dir-watch.py`); it and
+the close read this module through `unknown_now`.
 
 One file per lane, BESIDE `tasks/` — `.agent[/<lane>]/task-registry` — never inside it: about ten readers list
 `tasks/` itself and must not meet anything that is not a task directory. It is MACHINE-LOCAL (gitignored with its lock
@@ -24,7 +25,8 @@ tasks numbered 001; two `tasks freehand` shared one directory). A creator reserv
 a temporary name in the lane, renames it into `tasks/`, then writes its origin over the reservation: no reader ever
 sees a half-made task.
 
-Reads never write and never lock (plan panel T2): `read` and `is_known` only look. The writers — the creators,
+Reads never write and never wait on the lock (plan panel T2): `read` and `is_known` only look; `unknown_now` tries
+the lock SHARED without waiting, never creating its file, to tell a creation in progress from a crash's leftover. The writers — the creators,
 `tasks adopt`, `prepare-merge`'s renames — enrol what exists when they find no registry. `is_known` also counts a
 directory whose task.md is in the COMMITTED tree (`git ls-tree HEAD`, a regular blob — never the index: a staged
 hand-made task.md is not provenance; plan panel T4).
@@ -35,6 +37,7 @@ The reader fails closed: a registry that is a link, not a regular file or not in
 from __future__ import annotations
 
 import errno
+import fcntl
 import os
 import re
 import stat
@@ -142,10 +145,13 @@ def registered_numbers(agent_dir) -> "list[int]":
     return [n for n in (task_number(r[0]) for r in rows) if n is not None]
 
 
-def _committed_task_mds(project_path, agent_dir, names: "list[str] | None" = None) -> "set[str]":
+def _committed_task_mds(project_path, agent_dir, names: "list[str] | None" = None,
+                        timeout: float = 30.0) -> "set[str]":
     """The names of task directories whose task.md is a regular blob in HEAD (one `git ls-tree`). Empty outside git.
     The paths are given and read RELATIVE TO THE PROJECT (`-C <project>`, no `--full-tree`): a project may lie below
-    its repository's top (task 195, impl panel r1 — `--full-tree` read them from the top and missed every one)."""
+    its repository's top (task 195, impl panel r1 — `--full-tree` read them from the top and missed every one).
+    `timeout` bounds each `git` run; the first one that does not answer ends the asking — what it would have proved
+    stays unproven (task 196, plan panel P7: a hook the host kills at its deadline must not wait five times 30 s)."""
     if names is not None and not names:
         return set()                      # never `ls-tree` with no pathspec: that lists the whole tree (impl panel r2)
     try:
@@ -158,9 +164,11 @@ def _committed_task_mds(project_path, agent_dir, names: "list[str] | None" = Non
     # tree before the commit that ends it (impl panel r2, opus). Commits only — never the index (plan panel T4).
     for ref in ("HEAD", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "REBASE_HEAD"):
         try:
-            r = subprocess.run(["git", "--no-replace-objects", "-c", "core.quotepath=off", "-C", str(project_path),
-                                "ls-tree", "-r", "-z", ref, "--", *paths],
-                               capture_output=True, timeout=30)
+            r = subprocess.run(["git", "--no-replace-objects", "--literal-pathspecs", "-c", "core.quotepath=off",
+                                "-C", str(project_path), "ls-tree", "-r", "-z", ref, "--", *paths],
+                               capture_output=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            break
         except (OSError, subprocess.SubprocessError):
             continue
         if r.returncode == 0:
@@ -202,6 +210,59 @@ def unknown_task_dirs(project_path, agent_dir) -> "list[str]":
     if not left:
         return []
     committed = _committed_task_mds(project_path, agent_dir)
+    return [n for n in left if n not in committed]
+
+
+def _creating(agent_dir) -> "tuple[bool, int | None]":
+    """(a creator holds the lane lock now, the descriptor holding it SHARED — or None). Opens the lock file read-only,
+    never followed, never created; tries the shared lock without waiting. The caller closes the descriptor."""
+    try:
+        fd = os.open(lock_path(agent_dir), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0))
+    except OSError:
+        return False, None                # no lock file: no creator has ever run, none is running
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            os.close(fd)
+            return False, None
+        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        return True, None
+    except OSError:
+        os.close(fd)
+        return False, None
+    return False, fd
+
+
+def unknown_now(project_path, agent_dir, names: "list[str] | None" = None, *,
+                git_timeout: float = 30.0) -> "list[str] | None":
+    """The task folders standing under the lane's `tasks/` (all of them, or those among `names`) that are not known
+    — registered (a `reserved` line not counting) or committed (the git rule) — with a creation in progress left out:
+    the registry is read holding the lane lock SHARED when it can be had at once (then no creator is between its
+    rename and its registration), and while a creator holds it, a `reserved` folder is that creation (task 196, plan
+    panel P14; read under the lock, a creator that registers and lets go between two reads cannot make a folder look
+    hand-made). None when the lane has no registry (nothing is known by provenance then — plan panel P2). A name the
+    git rule cannot answer within `git_timeout` is unknown. Never waits, never writes. Raises RegistryUnreadable."""
+    lane = Path(agent_dir)
+    tasks_dir = lane / "tasks"
+    if names is None:
+        try:
+            names = sorted(n for n in os.listdir(tasks_dir) if LOOSE_TASK_DIR_RE.match(n))
+        except OSError:
+            names = []
+    creating, fd = _creating(lane)
+    try:
+        entries = read(lane)
+    finally:
+        if fd is not None:
+            os.close(fd)                  # lets the shared lock go
+    if entries is None:
+        return None
+    left = [n for n in names
+            if LOOSE_TASK_DIR_RE.match(n) and os.path.lexists(tasks_dir / n)
+            and entries.get(n) in (None, "reserved") and not (creating and entries.get(n) == "reserved")]
+    strict = [n for n in left if TASK_DIR_RE.fullmatch(n)]   # only such a name can be a committed task
+    committed = _committed_task_mds(project_path, lane, strict, timeout=git_timeout) if strict else set()
     return [n for n in left if n not in committed]
 
 

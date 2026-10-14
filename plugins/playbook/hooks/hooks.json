@@ -31,6 +31,16 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|search_replace|write|Bash|Shell|StrReplace|run_terminal_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/task-dir-watch-hook\"",
+            "timeout": 20
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
@@ -52,6 +62,38 @@
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/state-echo-hook\"",
             "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Shell|run_terminal_command|Write|write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/task-dir-watch-hook\"",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/state-echo-hook\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Shell|run_terminal_command|Write|write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/task-dir-watch-hook\"",
+            "timeout": 20
           }
         ]
       }
