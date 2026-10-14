@@ -56,6 +56,7 @@ FLAG_PENDING = "task_dir_flag.pending."     # a detection its post wrote without
 SNAPSHOT_NAME = "task_dirs_before"          # the watch's listing before a call (`….<tool_use_id>`)
 _FLAG_MAX = 1 << 20
 _GONE = object()                            # a file listed and then removed before it was read
+SNAPSHOT_MAX_AGE = 86400                    # the watch's own (a call another hook denied leaves its snapshot)
 # a task directory's name: its number, a dash, a slug — no whitespace, no separator, nothing bash cannot carry.
 # Always `fullmatch`: `$` alone accepts a trailing newline, and a name with one would split its registry line (task
 # 195, impl panel r2).
@@ -450,13 +451,14 @@ def _flag_names_at(dfd: int, fname: str):
     return out
 
 
-def standing_before(agent_dir, session_id: str) -> "set[str] | None":
-    """The task folders that stood before every call of this session still running: the intersection of its standing
-    pre-call snapshots (`sessions/<id>/task_dirs_before*`, the watch's — task 196); None when it has none (no watched
-    call is running, or no watch runs). Read only, never through a link; a snapshot it cannot read gives an empty set,
-    and the caller fails closed. The close passes it to `unknown_now` (task 197, impl panel r2 J5)."""
-    if not session_id or "/" in session_id or session_id in (".", ".."):
-        return None
+def standing_before(agent_dir) -> "set[str] | None":
+    """The task folders that stood before every watched call still running in the lane — any session's: the
+    intersection of the standing pre-call snapshots (`sessions/*/task_dirs_before*`, the watch's — task 196) younger
+    than `SNAPSHOT_MAX_AGE`; None when there are none (no watched call is running, or no watch runs). Read only, never
+    through a link; a snapshot or a session directory it cannot read gives an empty set, and the caller fails closed.
+    The close passes it to `unknown_now` (task 197, impl panel r2 J5; the single judge's run 1, K3 — codex: a close
+    that read only its own session's snapshots passed a folder another session's running call had made)."""
+    import time
     try:
         lfd = os.open(Path(agent_dir), _DIR_FLAGS)
     except OSError:
@@ -470,31 +472,53 @@ def standing_before(agent_dir, session_id: str) -> "set[str] | None":
             return set()
         try:
             try:
-                dfd = os.open(session_id, _DIR_FLAGS | os.O_NOFOLLOW, dir_fd=sfd)
-            except FileNotFoundError:
-                return None
+                with os.scandir(sfd) as it:
+                    sids = sorted(e.name for e in it)
             except OSError:
                 return set()
-            try:
+            out: "set[str] | None" = None
+            now = time.time()
+            for sid in sids:
                 try:
-                    with os.scandir(dfd) as it:
-                        snaps = sorted(e.name for e in it
-                                       if (e.name == SNAPSHOT_NAME or e.name.startswith(SNAPSHOT_NAME + "."))
-                                       and not e.name.endswith(".tmp"))
+                    dfd = os.open(sid, _DIR_FLAGS | os.O_NOFOLLOW, dir_fd=sfd)
+                except FileNotFoundError:
+                    continue                      # ended meanwhile
+                except NotADirectoryError:
+                    import stat
+                    try:
+                        if stat.S_ISLNK(os.stat(sid, dir_fd=sfd, follow_symlinks=False).st_mode):
+                            return set()          # a session directory that is a link (ENOTDIR here — measured)
+                    except OSError:
+                        return set()
+                    continue                      # a plain file: no session
                 except OSError:
                     return set()
-                out: "set[str] | None" = None
-                for name in snaps:
-                    data = _json_at(dfd, name)
-                    if data is _GONE:
-                        continue                  # its call's post took it meanwhile
-                    folders = data.get("folders") if isinstance(data, dict) else None
-                    if not isinstance(folders, list) or not all(isinstance(f, str) for f in folders):
+                try:
+                    try:
+                        with os.scandir(dfd) as it:
+                            snaps = sorted(e.name for e in it
+                                           if (e.name == SNAPSHOT_NAME or e.name.startswith(SNAPSHOT_NAME + "."))
+                                           and not e.name.endswith(".tmp"))
+                    except OSError:
                         return set()
-                    out = set(folders) if out is None else out & set(folders)
-                return out
-            finally:
-                os.close(dfd)
+                    for name in snaps:
+                        try:
+                            if now - os.stat(name, dir_fd=dfd, follow_symlinks=False).st_mtime > SNAPSHOT_MAX_AGE:
+                                continue          # a call that never posted, not a running one
+                        except FileNotFoundError:
+                            continue
+                        except OSError:
+                            return set()
+                        data = _json_at(dfd, name)
+                        if data is _GONE:
+                            continue              # its call's post took it meanwhile
+                        folders = data.get("folders") if isinstance(data, dict) else None
+                        if not isinstance(folders, list) or not all(isinstance(f, str) for f in folders):
+                            return set()
+                        out = set(folders) if out is None else out & set(folders)
+                finally:
+                    os.close(dfd)
+            return out
         finally:
             os.close(sfd)
     finally:

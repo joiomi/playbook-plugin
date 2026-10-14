@@ -692,7 +692,15 @@ def _post(p: dict, project: Path, lane: Path, sfd: int, sid: str) -> int:
         snap = _read_json(sfd, before)
     except ValueError:
         snap = None
-    _unlink(sfd, before)
+    # the snapshot stays until the detection is recorded: a close in a parallel call reads it as "this call is still
+    # running" (the single judge's run 1, K2 — codex: removed first, a close in that gap passed the folder)
+    try:
+        return _post_with(p, project, lane, sfd, sid, snap, tool, cmd, event)
+    finally:
+        _unlink(sfd, before)
+
+
+def _post_with(p: dict, project: Path, lane: Path, sfd: int, sid: str, snap, tool: str, cmd: str, event: str) -> int:
     notes: "list[str]" = []
     had_registry = isinstance(snap, dict) and bool(snap.get("registry"))
     if not _registry_present(lane) and had_registry:
@@ -710,11 +718,12 @@ def _post(p: dict, project: Path, lane: Path, sfd: int, sid: str) -> int:
         _say(event, notes)
         return 0
     try:
-        # what stood before the call; with no snapshot nothing is known to have stood — an `enrolled` row then proves
-        # nothing (impl panel r2 J1: a lane with no `tasks/` is no project to the hooks before the call, so its pre
-        # wrote none, and a creator in the call re-enrolled what the call made)
+        # what stood before the call; with no snapshot nothing is known either way and the rows are trusted — a
+        # successful close removes its session directory, the call's snapshot with it, and reading every `enrolled`
+        # folder as made by the call then held the session after every close (the single judge's run 1, K1); the
+        # one-lane project with no `.agent/tasks` (no project to the hooks before the call) is a stated bound
         stood = (set(f for f in snap["folders"] if isinstance(f, str))
-                 if isinstance(snap, dict) and isinstance(snap.get("folders"), list) else set())
+                 if isinstance(snap, dict) and isinstance(snap.get("folders"), list) else None)
         left = _unknown(project, lane, new, before=stood)
     except registry.RegistryUnreadable as e:
         _journal(lane, "record", "task registry unreadable", sid, tool, "", cmd)

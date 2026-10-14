@@ -934,17 +934,14 @@ class AReEnrolmentLaundersNothing(_Project):
         self.assertEqual(self.flagged(), [".agent/tasks/999-x"])       # the CLI's own `002-b` is not
         self.assertTrue(self.edit()[0])
 
-    def test_one_call_in_a_lane_with_no_tasks_folder_is_caught_too(self):
-        # impl panel r2 J1 (fable, opus, sonnet): with no `tasks/` the hook left before python and no snapshot was
-        # taken, so the in-call enrolment rule never ran — the close passed the folder
+    def test_the_bound_a_one_lane_project_with_no_tasks_folder(self):
+        # impl panel r2 J1, kept as a BOUND by the single judge's run 1 (K1): with no `.agent/tasks` the hooks see no
+        # project (`find_project_root`), so the call's pre takes no snapshot; the post cannot tell what stood, and an
+        # `enrolled` row is trusted there (reading it as made by the call held every session after a close, K1).
+        # A folder made by hand alone, with no creator in the call, is still flagged (no row knows it).
         shutil.rmtree(self.lane / "tasks")
         (self.lane / "task-registry").unlink()
-
-        def effect():
-            self._task(self.lane, "009-x")
-            r = self.cli("new", "quick", "b")
-            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.shell_call("mkdir -p .agent/tasks/009-x && … && .claude/bin/tasks new quick b", effect)
+        self.shell_call("mkdir -p …", lambda: self._task(self.lane, "009-x"))
         self.assertEqual(self.flagged(), [".agent/tasks/009-x"])
 
     def test_a_close_inside_the_call_that_made_the_folder_refuses(self):
@@ -963,6 +960,36 @@ class AReEnrolmentLaundersNothing(_Project):
         self.shell_call("rm …; cp -r …; tasks new quick b; tasks work N; tasks work done", effect)
         self.assertNotEqual(said["close"].returncode, 0)
         self.assertIn(".agent/tasks/999-x", said["close"].stderr)
+
+    def test_a_close_that_removes_its_session_flags_no_legacy_folder(self):
+        # the single judge's run 1, K1 (codex): a successful close removes its session directory, the call's snapshot
+        # with it — the post then read every uncommitted `enrolled` folder as made by the call and held the session
+        self._registry(self.lane, [("001-a", "new"), ("050-legacy", "enrolled")])
+        self._task(self.lane, "050-legacy")
+        sd = self.lane / "sessions" / SID
+        self.shell_call("tasks work done", lambda: shutil.rmtree(sd))
+        self.assertIsNone(self.flagged())
+        self.assertFalse(self.edit()[0])
+
+    def test_another_sessions_running_call_is_seen_by_a_close(self):
+        # the single judge's run 1, K3 (codex): session A's call made a folder and re-enrolled the lane but has not
+        # posted yet; session B's close read only B's snapshots, which already held the folder, and passed
+        r = self.cli("new", "quick", "d", sid=SID_B)
+        num = re.search(r"tasks/(\d+)-", r.stdout).group(1)
+        self.assertEqual(self.cli("work", num, sid=SID_B).returncode, 0)
+        (self.lane / "task-registry").unlink()
+        b, e, _ = self.pre("cp -r …; tasks new quick b", "toolu_A1")         # A's call starts: its snapshot
+        self.assertFalse(b, e)
+        # a live session: every CLI call sweeps a session whose id is no live agent and whose pointer is not fresh
+        (self.lane / "sessions" / SID / "current_state").write_text("001\n", encoding="utf-8")
+        self._task(self.lane, "999-x")
+        self.assertEqual(self.cli("new", "quick", "b").returncode, 0)       # …re-enrols, and A has not posted
+        self.assertTrue((self.lane / "sessions" / SID / "task_dirs_before.toolu_A1").exists())
+        b, e, _ = self.pre("tasks work done", "toolu_B1", sid=SID_B)        # B's close, inside a call of B's
+        self.assertFalse(b, e)
+        r = self.cli("work", "done", sid=SID_B)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn(".agent/tasks/999-x", r.stderr)
 
     def test_a_lane_with_no_tasks_folder_in_a_multi_user_project_gets_its_snapshot(self):
         # impl panel r2 J1: the hook left before python in a lane with no `tasks/` — here the project is found through

@@ -15,6 +15,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -393,6 +394,40 @@ class AFlaggedFolderIsNoEnrolment(_Project):
         self.assertEqual(self.unknown(), ["001-a", "999-x"])
 
 
+class ThePostKeepsItsSnapshotUntilTheFlag(_Project):
+    """The single judge's run 1, K2 (codex): the post removed its snapshot before the detection was recorded — a close
+    in a parallel call read only snapshots that already held the folder, and passed. In-process, the watch's module."""
+
+    def test_the_snapshot_stands_while_the_flag_is_written(self):
+        import importlib.util
+        sys.path.insert(0, str(PLUGIN))
+        self.addCleanup(lambda: sys.path.remove(str(PLUGIN)) if str(PLUGIN) in sys.path else None)
+        spec = importlib.util.spec_from_file_location("task_dir_watch_k2", SCRIPTS / "task-dir-watch.py")
+        w = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(w)
+        (self.agent / "task-registry").write_text("# playbook task-registry v1\n", encoding="utf-8")
+        sd = self.agent / "sessions" / "s-k2"
+        sd.mkdir(parents=True)
+        snap = sd / "task_dirs_before.toolu_K2"
+        snap.write_text(json.dumps({"v": 1, "folders": [], "registry": True}), encoding="utf-8")
+        (self.tasks / "999-x").mkdir()
+        seen = []
+        real = w._record_flag
+
+        def record(sfd, lane_rel, folders):
+            seen.append(snap.exists())
+            return real(sfd, lane_rel, folders)
+        w._record_flag = record
+        sfd = os.open(sd, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            w._post({"tool_name": "Bash", "tool_input": {"command": "cp -r"}, "hook_event_name": "PostToolUse",
+                     "tool_use_id": "toolu_K2"}, self.p, self.agent, sfd, "s-k2")
+        finally:
+            os.close(sfd)
+        self.assertEqual(seen, [True])
+        self.assertFalse(snap.exists())                      # removed once the detection is recorded
+
+
 class StandingBefore(_Project):
     """Task 197's impl panel r2, J5: what stood before a session's running calls — the intersection of its standing
     snapshots; None with none; an unfinished temp ignored; one it cannot read, or a session directory that is a
@@ -405,21 +440,30 @@ class StandingBefore(_Project):
 
     def test_the_intersection_of_the_standing_snapshots(self):
         reg = self.registry_module()
-        self.assertIsNone(reg.standing_before(self.agent, "s-snap"))          # no session directory
+        self.assertIsNone(reg.standing_before(self.agent))          # no session directory
         self.snap("task_dirs_before.toolu_1", ["001-a", "002-b"])
         self.snap("task_dirs_before.toolu_2", ["001-a"])
         self.snap("task_dirs_before.toolu_3.x1y2.tmp", [])                     # an unfinished write
-        self.assertEqual(reg.standing_before(self.agent, "s-snap"), {"001-a"})
+        self.assertEqual(reg.standing_before(self.agent), {"001-a"})
+        # another session's running call counts too (the single judge's run 1, K3) …
+        other = self.agent / "sessions" / "s-other"
+        other.mkdir()
+        (other / "task_dirs_before.toolu_9").write_text(json.dumps({"v": 1, "folders": []}), encoding="utf-8")
+        self.assertEqual(reg.standing_before(self.agent), set())
+        # … but not a snapshot older than a day: a call that never posted is not running
+        old = time.time() - reg.SNAPSHOT_MAX_AGE - 60
+        os.utime(other / "task_dirs_before.toolu_9", (old, old))
+        self.assertEqual(reg.standing_before(self.agent), {"001-a"})
 
     def test_what_it_cannot_read_stood_nothing(self):
         reg = self.registry_module()
         self.snap("task_dirs_before.toolu_1", ["001-a"])
         (self.agent / "sessions" / "s-snap" / "task_dirs_before.toolu_2").write_text("not json", encoding="utf-8")
-        self.assertEqual(reg.standing_before(self.agent, "s-snap"), set())
+        self.assertEqual(reg.standing_before(self.agent), set())
         moved = self.tmp / "moved"
         (self.agent / "sessions" / "s-snap").rename(moved)
         (self.agent / "sessions" / "s-snap").symlink_to(moved)
-        self.assertEqual(reg.standing_before(self.agent, "s-snap"), set())
+        self.assertEqual(reg.standing_before(self.agent), set())
 
 
 class EnsureEnrolledHoldsItsLane(_Project):
