@@ -264,12 +264,24 @@ def _held(afd: int, agent_dir: Path) -> Path:
     return p if p.is_dir() else agent_dir
 
 
-def _real_path(afd: int, agent_dir: Path) -> Path:
-    """Where the lane held open as `afd` is now — the created task's path is returned from there."""
+def _final_path(tfd: int, agent_dir: Path, name: str) -> Path:
+    """The created task's path: the lane's own path while its `tasks/` is still the directory held open as `tfd` — a
+    lane reached through a link stays a path inside the project, as its callers print it (the single judge's run 2:
+    the resolved path broke `tasks new` in a linked lane) — and, after a swap, where the held `tasks/` really is."""
+    lexical = agent_dir / "tasks" / name
     try:
-        return Path(os.readlink(f"/proc/self/fd/{afd}"))
+        if os.path.samestat(os.stat(agent_dir / "tasks"), os.fstat(tfd)):
+            return lexical
+        return Path(os.readlink(f"/proc/self/fd/{tfd}")) / name
     except OSError:
-        return agent_dir
+        return lexical
+
+
+def _tasks_view(tfd: int, lane: Path) -> Path:
+    """The held `tasks/` as a path the allocator lists THROUGH the descriptor (the single judge's run 2: it listed
+    `tasks/` by name, so a swap of `tasks/` alone sent a retry's number to the replacement)."""
+    p = Path(f"/proc/self/fd/{tfd}")
+    return p if p.is_dir() else lane / "tasks"
 
 
 class _Collision(Exception):
@@ -350,13 +362,21 @@ def create_task_dir(project_path, agent_dir, slug: str, origin: str,
     # `001-`, and that one line stopped every later read of the lane's registry)
     if not TASK_DIR_RE.fullmatch(f"1-{slug}"):
         raise ValueError(f"no task folder name can be made from the slug {slug!r}")
-    afd = os.open(agent_dir, _DIR_FLAGS)
+    # The lane opened from the project root without following a link when it lies inside the project; a lane reached
+    # through a link (a shared folder) is opened as it is and USED — but nothing in it is ever swept (the single judge's
+    # run 2, codex, Critical, reproduced: a plain open of a linked `.agent` let the sweep delete `.task-creating.*`
+    # folders in the link's target).
+    from tasks.shared import _open_dir_inside
+    afd = _open_dir_inside(Path(project_path), agent_dir)
+    inside = afd is not None
+    if afd is None:
+        afd = os.open(agent_dir, _DIR_FLAGS)
     try:
         lane = _held(afd, agent_dir)
         with named_lock(lock_path(lane)):
             tfd = os.open("tasks", _DIR_FLAGS | os.O_NOFOLLOW, dir_fd=afd)
             try:
-                return _create_locked(afd, tfd, lane, agent_dir, slug, origin, render, number, core)
+                return _create_locked(afd, tfd, lane, agent_dir, slug, origin, render, number, core, sweep=inside)
             finally:
                 os.close(tfd)
     finally:
@@ -364,13 +384,14 @@ def create_task_dir(project_path, agent_dir, slug: str, origin: str,
 
 
 def _create_locked(afd: int, tfd: int, lane: Path, agent_dir: Path, slug: str, origin: str,
-                   render: "Callable[[int, str], str]", number: "int | None", core) -> Path:
+                   render: "Callable[[int, str], str]", number: "int | None", core, sweep: bool) -> Path:
     """`create_task_dir`'s body, under the lane lock, every step through the held lane (`afd`, `tfd`, `lane`)."""
     from tasks.shared import _remove_tree_at
     rows = _rows_locked(lane)
-    _sweep_temps_at(afd)
+    if sweep:
+        _sweep_temps_at(afd)
     for _attempt in range(1000):
-        num = core._next_task_number(lane / "tasks")
+        num = core._next_task_number(_tasks_view(tfd, lane), agent_dir=lane)
         if number is not None and number != num:
             raise NumberTaken(number, num)
         name = f"{num:03d}-{slug}"
@@ -403,7 +424,7 @@ def _create_locked(afd: int, tfd: int, lane: Path, agent_dir: Path, slug: str, o
             os.fsync(d)
         rows[-1] = [name, origin, rows[-1][2]]
         _write(lane, rows)
-        return _real_path(afd, agent_dir) / "tasks" / name
+        return _final_path(tfd, agent_dir, name)
     raise RuntimeError("no free task number after 1000 tries")
 
 

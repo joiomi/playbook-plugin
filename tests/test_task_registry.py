@@ -571,6 +571,45 @@ class RoundTwoFixes(_Project):
         self.assertEqual(calls, ["002-x"])
         self.assertEqual(final.name, "003-x", "the second number was taken from the replacement lane")
 
+    def test_a_linked_lane_is_used_but_never_swept(self):
+        # the single judge's run 2 (codex, Critical, reproduced): the lane opened by a plain open followed a linked
+        # `.agent`, and the sweep deleted `.task-creating.*` folders in the link's target
+        external = self.tmp / "external-lane"
+        (external / "tasks").mkdir(parents=True)
+        foreign = external / ".task-creating.999.0"
+        foreign.mkdir()
+        (foreign / "keep.txt").write_text("the owner's data\n", encoding="utf-8")
+        import shutil as _sh
+        _sh.rmtree(self.agent)
+        self.agent.symlink_to(external, target_is_directory=True)
+        self.cli("new", "quick", "a", check=True)                   # a linked lane (a shared folder) still works
+        self.assertTrue((foreign / "keep.txt").is_file(), "the sweep deleted inside a linked lane's target")
+        self.assertTrue((external / "tasks" / "001-a" / "task.md").is_file())
+
+    def test_a_tasks_folder_swapped_during_a_build(self):
+        # run 2 (Important, reproduced): the allocator and the returned path resolved `tasks/` by name while the
+        # publication used the held descriptor — a swap of `tasks/` alone gave a path that did not exist, and a retry
+        # allocated from the replacement
+        reg = self.registry_module()
+        self.cli("new", "quick", "first", check=True)
+        replacement = self.tmp / "replacement-tasks"
+        (replacement / "009-theirs").mkdir(parents=True)
+        (replacement / "009-theirs" / "task.md").write_text("# 009\n", encoding="utf-8")
+        held = self.agent / "tasks.held"
+        calls = []
+
+        def render(num, name):
+            if not calls:
+                calls.append(name)
+                (self.tasks / name).mkdir()                 # a collision: a second number is taken
+                self.tasks.rename(held)
+                replacement.rename(self.tasks)
+            return f"# {num:03d} - x\n"
+        final = reg.create_task_dir(self.p, self.agent, "x", "new", render)
+        self.assertEqual(final.name, "003-x", "the retry allocated from the replacement tasks/")
+        self.assertTrue((final / "task.md").is_file(), "the returned path is not where the task is")
+        self.assertEqual(final.resolve(), (held / "003-x").resolve())
+
     def test_a_long_title_is_created(self):
         # J6 (sonnet): the temp name carried the task's name, ~25 bytes longer — ENAMETOOLONG for a 230-byte name
         title = "a" * 230

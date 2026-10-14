@@ -4163,11 +4163,12 @@ def _display_title(name: str) -> str:
     return name.replace("-", " ").replace("_", " ").title()
 
 
-def _next_task_number(tasks_dir: Path) -> int:
+def _next_task_number(tasks_dir: Path, agent_dir: "Path | None" = None) -> int:
     """Find the next available task number: one past the highest of the task directories AND of the numbers the
     lane's task registry holds — a reserved number a crashed creator burned is never reused (task 195). The ONE
     allocator: the creators call it under the lane lock (`registry.create_task_dir`). Raises
-    `registry.RegistryUnreadable` when the registry cannot be read."""
+    `registry.RegistryUnreadable` when the registry cannot be read. `agent_dir`, when given, is the lane whose
+    registry counts (the creator lists a held `tasks/` whose path has no lane above it)."""
     max_num = 0
     if tasks_dir.exists():
         for item in tasks_dir.iterdir():
@@ -4177,7 +4178,7 @@ def _next_task_number(tasks_dir: Path) -> int:
                     num = int(match.group(1))
                     max_num = max(max_num, num)
     from tasks.registry import registered_numbers
-    for num in registered_numbers(tasks_dir.parent):
+    for num in registered_numbers(agent_dir if agent_dir is not None else tasks_dir.parent):
         max_num = max(max_num, num)
     return max_num + 1
 
