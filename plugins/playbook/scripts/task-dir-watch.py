@@ -24,7 +24,8 @@ close's. A lane with no registry is watched too (task 197, its plan panel P1): w
 unknown; a call during which the registry vanished says so, and a standing flag outlives the registry (impl panel r1
 I6). A flagged folder that a re-enrolment takes in stays unknown — to this watch and to the close: the registry's
 reader reads the lane's flags (`registry.unknown_now`, task 197 impl panel r1 I2) —, and a folder made during a call
-whose row is `enrolled` by its end is flagged (I3). A post that
+whose row is `enrolled` by its end is flagged (I3) — every watched call has its snapshot, with no `tasks/` an empty
+one (impl panel r2 J1). A post that
 finds no snapshot of its call flags every unknown folder present (fail closed, plan panel P4). A git that does not
 answer within the budget proves nothing: the folder is flagged (P7). An unreadable registry never holds — a hold would
 block its repair — it is said and journaled, and the close refuses naming the repair (P9).
@@ -281,19 +282,6 @@ def _flag_times(data) -> "dict[str, str]":
     return out
 
 
-def _enrolled_during(project: Path, lane: Path, names: "list[str]") -> "list[str]":
-    """The folders among `names` — NEW in this call — that the registry calls `enrolled` and git does not know: an
-    enrolment records only what stood, so a folder made during the call and enrolled by its end was taken in by a
-    creator the same call ran with the registry gone (task 197, impl panel r1 I3 — fable, opus). They are unknown."""
-    rows = registry.read(lane) or {}
-    cand = [n for n in names if rows.get(n) == "enrolled"]
-    if not cand:
-        return []
-    strict = [n for n in cand if registry.TASK_DIR_RE.fullmatch(n)]
-    committed = registry._committed_task_mds(project, lane, strict, timeout=GIT_TIMEOUT) if strict else set()
-    return [n for n in cand if n not in committed and os.path.isdir(lane / "tasks" / n)]
-
-
 def _pending(sfd: int) -> "list[str]":
     try:
         return sorted(n for n in os.listdir(sfd) if n.startswith(PENDING))
@@ -340,9 +328,10 @@ def _registry_present(lane: Path) -> bool:
     return os.path.lexists(registry.registry_path(lane))
 
 
-def _unknown(project: Path, lane: Path, names: "list[str] | None") -> "list[str]":
-    """`unknown_now` for the watch: with no registry nothing knows a folder but a commit (impl panel r1 I6)."""
-    return registry.unknown_now(project, lane, names, git_timeout=GIT_TIMEOUT, no_registry="git") or []
+def _unknown(project: Path, lane: Path, names: "list[str] | None", before: "set[str] | None" = None) -> "list[str]":
+    """`unknown_now` for the watch: with no registry nothing knows a folder but a commit (impl panel r1 I6); `before`,
+    the call's own snapshot, makes a folder enrolled during the call unknown (task 197, impl panel r1 I3)."""
+    return registry.unknown_now(project, lane, names, git_timeout=GIT_TIMEOUT, no_registry="git", before=before) or []
 
 
 # ---------------------------------------------------------------- the way out
@@ -683,7 +672,7 @@ def _pre(watched: bool, p: dict, project: Path, lane: Path, sfd: int, inside: bo
                 _journal(lane, "block", "unknown task folder", sid, tool, first, cmd)
                 print(_hold_message(project, lane, left, cwd, notes), file=sys.stderr)
                 return 2
-    if watched and (lane / "tasks").is_dir():      # every lane, a registry or not (task 197, P1)
+    if watched:          # every lane, a registry or not (P1), `tasks/` or not — an empty listing (impl panel r2 J1)
         if inside:
             _sweep_snapshots(sfd)
         tuid = _str(p, "tool_use_id")
@@ -721,9 +710,12 @@ def _post(p: dict, project: Path, lane: Path, sfd: int, sid: str) -> int:
         _say(event, notes)
         return 0
     try:
-        left = _unknown(project, lane, new)
-        if isinstance(snap, dict) and isinstance(snap.get("folders"), list):
-            left = sorted(set(left) | set(_enrolled_during(project, lane, [n for n in new if n not in left])))
+        # what stood before the call; with no snapshot nothing is known to have stood — an `enrolled` row then proves
+        # nothing (impl panel r2 J1: a lane with no `tasks/` is no project to the hooks before the call, so its pre
+        # wrote none, and a creator in the call re-enrolled what the call made)
+        stood = (set(f for f in snap["folders"] if isinstance(f, str))
+                 if isinstance(snap, dict) and isinstance(snap.get("folders"), list) else set())
+        left = _unknown(project, lane, new, before=stood)
     except registry.RegistryUnreadable as e:
         _journal(lane, "record", "task registry unreadable", sid, tool, "", cmd)
         notes.append("⚠ playbook: the task-folder watch could not read the task registry — "

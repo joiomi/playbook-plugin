@@ -359,6 +359,27 @@ class AFlaggedFolderIsNoEnrolment(_Project):
         self.flag()
         self.assertEqual(self.unknown(), [])
 
+    def test_a_pending_entry_merged_while_it_is_read_is_still_seen(self):
+        # impl panel r2 J6 (codex, reproduced): the reader read the main flag before a re-check merged a pending entry
+        # into it, then found the pending entry gone — the folder was missed and a close passed
+        reg = self.registry_module()
+        self.flag(folders=())
+        self.flag("task_dir_flag.pending.1.2")
+        real = reg._flag_names_at
+        seen = {"main": 0}
+
+        def interleaved(dfd, fname):
+            if fname == "task_dir_flag":
+                seen["main"] += 1
+                if seen["main"] == 1:
+                    return set()                              # read BEFORE the merge: nothing in it yet
+            elif fname.startswith("task_dir_flag.pending."):
+                self.flag(folders=(".agent/tasks/999-x",))     # the re-check merges it now…
+                (self.sess / fname).unlink()                  # …and removes the entry it read
+            return real(dfd, fname)
+        reg._flag_names_at = interleaved
+        self.assertEqual(reg.unknown_now(self.p, self.agent, no_registry="git"), ["999-x"])
+
     def test_a_flag_it_cannot_read_makes_every_enrolled_folder_unknown(self):
         (self.sess / "task_dir_flag").write_text("not json", encoding="utf-8")
         self.assertEqual(self.unknown(), ["001-a", "999-x"])
@@ -370,6 +391,35 @@ class AFlaggedFolderIsNoEnrolment(_Project):
         self.sess.rename(moved)
         self.sess.symlink_to(moved)                           # a session directory that is a link
         self.assertEqual(self.unknown(), ["001-a", "999-x"])
+
+
+class StandingBefore(_Project):
+    """Task 197's impl panel r2, J5: what stood before a session's running calls — the intersection of its standing
+    snapshots; None with none; an unfinished temp ignored; one it cannot read, or a session directory that is a
+    link, gives an empty set (the close then fails closed)."""
+
+    def snap(self, name, folders):
+        d = self.agent / "sessions" / "s-snap"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / name).write_text(json.dumps({"v": 1, "folders": folders, "registry": True}), encoding="utf-8")
+
+    def test_the_intersection_of_the_standing_snapshots(self):
+        reg = self.registry_module()
+        self.assertIsNone(reg.standing_before(self.agent, "s-snap"))          # no session directory
+        self.snap("task_dirs_before.toolu_1", ["001-a", "002-b"])
+        self.snap("task_dirs_before.toolu_2", ["001-a"])
+        self.snap("task_dirs_before.toolu_3.x1y2.tmp", [])                     # an unfinished write
+        self.assertEqual(reg.standing_before(self.agent, "s-snap"), {"001-a"})
+
+    def test_what_it_cannot_read_stood_nothing(self):
+        reg = self.registry_module()
+        self.snap("task_dirs_before.toolu_1", ["001-a"])
+        (self.agent / "sessions" / "s-snap" / "task_dirs_before.toolu_2").write_text("not json", encoding="utf-8")
+        self.assertEqual(reg.standing_before(self.agent, "s-snap"), set())
+        moved = self.tmp / "moved"
+        (self.agent / "sessions" / "s-snap").rename(moved)
+        (self.agent / "sessions" / "s-snap").symlink_to(moved)
+        self.assertEqual(reg.standing_before(self.agent, "s-snap"), set())
 
 
 class EnsureEnrolledHoldsItsLane(_Project):

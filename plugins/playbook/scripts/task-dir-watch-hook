@@ -6,7 +6,7 @@
 #
 # The decisions are scripts/task-dir-watch.py's (with tasks.registry, on the parsed payload); this script finds the
 # project, the session's lane and its directory, and calls python only when there is something to decide: a flag
-# standing, or — for a shell call or a Write — a lane that has `tasks/`, a registry or not (task 197). The event and the tool
+# standing, or — for a shell call or a Write — always: every lane, a registry or `tasks/` or not (task 197). The event and the tool
 # are read here only to skip python for an edit with no flag (an edit makes no folder); hooks.json passes no argument
 # (the dual-host form, `tasks/hooks_check.py`), and a payload this read misjudges reaches python, which decides.
 # No `set -e`: a failure here leaves no snapshot (the post then flags every unknown folder present) — and a crash
@@ -62,8 +62,8 @@ if [ "$PB_FLAGGED" != true ]; then
     if [[ "$INPUT" =~ $PB_KEY ]] && ! [[ "$INPUT" =~ $PB_CREATES ]]; then
         exit 0
     fi
-    # every lane with `tasks/` is watched, a registry or not (task 197, P1)
-    [ -d "$AGENT_DIR/tasks" ] || exit 0
+    # every lane is watched, a registry or not (task 197, P1), `tasks/` or not: one call can make `tasks/` and a
+    # folder in it (impl panel r2 J1 — fable, opus, sonnet)
 fi
 PB_POST='"(hook_event_name|hookEventName)"[[:space:]]*:[[:space:]]*"(PostToolUse[A-Za-z]*)"'
 # A session directory that is a link (or `sessions` itself) is not this session's (task 194): not read, not written —

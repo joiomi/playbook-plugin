@@ -288,7 +288,7 @@ def _gate_bounce(task_id: str, task_file, action: str) -> bool:
     return True
 
 
-def _unknown_dirs_bounce(project_path, agent_dir) -> bool:
+def _unknown_dirs_bounce(project_path, agent_dir, session_id: str = "") -> bool:
     """If the lane holds a task folder the CLI did not make — not registered (a `reserved` line not counting, a
     creation in progress skipped), not committed: `registry.unknown_now`, the reader the watch uses — print what and
     the way out, and return True (the caller aborts). The owner's "la închidere" (2026-10-13 12:27, task 196 W4): the
@@ -296,10 +296,12 @@ def _unknown_dirs_bounce(project_path, agent_dir) -> bool:
     it was made. No registry → the git rule: what is not committed is unknown (task 197, its plan panel P4; until then
     a missing registry read as nothing). An unreadable registry refuses,
     naming its repair (P9: the watch never holds on it, so the close is where it stops)."""
-    from tasks.registry import LaneUnreadable, RegistryUnreadable, registry_path, unknown_now, unreadable_message
+    from tasks.registry import (LaneUnreadable, RegistryUnreadable, registry_path, standing_before, unknown_now,
+                                unreadable_message)
     try:
-        # a missing registry is no pass: what is not committed is unknown (task 197, its plan panel P4)
-        left = unknown_now(project_path, agent_dir, no_registry="git")
+        # a missing registry is no pass: what is not committed is unknown (task 197, its plan panel P4); a folder
+        # enrolled during a call this session is still running was made in it (impl panel r2 J5)
+        left = unknown_now(project_path, agent_dir, no_registry="git", before=standing_before(agent_dir, session_id))
     except RegistryUnreadable as e:
         print(f"Blocked: {unreadable_message(e)}", file=sys.stderr)
         print("  The close checks this lane's task folders against the task registry. Nothing changed.",
@@ -477,7 +479,7 @@ def cmd_work(cmd_args):
             task_file = matches[0]
             # Task 196 W4: a hand-made task folder in this lane refuses the close, before anything is read or written
             # for it (`--force --reason` overrides, as for the gates).
-            if not force and _unknown_dirs_bounce(project_path, agent_dir):
+            if not force and _unknown_dirs_bounce(project_path, agent_dir, session_id):
                 sys.exit(1)
             # V7b (task 043, round-1 panel): a close whose `done` cannot land
             # must not run verify, write a receipt, clear the session and print
@@ -1048,8 +1050,10 @@ def cmd_work(cmd_args):
                     if not force:
                         from tasks.registry import LaneUnreadable as _LU196
                         from tasks.registry import RegistryUnreadable as _RU196, unknown_now as _un196
+                        from tasks.registry import standing_before as _sb197
                         try:
-                            _late196 = _un196(project_path, agent_dir, no_registry="git")
+                            _late196 = _un196(project_path, agent_dir, no_registry="git",
+                                              before=_sb197(agent_dir, session_id))
                         except _RU196 as _e196:
                             raise CloseRaceRefused(f"the task registry became unreadable while this close ran "
                                                    f"({_e196}).")

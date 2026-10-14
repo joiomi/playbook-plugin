@@ -53,7 +53,9 @@ _PROC_SELF_FD = "/proc/self/fd"           # the held directories are reached thr
 TEMP_PREFIX = ".task-creating."
 FLAG_NAME = "task_dir_flag"                  # a session's task-folder flag (scripts/task-dir-watch.py, task 196)
 FLAG_PENDING = "task_dir_flag.pending."     # a detection its post wrote without the flag's lock
+SNAPSHOT_NAME = "task_dirs_before"          # the watch's listing before a call (`….<tool_use_id>`)
 _FLAG_MAX = 1 << 20
+_GONE = object()                            # a file listed and then removed before it was read
 # a task directory's name: its number, a dash, a slug — no whitespace, no separator, nothing bash cannot carry.
 # Always `fullmatch`: `$` alone accepts a trailing newline, and a name with one would split its registry line (task
 # 195, impl panel r2).
@@ -280,7 +282,8 @@ def _is_dir(path: Path) -> bool:
 
 
 def unknown_now(project_path, agent_dir, names: "list[str] | None" = None, *,
-                git_timeout: float = 30.0, no_registry: str = "none") -> "list[str] | None":
+                git_timeout: float = 30.0, no_registry: str = "none",
+                before: "set[str] | None" = None) -> "list[str] | None":
     """The task folders standing under the lane's `tasks/` (all of them, or those among `names`) that are not known
     — registered (a `reserved` line not counting) or committed (the git rule) — with a creation in progress left out:
     the registry is read holding the lane lock SHARED when it can be had at once (then no creator is between its
@@ -296,7 +299,10 @@ def unknown_now(project_path, agent_dir, names: "list[str] | None" = None, *,
     r1 I2 — fable, opus, sonnet: with the registry gone, a creator re-enrolled a flagged hand-made folder and the close
     read it as known): an enrolment records what stood, and a folder is flagged only while it is unknown, so such a
     row was written after the fact. When a flag cannot be read, every `enrolled` folder among `names` counts unknown
-    (fail closed). The git rule still applies: a committed one is known."""
+    (fail closed). The git rule still applies: a committed one is known. `before`, when given, is the folders that
+    stood before a call still running (the watch's snapshot): an `enrolled` row of a folder outside it was written by a
+    creator during that call, which re-enrolled what the call made (task 197, impl panel r2 J5 — codex, reproduced: one
+    call that made a folder, ran `tasks new` and then `tasks work done` closed before its post could flag it)."""
     lane = Path(agent_dir)
     tasks_dir = lane / "tasks"
     if names is None:
@@ -316,7 +322,7 @@ def unknown_now(project_path, agent_dir, names: "list[str] | None" = None, *,
     def unknown_row(n: str) -> bool:
         origin = entries.get(n)
         if origin == "enrolled":
-            return n in flagged or not complete
+            return n in flagged or not complete or (before is not None and n not in before)
         return origin in (None, "reserved") and not (creating and origin == "reserved")
 
     left = [n for n in names if LOOSE_TASK_DIR_RE.match(n) and _is_dir(tasks_dir / n) and unknown_row(n)]
@@ -331,22 +337,35 @@ def _lane_flags(agent_dir) -> "tuple[set[str], bool]":
     `sessions`, a session directory or a flag that is a link, a flag that is not the watch's JSON, a directory that
     cannot be listed — all read as `False`, and the caller fails closed (task 197, impl panel r1 I2). An unfinished
     temporary file (`….tmp`) is no flag yet; a session that ENDED took its flag with it (session-end removes its
-    directory)."""
+    directory). Each session's main flag is read before its pending entries, and a flag removed between the listing
+    and its read restarts the scan — three times, then the store reads as unreadable (impl panel r2 J6, codex,
+    reproduced: a re-check merged a pending entry into the main flag after the main flag was read; the entry, gone,
+    read as nothing, and the folder was missed)."""
+    for _try in range(3):
+        names, complete, vanished = _scan_lane_flags(agent_dir)
+        if not vanished:
+            return names, complete
+    return names, False
+
+
+def _scan_lane_flags(agent_dir) -> "tuple[set[str], bool, bool]":
+    """One pass of `_lane_flags`: (the names, every flag read, a listed flag vanished before it was read)."""
     import stat
     names: "set[str]" = set()
+    vanished = False
     try:
         sfd = os.open(Path(agent_dir) / "sessions", _DIR_FLAGS | os.O_NOFOLLOW)
     except FileNotFoundError:
-        return names, True
+        return names, True, False
     except OSError:
-        return names, False
+        return names, False, False
     complete = True
     try:
         try:
             with os.scandir(sfd) as it:
                 sids = [e.name for e in it]
         except OSError:
-            return names, False
+            return names, False, False
         for sid in sids:
             try:
                 dfd = os.open(sid, _DIR_FLAGS | os.O_NOFOLLOW, dir_fd=sfd)
@@ -371,9 +390,11 @@ def _lane_flags(agent_dir) -> "tuple[set[str], bool]":
                 except OSError:
                     complete = False
                     continue
-                for fname in found:
+                for fname in sorted(found, key=lambda n: (n != FLAG_NAME, n)):    # the main flag first
                     got = _flag_names_at(dfd, fname)
-                    if got is None:
+                    if got is _GONE:
+                        vanished = True
+                    elif got is None:
                         complete = False
                     else:
                         names |= got
@@ -381,18 +402,18 @@ def _lane_flags(agent_dir) -> "tuple[set[str], bool]":
                 os.close(dfd)
     finally:
         os.close(sfd)
-    return names, complete
+    return names, complete, vanished
 
 
-def _flag_names_at(dfd: int, fname: str) -> "set[str] | None":
-    """The folder names one flag file names (`<lane>/tasks/<name>` entries); an empty set when it is gone; None when
-    it cannot be read as the watch's JSON."""
+def _json_at(dfd: int, fname: str):
+    """One of the watch's JSON files in the directory held as `dfd`, never through a link: the object; `_GONE` when it
+    is not there (any more); None when it cannot be read as ASCII JSON of at most `_FLAG_MAX` bytes."""
     import json
     import stat
     try:
         fd = os.open(fname, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0), dir_fd=dfd)
     except FileNotFoundError:
-        return set()
+        return _GONE
     except OSError:
         return None
     try:
@@ -403,11 +424,21 @@ def _flag_names_at(dfd: int, fname: str) -> "set[str] | None":
         return None
     finally:
         os.close(fd)
+    if len(raw) > _FLAG_MAX:
+        return None
     try:
-        data = json.loads(raw.decode("ascii"))
+        return json.loads(raw.decode("ascii"))
     except (UnicodeDecodeError, ValueError):
         return None
-    if len(raw) > _FLAG_MAX or not isinstance(data, dict) or not isinstance(data.get("folders"), list):
+
+
+def _flag_names_at(dfd: int, fname: str):
+    """The folder names one flag file names (`<lane>/tasks/<name>` entries); `_GONE` when it is not there; None when it
+    cannot be read as the watch's JSON."""
+    data = _json_at(dfd, fname)
+    if data is _GONE:
+        return _GONE
+    if not isinstance(data, dict) or not isinstance(data.get("folders"), list):
         return None
     out = set()
     for f in data["folders"]:
@@ -417,6 +448,57 @@ def _flag_names_at(dfd: int, fname: str) -> "set[str] | None":
         if sep and name and "/" not in name:
             out.add(name)
     return out
+
+
+def standing_before(agent_dir, session_id: str) -> "set[str] | None":
+    """The task folders that stood before every call of this session still running: the intersection of its standing
+    pre-call snapshots (`sessions/<id>/task_dirs_before*`, the watch's — task 196); None when it has none (no watched
+    call is running, or no watch runs). Read only, never through a link; a snapshot it cannot read gives an empty set,
+    and the caller fails closed. The close passes it to `unknown_now` (task 197, impl panel r2 J5)."""
+    if not session_id or "/" in session_id or session_id in (".", ".."):
+        return None
+    try:
+        lfd = os.open(Path(agent_dir), _DIR_FLAGS)
+    except OSError:
+        return None
+    try:
+        try:
+            sfd = os.open("sessions", _DIR_FLAGS | os.O_NOFOLLOW, dir_fd=lfd)
+        except FileNotFoundError:
+            return None
+        except OSError:
+            return set()
+        try:
+            try:
+                dfd = os.open(session_id, _DIR_FLAGS | os.O_NOFOLLOW, dir_fd=sfd)
+            except FileNotFoundError:
+                return None
+            except OSError:
+                return set()
+            try:
+                try:
+                    with os.scandir(dfd) as it:
+                        snaps = sorted(e.name for e in it
+                                       if (e.name == SNAPSHOT_NAME or e.name.startswith(SNAPSHOT_NAME + "."))
+                                       and not e.name.endswith(".tmp"))
+                except OSError:
+                    return set()
+                out: "set[str] | None" = None
+                for name in snaps:
+                    data = _json_at(dfd, name)
+                    if data is _GONE:
+                        continue                  # its call's post took it meanwhile
+                    folders = data.get("folders") if isinstance(data, dict) else None
+                    if not isinstance(folders, list) or not all(isinstance(f, str) for f in folders):
+                        return set()
+                    out = set(folders) if out is None else out & set(folders)
+                return out
+            finally:
+                os.close(dfd)
+        finally:
+            os.close(sfd)
+    finally:
+        os.close(lfd)
 
 
 # ---------------------------------------------------------------- writers (each under the lane lock)

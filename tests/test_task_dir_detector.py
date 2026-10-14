@@ -934,6 +934,59 @@ class AReEnrolmentLaundersNothing(_Project):
         self.assertEqual(self.flagged(), [".agent/tasks/999-x"])       # the CLI's own `002-b` is not
         self.assertTrue(self.edit()[0])
 
+    def test_one_call_in_a_lane_with_no_tasks_folder_is_caught_too(self):
+        # impl panel r2 J1 (fable, opus, sonnet): with no `tasks/` the hook left before python and no snapshot was
+        # taken, so the in-call enrolment rule never ran — the close passed the folder
+        shutil.rmtree(self.lane / "tasks")
+        (self.lane / "task-registry").unlink()
+
+        def effect():
+            self._task(self.lane, "009-x")
+            r = self.cli("new", "quick", "b")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.shell_call("mkdir -p .agent/tasks/009-x && … && .claude/bin/tasks new quick b", effect)
+        self.assertEqual(self.flagged(), [".agent/tasks/009-x"])
+
+    def test_a_close_inside_the_call_that_made_the_folder_refuses(self):
+        # impl panel r2 J5 (codex, reproduced): one call deletes the registry, makes a folder, runs `tasks new` and
+        # `tasks work done` — the close ran before the post could flag anything, and passed
+        (self.lane / "task-registry").unlink()
+        said = {}
+
+        def effect():
+            self._task(self.lane, "999-x")
+            r = self.cli("new", "quick", "b")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            num = re.search(r"tasks/(\d+)-", r.stdout).group(1)
+            self.assertEqual(self.cli("work", num).returncode, 0)
+            said["close"] = self.cli("work", "done")
+        self.shell_call("rm …; cp -r …; tasks new quick b; tasks work N; tasks work done", effect)
+        self.assertNotEqual(said["close"].returncode, 0)
+        self.assertIn(".agent/tasks/999-x", said["close"].stderr)
+
+    def test_a_lane_with_no_tasks_folder_in_a_multi_user_project_gets_its_snapshot(self):
+        # impl panel r2 J1: the hook left before python in a lane with no `tasks/` — here the project is found through
+        # another lane's, so the snapshot of `[]` is what lets the close inside the call see the folder it made
+        shutil.rmtree(self.lane / "tasks")
+        (self.lane / "task-registry").unlink()
+        alice, bob = self.lane / "alice", self.lane / "bob"
+        self._task(bob, "001-bo")
+        self._registry(bob, [("001-bo", "new")])
+        alice.mkdir()
+        (self.lane / "current_user").write_text("alice\n", encoding="utf-8")
+        said = {}
+
+        def effect():
+            self._task(alice, "009-x")
+            r = self.cli("new", "quick", "b")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            num = re.search(r"tasks/(\d+)-", r.stdout).group(1)
+            self.assertEqual(self.cli("work", num).returncode, 0)
+            said["close"] = self.cli("work", "done")
+        self.shell_call("make a folder; tasks new quick b; tasks work N; tasks work done", effect)
+        self.assertNotEqual(said["close"].returncode, 0)
+        self.assertIn(".agent/alice/tasks/009-x", said["close"].stderr)
+
 
 class TheCloseRechecks(unittest.TestCase):
     """Impl panel r1 I2 (codex, reproduced): a folder made while the close's verify ran must still refuse it."""
@@ -987,6 +1040,39 @@ class TheCloseRechecks(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         r = subprocess.run([sys.executable, "-m", "tasks.cli", "work", "done"], cwd=d, env=env,
                            capture_output=True, text=True, timeout=120)
+        self.assertNotIn("Task 001 done.", r.stdout)
+        self.assertIn("999-late", r.stderr)
+
+    def test_a_folder_verify_makes_and_re_enrols_refuses_at_the_commit(self):
+        # impl panel r2 J5 at the commit: verify deletes the registry, makes a folder and runs a creator (which
+        # re-enrols it) — the re-check under the task lock reads the session's standing snapshot too
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        d = Path(tmp.name) / "repo"
+        subprocess.run(["git", "init", "-q", str(d)], check=True)
+        late = ("python3 -c \"import os, subprocess, sys; os.unlink('.agent/task-registry'); "
+                "os.mkdir('.agent/tasks/999-late'); open('.agent/tasks/999-late/task.md', 'w').write('# 999'); "
+                "subprocess.run([sys.executable, '-m', 'tasks.cli', 'new', 'quick', 'z'], check=True)\"")
+        (d / ".agent" / "tasks" / "001-t").mkdir(parents=True)
+        (d / ".agent" / "config.json").write_text(json.dumps({"verify": late, "panel_required_for": []}),
+                                                  encoding="utf-8")
+        (d / ".agent" / "tasks" / "001-t" / "task.md").write_text(
+            "# 001 - T\n\n## Status\npending\n\n## Risk\nreversible\n\n## Work Plan\n- [x] G1: do it\n",
+            encoding="utf-8")
+        (d / ".agent" / "task-registry").write_text(HEADER + "\n001-t\tnew\t2026-10-14T00:00:00Z\n",
+                                                   encoding="utf-8")
+        sid = "s197-commit-before"
+        env = dict(os.environ, PYTHONPATH=str(PLUGIN), PLAYBOOK_SESSION_ID=sid, HOME=tmp.name)
+        env.pop("BASH_ENV", None)
+        r = subprocess.run([sys.executable, "-m", "tasks.cli", "work", "1"], cwd=d, env=env, capture_output=True,
+                           text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        # the watch's snapshot of the call that runs the close: what stood before it
+        (d / ".agent" / "sessions" / sid / "task_dirs_before.toolu_C").write_text(
+            json.dumps({"v": 1, "folders": ["001-t"], "registry": True}), encoding="utf-8")
+        r = subprocess.run([sys.executable, "-m", "tasks.cli", "work", "done"], cwd=d, env=env,
+                           capture_output=True, text=True, timeout=120)
+        self.assertIn("999-late\tenrolled", (d / ".agent" / "task-registry").read_text(encoding="utf-8"))
         self.assertNotIn("Task 001 done.", r.stdout)
         self.assertIn("999-late", r.stderr)
 
