@@ -895,6 +895,46 @@ class TheClose(_Project):
         self.assertIn("001-a\tenrolled\t", (self.lane / "task-registry").read_text(encoding="utf-8"))
 
 
+class AReEnrolmentLaundersNothing(_Project):
+    """Task 197's impl panel r1: I2 (fable, opus, sonnet) — the registry gone, a hand-made folder flagged, `tasks new`
+    (a way out) re-enrols it `enrolled`, and `tasks work done` (a way out) closed over it: the rule was the watch's
+    alone. I3 (fable, opus) — ONE call that makes the folder and re-enrols the lane left it never flagged."""
+
+    def _activate(self, title, sid=SID):
+        r = self.cli("new", "quick", title, sid=sid)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        num = re.search(r"tasks/(\d+)-", r.stdout).group(1)
+        self.assertEqual(self.cli("work", num, sid=sid).returncode, 0)
+
+    def test_the_close_refuses_after_a_re_enrolment_in_the_flagged_session_and_in_another(self):
+        self._activate("c")
+        self._activate("d", sid=SID_B)
+        (self.lane / "task-registry").unlink()
+        self.shell_call("cp -r", lambda: self._task(self.lane, "999-x"))
+        self.assertEqual(self.flagged(), [".agent/tasks/999-x"])
+        r = self.cli("new", "quick", "b")                     # a way out of the hold — it re-enrols the lane
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("999-x\tenrolled\t", (self.lane / "task-registry").read_text(encoding="utf-8"))
+        for sid in (SID, SID_B):                              # the flagged session, and one the watch never held
+            r = self.cli("work", "done", sid=sid)
+            self.assertNotEqual(r.returncode, 0, sid)
+            self.assertIn(".agent/tasks/999-x", r.stderr, sid)
+        self.assertEqual(self.cli("adopt", ".agent/tasks/999-x").returncode, 0)
+        self.assertNotIn("999-x", self.cli("work", "done", sid=SID_B).stderr)
+
+    def test_one_call_that_makes_a_folder_and_re_enrols_the_lane_is_caught(self):
+        (self.lane / "task-registry").unlink()
+
+        def effect():
+            self._task(self.lane, "999-x")
+            r = self.cli("new", "quick", "b")                 # inside the same call: the lane re-enrolled
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.shell_call("cp -r … && .claude/bin/tasks new quick b", effect)
+        self.assertIn("999-x\tenrolled\t", (self.lane / "task-registry").read_text(encoding="utf-8"))
+        self.assertEqual(self.flagged(), [".agent/tasks/999-x"])       # the CLI's own `002-b` is not
+        self.assertTrue(self.edit()[0])
+
+
 class TheCloseRechecks(unittest.TestCase):
     """Impl panel r1 I2 (codex, reproduced): a folder made while the close's verify ran must still refuse it."""
 

@@ -22,7 +22,9 @@ and the event and the tool read from the payload (normalized, so grok's dialect 
 Only the session's own lane is watched (`AGENT_DIR`, plan panel P1): another lane is its own sessions' and its own
 close's. A lane with no registry is watched too (task 197, its plan panel P1): with none, what is not committed is
 unknown; a call during which the registry vanished says so, and a standing flag outlives the registry (impl panel r1
-I6). A flagged folder that a re-enrolment takes in (a row `enrolled` at or after its flag time) stays flagged (P3). A post that
+I6). A flagged folder that a re-enrolment takes in stays unknown — to this watch and to the close: the registry's
+reader reads the lane's flags (`registry.unknown_now`, task 197 impl panel r1 I2) —, and a folder made during a call
+whose row is `enrolled` by its end is flagged (I3). A post that
 finds no snapshot of its call flags every unknown folder present (fail closed, plan panel P4). A git that does not
 answer within the budget proves nothing: the folder is flagged (P7). An unreadable registry never holds — a hold would
 block its repair — it is said and journaled, and the close refuses naming the repair (P9).
@@ -265,7 +267,8 @@ def _record_flag(sfd: int, lane_rel: str, folders: "list[str]") -> "str | None":
 
 
 def _flag_times(data) -> "dict[str, str]":
-    """When each folder of a flag (or a pending entry) was flagged: its `flagged_at`, else the entry's `since`."""
+    """When each folder of a flag (or a pending entry) was flagged: its `flagged_at`, else the entry's `since` — a
+    record for a person; no rule reads it (task 197, impl panel r1: the registry's reader needs no time)."""
     if not isinstance(data, dict):
         return {}
     since = data.get("since") if isinstance(data.get("since"), str) else ""
@@ -278,26 +281,17 @@ def _flag_times(data) -> "dict[str, str]":
     return out
 
 
-def _laundered(project: Path, lane: Path, lane_rel: str, names: "list[str]", times: "dict[str, str]") -> "list[str]":
-    """The flagged folders a RE-ENROLMENT took in — a registry row `enrolled` at or after the folder was flagged, and
-    not committed: such a row is no release (task 197, its plan panel P3, fable/opus/sonnet: with the registry gone any
-    creator enrols every folder with a task.md, the flagged one too). Only `tasks adopt`, a commit or the removal is."""
-    try:
-        rows = registry._load(lane) or []
-    except registry.RegistryUnreadable:
+def _enrolled_during(project: Path, lane: Path, names: "list[str]") -> "list[str]":
+    """The folders among `names` — NEW in this call — that the registry calls `enrolled` and git does not know: an
+    enrolment records only what stood, so a folder made during the call and enrolled by its end was taken in by a
+    creator the same call ran with the registry gone (task 197, impl panel r1 I3 — fable, opus). They are unknown."""
+    rows = registry.read(lane) or {}
+    cand = [n for n in names if rows.get(n) == "enrolled"]
+    if not cand:
         return []
-    row = {r[0]: r for r in rows}
-    out = []
-    for n in names:
-        r = row.get(n)
-        flagged = times.get(f"{lane_rel}/tasks/{n}", "")
-        if r is not None and r[1] == "enrolled" and flagged and r[2] >= flagged:
-            out.append(n)
-    if not out:
-        return []
-    committed = registry._committed_task_mds(project, lane, [n for n in out if registry.TASK_DIR_RE.fullmatch(n)],
-                                             timeout=GIT_TIMEOUT)
-    return [n for n in out if n not in committed and os.path.isdir(lane / "tasks" / n)]
+    strict = [n for n in cand if registry.TASK_DIR_RE.fullmatch(n)]
+    committed = registry._committed_task_mds(project, lane, strict, timeout=GIT_TIMEOUT) if strict else set()
+    return [n for n in cand if n not in committed and os.path.isdir(lane / "tasks" / n)]
 
 
 def _pending(sfd: int) -> "list[str]":
@@ -551,10 +545,7 @@ def _recheck(project: Path, lane: Path, sfd: int) -> "tuple[list[str], str, str]
             note = ("the task registry is gone: nothing knows these folders — `.claude/bin/tasks adopt <it>` writes a "
                     "new registry that does")
         try:
-            left = _unknown(project, lane, names)
-            if names:
-                left = sorted(set(left) | set(_laundered(project, lane, lane_rel,
-                                                         [n for n in names if n not in left], times)))
+            left = _unknown(project, lane, names)       # a re-enrolled flagged folder stays unknown (I2)
         except registry.RegistryUnreadable as e:
             return [], "unreadable", registry.unreadable_message(e)
         if not left:
@@ -731,6 +722,8 @@ def _post(p: dict, project: Path, lane: Path, sfd: int, sid: str) -> int:
         return 0
     try:
         left = _unknown(project, lane, new)
+        if isinstance(snap, dict) and isinstance(snap.get("folders"), list):
+            left = sorted(set(left) | set(_enrolled_during(project, lane, [n for n in new if n not in left])))
     except registry.RegistryUnreadable as e:
         _journal(lane, "record", "task registry unreadable", sid, tool, "", cmd)
         notes.append("⚠ playbook: the task-folder watch could not read the task registry — "

@@ -10,6 +10,7 @@ on the tests they shaped.
 """
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -314,6 +315,95 @@ class NoDescriptorAnchor(_Project):
         reg = self.registry_module()
         made = reg.create_task_dir(self.p, self.agent, "x", "new", lambda n, name: f"# {n:03d} - x\n")
         self.assertTrue(made.is_dir())
+
+
+class AFlaggedFolderIsNoEnrolment(_Project):
+    """Task 197's impl panel r1, I2 (fable, opus, sonnet): an `enrolled` row of a folder a standing task-folder flag
+    names is a re-enrolment that took in a hand-made folder — the reader the watch and the close share counts it
+    unknown; a flag it cannot read makes every uncommitted `enrolled` folder unknown (fail closed)."""
+
+    def setUp(self):
+        super().setUp()
+        for n in ("001-a", "999-x"):
+            (self.tasks / n).mkdir()
+            (self.tasks / n / "task.md").write_text(f"# {n}\n", encoding="utf-8")
+        self.rows("enrolled")
+        self.sess = self.agent / "sessions" / "s-flagged"
+        self.sess.mkdir(parents=True)
+
+    def rows(self, origin_x):
+        (self.agent / "task-registry").write_text(
+            "# playbook task-registry v1\n001-a\tenrolled\t2026-10-14T00:00:00Z\n"
+            f"999-x\t{origin_x}\t2026-10-14T00:00:01Z\n", encoding="utf-8")
+
+    def flag(self, name="task_dir_flag", folders=(".agent/tasks/999-x",)):
+        (self.sess / name).write_text(json.dumps({"v": 2, "folders": list(folders), "since": "2026-10-14T00:00:00Z"}),
+                                      encoding="utf-8")
+
+    def unknown(self):
+        return self.registry_module().unknown_now(self.p, self.agent, no_registry="git")
+
+    def test_a_flag_makes_its_enrolled_folder_unknown(self):
+        self.assertEqual(self.unknown(), [])                  # control: no flag stands
+        self.flag()
+        self.assertEqual(self.unknown(), ["999-x"])
+
+    def test_a_pending_entry_is_a_flag_and_an_unfinished_temp_is_not(self):
+        self.flag("task_dir_flag.pending.1.2.abc.tmp")
+        self.assertEqual(self.unknown(), [])
+        self.flag("task_dir_flag.pending.1.2")
+        self.assertEqual(self.unknown(), ["999-x"])
+
+    def test_an_adopted_folder_stays_known_under_a_flag(self):
+        self.rows("adopt")
+        self.flag()
+        self.assertEqual(self.unknown(), [])
+
+    def test_a_flag_it_cannot_read_makes_every_enrolled_folder_unknown(self):
+        (self.sess / "task_dir_flag").write_text("not json", encoding="utf-8")
+        self.assertEqual(self.unknown(), ["001-a", "999-x"])
+        (self.sess / "task_dir_flag").unlink()
+        (self.sess / "task_dir_flag").symlink_to(self.tmp / "elsewhere.json")
+        self.assertEqual(self.unknown(), ["001-a", "999-x"])
+        (self.sess / "task_dir_flag").unlink()
+        moved = self.tmp / "moved-session"
+        self.sess.rename(moved)
+        self.sess.symlink_to(moved)                           # a session directory that is a link
+        self.assertEqual(self.unknown(), ["001-a", "999-x"])
+
+
+class EnsureEnrolledHoldsItsLane(_Project):
+    """Task 197's impl panel r1, I4 (codex, reproduced): `ensure_enrolled` locked and wrote by PATH — a lane swapped
+    for a link after its listing had the replacement's registry overwritten (its reservations lost)."""
+
+    def test_a_lane_swapped_after_the_listing_keeps_the_replacement_registry(self):
+        reg = self.registry_module()
+        (self.tasks / "001-a").mkdir()
+        (self.tasks / "001-a" / "task.md").write_text("# 001\n", encoding="utf-8")
+        other = self.tmp / "other-lane"
+        (other / "tasks").mkdir(parents=True)
+        kept = "# playbook task-registry v1\n007-b\treserved\t2026-10-14T00:00:00Z\n"
+        (other / "task-registry").write_text(kept, encoding="utf-8")
+        moved = self.tmp / "moved-lane"
+        real = reg._enrolment
+
+        def swapped(agent_dir, *a, **k):
+            rows = real(agent_dir, *a, **k)
+            self.agent.rename(moved)
+            self.agent.symlink_to(other)
+            return rows
+        reg._enrolment = swapped
+        self.assertTrue(reg.ensure_enrolled(self.p, self.agent))
+        self.assertEqual((other / "task-registry").read_text(encoding="utf-8"), kept)
+        self.assertIn("001-a\tenrolled\t", (moved / "task-registry").read_text(encoding="utf-8"))
+
+    def test_control_unswapped_it_enrols(self):
+        reg = self.registry_module()
+        (self.tasks / "001-a").mkdir()
+        (self.tasks / "001-a" / "task.md").write_text("# 001\n", encoding="utf-8")
+        self.assertTrue(reg.ensure_enrolled(self.p, self.agent))
+        self.assertIn("001-a\tenrolled\t", (self.agent / "task-registry").read_text(encoding="utf-8"))
+        self.assertFalse(reg.ensure_enrolled(self.p, self.agent))     # a registry that exists is left alone
 
 
 class ACorruptRegistry(_Project):

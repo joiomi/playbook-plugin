@@ -51,8 +51,8 @@ PB_FLAGGED=false
 # session path quoted, only the entry's suffix a glob (195's run 3, N2: `compgen -G` read `proj[one]` as a pattern)
 { [ -e "$FLAG" ] || [ -L "$FLAG" ]; } && PB_FLAGGED=true
 for PB_PEND in "$FLAG".pending.*; do
-    { [ -e "$PB_PEND" ] || [ -L "$PB_PEND" ]; } && PB_FLAGGED=true
-    break
+    # every entry is looked at — one removed meanwhile must not hide the next (task 197, impl panel r1 I1, agy)
+    if [ -e "$PB_PEND" ] || [ -L "$PB_PEND" ]; then PB_FLAGGED=true; break; fi
 done
 if [ "$PB_FLAGGED" != true ]; then
     # Claude's Edit/MultiEdit of an EXISTING file, with no flag: nothing to hold, nothing it could make — an empty

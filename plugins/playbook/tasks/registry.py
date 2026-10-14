@@ -51,6 +51,9 @@ REGISTRY_NAME = "task-registry"
 LOCK_NAME = "task-registry.lock"
 _PROC_SELF_FD = "/proc/self/fd"           # the held directories are reached through it (a test may point it away)
 TEMP_PREFIX = ".task-creating."
+FLAG_NAME = "task_dir_flag"                  # a session's task-folder flag (scripts/task-dir-watch.py, task 196)
+FLAG_PENDING = "task_dir_flag.pending."     # a detection its post wrote without the flag's lock
+_FLAG_MAX = 1 << 20
 # a task directory's name: its number, a dash, a slug — no whitespace, no separator, nothing bash cannot carry.
 # Always `fullmatch`: `$` alone accepts a trailing newline, and a name with one would split its registry line (task
 # 195, impl panel r2).
@@ -287,7 +290,13 @@ def unknown_now(project_path, agent_dir, names: "list[str] | None" = None, *,
     watch — a call during which the registry vanished, a hold that outlives it: task 196's impl panel r1 I6 — and,
     since task 197, the close: its plan panel P4). Only DIRECTORIES count (a file `12-notes.md` is no task
     folder — impl panel r1 I11). A name the git rule cannot answer within `git_timeout` is unknown. Never waits, never
-    writes. Raises RegistryUnreadable, and LaneUnreadable when `tasks/` or an entry cannot be read (r2 J9)."""
+    writes. Raises RegistryUnreadable, and LaneUnreadable when `tasks/` or an entry cannot be read (r2 J9).
+
+    An `enrolled` row is no knowledge of a folder a standing task-folder flag of the lane names (task 197, impl panel
+    r1 I2 — fable, opus, sonnet: with the registry gone, a creator re-enrolled a flagged hand-made folder and the close
+    read it as known): an enrolment records what stood, and a folder is flagged only while it is unknown, so such a
+    row was written after the fact. When a flag cannot be read, every `enrolled` folder among `names` counts unknown
+    (fail closed). The git rule still applies: a committed one is known."""
     lane = Path(agent_dir)
     tasks_dir = lane / "tasks"
     if names is None:
@@ -302,12 +311,112 @@ def unknown_now(project_path, agent_dir, names: "list[str] | None" = None, *,
         if no_registry != "git":
             return None
         entries = {}
-    left = [n for n in names
-            if LOOSE_TASK_DIR_RE.match(n) and _is_dir(tasks_dir / n)
-            and entries.get(n) in (None, "reserved") and not (creating and entries.get(n) == "reserved")]
+    flagged, complete = (_lane_flags(lane) if any(entries.get(n) == "enrolled" for n in names) else (set(), True))
+
+    def unknown_row(n: str) -> bool:
+        origin = entries.get(n)
+        if origin == "enrolled":
+            return n in flagged or not complete
+        return origin in (None, "reserved") and not (creating and origin == "reserved")
+
+    left = [n for n in names if LOOSE_TASK_DIR_RE.match(n) and _is_dir(tasks_dir / n) and unknown_row(n)]
     strict = [n for n in left if TASK_DIR_RE.fullmatch(n)]   # only such a name can be a committed task
     committed = _committed_task_mds(project_path, lane, strict, timeout=git_timeout) if strict else set()
     return [n for n in left if n not in committed]
+
+
+def _lane_flags(agent_dir) -> "tuple[set[str], bool]":
+    """The folder names the lane's standing task-folder flags name — every session's `task_dir_flag` and its pending
+    entries (the watch's, task 196) — and whether every one could be read. Read only, and never through a link: a
+    `sessions`, a session directory or a flag that is a link, a flag that is not the watch's JSON, a directory that
+    cannot be listed — all read as `False`, and the caller fails closed (task 197, impl panel r1 I2). An unfinished
+    temporary file (`….tmp`) is no flag yet; a session that ENDED took its flag with it (session-end removes its
+    directory)."""
+    import stat
+    names: "set[str]" = set()
+    try:
+        sfd = os.open(Path(agent_dir) / "sessions", _DIR_FLAGS | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return names, True
+    except OSError:
+        return names, False
+    complete = True
+    try:
+        try:
+            with os.scandir(sfd) as it:
+                sids = [e.name for e in it]
+        except OSError:
+            return names, False
+        for sid in sids:
+            try:
+                dfd = os.open(sid, _DIR_FLAGS | os.O_NOFOLLOW, dir_fd=sfd)
+            except FileNotFoundError:
+                continue                  # gone meanwhile
+            except NotADirectoryError:
+                # a plain file is no session; a link answers ENOTDIR here too (O_DIRECTORY with O_NOFOLLOW — measured)
+                try:
+                    if stat.S_ISLNK(os.stat(sid, dir_fd=sfd, follow_symlinks=False).st_mode):
+                        complete = False
+                except OSError:
+                    complete = False
+                continue
+            except OSError:
+                complete = False          # a directory it may not open
+                continue
+            try:
+                try:
+                    with os.scandir(dfd) as it:
+                        found = [e.name for e in it if e.name == FLAG_NAME
+                                 or (e.name.startswith(FLAG_PENDING) and not e.name.endswith(".tmp"))]
+                except OSError:
+                    complete = False
+                    continue
+                for fname in found:
+                    got = _flag_names_at(dfd, fname)
+                    if got is None:
+                        complete = False
+                    else:
+                        names |= got
+            finally:
+                os.close(dfd)
+    finally:
+        os.close(sfd)
+    return names, complete
+
+
+def _flag_names_at(dfd: int, fname: str) -> "set[str] | None":
+    """The folder names one flag file names (`<lane>/tasks/<name>` entries); an empty set when it is gone; None when
+    it cannot be read as the watch's JSON."""
+    import json
+    import stat
+    try:
+        fd = os.open(fname, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0), dir_fd=dfd)
+    except FileNotFoundError:
+        return set()
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        raw = os.read(fd, _FLAG_MAX + 1)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    try:
+        data = json.loads(raw.decode("ascii"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    if len(raw) > _FLAG_MAX or not isinstance(data, dict) or not isinstance(data.get("folders"), list):
+        return None
+    out = set()
+    for f in data["folders"]:
+        if not isinstance(f, str):
+            return None
+        head, sep, name = f.rpartition("/tasks/")
+        if sep and name and "/" not in name:
+            out.add(name)
+    return out
 
 
 # ---------------------------------------------------------------- writers (each under the lane lock)
@@ -342,15 +451,26 @@ def ensure_enrolled(project_path, agent_dir) -> bool:
     has); True when it wrote one. Called at a session's start and at `tasks work <N>` (task 197, its plan panel P1:
     with the Bash pre-run check gone, a lane with no registry — a fresh clone, a new init, a project upgraded from
     1.6.1 — must still be one the watch and the close can judge). A registry that exists, readable or not, is left
-    alone; never follows a link at the registry's path."""
+    alone; never follows a link at the registry's path. The lane is opened once and held, as a creator holds it: the
+    lock, the listing and the write all go through it, so a lane swapped for a link meanwhile keeps the replacement's
+    registry (impl panel r1 I4, codex, reproduced: the write by path overwrote it); without `/proc/self/fd` it
+    refuses (LaneUnanchored), and its callers say so and go on."""
     from tasks.filelock import named_lock
-    lane = Path(agent_dir)
-    if not (lane / "tasks").is_dir() or os.path.lexists(registry_path(lane)):
+    from tasks.shared import _open_dir_inside
+    agent_dir = Path(agent_dir)
+    if not (agent_dir / "tasks").is_dir() or os.path.lexists(registry_path(agent_dir)):
         return False
-    with named_lock(lock_path(lane)):
-        if os.path.lexists(registry_path(lane)):
-            return False
-        _write(lane, _enrolment(lane))
+    afd = _open_dir_inside(Path(project_path), agent_dir)
+    if afd is None:
+        afd = os.open(agent_dir, _DIR_FLAGS)
+    try:
+        lane = _held(afd, agent_dir)
+        with named_lock(lock_path(lane)):
+            if os.path.lexists(registry_path(lane)):
+                return False
+            _write(lane, _enrolment(lane))
+    finally:
+        os.close(afd)
     return True
 
 
