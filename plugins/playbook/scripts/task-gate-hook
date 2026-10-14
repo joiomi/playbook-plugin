@@ -321,16 +321,23 @@ pb_task_md_path() {
 pb_is_task_md() {
     [ -n "$1" ] && printf '%s\n' "$1" | grep -qE '\.agent(/[^/]+)?/tasks/[^/]+/task\.md$'
 }
-# pb_in_lane_tasks PATH — PATH is `<d>/<dir>/task.md` whose `<d>` IS the session lane's `tasks/` (the same directory —
-# `-ef`, links followed — whatever either is called: a lane or `.agent` linked to a store holds no `.agent` in its
-# real path; task 198, impl panel r1 I2).
+# pb_in_lane_tasks PATH... — one of the PATHs (pass the written, the normalised and the resolved one) is
+# `<d>/<dir>/task.md` whose `<d>` IS one of this project's lanes' `tasks/` (the same directory — `-ef`, links followed —
+# whatever either is called: a lane or `.agent` linked to a store holds no `.agent` in its real path; task 198, impl
+# panel r1 I2; every reading and every lane — impl panel r2 J1, J3).
 pb_in_lane_tasks() {
-    local d
-    case "$1" in */task.md) ;; *) return 1 ;; esac
-    d="${1%/task.md}"
-    case "${d##*/}" in ''|.|..) return 1 ;; esac      # `<dir>` is a name, not a hop
-    d="${d%/*}"
-    [ -n "$d" ] && [ -d "$AGENT_DIR/tasks" ] && [ "$d" -ef "$AGENT_DIR/tasks" ]
+    local p d lt
+    for p in "$@"; do
+        case "$p" in */task.md) ;; *) continue ;; esac
+        d="${p%/task.md}"
+        case "${d##*/}" in ''|.|..) continue ;; esac      # `<dir>` is a name, not a hop
+        d="${d%/*}"
+        [ -n "$d" ] || continue
+        for lt in "$PROJECT_DIR/.agent/tasks" "$PROJECT_DIR"/.agent/*/tasks; do
+            [ -d "$lt" ] && [ "$d" -ef "$lt" ] && return 0
+        done
+    done
+    return 1
 }
 # pb_is_active_record PATH NUMBER — PATH is the same FILE as the active record (device and inode, links followed —
 # a hard link, a link to the lane, a task-directory link whatever its number; task 198, impl panel r1 I1-I3): any
@@ -357,7 +364,7 @@ if [ "$TOOL_NAME" = "Write" ]; then
     # pattern here while Guard 1 exempted it as an `.agent/` path.
     TASK_MD_PATH=$(pb_task_md_path)
     PB_IN_LANE=false
-    pb_in_lane_tasks "$FILE_PATH" && PB_IN_LANE=true
+    pb_in_lane_tasks "$FILE_PATH" "$NORM_PATH" "$REAL_PATH" && PB_IN_LANE=true
     if [ -n "$TASK_MD_PATH" ] || [ "$PB_IN_LANE" = true ]; then
         # Task 171 (retro 107 R6): only a task record of THIS project is `tasks new`'s
         # to create — the pattern alone also refused a task.md of another project,
@@ -378,7 +385,10 @@ if [ "$TOOL_NAME" = "Write" ]; then
         fi
         # A record in the session lane's own `tasks/` (task 198, impl panel r1 I2) is this project's whatever
         # `--creates` reads: a lane linked to a store outside the project reads as outside.
-        if [ "$PB_CREATES" -eq 1 ] || { [ "$PB_IN_LANE" = true ] && [ ! -e "$FILE_PATH" ] && [ ! -L "$FILE_PATH" ]; } \
+        # A creation is a file that exists under NO reading — the written, the normalised, the resolved one (as
+        # `--creates` reads "exists"); a dangling link is a creation too: the Write makes its target (impl panel r2 J2).
+        if [ "$PB_CREATES" -eq 1 ] || { [ "$PB_IN_LANE" = true ] && [ ! -e "$FILE_PATH" ] \
+                && [ ! -e "${NORM_PATH:-$FILE_PATH}" ] && { [ -z "$REAL_PATH" ] || [ ! -e "$REAL_PATH" ]; }; } \
            || { [ "$PB_CREATES" -ne 0 ] && [ ! -f "${TASK_MD_PATH:-$FILE_PATH}" ]; }; then
             journal_enforcement "$PB_JOURNAL_DIR" task-gate block "manual task.md creation" \
                 "$SESSION_ID" "$TOOL_NAME" "$FILE_PATH"

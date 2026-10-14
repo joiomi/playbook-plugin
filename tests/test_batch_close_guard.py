@@ -600,6 +600,59 @@ class TheRecordIsKnownByIdentity(unittest.TestCase):
                                        "content": "notes\n"}})
         self.assertEqual(r.returncode, 0, r.stderr.decode())
 
+    def _create(self, f, path):
+        return f.run_hook({"hook_event_name": "PreToolUse", "tool_name": "Write",
+                           "tool_input": {"file_path": str(path), "content": "# by hand\n"}})
+
+    def test_a_creation_in_a_store_lane_under_every_spelling(self):
+        # impl panel r2 J1 (agy, opus, sonnet, codex): the lane test read the raw path only
+        f = ProjectFixture()
+        store = self._store_lane(f)
+        alias = self._tmp() / "alias"
+        alias.symlink_to(f.proj / ".agent")
+        (store / "tasks" / "004-x").mkdir()
+        diralias = self._tmp() / "diralias"
+        diralias.symlink_to(store / "tasks" / "004-x")
+        spellings = {
+            "a dot segment": str(store / "tasks" / "002-x") + "/./task.md",       # a str: Path() would drop it
+            "a doubled slash": str(store / "tasks" / "002-x") + "//task.md",
+            "a hop and back": str(alias / "tasks" / "002-x") + "/../002-x/task.md",
+            "a link to the task directory": diralias / "task.md",
+        }
+        for name, path in spellings.items():
+            with self.subTest(spelling=name):
+                r = self._create(f, path)
+                self.assertEqual(r.returncode, 2, r.stderr.decode())
+                self.assertIn(b"creates task.md files", r.stderr)
+
+    def test_a_dangling_link_in_a_store_lane_is_a_creation(self):
+        # impl panel r2 J2 (agy, fable, sonnet, codex): `! -L` read a dangling link as an existing record
+        f = ProjectFixture()
+        store = self._store_lane(f)
+        (store / "tasks" / "002-x").mkdir()
+        (store / "tasks" / "002-x" / "task.md").symlink_to(store / "tasks" / "002-x" / "missing.md")
+        r = self._create(f, store / "tasks" / "002-x" / "task.md")
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+
+    def test_another_lane_linked_to_a_store_is_this_projects_too(self):
+        # impl panel r2 J3 (codex): only the session's lane was compared
+        f = ProjectFixture()
+        (f.proj / ".agent" / "current_user").write_text("alice\n", encoding="utf-8")
+        (f.proj / ".agent" / "alice" / "tasks").mkdir(parents=True)
+        bob = self._tmp() / "store" / "bob-data"
+        (bob / "tasks").mkdir(parents=True)
+        (f.proj / ".agent" / "bob").symlink_to(bob)
+        alias = self._tmp() / "alias"
+        alias.symlink_to(f.proj / ".agent")
+        r = self._create(f, alias / "bob" / "tasks" / "002-new" / "task.md")
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+
+    def test_control_an_existing_record_through_a_link_is_a_rewrite(self):
+        f = ProjectFixture()
+        store = self._store_lane(f)
+        r = self._create(f, store / "tasks" / "001-thing" / "task.md")
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+
     def test_a_task_directory_link_to_an_active_directory_that_is_a_link(self):
         # codex: `009-alias → 001-thing` and `001-thing → …/005-y` — the normalised reading carries 009, the resolved
         # one 005, neither the active 001
