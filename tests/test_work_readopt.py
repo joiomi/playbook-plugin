@@ -357,8 +357,13 @@ class TestEvidenceContract(WorkReadoptBase):
         (tf.parent / "judge.md").write_text("# Panel Plan Review — task\n", encoding="utf-8")
         still = self.run_tasks("work", "done")
         self.assertEqual(still.returncode, 1, "plan review must not vouch for what was built")
-        # …an IMPL review does.
-        (tf.parent / "judge.md").write_text("# Panel Impl Review — task\n", encoding="utf-8")
+        # …nor an IMPL round whose panel FAILED (task 200's plan panel, P-7: the newest round an impl PASS)…
+        (tf.parent / "judge.md").write_text("# Panel Impl Review — task\n\n**PANEL VERDICT: FAIL** — 1/3\n",
+                                            encoding="utf-8")
+        self.assertEqual(self.run_tasks("work", "done").returncode, 1, "a failed impl panel is no evidence")
+        # …an IMPL review that passed does.
+        (tf.parent / "judge.md").write_text("# Panel Impl Review — task\n\n**PANEL VERDICT: PASS** — 3/3\n",
+                                            encoding="utf-8")
         ok = self.run_tasks("work", "done")
         self.assertEqual(ok.returncode, 0, ok.stderr)
         self.assertEqual(status_of(tf), "done")

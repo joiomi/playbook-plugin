@@ -108,6 +108,42 @@ class JudgesRunReadOnly(_Project):
 
 
 @unittest.skipUnless(bwrap_usable(), "no bubblewrap that can start a sandbox here")
+class AJudgesTextIsQuotedInTheRecord(_Project):
+    """Task 200 (#43, #3), at the process boundary: the single claude judge runs with the panel seat's tool limit,
+    and a real panel writes a format-2 round whose judges' lines are quoted."""
+
+    def tool_values(self, argv_text):
+        lines = argv_text.splitlines()
+        return [lines[lines.index(f) + 1] if f in lines else None for f in ("--tools", "--allowedTools")]
+
+    def test_the_single_claude_judge_runs_with_read_glob_grep_only(self):
+        r = self.tasks("impl-review", "1")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        argv = results(self.stub_out, "argv")
+        self.assertEqual(len(argv), 1, argv)
+        self.assertEqual(self.tool_values(argv[0]), ["Read,Glob,Grep", "Read,Glob,Grep"], argv[0])
+
+    def test_control_every_panel_seat_runs_with_it(self):
+        r = self.tasks("panel-review", "1", "--mode", "impl")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        argv = results(self.stub_out, "argv")
+        self.assertEqual(len(argv), 3, argv)
+        for a in argv:
+            self.assertEqual(self.tool_values(a), ["Read,Glob,Grep", "Read,Glob,Grep"], a)
+
+    def test_a_panel_round_is_format_2_with_its_judges_quoted(self):
+        r = self.tasks("panel-review", "1", "--mode", "impl")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        jm = (self.p / ".agent" / "tasks" / "001-probe" / "judge.md").read_text(encoding="utf-8")
+        lines = jm.splitlines()
+        self.assertTrue(lines[0].startswith("# Panel Impl Review — "), lines[:2])
+        self.assertEqual(lines[1], "**Round-format:** 2")
+        finding = "**Important** — `src/x.py:1` a finding from the stand-in judge"
+        self.assertEqual(sum(ln.startswith("> " + finding) for ln in lines), 3, jm)
+        self.assertFalse(any(ln.startswith(finding) for ln in lines), jm)
+
+
+@unittest.skipUnless(bwrap_usable(), "no bubblewrap that can start a sandbox here")
 class TheSingleJudgeIsAskedForFindingsOnly(_Project):
     def test_the_prompt_a_single_judge_receives_forbids_editing(self):
         for verb in ("plan-review", "impl-review"):

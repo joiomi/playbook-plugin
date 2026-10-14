@@ -235,7 +235,8 @@ def judge_verify_clause(commands) -> str:
     listed = "; ".join(f"`{c}`" for c in cmds[:6])
     return (
         "EXECUTION (optional): the project declares these commands safe to run "
-        f"in your read-only sandbox: {listed}. Use them only to check a SPECIFIC "
+        f"in your read-only sandbox: {listed} (claude judges have no shell — Read, Glob and Grep only, task "
+        "200 — so this does not apply to them). Use them only to check a SPECIFIC "
         "suspicion — never as routine (the close gate already runs the suite). "
         "Rules: state your predicted outcome BEFORE running — an unpredicted "
         "result is a lead to investigate, not evidence by itself; reproduce any "

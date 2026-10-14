@@ -230,15 +230,17 @@ def _next_review_round(project_path, task_file):
     try:
         if not task_file:
             return 1
-        from tasks.core import parse_judge_rounds
+        from tasks.core import _ROUND_HEAD_RE, split_judge_blocks
         total = 0
         seen = False
         for name in ("judge.md", "judge-archive.md"):
             p = Path(task_file).parent / name
             if p.exists():
                 seen = True
-                total += len(parse_judge_rounds(
-                    p.read_text(encoding="utf-8", errors="replace")))
+                # Every round the stacker keeps — a file 1.6.1 began counts its old rounds too (task 200): the
+                # stacker's blocks, not the rounds a reader trusts.
+                total += sum(1 for b in split_judge_blocks(p.read_text(encoding="utf-8", errors="replace"))
+                             if _ROUND_HEAD_RE.match(b))
         if not seen:
             return 1
         return total + 1
@@ -257,6 +259,23 @@ def _print_background_advisory(hard_timeout_secs: "int | None") -> None:
             "kill it mid-run.",
             flush=True,
         )
+
+
+def _round_head_line(title: str, label: str, mark: bool = True) -> str:
+    """A round's head as the writer writes it (task 200, #3): the H1 with its label on ONE line, and on the very
+    next line the writer's mark — what makes the round format 2 to `parse_judge_rounds` (not on a taskless
+    consultation, which no reader takes for a round: its plan panel, P-6)."""
+    from tasks.core import ROUND_FORMAT_MARK
+    head = f"# {title} — {' '.join(str(label).splitlines())}\n"
+    return head + f"{ROUND_FORMAT_MARK}\n" if mark else head
+
+
+def _judge_block_lines(label: str, text: str, failed: bool) -> "list[str]":
+    """One judge's block in a round: the writer's bars and label, then the judge's text QUOTED line by line
+    (task 200, #3) — no line of it can be a heading, a header field, a bar or triage to a reader of judge.md."""
+    from tasks.core import quote_judge_text
+    bar = "═" * 60
+    return [bar, f"  JUDGE: {label}{'  [FAILED]' if failed else ''}", bar + "\n", quote_judge_text(text), "\n\n"]
 
 
 def _panel_triage_frame() -> list[str]:
@@ -795,7 +814,8 @@ def _append_review_to_judge_md(task_dir, review_mode: str, seat: str, findings: 
     from tasks.filelock import task_lock
     path = Path(task_dir) / SINGLE_JUDGE_FILE
     stamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    quoted = "\n".join("> " + ln if ln.strip() else ">" for ln in findings.strip().splitlines())
+    from tasks.core import quote_judge_text
+    quoted = quote_judge_text(findings)
     block = (f"## Single-judge {review_mode} review — {stamp} (`{seat}`)\n\n"
              f"Recorded here by the CLI: task.md has no place for these findings ({why}). "
              f"The review, verbatim, every line quoted:\n\n{quoted}\n")
@@ -853,7 +873,11 @@ def _write_review_findings_locked(task_file: Path, review_mode: str, findings: s
         return f"unknown review mode {review_mode!r}"
     heading, placeholders = section
     open_m, close_m = _findings_markers(review_mode)
-    body = _neutralise_markers(findings.strip(), review_mode)
+    # Task 200 (V6): quoted line by line, as judge-single.md holds them — a judge's `## Status` / `blocked`,
+    # `## Owner rulings`, `## Risk`, `- [ ]` or `- [x] … impl-review` lines are none of those in task.md (on 1.6.1 a
+    # judge's `## Status` + `blocked` released the stop hook).
+    from tasks.core import quote_judge_text
+    body = quote_judge_text(_neutralise_markers(findings.strip(), review_mode))
     block = f"{open_m}\n{body}\n{close_m}"
 
     try:
@@ -1961,7 +1985,7 @@ def _cmd_panel_review(cmd_args):
     # so this assembly/write is only reached on a clean tree.)
     display_label = task_path or extra_prompt[:60]
     _title = f"Panel {review_label.title()}" if task_path else "Panel Consultation"   # task 073 (C14)
-    lines = [f"# {_title} — {display_label}\n", verdict_banner]
+    lines = [_round_head_line(_title, display_label, mark=bool(task_path)), verdict_banner]   # task 200
     lines.append(f"**Judges:** {succeeded}/{len(results)} succeeded | **Quorum:** {panel_quorum} | **Web search:** {'yes' if web_search else 'no'} | **Timeout:** {timeout_label}\n")
     # Context receipt (C3/P3), per transport (1.5.3): each seat saw what its
     # line says it saw — nothing was dropped without being named.
@@ -2079,12 +2103,7 @@ def _cmd_panel_review(cmd_args):
     # discipline rides with the data. Helper is unit-tested in tests/test_cli.py.
     lines.extend(_panel_triage_frame())
     for label in sorted(results.keys()):
-        tag = "  [FAILED]" if label in failed else ""
-        lines.append("═" * 60)
-        lines.append(f"  JUDGE: {label}{tag}")
-        lines.append("═" * 60 + "\n")
-        lines.append(results[label].strip())
-        lines.append("\n\n")
+        lines.extend(_judge_block_lines(label, results[label], failed=label in failed))
     # Stack, never clobber (1.5.3): a re-run panel must not destroy the
     # previous round's verdicts. Newest round first; the close gate reads
     # only the newest round's mode+verdict. Best-effort so a hostile tree can't
@@ -3094,7 +3113,10 @@ def _cmd_single_review(cmd, cmd_args):
         # reasoning. 'high' not 'max' — this bills the owner's own Claude
         # quota. Kept in step with the adapter so `--backend claude` and a
         # claude panel seat review at the same depth.
-        claude_args = ["-p", "--effort", "high", "--max-budget-usd", review_budget]
+        # Task 200 (#43): the same tool limit as the panel's claude seat, from the adapter's one constant.
+        from provider.adapters.claude import ClaudeAdapter as _CA
+        claude_args = ["-p", "--effort", "high", "--max-budget-usd", review_budget,
+                       "--tools", _CA.JUDGE_TOOLS, "--allowedTools", _CA.JUDGE_TOOLS]
         if model:
             from provider.adapters.claude import ClaudeAdapter
             claude_args += ["--model", ClaudeAdapter._MODEL_MAP.get(model, model)]

@@ -91,11 +91,10 @@ def extract_rejected_findings(task_dir: Path) -> "list[str]":
     """Triage bullets whose VERDICT is `REJECT` (upper case, whole word, right
     after the bullet or after its bold title — `ACCEPT`, `REJECTED` and a mention
     in prose do not match) from judge.md and judge-archive.md, file order,
-    de-duplicated. LIMIT (until writer-controlled
-    round delimiters, parked S11 item R9): judge.md does not separate a judge's
-    own output from agent triage, so a judge could plant such a line — which is
-    why SETTLED only ever lowers the count for a finding the NEXT judge itself
-    tags [SETTLED], and a contradicted ruling still counts."""
+    de-duplicated. A judge's lines in a round 1.6.2 wrote are quoted (`> `, task 200, #3), so none of them is a
+    bullet at a line start; text 1.6.1 wrote, where a judge's own output is not told apart from agent triage, keeps
+    being read as before (task 186's rule 10) with its bound: SETTLED only lowers the count for a finding the NEXT
+    judge itself tags [SETTLED], and a contradicted ruling still counts (the owner, 2026-09-29, task 108)."""
     out: "list[str]" = []
     seen = set()
     for name in ("judge.md", "judge-archive.md"):

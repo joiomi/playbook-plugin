@@ -32,6 +32,10 @@ from ..capabilities import ProviderCapabilities
 class ClaudeAdapter(ProviderAdapter):
     """Reference provider adapter for Claude Code (claude CLI)."""
 
+    # The tools a claude JUDGE may use, the panel seat's and the single judge's alike (task 200, #43: the single
+    # judge ran with every tool) — read-only ones; `WebSearch` is added only where a review enables it.
+    JUDGE_TOOLS = "Read,Glob,Grep"
+
     # Noise patterns to skip when reading session JSONL
     _NOISE_PREFIXES = (
         "<command-name>",
@@ -111,7 +115,7 @@ class ClaudeAdapter(ProviderAdapter):
         import shutil
         if not shutil.which(self.binary_name()):
             return f"(error: {self.binary_name()} not found on PATH)"
-        tools = "Read,Glob,Grep"
+        tools = self.JUDGE_TOOLS
         if web_search:
             tools += ",WebSearch"
         env = os.environ.copy()
