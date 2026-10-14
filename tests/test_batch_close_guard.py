@@ -647,6 +647,21 @@ class TheRecordIsKnownByIdentity(unittest.TestCase):
         r = self._create(f, alias / "bob" / "tasks" / "002-new" / "task.md")
         self.assertEqual(r.returncode, 2, r.stderr.decode())
 
+    def test_a_decoy_where_the_text_collapses_does_not_make_a_lane_creation_a_rewrite(self):
+        # the single judge's run 1 (codex, reproduced): `/outside/alias/../002-x/task.md` with `alias →
+        # <store>/tasks/landing` creates `<store>/tasks/002-x/task.md` (the kernel's reading, in the lane); its text
+        # collapses to `/outside/002-x/task.md`, a decoy that exists — "exists under some reading" let it through
+        f = ProjectFixture()
+        store = self._store_lane(f)
+        (store / "tasks" / "landing").mkdir()
+        out = self._tmp()
+        (out / "alias").symlink_to(store / "tasks" / "landing")
+        (out / "002-x").mkdir()
+        (out / "002-x" / "task.md").write_text("a decoy\n", encoding="utf-8")
+        r = self._create(f, str(out / "alias") + "/../002-x/task.md")
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+        self.assertFalse((store / "tasks" / "002-x").exists())
+
     def test_control_an_existing_record_through_a_link_is_a_rewrite(self):
         f = ProjectFixture()
         store = self._store_lane(f)

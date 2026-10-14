@@ -339,6 +339,18 @@ pb_in_lane_tasks() {
     done
     return 1
 }
+# pb_lane_creation PATH... — one reading that lies in one of this project's lanes' `tasks/` names no existing file:
+# lane and existence judged on the SAME reading (the single judge after impl panel r2, codex, reproduced: "exists
+# under some reading" let a decoy where the text collapses turn the kernel's creation in the lane into a rewrite).
+# A dangling link is a creation (`-e` follows it).
+pb_lane_creation() {
+    local p
+    for p in "$@"; do
+        [ -n "$p" ] || continue
+        pb_in_lane_tasks "$p" && [ ! -e "$p" ] && return 0
+    done
+    return 1
+}
 # pb_is_active_record PATH NUMBER — PATH is the same FILE as the active record (device and inode, links followed —
 # a hard link, a link to the lane, a task-directory link whatever its number; task 198, impl panel r1 I1-I3): any
 # `tasks/<NUMBER>-*/task.md` of the lane, links among those included.
@@ -385,10 +397,10 @@ if [ "$TOOL_NAME" = "Write" ]; then
         fi
         # A record in the session lane's own `tasks/` (task 198, impl panel r1 I2) is this project's whatever
         # `--creates` reads: a lane linked to a store outside the project reads as outside.
-        # A creation is a file that exists under NO reading — the written, the normalised, the resolved one (as
-        # `--creates` reads "exists"); a dangling link is a creation too: the Write makes its target (impl panel r2 J2).
-        if [ "$PB_CREATES" -eq 1 ] || { [ "$PB_IN_LANE" = true ] && [ ! -e "$FILE_PATH" ] \
-                && [ ! -e "${NORM_PATH:-$FILE_PATH}" ] && { [ -z "$REAL_PATH" ] || [ ! -e "$REAL_PATH" ]; }; } \
+        # A creation in a lane: a reading in the lane that names no existing file — the same reading for both
+        # (pb_lane_creation); a dangling link is one too: the Write makes its target (impl panel r2 J2).
+        if [ "$PB_CREATES" -eq 1 ] || { [ "$PB_IN_LANE" = true ] \
+                && pb_lane_creation "$FILE_PATH" "$NORM_PATH" "$REAL_PATH"; } \
            || { [ "$PB_CREATES" -ne 0 ] && [ ! -f "${TASK_MD_PATH:-$FILE_PATH}" ]; }; then
             journal_enforcement "$PB_JOURNAL_DIR" task-gate block "manual task.md creation" \
                 "$SESSION_ID" "$TOOL_NAME" "$FILE_PATH"
