@@ -4287,7 +4287,9 @@ def create_task(project_path: Path, name: str, task_type: str | None = None,
     # layout", disarming the guard for every other surface too.
     require_lane_marker(project_path, "tasks new")
     agent_dir = resolve_agent_dir(project_path)
-    slug = _slugify(name)
+    # a title with no letter or digit to slug (e.g. "!!!") gets the slug `task` — the folder `NNN-` it used to get is
+    # a name the task registry cannot hold (task 195, impl panel r1)
+    slug = _slugify(name) or "task"
 
     def _render(task_num: int, folder_name: str) -> str:
         # Check for custom playbook template first

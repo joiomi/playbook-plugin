@@ -34,8 +34,10 @@ The reader fails closed: a registry that is a link, not a regular file or not in
 """
 from __future__ import annotations
 
+import errno
 import os
 import re
+import shutil
 import stat
 import subprocess
 import time
@@ -137,7 +139,9 @@ def registered_numbers(agent_dir) -> "list[int]":
 
 
 def _committed_task_mds(project_path, agent_dir, names: "list[str] | None" = None) -> "set[str]":
-    """The names of task directories whose task.md is a regular blob in HEAD (one `git ls-tree`). Empty outside git."""
+    """The names of task directories whose task.md is a regular blob in HEAD (one `git ls-tree`). Empty outside git.
+    The paths are given and read RELATIVE TO THE PROJECT (`-C <project>`, no `--full-tree`): a project may lie below
+    its repository's top (task 195, impl panel r1 — `--full-tree` read them from the top and missed every one)."""
     try:
         rel = (Path(agent_dir) / "tasks").relative_to(project_path).as_posix()
     except ValueError:
@@ -145,7 +149,7 @@ def _committed_task_mds(project_path, agent_dir, names: "list[str] | None" = Non
     paths = [f"{rel}/{n}/task.md" for n in names] if names is not None else [rel]
     try:
         r = subprocess.run(["git", "--no-replace-objects", "-c", "core.quotepath=off", "-C", str(project_path),
-                            "ls-tree", "-r", "-z", "--full-tree", "HEAD", "--", *paths],
+                            "ls-tree", "-r", "-z", "HEAD", "--", *paths],
                            capture_output=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
         return set()
@@ -245,6 +249,30 @@ def _sweep_temps_locked(project_path, agent_dir) -> None:
         os.close(afd)
 
 
+class _Collision(Exception):
+    """The final name stands under `tasks/` (task 195, impl panel r1: only THIS is a collision — a FileExistsError
+    from a template's own read is an error, not a reason to take the next number)."""
+
+
+def _make_temp(agent_dir: Path, name: str) -> Path:
+    """A fresh temporary directory in the lane for `name` — a leftover of the same name (one the sweep could not
+    remove) is stepped over, never an error (task 195, impl panel r1)."""
+    for k in range(100):
+        tmp = agent_dir / f"{TEMP_PREFIX}{os.getpid()}.{k}.{name}"
+        try:
+            os.mkdir(tmp)
+            return tmp
+        except FileExistsError:
+            continue
+    raise RuntimeError(f"no free temporary directory name in {agent_dir}")
+
+
+def _drop_temp(tmp: "Path | None") -> None:
+    """Remove this creator's own temporary directory (made by it; never followed through a link inside)."""
+    if tmp is not None:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def _publish(tmp: Path, final: Path) -> None:
     """Put the built directory in place. (A test replaces this to kill the creator at exactly this point.)"""
     os.rename(tmp, final)
@@ -267,6 +295,10 @@ def create_task_dir(project_path, agent_dir, slug: str, origin: str,
     tasks_dir.mkdir(parents=True, exist_ok=True)
     if origin not in ORIGINS or origin in ("reserved", "enrolled"):
         raise ValueError(f"not a creator's origin: {origin!r}")
+    # a name the reader would refuse is never written (task 195, impl panel r1 — all five judges: an empty slug made
+    # `001-`, and that one line stopped every later read of the lane's registry)
+    if not TASK_DIR_RE.match(f"1-{slug}"):
+        raise ValueError(f"no task folder name can be made from the slug {slug!r}")
     with named_lock(lock_path(agent_dir)):
         rows = _rows_locked(agent_dir)
         _sweep_temps_locked(project_path, agent_dir)
@@ -278,20 +310,26 @@ def create_task_dir(project_path, agent_dir, slug: str, origin: str,
             rows.append([name, "reserved", _now()])
             _write(agent_dir, rows)
             final = tasks_dir / name
-            tmp = agent_dir / f"{TEMP_PREFIX}{os.getpid()}.{name}"
-            os.mkdir(tmp)
+            tmp = None
             try:
+                tmp = _make_temp(agent_dir, name)
                 atomic_write(tmp / "task.md", render(num, name))
                 if os.path.lexists(final):                 # stands there (made meanwhile): never published over
-                    raise FileExistsError(final)
-                _publish(tmp, final)
-            except FileExistsError:
-                _sweep_temps_locked(project_path, agent_dir)
+                    raise _Collision()
+                try:
+                    _publish(tmp, final)
+                except OSError as e:
+                    # rename(2) onto a folder made meanwhile: EEXIST, or ENOTEMPTY for a full one (impl panel r1)
+                    if e.errno in (errno.EEXIST, errno.ENOTEMPTY):
+                        raise _Collision() from e
+                    raise
+            except _Collision:
+                _drop_temp(tmp)
                 if number is not None:
                     raise NumberTaken(number, num + 1)
                 continue
             except BaseException:
-                _sweep_temps_locked(project_path, agent_dir)
+                _drop_temp(tmp)
                 raise
             rows[-1] = [name, origin, rows[-1][2]]
             _write(agent_dir, rows)
@@ -315,20 +353,36 @@ def adopt(project_path, agent_dir, name: str) -> str:
     if tm.is_symlink() or not tm.is_file():
         raise AdoptRefused(f"{tm} is missing or not a regular file — a task directory holds its task.md")
     num = task_number(name)
+    tasks_dir = agent_dir / "tasks"
     with named_lock(lock_path(agent_dir)):
         rows = _rows_locked(agent_dir)
         mine = [r for r in rows if r[0] == name]
         if mine and mine[0][1] != "reserved":
             return "known"
-        other = [r[0] for r in rows if r[0] != name and r[1] != "reserved" and task_number(r[0]) == num]
-        if other:
-            raise AdoptRefused(f"task number {num:03d} already belongs to {other[0]}")
+        # The number is another folder's when another FOLDER holds it — registered, committed or not (task 195,
+        # impl panel r1: the rows alone missed a committed `005-x` and refused a renamed folder whose old row stayed).
+        for other in sorted(os.listdir(tasks_dir)):
+            d = tasks_dir / other
+            if (other != name and task_number(other) == num and not d.is_symlink() and d.is_dir()
+                    and not (d / "task.md").is_symlink() and (d / "task.md").is_file()):
+                raise AdoptRefused(f"task number {num:03d} already belongs to {other}")
+        # a row of this number whose folder is gone is the renamed folder's old name — dropped
+        rows = [r for r in rows if not (r[0] != name and r[1] != "reserved" and task_number(r[0]) == num
+                                        and not os.path.lexists(tasks_dir / r[0]))]
+        mine = [r for r in rows if r[0] == name]
         if mine:
             mine[0][1] = "adopt"
         else:
             rows.append([name, "adopt", _now()])
         _write(agent_dir, rows)
     return "adopted"
+
+
+def ready_for_renames(agent_dir) -> None:
+    """Before `prepare-merge` moves any folder: read the registry (RegistryUnreadable now, before anything moved —
+    task 195, impl panel r1) and enrol the lane as it stands when it has none. Call it holding the lane lock, which the
+    renumbering keeps until its last rename."""
+    _rows_locked(agent_dir)
 
 
 def rename(project_path, agent_dir, old: str, new: str) -> None:

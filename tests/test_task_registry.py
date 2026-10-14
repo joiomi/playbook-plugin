@@ -361,5 +361,122 @@ class Renames(_Project):
         self.assertIn("tasks adopt", md)
 
 
+
+class RoundOneFixes(_Project):
+    """Task 195's impl panel round 1 (its `## Implementation Review`)."""
+
+    def test_a_title_with_nothing_to_slug_never_poisons_the_registry(self):
+        # I1 (all five judges): `tasks new quick "!!!"` made `001-`, a line the reader refuses
+        r = self.cli("new", "quick", "!!!")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.task_dirs(), ["001-task"])
+        self.cli("new", "quick", "next", check=True)                   # the registry still reads
+        self.assertEqual(sorted(self.registered()), ["001-task", "002-next"])
+        reg = self.registry_module()
+        with self.assertRaises(ValueError):
+            reg.create_task_dir(self.p, self.agent, "", "new", lambda n, name: "# x\n")
+        self.assertEqual(sorted(self.registered()), ["001-task", "002-next"], "a refused name was written")
+
+    def test_the_git_rule_in_a_project_below_its_repository_top(self):
+        # I2 (fable, opus, codex): `--full-tree` read the project-relative path from the repository top
+        repo = self.tmp / "repo"
+        app = repo / "app"
+        (app / ".agent" / "tasks" / "001-a").mkdir(parents=True)
+        (app / ".agent" / "tasks" / "001-a" / "task.md").write_text("# 001\n", encoding="utf-8")
+        git = ["git", "-c", "user.email=t@t", "-c", "user.name=t"]
+        subprocess.run(git + ["init", "-q"], cwd=repo, check=True)
+        subprocess.run(git + ["add", "-A"], cwd=repo, check=True)
+        subprocess.run(git + ["commit", "-qm", "a"], cwd=repo, check=True)
+        (app / ".agent" / "tasks" / "002-b").mkdir()
+        (app / ".agent" / "tasks" / "002-b" / "task.md").write_text("# 002\n", encoding="utf-8")
+        subprocess.run(git + ["add", "-A"], cwd=repo, check=True)
+        reg = self.registry_module()
+        self.assertTrue(reg.is_known(app, app / ".agent", "001-a"))
+        self.assertFalse(reg.is_known(app, app / ".agent", "002-b"))
+        self.assertEqual(reg.unknown_task_dirs(app, app / ".agent"), ["002-b"])
+
+    def test_the_freehand_rename_then_adopt(self):
+        # I3 (opus, codex): the gate says rename then adopt; adopt refused — the old row still owned the number
+        self.cli("freehand", check=True)
+        (self.tasks / "001-freehand").rename(self.tasks / "001-finished")
+        r = self.cli("adopt", "001-finished")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.registered(), {"001-finished": "adopt"})
+
+    def test_adopt_refuses_a_number_another_present_folder_has(self):
+        # I3: a committed `005-x` beside a hand-made `005-y` — the registry does not name `005-x`
+        self.cli("new", "quick", "first", check=True)
+        git = ["git", "-c", "user.email=t@t", "-c", "user.name=t"]
+        subprocess.run(git + ["init", "-q"], cwd=self.p, check=True)
+        self.handmade("005-x")
+        subprocess.run(git + ["add", ".agent/tasks/005-x/task.md"], cwd=self.p, check=True)
+        subprocess.run(git + ["commit", "-qm", "x"], cwd=self.p, check=True)
+        self.handmade("005-y")
+        r = self.cli("adopt", "005-y")
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("005", r.stdout + r.stderr)
+        self.assertNotIn("005-y", self.registered())
+
+    def test_prepare_merge_refuses_before_moving_anything(self):
+        # I4 (opus, codex): an unreadable registry stopped the renumbering halfway (folders moved, refs not rewritten)
+        self.cli("new", "quick", "a", check=True)
+        (self.agent / "task-registry").write_text("not a registry\n", encoding="utf-8")
+        code = ("import sys; sys.path.insert(0, sys.argv[1]); from pathlib import Path\n"
+                "import tasks.merge_prep as m\n"
+                "from tasks.registry import RegistryUnreadable\n"
+                "try:\n"
+                "    m._rename_colliding_tasks(Path(sys.argv[2]), Path(sys.argv[2]) / '.agent', {1: '001-a'}, {1: 7})\n"
+                "except RegistryUnreadable:\n"
+                "    sys.exit(3)\n")
+        r = subprocess.run([sys.executable, "-c", code, str(PLUGIN), str(self.p)], env=self.env(), text=True,
+                           capture_output=True, timeout=60)
+        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
+        self.assertEqual(self.task_dirs(), ["001-a"], "a folder was moved before the registry was read")
+
+    def test_a_render_error_is_not_taken_for_a_collision(self):
+        # I5 (sonnet): a FileExistsError raised inside render looped, reserving and burning numbers
+        reg = self.registry_module()
+
+        def render(num, name):
+            raise FileExistsError("a custom playbook's own error")
+        with self.assertRaises(FileExistsError):
+            reg.create_task_dir(self.p, self.agent, "x", "new", render)
+        self.assertEqual(len([o for o in self.registered().values() if o == "reserved"]), 1)
+        self.assertFalse([x for x in self.agent.iterdir() if x.name.startswith(".task-creating.")])
+
+    def test_a_full_folder_appearing_at_rename_time_is_a_collision(self):
+        # I5 (opus): rename(2) onto a non-empty folder raises ENOTEMPTY, not FileExistsError
+        import errno
+        reg = self.registry_module()
+        real = reg._publish
+        calls = []
+
+        def publish(tmp, final):
+            if not calls:
+                calls.append(final)
+                raise OSError(errno.ENOTEMPTY, "Directory not empty", str(final))
+            return real(tmp, final)
+        reg._publish = publish
+        try:
+            final = reg.create_task_dir(self.p, self.agent, "x", "new", lambda n, name: f"# {n:03d}\n")
+        finally:
+            reg._publish = real
+        self.assertEqual(final.name, "002-x")
+        self.assertEqual(self.registered(), {"001-x": "reserved", "002-x": "new"})
+
+    def test_a_leftover_temp_of_the_same_name_does_not_stop_a_creator(self):
+        # I5 (opus): `os.mkdir(tmp)` outside the try — a leftover the sweep cannot remove escaped as a traceback
+        reg = self.registry_module()
+        real = reg._sweep_temps_locked
+        reg._sweep_temps_locked = lambda *a, **k: None          # as with a linked `.agent`: nothing swept
+        try:
+            (self.agent / f"{reg.TEMP_PREFIX}{os.getpid()}.0.001-x").mkdir()      # the name it would take first
+            final = reg.create_task_dir(self.p, self.agent, "x", "new", lambda n, name: f"# {n:03d}\n")
+        finally:
+            reg._sweep_temps_locked = real
+        self.assertEqual(final.name, "001-x")
+        self.assertTrue((final / "task.md").is_file())
+
+
 if __name__ == "__main__":
     unittest.main()

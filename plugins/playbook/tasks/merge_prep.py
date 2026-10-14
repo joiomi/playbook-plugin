@@ -175,16 +175,32 @@ def _prepare_merge_tasks(project_path: Path, agent_dir: Path, target: str,
                 )
                 sys.exit(1)
 
-    _rename_colliding_tasks(project_path, agent_dir, current_tasks, rename_map)
+    from tasks.registry import RegistryUnreadable, unreadable_message
+    try:
+        _rename_colliding_tasks(project_path, agent_dir, current_tasks, rename_map)
+    except RegistryUnreadable as e:
+        print(unreadable_message(e).replace("Nothing was created", "Nothing was renumbered"), file=sys.stderr)
+        sys.exit(1)
     _rewrite_task_refs(project_path, agent_dir, rename_map)
 
 
 def _rename_colliding_tasks(project_path: Path, agent_dir: Path,
                              current_tasks: dict[int, str], rename_map: dict[int, int]) -> None:
+    from tasks.filelock import named_lock
+    from tasks.registry import lock_path as _registry_lock, ready_for_renames
+    # The task registry is read (and enrolled if absent) BEFORE any folder moves, and the lane lock is held across the
+    # renumbering, so no creator takes a number it is moving to (task 195, impl panel r1). RegistryUnreadable here
+    # leaves everything as it was.
+    with named_lock(_registry_lock(agent_dir)):
+        ready_for_renames(agent_dir)
+        _rename_colliding_tasks_locked(project_path, agent_dir, current_tasks, rename_map)
+
+
+def _rename_colliding_tasks_locked(project_path: Path, agent_dir: Path, current_tasks: dict[int, str],
+                                   rename_map: dict[int, int]) -> None:
     import subprocess
     import re
     tasks_dir = agent_dir / "tasks"
-
     for old_num in sorted(rename_map):
         new_num = rename_map[old_num]
         old_name = current_tasks[old_num]
