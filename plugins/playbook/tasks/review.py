@@ -847,10 +847,6 @@ def _write_review_findings(task_file: Path, review_mode: str, findings: str) -> 
     section = _REVIEW_SECTIONS.get(review_mode)
     if section is None:
         return f"unknown review mode {review_mode!r}"
-    heading, placeholders = section
-    open_m, close_m = _findings_markers(review_mode)
-    body = _neutralise_markers(findings.strip(), review_mode)
-    block = f"{open_m}\n{body}\n{close_m}"
 
     # Task 058: the read, the splice and the write are ONE locked transaction —
     # a panel round landing between them used to overwrite the other's work.

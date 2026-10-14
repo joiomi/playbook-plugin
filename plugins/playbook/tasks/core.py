@@ -3069,7 +3069,7 @@ ROUND_FORMAT_MARK = "**Round-format:** 2"
 def _leading_v2_heads(text: str, heads: "list") -> "list":
     """The format-2 heads of `text`: the LEADING run of round heads whose next line is the writer's mark. 1.6.2
     stacks its rounds on top, newest first, so in a file 1.6.1 began they precede every old-style head; a mark AFTER
-    an old-style head is a line 1.6.1 let a judge write (its judge text was not quoted) — it opens nothing."""
+    an old-style head is a line 1.6.1 let a judge write (its judge text was not quoted) — no format-2 round."""
     lead = []
     for h in heads:
         e = text.find("\n", h.start())
@@ -3096,7 +3096,7 @@ _ROUND_TREE_RE = re.compile(r"^\*\*Tree-state:\*\* ([0-9a-f]{6,64})", re.MULTILI
 _ROUND_TAMPER_RE = re.compile(r"^\*\*Tamper guard:\*\* (clean|degraded)(?:\s*[—-]+\s*(.*))?$",
                               re.MULTILINE)
 # The tail-cert F0 descriptor rides on one line inside the round (finding F).
-_ROUND_SNAPSHOT_RE = re.compile(r"\*\*Panel-snapshot:\*\* (\{.*\})[ \t]*$",
+_ROUND_SNAPSHOT_RE = re.compile(r"^\*\*Panel-snapshot:\*\* (\{.*\})[ \t]*$",   # at a line start (task 200)
                                 re.MULTILINE)
 JUDGE_MD_MAX_ROUNDS = 5
 JUDGE_ARCHIVE_NAME = "judge-archive.md"
@@ -3110,28 +3110,23 @@ _TRIM_POINTER_RE = re.compile(r"\n*\[\.\.\. \d+ older round\(s\)[^\]]*\]\s*\Z")
 def parse_judge_rounds(text: str) -> "list[dict]":
     """Structural parse of judge.md into rounds, file order (newest first under
     the stacking convention). Each round: {mode: 'plan'|'impl', verdict:
-    'PASS'|'FAIL'|None, tree_state: str, body: str, own: str, format: 1|2}. Substring checks over the
+    'PASS'|'FAIL'|None, tree_state: str, body: str, format: 1|2}. Substring checks over the
     whole file are how a stale or wrong-mode PASS satisfies a gate — the #09
     disease; this parser exists so verdicts are read per-round, never per-file.
 
-    Task 200 (#3): in a file whose leading heads are format-2 (`_leading_v2_heads`) only they open rounds, and
-    the last one's OWN part ends at the first old-style heading — in a file 1.6.1 began, its rounds follow the
-    oldest format-2 round as a LEGACY tail, kept in `body` for the stacker, never read as a round; a file with
-    none reads as before (format 1). In both, every fact of a round is read from its HEADER (the writer's lines
-    before the first `═` bar; the whole own part when there is none), never from what a judge wrote below it."""
+    Task 200 (#3): every heading opens a round, as 1.6.1 reads them — a judge's lines are quoted since 1.6.2, so
+    none of them is a heading, and the rounds 1.6.1 wrote below the 1.6.2 ones stay rounds (its impl panel is still
+    the post-D6 cap's round, the impl panel round 1's I-4). A round is format 2 only in the LEADING run of marked
+    heads (`_leading_v2_heads`). Every fact of a round is read from its HEADER (the writer's lines before the first
+    `═` bar; the whole round when there is none), each pattern at a line start, never from what a judge wrote."""
     heads = list(_ROUND_HEAD_RE.finditer(text))
-    lead = _leading_v2_heads(text, heads)
-    fmt = 2 if lead else 1
-    matches = lead or heads
+    n_v2 = len(_leading_v2_heads(text, heads))
     rounds: "list[dict]" = []
-    for i, m in enumerate(matches):
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+    for i, m in enumerate(heads):
+        end = heads[i + 1].start() if i + 1 < len(heads) else len(text)
         body = text[m.start():end]
-        own = body
-        if fmt == 2 and i + 1 == len(lead) and len(heads) > len(lead):
-            own = text[m.start():heads[len(lead)].start()]   # the legacy tail starts at the first old-style head
-        _sep0 = re.search(r"(?m)^\u2550{6,}", own)
-        _head0 = own[:_sep0.start()] if _sep0 else own
+        _sep0 = re.search(r"(?m)^\u2550{6,}", body)
+        _head0 = body[:_sep0.start()] if _sep0 else body
         vm = _ROUND_VERDICT_RE.search(_head0)
         tm = _ROUND_TREE_RE.search(_head0)
         # SECURITY (impl-review r12 finding 1): parse the F0 descriptor ONLY from
@@ -3171,30 +3166,26 @@ def parse_judge_rounds(text: str) -> "list[dict]":
             "tamper_guard": gm.group(1) if gm else None,
             "tamper_detail": (gm.group(2) or "").strip() if gm else "",
             "body": body,
-            "own": own,
-            "format": fmt,
+            "format": 2 if i < n_v2 else 1,
         })
     return rounds
 
 
-def split_judge_blocks(text: str) -> "list[str]":
-    """judge.md (or its archive) as the stacker keeps and moves it — verbatim blocks, newest first, that TRUST
-    nothing (task 200): a format-1 file one block per round, as before; a format-2 file each round's own part, then
-    its legacy tail cut at the old-style headings, so a file 1.6.1 began keeps its old rounds' order and they are
-    archived one by one; any text before the first head is a block of its own (task 200's plan panel, P-3: the
-    stacker used to rebuild the file from round bodies only and so deleted it — 170's post-D6 section)."""
-    rounds = parse_judge_rounds(text)
+def judge_preamble(text: str) -> str:
+    """The text above the first round heading of judge.md — an agent's note written at the top (170's post-D6
+    section) — or "" when there is none or no heading at all (task 200's plan panel, P-3)."""
     first = _ROUND_HEAD_RE.search(text)
-    out: "list[str]" = [text[:first.start()]] if first and text[:first.start()].strip() else []
-    if not rounds or rounds[0]["format"] == 1:
-        return out + [r["body"] for r in rounds]
-    for r in rounds:
-        out.append(r["own"])
-        tail = r["body"][len(r["own"]):]
-        heads = list(_ROUND_HEAD_RE.finditer(tail))
-        for k, h in enumerate(heads):
-            out.append(tail[h.start():heads[k + 1].start() if k + 1 < len(heads) else len(tail)])
-    return out
+    return text[:first.start()] if first and text[:first.start()].strip() else ""
+
+
+def split_judge_blocks(text: str, preamble: bool = True) -> "list[str]":
+    """judge.md (or its archive) as the stacker keeps and moves it — verbatim blocks, newest first, that TRUST
+    nothing (task 200): one block per round, and first, unless `preamble` is False, the text above the first
+    heading (`judge_preamble`), which the stacker keeps ABOVE the rounds, never counts and never archives
+    (impl panel round 1, I-2: it used to drop it, then — in this task's first form — to glue it into the newest
+    round)."""
+    pre = judge_preamble(text)
+    return ([pre] if pre and preamble else []) + [r["body"] for r in parse_judge_rounds(text)]
 
 
 def _archive_judge_overflow(archive_path: Path,
@@ -3224,13 +3215,15 @@ def _archive_judge_overflow(archive_path: Path,
         # instead, so nothing is lost. errors="replace" tolerates bad bytes
         # (an encoding glitch must not be fatal), but an unreadable file raises.
         raw = archive_path.read_text(encoding="utf-8", errors="replace")
-        prior_blocks = [b for b in split_judge_blocks(raw)
-                        if not b.lstrip().startswith("<!-- Judge round archive.")]   # its header: regenerated below
+        # Its generated header comment is regenerated below — only that comment is dropped, never text after it
+        # (impl panel round 1, I-1: dropping the whole leading block deleted what had been archived under it).
+        body = re.sub(r"\A\s*<!-- Judge round archive\..*?-->\s*", "", raw, count=1, flags=re.S)
+        prior_blocks = split_judge_blocks(body)
         if prior_blocks:
             prior = [_TRIM_POINTER_RE.sub("", b).rstrip() for b in prior_blocks]
-        elif raw.strip():
+        elif body.strip():
             # Non-empty but unparseable: never destroy a record we can't parse.
-            prior = [raw.strip()]
+            prior = [body.strip()]
     # Idempotent: if a crash landed BETWEEN the archive write and the judge.md
     # write (or a rollback failed), a retry recomputes the SAME overflow and
     # would archive it a second time, inflating the documented round count.
@@ -3289,22 +3282,23 @@ def stack_judge_round(judge_md: Path, round_text: str,
     from tasks.filelock import task_lock
     with task_lock(judge_md):
         old_bodies: "list[str]" = []
+        pre = ""
         if judge_md.exists():
-            try:
-                old_text = judge_md.read_text(encoding="utf-8", errors="replace")
-                old_blocks = split_judge_blocks(old_text)
-                if old_blocks:
-                    # Strip the previous end-of-file overflow pointer off whichever
-                    # round body it rode on (it is metadata, not review content), so
-                    # the archive stays a clean sequence of rounds.
-                    old_bodies = [_TRIM_POINTER_RE.sub("", b).rstrip() for b in old_blocks]
-                elif old_text.strip():
-                    # Legacy / taskless content that predates round headings: keep it
-                    # as one opaque block — stacking must never silently destroy a
-                    # prior record it merely cannot parse.
-                    old_bodies = [old_text.strip()]
-            except OSError:
-                old_bodies = []
+            # Impl panel round 1, I-6 (PRE-EXISTING): a judge.md that cannot be READ is never replaced — the error
+            # propagates and both files stay as they are (an empty read used to let the write erase its history).
+            old_text = judge_md.read_text(encoding="utf-8", errors="replace")
+            pre = judge_preamble(old_text).strip()
+            old_blocks = split_judge_blocks(old_text, preamble=False)
+            if old_blocks:
+                # Strip the previous end-of-file overflow pointer off whichever
+                # round body it rode on (it is metadata, not review content), so
+                # the archive stays a clean sequence of rounds.
+                old_bodies = [_TRIM_POINTER_RE.sub("", b).rstrip() for b in old_blocks]
+            elif old_text.strip():
+                # Legacy / taskless content that predates round headings: keep it
+                # as one opaque block — stacking must never silently destroy a
+                # prior record it merely cannot parse.
+                old_bodies = [old_text.strip()]
         kept_all = [round_text.rstrip()] + old_bodies
         overflow = kept_all[max_rounds:]        # oldest rounds pushed out THIS call
         kept = kept_all[:max_rounds]
@@ -3327,12 +3321,12 @@ def stack_judge_round(judge_md: Path, round_text: str,
         if overflow and not archived_ok:
             # F1: archiving failed — DO NOT drop the paid round. Keep everything in
             # judge.md untrimmed and say so honestly (no false git-recovery claim).
-            out = "\n\n".join(kept_all) + "\n"
+            out = (pre + "\n\n" if pre else "") + "\n\n".join(kept_all) + "\n"
             out += (f"\n[... {len(overflow)} older round(s) could NOT be archived to "
                     f"{JUDGE_ARCHIVE_NAME}; retained here in judge.md so nothing is "
                     "lost — fix the archive path ...]\n")
         else:
-            out = "\n\n".join(kept) + "\n"
+            out = (pre + "\n\n" if pre else "") + "\n\n".join(kept) + "\n"   # the preamble above (I-2)
             if overflow:
                 out += (f"\n[... {len(overflow)} older round(s) archived to "
                         f"{JUDGE_ARCHIVE_NAME} — kept verbatim, {archived_total} "
