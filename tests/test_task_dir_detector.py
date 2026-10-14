@@ -353,6 +353,48 @@ class FlaggedAfterTheCall(_Project):
         self.assertTrue(old.exists())
         self.assertEqual(self.flagged(), [".agent/tasks/999-x"])
 
+    def test_a_flag_lock_never_had_at_a_post_still_flags(self):
+        # impl panel r2 J5/J8 (sonnet, codex): the lock not had within its wait — the flag is written without it
+        sd = self.lane / "sessions" / SID
+        sd.mkdir(parents=True)
+        with open(sd / "task_dir_flag.lock", "a") as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            self.shell_call("cp -r", lambda: self._task(self.lane, "999-x"), tuid="toolu_LK")
+        self.assertEqual(self.flagged(), [".agent/tasks/999-x"])
+        self.assertTrue(self.edit()[0])
+
+    def test_a_flag_that_cannot_be_written_is_said_with_its_folder(self):
+        # the session directory not writable: nothing persists — the agent is told WHICH folder, and the close refuses
+        sd = self.lane / "sessions" / SID
+        self.assertFalse(self.pre("cp -r", "toolu_RO")[0])
+        self._task(self.lane, "999-x")
+        sd.chmod(0o500)
+        self.addCleanup(sd.chmod, 0o755)
+        _, _, outs = self.post("cp -r", "toolu_RO")
+        self.assertIn(".agent/tasks/999-x", "".join(outs))
+
+    def test_a_tasks_folder_that_cannot_be_listed_is_never_read_as_empty(self):
+        # impl panel r2 J9 (codex): an enumeration error became an empty listing — nothing new, nothing flagged
+        tasks = self.lane / "tasks"
+        self.addCleanup(tasks.chmod, 0o755)
+
+        def lock_out():
+            self._task(self.lane, "999-x")
+            tasks.chmod(0o300)                              # no read: it cannot be listed
+        _, _, outs = self.shell_call("cp -r; chmod", lock_out)
+        self.assertIn("could not run", "".join(outs))
+
+    def test_a_tasks_folder_whose_entries_cannot_be_examined_is_never_read_as_empty(self):
+        # r2 J9: listed but not searchable (no x) — an entry's stat fails; never read as "no folder"
+        tasks = self.lane / "tasks"
+        self.addCleanup(tasks.chmod, 0o755)
+
+        def lock_out():
+            self._task(self.lane, "999-x")
+            tasks.chmod(0o600)
+        _, _, outs = self.shell_call("cp -r; chmod", lock_out)
+        self.assertIn("could not run", "".join(outs))
+
     def test_a_folder_name_outside_the_task_pattern_is_ignored(self):
         self.shell_call("mk", lambda: (self.lane / "tasks" / "notes").mkdir())
         self.assertIsNone(self.flagged())
@@ -504,7 +546,8 @@ class HeldUntilResolved(_Project):
                     "tasks status; ls", "rm -r link/../proj/.agent/tasks/999-x", "tasks status",
                     "jump/../.claude/bin/tasks adopt 999-x", ".claude/bin/tasks status; ls",
                     ".claude/bin/tasks status && ls", ".claude/bin/tasks status | cat",
-                    ".claude/bin/tasks status > /tmp/x", "cd .agent; ls",
+                    ".claude/bin/tasks status > /tmp/x", "cd .agent; ls", "cd .agent", f"cd {self.proj}",
+                    "cd /tmp", "rm -r $'.agent/tasks/999-\\cA'", "rm -r $'.agent/tasks/999-\\u0041'",
                     "rm -i .agent/tasks/999-x", "cd /tmp && ls", "cd", "mv .agent/tasks/999-x /tmp/x",
                     "rm -r \"$(echo .agent/tasks/999-x)\"", "rm -r '.agent/tasks/999-x"):
             with self.subTest(cmd=cmd):
@@ -515,11 +558,29 @@ class HeldUntilResolved(_Project):
                     f"rm -r {self.proj}/.agent/tasks/999-x", "rm -r './.agent/tasks/999-x'",
                     'rm -r ".agent/tasks/999-x"', "rmdir .agent/tasks/999-x", "rm -r -- .agent/tasks/999-x",
                     "rm --recursive --force .agent/tasks/999-x", ".claude/bin/tasks adopt .agent/tasks/999-x",
-                    f"{CLI} adopt 999-x", f"cd {self.proj}", "cd .agent",
+                    f"{CLI} adopt 999-x", "rm -r $'.agent/tasks/999-x'", "rm -r $'.agent/tasks/999\\x2dx'",
                     "rm -r .agent/tasks/001-a/../999-x"):           # `..` through a real folder: the same folder
             with self.subTest(cmd=cmd):
                 blocked, err, _ = self.pre(cmd)
                 self.assertFalse(blocked, f"{cmd}: {err}")
+
+    def test_the_way_out_reads_ansi_c_as_bash_does(self):
+        # impl panel r2 J7 (codex): an escape decoded otherwise than bash decodes it names another folder — only the
+        # escapes bash decodes the same everywhere are read; each compared with bash's own reading
+        from importlib import util
+        spec = util.spec_from_file_location("tdw", PLUGIN / "scripts" / "task-dir-watch.py")
+        mod = util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        for word in ("$'a\\x41b'", "$'\\101'", "$'x\\ty'", "$'it\\'s'", "$'\\\\'", "$'\\e'", "$'\\x7'",
+                     "$'\\0101'", "$'\\xffz'", "$'q\\\"'", "$'\\?'", "$'\\a\\b\\f\\v\\r\\n'"):
+            with self.subTest(word=word):
+                ours = mod._words("rm " + word)
+                self.assertIsNotNone(ours, word)
+                theirs = subprocess.run([bash_or_skip(), "-c", f"printf '%s' {word}"], capture_output=True).stdout
+                self.assertEqual(ours[1].encode("utf-8", "surrogateescape"), theirs, word)
+        for word in ("$'\\cA'", "$'\\u0041'", "$'\\U00000041'", "$'\\q'"):
+            with self.subTest(refused=word):
+                self.assertIsNone(mod._words("rm " + word), word)
 
     def test_the_way_out_from_a_subdirectory(self):
         sub = self.proj / "sub"
@@ -638,6 +699,7 @@ class NamesAdoptCannotTake(_Project):
         self.assertTrue(blocked)
         self.assertIn("rm -r .agent/tasks/999-x", err)
         self.assertNotIn("tasks adopt .agent/tasks/999-x", err)
+        self.assertIn("may be someone's work", err)                # impl panel r2 J3: the warning on removal too
 
 
 class TheClose(_Project):
@@ -722,6 +784,35 @@ class TheCloseRechecks(unittest.TestCase):
         self.assertIn("appeared while this close ran: 999-late", r.stderr)
         self.assertIn("## Status\nin_progress", (d / ".agent" / "tasks" / "001-t" / "task.md").read_text(
             encoding="utf-8"))
+
+    def test_a_tasks_folder_made_unlistable_during_verify_refuses_the_close(self):
+        # impl panel r2 J9 (codex): verify makes a folder and takes the read bit off tasks/ — listing it fails, the
+        # commit can still write task.md (the search bit stays); an empty listing would have closed over the folder
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        d = Path(tmp.name) / "repo"
+        subprocess.run(["git", "init", "-q", str(d)], check=True)
+        tasks = d / ".agent" / "tasks"
+        self.addCleanup(lambda: tasks.chmod(0o755) if tasks.exists() else None)
+        late = ("python3 -c \"import os; os.mkdir('.agent/tasks/999-late'); os.chmod('.agent/tasks', 0o300)\"")
+        (tasks / "001-t").mkdir(parents=True)
+        (d / ".agent" / "config.json").write_text(json.dumps({"verify": late, "panel_required_for": []}),
+                                                  encoding="utf-8")
+        (tasks / "001-t" / "task.md").write_text(
+            "# 001 - T\n\n## Status\npending\n\n## Risk\nreversible\n\n## Work Plan\n- [x] G1: do it\n",
+            encoding="utf-8")
+        (d / ".agent" / "task-registry").write_text(HEADER + "\n001-t\tnew\t2026-10-14T00:00:00Z\n",
+                                                   encoding="utf-8")
+        env = dict(os.environ, PYTHONPATH=str(PLUGIN), PLAYBOOK_SESSION_ID="s196-close-unlistable", HOME=tmp.name)
+        env.pop("BASH_ENV", None)
+        r = subprocess.run([sys.executable, "-m", "tasks.cli", "work", "1"], cwd=d, env=env, capture_output=True,
+                           text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r = subprocess.run([sys.executable, "-m", "tasks.cli", "work", "done"], cwd=d, env=env,
+                           capture_output=True, text=True, timeout=120)
+        tasks.chmod(0o755)
+        self.assertNotIn("Task 001 done.", r.stdout)
+        self.assertIn("cannot be read", r.stderr)
 
 
 class BelowTheFloor(_Project):

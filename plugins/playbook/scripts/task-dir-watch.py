@@ -85,6 +85,8 @@ _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
 _FILE_FLAGS = os.O_NOFOLLOW | os.O_CLOEXEC
 _ANSI_C = {"a": 7, "b": 8, "e": 27, "E": 27, "f": 12, "n": 10, "r": 13, "t": 9, "v": 11, "\\": 92, "'": 39,
            '"': 34, "?": 63}
+# `\c`, `\u`, `\U` and an escape bash does not know are REFUSED, never guessed (impl panel r2 J7, codex: `\cA` read
+# as two characters named a folder bash's `$'…'` does not — `rm` would remove an unflagged sibling)
 
 
 class Unsafe(Exception):
@@ -191,8 +193,8 @@ def _write_json(sfd: int, name: str, obj) -> None:
 def _unlink(sfd: int, name: str) -> None:
     try:
         os.unlink(name, dir_fd=sfd)          # a link is removed, never what it names
-    except FileNotFoundError:
-        pass
+    except OSError:
+        pass                                 # best effort: an old snapshot is swept after a day
 
 
 def _lexists(sfd: int, name: str) -> bool:
@@ -229,6 +231,29 @@ def _flag_lock(sfd: int):
         os.close(fd)
 
 
+def _record_flag(sfd: int, lane_rel: str, folders: "list[str]") -> "str | None":
+    """Add `folders` to the session's flag; None when recorded, else why not. Under the flag's lock — and when that
+    lock is not had within its wait, without it (impl panel r2 J5/J8, sonnet, codex: a hold the lock kept from being
+    written held nothing): the write is still all-or-nothing, only a concurrent post's folder could be lost then."""
+    def merge() -> None:
+        try:
+            old = _read_json(sfd, FLAG)
+        except ValueError:
+            old = None
+        have = _flagged_names(old, lane_rel) or []
+        merged = sorted(set(f"{lane_rel}/tasks/{n}" for n in have) | set(folders))
+        _write_json(sfd, FLAG, {"v": 1, "folders": merged, "since": _now()})
+    try:
+        try:
+            with _flag_lock(sfd):
+                merge()
+        except Unsafe:
+            merge()
+        return None
+    except OSError as e:
+        return str(e)
+
+
 def _sweep_snapshots(sfd: int) -> None:
     now = time.time()
     try:
@@ -254,13 +279,10 @@ def _lane_rel(project: Path, lane: Path) -> str:
 
 
 def _listing(lane: Path) -> "list[str]":
-    """The `<digits>-` DIRECTORIES under the lane's `tasks/` (a file is not a task folder — impl panel r1 I11)."""
-    tasks_dir = lane / "tasks"
-    try:
-        names = os.listdir(tasks_dir)
-    except OSError:
-        return []
-    return sorted(n for n in names if registry.LOOSE_TASK_DIR_RE.match(n) and os.path.isdir(tasks_dir / n))
+    """The `<digits>-` DIRECTORIES under the lane's `tasks/` (a file is not a task folder — impl panel r1 I11). Raises
+    registry.LaneUnreadable when `tasks/` or an entry cannot be read (impl panel r2 J9: an empty listing let a folder
+    made in the same call through)."""
+    return registry.task_dir_names(lane / "tasks")
 
 
 def _registry_present(lane: Path) -> bool:
@@ -276,7 +298,7 @@ def _unknown(project: Path, lane: Path, names: "list[str] | None") -> "list[str]
 
 def _ansi_c_word(text: str, i: int) -> "tuple[bytes, int] | None":
     """The bytes of `$'…'` starting at `text[i]` (the `$`), and the index after its closing quote; None when it does
-    not close. The escapes bash decodes; an unknown one stays as written."""
+    not close or holds an escape outside `_ANSI_C`, `\\xHH` and `\\NNN` (each read as bash reads it)."""
     out = bytearray()
     j = i + 2
     while j < len(text):
@@ -296,8 +318,7 @@ def _ansi_c_word(text: str, i: int) -> "tuple[bytes, int] | None":
         elif e == "x":
             m = re.match(r"[0-9A-Fa-f]{1,2}", text[j + 2:])
             if not m:
-                out += b"\\x"
-                j += 2
+                return None
             else:
                 out.append(int(m.group(0), 16))
                 j += 2 + len(m.group(0))
@@ -306,17 +327,8 @@ def _ansi_c_word(text: str, i: int) -> "tuple[bytes, int] | None":
             assert m
             out.append(int(m.group(0), 8) & 0xFF)
             j += 1 + len(m.group(0))
-        elif e in "uU":
-            m = re.match(r"[0-9A-Fa-f]{1,%d}" % (4 if e == "u" else 8), text[j + 2:])
-            if not m:
-                out += ("\\" + e).encode()
-                j += 2
-            else:
-                out += chr(int(m.group(0), 16)).encode("utf-8", "surrogatepass")
-                j += 2 + len(m.group(0))
         else:
-            out += ("\\" + e).encode("utf-8", "surrogateescape")
-            j += 2
+            return None
     return None
 
 
@@ -411,8 +423,6 @@ def _is_way_out(cmd: str, cwd: str, project: Path, lane: Path, names: "list[str]
         return False
     if _is_tasks_cli(words[0], cwd, project):
         return True
-    if words[0] == "cd":
-        return len(words) == 2                    # `cd <dir>` changes nothing on disk
     if words[0] in _RM:
         short, longs = set("rRfv"), {"--recursive", "--force", "--verbose"}
     elif words[0] in _RMDIR:
@@ -548,10 +558,10 @@ def _hold_message(project: Path, lane: Path, left: "list[str]", cwd: str, notes:
             out.append(f"    keep it:    {cli} adopt {where}    (recommended — removing deletes its content)")
             out.append(f"    remove it:  rm -r {where}")
         else:
-            out.append(f"    remove it:  rm -r {where}    (adopt cannot take it: {why_not})")
-    out += ["", "`cd <dir>` alone is let through too. If you did not make it, another session working in this lane at "
-            "the same time may have — adopt it rather than remove it. Read tools still work; other sessions are not "
-            "held."]
+            out.append(f"    remove it:  rm -r {where}    (adopt cannot take it: {why_not}; removing deletes its "
+                       "content — if it was there before this call, it may be someone's work)")
+    out += ["", "If you did not make it, another session working in this lane at the same time may have — adopt it rather "
+            "than remove it. Read tools still work; other sessions are not held."]
     return "\n".join(out)
 
 
@@ -650,20 +660,20 @@ def _post(p: dict, project: Path, lane: Path, sfd: int, sid: str) -> int:
     if left:
         lane_rel = _lane_rel(project, lane)
         folders = [f"{lane_rel}/tasks/{n}" for n in left]
-        with _flag_lock(sfd):
-            try:
-                old = _read_json(sfd, FLAG)
-            except ValueError:
-                old = None
-            have = _flagged_names(old, lane_rel) or []
-            merged = sorted(set(f"{lane_rel}/tasks/{n}" for n in have) | set(folders))
-            _write_json(sfd, FLAG, {"v": 1, "folders": merged, "since": _now()})
+        recorded = _record_flag(sfd, lane_rel, folders)
         for f in folders:
-            _journal(lane, "record", "unknown task folder", sid, tool, f, cmd)
-        notes.append("⚠ playbook: this call made task folder(s) the playbook CLI did not make: "
-                     + ", ".join(_shown(f) for f in folders) + ". This session's next actions wait until each is "
-                     "adopted (`.claude/bin/tasks adopt <it>`) or removed (`rm -r <it>`). Only `.claude/bin/tasks "
-                     "new` makes task folders.")
+            _journal(lane, "record", "unknown task folder" if recorded is None
+                     else "unknown task folder (the hold could not be recorded)", sid, tool, f, cmd)
+        if recorded is None:
+            notes.append("⚠ playbook: this call made task folder(s) the playbook CLI did not make: "
+                         + ", ".join(_shown(f) for f in folders) + ". This session's next actions wait until each is "
+                         "adopted (`.claude/bin/tasks adopt <it>`) or removed (`rm -r <it>`). Only `.claude/bin/tasks "
+                         "new` makes task folders.")
+        else:
+            notes.append("⚠ playbook: this call made task folder(s) the playbook CLI did not make: "
+                         + ", ".join(_shown(f) for f in folders) + f" — and the hold could not be recorded ({recorded})"
+                         ". Adopt (`.claude/bin/tasks adopt <it>`) or remove (`rm -r <it>`) each now: `tasks work "
+                         "done` refuses while one stands.")
     _say(event, notes)
     return 0
 

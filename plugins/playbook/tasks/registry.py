@@ -64,6 +64,11 @@ class RegistryUnreadable(Exception):
     """The registry is there but cannot be read as one (a link, not a regular file, another format)."""
 
 
+class LaneUnreadable(Exception):
+    """The lane's `tasks/` (or an entry of it) cannot be read — never taken for an empty one (task 196's impl panel r2
+    J9, codex: a `tasks/` whose read bit was taken off listed as empty, and the close passed over a folder in it)."""
+
+
 class AdoptRefused(Exception):
     """`tasks adopt` was given something that is not a task directory it may register."""
 
@@ -234,6 +239,31 @@ def _creating(agent_dir) -> "tuple[bool, int | None]":
     return False, fd
 
 
+def task_dir_names(tasks_dir) -> "list[str]":
+    """The `<digits>-` DIRECTORIES under `tasks_dir`, sorted ([] when there is no `tasks_dir`). Raises LaneUnreadable
+    when it cannot be listed or an entry cannot be examined."""
+    tasks_dir = Path(tasks_dir)
+    try:
+        names = os.listdir(tasks_dir)
+    except FileNotFoundError:
+        return []
+    except OSError as e:
+        raise LaneUnreadable(f"{tasks_dir} cannot be listed: {e}") from e
+    return sorted(n for n in names if LOOSE_TASK_DIR_RE.match(n) and _is_dir(tasks_dir / n))
+
+
+def _is_dir(path: Path) -> bool:
+    """A directory (a link to one counts — the CLI reads through it); gone → False; unexaminable → LaneUnreadable."""
+    try:
+        return stat.S_ISDIR(os.stat(path).st_mode)
+    except FileNotFoundError:
+        return False
+    except OSError as e:
+        if os.path.islink(path):
+            return False                  # a dangling or looping link is no folder
+        raise LaneUnreadable(f"{path} cannot be examined: {e}") from e
+
+
 def unknown_now(project_path, agent_dir, names: "list[str] | None" = None, *,
                 git_timeout: float = 30.0, no_registry: str = "none") -> "list[str] | None":
     """The task folders standing under the lane's `tasks/` (all of them, or those among `names`) that are not known
@@ -245,14 +275,11 @@ def unknown_now(project_path, agent_dir, names: "list[str] | None" = None, *,
     panel P2), or what the git rule alone does not know (`"git"`, the watch — a call during which the registry vanished,
     a hold that outlives it: task 196's impl panel r1 I6). Only DIRECTORIES count (a file `12-notes.md` is no task
     folder — impl panel r1 I11). A name the git rule cannot answer within `git_timeout` is unknown. Never waits, never
-    writes. Raises RegistryUnreadable."""
+    writes. Raises RegistryUnreadable, and LaneUnreadable when `tasks/` or an entry cannot be read (r2 J9)."""
     lane = Path(agent_dir)
     tasks_dir = lane / "tasks"
     if names is None:
-        try:
-            names = sorted(n for n in os.listdir(tasks_dir) if LOOSE_TASK_DIR_RE.match(n))
-        except OSError:
-            names = []
+        names = task_dir_names(tasks_dir)
     creating, fd = _creating(lane)
     try:
         entries = read(lane)
@@ -264,7 +291,7 @@ def unknown_now(project_path, agent_dir, names: "list[str] | None" = None, *,
             return None
         entries = {}
     left = [n for n in names
-            if LOOSE_TASK_DIR_RE.match(n) and os.path.isdir(tasks_dir / n)
+            if LOOSE_TASK_DIR_RE.match(n) and _is_dir(tasks_dir / n)
             and entries.get(n) in (None, "reserved") and not (creating and entries.get(n) == "reserved")]
     strict = [n for n in left if TASK_DIR_RE.fullmatch(n)]   # only such a name can be a committed task
     committed = _committed_task_mds(project_path, lane, strict, timeout=git_timeout) if strict else set()

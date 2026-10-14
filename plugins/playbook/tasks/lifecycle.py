@@ -295,13 +295,17 @@ def _unknown_dirs_bounce(project_path, agent_dir) -> bool:
     watch sees a folder made during a session's shell call or Write; the close sees every folder of the lane, however
     it was made. No registry → nothing (no provenance to judge by — plan panel P2). An unreadable registry refuses,
     naming its repair (P9: the watch never holds on it, so the close is where it stops)."""
-    from tasks.registry import RegistryUnreadable, unknown_now, unreadable_message
+    from tasks.registry import LaneUnreadable, RegistryUnreadable, unknown_now, unreadable_message
     try:
         left = unknown_now(project_path, agent_dir)
     except RegistryUnreadable as e:
         print(f"Blocked: {unreadable_message(e)}", file=sys.stderr)
         print("  The close checks this lane's task folders against the task registry. Nothing changed.",
               file=sys.stderr)
+        return True
+    except LaneUnreadable as e:
+        print(f"Blocked: this lane's task folders cannot be read ({e}) — the close checks each one. Restore the "
+              "folder's permissions and re-run `tasks work done`. Nothing changed.", file=sys.stderr)
         return True
     if not left:
         return False
@@ -1037,12 +1041,16 @@ def cmd_work(cmd_args):
                     # still refuse the close — the check before verify is repeated here, under the task lock, at the
                     # commit (`--force --reason` overrides, as there).
                     if not force:
+                        from tasks.registry import LaneUnreadable as _LU196
                         from tasks.registry import RegistryUnreadable as _RU196, unknown_now as _un196
                         try:
                             _late196 = _un196(project_path, agent_dir)
                         except _RU196 as _e196:
                             raise CloseRaceRefused(f"the task registry became unreadable while this close ran "
                                                    f"({_e196}).")
+                        except _LU196 as _e196:
+                            raise CloseRaceRefused(f"this lane's task folders cannot be read any more ({_e196}) — "
+                                                   "the close checks each one.")
                         if _late196:
                             raise CloseRaceRefused(
                                 "task folder(s) the playbook CLI did not make appeared while this close ran: "
