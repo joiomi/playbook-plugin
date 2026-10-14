@@ -818,7 +818,7 @@ def _append_review_to_judge_md(task_dir, review_mode: str, seat: str, findings: 
     quoted = quote_judge_text(findings)
     block = (f"## Single-judge {review_mode} review — {stamp} (`{seat}`)\n\n"
              f"Recorded here by the CLI: task.md has no place for these findings ({why})."
-             + (f"\n\n{receipt}\n\n" if receipt else " ")        # the CLI's own receipt: its line, not quoted (II-3)
+             + (f"\n\n{_one_line(receipt)}\n\n" if receipt else " ")   # the CLI's receipt: its line, unquoted (II-3)
              + f"The review, verbatim, every line quoted:\n\n{quoted}\n")
     try:
         with task_lock(path):
@@ -878,7 +878,7 @@ def _write_review_findings_locked(task_file: Path, review_mode: str, findings: s
     body = quote_judge_text(_neutralise_markers(findings.strip(), review_mode))
     # The CLI's own receipt (a degraded tamper guard) is the writer's line: unquoted, right after its marker (II-3).
     if receipt:
-        body = _neutralise_markers(receipt.strip(), review_mode) + "\n\n" + body
+        body = _neutralise_markers(_one_line(receipt).strip(), review_mode) + "\n\n" + body
     block = f"{open_m}\n{body}\n{close_m}"
 
     try:
@@ -1377,6 +1377,14 @@ def _detect_tamper(project_path: Path, task_file: Path | None, before: dict) -> 
     return list(full["mutations"]) + list(full["cautions"])
 
 
+def _one_line(text: str) -> str:
+    """`text` on ONE line — every break `str.splitlines` knows (`\\r`, `\\x0b`, `\\x0c`, `\\x1c`-`\\x1e`, `\\x85`,
+    `\\u2028`, `\\u2029`, not only `\\n`) made a space: a writer line built from outside text (a path a caution names)
+    must not become several lines when the record is read again (task 200, the single judge's run 1: a `\\r` in a
+    caution, written unquoted into task.md, read back as `## Status` + `blocked`)."""
+    return " ".join(str(text).splitlines())
+
+
 def _tamper_mark_text(full: dict) -> str:
     """The durable one-line tamper receipt for a judge log / findings block.
 
@@ -1387,9 +1395,9 @@ def _tamper_mark_text(full: dict) -> str:
     (059 impl-panel r3, opus #2)."""
     cautions = full.get("cautions") or []
     if full.get("degraded"):
-        return "degraded — " + "; ".join(c.replace("\n", " ") for c in cautions)
+        return "degraded — " + "; ".join(_one_line(c) for c in cautions)
     if cautions:
-        return "clean, with notes — " + "; ".join(c.replace("\n", " ") for c in cautions)
+        return "clean, with notes — " + "; ".join(_one_line(c) for c in cautions)
     return "clean"
 
 
@@ -1999,7 +2007,7 @@ def _cmd_panel_review(cmd_args):
         if not _seats:
             continue
         _r = payloads[_tname]["receipts"]
-        _desc = " | ".join(_r) if _r else "full task.md + mind map delivered (no truncation)"
+        _desc = _one_line(" | ".join(_r)) if _r else "full task.md + mind map delivered (no truncation)"
         lines.append(f"**Context[{_tname}: {', '.join(sorted(_seats))}]:** {_desc}\n")
     # Commit + tree-state stamps: name WHICH code state this panel reviewed.
     # The fingerprint (content-based, .agent-excluded) is what the close
