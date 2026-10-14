@@ -469,14 +469,14 @@ class RoundOneFixes(_Project):
     def test_a_leftover_temp_of_the_same_name_does_not_stop_a_creator(self):
         # I5 (opus): `os.mkdir(tmp)` outside the try — a leftover the sweep cannot remove escaped as a traceback
         reg = self.registry_module()
-        real = reg._sweep_temps_locked
-        reg._sweep_temps_locked = lambda *a, **k: None          # as with a linked `.agent`: nothing swept
+        real = reg._sweep_temps_at
+        reg._sweep_temps_at = lambda *a, **k: None              # a leftover the sweep did not remove
         try:
             planted = self.agent / f"{reg.TEMP_PREFIX}{os.getpid()}.0"      # the temp name it would take first
             planted.mkdir()
             final = reg.create_task_dir(self.p, self.agent, "x", "new", lambda n, name: f"# {n:03d}\n")
         finally:
-            reg._sweep_temps_locked = real
+            reg._sweep_temps_at = real
         self.assertEqual(final.name, "001-x")
         self.assertTrue((final / "task.md").is_file())
         self.assertTrue(planted.is_dir(), "the leftover was not stepped over")
@@ -524,6 +524,52 @@ class RoundTwoFixes(_Project):
         orig = self.agent.with_name(".agent.orig")
         self.assertFalse([x for x in orig.iterdir() if x.name.startswith(reg.TEMP_PREFIX)],
                          "the creator's own temp was left in the lane it built in")
+
+    def test_a_lane_replaced_during_a_successful_build_keeps_its_own_registry(self):
+        # the single judge after round 3 (codex, Critical, reproduced): the build went through the held descriptors but
+        # the registry was written BY PATH — into the replacement lane's registry, its row lost, the made task left
+        # `reserved` where it really is
+        reg = self.registry_module()
+        self.cli("new", "quick", "first", check=True)                      # the lane's registry exists
+        replacement = self.tmp / "replacement"
+        (replacement / "tasks" / "009-theirs").mkdir(parents=True)
+        (replacement / "tasks" / "009-theirs" / "task.md").write_text("# 009\n", encoding="utf-8")
+        theirs = "# playbook task-registry v1\n009-theirs\tnew\t2026-10-14T00:00:00Z\n"
+        (replacement / "task-registry").write_text(theirs, encoding="utf-8")
+        orig = self.agent.with_name(".agent.orig")
+
+        def render(num, name):
+            self.agent.rename(orig)
+            replacement.rename(self.agent)
+            return f"# {num:03d} - x\n"
+        final = reg.create_task_dir(self.p, self.agent, "x", "new", render)
+        self.assertEqual((self.agent / "task-registry").read_text(encoding="utf-8"), theirs,
+                         "the replacement lane's registry was overwritten")
+        mine = (orig / "task-registry").read_text(encoding="utf-8")
+        self.assertIn("002-x\tnew\t", mine, "the made task is not registered where it was made")
+        self.assertEqual(final.resolve(), (orig / "tasks" / "002-x").resolve(), "the returned path is not where it is")
+
+    def test_a_second_number_after_a_swap_is_taken_in_the_held_lane(self):
+        # the allocator lists the HELD lane too: a collision after the lane was swapped takes the next number of the
+        # lane the task is made in, not of the replacement (whose 009 would make it 010)
+        reg = self.registry_module()
+        self.cli("new", "quick", "first", check=True)
+        replacement = self.tmp / "replacement"
+        (replacement / "tasks" / "009-theirs").mkdir(parents=True)
+        (replacement / "tasks" / "009-theirs" / "task.md").write_text("# 009\n", encoding="utf-8")
+        orig = self.agent.with_name(".agent.orig")
+        calls = []
+
+        def render(num, name):
+            if not calls:
+                calls.append(name)
+                (self.tasks / name).mkdir()                 # the final name stands: a collision, a second number
+                self.agent.rename(orig)
+                replacement.rename(self.agent)
+            return f"# {num:03d} - x\n"
+        final = reg.create_task_dir(self.p, self.agent, "x", "new", render)
+        self.assertEqual(calls, ["002-x"])
+        self.assertEqual(final.name, "003-x", "the second number was taken from the replacement lane")
 
     def test_a_long_title_is_created(self):
         # J6 (sonnet): the temp name carried the task's name, ~25 bytes longer — ENAMETOOLONG for a 230-byte name
