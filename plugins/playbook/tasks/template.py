@@ -336,7 +336,13 @@ def post_d6_clauses(settled: bool = False, delta: bool = False) -> str:
         s += ("This is a POST-PANEL review: its object is the POST-PANEL DELTA in your context "
               "(the newest impl panel's base → the current working tree). Every finding must cite "
               "a line the delta changed or a claim the delta changed; a problem in code the delta "
-              "did not touch is tagged [PRE-EXISTING] — it is parked, not counted. ")
+              "did not touch is tagged [PRE-EXISTING] — it is parked, not counted. "
+              "Every finding's FIRST line also names its file in a fixed field, after the severity "
+              "and the tag: `[file: <path>]` — the path copied exactly from the delta's DELTA FILES "
+              "list, or, for a file the delta did not change, that file's path from the project root. "
+              "A [PRE-EXISTING] finding is parked only when that field names a real file the delta "
+              "did not change and the finding cites no line the delta changed; without the field it "
+              "counts. ")
     return s
 
 

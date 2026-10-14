@@ -168,9 +168,10 @@ class Verdict(unittest.TestCase):
         self.assertEqual(r["important"], 1)
 
     def test_pre_existing_is_parked_not_counted(self):
-        # parked only relative to a delivered delta that did not touch b.py (task 108 round 2)
-        r = post_d6.parse_verdict("- **Important [PRE-EXISTING]** — `b.py:9` unchanged since the panel.\n"
-                                  "CAP: 1/5 reported, exhausted", delta_files={"a.py"})
+        # parked only relative to a delivered delta that did not touch b.py (task 108 round 2) — b.py named
+        # in the finding's `[file: …]` field and a real file (task 201, #6)
+        r = post_d6.parse_verdict("- **Important [PRE-EXISTING]** [file: b.py] — `b.py:9` unchanged since the panel.\n"
+                                  "CAP: 1/5 reported, exhausted", delta_files={"a.py"}, exists={"b.py"}.__contains__)
         self.assertEqual(r["verdict"], "PASS")
         self.assertEqual(r["pre_existing"], 1)
 
@@ -608,9 +609,10 @@ class SingleRun2(_TmpDir):
 
 class Round2(_TmpDir):
     def test_pre_existing_counts_when_no_delta_was_delivered(self):
-        text = "**Critical** [PRE-EXISTING] — `a.py:1` loses data.\n\nCAP: 1/5 reported, exhausted"
-        self.assertEqual(post_d6.parse_verdict(text, delta_files=None)["verdict"], "FAIL")
-        self.assertEqual(post_d6.parse_verdict(text, delta_files={"b.py"})["verdict"], "PASS")
+        text = "**Critical** [PRE-EXISTING] [file: a.py] — `a.py:1` loses data.\n\nCAP: 1/5 reported, exhausted"
+        real = {"a.py"}.__contains__
+        self.assertEqual(post_d6.parse_verdict(text, delta_files=None, exists=real)["verdict"], "FAIL")
+        self.assertEqual(post_d6.parse_verdict(text, delta_files={"b.py"}, exists=real)["verdict"], "PASS")
 
     def test_pre_existing_counts_when_it_cites_a_file_the_delta_changed(self):
         text = "**Important** [PRE-EXISTING] — `pkg/a.py:12` x\n\nCAP: 1/5 reported, exhausted"
@@ -775,9 +777,10 @@ class DeltaRun2(_TmpDir):
 class DeltaRun3(_TmpDir):
     def test_an_extensionless_delta_file_is_matched(self):
         # D3-1: `Makefile:8` has no dot extension
-        text = "**Important** [PRE-EXISTING] — `Makefile:8` drops a flag.\n\nCAP: 1/5 reported, exhausted"
-        self.assertEqual(post_d6.parse_verdict(text, delta_files={"Makefile"})["verdict"], "FAIL")
-        self.assertEqual(post_d6.parse_verdict(text, delta_files={"other.py"})["verdict"], "PASS")
+        text = "**Important** [PRE-EXISTING] [file: Makefile] — `Makefile:8` drops a flag.\n\nCAP: 1/5 reported, exhausted"
+        real = {"Makefile", "other.py"}.__contains__
+        self.assertEqual(post_d6.parse_verdict(text, delta_files={"Makefile"}, exists=real)["verdict"], "FAIL")
+        self.assertEqual(post_d6.parse_verdict(text, delta_files={"other.py"}, exists=real)["verdict"], "PASS")
 
     def test_the_recorded_horizon_wins_over_a_longer_caller_timeout(self):
         # D3-2: where liveness cannot be judged, an expired 60 s reservation must not
@@ -825,6 +828,203 @@ def datetime_now_iso():
 
 
 # ── end to end: the real panel and impl-review entry points, judges faked ────
+
+
+def _verdict_with(text, files, exists):
+    """`parse_verdict` with an `exists` predicate where the parser takes one (1.6.1's does not: there the
+    table below runs on its prose regex alone, which is what the red run records)."""
+    import inspect
+    kw = {"exists": exists} if "exists" in inspect.signature(post_d6.parse_verdict).parameters else {}
+    return post_d6.parse_verdict(text, delta_files=files, **kw)
+
+
+class TheFindingsFileIsAField(unittest.TestCase):
+    """Task 201 (#6, the owner's Q-L (a) 2026-09-30; plan panel triage 1-7): a finding's file is a FIXED field on its
+    first line, `[file: <path>]`. A [PRE-EXISTING] finding is not counted only when the field names a real file the
+    delta did not change AND its text cites no delta file at a line (1.6.1's check, kept as a reason to count) —
+    otherwise it counts: never fewer counted than 1.6.1."""
+
+    FILES = {"x/core.py", "playbook-plugin/x/core.py", "edit.py", "Makefile"}
+    # what `exists` answers yes to — also for paths the parser must refuse ITSELF (out of the tree) and for a
+    # diff side's spelling of a listed file: the parser's own clauses decide those, not the predicate
+    REAL = {"README.md", "edit.py", "x/core.py", "lib/old.py", "core.py", "Makefile",
+            "../../etc/passwd", "/etc/passwd", "b/edit.py"}
+
+    def verdict(self, finding, files=FILES, real=REAL):
+        n = len(post_d6._FINDING_RE.findall(finding))
+        return _verdict_with(finding + f"\n\nCAP: {n}/5 reported, exhausted\n", files, real.__contains__)
+
+    def test_the_field_and_the_text_decide(self):
+        for line, counted in (
+                ("**Important** [PRE-EXISTING] [file: README.md] — older than the panel", 0),
+                ("**Important** [file: README.md] [PRE-EXISTING] — the field before the tag", 0),
+                ("**Important [PRE-EXISTING]** [file: lib/old.py] — the tag inside the bold", 0),
+                ("**Important** [PRE-EXISTING] [file: `README.md:12`] — quoted, with a line", 0),
+                ("**Important** [PRE-EXISTING] [file: ./README.md] — a leading ./", 0),
+                ("**Important** [PRE-EXISTING] [file: edit.py] — a file the delta changed", 1),
+                ("**Important** [PRE-EXISTING] [file: playbook-plugin/x/core.py] — listed, scope-prefixed", 1),
+                ("**Important** [PRE-EXISTING] [file: b/edit.py] — a diff side's prefix", 1),
+                ("**Important** [PRE-EXISTING] [file: core.py] — a suffix of a listed path", 1),
+                ("**Important** [PRE-EXISTING] [file: Makefile] — listed, no extension", 1),
+                ("**Important** [PRE-EXISTING] — no field: `x/core.py` without a line", 1),
+                ("**Important** [PRE-EXISTING] [file: x/typo.py] — found nowhere", 1),
+                ("**Important** [PRE-EXISTING] [file: ../../etc/passwd] — out of the tree", 1),
+                ("**Important** [PRE-EXISTING] [file: /etc/passwd] — absolute", 1),
+                ("**Important** [PRE-EXISTING] [file: outside] — 1.6.1's draft sentinel is no path", 1),
+                ("**Important** [PRE-EXISTING] [file: README.md] — but the new caller `edit.py:3` reaches it", 1),
+                ("**Important** [file: README.md] — no tag: it counts", 1)):
+            with self.subTest(line=line):
+                self.assertEqual(self.verdict(line)["important"], counted)
+
+    def test_the_field_is_read_from_the_first_line_only(self):
+        v = self.verdict("**Important** [PRE-EXISTING] — older\n  [file: README.md]")
+        self.assertEqual(v["important"], 1)
+        # two findings glued on one line: the first one's field is not the second one's
+        v = self.verdict("**Important** [PRE-EXISTING] — a. **Important** [PRE-EXISTING] [file: README.md] — b.")
+        self.assertEqual((v["important"], v["pre_existing"]), (1, 1))
+
+    def test_a_settled_tag_after_the_field(self):
+        v = self.verdict("**Important** [file: edit.py] [SETTLED] — re-raised")
+        self.assertEqual((v["important"], v["settled"], v["verdict"]), (0, 1, "PASS"))
+
+    def test_without_a_delta_the_tag_counts(self):
+        v = self.verdict("**Important** [PRE-EXISTING] [file: README.md] — x", files=None)
+        self.assertEqual(v["important"], 1)
+
+    def test_a_real_unchanged_file_passes(self):
+        v = self.verdict("**Important** [PRE-EXISTING] [file: README.md] — older")
+        self.assertEqual((v["important"], v["pre_existing"], v["verdict"]), (0, 1, "PASS"))
+
+
+class TheDeltaGetsWhatIsLeft(unittest.TestCase):
+    """Task 201 (#7, the owner's Q-K (a) 2026-09-30; plan panel triage 12): the task keeps 1.6.1's room; the delta
+    gets what SETTLED, the map and the task leave, a quarter at least — re-measured on task 200's run 2
+    (`budget200.out` in task 201's record)."""
+
+    @staticmethod
+    def room_161(budget, used, delta_len):
+        # 1.6.1 (review.py): the delta cut to a quarter first, then the task got what was left of it
+        return max(5_000, min(budget // 2, budget - (used + min(delta_len, budget // 4)) - 2_000))
+
+    def test_task_200s_run_2(self):
+        cap = post_d6.delta_cap(200_000, 979 + 24_202, 60_251)
+        self.assertEqual(cap, 200_000 - 979 - 24_202 - 60_251 - 2_000)
+        self.assertGreater(cap, 94_869)                             # its whole delta would have gone whole
+
+    def test_a_quarter_at_least(self):
+        self.assertEqual(post_d6.delta_cap(200_000, 150_000, 60_000), 50_000)
+        self.assertEqual(post_d6.delta_cap(40_000, 26_000, 5_000), 10_000)    # the floor: 1.6.1's share
+
+    def test_the_task_keeps_its_1_6_1_room(self):
+        for budget, used, delta_len in ((200_000, 25_181, 94_869), (200_000, 90_000, 5_000),
+                                        (100_000, 25_000, 3_000), (40_000, 26_000, 30_000),
+                                        (10_000, 9_000, 50_000)):
+            with self.subTest(budget=budget, used=used, delta_len=delta_len):
+                self.assertEqual(post_d6.task_room(budget, used, delta_len),
+                                 self.room_161(budget, used, delta_len))
+
+
+def _scoped_repo(test, prefix):
+    d = Path(tempfile.mkdtemp(prefix=prefix))
+    test.addCleanup(shutil.rmtree, d, True)
+    _git(d, "init", "-q")
+    _git(d, "config", "user.email", "t@t")
+    _git(d, "config", "user.name", "t")
+    return d
+
+
+class ThePatchFileAndTheList(unittest.TestCase):
+    """Task 201 (II-5, plan triage 10; #6): the whole delta's file is bounded; a list git could not build says so."""
+
+    def test_the_patch_file_is_capped(self):
+        from unittest import mock
+        with mock.patch.object(post_d6, "PATCH_CAP", 100):
+            text = post_d6.patch_text("x" * 500)
+            self.assertEqual(post_d6.patch_text("y" * 100), "y" * 100)
+        self.assertTrue(text.startswith("x" * 100 + "\n[... the file stops at 100 of 500 chars"), text[:160])
+        self.assertNotIn("x" * 101, text)
+
+    def test_an_incomplete_list_says_so(self):
+        import tasks.core as core
+        from unittest import mock
+        d = _scoped_repo(self, "pb201-incomplete-")
+        (d / "a.py").write_text("a = 1\n", encoding="utf-8")
+        _git(d, "add", "-A")
+        _git(d, "commit", "-qm", "c0")
+        base = post_d6.worktree_tree(d, [])
+        (d / "a.py").write_text("a = 2\n", encoding="utf-8")
+        snap = {"scopes": {"": {"base": base, "identity": core._scope_identity(d, d)}}, "exclude": []}
+        with mock.patch("tasks.core._tail_cert_scopes", lambda p, c: {"": d}), \
+                mock.patch.object(post_d6, "_name_status_entries", lambda *a, **k: None):
+            text, note = post_d6.delta_text(d, snap, 100_000)
+            self.assertEqual(post_d6.delta_text(d, snap, 100_000, files_out=set())[0], None)
+        self.assertIn("DELTA FILES (incomplete: git could not list every scope's files) (0)", text)
+
+
+class TheDeltaCarriesNoColour(unittest.TestCase):
+    """Task 201 (Gemini #7, routed by task 188): with `color.ui=always` the delta's stat carried ANSI escapes."""
+
+    def test_color_ui_always(self):
+        import tasks.core as core
+        from unittest import mock
+        d = _scoped_repo(self, "pb201-colour-")
+        _git(d, "config", "color.ui", "always")
+        (d / "a.py").write_text("x = 1\n" * 400, encoding="utf-8")
+        _git(d, "add", "-A")
+        _git(d, "commit", "-qm", "c0")
+        base = post_d6.worktree_tree(d, [])
+        (d / "a.py").write_text("x = 2\n" * 400, encoding="utf-8")
+        snap = {"scopes": {"": {"base": base, "identity": core._scope_identity(d, d)}}, "exclude": []}
+        with mock.patch("tasks.core._tail_cert_scopes", lambda p, c: {"": d}):
+            text, note = post_d6.delta_text(d, snap, 1_500)      # cut: the stat goes out
+        self.assertTrue(note, "the delta was not cut, so no stat went out")
+        self.assertIn("a.py |", text)                               # the stat line itself
+        self.assertNotIn("\x1b[", text)
+
+
+class TheDeltaFilesList(unittest.TestCase):
+    """Task 201 (#6; plan panel triage 2-4): the part OPENS with every path the delta changed, counted all, bounded
+    at a sixth of its cap, inside the cap."""
+
+    def test_three_hundred_files_within_the_cap(self):
+        import tasks.core as core
+        from unittest import mock
+        d = _scoped_repo(self, "pb201-list-")
+        for i in range(300):
+            (d / f"module_{i:03d}.py").write_text(f"v = {i}\n", encoding="utf-8")
+        _git(d, "add", "-A")
+        _git(d, "commit", "-qm", "c0")
+        base = post_d6.worktree_tree(d, [])
+        for i in range(300):
+            (d / f"module_{i:03d}.py").write_text(f"v = {i + 1}\n", encoding="utf-8")
+        snap = {"scopes": {"": {"base": base, "identity": core._scope_identity(d, d)}}, "exclude": []}
+        files: set = set()
+        with mock.patch("tasks.core._tail_cert_scopes", lambda p, c: {"": d}):
+            text, note = post_d6.delta_text(d, snap, 20_000, files_out=files)
+        self.assertTrue(note, "not cut")
+        self.assertLessEqual(len(text), 20_000)
+        self.assertEqual(len(files), 300)
+        first = text.split("\n")[1]
+        self.assertTrue(first.startswith("DELTA FILES (300): "), first[:80])
+        self.assertIn(" more", first)                               # bounded, the rest counted
+        self.assertLess(text.index("DELTA FILES"), text.index("diff --git"))
+
+    def test_a_rename_lists_both_names(self):
+        import tasks.core as core
+        from unittest import mock
+        d = _scoped_repo(self, "pb201-rename-")
+        (d / "old_name.py").write_text("".join(f"line {i}\n" for i in range(50)), encoding="utf-8")
+        _git(d, "add", "-A")
+        _git(d, "commit", "-qm", "c0")
+        base = post_d6.worktree_tree(d, [])
+        _git(d, "mv", "old_name.py", "new_name.py")
+        snap = {"scopes": {"": {"base": base, "identity": core._scope_identity(d, d)}}, "exclude": []}
+        files: set = set()
+        with mock.patch("tasks.core._tail_cert_scopes", lambda p, c: {"": d}):
+            text, note = post_d6.delta_text(d, snap, 100_000, files_out=files)
+        self.assertEqual(files, {"old_name.py", "new_name.py"})
+        self.assertIn("DELTA FILES (2): new_name.py, old_name.py", text)
+
 
 class EndToEnd(unittest.TestCase):
     """Drives `cmd_panel_review` and `tasks impl-review` in a git project with
@@ -912,6 +1112,184 @@ class EndToEnd(unittest.TestCase):
              mock.patch("provider.sandbox.run", side_effect=fake_run), \
              mock.patch("provider.sandbox.format_judge_output", side_effect=lambda r: (r.stdout or "")):
             return self._in_project(tcli.main)
+
+    # ── task 201 (T8) ────────────────────────────────────────────────────────
+    def _ledger_bytes(self):
+        try:
+            return (self.tf.parent / post_d6.RUNS_NAME).read_bytes()
+        except OSError:
+            return b""
+
+    def _with_lib(self):
+        lib = self.d / "lib"
+        lib.mkdir()
+        _git(lib, "init", "-q")
+        _git(lib, "config", "user.email", "t@t")
+        _git(lib, "config", "user.name", "t")
+        (lib / "m.py").write_text("m = 1\n", encoding="utf-8")
+        _git(lib, "add", "-A")
+        _git(lib, "commit", "-q", "-m", "c0")
+        with open(self.d / ".git" / "info" / "exclude", "a", encoding="utf-8") as f:
+            f.write("lib/\n")
+        (self.d / ".agent" / "config.json").write_text(json.dumps({"code_roots": ["lib"]}), encoding="utf-8")
+        return lib
+
+    def test_an_empty_delta_runs_no_judge_and_writes_nothing(self):         # #9, plan triage 8
+        self._panel()
+        n, before = len(self.single_calls), self._ledger_bytes()
+        code, err, out = self._single("CAP: 0/5 reported, exhausted\n")
+        self.assertEqual(code, 2, err + out)
+        self.assertIn("nothing changed", err)
+        self.assertEqual(len(self.single_calls), n, "a judge was spawned on an empty delta")
+        self.assertEqual(self._ledger_bytes(), before, "the refused run wrote to the run ledger")
+
+    def test_an_empty_delta_leaves_an_earlier_pass_standing(self):          # plan triage 8 (fable I5 (c))
+        from tasks.core import post_d6_pass_base
+        self._panel()
+        (self.d / "edit.py").write_text("v = 2\n", encoding="utf-8")
+        code, err, out = self._single("CAP: 0/5 reported, exhausted\n")
+        self.assertIn("POST-D6 VERDICT: PASS", out, err)
+        was = post_d6_pass_base(self.d, self.tf.parent)
+        self.assertIsNotNone(was)
+        (self.d / "edit.py").write_text("v = 1\n", encoding="utf-8")      # back to the panel's tree: empty
+        code, err, out = self._single("CAP: 0/5 reported, exhausted\n")
+        self.assertEqual(code, 2, err)
+        self.assertEqual(post_d6_pass_base(self.d, self.tf.parent), was)
+
+    def test_the_same_content_committed_names_both_routes(self):            # plan triage 9 (opus I1)
+        (self.d / "edit.py").write_text("v = 2\n", encoding="utf-8")       # the panel reviews it uncommitted
+        self._panel()
+        _git(self.d, "commit", "-qam", "the reviewed code, unchanged")
+        code, err, out = self._single("CAP: 0/5 reported, exhausted\n")
+        self.assertEqual(code, 2, err)
+        self.assertIn("fresh impl panel", err)
+        self.assertIn("--owner-ok", err)
+
+    def test_one_unchanged_scope_is_not_refused(self):                      # plan triage 13 (a)
+        lib = self._with_lib()
+        self._panel()
+        (lib / "m.py").write_text("m = 2\n", encoding="utf-8")
+        code, err, out = self._single("CAP: 0/5 reported, exhausted\n")
+        self.assertEqual(code, 0, err)
+        self.assertIn("DELTA FILES (1): lib/m.py", self.single_calls[-1])
+
+    def test_a_nested_file_tagged_pre_existing_counts(self):                # plan triage 4
+        lib = self._with_lib()
+        self._panel()
+        (lib / "m.py").write_text("m = 2\n", encoding="utf-8")
+        code, err, out = self._single(
+            "**Important** [PRE-EXISTING] [file: lib/m.py] — x\n\nCAP: 1/5 reported, exhausted\n")
+        self.assertIn("POST-D6 VERDICT: FAIL", out, err)
+
+    def test_a_rename_only_delta_is_reviewed(self):                         # plan triage 13 (b)
+        self._panel()
+        _git(self.d, "mv", "edit.py", "renamed.py")
+        code, err, out = self._single(
+            "**Important** [PRE-EXISTING] [file: renamed.py] — x\n\nCAP: 1/5 reported, exhausted\n")
+        self.assertTrue(self.single_calls, err)
+        self.assertIn("DELTA FILES (2): edit.py, renamed.py", self.single_calls[-1])
+        self.assertIn("POST-D6 VERDICT: FAIL", out, err)
+
+    def test_the_context_lists_the_delta_files(self):                       # #6
+        self._panel()
+        (self.d / "edit.py").write_text("v = 2\n", encoding="utf-8")
+        (self.d / "new.py").write_text("n = 1\n", encoding="utf-8")
+        code, err, out = self._single("CAP: 0/5 reported, exhausted\n")
+        self.assertEqual(code, 0, err)
+        self.assertIn("DELTA FILES (2): edit.py, new.py", self.single_calls[-1])
+        self.assertIn("[file: ", self.single_calls[-1])                 # the prompt asks for the field
+
+    def test_the_verdict_checks_the_field_against_the_tree(self):           # #6: review.py's `exists`
+        self._panel()
+        (self.d / "edit.py").write_text("v = 2\n", encoding="utf-8")
+        code, err, out = self._single(
+            "**Important** [PRE-EXISTING] [file: nowhere.py] — x\n\nCAP: 1/5 reported, exhausted\n")
+        self.assertIn("POST-D6 VERDICT: FAIL", out, err)
+        code, err, out = self._single(
+            "**Important** [PRE-EXISTING] [file: keep.py] — x\n\nCAP: 1/5 reported, exhausted\n")
+        self.assertIn("POST-D6 VERDICT: PASS", out, err)
+
+    def test_a_cut_delta_names_its_patch_file(self):                        # II-5, plan triage 10, 11, 14
+        from unittest import mock
+        self._panel()
+        (self.d / "edit.py").write_text("".join(f"v{i} = {i}\n" for i in range(4000)), encoding="utf-8")
+        with mock.patch("tasks.core.resolve_review_context_chars", return_value=20_000):
+            code, err, out = self._single("CAP: 0/5 reported, exhausted\n")
+        self.assertEqual(code, 0, err)
+        rid = self._single_runs()[-1]["id"]
+        patch = self.tf.parent / f"post-d6-delta-{rid}.patch"
+        self.assertTrue(patch.is_file(), sorted(p.name for p in self.tf.parent.iterdir()))
+        first = patch.read_text(encoding="utf-8")
+        self.assertIn("+v3999 = 3999", first)
+        seen = self.single_calls[-1]
+        self.assertIn(f".agent/tasks/001-demo/post-d6-delta-{rid}.patch", seen)
+        self.assertIn("READ", seen)
+        self.assertIn("in parts", seen)
+        # a second cut run writes its own file; the first stays as the first review cites it
+        (self.d / "edit.py").write_text("".join(f"w{i} = {i}\n" for i in range(4000)), encoding="utf-8")
+        with mock.patch("tasks.core.resolve_review_context_chars", return_value=20_000):
+            self._single("CAP: 0/5 reported, exhausted\n")
+        rid2 = self._single_runs()[-1]["id"]
+        self.assertNotEqual(rid2, rid)
+        self.assertIn("+w3999 = 3999", (self.tf.parent / f"post-d6-delta-{rid2}.patch").read_text(encoding="utf-8"))
+        self.assertEqual(patch.read_text(encoding="utf-8"), first)
+
+    def test_the_delta_gets_what_the_task_leaves(self):                     # #7: more than 1.6.1's quarter
+        from unittest import mock
+        self._panel()
+        (self.d / "edit.py").write_text("".join(f"v{i} = {i}\n" for i in range(800)), encoding="utf-8")
+        with mock.patch("tasks.core.resolve_review_context_chars", return_value=20_000):
+            code, err, out = self._single("CAP: 0/5 reported, exhausted\n")
+        self.assertEqual(code, 0, err)
+        size = int(err.split("post-panel delta ", 1)[1].split(" chars", 1)[0].replace(",", ""))
+        self.assertGreater(size, 20_000 // 4, err)                         # 1.6.1 cut it to a quarter
+        self.assertNotIn("delta truncated", err)
+        self.assertIn("+v799 = 799", self.single_calls[-1])
+
+    def test_the_task_leaves_the_delta_its_quarter(self):                   # #7: the task keeps 1.6.1's room
+        # a map and a task big enough that the task's share binds: sized without the delta's quarter, the
+        # context ran over the budget and was head-clamped
+        from unittest import mock
+        (self.d / "MIND_MAP.md").write_text(
+            "# Mind Map\n" + "".join(f"[{i}] node {i:04d} of the map\n" for i in range(220)), encoding="utf-8")
+        with open(self.tf, "a", encoding="utf-8") as f:
+            # five sections the trimmer keeps newest first: the room decides how many go
+            for s in range(5):
+                f.write(f"\n## Notes {s}\n" + "".join(f"- note {s}.{i:03d}: a line of the task's own record\n"
+                                                      for i in range(40)))
+        self._panel()
+        (self.d / "edit.py").write_text("".join(f"v{i} = {i}\n" for i in range(800)), encoding="utf-8")
+        with mock.patch("tasks.core.resolve_review_context_chars", return_value=20_000):
+            code, err, out = self._single("CAP: 0/5 reported, exhausted\n")
+        self.assertEqual(code, 0, err)
+        self.assertIn("POST-PANEL DELTA", self.single_calls[-1])
+        self.assertNotIn("HEAD-CLAMPED", self.single_calls[-1], err)
+
+    def test_a_delta_that_fits_writes_no_patch_file(self):                  # plan triage 10
+        self._panel()
+        (self.d / "edit.py").write_text("v = 2\n", encoding="utf-8")
+        self._single("CAP: 0/5 reported, exhausted\n")
+        self.assertTrue(self.single_calls)
+        self.assertEqual(sorted(self.tf.parent.glob("post-d6-delta*")), [])
+
+    def test_an_unwritable_patch_file_leaves_the_git_commands(self):        # plan triage 10
+        from unittest import mock
+        real = self.R.atomic_write
+
+        def refuse(path, *a, **k):
+            if Path(path).name.startswith("post-d6-delta"):
+                raise OSError(28, "No space left on device")
+            return real(path, *a, **k)
+        self._panel()
+        (self.d / "edit.py").write_text("".join(f"v{i} = {i}\n" for i in range(4000)), encoding="utf-8")
+        with mock.patch("tasks.core.resolve_review_context_chars", return_value=20_000), \
+                mock.patch.object(self.R, "atomic_write", refuse):
+            code, err, out = self._single("CAP: 0/5 reported, exhausted\n")
+        self.assertEqual(code, 0, err)
+        seen = self.single_calls[-1]
+        self.assertIn("delta truncated", err + out + seen)
+        self.assertNotIn("post-d6-delta", seen)
+        self.assertIn("git -C", seen)
 
     def test_a_tree_edit_between_delta_and_tamper_baseline_sends_nothing(self):
         from unittest import mock

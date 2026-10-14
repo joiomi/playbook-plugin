@@ -19920,7 +19920,7 @@
     {
       "id": "PB-POST-D6-PROTOCOL",
       "category": "judges-and-reviews",
-      "statement": "The post-D6 review protocol (task 108): both context builders (panel and single judge) deliver FIRST a SETTLED block — the task's last unfenced `## Owner rulings` lines verbatim plus the judge.md/judge-archive.md triage bullets whose VERDICT is `REJECT` (right after the bullet, after its bold title, or ending inside the bold title — not a mention in prose; never a line a judge wrote into a round 1.6.2 wrote, where every judge line is quoted — task 200) — under a header that says a ruling closes a design choice, never a correctness defect; every impl panel round's header carries a unique `**Round-id:**` (with the verdict, the tree-state, the snapshot and the tamper receipt read from the round's HEADER only, each at a line start — task 200; from 1.6.2 its H1 is followed by the writer's `**Round-format:** 2` mark, a provenance label honoured only in a file's leading run of headings, which no reader decides on) and its Panel-snapshot records per scope a `base` tree of the working state (staged, unstaged, untracked) built in a temporary GIT_INDEX_FILE without changing the real index or `git status`; `impl-review` after an impl panel delivers the diff base → current working tree, refusing to send anything when a tree, the scope set or a scope's directory moves between building the delta and the tamper baseline, and giving task.md only the budget left after SETTLED + delta + map (a head-clamp tells the judge) (an unchanged file absent, an untracked file present; a scope set or scope directory changed since the panel refuses the delta; the delta is handed file by file — code first, then tests, then docs, the ledger and records, over all scopes, the smaller diff first inside each class, the classes being the close's own (`classify_delta_paths`), a rename classed by both its names, and each run of files under a line that names its class and scope — one scope's files of a class can come in several runs (task 178, PLAN S11 item 28); over budget, the names of the files handed whole, of the one cut part-way with how much of it went out, and of the ones left out — every one counted, as many written as fit in a sixth of the cap — then the stat of the same two trees — its listing kept to a third of the cap at most: cut there, with one line saying so, when it is longer — the exact diff commands and the diff as far as it fits, and the same counts and names in the note the CLI prints; a scope whose file list does not pair one to one with its patch is handed in git's own order under a line that says so — after the code and tests of the scopes that pair, before the docs — and nothing of it is dropped), computes POST-D6 VERDICT (PASS = no counted Critical or Important; a tag counts only right after the severity marker; [SETTLED] is not counted, [SETTLED-CONTRADICTED] is, and [PRE-EXISTING] is not counted only when a delta was delivered and the finding (its whole text) cites no file the FULL delta changed — the file set is taken before any truncation and holds both paths of a rename; the check is deliberately at FILE level (owner amendment 2026-09-30: judges often cite wrong lines, and file level errs toward more review); the response's last non-empty line must BE a whole, bare (not code-spanned) CAP line whose count equals the recognised findings, and `more remain` is incomplete — otherwise the verdict fails closed), and RESERVES each run under the task lock before any judge is spawned: runs 1-2 after a panel are free, run 3 needs a counted Critical in run 2, run 4+ always needs `--owner-ok --reason`; a refused run exits 2 with nothing spent, one review at a time per task — a panel reserves before its tamper snapshot too, so a panel and a single judge exclude each other (a live reservation — while its owning process runs (POSIX, same host; recorded pid + host), otherwise by its OWN recorded expiry — refuses a second one without writing — its append would void the first run by tamper; a reservation past the horizon it recorded — the hard review timeout plus 10 minutes for a single judge, plus 15 for a panel; two hours for either when the review runs with no hard timeout (`--timeout unlimited`) — counts as spent), a corrupt ledger line refuses every new reservation until repaired (or `--owner-ok`), a run killed at its hard timeout counts (verdict TIMEOUT), a run that produced no review releases its reservation, and every owner-ok reason is recorded and named in the close receipt.",
+      "statement": "The post-D6 review protocol (task 108): both context builders (panel and single judge) deliver FIRST a SETTLED block — the task's last unfenced `## Owner rulings` lines verbatim plus the judge.md/judge-archive.md triage bullets whose VERDICT is `REJECT` (right after the bullet, after its bold title, or ending inside the bold title — not a mention in prose; never a line a judge wrote into a round 1.6.2 wrote, where every judge line is quoted — task 200) — under a header that says a ruling closes a design choice, never a correctness defect; every impl panel round's header carries a unique `**Round-id:**` (with the verdict, the tree-state, the snapshot and the tamper receipt read from the round's HEADER only, each at a line start — task 200; from 1.6.2 its H1 is followed by the writer's `**Round-format:** 2` mark, a provenance label honoured only in a file's leading run of headings, which no reader decides on) and its Panel-snapshot records per scope a `base` tree of the working state (staged, unstaged, untracked) built in a temporary GIT_INDEX_FILE without changing the real index or `git status`; `impl-review` after an impl panel delivers the diff base → current working tree — opening with a `DELTA FILES` list of every path it changed (at most a sixth of the cap when the delta is cut, every name counted), and refused before any run is reserved, with nothing spent or written, when that list is empty: an empty delta never yields a PASS (task 201) — refusing to send anything when a tree, the scope set or a scope's directory moves between building the delta and the tamper baseline, sizing task.md by 1.6.1's rule — the budget left after SETTLED, the map and the delta held at min(its whole length, a quarter of the budget) — and then giving the delta what SETTLED, the map and the task leave, a quarter at least (task 201) (a head-clamp tells the judge) (an unchanged file absent, an untracked file present; a scope set or scope directory changed since the panel refuses the delta; the delta is handed file by file — code first, then tests, then docs, the ledger and records, over all scopes, the smaller diff first inside each class, the classes being the close's own (`classify_delta_paths`), a rename classed by both its names, and each run of files under a line that names its class and scope — one scope's files of a class can come in several runs (task 178, PLAN S11 item 28); over budget, the names of the files handed whole, of the one cut part-way with how much of it went out, and of the ones left out — every one counted, as many written as fit in a sixth of the cap — then the stat of the same two trees (asked for without colour, like the name list and the diff — task 201) — its listing kept to a third of the cap at most: cut there, with one line saying so, when it is longer — the exact diff commands — after the path and line count of `post-d6-delta-<run id>.patch`, the whole delta (at most 1,000,000 chars) the CLI wrote into the task dir for this run before its tamper baseline, when it could (task 201) — and the diff as far as it fits, and the same counts and names in the note the CLI prints; a scope whose file list does not pair one to one with its patch is handed in git's own order under a line that says so — after the code and tests of the scopes that pair, before the docs — and nothing of it is dropped), computes POST-D6 VERDICT (PASS = no counted Critical or Important; a tag counts only right after the severity marker (a `[file: …]` field may stand between — task 201); [SETTLED] is not counted, [SETTLED-CONTRADICTED] is, and [PRE-EXISTING] is not counted only when a delta was delivered, the finding's first line names in a `[file: <path>]` field a real file of the project that the FULL delta did not change — not absolute, no `..`, neither a listed path nor its `a/`/`b/` spelling nor the end of one — AND the finding (its whole text) cites no file the FULL delta changed (task 201, #6: the field added, the text check kept as a reason to count) — the file set is taken before any truncation and holds both paths of a rename, each scope-relative and scope-prefixed; the check is deliberately at FILE level (owner amendment 2026-09-30: judges often cite wrong lines, and file level errs toward more review); the response's last non-empty line must BE a whole, bare (not code-spanned) CAP line whose count equals the recognised findings, and `more remain` is incomplete — otherwise the verdict fails closed), and RESERVES each run under the task lock before any judge is spawned: runs 1-2 after a panel are free, run 3 needs a counted Critical in run 2, run 4+ always needs `--owner-ok --reason`; a refused run exits 2 with nothing spent, one review at a time per task — a panel reserves before its tamper snapshot too, so a panel and a single judge exclude each other (a live reservation — while its owning process runs (POSIX, same host; recorded pid + host), otherwise by its OWN recorded expiry — refuses a second one without writing — its append would void the first run by tamper; a reservation past the horizon it recorded — the hard review timeout plus 10 minutes for a single judge, plus 15 for a panel; two hours for either when the review runs with no hard timeout (`--timeout unlimited`) — counts as spent), a corrupt ledger line refuses every new reservation until repaired (or `--owner-ok`), a run killed at its hard timeout counts (verdict TIMEOUT), a run that produced no review releases its reservation, and every owner-ok reason is recorded and named in the close receipt.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/post_d6.py",
@@ -19937,6 +19937,14 @@
         {
           "path": "plugins/playbook/tasks/review.py",
           "reference": "symbol:_cmd_single_review"
+        },
+        {
+          "path": "plugins/playbook/tasks/post_d6.py",
+          "reference": "symbol:delta_parts"
+        },
+        {
+          "path": "plugins/playbook/tasks/post_d6.py",
+          "reference": "symbol:parse_verdict"
         }
       ],
       "failure_consequence": "High",
@@ -20714,6 +20722,94 @@
           "limitations": [
             "Task 200 (V1): the run cap's key and the delta base are the writer's round, never a judge's."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_post_d6.py",
+          "reference": "EndToEnd.test_an_empty_delta_runs_no_judge_and_writes_nothing",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_post_d6.py",
+            "reference": "EndToEnd.test_one_unchanged_scope_is_not_refused"
+          },
+          "limitations": [
+            "Task 201 (#9): no judge spawned and the run ledger byte-identical; an earlier PASS still stands (EndToEnd.test_an_empty_delta_leaves_an_earlier_pass_standing); the same content committed after the panel names both routes (EndToEnd.test_the_same_content_committed_names_both_routes). Judges are faked."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "TheFindingsFileIsAField.test_the_field_and_the_text_decide",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_post_d6.py",
+            "reference": "TheFindingsFileIsAField.test_a_real_unchanged_file_passes"
+          },
+          "limitations": [
+            "Task 201 (#6): 17 first lines — both orders of the field and the tag, quotes, `./`, `:line`, a diff side's spelling, the end of a listed path, out of the tree, found nowhere, the text check, no tag; the field read from the first line only (test_the_field_is_read_from_the_first_line_only). Mutation-checked: 13 clauses."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_post_d6.py",
+          "reference": "EndToEnd.test_the_verdict_checks_the_field_against_the_tree",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_post_d6.py",
+            "reference": "EndToEnd.test_a_nested_file_tagged_pre_existing_counts"
+          },
+          "limitations": [
+            "Task 201 (#6): the CLI's own `exists` (a file under the project root) decides a path found nowhere (counted) from a real unchanged one (not counted); a nested scope's prefixed name counts. Judges are faked."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_post_d6.py",
+          "reference": "EndToEnd.test_the_delta_gets_what_the_task_leaves",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_post_d6.py",
+            "reference": "EndToEnd.test_the_task_leaves_the_delta_its_quarter"
+          },
+          "limitations": [
+            "Task 201 (#7): a delta over a quarter of the budget goes whole; the task keeps 1.6.1's room so the context is not head-clamped; the arithmetic on task 200's run 2 (TheDeltaGetsWhatIsLeft). Re-measured on a real delta in task 201's evidence/budget200-after.out."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_post_d6.py",
+          "reference": "EndToEnd.test_a_cut_delta_names_its_patch_file",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_post_d6.py",
+            "reference": "EndToEnd.test_a_delta_that_fits_writes_no_patch_file"
+          },
+          "limitations": [
+            "Task 201 (II-5): one file per run (a second cut run leaves the first file as it was); an unwritable target leaves the git commands only (EndToEnd.test_an_unwritable_patch_file_leaves_the_git_commands); the file capped (ThePatchFileAndTheList.test_the_patch_file_is_capped). Judges are faked."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "TheDeltaFilesList.test_three_hundred_files_within_the_cap",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_post_d6.py",
+            "reference": "TheDeltaFilesList.test_a_rename_lists_both_names"
+          },
+          "limitations": [
+            "Task 201 (#6): 300 changed files — the part within its cap, the list first, all counted, bounded; an incomplete list says so (ThePatchFileAndTheList.test_an_incomplete_list_says_so)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "TheDeltaCarriesNoColour.test_color_ui_always",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 201 (Gemini #7): with `color.ui=always` the cut delta holds its stat line (asserted, so the check is not vacuous) and no ANSI escape. No separate negative control: the stat line's presence is the control. The name list (`-z`) carries no colour even without the flag (measured, task 201's probe), so its flag is not separately testable."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -20737,7 +20833,10 @@
         "Task 172 (PLAN S11 item 13; task 170's binding audit): until then this row cited 7 tests for a statement of about 30 clauses. The tests that carry the others were in the same module, uncited; each was read against its clause and is cited now, and the clauses that no test reached got an assertion, each watched red on one deliberate break in a throwaway copy: the SETTLED block's place (`FIRST`), the LAST rulings section, a scope whose directory changed, the stat's third of the cap.",
         "Task 172, after its impl panel: the clause about a scope's DIRECTORY moving between the delta and the tamper baseline, which that task had first cut for want of a test, is back in the statement with its test; the reservation horizon reads as the code has it (10 minutes of margin for a single judge, 15 for a panel — the statement had said 10 for both); the stat's bound is worded as what is cut (its listing), not as the size of the whole stat part.",
         "Task 178 (PLAN S11 item 28; owner decision 2026-10-10: \"Da, în S11 (Recomandat)\") — the ORDER of the handed delta and the naming of its cut, with the bounds that are stated and not removed: (1) the classes are FILE classes, the close's own, never content — a test helper outside a `tests/` directory is code, a nested `.md` that is no doc is code, and the outer repository's own scripts are handed with the plugin's code; (2) inside a class the order is by the SIZE of a file's diff, not by path and not by what matters most: a large change is handed after the small ones of its class and is the one cut when the class does not fit; (3) the size of the budget is unchanged (a quarter of the judge's context), so a delta whose code alone is larger is still cut — now with the cut named; (4) the file list is paired with the patch by POSITION, compared with each header where git writes the name as it is — printable ASCII with no double quote and no backslash; a name git QUOTES is paired by position only, the count of parts still checked (until impl round 1 the comparison was skipped for any name outside a short list of characters, one with a space included: sonnet); git is asked itself for the `a/`/`b/` prefixes and for the short form of a gitlink's change, so a user's `diff.noprefix`, `diff.mnemonicPrefix` or `diff.submodule` does not unsort a scope (the last was measured in impl round 1 after opus read it: with `log` or `diff` a nested repository's move had no header line and the whole scope went out in git's order, docs first); a scope where the two still do not pair one to one is handed unsorted under a line that says so — AFTER the code and tests of the scopes that pair, before the docs (it was handed first until that round); that git could give a list and a patch in different orders was not seen and is not excluded by a test against git itself (the test puts a wrong list in by a double); (5) the names of what was cut are bounded to a sixth of the cap: beyond that the files are counted, not named; (6) the judge is TOLD what was left out and how to fetch it — whether it does is the judge's, as before; no test reads a judge's behaviour. Before this task the delta went out in git's path order with the outer scope first, and the limitation was not written anywhere in this row.",
-        "Task 200 (PLAN §S14 T7, #3), measured on the tree and on the installed 1.6.1 (task 200's `evidence/`): a judge's output pasted verbatim into its round could open a round, supply a missing `**Tree-state:**`, plant a `REJECT` bullet for the SETTLED block and make the words \"impl review\" review evidence; a single judge's findings in task.md could give the task a `## Status` of `blocked` (the stop hook released on it — a guard that failed open) or a `## Owner rulings` section the SETTLED block read instead of the owner's. From 1.6.2 every judge line is quoted, a round's facts come from its header (each pattern at a line start), every heading still opens a round as in 1.6.1 (impl panel round 1, I-4: a 1.6.1 impl panel below a 1.6.2 round stays the post-D6 cap's round), the text above the first heading stays above it, and a judge.md that cannot be read is never replaced (I-6, pre-existing). BOUNDS: text 1.6.1 wrote keeps its judges' lines unquoted and is read as before (task 186's rule 10) — a forged heading or REJECT line there keeps 1.6.1's bound; the agent's own text is the agent's (a judge's review is never pasted into judge.md — the owner, 2026-10-14 21:53); single-judge findings already written unquoted into a task.md before 1.6.2 are read as before (a reader that skipped that region would change the fence engine every task.md reader shares — a PLAN Phase B input). After a rollback to 1.6.1, its stacker drops the text above the first heading at its next stack (as before 1.6.2), so the agent's notes go at the END of judge.md, where both versions keep them (impl panel round 2, II-6). A single judge's cut post-D6 delta names git commands a claude judge cannot run since #43 — routed to T8, the post-D6 delta's task, before the release (II-5). A writer line built from outside text — the tamper receipt, whose cautions name repo paths — carries no line break of any kind (`review._one_line`): a `\\r` in one made a `## Status` + `blocked` line in task.md and a forged round heading in judge.md's header (the single judge's run 1; the judge.md half on 1.6.1 too)."
+        "Task 200 (PLAN §S14 T7, #3), measured on the tree and on the installed 1.6.1 (task 200's `evidence/`): a judge's output pasted verbatim into its round could open a round, supply a missing `**Tree-state:**`, plant a `REJECT` bullet for the SETTLED block and make the words \"impl review\" review evidence; a single judge's findings in task.md could give the task a `## Status` of `blocked` (the stop hook released on it — a guard that failed open) or a `## Owner rulings` section the SETTLED block read instead of the owner's. From 1.6.2 every judge line is quoted, a round's facts come from its header (each pattern at a line start), every heading still opens a round as in 1.6.1 (impl panel round 1, I-4: a 1.6.1 impl panel below a 1.6.2 round stays the post-D6 cap's round), the text above the first heading stays above it, and a judge.md that cannot be read is never replaced (I-6, pre-existing). BOUNDS: text 1.6.1 wrote keeps its judges' lines unquoted and is read as before (task 186's rule 10) — a forged heading or REJECT line there keeps 1.6.1's bound; the agent's own text is the agent's (a judge's review is never pasted into judge.md — the owner, 2026-10-14 21:53); single-judge findings already written unquoted into a task.md before 1.6.2 are read as before (a reader that skipped that region would change the fence engine every task.md reader shares — a PLAN Phase B input). After a rollback to 1.6.1, its stacker drops the text above the first heading at its next stack (as before 1.6.2), so the agent's notes go at the END of judge.md, where both versions keep them (impl panel round 2, II-6). A single judge's cut post-D6 delta names git commands a claude judge cannot run since #43 — routed to T8, the post-D6 delta's task, before the release (II-5). A writer line built from outside text — the tamper receipt, whose cautions name repo paths — carries no line break of any kind (`review._one_line`): a `\\r` in one made a `## Status` + `blocked` line in task.md and a forged round heading in judge.md's header (the single judge's run 1; the judge.md half on 1.6.1 too).",
+        "Task 201 (#9): a delta that is empty only because the reviewed content was committed after the panel (HEAD moved, the content the same) is refused like any empty delta; that close goes through a fresh impl panel or `--owner-ok` (#9's text, task 109: an empty delta never yields a PASS). Phase B.",
+        "Task 201 (#6): the `[file: …]` field is the judge's own declaration — a finding about delta code whose field names a real unchanged file and whose text cites no delta file at a line is not counted; a file name that cannot be written on one line (a newline, bytes git escapes) never matches a real file, so such a finding counts (an escape syntax: Phase B).",
+        "Task 201 (#7): on a small budget, where SETTLED, the map and the task's 5,000 floor leave less than a quarter, both shares are 1.6.1's and the context head-clamps as in 1.6.1 (Phase B)."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],

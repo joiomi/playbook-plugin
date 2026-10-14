@@ -11,7 +11,8 @@ three causes; each has a part here:
       judge). A finding tagged [SETTLED] does not count against PASS; one tagged
       [SETTLED-CONTRADICTED] does — task.md is agent-written, so a ruling can
       only close a design choice, never hide a correctness defect.
-  (b) DELTA (`worktree_tree`, `delta_text`): every panel records, per scope, a
+  (b) DELTA (`worktree_tree`, `delta_parts` + `render_delta` = `delta_text`):
+      every panel records, per scope, a
       tree of the WORKING state (staged + unstaged + untracked) built in a
       temporary index (GIT_INDEX_FILE) — the real index is never touched. The
       post-D6 judge reviews base → current working tree; a finding outside it
@@ -39,6 +40,9 @@ from pathlib import Path
 
 RUNS_NAME = "post-panel-reviews.jsonl"
 CONTEXT_NAME = "post-d6-context.md"   # the SETTLED + DELTA parts the last single judge received
+PATCH_PREFIX = "post-d6-delta"         # `<prefix>-<run id>.patch`: a CUT delta whole, for a judge with no shell (task 201)
+PATCH_CAP = 1_000_000                  # … at most this much of it; the rest is named by its git commands
+DELTA_MARGIN = 2_000
 SETTLED_CAP = 8000
 
 SETTLED_HEADER = (
@@ -143,9 +147,14 @@ _FINDING_RE = re.compile(
     r"(?:^|(?<=[.!?:)]))[ \t]*(?:[-*+]\s+|\d+[.)]\s+)?\*\*\s*\[?\s*(Critical|Important)\b",
     re.IGNORECASE)
 # The tag counts only RIGHT AFTER the severity marker (inside or just after the
-# bold), never a literal "[SETTLED]" later in the finding's prose.
+# bold), never a literal "[SETTLED]" later in the finding's prose — a `[file: …]`
+# field may stand between the two (task 201: judges reorder fixed markers).
 _TAG_AFTER_RE = re.compile(
-    r"\]?\s*(?:\*\*)?\s*\[(SETTLED-CONTRADICTED|SETTLED|PRE-EXISTING)\]", re.IGNORECASE)
+    r"\]?\s*(?:\*\*)?\s*(?:\[file:[^\]\n]*\]\s*(?:\*\*)?\s*)?"
+    r"\[(SETTLED-CONTRADICTED|SETTLED|PRE-EXISTING)\]", re.IGNORECASE)
+# Task 201 (#6, the owner's Q-L (a) 2026-09-30): a finding's file, a FIXED field on
+# its first line.
+_FILE_FIELD_RE = re.compile(r"\[file:\s*([^\]\n]*?)\s*\]", re.IGNORECASE)
 _CAP_RE = re.compile(r"CAP:\s*(\d+)\s*/\s*\d+\s+reported", re.IGNORECASE)
 # The WHOLE last line must be the CAP line (task 108 round 2: a quoted mention on
 # the last line is not a verdict).
@@ -178,7 +187,34 @@ def _cites_delta(line: str, files: "set[str]") -> bool:
     return False
 
 
-def parse_verdict(text: str, delta_files: "set[str] | None" = None) -> dict:
+def _field_path(raw: str) -> str:
+    """The `[file: …]` field's path as a judge writes it, normalised: no quotes, no
+    leading `./`, no trailing `:line` (`:12`, `:12-30`, `:12:4`)."""
+    v = raw.strip().strip("`'\"").strip()
+    v = re.sub(r":\d+(?:[-:,]\d+)*$", "", v)
+    while v.startswith("./"):
+        v = v[2:]
+    return v
+
+
+def _outside_delta(path: str, files: "set[str]", exists) -> bool:
+    """Does a finding's declared file lie OUTSIDE the delta (task 201, #6)? Only a
+    real file of the project (`exists`) that the delta did not change. A listed path
+    — also as a diff side (`a/`, `b/`) or as the end of a listed one — a path found
+    nowhere, an absolute one, one with `..`, or no field at all: in it."""
+    if not path or exists is None or path.startswith("/") or ".." in path.split("/"):
+        return False
+    if path in files or (path[:2] in ("a/", "b/") and path[2:] in files):
+        return False
+    if any(f.endswith("/" + path) for f in files):
+        return False
+    try:
+        return bool(exists(path))
+    except Exception:
+        return False
+
+
+def parse_verdict(text: str, delta_files: "set[str] | None" = None, exists=None) -> dict:
     """Classify a judge log. A finding = a line that STARTS with a bold
     `Critical`/`Important` marker (the prompt requires it); its tag, if any, is
     read from that line. PASS iff no counted Critical/Important and the log is
@@ -202,9 +238,17 @@ def parse_verdict(text: str, delta_files: "set[str] | None" = None) -> dict:
             continue
         # [PRE-EXISTING] is only defined relative to a delivered delta, and never
         # for a file the delta changed (task 108 round 2): otherwise it counts.
-        if t == "PRE-EXISTING" and delta_files is not None and not _cites_delta(span, delta_files):
-            counts["pre_existing"] += 1
-            continue
+        # Task 201 (#6): the file is the finding's FIXED field on its first line (up
+        # to the next marker on it); not counted only when that names a real file
+        # the delta did not change AND the text cites no delta file at a line —
+        # 1.6.1's check, kept as a reason to count: never fewer counted than 1.6.1.
+        if t == "PRE-EXISTING" and delta_files is not None:
+            seg_end = marks[k + 1][1].start() if k + 1 < len(marks) and marks[k + 1][0] == i else len(ln)
+            field = _FILE_FIELD_RE.search(ln, m.end(), seg_end)
+            if (_outside_delta(_field_path(field.group(1)) if field else "", delta_files, exists)
+                    and not _cites_delta(span, delta_files)):
+                counts["pre_existing"] += 1
+                continue
         if t == "SETTLED-CONTRADICTED":
             counts["contradicted"] += 1
         counts[m.group(1).lower()] += 1
@@ -343,7 +387,7 @@ def _name_status_entries(repo: Path, base: str, cur: str, exclude: "list[str]"):
     entry per changed file: `(path,)`, or `(old, new)` for a rename or a copy.
     None when git could not say."""
     try:
-        nm = subprocess.run(["git", "diff", "--name-status", "-z", "-M", base, cur,
+        nm = subprocess.run(["git", "diff", "--no-color", "--name-status", "-z", "-M", base, cur,
                              "--", ".", *exclude], cwd=str(repo), capture_output=True,
                             timeout=_GIT_TIMEOUT)
     except (OSError, subprocess.SubprocessError, ValueError):
@@ -430,21 +474,30 @@ def _listing(label: str, names: "list[str]", budget: int) -> str:
     return line + "\n"
 
 
-def delta_text(project_path: Path, snapshot: "dict | None", cap: int,
-               trees_out: "dict | None" = None,
-               files_out: "set | None" = None) -> "tuple[str | None, str]":
-    """The `=== POST-PANEL DELTA ===` part for the newest impl panel's snapshot:
-    (text, note). None when any scope lacks a usable base — the caller then falls
-    back to the whole-task review and says so.
+_DELTA_HEAD = ("=== POST-PANEL DELTA (the newest impl panel's base → the current working "
+               "tree; staged, unstaged and untracked) ===\n")
 
-    The delta goes out FILE BY FILE (task 178): code first, then tests, then docs,
-    the ledger and records, over all scopes; inside a class the smaller diff first,
-    each run of files under a line that names its class and scope. Over `cap` the part carries, in this order: what was handed whole,
-    which file is cut part-way and which are left out — by name — each scope's
-    `--stat`, and as much of the ordered diff as fits; the note says the same in
-    short, for the line the CLI prints. A scope whose file list cannot be paired
-    with its patch is handed in git's own order and the text says so — after the
-    code and tests of the scopes that pair, before the docs."""
+
+def delta_parts(project_path: Path, snapshot: "dict | None",
+                need_files: bool = True) -> "tuple[dict | None, str]":
+    """The git work of the `=== POST-PANEL DELTA ===` part for the newest impl
+    panel's snapshot, no cap yet (task 201: the CLI builds it BEFORE it reserves a
+    run, so an empty delta is refused with nothing written) — (parts, "") or
+    (None, why). None when any scope lacks a usable base — the caller then falls
+    back to the whole-task review and says so — or, with `need_files`, when a
+    scope's file list cannot be built (D3-3: a partial set must never feed the
+    verdict).
+
+    `parts`: `body` (each scope's two trees, then its files FILE BY FILE, task 178:
+    code first, then tests, then docs, the ledger and records, over all scopes;
+    inside a class the smaller diff first, each run of files under a line that
+    names its class and scope), `spans` (where each file's part begins and ends in
+    the body), `stats`, `files` (every path the delta changed, scope-relative AND
+    scope-prefixed — the verdict's set), `listed` (those paths as the delta names
+    them, sorted — task 201, #6), `complete` (whether every scope's list was
+    built) and `trees` (each scope's current tree). A scope whose file list
+    cannot be paired with its patch is handed in git's own order and the text says
+    so — after the code and tests of the scopes that pair, before the docs."""
     from tasks.core import _tail_cert_scopes, load_config
     if not isinstance(snapshot, dict) or not isinstance(snapshot.get("scopes"), dict):
         return None, "the newest impl panel recorded no snapshot"
@@ -464,6 +517,10 @@ def delta_text(project_path: Path, snapshot: "dict | None", cap: int,
                       + ", ".join(sorted(n or "." for n in live_names)) + ")")
     scope_lines, stats, units = [], [], []      # units: (class, scope no., size, file no., name, text)
     unsorted = []                               # (scope no., label, patch) — handed in git's order
+    files: "set[str]" = set()
+    listed: "set[str]" = set()
+    trees: "dict[str, str]" = {}
+    complete = True
     for scope_no, (name, repo) in enumerate(live.items()):
         rec = snapshot["scopes"].get(name)
         base = rec.get("base") if isinstance(rec, dict) else None
@@ -477,17 +534,21 @@ def delta_text(project_path: Path, snapshot: "dict | None", cap: int,
         text, why, cur = scope_delta(repo, base, exclude, with_tree=True)
         if text is None:
             return None, f"scope {label}: {why}"
-        if trees_out is not None:
-            trees_out[name] = cur
+        trees[name] = cur
         # The file list: from the FULL diff, before any truncation (the verdict's
         # PRE-EXISTING check); --name-status -z gives BOTH paths of a rename/copy
         # (task 108 D2-4). It is also what the patch is sorted by (task 178).
         entries = _name_status_entries(repo, base, cur, exclude)
-        if files_out is not None:
-            if entries is None:
+        if entries is None:
+            if need_files:
                 # D3-3: a partial delta-file set must never feed the verdict
                 return None, f"scope {label}: could not build the delta's file list (git diff --name-status failed)"
-            files_out.update(p for paths in entries for p in paths)
+            complete = False
+        for paths in entries or []:
+            for p in paths:
+                shown = p if name == "" else f"{name}/{p}"
+                files.update((p, shown))       # the judge copies the prefixed name (task 201, #6)
+                listed.add(shown)
         scope_lines.append(f"### scope {label} — git -C {label} diff {base} {cur}"
                            + ("" if text.strip() else " — no change in this scope") + "\n")
         paired = _pair_parts(entries, _split_patch(text)) if entries is not None else None
@@ -500,11 +561,9 @@ def delta_text(project_path: Path, snapshot: "dict | None", cap: int,
                               len(part), file_no,
                               paths[-1] if name == "" else f"{name}/{paths[-1]}", part))
         # stat of the SAME two trees (untracked files included — codex r1)
-        st = _git(repo, ["diff", "--stat=200", "-M", base, cur, "--", ".", *exclude])
+        st = _git(repo, ["diff", "--no-color", "--stat=200", "-M", base, cur, "--", ".", *exclude])
         stats.append(f"scope {label} — git -C {label} diff --stat {base} {cur}:\n"
                      + (st.stdout if st.returncode == 0 else "(stat unavailable)\n"))
-    head = ("=== POST-PANEL DELTA (the newest impl panel's base → the current working "
-            "tree; staged, unstaged and untracked) ===\n")
     labels = [name or "." for name in live]
     # The body: each scope's two trees, then the files — and where every file's part
     # begins and ends in it, which is what the cut is named from.
@@ -539,14 +598,40 @@ def delta_text(project_path: Path, snapshot: "dict | None", cap: int,
             last = (cls, scope_no)
         spans.append((shown, len(body), len(body) + len(part)))
         body += part
-    if len(head) + len(body) <= cap:
+    return {"body": body, "spans": spans, "stats": stats, "files": files,
+            "listed": sorted(listed), "complete": complete, "trees": trees}, ""
+
+
+def _files_line(parts: dict, budget: int) -> str:
+    label = "DELTA FILES" if parts.get("complete", True) else \
+        "DELTA FILES (incomplete: git could not list every scope's files)"
+    return _listing(label, parts["listed"], budget)
+
+
+def render_delta(parts: dict, cap: "int | None", patch_name: str = "",
+                 patch_lines: int = 0) -> "tuple[str, str]":
+    """The part from `delta_parts` within `cap` characters (None: whole) — (text,
+    note). It OPENS with the list of every path the delta changed (task 201, #6;
+    over the cap at most a sixth of it, every name counted). Over `cap` it carries,
+    in this order: what was handed whole, which file is cut part-way and which are
+    left out — by name — each scope's `--stat`, and as much of the ordered diff as
+    fits; the note says the same in short, for the line the CLI prints. When the CLI
+    wrote the whole delta to `patch_name` (task 201, II-5), the outro names it
+    first, for a judge with no shell."""
+    body, spans, stats = parts["body"], parts["spans"], parts["stats"]
+    head = _DELTA_HEAD + _files_line(parts, 10 ** 9)
+    if cap is None or len(head) + len(body) <= cap:
         return head + body, ""
+    head = _DELTA_HEAD + _files_line(parts, cap // 6)
     intro = (f"[... delta is {len(body):,} chars, over the {cap:,} budget. Handed in this order: "
              "code, then tests, then docs, the ledger and records; inside each, the smaller diff "
              "first.\n")
     outro = ("Below: the stat of every scope (base → captured working tree, untracked files "
-             "included), then the diff as far as it fits. For what is cut or left out run "
-             "`git -C <scope> diff <base> <tree> -- <path>` with the two trees each scope names — "
+             "included), then the diff as far as it fits. For what is cut or left out "
+             + (f"READ `{patch_name}` ({patch_lines:,} lines) — the whole delta and its whole file "
+                "list, written by the CLI for this run; read it in parts (an offset and a limit). "
+                "With a shell you may also " if patch_name else "")
+             + "run `git -C <scope> diff <base> <tree> -- <path>` with the two trees each scope names — "
              "both are in the object store ...]\n")
     stat_txt = "\n".join(stats)
     stat_cap = cap // 3                     # the stat is bounded too (codex, task 108 run 2)
@@ -569,6 +654,51 @@ def delta_text(project_path: Path, snapshot: "dict | None", cap: int,
                 + (", …" if len(left) > 3 else "") + ")"
     return head + intro + said + outro + stat_txt + "\n" + body[:room], note
 
+
+def delta_text(project_path: Path, snapshot: "dict | None", cap: int,
+               trees_out: "dict | None" = None,
+               files_out: "set | None" = None) -> "tuple[str | None, str]":
+    """`delta_parts` then `render_delta` in one call: (text, note), or (None, why).
+    With `files_out` the file list must be complete (the verdict's set)."""
+    parts, why = delta_parts(project_path, snapshot, need_files=files_out is not None)
+    if parts is None:
+        return None, why
+    if trees_out is not None:
+        trees_out.update(parts["trees"])
+    if files_out is not None:
+        files_out.update(parts["files"])
+    return render_delta(parts, cap)
+
+
+def patch_name(run_id: str) -> str:
+    """The file a cut delta is written to whole, one per run (task 201, II-5: a later
+    run must not rewrite the file an earlier review cites)."""
+    return f"{PATCH_PREFIX}-{run_id}.patch" if run_id else f"{PATCH_PREFIX}.patch"
+
+
+def patch_text(whole: str) -> str:
+    """The whole delta as the patch file holds it: at most `PATCH_CAP` characters,
+    the rest named by its git commands."""
+    if len(whole) <= PATCH_CAP:
+        return whole
+    return whole[:PATCH_CAP] + (
+        f"\n[... the file stops at {PATCH_CAP:,} of {len(whole):,} chars — for the rest run "
+        "`git -C <scope> diff <base> <tree> -- <path>` with the two trees each scope names above ...]\n")
+
+
+def task_room(budget: int, used: int, delta_len: int) -> int:
+    """The task's share of a single judge's context — 1.6.1's rule, kept (task 201,
+    plan triage 12): what SETTLED and the map (`used`) leave beside the delta, the
+    delta held at min(its whole length, a quarter of the budget) — the most 1.6.1's
+    cut delta took; at most half the budget, 5,000 at least."""
+    return max(5_000, min(budget // 2, budget - used - min(delta_len, budget // 4) - DELTA_MARGIN))
+
+
+def delta_cap(budget: int, used: int, task_len: int) -> int:
+    """The delta's share (task 201, #7 — the owner's Q-K (a), 2026-09-30): what
+    SETTLED, the map (`used`) and the task leave, less a margin; a quarter of the
+    budget at least (task 108's fixed share, now its floor)."""
+    return max(budget // 4, budget - used - task_len - DELTA_MARGIN)
 
 def _cut_lines(spans, room: int, budget: int):
     """What a cut at `room` characters of the body does to its files, in words —

@@ -2840,7 +2840,19 @@ def _cmd_single_review(cmd, cmd_args):
     _pd6_rid = ""
     _pd6_trees: dict = {}
     _pd6_files: set = set()
+    _pd6_parts, _pd6_note = None, ""
     if _pd6_round is not None:
+        # Task 201 (#9; plan triage 8): the delta's git work comes BEFORE the run is
+        # reserved — an empty delta is refused with nothing spent and nothing written.
+        _pd6_parts, _pd6_note = _pd6.delta_parts(project_path, _pd6_round.get("snapshot"))
+        if _pd6_parts is not None and not _pd6_parts["files"]:
+            print(f"  post-D6: nothing changed in the reviewed scopes since impl panel "
+                  f"{_pd6_panel_fp or '(no id)'} — nothing for a judge to read; no judge is run, nothing "
+                  "is spent or written. Run `tasks work done` first: a records-only tail closes there. "
+                  "If that is STALE only because a commit moved HEAD with the same content, the close "
+                  "needs a fresh impl panel or `--owner-ok` — an empty delta never yields a post-D6 PASS "
+                  "(task 201, #9).", file=sys.stderr, flush=True)
+            sys.exit(2)
         if _pd6_panel_fp:
             _ok, _run_no, _refusal, _pd6_rid = _pd6.reserve_run(
                 task_file, _pd6_panel_fp,
@@ -2853,9 +2865,43 @@ def _cmd_single_review(cmd, cmd_args):
             print(f"  post-D6: single-judge run {_run_no} after impl panel {_pd6_panel_fp}"
                   + (f' (owner-ok: "{owner_ok_reason}")' if owner_ok_flag else ""),
                   file=sys.stderr, flush=True)
-        _pd6_delta, _pd6_note = _pd6.delta_text(
-            project_path, _pd6_round.get("snapshot"), MAX_CONTEXT_CHARS // 4,
-            trees_out=_pd6_trees, files_out=_pd6_files)
+    mm_content = _load_mind_map(project_path)
+    _mm_part = f"=== MIND_MAP.md ===\n{mm_content}" if mm_content else ""
+    task_content = task_file.read_text(encoding="utf-8")
+    # Task 108 r2: the task gets what is LEFT after SETTLED + DELTA + the map. Task 201
+    # (#7, the owner's Q-K (a)): sized by that same rule — the delta held at min(its whole
+    # length, a quarter) — and the delta then gets what the task leaves, a quarter at least.
+    _sj_used = sum(len(x) for x in context_parts) + len(_mm_part)
+    _pd6_whole = _pd6.render_delta(_pd6_parts, None)[0] if _pd6_parts is not None else ""
+    task_content, task_receipt = select_task_context(
+        task_content,
+        _pd6.task_room(MAX_CONTEXT_CHARS, _sj_used, len(_pd6_whole)) if _pd6_parts is not None
+        else max(5_000, min(MAX_CONTEXT_CHARS // 2, MAX_CONTEXT_CHARS - _sj_used - 2_000)))
+    if _pd6_round is not None:
+        if _pd6_parts is not None:
+            _pd6_trees.update(_pd6_parts["trees"])
+            _pd6_files.update(_pd6_parts["files"])
+            _pd6_cap = _pd6.delta_cap(MAX_CONTEXT_CHARS, _sj_used,
+                                      len(task_content) + len(str(task_path)) + 12)
+            _pd6_pname, _pd6_plines = "", 0
+            if len(_pd6_whole) > _pd6_cap:
+                # II-5 (task 201): a CUT delta whole, for a judge with no shell — one file
+                # per run, written before the tamper baseline; a failed write leaves the
+                # outro with the git commands only.
+                _pd6_patch = task_file.parent / _pd6.patch_name(_pd6_rid)
+                _pd6_ptext = _pd6.patch_text(_pd6_whole)
+                try:
+                    atomic_write(_pd6_patch, _pd6_ptext)
+                    try:
+                        _pd6_pname = str(_pd6_patch.relative_to(project_path))
+                    except ValueError:
+                        _pd6_pname = str(_pd6_patch)
+                    _pd6_plines = _pd6_ptext.count("\n") + 1
+                except OSError as _pd6_perr:
+                    print(f"  ⚠ could not write {_pd6_patch.name} ({_pd6_perr}) — the judge is told "
+                          "the git commands only", file=sys.stderr, flush=True)
+            _pd6_delta, _pd6_note = _pd6.render_delta(_pd6_parts, _pd6_cap, patch_name=_pd6_pname,
+                                                      patch_lines=_pd6_plines)
         if _pd6_delta:
             context_parts.append(_pd6_delta)
             context_receipts.append(f"post-panel delta {len(_pd6_delta):,} chars"
@@ -2863,14 +2909,8 @@ def _cmd_single_review(cmd, cmd_args):
         else:
             _pd6_delta = ""
             context_receipts.append(f"NO post-panel delta — {_pd6_note}; the judge reviews the whole task")
-    mm_content = _load_mind_map(project_path)
-    if mm_content:
-        context_parts.append(f"=== MIND_MAP.md ===\n{mm_content}")
-    task_content = task_file.read_text(encoding="utf-8")
-    # Task 108 r2: the task gets what is LEFT after SETTLED + DELTA + the map.
-    _sj_used = sum(len(x) for x in context_parts)
-    task_content, task_receipt = select_task_context(
-        task_content, max(5_000, min(MAX_CONTEXT_CHARS // 2, MAX_CONTEXT_CHARS - _sj_used - 2_000)))
+    if _mm_part:
+        context_parts.append(_mm_part)
     if task_receipt:
         context_receipts.append(task_receipt)
         # Aliased for the same reason as the panel arm's trim-notice site:
@@ -3604,8 +3644,13 @@ def _cmd_single_review(cmd, cmd_args):
     # SETTLED + DELTA parts the judge received are kept beside the log.
     if (_pd6_round is not None and _pd6_panel_fp and not _log_save_failed
             and saved_review_text and saved_review_text.strip()):
+        def _pd6_exists(rel: str) -> bool:
+            # a finding's `[file: …]` names a real file, from the project root (task 201,
+            # #6; the parser has already refused an absolute path and one with `..`)
+            return (Path(project_path) / rel).is_file()
         _v = _pd6.parse_verdict(saved_review_text,
-                                delta_files=(_pd6_files or _pd6.delta_files(_pd6_delta)) if _pd6_delta else None)
+                                delta_files=(_pd6_files or _pd6.delta_files(_pd6_delta)) if _pd6_delta else None,
+                                exists=_pd6_exists)
         print("\n" + _pd6.verdict_line(_v), flush=True)
         try:
             _pd6.finish_run(task_file.parent, _pd6_rid, {
