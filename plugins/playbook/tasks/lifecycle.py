@@ -1741,9 +1741,19 @@ def cmd_adopt(cmd_args):
     registry, under its lock. Idempotent: a folder it already knows is left as it is. A refusal says why
     and changes nothing. One journal record per adoption."""
     from tasks.registry import AdoptRefused, RegistryUnreadable, adopt, unreadable_message
-    name = cmd_args[0]
     project_path = find_project_root()
     agent_dir = resolve_agent_dir(project_path)
+    # a trailing slash or a path to the folder (tab completion) names the folder; a path outside this lane's
+    # `tasks/` is refused (task 195, impl panel r2, gemini)
+    arg = cmd_args[0].rstrip("/")
+    name = arg
+    if "/" in arg:
+        given = Path(arg).resolve()
+        if given.parent != (agent_dir / "tasks").resolve():
+            print(f"Error: {cmd_args[0]!r} is not a folder of this lane's tasks/ ({agent_dir / 'tasks'}). "
+                  "Nothing changed.", file=sys.stderr)
+            sys.exit(1)
+        name = given.name
     try:
         result = adopt(project_path, agent_dir, name)
     except AdoptRefused as e:

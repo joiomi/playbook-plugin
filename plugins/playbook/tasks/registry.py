@@ -37,7 +37,6 @@ from __future__ import annotations
 import errno
 import os
 import re
-import shutil
 import stat
 import subprocess
 import time
@@ -48,8 +47,13 @@ HEADER = "# playbook task-registry v1"
 REGISTRY_NAME = "task-registry"
 LOCK_NAME = "task-registry.lock"
 TEMP_PREFIX = ".task-creating."
-# a task directory's name: its number, a dash, a slug — no whitespace, no separator, nothing bash cannot carry
+# a task directory's name: its number, a dash, a slug — no whitespace, no separator, nothing bash cannot carry.
+# Always `fullmatch`: `$` alone accepts a trailing newline, and a name with one would split its registry line (task
+# 195, impl panel r2).
 TASK_DIR_RE = re.compile(r"^(\d+)-[A-Za-z0-9][A-Za-z0-9._-]*$")
+# what a folder under `tasks/` must look like to be a task folder at all — the CLI's own readers glob `NNN-*` — so a
+# folder named outside the grammar is still listed as unknown (never registrable: removing it is the way out)
+LOOSE_TASK_DIR_RE = re.compile(r"^\d+-")
 ORIGINS = ("new", "freehand", "retro", "adopt", "enrolled", "reserved")
 
 
@@ -78,7 +82,7 @@ def lock_path(agent_dir) -> Path:
 
 
 def task_number(name: str) -> "int | None":
-    m = TASK_DIR_RE.match(name)
+    m = TASK_DIR_RE.fullmatch(name)
     return int(m.group(1)) if m else None
 
 
@@ -119,7 +123,7 @@ def _load(agent_dir) -> "list[list[str]] | None":
         if not line:
             continue
         parts = line.split("\t")
-        if len(parts) != 3 or not TASK_DIR_RE.match(parts[0]) or parts[1] not in ORIGINS:
+        if len(parts) != 3 or not TASK_DIR_RE.fullmatch(parts[0]) or parts[1] not in ORIGINS:
             raise RegistryUnreadable(f"{path}:{n}: not a registry line")
         rows.append(parts)
     return rows
@@ -142,21 +146,27 @@ def _committed_task_mds(project_path, agent_dir, names: "list[str] | None" = Non
     """The names of task directories whose task.md is a regular blob in HEAD (one `git ls-tree`). Empty outside git.
     The paths are given and read RELATIVE TO THE PROJECT (`-C <project>`, no `--full-tree`): a project may lie below
     its repository's top (task 195, impl panel r1 — `--full-tree` read them from the top and missed every one)."""
+    if names is not None and not names:
+        return set()                      # never `ls-tree` with no pathspec: that lists the whole tree (impl panel r2)
     try:
         rel = (Path(agent_dir) / "tasks").relative_to(project_path).as_posix()
     except ValueError:
         return set()
     paths = [f"{rel}/{n}/task.md" for n in names] if names is not None else [rel]
-    try:
-        r = subprocess.run(["git", "--no-replace-objects", "-c", "core.quotepath=off", "-C", str(project_path),
-                            "ls-tree", "-r", "-z", "HEAD", "--", *paths],
-                           capture_output=True, timeout=30)
-    except (OSError, subprocess.SubprocessError):
-        return set()
-    if r.returncode != 0:
-        return set()
+    out = b""
+    # HEAD, and the commits a stopped merge, cherry-pick, revert or rebase is bringing in: their folders stand in the
+    # tree before the commit that ends it (impl panel r2, opus). Commits only — never the index (plan panel T4).
+    for ref in ("HEAD", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "REBASE_HEAD"):
+        try:
+            r = subprocess.run(["git", "--no-replace-objects", "-c", "core.quotepath=off", "-C", str(project_path),
+                                "ls-tree", "-r", "-z", ref, "--", *paths],
+                               capture_output=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if r.returncode == 0:
+            out += r.stdout
     found = set()
-    for rec in r.stdout.split(b"\0"):
+    for rec in out.split(b"\0"):
         meta, _, path = rec.partition(b"\t")
         fields = meta.split()
         if len(fields) != 3 or fields[1] != b"blob" or fields[0] not in (b"100644", b"100755"):
@@ -165,7 +175,7 @@ def _committed_task_mds(project_path, agent_dir, names: "list[str] | None" = Non
         if not p.startswith(rel + "/") or not p.endswith("/task.md"):
             continue
         name = p[len(rel) + 1:-len("/task.md")]
-        if "/" not in name and TASK_DIR_RE.match(name):
+        if "/" not in name and TASK_DIR_RE.fullmatch(name):
             found.add(name)
     return found
 
@@ -184,7 +194,7 @@ def unknown_task_dirs(project_path, agent_dir) -> "list[str]":
     next task's detector. A pure read. Raises RegistryUnreadable."""
     tasks_dir = Path(agent_dir) / "tasks"
     try:
-        names = sorted(n for n in os.listdir(tasks_dir) if TASK_DIR_RE.match(n))
+        names = sorted(n for n in os.listdir(tasks_dir) if LOOSE_TASK_DIR_RE.match(n))
     except OSError:
         return []
     entries = read(agent_dir) or {}
@@ -212,7 +222,7 @@ def _enrolment(agent_dir) -> "list[list[str]]":
         return rows
     stamp = _now()
     for name in names:
-        if not TASK_DIR_RE.match(name):
+        if not TASK_DIR_RE.fullmatch(name):
             continue
         d = tasks_dir / name
         tm = d / "task.md"
@@ -254,11 +264,12 @@ class _Collision(Exception):
     from a template's own read is an error, not a reason to take the next number)."""
 
 
-def _make_temp(agent_dir: Path, name: str) -> Path:
-    """A fresh temporary directory in the lane for `name` — a leftover of the same name (one the sweep could not
-    remove) is stepped over, never an error (task 195, impl panel r1)."""
+def _make_temp(agent_dir: Path) -> Path:
+    """A fresh temporary directory in the lane — a leftover of the same name (one the sweep could not remove) is
+    stepped over, never an error (task 195, impl panel r1). Its name does not carry the task's: a 230-byte folder name
+    must not make a temp name past the 255-byte limit (impl panel r2, sonnet)."""
     for k in range(100):
-        tmp = agent_dir / f"{TEMP_PREFIX}{os.getpid()}.{k}.{name}"
+        tmp = agent_dir / f"{TEMP_PREFIX}{os.getpid()}.{k}"
         try:
             os.mkdir(tmp)
             return tmp
@@ -267,10 +278,20 @@ def _make_temp(agent_dir: Path, name: str) -> Path:
     raise RuntimeError(f"no free temporary directory name in {agent_dir}")
 
 
-def _drop_temp(tmp: "Path | None") -> None:
-    """Remove this creator's own temporary directory (made by it; never followed through a link inside)."""
-    if tmp is not None:
-        shutil.rmtree(tmp, ignore_errors=True)
+def _drop_temp(project_path, agent_dir: Path, tmp: "Path | None") -> None:
+    """Remove this creator's own temporary directory through the lane opened from the project root without following
+    a link (task 195, impl panel r2 — codex, Critical, reproduced: removed by path, a lane swapped for a link sent the
+    delete into the replacement tree). A lane that is a link keeps its temp — harmless, swept by the next creator."""
+    if tmp is None:
+        return
+    from tasks.shared import _open_dir_inside, _remove_tree_at
+    afd = _open_dir_inside(Path(project_path), Path(agent_dir))
+    if afd is None:
+        return
+    try:
+        _remove_tree_at(afd, tmp.name)
+    finally:
+        os.close(afd)
 
 
 def _publish(tmp: Path, final: Path) -> None:
@@ -297,7 +318,7 @@ def create_task_dir(project_path, agent_dir, slug: str, origin: str,
         raise ValueError(f"not a creator's origin: {origin!r}")
     # a name the reader would refuse is never written (task 195, impl panel r1 — all five judges: an empty slug made
     # `001-`, and that one line stopped every later read of the lane's registry)
-    if not TASK_DIR_RE.match(f"1-{slug}"):
+    if not TASK_DIR_RE.fullmatch(f"1-{slug}"):
         raise ValueError(f"no task folder name can be made from the slug {slug!r}")
     with named_lock(lock_path(agent_dir)):
         rows = _rows_locked(agent_dir)
@@ -312,7 +333,7 @@ def create_task_dir(project_path, agent_dir, slug: str, origin: str,
             final = tasks_dir / name
             tmp = None
             try:
-                tmp = _make_temp(agent_dir, name)
+                tmp = _make_temp(agent_dir)
                 atomic_write(tmp / "task.md", render(num, name))
                 if os.path.lexists(final):                 # stands there (made meanwhile): never published over
                     raise _Collision()
@@ -324,12 +345,12 @@ def create_task_dir(project_path, agent_dir, slug: str, origin: str,
                         raise _Collision() from e
                     raise
             except _Collision:
-                _drop_temp(tmp)
+                _drop_temp(project_path, agent_dir, tmp)
                 if number is not None:
                     raise NumberTaken(number, num + 1)
                 continue
             except BaseException:
-                _drop_temp(tmp)
+                _drop_temp(project_path, agent_dir, tmp)
                 raise
             rows[-1] = [name, origin, rows[-1][2]]
             _write(agent_dir, rows)
@@ -342,19 +363,21 @@ def adopt(project_path, agent_dir, name: str) -> str:
     (idempotent — plan panel T7). Raises AdoptRefused naming why, or RegistryUnreadable."""
     from tasks.filelock import named_lock
     agent_dir = Path(agent_dir)
-    if not TASK_DIR_RE.match(name):
+    if not TASK_DIR_RE.fullmatch(name):
         raise AdoptRefused(f"{name!r} is not a task directory name (<number>-<slug>)")
     d = agent_dir / "tasks" / name
     tm = d / "task.md"
-    if d.is_symlink():
-        raise AdoptRefused(f"{d} is a link — only a real directory is adopted")
-    if not d.is_dir():
-        raise AdoptRefused(f"no directory {d}")
-    if tm.is_symlink() or not tm.is_file():
-        raise AdoptRefused(f"{tm} is missing or not a regular file — a task directory holds its task.md")
     num = task_number(name)
     tasks_dir = agent_dir / "tasks"
     with named_lock(lock_path(agent_dir)):
+        # checked UNDER the lock: a folder `prepare-merge` renames while adopt waits is not registered by its old name
+        # (impl panel r2, codex)
+        if d.is_symlink():
+            raise AdoptRefused(f"{d} is a link — only a real directory is adopted")
+        if not d.is_dir():
+            raise AdoptRefused(f"no directory {d}")
+        if tm.is_symlink() or not tm.is_file():
+            raise AdoptRefused(f"{tm} is missing or not a regular file — a task directory holds its task.md")
         rows = _rows_locked(agent_dir)
         mine = [r for r in rows if r[0] == name]
         if mine and mine[0][1] != "reserved":
@@ -378,20 +401,35 @@ def adopt(project_path, agent_dir, name: str) -> str:
     return "adopted"
 
 
-def ready_for_renames(agent_dir) -> None:
+def ready_for_renames(agent_dir, new_names=()) -> None:
     """Before `prepare-merge` moves any folder: read the registry (RegistryUnreadable now, before anything moved —
-    task 195, impl panel r1) and enrol the lane as it stands when it has none. Call it holding the lane lock, which the
-    renumbering keeps until its last rename."""
-    _rows_locked(agent_dir)
+    task 195, impl panel r1), enrol the lane as it stands when it has none, refuse a target name another row already
+    holds, and drop a crashed creator's `reserved` row of a target name (impl panel r2, fable: two rows of one name,
+    the later reserved one winning). Call it holding the lane lock, which the renumbering keeps until its last rename."""
+    rows = _rows_locked(agent_dir)
+    targets = set(new_names)
+    taken = [r[0] for r in rows if r[0] in targets and r[1] != "reserved"]
+    if taken:
+        raise RegistryUnreadable(f"the task registry already names {taken[0]}, a folder prepare-merge would rename to")
+    kept = [r for r in rows if not (r[0] in targets and r[1] == "reserved")]
+    if len(kept) != len(rows):
+        _write(agent_dir, kept)
 
 
 def rename(project_path, agent_dir, old: str, new: str) -> None:
-    """A registered directory renamed by the CLI (`prepare-merge`) keeps its line under the new name (plan panel T8).
-    Enrols first when the lane has no registry; an unregistered `old` stays unregistered."""
+    """A registered directory renamed by the CLI (`prepare-merge`) keeps its line under the new name (plan panel T8);
+    one known only by the git rule gets a row under the new name. Enrols first when the lane has no registry; a
+    `reserved` row of the new name is dropped; an unknown `old` stays unknown."""
     from tasks.filelock import named_lock
     with named_lock(lock_path(agent_dir)):
-        rows = _rows_locked(agent_dir)
+        rows = [r for r in _rows_locked(agent_dir) if not (r[0] == new and r[1] == "reserved")]
+        moved = False
         for r in rows:
             if r[0] == old:
                 r[0] = new
+                moved = True
+        if not moved and old in _committed_task_mds(project_path, agent_dir, [old]):
+            # known only by the git rule (pulled in after the registry existed): after `git mv` its new path is staged,
+            # not committed — it gets a row (impl panel r2, gemini, fable, opus)
+            rows.append([new, "enrolled", _now()])
         _write(agent_dir, rows)

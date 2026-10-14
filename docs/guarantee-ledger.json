@@ -20496,7 +20496,7 @@
     {
       "id": "PB-TASK-REGISTRY",
       "category": "task-lifecycle",
-      "statement": "Every task directory the CLI makes is named in its lane's task registry (`.agent[/<lane>]/task-registry`, beside `tasks/`, machine-local): `tasks new`, `tasks freehand` and `tasks retro` reserve a number, build the directory under a temporary name in the lane, rename it into `tasks/` and only then register its origin — under one per-lane lock that also takes the number, so two creators at once never take one number nor share a directory, and the number counts the registry's (a reservation burned by a crash is never reused). A reservation is never membership; a name already standing under `tasks/` is never published over. Reads never write: a directory is known when it is registered or its task.md is a regular blob in the COMMITTED tree (`git ls-tree HEAD`; a staged one is not); the writers (the creators, `tasks adopt`, `prepare-merge`'s renames) enrol the lane's existing directories that hold a task.md when they find no registry. `tasks adopt <folder>` registers a real folder with a task.md and a `<number>-<slug>` name whose number no other folder present holds, once, dropping a row of that number whose folder is gone (a renamed folder's old name); `prepare-merge` reads the registry before it moves anything and renumbers under the lane lock, carrying each renamed folder's line. A title with nothing to slug gets the slug `task`, and a name the reader would refuse is never written. An unreadable registry (a link, not a regular file, another format) stops a creator before it creates anything, naming the repair. BOUNDS: a directory present when a lane's registry is first written is trusted; deleting the registry re-enrols what is there; a creator killed after its rename and before its registration leaves a folder `tasks adopt` must take in; a folder an older CLI makes after the registry exists is unknown until adopted or committed; the instant between the creator's last check of the final name and its rename is not closed; between the rename and the origin's rewrite a finished folder is still `reserved`, so a lock-free reader in another session at that instant reads it unknown (task 196's detector must not flag a `reserved` folder while the lane lock is held); a repo whose `.gitignore` predates these entries shows the registry and its lock as untracked until `scripts/init` refreshes its ignore block (the freshness fingerprint and the panel snapshot exclude `.agent` already). Nothing ENFORCES it yet — the detector is task 196's (PLAN §S14 T5b, second half).",
+      "statement": "Every task directory the CLI makes is named in its lane's task registry (`.agent[/<lane>]/task-registry`, beside `tasks/`, machine-local): `tasks new`, `tasks freehand` and `tasks retro` reserve a number, build the directory under a temporary name in the lane, rename it into `tasks/` and only then register its origin — under one per-lane lock that also takes the number, so two creators at once never take one number nor share a directory, and the number counts the registry's (a reservation burned by a crash is never reused). A reservation is never membership; a name already standing under `tasks/` is never published over. Reads never write: a directory is known when it is registered or its task.md is a regular blob in a COMMIT — HEAD, or the commit a stopped merge, cherry-pick, revert or rebase is bringing in (`git ls-tree`, never the index: a staged one is not); the writers (the creators, `tasks adopt`, `prepare-merge`'s renames) enrol the lane's existing directories that hold a task.md when they find no registry. `tasks adopt <folder>` registers a real folder with a task.md and a `<number>-<slug>` name whose number no other folder present holds, once, dropping a row of that number whose folder is gone (a renamed folder's old name); `prepare-merge` reads the registry before it moves anything (refusing a target name another row holds, dropping a reserved one) and renumbers under the lane lock, carrying each renamed folder's line — a folder known only by the git rule gets one under its new name. A folder whose name falls outside `<number>-<slug>` (a newline in it, say) is never registered and lists as unknown. A creator's temporary directory is removed only through the lane opened from the project root without following a link. A title with nothing to slug gets the slug `task`, and a name the reader would refuse is never written. An unreadable registry (a link, not a regular file, another format) stops a creator before it creates anything, naming the repair. BOUNDS: a directory present when a lane's registry is first written is trusted; deleting the registry re-enrols what is there; a creator killed after its rename and before its registration leaves a folder `tasks adopt` must take in; a folder an older CLI makes after the registry exists is unknown until adopted or committed; the instant between the creator's last check of the final name and its rename is not closed; between the rename and the origin's rewrite a finished folder is still `reserved`, so a lock-free reader in another session at that instant reads it unknown (task 196's detector must not flag a `reserved` folder while the lane lock is held); a repo whose `.gitignore` predates these entries shows the registry and its lock as untracked until `scripts/init` refreshes its ignore block (the freshness fingerprint and the panel snapshot exclude `.agent` already). Nothing ENFORCES it yet — the detector is task 196's (PLAN §S14 T5b, second half).",
       "owner": [
         {
           "path": "plugins/playbook/tasks/registry.py",
@@ -20809,6 +20809,96 @@
           "limitations": [
             "Red on nested `ad74aa4` (task 195, impl panel r1)."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_registry.py",
+          "reference": "RoundTwoFixes.test_a_failed_creation_removes_its_temp_only_through_the_lane_it_holds",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Red on nested `cddfa3f` (task 195, impl panel r2)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_registry.py",
+          "reference": "RoundTwoFixes.test_a_long_title_is_created",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Red on nested `cddfa3f` (task 195, impl panel r2)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_registry.py",
+          "reference": "RoundTwoFixes.test_a_folder_name_ending_in_a_newline_is_never_enrolled",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Red on nested `cddfa3f` (task 195, impl panel r2)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_registry.py",
+          "reference": "RoundTwoFixes.test_an_empty_name_list_asks_git_nothing",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Red on nested `cddfa3f` (task 195, impl panel r2)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_registry.py",
+          "reference": "RoundTwoFixes.test_prepare_merge_keeps_a_folder_known_only_by_git",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Red on nested `cddfa3f` (task 195, impl panel r2)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_registry.py",
+          "reference": "RoundTwoFixes.test_a_rename_over_a_reserved_row_of_the_new_name",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Red on nested `cddfa3f` (task 195, impl panel r2)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_registry.py",
+          "reference": "RoundTwoFixes.test_a_stopped_merge_brings_its_folders_known",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Red on nested `cddfa3f` (task 195, impl panel r2)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_registry.py",
+          "reference": "RoundTwoFixes.test_adopt_takes_a_trailing_slash_and_a_tasks_path_but_not_another_lane",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Red on nested `cddfa3f` (task 195, impl panel r2)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_registry.py",
+          "reference": "RoundTwoFixes.test_doctor_does_not_ask_to_adopt_before_a_registry_exists",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Red on nested `cddfa3f` (task 195, impl panel r2)."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -20819,7 +20909,8 @@
       ],
       "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "2026-10-14 (task 195, PLAN S14 T5b first half; the owner's B31 answers of 2026-10-13 12:27): the dry run on copies of both real trees (this repo 186 folders, WoW 40) enrolled them all with 0 unknown; a planted folder unknown, staged or not (task 195's `evidence/dryrun.txt`)."
+        "2026-10-14 (task 195, PLAN S14 T5b first half; the owner's B31 answers of 2026-10-13 12:27): the dry run on copies of both real trees (this repo 186 folders, WoW 40) enrolled them all with 0 unknown; a planted folder unknown, staged or not (task 195's `evidence/dryrun.txt`).",
+        "2026-10-14 (task 195, impl panel r2): prepare-merge's own planning predates the registry and is a Phase B input — its targets start at max(target)+1 without the current branch's folders or the registry's numbers, they are computed before the lane lock, and a kill after `git mv` before the registry's rename leaves the moved folder to `tasks adopt`."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],

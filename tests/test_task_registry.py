@@ -478,5 +478,133 @@ class RoundOneFixes(_Project):
         self.assertTrue((final / "task.md").is_file())
 
 
+
+class RoundTwoFixes(_Project):
+    """Task 195's impl panel round 2 (its `## Implementation Review`)."""
+
+    git = ["git", "-c", "user.email=t@t", "-c", "user.name=t"]
+
+    def test_a_failed_creation_removes_its_temp_only_through_the_lane_it_holds(self):
+        # J1 (codex, Critical): the temp was removed BY PATH — a lane swapped for a link sent the delete elsewhere
+        reg = self.registry_module()
+        victim = self.tmp / "victim-lane"
+        victim.mkdir()
+
+        def render(num, name):
+            temp = next(x.name for x in self.agent.iterdir() if x.name.startswith(reg.TEMP_PREFIX))
+            (victim / temp).mkdir()
+            (victim / temp / "keep.txt").write_text("the owner's data\n", encoding="utf-8")
+            self.agent.rename(self.agent.with_name(".agent.orig"))
+            self.agent.symlink_to(victim, target_is_directory=True)
+            raise RuntimeError("the template failed")
+        with self.assertRaises(RuntimeError):
+            reg.create_task_dir(self.p, self.agent, "x", "new", render)
+        kept = [x for x in victim.iterdir() if x.name.startswith(reg.TEMP_PREFIX)]
+        self.assertTrue(kept and (kept[0] / "keep.txt").is_file(), "the delete followed the swapped lane")
+
+    def test_a_long_title_is_created(self):
+        # J6 (sonnet): the temp name carried the task's name, ~25 bytes longer — ENAMETOOLONG for a 230-byte name
+        title = "a" * 230
+        r = self.cli("new", "quick", title)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.task_dirs(), [f"001-{title}"])
+
+    def test_a_folder_name_ending_in_a_newline_is_never_enrolled(self):
+        # J2 (sonnet, codex): `$` accepts a trailing newline — enrolled, the line split, the registry unreadable
+        self.handmade("001-x\n")
+        self.cli("new", "quick", "y", check=True)
+        self.cli("new", "quick", "z", check=True)                    # still readable
+        self.assertNotIn("001-x\n", self.registered())
+        r = self.cli("adopt", "001-x\n")
+        self.assertNotEqual(r.returncode, 0)
+
+    def test_an_empty_name_list_asks_git_nothing(self):
+        # J8 (gemini): names=[] ran `ls-tree` with no pathspec — the whole tree
+        subprocess.run(self.git + ["init", "-q"], cwd=self.p, check=True)
+        self.handmade("001-a")
+        subprocess.run(self.git + ["add", "-A"], cwd=self.p, check=True)
+        subprocess.run(self.git + ["commit", "-qm", "a"], cwd=self.p, check=True)
+        reg = self.registry_module()
+        self.assertEqual(reg._committed_task_mds(self.p, self.agent, []), set())
+
+    def test_prepare_merge_keeps_a_folder_known_only_by_git(self):
+        # J3 (gemini, fable, opus): a folder pulled in after the registry existed has no row; after `git mv` its new
+        # path is staged, not in HEAD
+        subprocess.run(self.git + ["init", "-q"], cwd=self.p, check=True)
+        self.cli("new", "quick", "first", check=True)
+        self.handmade("005-x")
+        subprocess.run(self.git + ["add", "-A"], cwd=self.p, check=True)
+        subprocess.run(self.git + ["commit", "-qm", "pulled"], cwd=self.p, check=True)
+        self.assertNotIn("005-x", self.registered())
+        code = ("import sys; sys.path.insert(0, sys.argv[1]); from pathlib import Path\n"
+                "import tasks.merge_prep as m\n"
+                "m._rename_colliding_tasks(Path(sys.argv[2]), Path(sys.argv[2]) / '.agent', {5: '005-x'}, {5: 9})\n")
+        r = subprocess.run([sys.executable, "-c", code, str(PLUGIN), str(self.p)], env=self.env(), text=True,
+                           capture_output=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        reg = self.registry_module()
+        self.assertTrue(reg.is_known(self.p, self.agent, "009-x"), "the renamed folder reads unknown")
+
+    def test_a_rename_over_a_reserved_row_of_the_new_name(self):
+        # J4 (fable): two rows of one name, the later (reserved) one won
+        self.cli("new", "quick", "a", check=True)
+        f = self.agent / "task-registry"
+        f.write_text(f.read_text(encoding="utf-8") + "007-a\treserved\t2026-10-14T00:00:00Z\n", encoding="utf-8")
+        code = ("import sys; sys.path.insert(0, sys.argv[1]); from pathlib import Path\n"
+                "import tasks.merge_prep as m\n"
+                "m._rename_colliding_tasks(Path(sys.argv[2]), Path(sys.argv[2]) / '.agent', {1: '001-a'}, {1: 7})\n")
+        r = subprocess.run([sys.executable, "-c", code, str(PLUGIN), str(self.p)], env=self.env(), text=True,
+                           capture_output=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        names = [ln.split("\t")[0] for ln in self.registry_lines()[1:]]
+        self.assertEqual(names.count("007-a"), 1, self.registry_lines())
+        self.assertEqual(self.registered()["007-a"], "new")
+
+    def test_a_stopped_merge_brings_its_folders_known(self):
+        # J5 (opus): the other side's committed folders are in the tree but not in HEAD until the merge commit
+        subprocess.run(self.git + ["init", "-q", "-b", "main"], cwd=self.p, check=True)
+        (self.p / "notes.md").write_text("base\n", encoding="utf-8")
+        subprocess.run(self.git + ["add", "-A"], cwd=self.p, check=True)
+        subprocess.run(self.git + ["commit", "-qm", "base"], cwd=self.p, check=True)
+        subprocess.run(self.git + ["checkout", "-qb", "other"], cwd=self.p, check=True)
+        self.handmade("005-b")
+        (self.p / "notes.md").write_text("theirs\n", encoding="utf-8")
+        subprocess.run(self.git + ["add", "-A"], cwd=self.p, check=True)
+        subprocess.run(self.git + ["commit", "-qm", "theirs"], cwd=self.p, check=True)
+        subprocess.run(self.git + ["checkout", "-q", "main"], cwd=self.p, check=True)
+        (self.p / "notes.md").write_text("ours\n", encoding="utf-8")
+        subprocess.run(self.git + ["commit", "-qam", "ours"], cwd=self.p, check=True)
+        subprocess.run(self.git + ["merge", "-q", "other"], cwd=self.p, capture_output=True)   # stops on notes.md
+        self.assertTrue((self.p / ".git" / "MERGE_HEAD").exists(), "the merge did not stop: the test proves nothing")
+        reg = self.registry_module()
+        self.assertTrue(reg.is_known(self.p, self.agent, "005-b"))
+
+    def test_adopt_takes_a_trailing_slash_and_a_tasks_path_but_not_another_lane(self):
+        # J7 (gemini): tab completion gives `005-x/` or `.agent/tasks/005-x`
+        self.cli("new", "quick", "first", check=True)
+        self.handmade("005-x")
+        self.handmade("006-y")
+        self.cli("adopt", "005-x/", check=True)
+        self.cli("adopt", ".agent/tasks/006-y", check=True)
+        self.assertEqual(self.registered().get("005-x"), "adopt")
+        self.assertEqual(self.registered().get("006-y"), "adopt")
+        # a path outside the lane's tasks/ — even when the lane holds a folder of the same name — is refused, said why
+        self.handmade("007-z")
+        elsewhere = self.tmp / "elsewhere" / "007-z"
+        elsewhere.mkdir(parents=True)
+        (elsewhere / "task.md").write_text("# 7\n", encoding="utf-8")
+        r = self.cli("adopt", str(elsewhere))
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("not a folder of this lane", r.stderr)
+        self.assertNotIn("007-z", self.registered())
+
+    def test_doctor_does_not_ask_to_adopt_before_a_registry_exists(self):
+        # J9 (gemini): INFO "the first writer enrols" followed by a WARN to adopt
+        self.handmade("001-by-hand")
+        r = self.cli("doctor")
+        self.assertIn("no task registry yet", r.stdout)
+        self.assertNotIn("folders the task registry does not know", r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -195,6 +195,8 @@ def cmd_doctor(cmd_args):
         try:
             _unk = _unknown(project_path, _ad)
             if _reg_read(_ad) is None:
+                # no WARN to adopt then: the first writer enrols them (impl panel r2, gemini)
+                _unk = []
                 print("  [INFO] tasks: no task registry yet — the first `tasks new`/`freehand`/`retro`/`adopt` "
                       "writes it and enrols the folders that exist")
             if _unk:

@@ -192,7 +192,7 @@ def _rename_colliding_tasks(project_path: Path, agent_dir: Path,
     # renumbering, so no creator takes a number it is moving to (task 195, impl panel r1). RegistryUnreadable here
     # leaves everything as it was.
     with named_lock(_registry_lock(agent_dir)):
-        ready_for_renames(agent_dir)
+        ready_for_renames(agent_dir, [_renumbered_dir_name(current_tasks[o], n) for o, n in rename_map.items()])
         _rename_colliding_tasks_locked(project_path, agent_dir, current_tasks, rename_map)
 
 
