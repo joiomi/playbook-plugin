@@ -290,6 +290,31 @@ class TheExplicitNumber(_Project):
         self.assertIn("003-x", self.task_dirs())
 
 
+class NoDescriptorAnchor(_Project):
+    """The single judge's run 3 (codex, Critical, reproduced with /proc hidden): without `/proc/self/fd` the creator
+    fell back to the lane's PATH — a lane swapped during the build had its replacement's registry overwritten. The
+    owner's ruling (2026-10-14): "Repară și închide" — the creator refuses to create then."""
+
+    def test_a_creator_without_the_anchor_refuses_and_creates_nothing(self):
+        reg = self.registry_module()
+        reg._PROC_SELF_FD = str(self.tmp / "no-proc-self-fd")
+        before = (self.agent / "task-registry").exists()
+        with self.assertRaises(reg.RegistryUnreadable) as cm:
+            reg.create_task_dir(self.p, self.agent, "x", "new", lambda n, name: f"# {n:03d} - x\n")
+        self.assertIsInstance(cm.exception, reg.LaneUnanchored)
+        said = reg.unreadable_message(cm.exception)
+        self.assertIn(reg._PROC_SELF_FD, said)
+        self.assertIn("Nothing was created", said)
+        self.assertNotIn("move it aside", said)                 # the registry's repair would mislead here
+        self.assertEqual(self.task_dirs(), [])
+        self.assertEqual((self.agent / "task-registry").exists(), before)
+
+    def test_control_with_the_anchor_it_creates(self):
+        reg = self.registry_module()
+        made = reg.create_task_dir(self.p, self.agent, "x", "new", lambda n, name: f"# {n:03d} - x\n")
+        self.assertTrue(made.is_dir())
+
+
 class ACorruptRegistry(_Project):
     def test_a_creator_stops_and_names_the_repair(self):
         (self.agent / "task-registry").write_text("not a registry\n", encoding="utf-8")

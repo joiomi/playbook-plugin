@@ -49,6 +49,7 @@ from typing import Callable
 HEADER = "# playbook task-registry v1"
 REGISTRY_NAME = "task-registry"
 LOCK_NAME = "task-registry.lock"
+_PROC_SELF_FD = "/proc/self/fd"           # the held directories are reached through it (a test may point it away)
 TEMP_PREFIX = ".task-creating."
 # a task directory's name: its number, a dash, a slug — no whitespace, no separator, nothing bash cannot carry.
 # Always `fullmatch`: `$` alone accepts a trailing newline, and a name with one would split its registry line (task
@@ -62,6 +63,13 @@ ORIGINS = ("new", "freehand", "retro", "adopt", "enrolled", "reserved")
 
 class RegistryUnreadable(Exception):
     """The registry is there but cannot be read as one (a link, not a regular file, another format)."""
+
+
+class LaneUnanchored(RegistryUnreadable):
+    """The creator cannot hold its lane: this system offers no `/proc/self/fd` to reach the held directories through
+    (task 195, the single judge's run 3, codex, Critical, reproduced with /proc hidden — the creator fell back to the
+    lane's PATH and a lane swapped during the build had its replacement's registry overwritten). A RegistryUnreadable,
+    so every creator's caller stops and says it; nothing is created (the owner, 2026-10-14: "Repară și închide")."""
 
 
 class LaneUnreadable(Exception):
@@ -96,6 +104,8 @@ def task_number(name: str) -> "int | None":
 
 def unreadable_message(e: Exception) -> str:
     """What a creator says when the registry cannot be read (plan panel T11): the file, why, the repair."""
+    if isinstance(e, LaneUnanchored):
+        return f"playbook: {e}. Nothing was created."
     return (f"playbook: the task registry cannot be read — {e}. Nothing was created: move it aside "
             f"(`mv <it> <it>.bad`) and run the command again — the next creator rebuilds it from the task directories.")
 
@@ -354,9 +364,13 @@ def _held(afd: int, agent_dir: Path) -> Path:
     (`/proc/self/fd/<afd>`): the lock, the registry's read and write, the allocator's listing then all stay in the lane
     the creator opened, whatever is swapped in its path later (the single judge after round 3, codex, Critical,
     reproduced: the build went through the held descriptors but the registry was written by path — into a replacement
-    lane's registry). Without /proc, the lane's path (the unanchored shape of before)."""
-    p = Path(f"/proc/self/fd/{afd}")
-    return p if p.is_dir() else agent_dir
+    lane's registry). Without it the creator REFUSES (LaneUnanchored — the single judge's run 3: the fallback to the
+    lane's path was the unanchored shape a swap still reached)."""
+    p = Path(f"{_PROC_SELF_FD}/{afd}")
+    if not p.is_dir():
+        raise LaneUnanchored(f"this system offers no {_PROC_SELF_FD}, so a task creator cannot hold its lane "
+                             f"({agent_dir}) against a swap")
+    return p
 
 
 def _final_path(tfd: int, agent_dir: Path, name: str) -> Path:
@@ -367,7 +381,7 @@ def _final_path(tfd: int, agent_dir: Path, name: str) -> Path:
     try:
         if os.path.samestat(os.stat(agent_dir / "tasks"), os.fstat(tfd)):
             return lexical
-        return Path(os.readlink(f"/proc/self/fd/{tfd}")) / name
+        return Path(os.readlink(f"{_PROC_SELF_FD}/{tfd}")) / name
     except OSError:
         return lexical
 
@@ -375,8 +389,11 @@ def _final_path(tfd: int, agent_dir: Path, name: str) -> Path:
 def _tasks_view(tfd: int, lane: Path) -> Path:
     """The held `tasks/` as a path the allocator lists THROUGH the descriptor (the single judge's run 2: it listed
     `tasks/` by name, so a swap of `tasks/` alone sent a retry's number to the replacement)."""
-    p = Path(f"/proc/self/fd/{tfd}")
-    return p if p.is_dir() else lane / "tasks"
+    p = Path(f"{_PROC_SELF_FD}/{tfd}")
+    if not p.is_dir():
+        raise LaneUnanchored(f"this system offers no {_PROC_SELF_FD}, so a task creator cannot hold its tasks/ "
+                             "against a swap")
+    return p
 
 
 class _Collision(Exception):
