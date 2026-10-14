@@ -425,7 +425,8 @@ def merge_push_gate(out: Path) -> int:
 def task_dir_watch(out: Path) -> int:
     """Task 196 (PLAN S14 T5b, B31): a task folder made by hand in a real session is flagged after the call, the next
     action is held, the way out releases it — also after a command that FAILS (measured: Claude Code fires only
-    PostToolUseFailure then)."""
+    PostToolUseFailure then). Task 197: the Bash pre-run check is gone, so a real `mkdir -p` of a task folder (the B31
+    case) runs, and is caught after the call like the copy."""
     run = Run("PB-TASK-DIR-WATCH", "a task folder made by hand is caught after the call and holds the session", out,
               ["claude"])
     p = _proj("pb196-watch-")
@@ -440,6 +441,10 @@ def task_dir_watch(out: Path) -> int:
         "7. Run exactly: ls\n"
         "8. Run exactly: .claude/bin/tasks adopt .agent/tasks/003-by-hand\n"
         "9. Run exactly: ls\n"
+        "10. Run exactly: mkdir -p .agent/tasks/004-by-hand\n"
+        "11. Edit notes.md: change its text to `d` (read it first).\n"
+        "12. Run exactly: rm -r .agent/tasks/004-by-hand\n"
+        "13. Edit notes.md: change its text to `e` (read it first).\n"
         "Then reply DONE.\n"))
     post = [str(x.get("output") or "") for x in hook_responses(ev, "PostToolUse")]
     fail = [str(x.get("output") or "") for x in hook_responses(ev, "PostToolUseFailure")]
@@ -458,13 +463,27 @@ def task_dir_watch(out: Path) -> int:
                        for x in held), f"held: {held_names}")
     notes = (p / "notes.md").read_text(encoding="utf-8")
     run.clause("the exact removal is let through, and the Edit after it goes through",
-               not (p / ".agent" / "tasks" / "002-by-hand").exists() and notes.strip() == "c",
+               not (p / ".agent" / "tasks" / "002-by-hand").exists() and notes.strip() == "e",
                f"002-by-hand present: {(p / '.agent' / 'tasks' / '002-by-hand').exists()}; notes.md: {notes!r}")
     run.clause("a copy made by a command that FAILS is caught through PostToolUseFailure",
                any("003-by-hand" in o for o in fail), f"{len(fail)} PostToolUseFailure responses: "
                + json.dumps([o[:120] for o in fail]))
     run.clause("the call after it is held (the `ls`)", any(n.startswith("PreToolUse:Bash") for n in held_names),
                f"held: {held_names}")
+    # task 197 (B31): the real `mkdir -p` is not refused before it runs — the gate's old words never appear — it is
+    # flagged after the call, the Edit after it is held naming it, and its removal releases the session
+    every = [str(x.get("stderr") or "") + str(x.get("output") or "") for x in pre]
+    run.clause("a real `mkdir -p` of a task folder runs (no PreToolUse refusal of it) and is flagged after the call",
+               any("004-by-hand" in o and "did not make" in o for o in post + fail)
+               and not any("create task directories manually" in o for o in every),
+               f"post/failure responses naming 004-by-hand: {sum('004-by-hand' in o for o in post + fail)}; the old "
+               f"refusal's words: {sum('create task directories manually' in o for o in every)}")
+    run.clause("the Edit after it is held, naming that folder",
+               any(n.startswith("PreToolUse:Edit") and "004-by-hand" in str(x.get("stderr") or x.get("output") or "")
+                   for n, x in zip(held_names, held)), f"held: {held_names}")
+    run.clause("its removal is let through and the last Edit goes through",
+               not (p / ".agent" / "tasks" / "004-by-hand").exists() and notes.strip() == "e",
+               f"004-by-hand present: {(p / '.agent' / 'tasks' / '004-by-hand').exists()}; notes.md: {notes!r}")
     reg = (p / ".agent" / "task-registry").read_text(encoding="utf-8") if (p / ".agent" / "task-registry").exists() \
         else ""
     flag = p / ".agent" / "sessions"

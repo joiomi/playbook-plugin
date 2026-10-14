@@ -283,9 +283,9 @@ def unknown_now(project_path, agent_dir, names: "list[str] | None" = None, *,
     the registry is read holding the lane lock SHARED when it can be had at once (then no creator is between its
     rename and its registration), and while a creator holds it, a `reserved` folder is that creation (task 196, plan
     panel P14; read under the lock, a creator that registers and lets go between two reads cannot make a folder look
-    hand-made). With no registry: None (`no_registry="none"`, the close — nothing is known by provenance then, plan
-    panel P2), or what the git rule alone does not know (`"git"`, the watch — a call during which the registry vanished,
-    a hold that outlives it: task 196's impl panel r1 I6). Only DIRECTORIES count (a file `12-notes.md` is no task
+    hand-made). With no registry: None (`no_registry="none"`), or what the git rule alone does not know (`"git"`, the
+    watch — a call during which the registry vanished, a hold that outlives it: task 196's impl panel r1 I6 — and,
+    since task 197, the close: its plan panel P4). Only DIRECTORIES count (a file `12-notes.md` is no task
     folder — impl panel r1 I11). A name the git rule cannot answer within `git_timeout` is unknown. Never waits, never
     writes. Raises RegistryUnreadable, and LaneUnreadable when `tasks/` or an entry cannot be read (r2 J9)."""
     lane = Path(agent_dir)
@@ -335,6 +335,23 @@ def _enrolment(agent_dir) -> "list[list[str]]":
             continue
         rows.append([name, "enrolled", stamp])
     return rows
+
+
+def ensure_enrolled(project_path, agent_dir) -> bool:
+    """Write the registry of a lane that has `tasks/` and none yet, enrolling what stands (the trust a first enrolment
+    has); True when it wrote one. Called at a session's start and at `tasks work <N>` (task 197, its plan panel P1:
+    with the Bash pre-run check gone, a lane with no registry — a fresh clone, a new init, a project upgraded from
+    1.6.1 — must still be one the watch and the close can judge). A registry that exists, readable or not, is left
+    alone; never follows a link at the registry's path."""
+    from tasks.filelock import named_lock
+    lane = Path(agent_dir)
+    if not (lane / "tasks").is_dir() or os.path.lexists(registry_path(lane)):
+        return False
+    with named_lock(lock_path(lane)):
+        if os.path.lexists(registry_path(lane)):
+            return False
+        _write(lane, _enrolment(lane))
+    return True
 
 
 def _rows_locked(agent_dir) -> "list[list[str]]":
@@ -562,7 +579,9 @@ def adopt(project_path, agent_dir, name: str) -> str:
             raise AdoptRefused(f"{tm} is missing or not a regular file — a task directory holds its task.md")
         rows = _rows_locked(agent_dir)
         mine = [r for r in rows if r[0] == name]
-        if mine and mine[0][1] != "reserved":
+        # an `enrolled` row is taken over by the explicit adoption (task 197, P3: a re-enrolment after the registry was
+        # deleted enrols a flagged folder too — only `tasks adopt` releases it, so it records the adoption)
+        if mine and mine[0][1] not in ("reserved", "enrolled"):
             return "known"
         # The number is another folder's when another FOLDER holds it — registered, committed or not (task 195,
         # impl panel r1: the rows alone missed a committed `005-x` and refused a renamed folder whose old row stayed).
@@ -577,6 +596,7 @@ def adopt(project_path, agent_dir, name: str) -> str:
         mine = [r for r in rows if r[0] == name]
         if mine:
             mine[0][1] = "adopt"
+            mine[0][2] = _now()
         else:
             rows.append([name, "adopt", _now()])
         _write(agent_dir, rows)

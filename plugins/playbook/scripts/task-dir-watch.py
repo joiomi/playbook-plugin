@@ -20,8 +20,9 @@ and the event and the tool read from the payload (normalized, so grok's dialect 
               the words said to the agent (additionalContext, naming the event)
 
 Only the session's own lane is watched (`AGENT_DIR`, plan panel P1): another lane is its own sessions' and its own
-close's. A lane with no registry is not watched — except that a call during which the registry VANISHED has what it
-made flagged, and a standing flag outlives the registry (nothing knows its folders then; impl panel r1 I6). A post that
+close's. A lane with no registry is watched too (task 197, its plan panel P1): with none, what is not committed is
+unknown; a call during which the registry vanished says so, and a standing flag outlives the registry (impl panel r1
+I6). A flagged folder that a re-enrolment takes in (a row `enrolled` at or after its flag time) stays flagged (P3). A post that
 finds no snapshot of its call flags every unknown folder present (fail closed, plan panel P4). A git that does not
 answer within the budget proves nothing: the folder is flagged (P7). An unreadable registry never holds — a hold would
 block its repair — it is said and journaled, and the close refuses naming the repair (P9).
@@ -35,9 +36,9 @@ link — and nothing in it is swept.
 The way out of a hold, let through while the session is flagged: ONE simple command — quoted literals, `$'…'`
 included; no operator, redirection, expansion, glob or newline outside quotes — that is `rm` (-r -R -f -v, --recursive,
 --force, --verbose, `--`) or `rmdir` (-v) whose every operand names a flagged folder by its PHYSICAL parent and its name
-(as rm reaches it: `link/../x` is where the link's target is, P18), a bare `cd <dir>`, or a `tasks` CLI call by a path
+(as rm reaches it: `link/../x` is where the link's target is, P18), or a `tasks` CLI call by a path
 that is, physically, the project's `.claude/bin/tasks` or this plugin's `scripts/tasks` (impl panel r1 I3: the bare
-`tasks` is whatever PATH finds). Read-type tools never reach the hook. Before refusing, the flag is re-checked under
+`tasks` is whatever PATH finds; a `cd` is none — impl panel r2 J4). Read-type tools never reach the hook. Before refusing, the flag is re-checked under
 its lock: a folder gone or now known leaves it; with none left the flag is removed and the call passes.
 
 Exit codes: 0 = pass; 2 = hold. Anything else (1: a crash, the session directory not openable safely, the flag's lock
@@ -245,7 +246,12 @@ def _record_flag(sfd: int, lane_rel: str, folders: "list[str]") -> "str | None":
             old = None
         have = _flagged_names(old, lane_rel) or []
         merged = sorted(set(f"{lane_rel}/tasks/{n}" for n in have) | set(folders))
-        _write_json(sfd, FLAG, {"v": 1, "folders": merged, "since": _now()})
+        times = _flag_times(old)
+        now = _now()
+        for f in folders:
+            times.setdefault(f, now)
+        _write_json(sfd, FLAG, {"v": 2, "folders": merged, "flagged_at": {f: times[f] for f in merged if f in times},
+                                "since": now})
     try:
         try:
             with _flag_lock(sfd):
@@ -256,6 +262,42 @@ def _record_flag(sfd: int, lane_rel: str, folders: "list[str]") -> "str | None":
         return None
     except OSError as e:
         return str(e)
+
+
+def _flag_times(data) -> "dict[str, str]":
+    """When each folder of a flag (or a pending entry) was flagged: its `flagged_at`, else the entry's `since`."""
+    if not isinstance(data, dict):
+        return {}
+    since = data.get("since") if isinstance(data.get("since"), str) else ""
+    times = data.get("flagged_at") if isinstance(data.get("flagged_at"), dict) else {}
+    out = {}
+    for f in data.get("folders") or []:
+        if isinstance(f, str):
+            t = times.get(f)
+            out[f] = t if isinstance(t, str) else since
+    return out
+
+
+def _laundered(project: Path, lane: Path, lane_rel: str, names: "list[str]", times: "dict[str, str]") -> "list[str]":
+    """The flagged folders a RE-ENROLMENT took in — a registry row `enrolled` at or after the folder was flagged, and
+    not committed: such a row is no release (task 197, its plan panel P3, fable/opus/sonnet: with the registry gone any
+    creator enrols every folder with a task.md, the flagged one too). Only `tasks adopt`, a commit or the removal is."""
+    try:
+        rows = registry._load(lane) or []
+    except registry.RegistryUnreadable:
+        return []
+    row = {r[0]: r for r in rows}
+    out = []
+    for n in names:
+        r = row.get(n)
+        flagged = times.get(f"{lane_rel}/tasks/{n}", "")
+        if r is not None and r[1] == "enrolled" and flagged and r[2] >= flagged:
+            out.append(n)
+    if not out:
+        return []
+    committed = registry._committed_task_mds(project, lane, [n for n in out if registry.TASK_DIR_RE.fullmatch(n)],
+                                             timeout=GIT_TIMEOUT)
+    return [n for n in out if n not in committed and os.path.isdir(lane / "tasks" / n)]
 
 
 def _pending(sfd: int) -> "list[str]":
@@ -493,11 +535,15 @@ def _recheck(project: Path, lane: Path, sfd: int) -> "tuple[list[str], str, str]
         except ValueError:
             data = None
         names = _flagged_names(data, lane_rel)
+        times = _flag_times(data)
         for pend in pending:                      # merged under the lock; removed below only once read (K1)
             try:
-                more = _flagged_names(_read_json(sfd, pend), lane_rel)
+                pdata = _read_json(sfd, pend)
+                more = _flagged_names(pdata, lane_rel)
             except ValueError:
-                more = None
+                pdata, more = None, None
+            for f, t_ in _flag_times(pdata).items():
+                times.setdefault(f, t_)
             names = None if names is None or more is None else sorted(set(names) | set(more))
         state, note = "ok", ""
         if not _registry_present(lane):
@@ -506,14 +552,19 @@ def _recheck(project: Path, lane: Path, sfd: int) -> "tuple[list[str], str, str]
                     "new registry that does")
         try:
             left = _unknown(project, lane, names)
+            if names:
+                left = sorted(set(left) | set(_laundered(project, lane, lane_rel,
+                                                         [n for n in names if n not in left], times)))
         except registry.RegistryUnreadable as e:
             return [], "unreadable", registry.unreadable_message(e)
         if not left:
             _unlink(sfd, FLAG)
         else:
             folders = [f"{lane_rel}/tasks/{n}" for n in left]
-            if pending or not isinstance(data, dict) or data.get("folders") != folders:
-                _write_json(sfd, FLAG, {"v": 1, "folders": folders, "since": _now()})
+            if pending or not isinstance(data, dict) or data.get("folders") != folders or data.get("v") != 2:
+                now = _now()
+                _write_json(sfd, FLAG, {"v": 2, "folders": folders,
+                                        "flagged_at": {f: times.get(f) or now for f in folders}, "since": now})
         for pend in pending:                      # only the entries read above — a newer one stands
             _unlink(sfd, pend)
         return left, state, note
@@ -575,7 +626,14 @@ def _hold_message(project: Path, lane: Path, left: "list[str]", cwd: str, notes:
     if "/" not in cli:
         cli = "./" + cli
     for n in left:
-        where = _shell_word(_rel_from(cwd, lane / "tasks" / n))
+        folder = lane / "tasks" / n
+        where = _shell_word(_rel_from(cwd, folder))
+        try:                                      # from inside the folder `rm -r .` works for nothing (195's run 3 N3)
+            real_cwd, real_folder = os.path.realpath(cwd), os.path.realpath(folder)
+            if real_cwd == real_folder or real_cwd.startswith(real_folder + os.sep):
+                where = _shell_word(str(folder))
+        except (OSError, ValueError):
+            pass
         why_not = _adoptable(lane, n)
         out.append(f"  {_shown(f'{lane_rel}/tasks/{n}')}")
         if why_not is None:
@@ -634,12 +692,12 @@ def _pre(watched: bool, p: dict, project: Path, lane: Path, sfd: int, inside: bo
                 _journal(lane, "block", "unknown task folder", sid, tool, first, cmd)
                 print(_hold_message(project, lane, left, cwd, notes), file=sys.stderr)
                 return 2
-    if watched and _registry_present(lane):
+    if watched and (lane / "tasks").is_dir():      # every lane, a registry or not (task 197, P1)
         if inside:
             _sweep_snapshots(sfd)
         tuid = _str(p, "tool_use_id")
         name = f"{BEFORE}.{tuid}" if _TUID_RE.fullmatch(tuid) else BEFORE
-        _write_json(sfd, name, {"v": 1, "folders": _listing(lane), "registry": True})
+        _write_json(sfd, name, {"v": 1, "folders": _listing(lane), "registry": _registry_present(lane)})
     return 0
 
 
@@ -657,14 +715,12 @@ def _post(p: dict, project: Path, lane: Path, sfd: int, sid: str) -> int:
     _unlink(sfd, before)
     notes: "list[str]" = []
     had_registry = isinstance(snap, dict) and bool(snap.get("registry"))
-    if not _registry_present(lane):
-        if not had_registry:
-            return 0                              # no registry before or after: not watched
+    if not _registry_present(lane) and had_registry:
+        # still watched — with no registry what the git rule does not know is unknown (task 197, P1)
         _journal(lane, "record", "task registry removed during this call", sid, tool,
                  f"{_lane_rel(project, lane)}/{registry.REGISTRY_NAME}", cmd)
-        notes.append(f"⚠ playbook: this call removed the lane's task registry ({registry.REGISTRY_NAME}): what it "
-                     "made is known to nothing, and a later folder is not watched until a `tasks` creator writes a "
-                     "new registry.")
+        notes.append(f"⚠ playbook: this call removed the lane's task registry ({registry.REGISTRY_NAME}): until a new "
+                     "one is written, what is not committed counts as made by hand.")
     now = _listing(lane)
     if isinstance(snap, dict) and isinstance(snap.get("folders"), list):
         new = sorted(set(now) - set(f for f in snap["folders"] if isinstance(f, str)))
@@ -703,6 +759,13 @@ def _post(p: dict, project: Path, lane: Path, sfd: int, sid: str) -> int:
 
 
 def main(argv: "list[str]") -> int:
+    if len(argv) == 4 and argv[1] == "--enrol":    # the session start (task 197, P1): a lane's registry, if missing
+        try:
+            registry.ensure_enrolled(Path(argv[2]), Path(argv[3]))
+            return 0
+        except Exception as e:                # never a refusal of the session start
+            print(f"task-dir-watch: the task registry could not be written: {e}", file=sys.stderr)
+            return 1
     if len(argv) != 5:
         print("usage: task-dir-watch.py PROJECT AGENT_DIR SESSION_DIR SESSION_ID (the payload on stdin)",
               file=sys.stderr)

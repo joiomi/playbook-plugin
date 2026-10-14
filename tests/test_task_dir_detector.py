@@ -49,7 +49,7 @@ class _Project(unittest.TestCase):
         self.base = Path(self._tmp.name)
         self.home = self.base / "home"
         self.home.mkdir()
-        self.proj = self.base / "proj"
+        self.proj = self.base / getattr(self, "PROJ_NAME", "proj")
         self.lane = self.proj / ".agent"
         self._task(self.lane, "001-a")
         self._registry(self.lane, [("001-a", "new")])
@@ -213,11 +213,26 @@ class FlaggedAfterTheCall(_Project):
         self.shell_call("ls", lambda: None)
         self.assertIsNone(self.flagged())
 
-    def test_no_registry_no_watch(self):
+    def test_a_lane_whose_registry_is_gone_is_still_watched(self):
+        # task 197 P1 (opus, fable, sonnet): with the Bash check gone, a lane with no registry must not be unguarded —
+        # what the git rule does not know is unknown there
         (self.lane / "task-registry").unlink()
         self.shell_call("cp -r", lambda: self._task(self.lane, "999-x"))
-        self.assertIsNone(self.flagged())
-        self.assertEqual(list((self.lane / "sessions" / SID).glob("task_dirs_before*")), [])
+        self.assertEqual(self.flagged(), [".agent/tasks/999-x"])
+
+    def test_re_enrolment_after_a_flag_does_not_release_it(self):
+        # task 197 P3: with the registry gone any creator re-enrols every folder with a task.md — the flagged one too;
+        # that is no release: only `tasks adopt`, its removal or a commit is
+        (self.lane / "task-registry").unlink()
+        self.shell_call("cp -r", lambda: self._task(self.lane, "999-x"))
+        self.assertEqual(self.flagged(), [".agent/tasks/999-x"])
+        r = self.cli("new", "quick", "b")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual((self.lane / "task-registry").read_text(encoding="utf-8").count("999-x\tenrolled"), 1)
+        self.assertTrue(self.edit()[0])
+        r = self.cli("adopt", ".agent/tasks/999-x")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertFalse(self.edit()[0])
 
     def test_a_committed_folder_is_not_flagged(self):
         git = shutil.which("git") or self.skipTest("no git")
@@ -471,6 +486,45 @@ class FlaggedAfterTheCall(_Project):
                 shutil.rmtree(self.lane / "tasks" / b)
 
 
+class EveryLaneIsWatched(_Project):
+    """Task 197 (PLAN S14 T5b, the last part): the Bash pre-run check is gone (the owner's answer of 2026-10-13 12:27,
+    "O scot pentru shell"); a lane is enrolled at the session start, and a folder made by hand is caught after the call
+    whatever the command's spelling."""
+
+    def test_the_session_start_enrols_a_lane_without_a_registry(self):
+        (self.lane / "task-registry").unlink()
+        self.fire("SessionStart", {"session_id": SID, "cwd": str(self.proj), "hook_event_name": "SessionStart",
+                                   "source": "startup"})
+        reg = self.lane / "task-registry"
+        self.assertTrue(reg.is_file())
+        self.assertIn("001-a\tenrolled\t", reg.read_text(encoding="utf-8"))
+
+    def _caught(self, command, name):
+        # each spelling in a session of its own (one fixture per subtest)
+        sid = "s197-" + name
+        blocked, err, _ = self.pre(command, "toolu_M" + name, sid=sid)
+        self.assertFalse(blocked, f"{command!r} refused before it ran: {err}")
+        self._task(self.lane, name)
+        self.post(command, "toolu_M" + name, sid=sid)
+        self.assertEqual(self.flagged(sid), [f".agent/tasks/{name}"])
+
+    def test_a_real_mkdir_runs_and_is_caught_after(self):
+        self._caught("mkdir -p .agent/tasks/901-x", "901-x")
+
+    def test_a_brace_spelling_runs_and_is_caught_after(self):
+        self._caught("mkdir -p .agent/tasks/{902-x,902-y}", "902-x")
+
+    def test_an_ansi_c_spelling_runs_and_is_caught_after(self):
+        self._caught("mkdir -p $'.agent/tasks/903-x'", "903-x")
+
+    def test_the_helper_without_a_mode_is_no_judge(self):
+        r = subprocess.run([sys.executable, "-E", "-s", str(PLUGIN / "scripts" / "task-dir-target.py")],
+                           input="mkdir -p .agent/tasks/9-x", text=True, capture_output=True,
+                           env=dict(self._env(), PB_PROJECT=str(self.proj)))
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertIn("usage", r.stderr.lower())
+
+
 class TheSessionsAndTheLanes(_Project):
 
     def test_another_session_is_not_held(self):
@@ -693,6 +747,23 @@ class HeldUntilResolved(_Project):
         self.addCleanup(target_parent.chmod, 0o755)
         self.assertTrue(self.edit()[0])
 
+    def test_a_flagged_session_whose_directory_became_a_link_is_held(self):
+        # task 193's single judge, run 3 (M3): the hook let a flagged session through once its directory was a link
+        sd = self.lane / "sessions" / SID
+        moved = self.base / "moved-session"
+        shutil.move(str(sd), str(moved))
+        sd.symlink_to(moved)
+        self.assertTrue(self.edit()[0])
+        self.assertTrue(self.pre("ls")[0])
+
+    def test_from_inside_the_flagged_folder_the_suggestion_works(self):
+        # task 195's single judge, run 3 (N3): `rm -r .` from inside the folder works for nothing — an absolute path
+        inside = self.lane / "tasks" / "999-x"
+        _, err, _ = self.pre("ls", cwd=inside)
+        self.assertIn(f"rm -r {inside}", err)
+        blocked, err2, _ = self.pre(f"rm -r {inside}", cwd=inside)
+        self.assertFalse(blocked, err2)
+
     def test_a_watch_that_cannot_run_holds_a_flagged_session(self):
         # fail closed while a flag stands, as the gate holds on a status it cannot read; a post is never held
         fake = self.base / "brokenpy"
@@ -722,6 +793,21 @@ class HeldUntilResolved(_Project):
         self.edit()
         self.assertTrue(target.exists())
         self.assertEqual(json.loads(target.read_text(encoding="utf-8"))["folders"], [".agent/tasks/999-x"])
+
+
+class APathWithGlobCharacters(_Project):
+    """Task 195's single judge, run 3 (N2): `compgen -G` read the session path's `[...]` as a glob — a pending entry
+    in `proj[one]` was missed and the next Edit passed."""
+    PROJ_NAME = "proj[one]"
+
+    def test_a_pending_entry_holds_in_such_a_project(self):
+        sd = self.lane / "sessions" / SID
+        sd.mkdir(parents=True)
+        with open(sd / "task_dir_flag.lock", "a") as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            self.shell_call("cp -r", lambda: self._task(self.lane, "999-x"), tuid="toolu_GL")
+            self.assertTrue(list(sd.glob("task_dir_flag.pending.*")))
+            self.assertTrue(self.edit()[0])
 
 
 class NamesAdoptCannotTake(_Project):
@@ -792,12 +878,21 @@ class TheClose(_Project):
         r = self.cli("work", "done")
         self.assertNotIn("999-notes.md", r.stdout + r.stderr)
 
-    def test_the_close_without_a_registry_says_nothing_of_folders(self):
+    def test_the_close_without_a_registry_reads_the_git_rule(self):
+        # task 197 P4: a missing registry is no pass — what is not committed is unknown
         self._active()
         (self.lane / "task-registry").unlink()
         self._task(self.lane, "999-x")
         r = self.cli("work", "done")
-        self.assertNotIn("999-x", r.stdout + r.stderr)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("999-x", r.stdout + r.stderr)
+
+    def test_tasks_work_enrols_a_lane_without_a_registry(self):
+        # task 197 P1(a): the activation writes the registry a lane lacks, from what stands (the first enrolment's trust)
+        (self.lane / "task-registry").unlink()
+        r = self.cli("work", "1")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("001-a\tenrolled\t", (self.lane / "task-registry").read_text(encoding="utf-8"))
 
 
 class TheCloseRechecks(unittest.TestCase):
@@ -829,6 +924,31 @@ class TheCloseRechecks(unittest.TestCase):
         self.assertIn("appeared while this close ran: 999-late", r.stderr)
         self.assertIn("## Status\nin_progress", (d / ".agent" / "tasks" / "001-t" / "task.md").read_text(
             encoding="utf-8"))
+
+    def test_a_registry_deleted_during_verify_refuses_at_the_commit(self):
+        # task 197 P4 (agy, codex): the commit-time check read "no registry" as a pass
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        d = Path(tmp.name) / "repo"
+        subprocess.run(["git", "init", "-q", str(d)], check=True)
+        late = ("python3 -c \"import os; os.unlink('.agent/task-registry'); os.mkdir('.agent/tasks/999-late')\"")
+        (d / ".agent" / "tasks" / "001-t").mkdir(parents=True)
+        (d / ".agent" / "config.json").write_text(json.dumps({"verify": late, "panel_required_for": []}),
+                                                  encoding="utf-8")
+        (d / ".agent" / "tasks" / "001-t" / "task.md").write_text(
+            "# 001 - T\n\n## Status\npending\n\n## Risk\nreversible\n\n## Work Plan\n- [x] G1: do it\n",
+            encoding="utf-8")
+        (d / ".agent" / "task-registry").write_text(HEADER + "\n001-t\tnew\t2026-10-14T00:00:00Z\n",
+                                                   encoding="utf-8")
+        env = dict(os.environ, PYTHONPATH=str(PLUGIN), PLAYBOOK_SESSION_ID="s197-close-noreg", HOME=tmp.name)
+        env.pop("BASH_ENV", None)
+        r = subprocess.run([sys.executable, "-m", "tasks.cli", "work", "1"], cwd=d, env=env, capture_output=True,
+                           text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r = subprocess.run([sys.executable, "-m", "tasks.cli", "work", "done"], cwd=d, env=env,
+                           capture_output=True, text=True, timeout=120)
+        self.assertNotIn("Task 001 done.", r.stdout)
+        self.assertIn("999-late", r.stderr)
 
     def test_a_tasks_folder_made_unlistable_during_verify_refuses_the_close(self):
         # impl panel r2 J9 (codex): verify makes a folder and takes the read bit off tasks/ — listing it fails, the

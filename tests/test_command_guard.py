@@ -1891,7 +1891,8 @@ H_VECTORS = [
     ("H05", "task-gate-hook", "edit-doc", {}, {}, 0, 0, ""),
     ("H06", "task-gate-hook", "write-taskmd-manual", {}, {}, 2, 2, ""),
     ("H07", "task-gate-hook", "write-taskmd-outside", {}, {}, 2, 0, "task 171 (R6): a task.md of ANOTHER project is not Guard 0's"),
-    ("H08", "task-gate-hook", "bash-mkdir-taskdir", {}, {}, 2, 2, ""),
+    ("H08", "task-gate-hook", "bash-mkdir-taskdir", {}, {}, 2, 0,
+     "task 197: the pre-run check is gone — the folder is caught after the call (PB-TASK-DIR-WATCH)"),
     ("H09", "task-gate-hook", "bash-mkdir-var-agent", {}, {}, 0, 0, "task 110 (G2-02): candidate was 2, a regression"),
     ("H10", "task-gate-hook", "bash-heredoc-note", {}, {}, 2, 0, "task 110 (R8 / item 31): a heredoc NOTE runs no mkdir"),
     ("H11", "task-gate-hook", "bash-tasks-status", {}, {}, 0, 0, ""),
@@ -2035,7 +2036,7 @@ class GauntletHookStepsAsVectors(unittest.TestCase):
         chat = d / ".agent" / "chat_log.md"
         log = chat.read_text(encoding="utf-8") if chat.exists() else ""
         if step == "H08":
-            self.assertEqual([x["reason"] for x in rows if x["hook"] == "task-gate"], ["manual task dir creation"])
+            self.assertEqual([x["reason"] for x in rows if x["hook"] == "task-gate"], [])
         if step == "H11":
             self.assertIn(f"export PLAYBOOK_SESSION_ID={sid}", r.stdout)
         if step == "H26":

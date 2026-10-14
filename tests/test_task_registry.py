@@ -245,7 +245,8 @@ class TheGitRule(_Project):
 class Adopt(_Project):
     def test_adopt_registers_once_and_refuses_what_is_not_a_task_directory(self):
         # the lane has a registry already (a task was made); with none, the first writer — adopt included — enrols
-        # every folder that exists (the "trusted at first enrolment" bound), so this one would read `enrolled`
+        # every folder that exists (the "trusted at first enrolment" bound), and adopt then takes this one's
+        # `enrolled` row over (task 197)
         self.cli("new", "quick", "first", check=True)
         self.handmade("005-x")
         r = self.cli("adopt", "005-x", check=True)

@@ -6,7 +6,7 @@
 #
 # The decisions are scripts/task-dir-watch.py's (with tasks.registry, on the parsed payload); this script finds the
 # project, the session's lane and its directory, and calls python only when there is something to decide: a flag
-# standing, or — for a shell call or a Write — a registry in the lane or a snapshot of a call. The event and the tool
+# standing, or — for a shell call or a Write — a lane that has `tasks/`, a registry or not (task 197). The event and the tool
 # are read here only to skip python for an edit with no flag (an edit makes no folder); hooks.json passes no argument
 # (the dual-host form, `tasks/hooks_check.py`), and a payload this read misjudges reaches python, which decides.
 # No `set -e`: a failure here leaves no snapshot (the post then flags every unknown folder present) — and a crash
@@ -47,8 +47,13 @@ SESSION_DIR="$AGENT_DIR/sessions/$SESSION_ID"
 FLAG="$SESSION_DIR/task_dir_flag"
 
 PB_FLAGGED=false
-# a flag, or a pending entry a post wrote when it could not have the flag's lock (the single judge's K1)
-{ [ -e "$FLAG" ] || [ -L "$FLAG" ] || compgen -G "$FLAG.pending.*" > /dev/null; } && PB_FLAGGED=true
+# a flag, or a pending entry a post wrote when it could not have the flag's lock (the single judge's K1) — the
+# session path quoted, only the entry's suffix a glob (195's run 3, N2: `compgen -G` read `proj[one]` as a pattern)
+{ [ -e "$FLAG" ] || [ -L "$FLAG" ]; } && PB_FLAGGED=true
+for PB_PEND in "$FLAG".pending.*; do
+    { [ -e "$PB_PEND" ] || [ -L "$PB_PEND" ]; } && PB_FLAGGED=true
+    break
+done
 if [ "$PB_FLAGGED" != true ]; then
     # Claude's Edit/MultiEdit of an EXISTING file, with no flag: nothing to hold, nothing it could make — an empty
     # old_string creates the file and its folders (task 196 I12, measured), so that one goes on to python
@@ -57,13 +62,23 @@ if [ "$PB_FLAGGED" != true ]; then
     if [[ "$INPUT" =~ $PB_KEY ]] && ! [[ "$INPUT" =~ $PB_CREATES ]]; then
         exit 0
     fi
-    if [ ! -e "$AGENT_DIR/task-registry" ] && [ ! -L "$AGENT_DIR/task-registry" ] \
-       && ! compgen -G "$SESSION_DIR/task_dirs_before*" > /dev/null; then
-        exit 0
-    fi
+    # every lane with `tasks/` is watched, a registry or not (task 197, P1)
+    [ -d "$AGENT_DIR/tasks" ] || exit 0
 fi
-# A session directory that is a link (or `sessions` itself) is not this session's (task 194): not read, not written.
-_pb_session_dir_ok "$SESSION_DIR" || exit 0
+PB_POST='"(hook_event_name|hookEventName)"[[:space:]]*:[[:space:]]*"(PostToolUse[A-Za-z]*)"'
+# A session directory that is a link (or `sessions` itself) is not this session's (task 194): not read, not written —
+# and a session flagged before it became one stays held (193's run 3, M3: it was let through).
+if ! _pb_session_dir_ok "$SESSION_DIR"; then
+    if [ "$PB_FLAGGED" = true ] && ! [[ "$INPUT" =~ $PB_POST ]]; then
+        cat >&2 <<MSG
+BLOCKED: this session is held for a task folder the playbook CLI did not make, and its session directory
+($SESSION_DIR) is now a link, so the hold cannot be checked. Put the real directory back in its place;
+a person can also remove the folder named in its task_dir_flag and that file.
+MSG
+        exit 2
+    fi
+    exit 0
+fi
 
 PB_OUT=$(printf '%s' "$INPUT" | python3 -E -s "$HOOK_DIR/task-dir-watch.py" "$PROJECT_DIR" "$AGENT_DIR" \
          "$SESSION_DIR" "$SESSION_ID")
@@ -75,7 +90,6 @@ case "$PB_RC" in
 esac
 # The watch did not run (no python3, a crash): a standing flag holds the call, as the gate holds on a status it
 # cannot read (task 055); nothing stands — nothing to hold.
-PB_POST='"(hook_event_name|hookEventName)"[[:space:]]*:[[:space:]]*"(PostToolUse[A-Za-z]*)"'
 if [[ "$INPUT" =~ $PB_POST ]]; then
     # after a call: nothing to hold — said, so a folder this call made is known to wait for the close
     printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"⚠ playbook: the task-folder watch could not run after this call (task-dir-watch.py ended with exit %s); a task folder made by hand is still refused at `tasks work done`."}}\n' \

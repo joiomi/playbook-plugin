@@ -297,8 +297,8 @@ class ShellEntrypointFloorGuard(unittest.TestCase):
 
     # -- task 194 (#46): the task gate keeps its polarity below the floor — it fails closed: no call but a shell
     #    command is let through (what authorizes an edit runs on python3: the task's status, Guard 0, the batch
-    #    check), and a shell command keeps only the guards that need none (the judge's; the task-dir trigger, which
-    #    then refuses without the helper that narrows it); no session id is injected. The state echo is advisory:
+    #    check), and a shell command keeps only the guard that needs none (the judge's; task 197 removed the
+    #    task-dir trigger — a hand-made folder is caught after the call); no session id is injected. The state echo is advisory:
     #    it says so, writes nothing and counts nothing — and marks the count it did not make, so the stop hook
     #    holds the turn instead of reading old counts. --
     def _working_old_python(self):
@@ -368,19 +368,13 @@ class ShellEntrypointFloorGuard(unittest.TestCase):
         r = self._gate(path, bash(".claude/bin/tasks status"))
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertNotIn(b"updatedInput", r.stdout, "a session id was injected below the floor")
-        # a task directory named by a temp path outside the project: the helper allows it on a supported interpreter
-        # (the control below); below the floor the trigger alone decides
+        # task 197: the Bash pre-run task-dir check is gone (a hand-made folder is caught after the call, by the watch),
+        # so below the floor a `mkdir` or a brace is a shell command like any other — let through, no helper run
         outside = str(self.tmp / "elsewhere" / ".agent" / "tasks" / "001-x")
         r = self._gate(path, bash(f"mkdir -p {outside}"))
-        self.assertEqual(r.returncode, 2, "the task-dir trigger was narrowed below the floor")
-        self.assertIn("below python3 3.10 the check that tells a task directory apart is not run",
-                      r.stderr.decode("utf-8", "replace"))
-        journal = (self.proj / ".agent" / "journal" / "enforcement.jsonl").read_text(encoding="utf-8")
-        self.assertIn('"reason":"python3 below 3.10: task-dir trigger"', journal)
-        self.assertNotIn("manual task dir creation", journal)
+        self.assertEqual(r.returncode, 0, r.stderr)
         r = self._gate(path, bash("awk '{print $1}' README.md"))
-        self.assertEqual(r.returncode, 2, "a brace is a trigger: refused below the floor, said why")
-        self.assertIn("is not run", r.stderr.decode("utf-8", "replace"))
+        self.assertEqual(r.returncode, 0, r.stderr)
         self.assertNotIn("task-dir-target.py", log.read_text(encoding="utf-8"))
         r = self._gate(path, bash("tasks new build x"), sid="judge")
         self.assertEqual(r.returncode, 2, "the judge's guard was dropped below the floor")

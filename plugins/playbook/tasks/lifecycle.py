@@ -293,11 +293,13 @@ def _unknown_dirs_bounce(project_path, agent_dir) -> bool:
     creation in progress skipped), not committed: `registry.unknown_now`, the reader the watch uses — print what and
     the way out, and return True (the caller aborts). The owner's "la închidere" (2026-10-13 12:27, task 196 W4): the
     watch sees a folder made during a session's shell call or Write; the close sees every folder of the lane, however
-    it was made. No registry → nothing (no provenance to judge by — plan panel P2). An unreadable registry refuses,
+    it was made. No registry → the git rule: what is not committed is unknown (task 197, its plan panel P4; until then
+    a missing registry read as nothing). An unreadable registry refuses,
     naming its repair (P9: the watch never holds on it, so the close is where it stops)."""
-    from tasks.registry import LaneUnreadable, RegistryUnreadable, unknown_now, unreadable_message
+    from tasks.registry import LaneUnreadable, RegistryUnreadable, registry_path, unknown_now, unreadable_message
     try:
-        left = unknown_now(project_path, agent_dir)
+        # a missing registry is no pass: what is not committed is unknown (task 197, its plan panel P4)
+        left = unknown_now(project_path, agent_dir, no_registry="git")
     except RegistryUnreadable as e:
         print(f"Blocked: {unreadable_message(e)}", file=sys.stderr)
         print("  The close checks this lane's task folders against the task registry. Nothing changed.",
@@ -317,6 +319,9 @@ def _unknown_dirs_bounce(project_path, agent_dir) -> bool:
           "them and they are not committed):", file=sys.stderr)
     for n in left:
         print(f"  {rel}/tasks/{n!r}" if any(ord(c) < 32 for c in n) else f"  {rel}/tasks/{n}", file=sys.stderr)
+    if not os.path.lexists(registry_path(agent_dir)):
+        print("  (The lane's task registry is gone: what is not committed is unknown — `tasks adopt <folder>` writes a "
+              "new registry.)", file=sys.stderr)
     print("  Keep one:   .claude/bin/tasks adopt <folder>   (it must hold a task.md and a free number)\n"
           "  Remove one: rm -r <folder>   (removing deletes its content — it may be someone's work)\n"
           "  Then retry `tasks work done` — or override with --force --reason. Nothing changed.", file=sys.stderr)
@@ -1044,7 +1049,7 @@ def cmd_work(cmd_args):
                         from tasks.registry import LaneUnreadable as _LU196
                         from tasks.registry import RegistryUnreadable as _RU196, unknown_now as _un196
                         try:
-                            _late196 = _un196(project_path, agent_dir)
+                            _late196 = _un196(project_path, agent_dir, no_registry="git")
                         except _RU196 as _e196:
                             raise CloseRaceRefused(f"the task registry became unreadable while this close ran "
                                                    f"({_e196}).")
@@ -1305,6 +1310,14 @@ def cmd_work(cmd_args):
     # Auto-close previous task if all gates are checked
     agent_dir = resolve_agent_dir(project_path)
     agent_dir.mkdir(parents=True, exist_ok=True)
+    # Task 197 (its plan panel P1): a lane with no task registry gets one at the activation, from what stands — so the
+    # watch and the close can tell a CLI-made folder from a hand-made one (the session start does the same). A failure
+    # here is said, never a refusal of the activation.
+    try:
+        from tasks.registry import ensure_enrolled
+        ensure_enrolled(project_path, agent_dir)
+    except Exception as _enrol_err:          # noqa: BLE001
+        print(f"note: the task registry could not be written ({_enrol_err}).", file=sys.stderr)
     session_id = require_session_id()   # task 105: never `sessions/""`
     session_dir = agent_dir / "sessions" / session_id
     session_state = session_dir / "current_state"

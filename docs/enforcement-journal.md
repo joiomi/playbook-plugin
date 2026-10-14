@@ -50,8 +50,8 @@ of `task-gate`, `command-guard`, `stop`, `gate-batch-check`, `task-dir-watch` (t
 folder it flags after a call (also `"task registry unreadable"` and `"task registry removed during this call"`),
 `block` with `reason="unknown task folder"` when it holds a flagged session's call, and `allow` with
 `reason="unknown task folder: the way out"` for the removal or `tasks` call it lets through;
-`task-gate` writes `allow` or `block` (its Bash task-dir refusal too, as
-`reason="manual task dir creation"`, since task 110); `command-guard` writes
+`task-gate` writes `allow` or `block` (its Bash task-dir refusal wrote
+`reason="manual task dir creation"` from task 110 until task 197 removed it); `command-guard` writes
 `block`, and `allow` for an acknowledged dangerous command with
 `reason="ack-irreversible-task:<rule>"` or `"ack-operator-env:<rule>"` (task 110);
 `stop`/`gate-batch-check` write `block`; the **close** path writes a `record` (`hook="close"`,

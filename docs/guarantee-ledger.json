@@ -2168,7 +2168,7 @@
     {
       "id": "PB-TASK-DIR-GUARD",
       "category": "hook-payload-and-paths",
-      "statement": "task-gate-hook refuses a Bash command that creates a task directory by hand inside the project — a `mkdir` naming `.agent[/<lane>]/tasks/…` in any shell spelling the decoder can resolve from the text (quoted, backslash-escaped, `$'…'`, brace-expanded, a glob in the PATH), judged by scripts/task-dir-target.py after the shell's own decoding — allows the same command when every named target is a literal absolute path OUTSIDE the project (a temp fixture), and, once the trigger fires (a `mkdir` word after quote/backslash stripping, a `$'`, or a `{` anywhere in the text), allows a command whose every mkdir word is provably inert — inside masked data (a heredoc a non-shell reads, an echo/printf literal) or among the arguments of a known read/print command (echo, printf, grep, cat, the `tasks` CLI, `git commit/log/show/diff/…` without `-c`), found through command_guard's walker (segments, wrappers, payloads, `sh -c`, eval, `$(…)`, herestrings, `find -exec`); any other command carrying the word, and every command whose NAME is unresolved (`$M`, `$(…)`, a backtick), counts as running it (task 110 and its impl panel round 1), and a mention is inert only while EVERY command of the call is one the helper knows to read, print or write text (a closed list — echo, printf, grep, cat, head, tail, wc, tee, cd, ls, cut, tr, the `tasks` CLI, git's read subcommands — that holds for a tool named bare in the environment the call found: no pager, no sorter, no command with an output-file operand; any environment change in the call — an assignment, a prefix, `printf -v`, an expansion that assigns, an arithmetic expression — takes the whole call off it; a path-qualified name, git and `tasks` count only when the call writes no file, a write being `tee` or any unquoted `>` not aimed at the null device or a descriptor; plus a non-shell interpreter whose program IS a quoted heredoc: given no program by `-c`, `-e`, `-m` or a script operand, its stdin not redirected from elsewhere) — with a shell, a sourcer, a path, or any program the helper does not know in the same call, text that one command writes or prints could be run by another, so the released answer stands (impl panel round 2: the first narrowing allowed a script written through a file-sink heredoc or by echo/printf and then run, a read command's output piped into a shell, and a quoted heredoc whose reader it could not name — a regression against 1.5.45) — and otherwise refuses to judge anything but one simple mkdir: a compound command, a pipe, a subshell, a background job, a prefix assignment or an expansion that could repoint the path is blocked, never narrowed. A word holding an unresolved expansion (a variable, `$(…)`, a backtick, or a shell special parameter such as `$@` — task 110) counts as naming a task dir only when it can still spell one: `tasks` is visible, or an expansion follows the `.ag` hint, or the `.ag` is not a whole `.agent` component — so `\"$N/.agent\"` is allowed (task 110, a regression against 1.5.45) while `.$D/tasks/…` and `.agent/$T/…` are refused. A command NAME that exists only after the shell evaluates it — assembled in a variable (`D=mk; D+=dir; \"$D\" -p …`) or a glob on the binary itself (`/bin/mk?ir`) — is outside the guard, the same architectural bound as PB-COMMAND-DANGEROUS. Below Python 3.10 the decoder is not run: once the trigger fires the command is refused, the narrowing above does not apply, and the refusal says why (task 194, PB-PYTHON-FLOOR).",
+      "statement": "RETIRED by task 197 (2026-10-14; the owner's answer of 2026-10-13 12:27 to the pre-run check, \"O scot pentru shell\"): `task-gate-hook` no longer judges a Bash command's TEXT before it runs for a task directory made by hand — a `mkdir`, a brace or a `$'…'` spelling runs, and the folder it makes is caught after the call by `task-dir-watch-hook` and at `tasks work done`, whatever the spelling (PB-TASK-DIR-WATCH); `scripts/task-dir-target.py` keeps only the file-path modes Guard 0 asks (`--path`, `--creates` — PB-TASK-MD-GUARD) and, given no mode, judges nothing (usage, exit 2). The row is kept as the history of the pre-run check (tasks 080-110): what it guaranteed until 1.6.1 is its first limitation.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/task-gate-hook",
@@ -2184,245 +2184,65 @@
       "proofs": [
         {
           "type": "executable integration",
+          "path": "tests/test_task_dir_detector.py",
+          "reference": "EveryLaneIsWatched.test_a_real_mkdir_runs_and_is_caught_after",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_task_dir_detector.py",
+            "reference": "FlaggedAfterTheCall.test_a_folder_there_before_the_call_is_not_flagged"
+          },
+          "limitations": [
+            "The retirement: `mkdir -p .agent/tasks/901-x` exits 0 from every PreToolUse hook hooks.json wires for a shell call, and the folder is flagged after it (red on nested `edaa979`: the gate refused it)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_dir_detector.py",
+          "reference": "EveryLaneIsWatched.test_a_brace_spelling_runs_and_is_caught_after",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "`mkdir -p .agent/tasks/{902-x,902-y}`: let run, flagged after (red on `edaa979`)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_dir_detector.py",
+          "reference": "EveryLaneIsWatched.test_an_ansi_c_spelling_runs_and_is_caught_after",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "`mkdir -p $'.agent/tasks/903-x'`: let run, flagged after (red on `edaa979`)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_dir_detector.py",
+          "reference": "EveryLaneIsWatched.test_the_helper_without_a_mode_is_no_judge",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "`task-dir-target.py` given a command and no mode: exit 2, usage (red on `edaa979`: it judged the text)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_command_guard.py",
+          "reference": "GauntletHookStepsAsVectors.test_each_step_on_the_candidate",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Step H08 (task 109's gauntlet vector, `mkdir -p .agent/tasks/099-manual`): installed 1.6.1 exits 2, the candidate 0, and no task-gate journal row."
+          ]
+        },
+        {
+          "type": "executable integration",
           "path": "tests/test_python_floor.py",
           "reference": "ShellEntrypointFloorGuard.test_task_gate_lets_a_shell_command_through_below_the_floor",
           "boundary": "subprocess",
-          "negative_control": {
-            "path": "tests/test_python_floor.py",
-            "reference": "ShellEntrypointFloorGuard.test_control_task_gate_on_a_supported_interpreter"
-          },
-          "limitations": [
-            "Below the floor: a mkdir of a task directory outside the project and an `awk '{…}'` are refused with the reason; on a supported interpreter the same mkdir passes (the control)."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_gate_path_traversal.py",
-          "reference": "ManualTaskDirGuard.test_temp_dir_agent_tasks_is_not_a_task_dir",
-          "boundary": "subprocess",
-          "negative_control": {
-            "path": "tests/test_gate_path_traversal.py",
-            "reference": "ManualTaskDirGuard.test_quoted_escaped_and_globbed_spellings_are_still_blocked"
-          },
-          "limitations": [
-            "Six temp-fixture spellings (absolute, quoted, with -m, /bin/mkdir) are allowed — S1d (task 080, flag C15)."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_gate_path_traversal.py",
-          "reference": "ManualTaskDirGuard.test_only_a_simple_mkdir_is_ever_allowed",
-          "boundary": "subprocess",
           "negative_control": null,
           "limitations": [
-            "Eight non-simple shapes (a symlink planted earlier in the same command, `cd &&`, a pipe, `&`, a subshell, `$(…)`, a second line, a prefix assignment) are refused, never narrowed."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_gate_path_traversal.py",
-          "reference": "ManualTaskDirGuard.test_quoted_escaped_and_globbed_spellings_are_still_blocked",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "Task 085 G2: `.ag'ent/tasks'`, `.ag\\ent`, `\".agent\"`, `$'e'`, `?` glob — the helper judges the decoded path."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_gate_path_traversal.py",
-          "reference": "ManualTaskDirGuard.test_expanded_and_respelled_forms_are_blocked",
-          "boundary": "subprocess",
-          "negative_control": {
-            "path": "tests/test_gate_path_traversal.py",
-            "reference": "ManualTaskDirGuard.test_expansions_that_name_no_task_dir_stay_allowed"
-          },
-          "limitations": [
-            "Task 085 T2: `m\\kdir`, `m'kdir'`, `$'\\x6d'kdir` and expanded spellings still trigger the helper."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_gate_path_traversal.py",
-          "reference": "ManualTaskDirGuard.test_round3_spellings_are_blocked",
-          "boundary": "subprocess",
-          "negative_control": {
-            "path": "tests/test_gate_path_traversal.py",
-            "reference": "ManualTaskDirGuard.test_round3_lookalikes_are_allowed"
-          },
-          "limitations": [
-            "Task 085 U3: brace spellings of the command word (`mk{d,z}ir`) are decoded by the helper's brace expansion."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_gate_path_traversal.py",
-          "reference": "ManualTaskDirGuard.test_a_large_unrelated_brace_expansion_is_allowed",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "A large brace expansion that names no task dir is allowed (no over-block)."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_gate_path_traversal.py",
-          "reference": "ManualTaskDirGuard.test_the_bound_a_globbed_command_name",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "The documented bound, pinned as ALLOWED: `/bin/mk?ir -p .agent/tasks/999-x` resolves against the filesystem only at run time (task 085 U8)."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_gate_path_traversal.py",
-          "reference": "ManualTaskDirGuard.test_the_bound_a_variable_assembled_command_name",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "Task 100 impl panel round 1 (2026-09-27) (codex-high, measured live): `D=mk; D+=dir; \"$D\" -p .agent/tasks/999-x` passes the hook and creates the directory — pinned as the bound, not fixed: blocking every command whose name is a variable would refuse ordinary shell."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_gate_path_traversal.py",
-          "reference": "TaskDirGuardFixBatch110.test_text_that_only_mentions_mkdir_is_not_a_task_dir",
-          "boundary": "subprocess",
-          "negative_control": {
-            "path": "tests/test_gate_path_traversal.py",
-            "reference": "TaskDirGuardFixBatch110.test_a_mkdir_that_really_runs_still_blocks"
-          },
-          "limitations": [
-            "Task 110 (parked item 31 / R8): 7 mentions allowed, 17 command positions still refused. Corpus: task-dir refusals 123 → 27 of 3,551 triggered commands after the first narrowing, 123 → 51 after impl panel round 1 made it stricter (`measure/results-round1fix.json`), 0 newly refused either time; the 72 newly allowed are a subset of the 96 reviewed by hand — none creates a task dir (task 110 record, measure/)."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_gate_path_traversal.py",
-          "reference": "TaskDirGuardFixBatch110.test_a_variable_before_a_final_dotagent_is_not_a_task_dir",
-          "boundary": "subprocess",
-          "negative_control": {
-            "path": "tests/test_gate_path_traversal.py",
-            "reference": "TaskDirGuardFixBatch110.test_a_variable_that_can_still_complete_a_task_dir_blocks"
-          },
-          "limitations": [
-            "Task 110 (109 G2-02 / R15): a regression against 1.5.45."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_gate_path_traversal.py",
-          "reference": "TaskDirGuardFixBatch110.test_shell_special_parameters_are_unresolved",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "085 round 3 V4 / R8: `.$@/tasks/…`; the widening refused nothing on the corpus."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_gate_path_traversal.py",
-          "reference": "TaskDirGuardImplPanelRound1.test_unresolved_heads_and_unmodelled_wrappers_block",
-          "boundary": "subprocess",
-          "negative_control": {
-            "path": "tests/test_gate_path_traversal.py",
-            "reference": "TaskDirGuardImplPanelRound1.test_mentions_in_read_print_commands_still_pass"
-          },
-          "limitations": [
-            "Task 110 impl panel round 1 (opus, sol-high): `$M -p`, `\"$(echo mkdir)\" -p`, a backtick head, `busybox mkdir`, `flock … mkdir`, `rg --pre mkdir`, `git -c alias…` — the first narrowing allowed them, 1.5.45 refused (a REGRESSION)."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_gate_path_traversal.py",
-          "reference": "TaskDirGuardImplPanelRound1.test_a_shell_heredoc_body_is_a_script_wherever_it_sits",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "A quoted heredoc's reader was taken from the line's FIRST command; `cd x; bash <<'EOF'` and `cat <<'EOF' | bash` keep their body now (a control: the panel-time tree also refused these, my round-1 change must not open them)."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_gate_path_traversal.py",
-          "reference": "TaskDirGuardImplPanelRound1.test_a_parallel_too_large_to_enumerate_blocks",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": []
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_gate_path_traversal.py",
-          "reference": "TaskDirGuardImplPanelRound2.test_text_one_command_writes_is_not_inert_when_the_call_can_run_it",
-          "boundary": "subprocess",
-          "negative_control": {
-            "path": "tests/test_gate_path_traversal.py",
-            "reference": "TaskDirGuardImplPanelRound2.test_a_mention_stays_inert_while_every_command_only_reads_or_prints"
-          },
-          "limitations": [
-            "Task 110 impl panel round 2, class 6 (opus) — a REGRESSION against 1.5.45, measured on three roots (installed 1.5.45, the tree before the task, the panel-time tree): 12 forms refused by the first two and allowed by the third. RED on the panel-time helper: 12 failures; the 6 controls (notes, prints, a record writer, a commit message) pass before and after.",
-            "Corpus (33,782 commands, 3,684 that trigger the guard): refusals 131 (before the task) → 53 (panel time) → 67 on the final code; 0 commands refused that the tree before the task allowed; 14 of the 78 commands the first narrowing let through are refused again, every one refused by the installed 1.5.45 as well (11 run `python3` on a script, a module or `-c` in the same call, 1 pipes through `sed`, 1 is an assignment on its own, 1 is prose lines the walker reads as commands)."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_gate_path_traversal.py",
-          "reference": "TaskDirGuardImplPanelRound2.test_a_quoted_heredoc_with_a_reader_the_helper_cannot_name_is_not_data",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "`su -`, `sudo -s` and a program the helper has never heard of reading a quoted heredoc: the body was dropped as data although the reader may run it. 3 failures on the panel-time helper."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_gate_path_traversal.py",
-          "reference": "TaskDirGuardImplPanelRound2.test_a_read_command_that_can_be_made_to_run_a_program_is_not_read_only",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "Found by my own review of the first round-2 fix, before the judge: a pager, a sorter and any environment-prefixed command were on the read/print list. 4 failures on that first form, then green."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_gate_path_traversal.py",
-          "reference": "TaskDirGuardImplPanelRound2.test_an_interpreter_is_exempt_only_when_its_program_is_the_heredoc",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "Post-D6 run 1 (codex, counted Important): the exemption looked only for a quoted heredoc on the interpreter's line, so an interpreter given its program another way was exempt although the heredoc was only that program's input. 6 failures on the code the judge reviewed; the 6 controls in the same test (the program IS the heredoc) pass before and after."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_gate_path_traversal.py",
-          "reference": "TaskDirGuardImplPanelRound2.test_the_read_only_list_holds_only_in_an_unchanged_environment_and_for_bare_names",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "Found by my own review after post-D6 run 1, in the same class as its second finding: a path-qualified name can be the file the call wrote; an assignment, `export` or prefix changes what a listed tool starts; git and `tasks` start configured programs. 8 failures on the code with only the judge's two repairs in, then green."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_gate_path_traversal.py",
-          "reference": "TaskDirGuardImplPanelRound2.test_a_write_counts_however_it_is_spelled",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "Post-D6 run 2 (codex, counted Important), repaired as a class: 'the call writes no file' was decided from the output redirections written as their own word. 7 of 9 spellings allowed by the code the judge reviewed; the 3 controls (a redirection that writes no file) pass before and after. The scan errs toward 'writes': a `>` that is no redirection (a `[[ a > b ]]` comparison) counts. Three rows were added by my own review of that repair — a write inside a substitution that itself stands between double quotes — and failed against its first form: every substitution body is scanned as its own text now."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_gate_path_traversal.py",
-          "reference": "TaskDirGuardImplPanelRound2.test_an_environment_change_counts_however_it_is_made",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "Post-D6 run 2 (codex, counted Important), repaired as a class: a listed builtin that sets a variable, an assigning expansion and an arithmetic expression were not seen as environment changes. 5 of 6 forms allowed by the code the judge reviewed; the 3 controls pass before and after. Any `((` in the call counts. Two more arithmetic spellings (the old bracket form, an array subscript) were added by my own review and failed against the first form of the repair."
+            "Below 3.10 a `mkdir` naming a task directory and a command with a brace pass the gate, no helper run (task 194 refused them there: the trigger without its helper)."
           ]
         }
       ],
@@ -2434,6 +2254,7 @@
       ],
       "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
+        "The guarantee as it stood from task 100 to task 197 (history): task-gate-hook refuses a Bash command that creates a task directory by hand inside the project — a `mkdir` naming `.agent[/<lane>]/tasks/…` in any shell spelling the decoder can resolve from the text (quoted, backslash-escaped, `$'…'`, brace-expanded, a glob in the PATH), judged by scripts/task-dir-target.py after the shell's own decoding — allows the same command when every named target is a literal absolute path OUTSIDE the project (a temp fixture), and, once the trigger fires (a `mkdir` word after quote/backslash stripping, a `$'`, or a `{` anywhere in the text), allows a command whose every mkdir word is provably inert — inside masked data (a heredoc a non-shell reads, an echo/printf literal) or among the arguments of a known read/print command (echo, printf, grep, cat, the `tasks` CLI, `git commit/log/show/diff/…` without `-c`), found through command_guard's walker (segments, wrappers, payloads, `sh -c`, eval, `$(…)`, herestrings, `find -exec`); any other command carrying the word, and every command whose NAME is unresolved (`$M`, `$(…)`, a backtick), counts as running it (task 110 and its impl panel round 1), and a mention is inert only while EVERY command of the call is one the helper knows to read, print or write text (a closed list — echo, printf, grep, cat, head, tail, wc, tee, cd, ls, cut, tr, the `tasks` CLI, git's read subcommands — that holds for a tool named bare in the environment the call found: no pager, no sorter, no command with an output-file operand; any environment change in the call — an assignment, a prefix, `printf -v`, an expansion that assigns, an arithmetic expression — takes the whole call off it; a path-qualified name, git and `tasks` count only when the call writes no file, a write being `tee` or any unquoted `>` not aimed at the null device or a descriptor; plus a non-shell interpreter whose program IS a quoted heredoc: given no program by `-c`, `-e`, `-m` or a script operand, its stdin not redirected from elsewhere) — with a shell, a sourcer, a path, or any program the helper does not know in the same call, text that one command writes or prints could be run by another, so the released answer stands (impl panel round 2: the first narrowing allowed a script written through a file-sink heredoc or by echo/printf and then run, a read command's output piped into a shell, and a quoted heredoc whose reader it could not name — a regression against 1.5.45) — and otherwise refuses to judge anything but one simple mkdir: a compound command, a pipe, a subshell, a background job, a prefix assignment or an expansion that could repoint the path is blocked, never narrowed. A word holding an unresolved expansion (a variable, `$(…)`, a backtick, or a shell special parameter such as `$@` — task 110) counts as naming a task dir only when it can still spell one: `tasks` is visible, or an expansion follows the `.ag` hint, or the `.ag` is not a whole `.agent` component — so `\"$N/.agent\"` is allowed (task 110, a regression against 1.5.45) while `.$D/tasks/…` and `.agent/$T/…` are refused. A command NAME that exists only after the shell evaluates it — assembled in a variable (`D=mk; D+=dir; \"$D\" -p …`) or a glob on the binary itself (`/bin/mk?ir`) — is outside the guard, the same architectural bound as PB-COMMAND-DANGEROUS. Below Python 3.10 the decoder is not run: once the trigger fires the command is refused, the narrowing above does not apply, and the refusal says why (task 194, PB-PYTHON-FLOOR).",
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
         "Row added by Task 100 (PLAN S8 binding audit, 2026-09-27) for the parked item task 087 → PLAN S8 (task 080 built the S1d narrowing helper; task 085 G2/T2/U3 extended the trigger to shell spellings). Bound: the helper judges the command TEXT before the shell runs it — a mkdir whose target only exists after an earlier step (a symlink planted in the same command) is refused as non-simple rather than resolved; a genuinely new spelling the decoder does not know is refused too (the trigger is loose on purpose: any `mkdir` word, `$'`, or `{` runs the helper, which can only narrow). Hermetic bash subprocess on the CI lanes, not a live provider hook invocation; the ack-free judge-session block (`tasks new|work` from a judge) is PB-JUDGE-READONLY's neighbour, not this row.",
         "Task 100 impl panel round 1 (2026-09-27) NARROWED `in any shell spelling` to `any spelling the decoder can resolve from the text`: two seats showed a computed command NAME (a variable-assembled `\"$D\"`, a glob on the binary `/bin/mk?ir`) is not seen — task-dir-target.py decodes quoting, escapes, `$'…'`, braces and PATH globs, but a name that exists only after evaluation needs the shell's variable environment or filesystem, which a static judge does not have (the same class command_guard pins in TheArchitecturalBound). Both shapes are pinned as ALLOWED so the bound is visible; the OS sandbox is the layer for them.",
@@ -2441,7 +2262,10 @@
         "Task 110 bound: a mkdir run by a non-shell program from a quoted HEREDOC BODY (`python3 - <<'PY'` with os.system / subprocess) is not seen — the body is data to the guard. A non-shell command whose own words carry the mkdir word (`python3 -c \"…mkdir…\"`, `make … mkdir`) still refuses (impl panel round 1: only known read/print commands make the word inert).",
         "Task 110 impl panel round 2 bound: the read/print list is CLOSED on purpose. A harmless tool it does not name (`sed`, `awk`, `jq`, a test runner) in the same call as a mention keeps the released refusal when the call also names a task dir; the cost is measured above (14 corpus commands refused again, all refused by 1.5.45). A program a listed command is CONFIGURED to start (a git hook, a pager, the verify command `tasks` runs) is covered inside one call — git, `tasks` and a path-qualified name do not count as read commands when the call writes a file, and an environment change takes the call off the list — but one planted in an EARLIER call is not seen. The two exemptions that remain are the declared ones: a non-shell interpreter reading its PROGRAM from a quoted heredoc is not followed into what that program does, and a file written in one tool call and run in a LATER one is not seen (the guard keeps no state between calls).",
         "Task 110, review status (2026-10-05): the post-panel single-judge run cap (owner rule D6) was reached after run 2, which counted two Important findings in this helper's read/print list. Both were repaired as classes (`test_a_write_counts_however_it_is_spelled`, `test_an_environment_change_counts_however_it_is_made`), test-pinned, measured on the bash-history corpus and covered by the full verify — but NO judge has reviewed those two repairs. The owner closed the task on 2026-10-05 WITHOUT a third run, by decision: the cap had been reached on a fourth task in a row, each extra run granted before had found new edges in fresh repairs and no Critical, the dangerous-command guard drew no finding in run 2, and a miss in this helper means a task directory created without `tasks new`, not a dangerous command executed. A design item is parked for PLAN S11: detect such a directory after the fact instead of predicting from the command text what a command may start.",
-        "2026-10-14 (task 196): a task folder made by hand is now also found AFTER the call, by any spelling, and the session held (PB-TASK-DIR-WATCH); this row's pre-run check is removed by task 197 once that row stands (the owner's answer of 2026-10-13 12:27, \"O scot pentru shell\")."
+        "2026-10-14 (task 196): a task folder made by hand is now also found AFTER the call, by any spelling, and the session held (PB-TASK-DIR-WATCH); this row's pre-run check is removed by task 197 once that row stands (the owner's answer of 2026-10-13 12:27, \"O scot pentru shell\").",
+        "2026-10-14 (task 197, PLAN §S14 T5b, the last part): the check is removed — it predicted from a command's text what it would create; 54 of 56 vectors were live bypasses in task 077, each repair widened the model and the next review found its next edge (#12), and it refused harmless commands (B31). Its 22 proofs went with the tests they named — `tests/test_gate_path_traversal.py`'s ManualTaskDirGuard, ManualTaskDirHelperPortability, TaskDirGuardFixBatch110, TaskDirGuardImplPanelRound1 and TaskDirGuardImplPanelRound2 (on nested `edaa979` and in the git history of this ledger and that file).",
+        "Plan panel r1 of task 197, P7 (opus, sonnet): grok, antigravity and pi wire `task-gate-hook` but not the watch, so with the pre-run refusal gone they keep only the close's check; supported enforcement is Claude's alone (owner decision 2026-08-21) — PB-TASK-DIR-WATCH's bound.",
+        "Its status stays `verified_by_current_executable_evidence`: since task 197 the row claims the retirement — what the six proofs above run — not the check. A `not_applicable` row (task 197's plan) would fail §S14's release bar, which takes every row verified or waived (found writing W4)."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],
@@ -2451,7 +2275,7 @@
     {
       "id": "PB-TASK-DIR-WATCH",
       "category": "hook-payload-and-paths",
-      "statement": "`task-dir-watch-hook` (PreToolUse on every tool the task gate sees; PostToolUse and PostToolUseFailure on a shell call, a Write or an edit — task 196, PLAN §S14 T5b, B31 = #12, by the owner's answers of 2026-10-13 12:27) flags a task folder (a DIRECTORY with a `<digits>-…` name under the session's own lane's `tasks/` — a file is not one) that appeared during one of the session's own shell calls, Writes or creating edits (an Edit or MultiEdit with an empty `old_string` creates the file and its missing folders — measured; an edit of an existing file is not watched) and that is not known — not registered in the task registry (a `reserved` line not counting; a `reserved` folder while a creator holds the lane lock is a creation in progress, not flagged) and its task.md not committed: a snapshot of `tasks/` per call before it (`sessions/<id>/task_dirs_before.<tool_use_id>`, so parallel calls keep their own), a listing after; a call with no snapshot flags every unknown folder present; a git that does not answer within 1 s leaves a folder unproven, flagged. A flag is the session's flag file (ASCII JSON, so a name that is not UTF-8 round-trips; its read-modify-write under a session lock waited for 3 s at most; a post that cannot have it records a pending entry under a name of its own, which counts as a flag and which the next re-check merges under the lock — removing only what it read: two posts at once keep both folders, and a detection made while a re-check runs is never lost; a flag that cannot be written at all is said with its folders, and the close refuses), read, written, listed and removed only through the session directory held open from the project root without following a link (a lane reached through a link: its session directory opened without following its own link, nothing swept there), a journal line (`task-dir-watch`, `record`, `unknown task folder`) and the words said to the agent (additionalContext naming the event — measured in task 196 to reach the model after a PostToolUseFailure too). A flagged session's next call through the hook — an edit, a Write or a shell call — is refused (exit 2, a journal line), naming each folder, `tasks adopt` first when it can take it, `rm -r` written from the call's cwd (a form the command guard lets through), and why adopt cannot when it cannot; except the way out: ONE simple command (quoted literals, and `$'…'` with only the escapes bash decodes the same everywhere — `\\\\c`, `\\\\u`, `\\\\U` and an unknown escape are refused; no operator, redirection, expansion, glob or newline outside quotes) — `rm` (-r -R -f -v and their long forms) or `rmdir` whose every operand names a flagged folder by its PHYSICAL parent and its name, or a `tasks` CLI call by a path that is, physically, the project's `.claude/bin/tasks` or the plugin's `scripts/tasks` (never the bare `tasks`: PATH decides what it runs). Before refusing, the flag is re-checked: a folder gone or now known leaves it, and with none left the call passes. A watch that cannot run while a flag stands holds the call (fail closed; after a call it says so). With the registry gone a standing flag still holds — nothing knows its folders — and a call during which the registry vanished has what it made flagged. Another session is not held. `tasks work done` refuses while the session's lane holds an unknown task folder (the same reader, `registry.unknown_now`) and on an unreadable registry, naming the repair — checked before verify and again under the task lock at the commit; a `tasks/` that cannot be listed or whose entries cannot be examined is never read as empty (the close refuses, the watch says it could not run); `--force --reason` overrides. BOUNDS: below python 3.10 nothing is watched or held; a lane with no registry is not watched and its close says nothing of folders; a background shell call returns at once, so a folder it makes later is the close's; two sessions of one lane whose calls overlap both see the folder and are both held (either one's removal or adoption releases both — narrower than task 186's R3-2 — accepted by the owner on 2026-10-14 07:52: \"Accept limita\"); another lane is its own sessions' and its own close's; a call that `cd`s into another project is not watched there; no session id (the background daemon) → nothing; Read-type tools, Task, MCP and WebFetch are neither watched nor held (a folder an MCP server writes is the close's); codex, grok and pi have only the close; an unreadable registry holds nothing — it is said and journaled, and the close refuses; a registry deleted ends the watch for the calls AFTER the deleting one (task 197 closes that before it removes the Bash pre-run check) and the next creator re-enrols what stands (PB-TASK-REGISTRY); a folder made by hand and COMMITTED — in the same call, or anywhere before the close — reads known (the git rule cannot tell a commit from a pull; a Phase B input); a non-strict or task.md-less directory present when the registry was first written reads unknown and only removal or `--force` ends it (the dry run on the owner's two trees found none; a Phase B input); a call that fires no post leaves its snapshot (a call another hook denied never ran; an interrupted call fires PostToolUseFailure — its payload carries `is_interrupt`); the way out's `rm` is the one PATH finds (a hold against a habit, not against intent); a session directory made unwritable on purpose (or a full disk) leaves a detection said but not held — the close refuses; the registry is keyed by name, so a folder made by hand under a registered name reads known. The Bash pre-run check (PB-TASK-DIR-GUARD) still stands until task 197 removes it.",
+      "statement": "`task-dir-watch-hook` (PreToolUse on every tool the task gate sees; PostToolUse and PostToolUseFailure on a shell call, a Write or an edit — task 196, PLAN §S14 T5b, B31 = #12, by the owner's answers of 2026-10-13 12:27) flags a task folder (a DIRECTORY with a `<digits>-…` name under the session's own lane's `tasks/` — a file is not one) that appeared during one of the session's own shell calls, Writes or creating edits (an Edit or MultiEdit with an empty `old_string` creates the file and its missing folders — measured; an edit of an existing file is not watched) and that is not known — not registered in the task registry (a `reserved` line not counting; a `reserved` folder while a creator holds the lane lock is a creation in progress, not flagged) and its task.md not committed: a snapshot of `tasks/` per call before it (`sessions/<id>/task_dirs_before.<tool_use_id>`, so parallel calls keep their own), a listing after; a call with no snapshot flags every unknown folder present; a git that does not answer within 1 s leaves a folder unproven, flagged. A flag is the session's flag file (ASCII JSON, so a name that is not UTF-8 round-trips; its read-modify-write under a session lock waited for 3 s at most; a post that cannot have it records a pending entry under a name of its own, which counts as a flag and which the next re-check merges under the lock — removing only what it read: two posts at once keep both folders, and a detection made while a re-check runs is never lost; a flag that cannot be written at all is said with its folders, and the close refuses), read, written, listed and removed only through the session directory held open from the project root without following a link (a lane reached through a link: its session directory opened without following its own link, nothing swept there), a journal line (`task-dir-watch`, `record`, `unknown task folder`) and the words said to the agent (additionalContext naming the event — measured in task 196 to reach the model after a PostToolUseFailure too). A flagged session's next call through the hook — an edit, a Write or a shell call — is refused (exit 2, a journal line), naming each folder, `tasks adopt` first when it can take it, `rm -r` written from the call's cwd (a form the command guard lets through; the folder's absolute path when the cwd is inside it), and why adopt cannot when it cannot; except the way out: ONE simple command (quoted literals, and `$'…'` with only the escapes bash decodes the same everywhere — `\\\\c`, `\\\\u`, `\\\\U` and an unknown escape are refused; no operator, redirection, expansion, glob or newline outside quotes) — `rm` (-r -R -f -v and their long forms) or `rmdir` whose every operand names a flagged folder by its PHYSICAL parent and its name, or a `tasks` CLI call by a path that is, physically, the project's `.claude/bin/tasks` or the plugin's `scripts/tasks` (never the bare `tasks`: PATH decides what it runs). Before refusing, the flag is re-checked: a folder gone or now known leaves it, and with none left the call passes. A watch that cannot run while a flag stands holds the call (fail closed; after a call it says so). With the registry gone a standing flag still holds — nothing knows its folders — and a call during which the registry vanished has what it made flagged. Another session is not held. `tasks work done` refuses while the session's lane holds an unknown task folder (the same reader, `registry.unknown_now`) and on an unreadable registry, naming the repair — checked before verify and again under the task lock at the commit; a `tasks/` that cannot be listed or whose entries cannot be examined is never read as empty (the close refuses, the watch says it could not run); `--force --reason` overrides. Every lane that has `tasks/` is watched, a registry or not (task 197): with none, what is not committed is unknown — to the watch and to both of the close's checks — and a session's start and `tasks work <N>` write the registry of a lane that has `tasks/` and none, from what stands (PB-TASK-REGISTRY). A re-enrolment is no release: a flagged folder that a registry row `enrolled` at or after its flag time takes in stays flagged (the flag keeps each folder's time) — only `tasks adopt` (which takes over such a row), a commit or the folder's removal ends it. Since task 197 the watch and the close are the only check of a hand-made task folder: the Bash pre-run check (PB-TASK-DIR-GUARD) is retired, so a `mkdir`, a brace or a `$'…'` spelling runs and what it made is caught after the call. BOUNDS: below python 3.10 nothing is watched or held; a background shell call returns at once, so a folder it makes later is the close's; two sessions of one lane whose calls overlap both see the folder and are both held (either one's removal or adoption releases both — narrower than task 186's R3-2 — accepted by the owner on 2026-10-14 07:52: \"Accept limita\"); another lane is its own sessions' and its own close's; a call that `cd`s into another project is not watched there; no session id (the background daemon), the fresh-clone shape (lanes and no marker) or a malformed marker → nothing (the task gate refuses edits on the last); a session directory that is a link is neither read nor written, and a session flagged before it became one is held, naming the repair; Read-type tools, Task, MCP and WebFetch are neither watched nor held (a folder an MCP server writes is the close's); codex, grok, antigravity and pi have only the close (grok, antigravity and pi wire `task-gate-hook` and lost its pre-run refusal with task 197 — supported enforcement is Claude's, owner decision 2026-08-21); an unreadable registry holds nothing — it is said and journaled, and the close refuses; a registry deleted is written again from what stands by the next creator, session start or activation (PB-TASK-REGISTRY's bound): the flagged session stays held, but the close reads that registry as it stands, so a folder it took in reads known there; a lane with no registry that no session start, `tasks work <N>`, creator or `tasks adopt` has enrolled yet (a session started before the upgrade to this version — which asks every session to be restarted — closing its task) has its close refuse every uncommitted task folder, saying the registry is gone and naming `tasks adopt`; a folder made by hand and COMMITTED — in the same call, or anywhere before the close — reads known (the git rule cannot tell a commit from a pull; a Phase B input); a non-strict or task.md-less directory present when the registry was first written reads unknown and only removal or `--force` ends it (the dry run on the owner's two trees found none; a Phase B input); a call that fires no post leaves its snapshot (a call another hook denied never ran; an interrupted call fires PostToolUseFailure — its payload carries `is_interrupt`); the way out's `rm` is the one PATH finds (a hold against a habit, not against intent); a session directory made unwritable on purpose (or a full disk) leaves a detection said but not held — the close refuses; the registry is keyed by name, so a folder made by hand under a registered name reads known.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/task-dir-watch-hook",
@@ -2484,6 +2308,10 @@
         {
           "path": "plugins/playbook/tasks/lifecycle.py",
           "reference": "symbol:_unknown_dirs_bounce"
+        },
+        {
+          "path": "plugins/playbook/scripts/task-dir-watch.py",
+          "reference": "symbol:_laundered"
         }
       ],
       "failure_consequence": "High",
@@ -2673,7 +2501,7 @@
           "boundary": "subprocess",
           "negative_control": {
             "path": "tests/test_task_dir_detector.py",
-            "reference": "TheClose.test_the_close_without_a_registry_says_nothing_of_folders"
+            "reference": "TheClose.test_the_close_skips_a_creation_in_progress"
           },
           "limitations": [
             "The tree CLI's `tasks work done`; red on nested `418be57`."
@@ -2876,6 +2704,95 @@
           "limitations": [
             "A real headless claude session on the candidate (task 196, 2026-10-14 07:23 after the single judge's run-1 fixes — 07:04, 06:39, 05:56 and 05:37 before them —, PASS 7 clauses): a folder copied by hand flagged after the call and the agent told; the next Edit held naming the folder and `rm -r`; the removal let through and the Edit after it done; a copy by a FAILING command caught through PostToolUseFailure and the next call held; `tasks adopt` let through, registering it and releasing the session; the journal's flag, block and allow lines."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_dir_detector.py",
+          "reference": "FlaggedAfterTheCall.test_a_lane_whose_registry_is_gone_is_still_watched",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_task_dir_detector.py",
+            "reference": "FlaggedAfterTheCall.test_a_committed_folder_is_not_flagged"
+          },
+          "limitations": [
+            "Task 197 P1(b): the registry deleted, a `cp -r` of a task folder flagged after the call (red on nested `edaa979`: not watched)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_dir_detector.py",
+          "reference": "FlaggedAfterTheCall.test_re_enrolment_after_a_flag_does_not_release_it",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task 197 P3: the registry deleted, a folder flagged, `tasks new` re-enrols it (`enrolled`): the next Edit still held; `tasks adopt` releases it (red on `edaa979`)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_dir_detector.py",
+          "reference": "EveryLaneIsWatched.test_a_real_mkdir_runs_and_is_caught_after",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_task_dir_detector.py",
+            "reference": "FlaggedAfterTheCall.test_a_folder_there_before_the_call_is_not_flagged"
+          },
+          "limitations": [
+            "Task 197: the Bash pre-run check gone — a real `mkdir -p` runs and is flagged after; a brace and a `$'…'` spelling likewise (the two tests beside it)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_dir_detector.py",
+          "reference": "HeldUntilResolved.test_a_flagged_session_whose_directory_became_a_link_is_held",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task 193's single judge, run 3 (M3): the session directory moved and a link left in its place — the next Edit and shell call held (red on `edaa979`: let through)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_dir_detector.py",
+          "reference": "HeldUntilResolved.test_from_inside_the_flagged_folder_the_suggestion_works",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task 195's single judge, run 3 (N3): from inside the flagged folder the refusal names its absolute path, and that removal passes (red on `edaa979`: `rm -r .`)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_dir_detector.py",
+          "reference": "APathWithGlobCharacters.test_a_pending_entry_holds_in_such_a_project",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task 195's single judge, run 3 (N2): in a project named `proj[one]` a pending entry holds the next Edit (red on `edaa979`: `compgen -G` read the path as a pattern)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_dir_detector.py",
+          "reference": "TheClose.test_the_close_without_a_registry_reads_the_git_rule",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_task_dir_detector.py",
+            "reference": "TheClose.test_the_close_skips_a_creation_in_progress"
+          },
+          "limitations": [
+            "Task 197 P4: the registry deleted, an uncommitted folder — `tasks work done` refuses naming it (red on `edaa979`: it passed)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_dir_detector.py",
+          "reference": "TheCloseRechecks.test_a_registry_deleted_during_verify_refuses_at_the_commit",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task 197 P4/P11 (agy, codex): verify deletes the registry and makes a folder — the commit's re-check refuses (red on `edaa979`)."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -2888,10 +2805,11 @@
       "missing_evidence_or_limitation": [
         "2026-10-14 (task 196): the owner's four B31 answers of 2026-10-13 12:27 — after every shell command and at the close; provenance from the registry (task 195); the next action held; the Bash pre-run check removed (task 197, once this row stands). Plan panel r1 (5/5) shaped it: P1-P20 in task 196's record.",
         "The overlap bound (two sessions of one lane, calls overlapping in time, both held) is narrower than task 186's R3-2 (\"the block holds only the creating session\"): a listing cannot tell which of two overlapping calls made a folder. Accepted by the owner, 2026-10-14 07:52 (\"Accept limita (Recomandat)\").",
-        "2026-10-14 (task 196 impl panel r1, 5/5, 1 Critical + 14 Important): I1-I7, I9, I11, I12, I14 fixed red first; I10, I11 (pre-existing directories), I13, I8 (`rm`) and the calls after a registry's deletion kept as the bounds above — the last one is task 197's to close before it removes the Bash pre-run check.",
+        "2026-10-14 (task 196 impl panel r1, 5/5, 1 Critical + 14 Important): I1-I7, I9, I11, I12, I14 fixed red first; I10, I11 (pre-existing directories), I13, I8 (`rm`) and the calls after a registry's deletion kept as the bounds above — the last one is task 197's to close before it removes the Bash pre-run check. (Task 197 closed it: every lane with `tasks/` watched, the enrolment.)",
         "2026-10-14 (task 196 impl panel r2, 5/5, 11 Important, no Critical — the last round D6 allows): the grave ones fixed red first — J4 (MEASURED: the hooks find the project from the shell's cwd, so a `cd` let a held session leave its project — `cd` is no way out), J7, J5/J8, J9; J2 MEASURED harmless (the payload's cwd follows a `cd`); J1 and J3 routed to PLAN's Phase B inputs; J6 settled (P9). The delta after r2 is guard code: one single-judge run (the owner's 18:37 rule).",
         "2026-10-14 (task 196, the single judge's run 1 after impl panel r2, 18:37 rule): FAIL, 3 Important — K1 (grave: a race my J5 fallback opened) and K3 fixed red first; K2 (an unwritable session directory) kept as a bound and a Phase B input. Run 2 of the same judge followed.",
-        "2026-10-14 (task 196, the single judge's run 2 — the last the 18:37 rule allows): FAIL, 2 Important, neither grave — L1 (a listing error of the session directory reads as no pending entry) and L2 (the pending prefix also matches an unfinished temporary file: a re-check at that instant over-flags or leaves the post's entry unpublished, which the post then says) — routed to PLAN's Phase B inputs with their fixes."
+        "2026-10-14 (task 196, the single judge's run 2 — the last the 18:37 rule allows): FAIL, 2 Important, neither grave — L1 (a listing error of the session directory reads as no pending entry) and L2 (the pending prefix also matches an unfinished temporary file: a re-check at that instant over-flags or leaves the post's entry unpublished, which the post then says) — routed to PLAN's Phase B inputs with their fixes.",
+        "2026-10-14 (task 197, PLAN §S14 T5b, the last part): the Bash pre-run check removed (PB-TASK-DIR-GUARD retired) and, before it — task 197's plan panel r1 (5/5, 3 Critical + 15 Important; P1-P12 in its record) — the watch on in every lane with `tasks/` (P1), the enrolment at a session's start and at `tasks work <N>` (P1), a re-enrolment no release (P3), both of the close's checks on the git rule with no registry (P4), and three edges of task 196's hook (P12: a linked session directory with a flag held — 193's run 3 M3; the pending entry found in a project whose path has glob characters — 195's run 3 N2; from inside the flagged folder an absolute removal suggested — N3). The daemon, the fresh-clone shape and a malformed marker stay bounds (P6); the hosts without the watch are P7's."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],
@@ -2901,7 +2819,7 @@
     {
       "id": "PB-TASK-MD-GUARD",
       "category": "hook-payload-and-paths",
-      "statement": "task-gate-hook refuses a `Write` that would CREATE a task record of this project by hand — a `file_path` naming `.agent[/<lane>]/tasks/<dir>/task.md` inside this project where no such file exists — whatever lexical spelling names it (a `/./` segment, a doubled slash, an `x/..` hop: the guard judges the normalised path), and answers that only `tasks new` creates task.md files. A `Write` over a task.md that already exists is not a creation and is not refused by this guard. Nor is a `Write` that creates a task.md of ANOTHER project. Whether a `Write` would create a file inside this project is decided on the path AS WRITTEN, read both as the kernel reads it (links first, then `..`) and as text (collapsed first): a creation inside the project under either reading is refused, a file that already exists under a reading is a rewrite under it (`task-dir-target.py --creates`, with the two inside helpers the task-directory guard uses; a relative or `~` path is judged on existence alone). When that helper does not run, the guard decides as it did before it had a scope: any creation that matches the pattern is refused.",
+      "statement": "task-gate-hook refuses a `Write` that would CREATE a task record of this project by hand — a `file_path` naming `.agent[/<lane>]/tasks/<dir>/task.md` inside this project where no such file exists — whatever lexical spelling names it (a `/./` segment, a doubled slash, an `x/..` hop: the guard judges the normalised path), and answers that only `tasks new` creates task.md files. A `Write` over a task.md that already exists is not a creation and is not refused by this guard. Nor is a `Write` that creates a task.md of ANOTHER project. Whether a `Write` would create a file inside this project is decided on the path AS WRITTEN, read both as the kernel reads it (links first, then `..`) and as text (collapsed first): a creation inside the project under either reading is refused, a file that already exists under a reading is a rewrite under it (`task-dir-target.py --creates`, with its two inside helpers; a relative or `~` path is judged on existence alone). When that helper does not run, the guard decides as it did before it had a scope: any creation that matches the pattern is refused.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/task-gate-hook",
@@ -2985,7 +2903,7 @@
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
         "Row added by task 166 (PLAN S11 fix batch, item 5; owner 2026-10-09: \"Adaug rândul în S11 (Recomandat)\"). The guard is older than the ledger and its tests date from task 158; until this row it was enforced and tested, and stated nowhere here.",
         "Task 171 (PLAN S11; retro 107 R6): the guard has a project scope. Until then a `Write` creating `<anywhere>/.agent/tasks/<dir>/task.md` was refused too, and this row stated that as a bound. Bound that remains, measured in that task and older than it: the pattern reads the path's TEXT, so a path that reaches this project's `.agent` through a symlink whose name is not `.agent` (`<link>/tasks/<dir>/task.md`) is not seen by this guard.",
-        "Bound: only a payload whose tool is `Write` is judged by this guard. One of another tool (`Edit`, `MultiEdit`, `NotebookEdit`) that names a task.md which does not exist is not refused here; whether such a tool can create a file at all is the host's behaviour and is not checked. Making a task DIRECTORY through the shell is `PB-TASK-DIR-GUARD`'s subject, not this row's.",
+        "Bound: only a payload whose tool is `Write` is judged by this guard. One of another tool (`Edit`, `MultiEdit`, `NotebookEdit`) that names a task.md which does not exist is not refused here; whether such a tool can create a file at all is the host's behaviour and is not checked. Making a task DIRECTORY through the shell is `PB-TASK-DIR-WATCH`'s subject (after the call; task 197 retired the pre-run `PB-TASK-DIR-GUARD`), not this row's.",
         "2026-10-14 (task 194): below Python 3.10 the task gate refuses every edit tool call before this guard runs (PB-PYTHON-FLOOR) — a Write over an existing task.md included."
       ],
       "follow_up_phases": [],
@@ -11575,7 +11493,7 @@
     {
       "id": "PB-PYTHON-FLOOR",
       "category": "compatibility-and-package",
-      "statement": "The documented and diagnosed minimum Python version matches syntax used by every shipped module, and the entry points that check the interpreter — the eight launchers and all ten hooks — fail clearly before import under an incompatible one, each hook with its own polarity: the task gate fails closed (no call but a shell command passes, and with no usable python3 at all not even that: the payload is unreadable and every call is refused; a shell command keeps the judge's guard and the task-dir trigger, which then refuses without its helper; the gate and the echo ask only inside a project), the stop hook counts the gates without Python and still blocks, codex's apply-patch hook refuses a PreToolUse edit; the others say so and do nothing — the state echo marks the count it did not make, so the stop hook holds the turn (task 194).",
+      "statement": "The documented and diagnosed minimum Python version matches syntax used by every shipped module, and the entry points that check the interpreter — the eight launchers and all ten hooks — fail clearly before import under an incompatible one, each hook with its own polarity: the task gate fails closed (no call but a shell command passes, and with no usable python3 at all not even that: the payload is unreadable and every call is refused; a shell command keeps the judge's guard (the task-dir trigger went with task 197); the gate and the echo ask only inside a project), the stop hook counts the gates without Python and still blocks, codex's apply-patch hook refuses a PreToolUse edit; the others say so and do nothing — the state echo marks the count it did not make, so the stop hook holds the turn (task 194).",
       "owner": [
         {
           "path": "plugins/playbook/scripts/tasks",
@@ -11744,7 +11662,7 @@
             "reference": "ShellEntrypointFloorGuard.test_control_task_gate_on_a_supported_interpreter"
           },
           "limitations": [
-            "`ls` passes with the floor said; `tasks status` gets no injected session id; a task directory outside the project, which the helper allows on a supported interpreter (the control), is refused; the judge's guard holds."
+            "`ls` passes with the floor said; `tasks status` gets no injected session id; since task 197 a `mkdir` naming a task directory and a command with a brace pass too, no helper run (until then the trigger refused them below the floor); the judge's guard holds."
           ]
         },
         {
@@ -18281,7 +18199,7 @@
     {
       "id": "PB-ENFORCEMENT-JOURNAL",
       "category": "hook-payload-and-paths",
-      "statement": "The enforcement hooks append a best-effort, log-only record of each decision to the lane-resolved .agent/<lane>/journal/enforcement.jsonl (root lane: .agent/journal/enforcement.jsonl). The `decision` field is one of {allow, block, record, session-walk}: task-gate writes allow or block (including the Bash task-dir refusal — task 110), command-guard writes block, and allow for an acknowledged command (`ack-irreversible-task:<rule>`, `ack-operator-env:<rule>` — task 110), stop/batch-close write block, and the close path writes a `record` (hook=\"close\", decision=\"record\", reason=\"verify contract\") logging the verify bar that close ran — a forensic record, not a gate allow/block. state-echo and task-gate write `session-walk` on an unresolved session id — what the resolver's walk read, capped per day (task 192, docs/enforcement-journal.md Family 3). A journal write failure never changes any enforcement decision, the journal is never created outside an existing playbook-managed lane, and neither writer writes into a linked `journal/` directory, through a linked journal file or into one that is not a regular file (the bash writer since task 192: before it a FIFO there hung the gate past its timeout, and a link received the record — measured). BOUND: the bash writer checks the file and then writes it, so a process that swaps it for a FIFO between the two can still hang the writing hook (the single judge after task 192's round 2 did, by a timed swap); pb_journal.py opens it non-blocking and without following a link, so its own residual is a swap of the directory. A Phase B input (PLAN.md).",
+      "statement": "The enforcement hooks append a best-effort, log-only record of each decision to the lane-resolved .agent/<lane>/journal/enforcement.jsonl (root lane: .agent/journal/enforcement.jsonl). The `decision` field is one of {allow, block, record, session-walk}: task-gate writes allow or block (its Bash task-dir refusal too, from task 110 until task 197 removed it), command-guard writes block, and allow for an acknowledged command (`ack-irreversible-task:<rule>`, `ack-operator-env:<rule>` — task 110), stop/batch-close write block, and the close path writes a `record` (hook=\"close\", decision=\"record\", reason=\"verify contract\") logging the verify bar that close ran — a forensic record, not a gate allow/block. state-echo and task-gate write `session-walk` on an unresolved session id — what the resolver's walk read, capped per day (task 192, docs/enforcement-journal.md Family 3). A journal write failure never changes any enforcement decision, the journal is never created outside an existing playbook-managed lane, and neither writer writes into a linked `journal/` directory, through a linked journal file or into one that is not a regular file (the bash writer since task 192: before it a FIFO there hung the gate past its timeout, and a link received the record — measured). BOUND: the bash writer checks the file and then writes it, so a process that swaps it for a FIFO between the two can still hang the writing hook (the single judge after task 192's round 2 did, by a timed swap); pb_journal.py opens it non-blocking and without following a link, so its own residual is a swap of the directory. A Phase B input (PLAN.md).",
       "owner": [
         {
           "path": "plugins/playbook/scripts/pb_journal.py",
@@ -18421,16 +18339,6 @@
           },
           "limitations": [
             "Pins the close entry's decision=\"record\" (the third contract value) with the verify command in the `command` field; the negative control proves a wedged journal never blocks the close."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_gate_path_traversal.py",
-          "reference": "TaskDirGuardFixBatch110.test_the_block_is_journalled",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "Task 110 (109 G2-13): Guard 2's refusal had no journal line."
           ]
         },
         {
@@ -21000,7 +20908,7 @@
     {
       "id": "PB-TASK-REGISTRY",
       "category": "task-lifecycle",
-      "statement": "Every task directory the CLI makes is named in its lane's task registry (`.agent[/<lane>]/task-registry`, beside `tasks/`, machine-local): `tasks new`, `tasks freehand` and `tasks retro` reserve a number, build the directory under a temporary name in the lane, rename it into `tasks/` and only then register its origin — under one per-lane lock that also takes the number, so two creators at once never take one number nor share a directory, and the number counts the registry's (a reservation burned by a crash is never reused). A reservation is never membership; a name already standing under `tasks/` is never published over. Reads never write: a directory is known when it is registered or its task.md is a regular blob in a COMMIT — HEAD, or the commit a stopped merge, cherry-pick, revert or rebase is bringing in (`git ls-tree`, never the index: a staged one is not); the writers (the creators, `tasks adopt`, `prepare-merge`'s renames) enrol the lane's existing directories that hold a task.md when they find no registry. `tasks adopt <folder>` registers a real folder with a task.md and a `<number>-<slug>` name whose number no other folder present holds, once, dropping a row of that number whose folder is gone (a renamed folder's old name); `prepare-merge` reads the registry before it moves anything (refusing a target name another row holds, dropping a reserved one) and renumbers under the lane lock, carrying each renamed folder's line — a folder known only by the git rule gets one under its new name. A folder whose name falls outside `<number>-<slug>` (a newline in it, say) is never registered and lists as unknown. A creator opens its lane and `tasks/` once under the lock and does all of a build — the temporary directory, its task.md, the final-name check, the rename and a failed build's cleanup — through those descriptors, so a swap of either path afterwards changes nothing it writes, renames or removes. A system that offers no `/proc/self/fd` (through which the held directories are reached) makes a creator REFUSE, creating nothing — never the unanchored fall-back to the lane's path (the single judge's run 3, 2026-10-14). A title with nothing to slug gets the slug `task`, and a name the reader would refuse is never written. An unreadable registry (a link, not a regular file, another format) stops a creator before it creates anything, naming the repair. BOUNDS: a directory present when a lane's registry is first written is trusted; deleting the registry re-enrols what is there; a creator killed after its rename and before its registration leaves a folder `tasks adopt` must take in; a folder an older CLI makes after the registry exists is unknown until adopted or committed; the instant between the creator's last check of the final name and its rename is not closed; between the rename and the origin's rewrite a finished folder is still `reserved`, so a lock-free reader in another session at that instant reads it unknown (task 196's detector must not flag a `reserved` folder while the lane lock is held); a repo whose `.gitignore` predates these entries shows the registry and its lock as untracked until `scripts/init` refreshes its ignore block — the freshness fingerprint excludes `.agent`, but the panel's tamper guard hashes untracked files there, so in such a repo a registry write during a panel (a lock holder rewrites the lock's pid) voids that round; the registry is keyed by NAME, so a folder removed and made again by hand under the same name reads known through its old row — what reads unknown is a hand-made folder under a NEW name. It is ENFORCED by task 196's watch and close check (PB-TASK-DIR-WATCH).",
+      "statement": "Every task directory the CLI makes is named in its lane's task registry (`.agent[/<lane>]/task-registry`, beside `tasks/`, machine-local): `tasks new`, `tasks freehand` and `tasks retro` reserve a number, build the directory under a temporary name in the lane, rename it into `tasks/` and only then register its origin — under one per-lane lock that also takes the number, so two creators at once never take one number nor share a directory, and the number counts the registry's (a reservation burned by a crash is never reused). A reservation is never membership; a name already standing under `tasks/` is never published over. Reads never write: a directory is known when it is registered or its task.md is a regular blob in a COMMIT — HEAD, or the commit a stopped merge, cherry-pick, revert or rebase is bringing in (`git ls-tree`, never the index: a staged one is not); the writers (the creators, `tasks adopt`, `prepare-merge`'s renames) enrol the lane's existing directories that hold a task.md when they find no registry, and so do a session's start and `tasks work <N>` in a lane that has `tasks/` and none (task 197: never a failure of either; a registry that exists, readable or not, is left alone). `tasks adopt <folder>` registers a real folder with a task.md and a `<number>-<slug>` name whose number no other folder present holds, once (taking over an `enrolled` row of that name, with a new time — task 197: a re-enrolment is no release of a flagged folder, an adoption is), dropping a row of that number whose folder is gone (a renamed folder's old name); `prepare-merge` reads the registry before it moves anything (refusing a target name another row holds, dropping a reserved one) and renumbers under the lane lock, carrying each renamed folder's line — a folder known only by the git rule gets one under its new name. A folder whose name falls outside `<number>-<slug>` (a newline in it, say) is never registered and lists as unknown. A creator opens its lane and `tasks/` once under the lock and does all of a build — the temporary directory, its task.md, the final-name check, the rename and a failed build's cleanup — through those descriptors, so a swap of either path afterwards changes nothing it writes, renames or removes. A system that offers no `/proc/self/fd` (through which the held directories are reached) makes a creator REFUSE, creating nothing — never the unanchored fall-back to the lane's path (the single judge's run 3, 2026-10-14). A title with nothing to slug gets the slug `task`, and a name the reader would refuse is never written. An unreadable registry (a link, not a regular file, another format) stops a creator before it creates anything, naming the repair. BOUNDS: a directory present when a lane's registry is first written is trusted (since task 197 that is normally a session's start in the lane); deleting the registry re-enrols what is there; a creator killed after its rename and before its registration leaves a folder `tasks adopt` must take in; a folder an older CLI makes after the registry exists is unknown until adopted or committed; the instant between the creator's last check of the final name and its rename is not closed; between the rename and the origin's rewrite a finished folder is still `reserved`, so a lock-free reader in another session at that instant reads it unknown (task 196's detector must not flag a `reserved` folder while the lane lock is held); a repo whose `.gitignore` predates these entries shows the registry and its lock as untracked until `scripts/init` refreshes its ignore block (and the close's uncommitted-work warning counts the two — since task 197 a session's start writes the registry, so in such a repo they show at its first close) — the freshness fingerprint excludes `.agent`, but the panel's tamper guard hashes untracked files there, so in such a repo a registry write during a panel (a lock holder rewrites the lock's pid) voids that round; the registry is keyed by NAME, so a folder removed and made again by hand under the same name reads known through its old row — what reads unknown is a hand-made folder under a NEW name. It is ENFORCED by task 196's watch and close check (PB-TASK-DIR-WATCH).",
       "owner": [
         {
           "path": "plugins/playbook/tasks/registry.py",
@@ -21065,6 +20973,10 @@
         {
           "path": "plugins/playbook/tasks/registry.py",
           "reference": "symbol:unknown_now"
+        },
+        {
+          "path": "plugins/playbook/tasks/registry.py",
+          "reference": "symbol:ensure_enrolled"
         }
       ],
       "failure_consequence": "High",
@@ -21429,6 +21341,36 @@
           },
           "limitations": [
             "The anchor pointed at a missing directory in-process (`_PROC_SELF_FD`); red on nested `12a2539` (the creator went ahead through the lane's path)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_dir_detector.py",
+          "reference": "EveryLaneIsWatched.test_the_session_start_enrols_a_lane_without_a_registry",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task 197 P1(a): `session-start-hook` in a lane with `tasks/` and no registry writes it, `001-a` `enrolled` (red on nested `edaa979`)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_dir_detector.py",
+          "reference": "TheClose.test_tasks_work_enrols_a_lane_without_a_registry",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task 197 P1(a): `tasks work 1` in such a lane writes it (red on `edaa979`)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_dir_detector.py",
+          "reference": "FlaggedAfterTheCall.test_re_enrolment_after_a_flag_does_not_release_it",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task 197 P3: `tasks adopt` takes over the `enrolled` row of a flagged folder and releases it."
           ]
         }
       ],

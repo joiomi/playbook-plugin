@@ -717,10 +717,11 @@ class EveryShippedInlinePythonIsIsolated(unittest.TestCase):
         "scripts/gate-echo-lib.sh": 1,
         "scripts/init": 3,
         "scripts/monitor-lib/bootstrap.sh": 2,
+        "scripts/session-start-hook": 1,
         "scripts/state-echo-hook": 2,
         "scripts/stop-hook": 1,
         "scripts/task-dir-watch-hook": 1,
-        "scripts/task-gate-hook": 7,
+        "scripts/task-gate-hook": 6,
         "skills/merge/SKILL.md": 4,
     }
 

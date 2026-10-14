@@ -380,10 +380,17 @@ class TestEvidenceContract(WorkReadoptBase):
 
     def _git_project(self):
         """A git project with init's runtime-state ignore (session pointers are not
-        work), committed — the shape a real `/playbook:init` project has."""
+        work), committed — the shape a real `/playbook:init` project has: init's own
+        list (task 197: `tasks work` writes the lane's task registry and its lock, which
+        that list ignores; a hand-kept `.agent/sessions/` line counted them as work)."""
+        import importlib.util
         import subprocess as sp
+        merge = Path(__file__).resolve().parent.parent / "plugins" / "playbook" / "scripts" / "claude-md-merge.py"
+        spec = importlib.util.spec_from_file_location("claude_md_merge_readopt", merge)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
         sp.run(["git", "init", "-q"], cwd=self.project, check=True)
-        (self.project / ".gitignore").write_text(".agent/sessions/\n", encoding="utf-8")
+        (self.project / ".gitignore").write_text("\n".join(mod.GITIGNORE_ENTRIES) + "\n", encoding="utf-8")
         sp.run(["git", "add", ".gitignore"], cwd=self.project, check=True)
         sp.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
                 "commit", "-q", "-m", "seed"], cwd=self.project, check=True)

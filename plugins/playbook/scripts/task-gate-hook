@@ -3,7 +3,8 @@
 # PreToolUse hook — guards:
 #   0. Write — block creating new task.md files (only tasks new CLI does that)
 #   1. Edit/Write on code files blocked when no task is active (exit 2 = BLOCK)
-#   2-mkdir. Bash — block manual task directory creation
+#   2. Bash — the judge session's guard (Guard 3) and the session-id injection; a task folder made by hand is
+#      caught AFTER the call by task-dir-watch-hook (task 197 removed the pre-run check)
 #
 # Allows: .agent/, .claude/ edits (task management, hook config)
 
@@ -263,8 +264,8 @@ journal_session_walk "$PB_JOURNAL_DIR" task-gate "$SESSION_ID" "$TOOL_NAME" "$PB
 # cannot be trusted below 3.10 (measured under a 3.9 that runs the stdlib: a README write
 # and a gate tick in task.md went through), so no call but a shell command passes here —
 # not even an exempt `.agent/` edit: below the floor the CLI refuses to run, and the fix
-# is python3, not a file. A shell command keeps only the guards that need no python of
-# ours: the judge's, and the task-dir trigger, which then refuses without its helper. ---
+# is python3, not a file. A shell command keeps the judge's guard, which needs no python
+# of ours. ---
 if [ "$PB_PY_FLOOR" != true ] && [ "$TOOL_NAME" != "Bash" ]; then
     journal_enforcement "$PB_JOURNAL_DIR" task-gate block "python3 below 3.10" \
         "$SESSION_ID" "$TOOL_NAME" "$FILE_PATH"
@@ -558,7 +559,7 @@ MSG
     exit 2
 fi
 
-# --- Guard 2: Bash — inject session_id + block manual task dir creation ---
+# --- Guard 2: Bash — inject session_id (the manual task-dir check: task-dir-watch-hook, after the call) ---
 if [ "$TOOL_NAME" = "Bash" ]; then
     if [ -n "$PB_FUSED" ]; then CMD="$PB_CMD"; else
     CMD=$(echo "$INPUT" | python3 -I -c "import sys,json; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('command',''))" 2>/dev/null || echo "")
@@ -578,51 +579,10 @@ MSG
         exit 2
     fi
 
-    # S1d (task 080, flag C15): the trigger matches the whole command text, so
-    # a fixture in a temp dir (`<tmp>/.agent/tasks/001-x`) was refused. When it
-    # fires, task-dir-target.py narrows it: exit 0 = every such target is a
-    # literal absolute path outside the project → allow. Exit 1, a crash, or a
-    # missing python3 → block, exactly as before (it can only narrow).
-    # MUST run BEFORE the injection early-exit below (task 080 round 1): with
-    # the old order `tasks status; mkdir -p .agent/tasks/9-x` was allowed there.
-    # The trigger is deliberately loose (round 2: `.agent/x/../tasks/` and
-    # `.agent//tasks//` slipped past `\.agent(/[^/]+)?/tasks/`) — a wider
-    # trigger can only block more; the helper does the narrowing.
-    # Task 085 G2: any `mkdir` word triggers the check now — a shell spelling of
-    # the path (`.ag'ent/tasks'`, `.ag\ent`, `.ag?nt`) never matched a raw-text
-    # regex. The helper decides whether a task dir is named at all.
-    # Round 2 (T2): the word is looked for with quotes and backslashes removed
-    # (`m\kdir`, `m'kdir'`), and any `$'…'` also triggers — only the helper can
-    # decode it (`$'\x6d'kdir`); it allows a command that runs no mkdir.
-    # Round 3 (U3): any `{` too — a brace can spell the command word itself
-    # (`mk{d,z}ir`), which only the helper's brace expansion can see.
-    if { printf '%s' "$CMD" | tr -d "'\"\\\\" | grep -qE '(^|[^[:alnum:]_])mkdir([^[:alnum:]_]|$)' \
-         || printf '%s' "$CMD" | grep -qF -e "\$'" -e "{"; } \
-       && ! { [ "$PB_PY_FLOOR" = true ] \
-              && printf '%s' "$CMD" | PB_PROJECT="$PROJECT_DIR" python3 -E -s "$HOOK_DIR/task-dir-target.py" 2>/dev/null; }; then
-        # (below the Python floor the helper that narrows the trigger is not run — task 194)
-        # Task 110 (109 G2-13): this refusal was the one task-gate block with no
-        # journal line (Guard 0's Write refusal above logs one).
-        if [ "$PB_PY_FLOOR" != true ]; then
-            journal_enforcement "$PB_JOURNAL_DIR" task-gate block "python3 below 3.10: task-dir trigger" \
-                "$SESSION_ID" "$TOOL_NAME" "" "$CMD"
-            cat >&2 <<'MSG'
-BLOCKED: below python3 3.10 the check that tells a task directory apart is not run, so a
-command with `mkdir`, `{` or `$'` in it is refused. Upgrade python3, then retry.
-MSG
-            exit 2
-        fi
-        journal_enforcement "$PB_JOURNAL_DIR" task-gate block "manual task dir creation" \
-            "$SESSION_ID" "$TOOL_NAME" "" "$CMD"
-        cat >&2 <<'MSG'
-BLOCKED: Don't create task directories manually.
-
-Use `.claude/bin/tasks new <type> <name>` to create tasks. The CLI enforces templates and numbering.
-
-Types: audit, bugfix, build, cleanup, eval, feature, light, ops, quick, refactor, research (run `tasks new` to see the current set)
-MSG
-        exit 2
-    fi
+    # The Bash pre-run task-dir check that stood here (tasks 080-110: a `mkdir` word, a `{` or a `$'` sent the
+    # command to task-dir-target.py, which guessed from the TEXT whether it made a task folder) is gone with
+    # task 197, by the owner's answer of 2026-10-13 12:27 ("O scot pentru shell"): a folder made by hand is
+    # caught AFTER the call by task-dir-watch-hook, by any spelling (ledger PB-TASK-DIR-WATCH).
 
     # Inject PLAYBOOK_SESSION_ID into tasks CLI commands via updatedInput
     if [ -n "$SESSION_ID" ] && echo "$CMD" | grep -qE '(^|[;&|] *)(([^ ]*/)?)tasks (work|status|bootstrap|freehand|retro|new)'; then

@@ -120,6 +120,12 @@ if [ -n "$PROJECT_DIR" ]; then
     # provisioning would mint a phantom lane beside the real ones. Warn instead
     # of exiting: session start is where the user can actually see and fix it.
     LANES_NO_MARKER=$(lanes_without_marker "$PROJECT_DIR" | tr '\n' ' ')
+    # Task 197 (its plan panel P1): a lane with `tasks/` and no task registry gets one now, from what stands — the
+    # task-folder watch and the close judge provenance by it. Never a failure of the session start.
+    if [ -z "$LANES_NO_MARKER" ] && [ -d "$AGENT_DIR/tasks" ] && [ ! -e "$AGENT_DIR/task-registry" ] \
+       && [ ! -L "$AGENT_DIR/task-registry" ]; then
+        python3 -E -s "$HOOK_DIR/task-dir-watch.py" --enrol "$PROJECT_DIR" "$AGENT_DIR" > /dev/null 2>&1 || true
+    fi
     if [ -z "$SESSION_ID" ]; then
         :   # unresolved (task 105) — no session directory to provision
     elif [ -n "$LANES_NO_MARKER" ]; then
