@@ -529,6 +529,90 @@ class AnAliasOfTheRecordIsStillGuarded(unittest.TestCase):
                 self.assertEqual(r.returncode, want, r.stderr.decode())
 
 
+class TheRecordIsKnownByIdentity(unittest.TestCase):
+    """Task 198, impl panel r1 (fable, opus, sonnet, codex): the guards decided on the TEXT of the resolved path, so the
+    record escaped wherever its real location does not spell `.agent[/<lane>]/tasks/<dir>/task.md` — a hard link, a
+    lane or `.agent` linked to a store, a task-directory link to a directory that is itself a link. Guard 0.5 asks
+    whether the written file IS the active record (the same device and inode); Guard 0 whether its `tasks/` IS the
+    lane's."""
+
+    def _bare(self, f, path):
+        payload = f.edit_payload(G[:3], [checked(g) for g in G[:3]])
+        payload["tool_input"]["file_path"] = str(path)
+        return f.run_hook(payload)
+
+    def _tmp(self):
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d, True)
+        return d
+
+    def _store_lane(self, f):
+        """`.agent` moved to a store not named `.agent`, a link left in its place."""
+        store = self._tmp() / "store" / "agent-data"
+        store.parent.mkdir(parents=True)
+        shutil.move(str(f.proj / ".agent"), str(store))
+        (f.proj / ".agent").symlink_to(store)
+        return store
+
+    def test_a_hard_link_to_the_active_record_is_the_record(self):
+        f = ProjectFixture()
+        hard = self._tmp() / "notes.md"
+        os.link(f.task_file, hard)
+        r = self._bare(f, hard)
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+        self.assertIn(b"outcome note", r.stderr)
+
+    def test_control_a_copy_of_the_record_is_not_the_record(self):
+        f = ProjectFixture()
+        copy = self._tmp() / "notes.md"
+        shutil.copyfile(f.task_file, copy)
+        r = self._bare(f, copy)
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+
+    def test_an_alias_to_a_lane_linked_to_a_store(self):
+        f = ProjectFixture()
+        self._store_lane(f)
+        alias = self._tmp() / "alias"
+        alias.symlink_to(f.proj / ".agent")
+        r = self._bare(f, alias / "tasks" / "001-thing" / "task.md")
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+        r = f.run_hook({"hook_event_name": "PreToolUse", "tool_name": "Write",
+                        "tool_input": {"file_path": str(alias / "tasks" / "002-by-hand" / "task.md"),
+                                       "content": "# 002\n"}})
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+        self.assertIn(b"creates task.md files", r.stderr)
+
+    def test_the_stores_own_path(self):
+        f = ProjectFixture()
+        store = self._store_lane(f)
+        r = self._bare(f, store / "tasks" / "001-thing" / "task.md")
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+        r = f.run_hook({"hook_event_name": "PreToolUse", "tool_name": "Write",
+                        "tool_input": {"file_path": str(store / "tasks" / "002-by-hand" / "task.md"),
+                                       "content": "# 002\n"}})
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+
+    def test_control_a_hop_out_of_tasks_is_no_record(self):
+        # `.agent/tasks/../task.md` is `.agent/task.md`: no task directory names it, so the lane rule does not apply
+        f = ProjectFixture()
+        r = f.run_hook({"hook_event_name": "PreToolUse", "tool_name": "Write",
+                        "tool_input": {"file_path": str(f.proj / ".agent" / "tasks" / ".." / "task.md"),
+                                       "content": "notes\n"}})
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+
+    def test_a_task_directory_link_to_an_active_directory_that_is_a_link(self):
+        # codex: `009-alias → 001-thing` and `001-thing → …/005-y` — the normalised reading carries 009, the resolved
+        # one 005, neither the active 001
+        f = ProjectFixture()
+        target = self._tmp() / "store" / ".agent" / "tasks" / "005-y"
+        target.parent.mkdir(parents=True)
+        shutil.move(str(f.task_file.parent), str(target))
+        f.task_file.parent.symlink_to(target)
+        (f.proj / ".agent" / "tasks" / "009-alias").symlink_to(f.task_file.parent)
+        r = self._bare(f, f.proj / ".agent" / "tasks" / "009-alias" / "task.md")
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+
+
 class ABackslashIsACharacterOfAName(unittest.TestCase):
     """Task 198 (#24, PLAN S14 T5b; task 171's single judge, run 3, measured): `task-dir-target.py` rewrote a backslash
     to a slash, so a record under the SEPARATE directory `<tmp>/proj\\other` was judged inside `<tmp>/proj` and Guard 0

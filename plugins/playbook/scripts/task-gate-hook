@@ -321,6 +321,29 @@ pb_task_md_path() {
 pb_is_task_md() {
     [ -n "$1" ] && printf '%s\n' "$1" | grep -qE '\.agent(/[^/]+)?/tasks/[^/]+/task\.md$'
 }
+# pb_in_lane_tasks PATH — PATH is `<d>/<dir>/task.md` whose `<d>` IS the session lane's `tasks/` (the same directory —
+# `-ef`, links followed — whatever either is called: a lane or `.agent` linked to a store holds no `.agent` in its
+# real path; task 198, impl panel r1 I2).
+pb_in_lane_tasks() {
+    local d
+    case "$1" in */task.md) ;; *) return 1 ;; esac
+    d="${1%/task.md}"
+    case "${d##*/}" in ''|.|..) return 1 ;; esac      # `<dir>` is a name, not a hop
+    d="${d%/*}"
+    [ -n "$d" ] && [ -d "$AGENT_DIR/tasks" ] && [ "$d" -ef "$AGENT_DIR/tasks" ]
+}
+# pb_is_active_record PATH NUMBER — PATH is the same FILE as the active record (device and inode, links followed —
+# a hard link, a link to the lane, a task-directory link whatever its number; task 198, impl panel r1 I1-I3): any
+# `tasks/<NUMBER>-*/task.md` of the lane, links among those included.
+pb_is_active_record() {
+    local e
+    case "$2" in ''|*[!0-9]*) return 1 ;; esac
+    [ -n "$1" ] && [ -e "$1" ] || return 1
+    for e in "$AGENT_DIR/tasks/$2"-*/task.md; do
+        [ -e "$e" ] && [ "$1" -ef "$e" ] && return 0
+    done
+    return 1
+}
 
 # --- Guard 0: Write — block creating new task.md files (only tasks new CLI does that) ---
 if [ "$TOOL_NAME" = "Write" ]; then
@@ -333,7 +356,9 @@ if [ "$TOOL_NAME" = "Write" ]; then
     # slash or an `x/..` hop name the same file, and the raw spelling matched no
     # pattern here while Guard 1 exempted it as an `.agent/` path.
     TASK_MD_PATH=$(pb_task_md_path)
-    if [ -n "$TASK_MD_PATH" ]; then
+    PB_IN_LANE=false
+    pb_in_lane_tasks "$FILE_PATH" && PB_IN_LANE=true
+    if [ -n "$TASK_MD_PATH" ] || [ "$PB_IN_LANE" = true ]; then
         # Task 171 (retro 107 R6): only a task record of THIS project is `tasks new`'s
         # to create — the pattern alone also refused a task.md of another project,
         # where this project's CLI creates nothing. `task-dir-target.py --creates`
@@ -351,7 +376,10 @@ if [ "$TOOL_NAME" = "Write" ]; then
         else
             PB_CREATES=$?
         fi
-        if [ "$PB_CREATES" -eq 1 ] || { [ "$PB_CREATES" -ne 0 ] && [ ! -f "$TASK_MD_PATH" ]; }; then
+        # A record in the session lane's own `tasks/` (task 198, impl panel r1 I2) is this project's whatever
+        # `--creates` reads: a lane linked to a store outside the project reads as outside.
+        if [ "$PB_CREATES" -eq 1 ] || { [ "$PB_IN_LANE" = true ] && [ ! -e "$FILE_PATH" ] && [ ! -L "$FILE_PATH" ]; } \
+           || { [ "$PB_CREATES" -ne 0 ] && [ ! -f "${TASK_MD_PATH:-$FILE_PATH}" ]; }; then
             journal_enforcement "$PB_JOURNAL_DIR" task-gate block "manual task.md creation" \
                 "$SESSION_ID" "$TOOL_NAME" "$FILE_PATH"
             cat >&2 <<'MSG'
@@ -388,8 +416,17 @@ if [ "$TOOL_NAME" = "Edit" ] || [ "$TOOL_NAME" = "Write" ] || [ "$TOOL_NAME" = "
     # Check if this targets the active task's task.md — on the normalised path,
     # for the reason given at Guard 0 (task 158).
     TASK_MD_PATH=$(pb_task_md_path)
-    if [ -f "$STATE_FILE" ] && [ -n "$TASK_MD_PATH" ]; then
+    PB_ACTIVE_BY_IDENTITY=false
+    if [ -f "$STATE_FILE" ]; then
         ACTIVE_TASK=$(head -1 "$STATE_FILE" | tr -d '[:space:]')
+        # The written file IS the active record (task 198, impl panel r1 — fable, opus, sonnet, codex): any link to it,
+        # hard or symbolic, whatever the path spells. Identity is this project's record by itself.
+        if pb_is_active_record "$FILE_PATH" "$ACTIVE_TASK"; then
+            PB_ACTIVE_BY_IDENTITY=true
+            [ -n "$TASK_MD_PATH" ] || TASK_MD_PATH="$FILE_PATH"
+        fi
+    fi
+    if [ -f "$STATE_FILE" ] && { [ -n "$TASK_MD_PATH" ] || [ "$PB_ACTIVE_BY_IDENTITY" = true ]; }; then
         # … and it is THIS project's record (task 171, impl panel r2): another project's
         # `…/tasks/<the same number>-x/task.md` matched too, and a new one born with ticked
         # gates was refused here after Guard 0 had let it through. `--path` exits 0 only
@@ -412,8 +449,8 @@ if [ "$TOOL_NAME" = "Edit" ] || [ "$TOOL_NAME" = "Write" ] || [ "$TOOL_NAME" = "
                 "$ACTIVE_TASK"-*) PB_IS_ACTIVE_RECORD=true ;;
             esac
         done
-        if [ -n "$ACTIVE_TASK" ] && [ "$PB_IS_ACTIVE_RECORD" = true ] \
-           && ! printf '%s' "$FILE_PATH" | PB_PROJECT="$PROJECT_DIR" python3 -E -s "$HOOK_DIR/task-dir-target.py" --path 2>/dev/null; then
+        if [ -n "$ACTIVE_TASK" ] && { [ "$PB_ACTIVE_BY_IDENTITY" = true ] || { [ "$PB_IS_ACTIVE_RECORD" = true ] \
+           && ! printf '%s' "$FILE_PATH" | PB_PROJECT="$PROJECT_DIR" python3 -E -s "$HOOK_DIR/task-dir-target.py" --path 2>/dev/null; }; }; then
             # "The guard could not run" => fail OPEN, loudly (uniform policy).
             # `python3 <missing-file>` exits 2, which is INDISTINGUISHABLE from
             # gate-batch-check's own legitimate block-with-exit-2 — so a missing
