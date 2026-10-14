@@ -1381,7 +1381,8 @@ def _drop_sink_heredoc_bodies(command):
             continue                                   # unterminated → keep all
         if not quoted and _EXPANSION.search("\n".join(lines[i:j])):
             continue                                   # expansions would run
-        i = j + 1                                      # drop body + closing tag
+        out.append(lines[j])                           # drop the body; its tag line stays (task 199:
+        i = j + 1                                      # the text after it still reads as what it is)
     return "\n".join(out)
 
 
@@ -1391,7 +1392,12 @@ def _strip_data_regions(command):
     body line `rm -rf /` still blocks, conservatively): a `cat`/`tee` heredoc
     body written to a plain file (quoted tag, or no expansion inside) and an
     echo/printf line redirected to a plain file with no pipe/expansion on it.
-    Everything that could run stays."""
+    Everything that could run stays. Only on a PLAIN command (task 199, see
+    `_heredoc_plan`): inside a group, a subshell, a loop or a function, what
+    echo or cat prints can reach a shell the construct pipes to (`{ echo '…';
+    } | bash`, `{⏎cat <<'EOF' … EOF⏎} | bash`), so nothing is masked there."""
+    if _heredoc_plan(_strip_comments(str(command))) is None:
+        return str(command)
     return "\n".join("echo > file" if _DATA_LINE.match(l) else _mask_echo_literals(l)
                      for l in _drop_sink_heredoc_bodies(command).split("\n"))
 
@@ -1450,9 +1456,171 @@ def _pipes_downloader_into_shell(text):
 
 
 def _command_substitutions(text):
-    """The contents of every `$( … )` and backtick substitution. Their bodies RUN,
-    whatever surrounds them — `echo "$(rm -rf /)"` deletes the disk — so each is
-    classified as a command in its own right."""
+    """The contents of every `$( … )`, backtick and `<( … )`/`>( … )` substitution that RUNS. Their bodies run whatever
+    surrounds them — `echo "$(rm -rf /)"` deletes the disk — so each is classified as a command in its own right; but
+    inside single quotes and `$'…'` bash keeps them literal (task 199, #10: a single-quoted note quoting a dangerous
+    command in backticks was refused). Outside quotes and inside double quotes they run; a heredoc opened outside quotes
+    has its body read QUOTE-BLIND, as before (in an unquoted body `'` is a literal character and the substitutions run;
+    a quoted body still here is a shell's script, the non-shell ones having been stripped by the caller; a body whose
+    closing tag a data stripper removed runs to the end, read the same way); an unterminated quote leaves the rest of
+    the text to the quote-blind scan. Conservative everywhere it cannot tell."""
+    out = []
+    i, n = 0, len(text)
+    pending = []                                   # heredocs opened on this line: (tag, strip_tabs)
+    while i < n:
+        c = text[i]
+        if c == "\n":
+            i += 1
+            if pending:
+                i = _heredoc_bodies(text, i, pending, out)
+                pending = []
+            continue
+        if c == "\\":
+            i += 2
+            continue
+        if c == "'" or text.startswith("$'", i):
+            j = _quote_end(text, i)
+            if j is None:
+                out.extend(_command_substitutions_blind(text[i:]))
+                break
+            i = j
+            continue
+        if c == '"':
+            j = i + 1
+            while j < n and text[j] != '"':
+                if text[j] == "\\":
+                    j += 2
+                    continue
+                if text.startswith("$(", j) or text[j] == "`":
+                    body, j = _one_substitution(text, j)
+                    if body is None:
+                        return out
+                    out.append(body)
+                    continue
+                j += 1
+            if j >= n:
+                out.extend(_command_substitutions_blind(text[i:]))
+                break
+            i = j + 1
+            continue
+        if text.startswith("<<<", i):
+            i += 3                                 # a herestring (its shell payload: `_herestring_payloads`)
+            continue
+        if text.startswith("<<", i):
+            tag, dash, _quoted, j = _heredoc_tag(text, i)
+            if tag:
+                pending.append((tag, dash))
+            i = j
+            continue
+        if text.startswith(("<(", ">(", "$("), i) or c == "`":
+            body, i = _one_substitution(text, i)
+            if body is None:
+                return out
+            out.append(body)
+            continue
+        i += 1
+    return out
+
+
+def _quote_end(text, i):
+    """The index after the `'…'` or `$'…'` that starts at `i` (in `$'…'` a backslash escapes the next character), or
+    None when it does not close."""
+    n = len(text)
+    if text[i] == "$":
+        j = i + 2
+        while j < n and text[j] != "'":
+            j += 2 if text[j] == "\\" else 1
+        return j + 1 if j < n else None
+    j = text.find("'", i + 1)
+    return None if j == -1 else j + 1
+
+
+def _heredoc_tag(text, i):
+    """(the tag, `<<-`, whether the word is quoted, the index after it) for the heredoc operator `<<` at `i`; the tag is
+    "" when no word follows. The word may be quoted in part (`'EOF'`, `"EOF"`, `E'O'F`, `\\EOF`): its quotes are
+    removed, and any of them makes the body unexpanded."""
+    n = len(text)
+    j = i + 2
+    dash = j < n and text[j] == "-"
+    if dash:
+        j += 1
+    while j < n and text[j] in " \t":
+        j += 1
+    tag, quoted = [], False
+    while j < n and text[j] not in " \t\n;&|<>()":
+        ch = text[j]
+        if ch in "'\"":
+            k = text.find(ch, j + 1)
+            if k == -1:
+                break
+            tag.append(text[j + 1:k])
+            quoted = True
+            j = k + 1
+        elif ch == "\\":
+            tag.append(text[j + 1:j + 2])
+            quoted = True
+            j += 2
+        else:
+            tag.append(ch)
+            j += 1
+    return "".join(tag), dash, quoted, j
+
+
+def _heredoc_bodies(text, i, pending, out):
+    """Read the bodies of the heredocs opened on the line that ended before `i`, in order: each up to the line that is
+    its tag (tabs stripped first for `<<-`), or to the end of the text. Each body is scanned QUOTE-BLIND (in an
+    unquoted body `'` is a literal character) and its substitutions added to `out`. Returns the index after them."""
+    n = len(text)
+    for tag, dash in pending:
+        start = i
+        while i < n:
+            e = text.find("\n", i)
+            e = n if e == -1 else e
+            line = text[i:e]
+            if (line.lstrip("\t") if dash else line) == tag:
+                out.extend(_command_substitutions_blind(text[start:i]))
+                i = e + 1
+                break
+            i = e + 1
+        else:
+            out.extend(_command_substitutions_blind(text[start:]))
+            return n
+    return i
+
+
+def _one_substitution(text, i):
+    """(the body, the index after it) of the substitution that starts at `i` — `$( … )`, `<( … )`, `>( … )` or a
+    backtick span —, or (None, len(text)) when it does not close (the scan stops there, as it always did)."""
+    n = len(text)
+    if text[i] == "`":
+        j = text.find("`", i + 1)
+        if j == -1:
+            return None, n
+        return text[i + 1:j], j + 1
+    depth, j, quote = 1, i + 2, ""
+    while j < n and depth:
+        c = text[j]
+        if quote:
+            if c == "\\" and quote == '"' and j + 1 < n:
+                j += 1
+            elif c == quote:
+                quote = ""
+        elif c in "\"'":
+            quote = c
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+        j += 1
+    if depth:
+        return None, n
+    return text[i + 2:j - 1], j
+
+
+def _command_substitutions_blind(text):
+    """The quote-blind scan (the whole of `_command_substitutions` until task 199): every `$( … )`, backtick and
+    `<( … )`/`>( … )` body, quotes ignored. For the text the quote-aware scan cannot read as a script — a heredoc
+    body, the rest after an unterminated quote."""
     out = []
     i, n = 0, len(text)
     while i < n:
@@ -1517,7 +1685,6 @@ def _command_substitutions(text):
 # code span gets refused. Measured on this repo's own 73 859 source/doc lines:
 # that single distinction accounts for 19 of 27 newly-blocked lines, and it is
 # not a heuristic — a quoted tag genuinely suppresses expansion in every shell.
-_QUOTED_HEREDOC = re.compile(r"""<<-?\s*(['"])(?P<tag>[A-Za-z_][A-Za-z0-9_]*)\1""")
 # ... unless the SINK is itself a shell: `bash <<'EOF'` does not expand the body
 # when the outer shell reads it, but bash then runs it and expands it there.
 _SHELLS = {"sh", "bash", "zsh", "ksh", "dash", "ash"}
@@ -1530,44 +1697,186 @@ _SHELLS = {"sh", "bash", "zsh", "ksh", "dash", "ash"}
 _ARGUMENT_JUDGED_HEADS = frozenset({"rm", "git", "dd"}) | frozenset(_SHELLS) | frozenset(_DB_CLIENTS)
 
 
-def _line_runs_a_shell(line, _depth=0):
-    for seg in _split_segments(line):
-        rest, _executes, payloads = _walk_prefix(seg)
-        lexed = _lex(rest)
-        if lexed and _command_name(lexed[0][2]) in (_SHELLS | _SOURCERS):
-            return True
-        if _depth < 8 and any(p and _line_runs_a_shell(p, _depth + 1) for p in payloads):
-            return True
-    return False
+# ── what a quoted heredoc's body is (task 199, #11) ──────────────────────────
+# The whole-command rules read the text without the body of a QUOTED heredoc that a known data reader reads: `cat`,
+# `tee`, `git commit` (the message), or a python that reads its PROGRAM from stdin (`python3 - <<'PY'`; with `-c`, `-m`
+# or a script operand the body is data handed to code the guard does not read). Two conditions make that removal one
+# the guard can reason about. The command is PLAIN — no group, subshell, substitution, backtick, process substitution,
+# compound command or `exec` anywhere outside the bodies —, so what a reader prints goes to its own pipeline or to a
+# file, never to a shell an enclosing construct feeds (`{ cat <<'EOF' … } | bash`, `git commit -m "$(bash <<'EOF' …)"`,
+# `while read l; do eval "$l"; done <<'EOF'`). And every command of the reader's pipeline is a reader (`cat <<'EOF' |
+# bash` keeps it). Anything else keeps the body, as every whole-command rule read it before: `ssh host`, `su`,
+# `at now`, `docker exec … sh`, a command an expansion names, a database client. The corpus measurement and each
+# command it newly allows are in task 199's record. Bound: a reader's program that builds a command from its own text
+# (`os.system(…)` in the body) is not seen — download-then-run's bound since task 110.
+_HEREDOC_DATA_READERS = frozenset({"cat", "tee"})
+_PYTHONS = frozenset({"python", "python3"})
+_PYTHON_FLAGS = frozenset({"-B", "-b", "-bb", "-d", "-E", "-I", "-O", "-OO", "-P", "-q", "-s", "-S", "-u", "-v"})
+_PYTHON_VALUED = frozenset({"-W", "-X"})
+_GIT_GLOBAL_VALUED = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace"})
+_COMPOUND_WORDS = frozenset({"if", "then", "elif", "else", "fi", "case", "esac", "for", "select", "while", "until",
+                             "do", "done", "function", "coproc", "exec"})
+_HEREDOC_OP = re.compile(r"(?<!<)<<(?!<)")
+_REDIRECT = re.compile(r"^(?:\d+|&)?(?:<<-?|<>|<&|>&|>>|>\||<|>)")
+
+
+def _words(lexed):
+    """The values of a command's words after its name, its redirections left out (`2>&1`, `> out`, `<<'PY'`)."""
+    out, i = [], 1
+    while i < len(lexed):
+        raw, _start, value, _quoted = lexed[i]
+        m = _REDIRECT.match(raw)
+        if m:
+            i += 2 if m.end() == len(raw) else 1       # `> out` / `>out`
+            continue
+        out.append(value)
+        i += 1
+    return out
+
+
+def _python_program_on_stdin(words):
+    i = 0
+    while i < len(words):
+        w = words[i]
+        if w in _PYTHON_VALUED:
+            i += 2
+        elif w in _PYTHON_FLAGS:
+            i += 1
+        else:
+            return w == "-"                            # `-c`, `-m`, a script, `--…`: not its program
+    return True
+
+
+def _git_subcommand(words):
+    i = 0
+    while i < len(words):
+        w = words[i]
+        if w in _GIT_GLOBAL_VALUED:
+            i += 2
+        elif w.startswith("-"):
+            i += 1
+        else:
+            return w
+    return None
+
+
+def _reads_heredoc_as_data(seg):
+    """Whether segment `seg` runs a known data reader: its name read through the wrapper walk, never named by an
+    expansion, delegating to nothing else."""
+    rest, executes, payloads = _walk_prefix(seg)
+    if not executes or any(payloads):
+        return False                                   # `env -S '…'`, `sudo sh -c …`: a second command
+    lexed = _lex(rest)
+    if not lexed or re.search(r"[$`]", lexed[0][0]):
+        return False                                   # an assignment alone, `$SHELL`, `$(which bash)`
+    name, words = _command_name(lexed[0][2]), _words(lexed)
+    if name in _PYTHONS:
+        return _python_program_on_stdin(words)
+    if name == "git":
+        return _git_subcommand(words) == "commit"
+    return name in _HEREDOC_DATA_READERS
+
+
+def _reader_pipeline_reads_data(line):
+    """Whether every pipeline of `line` that holds a heredoc operator — its commands joined by `|`, `|&` or `&` — is
+    made of known data readers only."""
+    runs, run = [], []
+    for seg, op in _split_segments_keep(line):
+        run.append(seg)
+        if op not in ("|", "&"):
+            runs.append(run)
+            run = []
+    holding = [r for r in runs if any(_HEREDOC_OP.search(s) for s in r)]
+    return bool(holding) and all(_reads_heredoc_as_data(s) for r in holding for s in r if s.strip())
+
+
+def _heredoc_plan(text):
+    """Every heredoc of `text` as (its opener's logical line, how many heredocs that line opens, whether the tag is
+    quoted, where the body starts, where its tag line starts), read as bash reads them — operators outside quotes,
+    bodies after the line, each to the line that is its tag (tabs stripped for `<<-`). None when `text` is not PLAIN
+    (see above), or holds an unterminated quote, an empty tag or a body that does not end: nothing is removed then."""
+    plan, skeleton = [], []
+    i, n, line_start, pending = 0, len(text), 0, []
+    while i < n:
+        c = text[i]
+        if c == "\n":
+            line = text[line_start:i]
+            skeleton.append(line)
+            i += 1
+            for tag, dash, quoted in pending:
+                start = i
+                while True:
+                    if i >= n:
+                        return None                    # the body does not end
+                    e = text.find("\n", i)
+                    e = n if e == -1 else e
+                    if (text[i:e].lstrip("\t") if dash else text[i:e]) == tag:
+                        plan.append((line, len(pending), quoted, start, i))
+                        i = min(e + 1, n)
+                        break
+                    i = e + 1
+            pending = []
+            line_start = i
+            continue
+        if c == "\\":
+            i += 2
+            continue
+        if c == "'" or text.startswith("$'", i):
+            j = _quote_end(text, i)
+            if j is None:
+                return None
+            i = j
+            continue
+        if c == '"':
+            j = i + 1
+            while j < n and text[j] != '"':
+                if text[j] == "\\":
+                    j += 2
+                    continue
+                if text[j] == "`" or text.startswith("$(", j):
+                    return None
+                j += 1
+            if j >= n:
+                return None
+            i = j + 1
+            continue
+        if c in "(){}`":
+            return None
+        if text.startswith("<<<", i):
+            i += 3
+            continue
+        if text.startswith("<<", i):
+            tag, dash, quoted, j = _heredoc_tag(text, i)
+            if not tag:
+                return None
+            pending.append((tag, dash, quoted))
+            i = j
+            continue
+        i += 1
+    if pending:
+        return None                                    # an opener on the last line: no body to read
+    skeleton.append(text[line_start:])
+    for seg in _split_segments("\n".join(skeleton)):
+        lexed = _lex(seg)
+        if lexed and lexed[0][2] in _COMPOUND_WORDS:
+            return None
+    return plan
 
 
 def _strip_quoted_heredoc_bodies(text):
-    lines = str(text).split("\n")
-    out, i = [], 0
-    while i < len(lines):
-        line = lines[i]
-        out.append(line)
-        i += 1
-        m = _QUOTED_HEREDOC.search(line)
-        if not m:
-            continue
-        # `sudo bash <<'EOF'` / `env bash <<…` / `timeout 5 sh <<…`: resolve the
-        # sink through the wrapper walk, not from the first token (impl panel
-        # round 2, sol:high + sol:medium).
-        # Task 110 (impl panel round 1 follow-up): the sink was read from the
-        # FIRST command of the line, so `cd x; bash <<'EOF'` and `cat <<'EOF' |
-        # bash` hid a shell script. The body is kept when ANY command on the
-        # line — or a payload it delegates to — is a shell or a sourcer.
-        if _line_runs_a_shell(line):
-            continue                                   # the body IS a shell script
-        tag = m.group("tag")
-        j = i
-        while j < len(lines) and lines[j].strip() != tag:
-            j += 1
-        if j >= len(lines):
-            continue                                   # unterminated → keep it all
-        i = j + 1                                      # drop the inert body
-    return "\n".join(out)
+    """`text` without the bodies of the quoted heredocs that known data readers read (see above; each tag line stays,
+    so the text after it still reads as the command it is); `text` itself when the command is not PLAIN."""
+    text = str(text)
+    plan = _heredoc_plan(text)
+    if not plan:
+        return text
+    out, last = [], 0
+    for line, ops, quoted, body_start, tag_start in plan:
+        if quoted and ops == 1 and _reader_pipeline_reads_data(line):
+            out.append(text[last:body_start])
+            last = tag_start
+    out.append(text[last:])
+    return "".join(out)
 
 
 # `bash <<< '<script>'` hands the shell its script on stdin, so the string is a
@@ -1739,7 +2048,7 @@ def _downloads_then_runs(text, written=None, _depth=0):
     return False
 
 
-def classify_command(command, extra_patterns=None, _depth=0, _argv=False, _in_sub=False):
+def classify_command(command, extra_patterns=None, _depth=0, _argv=False):
     """Return ("block", name, why) or ("allow", None, None). Pure + deterministic.
 
     `command` may be a str, or a list of argv tokens (Codex `exec_command`), in
@@ -1753,7 +2062,7 @@ def classify_command(command, extra_patterns=None, _depth=0, _argv=False, _in_su
             quoted = " ".join(shlex.quote(str(p)) for p in command)
         except Exception:
             quoted = " ".join(str(p) for p in command)
-        return classify_command(quoted, extra_patterns, _depth, _argv=True, _in_sub=_in_sub)
+        return classify_command(quoted, extra_patterns, _depth, _argv=True)
     if not command or not str(command).strip():
         return ("allow", None, None)
     command = str(command)
@@ -1774,7 +2083,7 @@ def classify_command(command, extra_patterns=None, _depth=0, _argv=False, _in_su
             if payload:
                 if _depth + 1 >= _MAX_DEPTH:
                     return _TOO_DEEP                   # never silently open
-                v = classify_command(payload, extra_patterns, _depth + 1, _in_sub=_in_sub)
+                v = classify_command(payload, extra_patterns, _depth + 1)
                 if v[0] == "block":
                     return v
         if not executes:                               # `sudo --version …` prints, runs nothing
@@ -1787,7 +2096,7 @@ def classify_command(command, extra_patterns=None, _depth=0, _argv=False, _in_su
             return ("block", hit[0], hit[1])
         inner = _unwrap_shell_c(stripped) or _unwrap_shell_c(normalized)
         if inner and _depth < _MAX_DEPTH:                       # unwrap `bash -lc "<script>"`
-            v = classify_command(inner, extra_patterns, _depth + 1, _in_sub=_in_sub)
+            v = classify_command(inner, extra_patterns, _depth + 1)
             if v[0] == "block":
                 return v
     # Task 073 (B0): the whole-command patterns must not fire on DATA — a heredoc
@@ -1809,34 +2118,39 @@ def classify_command(command, extra_patterns=None, _depth=0, _argv=False, _in_su
             if sub.strip():
                 if _depth + 1 >= _MAX_DEPTH:
                     return _TOO_DEEP                   # fail CLOSED, never silently open
-                v = classify_command(sub, extra_patterns, _depth + 1, _in_sub=True)
+                v = classify_command(sub, extra_patterns, _depth + 1)
                 if v[0] == "block":
                     return v
-    if _pipes_downloader_into_shell(whole_text):
+    # What a runner of each rule's language reads (task 199, #11): the body of a QUOTED heredoc that a non-shell reads
+    # (`python3 - <<'PY'`) is that program's text, not shell code — a docs editor quoting `curl … | sh` in a string was
+    # refused. Every whole-command rule reads the text without the bodies of known data readers (`_HEREDOC_DATA_READERS`;
+    # a shell's, a database client's or an unknown sink's body is kept: it may run it). Bound, as for download-then-run
+    # since task 110: a command a non-shell program builds from its own text (`os.system(…)`) is not seen.
+    shell_text = _strip_quoted_heredoc_bodies(whole_text)
+    if _pipes_downloader_into_shell(shell_text):
         return ("block", "pipe-to-shell", _PIPE_WHY)
-    if _shell_consumes_a_downloader(whole_text):
+    if _shell_consumes_a_downloader(shell_text):
         return ("block", "pipe-to-shell", _PIPE_WHY)
     # The body of a quoted heredoc that a NON-shell reads (a `python3 - <<'PY'`
     # program) is not shell code: measured, the unrestricted form refused one
     # legitimate command of the owner's history — a python script writing prose
     # that quotes the vector. A shell's heredoc body is kept (the sink runs it).
-    # Not inside a body the SUBSTITUTION scan extracted: that scan also lifts a
-    # backtick span out of single quotes (where bash keeps it literal), and that
-    # pre-existing quirk was the whole of the one false positive measured with
-    # the rule applied there (task 110 — parked as its own finding). Bound: a
-    # download-then-run INSIDE `$( … )` is not seen.
-    if not _in_sub and _downloads_then_runs(_strip_quoted_heredoc_bodies(whole_text)):
+    # Inside a substitution body too since task 199: task 110 left those out
+    # because the substitution scan lifted a backtick span out of single quotes
+    # (#10, fixed above); measured again, the rule there refuses no command of
+    # the corpus.
+    if _downloads_then_runs(shell_text):
         return ("block", "download-then-run",
                 "running a script this command just downloaded executes unreviewed remote code")
     for name, rx, why in _WHOLE:
-        if rx.search(whole_text):
+        if rx.search(shell_text):
             return ("block", name, why)
     for pat in (extra_patterns or []):
         # On the MASKED text, like every built-in whole-command rule: a project
         # pattern must not fire on a heredoc fixture either (impl panel round 1,
         # sonnet #2 — the shipped example dodged it only by its `$` anchor).
         try:
-            if re.search(pat, whole_text, re.I):
+            if re.search(pat, shell_text, re.I):
                 return ("block", "project-dangerous", f"matches project pattern {pat!r}")
         except re.error:
             continue
