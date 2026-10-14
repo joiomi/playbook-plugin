@@ -187,9 +187,13 @@ class NoUnapprovedDirectWriters(unittest.TestCase):
     # Everything else must route through `atomic.rewrite` (or hold `task_lock`
     # across its own multi-file protocol).
     APPROVED = {
-        ("core.py", "_atomic_write(task_file, content)"):
-            "task CREATION writes a brand-new file in a directory just made — "
-            "there is no prior content to lose and no concurrent writer",
+        # task 195: every task CREATION goes through registry.create_task_dir — `new`, `freehand`
+        # and `retro` no longer write task.md themselves
+        ("registry.py", 'atomic_write(tmp / "task.md", render(num, name))'):
+            "task CREATION writes a brand-new file into a temporary directory it just made in the "
+            "lane, under the lane lock; nothing else knows that directory until it is renamed in",
+        ("registry.py", "atomic_write(registry_path(agent_dir)"):
+            "the task registry — its own file, not a task record — written under the lane lock",
         ("core.py", "_atomic_write(archive_path, header"):
             "inside stack_judge_round's two-file protocol, which holds the task "
             "lock across the whole sequence (its rollback is the crash contract)",
@@ -197,11 +201,6 @@ class NoUnapprovedDirectWriters(unittest.TestCase):
             "same two-file protocol, under the same held lock",
         ("core.py", "atomic_write(archive_path, archive_backup)"):
             "the rollback arm of that protocol, under the same held lock",
-        ("history.py", "atomic_write(task_file, retro_content)"):
-            "retro CREATES a new task file in a directory it just made",
-        ("lifecycle.py", "_atomic_write("):
-            "the freehand task CREATION writes a brand-new file (checked by eye: "
-            "the only remaining _atomic_write in lifecycle is that creation)",
         ("review.py", "atomic_write(task_file, new_text)"):
             "inside _write_review_findings_locked, whose caller holds the task "
             "lock for the whole read-splice-write (it keeps a soft error-string "
@@ -250,7 +249,7 @@ class NoUnapprovedDirectWriters(unittest.TestCase):
         # The modules that own task/judge records. Others (dashboard, mindmap,
         # intent, project_setup…) write their own files and are out of scope.
         RECORD_MODULES = {"core.py", "lifecycle.py", "review.py", "compact.py",
-                          "history.py", "merge_prep.py"}
+                          "history.py", "merge_prep.py", "registry.py"}
         for pyfile in sorted(pkg.glob("*.py")):
             if pyfile.name not in RECORD_MODULES:
                 continue

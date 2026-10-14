@@ -685,16 +685,10 @@ def cmd_retro(cmd_args):
     )
 
     # Create as a new task
-    from tasks.core import _next_task_number, _slugify
-    tasks_dir_path = resolve_agent_dir(project_path) / "tasks"
-    task_num = _next_task_number(tasks_dir_path)
+    from tasks.registry import RegistryUnreadable, create_task_dir, unreadable_message
     first = tasks[0]["number"]
     last = tasks[-1]["number"]
     slug = f"retro-{first:03d}-{last:03d}"
-    folder_name = f"{task_num:03d}-{slug}"
-    task_dir = tasks_dir_path / folder_name
-    task_dir.mkdir(parents=True)
-    task_file = task_dir / "task.md"
     # when this retro was made — the next retro's chat boundary (task 145)
     _head, _sep, _rest = retro_content.partition("\n")
     # …and a digest of every unfinished task of the window: the next bare retro refuses
@@ -706,7 +700,15 @@ def cmd_retro(cmd_args):
          if not _t["status"].strip().lower().startswith("done")})
     retro_content = (f"{_head}\n<!-- retro-generated: {_stamp} -->"
                      + (f"\n{_carried_line}" if _carried_line else "") + f"{_sep}{_rest}")
-    atomic_write(task_file, retro_content)
+    # made, numbered and registered under the lane lock (task 195)
+    try:
+        task_dir = create_task_dir(project_path, resolve_agent_dir(project_path), slug, "retro",
+                                   lambda _num, _name: retro_content)
+    except RegistryUnreadable as e:
+        print(unreadable_message(e), file=sys.stderr)
+        sys.exit(1)
+    task_file = task_dir / "task.md"
+    task_num = int(task_dir.name.split("-", 1)[0])
 
     print(f"Created: {task_file.relative_to(project_path)}")
     if window:

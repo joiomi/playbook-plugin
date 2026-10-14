@@ -1531,23 +1531,26 @@ def cmd_new(cmd_args):
     intent_text = " ".join(cmd_args[2:]) if len(cmd_args) > 2 else None
     project_path = find_project_root()
 
-    # Check if user included a task number prefix
+    # Check if user included a task number prefix: it must be the next number, read under the
+    # lane lock by the creator (task 195 — the check here used to read the directories alone,
+    # outside any lock, and could pass a number a concurrent creator or a burned reservation took)
     import re as _re
-    from tasks.core import _next_task_number
+    from tasks.registry import NumberTaken, RegistryUnreadable, unreadable_message
     num_match = _re.match(r'^(\d{3})-(.+)$', task_name)
+    provided_num = None
     if num_match:
         provided_num = int(num_match.group(1))
-        tasks_dir = resolve_agent_dir(project_path) / "tasks"
-        next_num = _next_task_number(tasks_dir)
-        if provided_num == next_num:
-            # Matches next number - strip it (user was explicit)
-            task_name = num_match.group(2)
-        else:
-            print(f"Error: provided task number {provided_num:03d} doesn't match next number {next_num:03d}", file=sys.stderr)
-            print(f"Usage: tasks new {task_type} {num_match.group(2)}", file=sys.stderr)
-            sys.exit(1)
-    task_file = create_task(project_path, task_name, task_type=task_type,
-                           intent_text=intent_text, stub=is_stub)
+        task_name = num_match.group(2)
+    try:
+        task_file = create_task(project_path, task_name, task_type=task_type,
+                                intent_text=intent_text, stub=is_stub, number=provided_num)
+    except NumberTaken as e:
+        print(f"Error: {e}", file=sys.stderr)
+        print(f"Usage: tasks new {task_type} {task_name}", file=sys.stderr)
+        sys.exit(1)
+    except RegistryUnreadable as e:
+        print(unreadable_message(e), file=sys.stderr)
+        sys.exit(1)
     pattern_name = PLAYBOOKS.get(task_type, f"custom ({task_type})")
 
     import re
@@ -1732,6 +1735,48 @@ def cmd_parked(cmd_args):
               "open deliberately.")
 
 
+def cmd_adopt(cmd_args):
+    """`tasks adopt <task folder>` (task 195): register a task folder the CLI did not make — one renamed by
+    hand (the freehand gate asks for it), or one made by hand that should stay — with the lane's task
+    registry, under its lock. Idempotent: a folder it already knows is left as it is. A refusal says why
+    and changes nothing. One journal record per adoption."""
+    from tasks.registry import AdoptRefused, RegistryUnreadable, adopt, unreadable_message
+    name = cmd_args[0]
+    project_path = find_project_root()
+    agent_dir = resolve_agent_dir(project_path)
+    try:
+        result = adopt(project_path, agent_dir, name)
+    except AdoptRefused as e:
+        print(f"Error: {e}. Nothing changed.", file=sys.stderr)
+        sys.exit(1)
+    except RegistryUnreadable as e:
+        print(unreadable_message(e), file=sys.stderr)
+        sys.exit(1)
+    if result == "known":
+        print(f"{name} is already known to the task registry — nothing changed.")
+        return
+    print(f"Adopted {name}: the task registry now knows it.")
+    try:                                   # a journal failure never changes the adoption
+        import importlib.util as _ilu
+        _spec = _ilu.spec_from_file_location(
+            "_pb_journal_adopt", Path(__file__).resolve().parent.parent / "scripts" / "pb_journal.py")
+        if _spec is not None and _spec.loader is not None:
+            _pbj = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(_pbj)
+            _sid = os.environ.get("PLAYBOOK_SESSION_ID", "")
+            _pbj.append(agent_dir, "adopt", "record", "task folder adopted into the registry", _sid,
+                        path=f"tasks/{name}")
+    except Exception:
+        pass
+
+
+# The freehand rename gate (task 195, plan panel T8): a renamed task directory is one the task
+# registry no longer names — `tasks adopt <new name>` registers it again.
+_FREEHAND_RENAME_GATE = ("- [ ] Rename this task folder and header to match what was actually done, then run "
+                         "`.claude/bin/tasks adopt <new folder name>` (the task registry knows it by its name) "
+                         "and check this gate last\n")
+
+
 def cmd_freehand(cmd_args):
     """The `tasks freehand` arm — body moved verbatim from cli.py (1.5.9 split)."""
     project_path = find_project_root()
@@ -1839,31 +1884,34 @@ def cmd_freehand(cmd_args):
     if not task_num:
         # Orchestrator mode: create a minimal freehand task (no Design Phase)
         print("No active task — creating freehand session...")
-        from tasks.core import _next_task_number, _slugify
-        tasks_dir = agent_dir / "tasks"
-        task_num_int = _next_task_number(tasks_dir)
-        task_num = f"{task_num_int:03d}"
-        slug = _slugify("freehand")
-        task_dir = tasks_dir / f"{task_num}-{slug}"
-        task_dir.mkdir(parents=True, exist_ok=True)
-        task_file = task_dir / "task.md"
+        from tasks.core import _slugify
+        from tasks.registry import RegistryUnreadable, create_task_dir, unreadable_message
         # Write minimal template — Freehand gate is first unchecked gate
         from datetime import datetime, timezone
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        _atomic_write(  # I9: atomic like every task.md writer
-            task_file,
-            f"# {task_num} - Freehand\n\n"
-            f"## Status\nin_progress\n\n"
-            f"## Intent\n(freehand session — intent determined during work)\n\n"
-            f"## Work Plan\n\n"
-            f"### Freehand\n"
-            f"<!-- freehand-start: {now_iso} -->\n"
-            f"- [ ] Freehand\n"
-            f"- [ ] Freehand log — run `.claude/bin/tasks freehand log` to capture chat_log messages, "
-            f"then retro-add checked gates for work done\n"
-            f"- [ ] Rewrite this freehand work into normal task gates inside this task so the final trace reads like ordinary tracked work\n"
-            f"- [ ] Rename this task folder and header to match what was actually done, then check this gate last\n",
-        )
+
+        def _render(num: int, _name: str) -> str:
+            return (
+                f"# {num:03d} - Freehand\n\n"
+                f"## Status\nin_progress\n\n"
+                f"## Intent\n(freehand session — intent determined during work)\n\n"
+                f"## Work Plan\n\n"
+                f"### Freehand\n"
+                f"<!-- freehand-start: {now_iso} -->\n"
+                f"- [ ] Freehand\n"
+                f"- [ ] Freehand log — run `.claude/bin/tasks freehand log` to capture chat_log messages, "
+                f"then retro-add checked gates for work done\n"
+                f"- [ ] Rewrite this freehand work into normal task gates inside this task so the final trace reads like ordinary tracked work\n"
+                f"{_FREEHAND_RENAME_GATE}")
+        # made, numbered and registered under the lane lock (task 195 — `mkdir(exist_ok=True)` let two at
+        # once SHARE one directory)
+        try:
+            task_dir = create_task_dir(project_path, agent_dir, _slugify("freehand"), "freehand", _render)
+        except RegistryUnreadable as e:
+            print(unreadable_message(e), file=sys.stderr)
+            sys.exit(1)
+        task_num = task_dir.name.split("-", 1)[0]
+        task_file = task_dir / "task.md"
         # Activate it
         session_id = require_session_id()   # task 105: never `sessions/""`
         session_dir = agent_dir / "sessions" / session_id
@@ -1890,7 +1938,7 @@ def cmd_freehand(cmd_args):
             f"- [ ] Freehand log — run `.claude/bin/tasks freehand log` to capture chat_log messages, "
             f"then retro-add checked gates for work done\n"
             f"- [ ] Rewrite this freehand work into normal task gates inside this task so the final trace reads like ordinary tracked work\n"
-            f"- [ ] Rename this task folder and header to match what was actually done, then check this gate last\n"
+            f"{_FREEHAND_RENAME_GATE}"
         )
 
         # Find Work Plan section and insert before first unchecked gate there

@@ -83,6 +83,7 @@ _BASELINE = {
     "handoff": (1, "No active task to hand off"),
     "parked": (0, "No open parked items."),
     "freehand": (0, "creating freehand session"),
+    "adopt": (2, "takes exactly one task folder name"),        # task 195: bare = wrong usage, nothing written
     # I5: doctor exits non-zero when a check FAILs. The bare scratch project has
     # no CLAUDE.md/MIND_MAP.md, so doctor deterministically reports failures → 1.
     "doctor": (1, "tasks doctor"),

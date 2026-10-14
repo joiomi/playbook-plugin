@@ -4164,18 +4164,21 @@ def _display_title(name: str) -> str:
 
 
 def _next_task_number(tasks_dir: Path) -> int:
-    """Find the next available task number."""
-    if not tasks_dir.exists():
-        return 1
-
+    """Find the next available task number: one past the highest of the task directories AND of the numbers the
+    lane's task registry holds — a reserved number a crashed creator burned is never reused (task 195). The ONE
+    allocator: the creators call it under the lane lock (`registry.create_task_dir`). Raises
+    `registry.RegistryUnreadable` when the registry cannot be read."""
     max_num = 0
-    for item in tasks_dir.iterdir():
-        if item.is_dir():
-            match = re.match(r'^(\d+)-', item.name)
-            if match:
-                num = int(match.group(1))
-                max_num = max(max_num, num)
-
+    if tasks_dir.exists():
+        for item in tasks_dir.iterdir():
+            if item.is_dir():
+                match = re.match(r'^(\d+)-', item.name)
+                if match:
+                    num = int(match.group(1))
+                    max_num = max(max_num, num)
+    from tasks.registry import registered_numbers
+    for num in registered_numbers(tasks_dir.parent):
+        max_num = max(max_num, num)
     return max_num + 1
 
 
@@ -4257,7 +4260,7 @@ def list_all_types(project_path: Path) -> list[str]:
 
 
 def create_task(project_path: Path, name: str, task_type: str | None = None,
-                intent_text: str | None = None, stub: bool = False) -> Path:
+                intent_text: str | None = None, stub: bool = False, number: "int | None" = None) -> Path:
     """Create a new task with the given name.
 
     Args:
@@ -4268,83 +4271,84 @@ def create_task(project_path: Path, name: str, task_type: str | None = None,
             instead of the base Python template.
         intent_text: Optional intent paragraph to pre-fill ## Intent section.
         stub: If True, generate minimal stub (no gates) instead of full template.
+        number: The number the caller named (`tasks new NNN-name`); it must be the next one, read
+            under the lane lock — else `registry.NumberTaken`.
 
     Returns:
         Path to the created task.md file
+
+    The directory is made by `registry.create_task_dir` (task 195): reserved, built under a
+    temporary name in the lane, renamed in and registered, under the lane lock that also takes
+    the number. Raises `registry.RegistryUnreadable` before creating anything.
     """
     # Creating a task in the fresh-clone shape would mint a root `.agent/tasks/`
     # — and because a root tasks dir is itself a legitimate lane, that single
     # mkdir permanently converts the guarded shape into an "allowed mixed
     # layout", disarming the guard for every other surface too.
     require_lane_marker(project_path, "tasks new")
-    tasks_dir = resolve_agent_dir(project_path) / "tasks"
-    tasks_dir.mkdir(parents=True, exist_ok=True)
-
-    task_num = _next_task_number(tasks_dir)
+    agent_dir = resolve_agent_dir(project_path)
     slug = _slugify(name)
-    folder_name = f"{task_num:03d}-{slug}"
 
-    task_dir = tasks_dir / folder_name
-    task_dir.mkdir()
+    def _render(task_num: int, folder_name: str) -> str:
+        # Check for custom playbook template first
+        custom = _find_custom_playbook(project_path, task_type) if task_type else None
 
-    # Check for custom playbook template first
-    custom = _find_custom_playbook(project_path, task_type) if task_type else None
+        if stub:
+            # Stub mode: minimal template with no gates
+            from tasks.template import render_stub_template
+            content = render_stub_template(
+                num=task_num, title=_display_title(name),
+                intent_text=intent_text or "",
+                task_type=task_type,
+            )
+        elif custom:
+            content = custom.read_text(encoding="utf-8", errors="replace")
+            content = content.replace("{{NNN}}", f"{task_num:03d}")
+            content = content.replace("{{TITLE}}", _display_title(name))
+            # F8: let the [intent] arg reach a custom playbook too, via an explicit
+            # `{{INTENT}}` token (built-in templates use prose placeholders, matched
+            # below; a custom author opts in with this token). No token → unchanged.
+            content = content.replace("{{INTENT}}", intent_text or "")
+        else:
+            # Fall back to base Python template
+            from tasks.template import render_template
+            content = render_template(num=task_num, title=_display_title(name), task_type=task_type)
 
-    if stub:
-        # Stub mode: minimal template with no gates
-        from tasks.template import render_stub_template
-        content = render_stub_template(
-            num=task_num, title=_display_title(name),
-            intent_text=intent_text or "",
-            task_type=task_type,
-        )
-    elif custom:
-        content = custom.read_text(encoding="utf-8", errors="replace")
-        content = content.replace("{{NNN}}", f"{task_num:03d}")
-        content = content.replace("{{TITLE}}", _display_title(name))
-        # F8: let the [intent] arg reach a custom playbook too, via an explicit
-        # `{{INTENT}}` token (built-in templates use prose placeholders, matched
-        # below; a custom author opts in with this token). No token → unchanged.
-        content = content.replace("{{INTENT}}", intent_text or "")
-    else:
-        # Fall back to base Python template
-        from tasks.template import render_template
-        content = render_template(num=task_num, title=_display_title(name), task_type=task_type)
+            # Append playbook template if task_type specified
+            if task_type:
+                role_template = _load_playbook(task_type, project_path)
+                if role_template:
+                    content += "\n" + role_template + "\n"
 
-        # Append playbook template if task_type specified
-        if task_type:
-            role_template = _load_playbook(task_type, project_path)
-            if role_template:
-                content += "\n" + role_template + "\n"
+        # Pre-fill Intent section if intent_text provided
+        if intent_text and not stub:
+            # Replace placeholder in all template variants
+            for placeholder in [
+                "(what we want to achieve \u2014 the outcome, not the activity)",
+                "(one line \u2014 what to do and how to verify)",
+                # B1: the `light` template's Intent placeholder \u2014 was missing here, so
+                # `tasks new light <name> <intent>` silently discarded the intent.
+                "(one line \u2014 what to do and what proves it worked)",
+            ]:
+                if placeholder in content:
+                    content = content.replace(placeholder, intent_text)
+                    break
 
-    # Pre-fill Intent section if intent_text provided
-    if intent_text and not stub:
-        # Replace placeholder in all template variants
-        for placeholder in [
-            "(what we want to achieve \u2014 the outcome, not the activity)",
-            "(one line \u2014 what to do and how to verify)",
-            # B1: the `light` template's Intent placeholder \u2014 was missing here, so
-            # `tasks new light <name> <intent>` silently discarded the intent.
-            "(one line \u2014 what to do and what proves it worked)",
-        ]:
-            if placeholder in content:
-                content = content.replace(placeholder, intent_text)
-                break
+        # F8: standing gates — project-declared gates appended LAST, whatever
+        # branch assembled the content (base template, custom playbook, role
+        # append). Stubs are skipped: they carry no gates until activation, and
+        # the expansion path applies the same helper then.
+        if not stub:
+            content, _sg_issues = append_standing_gates(
+                content, load_config(project_path), task_num)
+            for _msg in _sg_issues:
+                print(f"[playbook] standing_gates: {_msg}", file=sys.stderr)
 
-    # F8: standing gates — project-declared gates appended LAST, whatever
-    # branch assembled the content (base template, custom playbook, role
-    # append). Stubs are skipped: they carry no gates until activation, and
-    # the expansion path applies the same helper then.
-    if not stub:
-        content, _sg_issues = append_standing_gates(
-            content, load_config(project_path), task_num)
-        for _msg in _sg_issues:
-            print(f"[playbook] standing_gates: {_msg}", file=sys.stderr)
+        return content
 
-    task_file = task_dir / "task.md"
-    _atomic_write(task_file, content)
-
-    return task_file
+    from tasks.registry import create_task_dir
+    task_dir = create_task_dir(project_path, agent_dir, slug, "new", _render, number=number)
+    return task_dir / "task.md"
 
 
 def _live_status_pair(lines: "list[str]") -> "tuple[int, int] | None":

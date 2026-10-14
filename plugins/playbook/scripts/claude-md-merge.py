@@ -115,6 +115,14 @@ GITIGNORE_ENTRIES = (
     ".agent/*/chat_log_counter.lock",
     # Task 170: the lock under which `append_intent` reads and replaces the root INTENT.md.
     ".agent/intent.lock",
+    # Task 195: the task registry, its lock and a creator's temporary directory are machine-local
+    # (tracked, every write would dirty the tree the freshness fingerprint and the tamper guard read).
+    ".agent/task-registry",
+    ".agent/*/task-registry",
+    ".agent/task-registry.lock",
+    ".agent/*/task-registry.lock",
+    ".agent/.task-creating.*",
+    ".agent/*/.task-creating.*",
 )
 
 

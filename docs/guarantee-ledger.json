@@ -913,7 +913,8 @@
         "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21).",
         "CLOSED in task 055 (043 round-5 panel vector, codex): the stop-hook no longer discovers gates with `grep -c`/`grep -m1`; it reads status + live unchecked count + first live unchecked gate from ONE spawn of scripts/task-status.py --fields (core._live_gate_state — the same function behind `_gate_counts`/`_extract_head_position`/the lifecycle close count), so hook and CLI agree by construction and the parity test pins them on fenced decoy tables. Fence view is FENCE-ONLY: a CLOSED fence hides its `- [ ]` lines; an UNCLOSED fence hides nothing (its gates stay counted → the stop still blocks); indented-code tracking is OFF so a nested `    - [ ] gate` after a blank line stays a gate (it must never vanish from the count — that would release the stop). Round-1 impl panel (055) then found the RELEASE (not the count) still fail-open on three shapes the count correctly kept live — a blank-text first gate hiding a later Freehand gate (sentinel bug), an unclosed-fenced Freehand decoy, an indented Freehand example — so the release decision moved into Python (`_freehand_release_allowed`, the 4th `--fields` line; hold on any unclosed fence or indent >= 4), and the gate reader splits on physical `\\n` only (`_physical_lines`; `splitlines()` would count a `prose\\x85- [ ] x` line grep cannot see, breaking the fallback's over-count property). `_extract_head_position` takes its gate from the same scan (an NBSP-led marker is a gate for no reader); its one documented extra is stopping earlier at an empty `- **Field**:` line. The grep survives only as the no-python fallback: fence-blind can only OVER-count, and the Freehand release is disabled there. STILL fence-blind, disclosed: scripts/state-echo-hook's advisory counts (display only, not enforcing — parked), scripts/gate-batch-check.py's GATE_RE (batch-tick guard: can only over-block), retro.py's per-section gate scan (analytics), provider/codex_hooks._scan_gates (experimental provider; cannot import tasks.*). HTML-comment blocks remain live regions for every scanner (engine-wide vector, parked in 043 — not picked up here).",
         "2026-10-12 (task 184, PLAN S11): entering freehand relaxes the stop, and activating a tracked task re-arms it — observed live on claude (scenario PB-TASK-FREEHAND).",
-        "2026-10-13 (task 192, PLAN S14 T3, item #25; impl panel r1, opus): the `find -path` BOUND is closed — the hooks match the task directory's own name, in `_find_active_task`'s order (tests/test_task_record_lookup.py; impl panel r2: the bounds with two directories of one number are in PB-TASK-ACTIVATE)."
+        "2026-10-13 (task 192, PLAN S14 T3, item #25; impl panel r1, opus): the `find -path` BOUND is closed — the hooks match the task directory's own name, in `_find_active_task`'s order (tests/test_task_record_lookup.py; impl panel r2: the bounds with two directories of one number are in PB-TASK-ACTIVATE).",
+        "2026-10-14 (task 195): the freehand task is made by `registry.create_task_dir` (two at once no longer share one directory — measured before); both freehand rename gates name `tasks adopt <new folder name>`."
       ],
       "follow_up_phases": [
         3,
@@ -8080,7 +8081,8 @@
         "Logger wiring is a per-machine copy outside the plugin (~/.claude/bash-log.{sh,zsh}). Proved (task 169): init deploys the shipped bytes, replaces an older copy, and a shell started with the BASH_ENV it wrote logs into the project's history. Bound: the copy is refreshed by init, NOT by a plugin update — after an update it is the older logger until init is re-run (`tasks doctor` reports a stale copy with both hashes).",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
         "Task 100 (PLAN S8 binding audit, 2026-09-27) had removed `wrappers` from the statement — no test asserted their creation on a clean init. Task 169 (PLAN S11) restored the word with a test: `.claude/bin/tasks`, `monitor` and `sandbox` are created executable, and the tasks wrapper answers from the copy the manifest names. The project `.claude/settings.json` deny list is PB-INIT-DENY-LIST.",
-        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`)."
+        "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
+        "2026-10-14 (task 195): the gitignore runtime block also holds the task registry, its lock and a creator's temporary directory (root and lane)."
       ],
       "follow_up_phases": [
         8,
@@ -10422,7 +10424,8 @@
       "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
-        "Task 100 (PLAN S8 binding audit, 2026-09-27) NARROWED: chat_log.md reference rewriting (merge_prep.py `_prepare_merge_chatlog`, the `Rewrite chat_log.md` step) is asserted by no test; removed from the statement. S12 cli-contracts candidate."
+        "Task 100 (PLAN S8 binding audit, 2026-09-27) NARROWED: chat_log.md reference rewriting (merge_prep.py `_prepare_merge_chatlog`, the `Rewrite chat_log.md` step) is asserted by no test; removed from the statement. S12 cli-contracts candidate.",
+        "2026-10-14 (task 195): a renumbered folder's task-registry line follows it (`registry.rename`)."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],
@@ -13295,7 +13298,8 @@
       "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
-        "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21)."
+        "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21).",
+        "2026-10-14 (task 195): the rendered template is written by `registry.create_task_dir` (reserved, built in the lane, renamed in, registered — PB-TASK-REGISTRY); a number given as `tasks new NNN-name` is checked under the lane lock, with the same error text."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],
@@ -20485,6 +20489,255 @@
       "follow_up_phases": [
         8
       ],
+      "required_live_evidence": [],
+      "semantic_protocol": null,
+      "violation_reproduction": null
+    },
+    {
+      "id": "PB-TASK-REGISTRY",
+      "category": "task-lifecycle",
+      "statement": "Every task directory the CLI makes is named in its lane's task registry (`.agent[/<lane>]/task-registry`, beside `tasks/`, machine-local): `tasks new`, `tasks freehand` and `tasks retro` reserve a number, build the directory under a temporary name in the lane, rename it into `tasks/` and only then register its origin — under one per-lane lock that also takes the number, so two creators at once never take one number nor share a directory, and the number counts the registry's (a reservation burned by a crash is never reused). A reservation is never membership; a name already standing under `tasks/` is never published over. Reads never write: a directory is known when it is registered or its task.md is a regular blob in the COMMITTED tree (`git ls-tree HEAD`; a staged one is not); the writers (the creators, `tasks adopt`, `prepare-merge`'s renames) enrol the lane's existing directories that hold a task.md when they find no registry. `tasks adopt <folder>` registers a real folder with a task.md and a `<number>-<slug>` name whose number no registered folder has, once; `prepare-merge` carries a renamed folder's line. An unreadable registry (a link, not a regular file, another format) stops a creator before it creates anything, naming the repair. BOUNDS: a directory present when a lane's registry is first written is trusted; deleting the registry re-enrols what is there; a creator killed after its rename and before its registration leaves a folder `tasks adopt` must take in; a folder an older CLI makes after the registry exists is unknown until adopted or committed; the instant between the creator's last check of the final name and its rename is not closed; a repo whose `.gitignore` predates these entries shows the registry and its lock as untracked until `scripts/init` refreshes its ignore block (the freshness fingerprint and the panel snapshot exclude `.agent` already). Nothing ENFORCES it yet — the detector is task 196's (PLAN §S14 T5b, second half).",
+      "owner": [
+        {
+          "path": "plugins/playbook/tasks/registry.py",
+          "reference": "symbol:create_task_dir"
+        },
+        {
+          "path": "plugins/playbook/tasks/registry.py",
+          "reference": "symbol:is_known"
+        },
+        {
+          "path": "plugins/playbook/tasks/registry.py",
+          "reference": "symbol:unknown_task_dirs"
+        },
+        {
+          "path": "plugins/playbook/tasks/registry.py",
+          "reference": "symbol:adopt"
+        },
+        {
+          "path": "plugins/playbook/tasks/registry.py",
+          "reference": "symbol:rename"
+        },
+        {
+          "path": "plugins/playbook/tasks/registry.py",
+          "reference": "symbol:read"
+        },
+        {
+          "path": "plugins/playbook/tasks/core.py",
+          "reference": "symbol:_next_task_number"
+        },
+        {
+          "path": "plugins/playbook/tasks/core.py",
+          "reference": "symbol:create_task"
+        },
+        {
+          "path": "plugins/playbook/tasks/lifecycle.py",
+          "reference": "symbol:cmd_freehand"
+        },
+        {
+          "path": "plugins/playbook/tasks/lifecycle.py",
+          "reference": "symbol:cmd_adopt"
+        },
+        {
+          "path": "plugins/playbook/tasks/lifecycle.py",
+          "reference": "symbol:cmd_new"
+        },
+        {
+          "path": "plugins/playbook/tasks/history.py",
+          "reference": "symbol:cmd_retro"
+        },
+        {
+          "path": "plugins/playbook/tasks/merge_prep.py",
+          "reference": "symbol:_rename_colliding_tasks"
+        },
+        {
+          "path": "plugins/playbook/scripts/claude-md-merge.py",
+          "reference": "symbol:GITIGNORE_ENTRIES"
+        }
+      ],
+      "failure_consequence": "High",
+      "claim_kind": "mechanical",
+      "proofs": [
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_registry.py",
+          "reference": "TwoCreatorsAtOnce.test_new_and_new",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_task_registry.py",
+            "reference": "TwoCreatorsAtOnce.test_control_one_creator_alone"
+          },
+          "limitations": [
+            "Two CLI processes with a file barrier in the number step; red on nested `9765c51` (`001-a` and `001-b`)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_registry.py",
+          "reference": "TwoCreatorsAtOnce.test_freehand_and_freehand",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_task_registry.py",
+            "reference": "TwoCreatorsAtOnce.test_control_one_creator_alone"
+          },
+          "limitations": [
+            "Red on `9765c51`: ONE `001-freehand`, shared."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_registry.py",
+          "reference": "TwoCreatorsAtOnce.test_new_and_retro",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_task_registry.py",
+            "reference": "TwoCreatorsAtOnce.test_control_one_creator_alone"
+          },
+          "limitations": [
+            "Red on `9765c51`: both took 002."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_registry.py",
+          "reference": "TwoCreatorsAtOnce.test_six_processes_without_a_barrier",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_task_registry.py",
+            "reference": "TwoCreatorsAtOnce.test_control_one_creator_alone"
+          },
+          "limitations": [
+            "Six real processes, no barrier (flock between sessions); red on `9765c51`: five tasks numbered 001."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_registry.py",
+          "reference": "ACrashedCreator.test_a_reserved_name_is_never_known_and_its_number_is_not_reused",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_task_registry.py",
+            "reference": "TwoCreatorsAtOnce.test_control_one_creator_alone"
+          },
+          "limitations": [
+            "The creator killed at `_publish` (os._exit): reserved, never known, a hand-made dir of that name unknown, the next number fresh, the dead temp directory removed."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_registry.py",
+          "reference": "TheRenameTarget.test_an_empty_directory_appearing_at_the_final_name_is_not_laundered",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_registry.py",
+          "reference": "Enrolment.test_the_first_writer_enrols_the_directories_that_hold_a_task_md",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "A `tasks list` (a read) writes nothing; the first `tasks new` enrols."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_registry.py",
+          "reference": "TheGitRule.test_a_committed_task_is_known_a_staged_one_is_not",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_registry.py",
+          "reference": "Adopt.test_adopt_registers_once_and_refuses_what_is_not_a_task_directory",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_registry.py",
+          "reference": "EveryCreatorRegisters.test_new_freehand_and_retro",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_task_registry.py",
+            "reference": "TwoCreatorsAtOnce.test_control_one_creator_alone"
+          },
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_registry.py",
+          "reference": "TheExplicitNumber.test_the_check_counts_a_burned_number",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_registry.py",
+          "reference": "ACorruptRegistry.test_a_creator_stops_and_names_the_repair",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_registry.py",
+          "reference": "MachineLocal.test_a_creator_leaves_only_the_task_in_git_status",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "With init's ignore block (`GITIGNORE_ENTRIES`) in a git repo: porcelain shows only the new task.md."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_registry.py",
+          "reference": "TempDirectoriesInTheLane.test_a_left_temp_directory_is_removed_and_ignored",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_registry.py",
+          "reference": "TheDoctorAdvisory.test_doctor_names_the_folders_the_registry_does_not_know",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_registry.py",
+          "reference": "Renames.test_prepare_merge_renames_a_registered_directory_in_the_registry",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_registry.py",
+          "reference": "Renames.test_the_freehand_rename_gate_names_adopt",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        }
+      ],
+      "applicable_platforms": [
+        "linux"
+      ],
+      "applicable_providers": [
+        "claude"
+      ],
+      "status": "verified_by_current_executable_evidence",
+      "missing_evidence_or_limitation": [
+        "2026-10-14 (task 195, PLAN S14 T5b first half; the owner's B31 answers of 2026-10-13 12:27): the dry run on copies of both real trees (this repo 186 folders, WoW 40) enrolled them all with 0 unknown; a planted folder unknown, staged or not (task 195's `evidence/dryrun.txt`)."
+      ],
+      "follow_up_phases": [],
       "required_live_evidence": [],
       "semantic_protocol": null,
       "violation_reproduction": null

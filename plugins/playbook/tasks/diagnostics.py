@@ -186,6 +186,25 @@ def cmd_doctor(cmd_args):
     check("project: CLAUDE.md exists", claude_md.exists())
     mind_map = project_path / "MIND_MAP.md"
     check("project: MIND_MAP.md exists", mind_map.exists())
+    # Task 195: the task folders the lane's task registry does not know (registered, or committed in
+    # git). Advisory — nothing enforces it until the detector; a pure read.
+    try:
+        from tasks.core import resolve_agent_dir as _rad
+        from tasks.registry import RegistryUnreadable as _RU, read as _reg_read, unknown_task_dirs as _unknown
+        _ad = _rad(project_path)
+        try:
+            _unk = _unknown(project_path, _ad)
+            if _reg_read(_ad) is None:
+                print("  [INFO] tasks: no task registry yet — the first `tasks new`/`freehand`/`retro`/`adopt` "
+                      "writes it and enrols the folders that exist")
+            if _unk:
+                warn("tasks: folders the task registry does not know",
+                     ", ".join(_unk[:8]) + (f" … (+{len(_unk) - 8})" if len(_unk) > 8 else "")
+                     + " — `tasks adopt <folder>` registers one that should stay")
+        except _RU as _e:
+            warn("tasks: task registry readable", str(_e))
+    except Exception as e:  # advisory: never takes doctor down
+        warn("tasks: registry check ran", f"skipped ({e})")
 
     # 1b. Optional per-install config (.agent/config.json). Advisory only:
     # a missing/malformed file or bad value falls back to defaults at runtime,

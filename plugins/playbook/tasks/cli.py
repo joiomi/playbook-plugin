@@ -30,7 +30,7 @@ COMMANDS = (
     "work", "new", "init", "bootstrap", "list", "ls", "panel-review",
     "models", "plan-review", "impl-review", "judge", "context", "intent",
     "timeline", "tagger", "tag", "retro", "status", "audit", "blocked",
-    "handoff", "parked", "freehand", "doctor", "environment", "detect-verify", "merge-doctor",
+    "handoff", "parked", "freehand", "adopt", "doctor", "environment", "detect-verify", "merge-doctor",
     "mindmap-sync", "log", "prepare-merge", "compact", "recall", "dashboard",
 )
 
@@ -213,6 +213,12 @@ def _main():
         from tasks.lifecycle import cmd_freehand
         cmd_freehand(cmd_args)
 
+    elif cmd == "adopt":
+        # Task 195: register a task folder the CLI did not make (a renamed one, a hand-made one
+        # that should stay) with the lane's task registry.
+        from tasks.lifecycle import cmd_adopt
+        cmd_adopt(cmd_args)
+
     elif cmd == "doctor":
         from tasks.diagnostics import cmd_doctor
         cmd_doctor(cmd_args)
@@ -301,6 +307,7 @@ _USAGE = {
     "dashboard": "tasks dashboard [--no-detect]", "mindmap-sync": "tasks mindmap-sync [--fix]",
     "retro": "tasks retro [--since N]", "freehand": "tasks freehand [log]", "audit": "tasks audit [<N>]",
     "new": "tasks new <type> <name> [intent words …]  (intent words starting with `--` go after a `--`)",
+    "adopt": "tasks adopt <task folder name>",
     "work": 'tasks work <N> [--force] [--reopen]  |  tasks work done [--force|--stale-panel-ok|--owner-ok --reason "why"]',
 }
 
@@ -370,6 +377,10 @@ def _wrong_usage(cmd: str, args: list) -> "str | None":
         if "--reopen" not in args and _ARGS_TASK_IS_DONE(args[0]):
             return (f"task {args[0]} is done — `tasks work {args[0]} --reopen` reopens it "
                     "(its status goes back to in_progress; the close receipt stays as history)")
+        return None
+    if cmd == "adopt":
+        if len(args) != 1 or args[0].startswith("-"):
+            return "takes exactly one task folder name (e.g. `tasks adopt 042-renamed-task`)"
         return None
     if cmd == "audit":
         nums = [a for a in args if a.isdigit()]

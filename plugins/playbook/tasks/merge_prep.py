@@ -200,6 +200,10 @@ def _rename_colliding_tasks(project_path: Path, agent_dir: Path,
         if result.returncode != 0:
             # Fallback for untracked dirs
             (tasks_dir / old_name).rename(tasks_dir / new_name)
+        # the task registry follows the rename (task 195, plan panel T8: a renamed directory the
+        # registry no longer names would read as hand-made)
+        from tasks.registry import rename as _registry_rename
+        _registry_rename(project_path, agent_dir, old_name, new_name)
 
         # Rewrite H1 title: "# 133 - ..." → "# 135 - ..."
         task_md = tasks_dir / new_name / "task.md"

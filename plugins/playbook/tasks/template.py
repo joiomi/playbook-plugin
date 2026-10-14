@@ -767,6 +767,7 @@ Tasks CLI:
     tasks work <N>             activate task
     tasks work done            deactivate
     tasks freehand             user-driven mode (no gate pressure)
+    tasks adopt <folder>       register a task folder the CLI did not make (e.g. after renaming one)
   Create:
     tasks new <type> <name> [intent]   create task (intent fills ## Intent)
     tasks new --stub <type> <name> [intent]   stub (expands on work)
@@ -946,6 +947,8 @@ Commands:
                       in-flight reasoning to, then blocks (reason: handoff).
                       bootstrap surfaces it; work <N> resumes and consumes it.
   freehand            User-driven mode (no gate pressure)
+  adopt <folder>      Register a task folder the CLI did not make (a renamed one, or a
+                      hand-made one that should stay) with the lane's task registry
   new <type> <name> [intent]   Create task (intent pre-fills ## Intent)
   new --stub <type> <name> [intent]   Create stub (expands on work)
   list [--pending]    List all tasks with status
