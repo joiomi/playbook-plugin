@@ -2886,11 +2886,12 @@ def _cmd_single_review(cmd, cmd_args):
             _pd6_pname, _pd6_plines = "", 0
             if len(_pd6_whole) > _pd6_cap:
                 # II-5 (task 201): a CUT delta whole, for a judge with no shell — one file
-                # per run, written before the tamper baseline; a failed write leaves the
-                # outro with the git commands only.
-                _pd6_patch = task_file.parent / _pd6.patch_name(_pd6_rid)
+                # per run in the lane journal (gitignored; impl round 2, R2-3), written
+                # before the tamper baseline; a failed write leaves the git commands only.
+                _pd6_patch = _pd6.patch_path(task_file.parent, _pd6_rid)
                 _pd6_ptext = _pd6.patch_text(_pd6_whole)
                 try:
+                    _pd6.patch_dir_ready(_pd6_patch.parent)
                     atomic_write(_pd6_patch, _pd6_ptext)
                     try:
                         _pd6_pname = str(_pd6_patch.relative_to(project_path))

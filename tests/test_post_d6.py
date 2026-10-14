@@ -883,6 +883,18 @@ class TheFindingsFileIsAField(unittest.TestCase):
         v = self.verdict("**Important** [PRE-EXISTING] — a. **Important** [PRE-EXISTING] [file: README.md] — b.")
         self.assertEqual((v["important"], v["pre_existing"]), (1, 1))
 
+    def test_an_ambiguous_field_counts(self):                              # impl round 2: R2-1, R2-4, R2-5
+        for files, line, counted in (
+                (self.FILES, "**Important** [PRE-EXISTING] [file: README.md] — also [file: edit.py]", 1),
+                ({"keep.py:12"}, "**Important** [PRE-EXISTING] [file: keep.py:12] — a changed `keep.py:12`", 1),
+                ({"keep.py:12"}, "**Important** [PRE-EXISTING] [file: `keep.py:12`] — quoted", 1),
+                ({"keep.py]suffix.py"}, "**Important** [PRE-EXISTING] [file: keep.py]suffix.py] — copied exactly", 1),
+                (self.FILES, "**Important** [PRE-EXISTING] [file: README.md] — a later [note] is no field", 0)):
+            with self.subTest(line=line):
+                v = _verdict_with(line + "\n\nCAP: 1/5 reported, exhausted\n", files,
+                                  {"README.md", "keep.py"}.__contains__)
+                self.assertEqual(v["important"], counted)
+
     def test_a_settled_tag_after_the_field(self):
         v = self.verdict("**Important** [file: edit.py] [SETTLED] — re-raised")
         self.assertEqual((v["important"], v["settled"], v["verdict"]), (0, 1, "PASS"))
@@ -943,6 +955,28 @@ class ThePatchFileAndTheList(unittest.TestCase):
             self.assertEqual(post_d6.patch_text("y" * 100), "y" * 100)
         self.assertTrue(text.startswith("x" * 100 + "\n[... the file stops at 100 of 500 chars"), text[:160])
         self.assertNotIn("x" * 101, text)
+
+    def test_the_patch_path_is_in_the_lane_journal(self):                # impl round 2, R2-3
+        self.assertEqual(post_d6.patch_path(Path("/p/.agent/tasks/001-x"), "ab12"),
+                         Path("/p/.agent/journal/post-d6/001-x-ab12.patch"))
+        self.assertEqual(post_d6.patch_path(Path("/p/.agent/mihnea/tasks/001-x"), ""),
+                         Path("/p/.agent/mihnea/journal/post-d6/001-x-run.patch"))
+
+    def test_a_linked_journal_is_not_written_through(self):              # impl round 2, R2-3 (task 192's class)
+        d = Path(tempfile.mkdtemp(prefix="pb201-jlink-"))
+        self.addCleanup(shutil.rmtree, d, True)
+        (d / "elsewhere").mkdir()
+        (d / "lane").mkdir()
+        os.symlink(d / "elsewhere", d / "lane" / "journal")
+        with self.assertRaises(OSError):
+            post_d6.patch_dir_ready(d / "lane" / "journal" / "post-d6")
+        self.assertFalse((d / "elsewhere" / "post-d6").exists())
+        (d / "lane2" / "journal").mkdir(parents=True)
+        os.symlink(d / "elsewhere", d / "lane2" / "journal" / "post-d6")
+        with self.assertRaises(OSError):
+            post_d6.patch_dir_ready(d / "lane2" / "journal" / "post-d6")
+        post_d6.patch_dir_ready(d / "lane3" / "journal" / "post-d6")            # a plain one is made
+        self.assertTrue((d / "lane3" / "journal" / "post-d6").is_dir())
 
     def test_an_incomplete_list_says_so(self):
         import tasks.core as core
@@ -1313,12 +1347,12 @@ class EndToEnd(unittest.TestCase):
             code, err, out = self._single("CAP: 0/5 reported, exhausted\n")
         self.assertEqual(code, 0, err)
         rid = self._single_runs()[-1]["id"]
-        patch = self.tf.parent / f"post-d6-delta-{rid}.patch"
-        self.assertTrue(patch.is_file(), sorted(p.name for p in self.tf.parent.iterdir()))
+        patch = self.tf.parent.parent.parent / "journal" / "post-d6" / f"001-demo-{rid}.patch"
+        self.assertTrue(patch.is_file(), self._patches())
         first = patch.read_text(encoding="utf-8")
         self.assertIn("+v3999 = 3999", first)
         seen = self.single_calls[-1]
-        self.assertIn(f".agent/tasks/001-demo/post-d6-delta-{rid}.patch", seen)
+        self.assertIn(f".agent/journal/post-d6/001-demo-{rid}.patch", seen)
         self.assertIn("READ", seen)
         self.assertIn("in parts", seen)
         # a second cut run writes its own file; the first stays as the first review cites it
@@ -1327,7 +1361,7 @@ class EndToEnd(unittest.TestCase):
             self._single("CAP: 0/5 reported, exhausted\n")
         rid2 = self._single_runs()[-1]["id"]
         self.assertNotEqual(rid2, rid)
-        self.assertIn("+w3999 = 3999", (self.tf.parent / f"post-d6-delta-{rid2}.patch").read_text(encoding="utf-8"))
+        self.assertIn("+w3999 = 3999", (patch.parent / f"001-demo-{rid2}.patch").read_text(encoding="utf-8"))
         self.assertEqual(patch.read_text(encoding="utf-8"), first)
 
     def test_the_delta_gets_what_the_task_leaves(self):                     # #7: more than 1.6.1's quarter
@@ -1372,7 +1406,7 @@ class EndToEnd(unittest.TestCase):
         self.assertTrue(self.single_calls, err)
         self.assertIn("POST-D6 VERDICT: FAIL", out, err)                    # the printed name is in the delta
         rid = self._single_runs()[-1]["id"]
-        self.assertTrue((self.tf.parent / f"post-d6-delta-{rid}.patch").is_file())
+        self.assertEqual([x.name for x in self._patches()], [f"001-demo-{rid}.patch"])
 
     def test_a_link_to_a_changed_file_counts(self):                         # impl round 1, R1-3 (codex)
         os.symlink("edit.py", self.d / "edit-link.py")
@@ -1382,19 +1416,61 @@ class EndToEnd(unittest.TestCase):
             "**Important** [PRE-EXISTING] [file: edit-link.py] — x\n\nCAP: 1/5 reported, exhausted\n")
         self.assertIn("POST-D6 VERDICT: FAIL", out, err)
 
+    def test_a_changed_file_named_like_a_line_counts(self):               # impl round 2, R2-4 (codex)
+        self._panel()
+        (self.d / "keep.py:12").write_text("k = 12\n", encoding="utf-8")    # beside the unchanged keep.py
+        code, err, out = self._single(
+            "**Important** [PRE-EXISTING] [file: keep.py:12] — x\n\nCAP: 1/5 reported, exhausted\n")
+        self.assertIn("POST-D6 VERDICT: FAIL", out, err)
+
+    def test_a_changed_file_whose_name_holds_a_bracket_counts(self):      # impl round 2, R2-5 (codex)
+        self._panel()
+        (self.d / "keep.py]suffix.py").write_text("k = 1\n", encoding="utf-8")
+        code, err, out = self._single(
+            "**Important** [PRE-EXISTING] [file: keep.py]suffix.py] — x\n\nCAP: 1/5 reported, exhausted\n")
+        self.assertIn("POST-D6 VERDICT: FAIL", out, err)
+
+    def _patches(self):
+        return sorted((self.tf.parent.parent.parent / "journal" / "post-d6").glob("*.patch"))
+
+    def test_the_patch_file_lives_in_the_lane_journal(self):              # impl round 2, R2-3 (sonnet)
+        from unittest import mock
+        self._panel()
+        (self.d / "edit.py").write_text("".join(f"v{i} = {i}\n" for i in range(4000)), encoding="utf-8")
+        with mock.patch("tasks.core.resolve_review_context_chars", return_value=20_000):
+            self._single("CAP: 0/5 reported, exhausted\n")
+        rid = self._single_runs()[-1]["id"]
+        self.assertEqual([x.name for x in self._patches()], [f"001-demo-{rid}.patch"])
+        self.assertEqual(sorted(self.tf.parent.glob("post-d6-delta*")), [], "a patch file was left in the task folder")
+
+    def test_a_linked_journal_gets_no_patch(self):                         # impl round 2, R2-3
+        from unittest import mock
+        elsewhere = Path(tempfile.mkdtemp(prefix="pb201-elsewhere-"))
+        self.addCleanup(shutil.rmtree, elsewhere, True)
+        os.symlink(elsewhere, self.tf.parent.parent.parent / "journal")
+        self._panel()
+        (self.d / "edit.py").write_text("".join(f"v{i} = {i}\n" for i in range(4000)), encoding="utf-8")
+        with mock.patch("tasks.core.resolve_review_context_chars", return_value=20_000):
+            code, err, out = self._single("CAP: 0/5 reported, exhausted\n")
+        self.assertEqual(code, 0, err)
+        self.assertFalse((elsewhere / "post-d6").exists(), "written through the link")
+        self.assertIn("is a link", err)
+        self.assertNotIn("journal/post-d6", self.single_calls[-1])
+        self.assertIn("git -C", self.single_calls[-1])
+
     def test_a_delta_that_fits_writes_no_patch_file(self):                  # plan triage 10
         self._panel()
         (self.d / "edit.py").write_text("v = 2\n", encoding="utf-8")
         self._single("CAP: 0/5 reported, exhausted\n")
         self.assertTrue(self.single_calls)
-        self.assertEqual(sorted(self.tf.parent.glob("post-d6-delta*")), [])
+        self.assertEqual(self._patches(), [])
 
     def test_an_unwritable_patch_file_leaves_the_git_commands(self):        # plan triage 10
         from unittest import mock
         real = self.R.atomic_write
 
         def refuse(path, *a, **k):
-            if Path(path).name.startswith("post-d6-delta"):
+            if Path(path).parent.name == "post-d6":
                 raise OSError(28, "No space left on device")
             return real(path, *a, **k)
         self._panel()
@@ -1405,7 +1481,7 @@ class EndToEnd(unittest.TestCase):
         self.assertEqual(code, 0, err)
         seen = self.single_calls[-1]
         self.assertIn("delta truncated", err + out + seen)
-        self.assertNotIn("post-d6-delta", seen)
+        self.assertNotIn("journal/post-d6", seen)
         self.assertIn("git -C", seen)
 
     def test_a_tree_edit_between_delta_and_tamper_baseline_sends_nothing(self):

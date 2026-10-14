@@ -40,8 +40,8 @@ from pathlib import Path
 
 RUNS_NAME = "post-panel-reviews.jsonl"
 CONTEXT_NAME = "post-d6-context.md"   # the SETTLED + DELTA parts the last single judge received
-PATCH_PREFIX = "post-d6-delta"         # `<prefix>-<run id>.patch`: a CUT delta whole, for a judge with no shell (task 201)
-PATCH_CAP = 1_000_000                  # … at most this much of it; the rest is named by its git commands
+PATCH_DIR = "post-d6"                  # `<lane>/journal/post-d6/<task folder>-<run id>.patch`: a CUT delta whole,
+PATCH_CAP = 1_000_000                  # for a judge with no shell (task 201) — at most this much of it
 DELTA_MARGIN = 2_000
 SETTLED_CAP = 8000
 
@@ -220,6 +220,20 @@ def _as_real(path: str, exists) -> str:
     return path if r is True else (r if isinstance(r, str) else "")
 
 
+def _names_a_delta_file(ln: str, start: int, end: int, files: "set[str]") -> bool:
+    """Does ANY reading of a field's value name a file the delta changed (task 201,
+    impl round 2: R2-4, R2-5)? The value read up to each `]` before `end` (a name may
+    hold one), each raw (quotes stripped, `:line` kept — a file may be named so) and
+    normalised."""
+    j = ln.find("]", start, end)
+    while j != -1:
+        raw = ln[start:j].strip().strip("`'\"").strip()
+        if raw and (_in_delta(raw, files) or _in_delta(_field_path(raw), files)):
+            return True
+        j = ln.find("]", j + 1, end)
+    return False
+
+
 def _in_delta(path: str, files: "set[str]") -> bool:
     """A listed path, its diff side's spelling (`a/`, `b/`), or the end of one."""
     return (path in files or (path[:2] in ("a/", "b/") and path[2:] in files)
@@ -289,11 +303,16 @@ def parse_verdict(text: str, delta_files: "set[str] | None" = None, exists=None)
         # 1.6.1's check, kept as a reason to count: never fewer counted than 1.6.1.
         if t == "PRE-EXISTING" and delta_files is not None:
             seg_end = marks[k + 1][1].start() if k + 1 < len(marks) and marks[k + 1][0] == i else len(ln)
-            field = _FILE_FIELD_RE.search(ln, m.end(), seg_end)
+            # two fields on the first line, or a value whose any reading names a delta
+            # file, is ambiguous: counted (task 201, impl round 2: R2-1, R2-4, R2-5)
+            fields = list(_FILE_FIELD_RE.finditer(ln, m.end(), seg_end))
+            field = fields[0] if len(fields) == 1 else None
             if field and exists is not None and real_files is None:
                 real_files = _real_files(delta_files, exists)
-            if (_outside_delta(_field_path(field.group(1)) if field else "", delta_files, exists,
-                               real_files or frozenset())
+            if (field is not None
+                    and not _names_a_delta_file(ln, field.start(1), seg_end, delta_files)
+                    and _outside_delta(_field_path(field.group(1)), delta_files, exists,
+                                       real_files or frozenset())
                     and not _cites_delta(span, delta_files)):
                 counts["pre_existing"] += 1
                 continue
@@ -729,10 +748,26 @@ def delta_text(project_path: Path, snapshot: "dict | None", cap: int,
     return render_delta(parts, cap)
 
 
-def patch_name(run_id: str) -> str:
+def patch_path(task_dir: Path, run_id: str) -> Path:
     """The file a cut delta is written to whole, one per run (task 201, II-5: a later
-    run must not rewrite the file an earlier review cites)."""
-    return f"{PATCH_PREFIX}-{run_id}.patch" if run_id else f"{PATCH_PREFIX}.patch"
+    run must not rewrite the file an earlier review cites): in the lane's journal,
+    which init's block gitignores in both lane forms — the delta holds untracked files
+    whole (impl round 2, R2-3) — and which the judge sandbox shows (it masks only
+    `sessions`, `chat_log.md`, `bash_history`)."""
+    task_dir = Path(task_dir)
+    return task_dir.parent.parent / "journal" / PATCH_DIR / f"{task_dir.name}-{run_id or 'run'}.patch"
+
+
+def patch_dir_ready(d: Path) -> None:
+    """Make the patch folder; OSError when it, or the journal it is in, is a link — a
+    write through a planted link would go elsewhere (task 192's class)."""
+    d = Path(d)
+    for x in (d.parent, d):
+        if x.is_symlink():
+            raise OSError(f"{x} is a link — not written through")
+    d.mkdir(parents=True, exist_ok=True)
+    if d.is_symlink() or d.parent.is_symlink() or not d.is_dir():
+        raise OSError(f"{d} is not a plain folder")
 
 
 def patch_text(whole: str) -> str:
