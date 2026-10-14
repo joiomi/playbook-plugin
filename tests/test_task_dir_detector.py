@@ -20,6 +20,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -135,6 +136,21 @@ class _Project(unittest.TestCase):
         (self.proj / rel).write_text("x\n", encoding="utf-8")
         return self.fire("PostToolUse", dict(self._payload("PostToolUse", "Write", ti, tuid, sid),
                                              tool_response={"type": "create", "filePath": str(self.proj / rel)}), sid)
+
+    def edit_call(self, rel, old, new, effect, tuid="toolu_01E"):
+        """An Edit as the host runs it (an empty `old` creates the file and its folders — measured, task 196 I12)."""
+        ti = {"file_path": str(self.proj / rel), "old_string": old, "new_string": new}
+        b, e, _ = self.fire("PreToolUse", self._payload("PreToolUse", "Edit", ti, tuid, SID))
+        self.assertFalse(b, f"the Edit itself was refused: {e}")
+        effect()
+        return self.fire("PostToolUse", dict(self._payload("PostToolUse", "Edit", ti, tuid, SID),
+                                             tool_response={"filePath": str(self.proj / rel)}))
+
+    def helper(self, payload, session_dir):
+        """task-dir-watch.py run directly — past the bash hook's own checks."""
+        return subprocess.run([sys.executable, "-E", "-s", str(PLUGIN / "scripts" / "task-dir-watch.py"),
+                               str(self.proj), str(self.lane), str(session_dir), SID], input=json.dumps(payload),
+                              text=True, capture_output=True, env=self._env(), timeout=60)
 
     def shell_call(self, command, effect, tuid: "str | None" = "toolu_01PRE", sid=SID, failed=False, path=None):
         """One shell call as the host runs it: the PreToolUse hooks, the command's effect, the PostToolUse hooks."""
@@ -254,6 +270,88 @@ class FlaggedAfterTheCall(_Project):
         self._registry(self.lane, [("001-a", "new"), ("995-r", "reserved")])
         self.shell_call("ls", lambda: self._task(self.lane, "995-r"))
         self.assertEqual(self.flagged(), [".agent/tasks/995-r"])
+
+    def test_a_file_replaced_by_a_folder_of_its_name_is_caught(self):
+        # the listing is of DIRECTORIES: a file `999-x` before the call, a folder `999-x` after it — new
+        (self.lane / "tasks" / "999-x").write_text("x", encoding="utf-8")
+
+        def swap():
+            (self.lane / "tasks" / "999-x").unlink()
+            self._task(self.lane, "999-x")
+        self.shell_call("rm; cp -r", swap)
+        self.assertEqual(self.flagged(), [".agent/tasks/999-x"])
+
+    def test_a_file_is_not_a_task_folder(self):
+        # impl panel r1 I11: `12-notes.md` (a file) is no task folder — not flagged, and never refuses a close
+        self.shell_call("touch", lambda: (self.lane / "tasks" / "999-notes.md").write_text("x", encoding="utf-8"))
+        self.assertIsNone(self.flagged())
+
+    def test_an_edit_that_creates_a_file_makes_its_folder_and_is_caught(self):
+        # impl panel r1 I12, measured: an Edit with an empty old_string creates the file AND its missing folders
+        def made():
+            (self.lane / "tasks" / "999-x").mkdir()
+            (self.lane / "tasks" / "999-x" / "notes.md").write_text("n\n", encoding="utf-8")
+        self.edit_call(".agent/tasks/999-x/notes.md", "", "n", made)
+        self.assertEqual(self.flagged(), [".agent/tasks/999-x"])
+
+    def test_an_edit_of_an_existing_file_is_not_watched(self):
+        self.edit_call("README.md", "a", "b", lambda: None)
+        self.assertEqual(list((self.lane / "sessions" / SID).glob("task_dirs_before*"))
+                         if (self.lane / "sessions" / SID).exists() else [], [])
+
+    def test_a_name_that_is_not_utf8_is_flagged_and_removable(self):
+        # impl panel r1 I4 (codex, reproduced): a name with byte 0xff broke the flag's write — nothing persisted
+        raw = os.fsencode(str(self.lane / "tasks")) + b"/999-\xff"
+        self.shell_call("cp -r", lambda: os.mkdir(raw))
+        self.assertEqual(self.flagged(), [".agent/tasks/999-\udcff"])
+        blocked, err, _ = self.edit()
+        self.assertTrue(blocked)
+        self.assertIn("rm -r $'.agent/tasks/999-\\xff'", err)
+        blocked, err, _ = self.pre("rm -r $'.agent/tasks/999-\\xff'")
+        self.assertFalse(blocked, err)
+        os.rmdir(raw)
+        self.assertFalse(self.edit()[0])
+
+    def test_a_registry_removed_during_a_call_flags_what_the_call_made(self):
+        # impl panel r1 I6 (sonnet S3): no registry after the call — what it made is known to nothing
+        def both():
+            (self.lane / "task-registry").unlink()
+            self._task(self.lane, "999-x")
+        self.shell_call("rm .agent/task-registry; cp -r", both)
+        self.assertEqual(self.flagged(), [".agent/tasks/999-x"])
+
+    def test_a_linked_session_directory_is_never_swept_nor_written(self):
+        # impl panel r1 I1 (codex, Critical, reproduced): the session directory swapped for a link after the hook's
+        # check let the snapshot sweep delete files outside the project
+        outside = self.base / "outside"
+        outside.mkdir()
+        old = outside / "task_dirs_before.toolu_OLD"
+        old.write_text('{"v": 1, "folders": []}', encoding="utf-8")
+        two_days = time.time() - 2 * 86400
+        os.utime(old, (two_days, two_days))
+        (self.lane / "sessions").mkdir()
+        (self.lane / "sessions" / SID).symlink_to(outside)
+        for event in ("PreToolUse", "PostToolUse"):
+            with self.subTest(event=event):
+                self.helper(self._payload(event, "Bash", {"command": "ls"}, "toolu_L", SID),
+                            self.lane / "sessions" / SID)
+                self.assertTrue(old.exists())
+                self.assertEqual(sorted(p.name for p in outside.iterdir()), ["task_dirs_before.toolu_OLD"])
+
+    def test_a_lane_reached_through_a_link_is_used_and_never_swept(self):
+        # a shared folder as the lane (task 195's rule): watched, but nothing in it swept
+        shared = self.base / "shared"
+        shutil.move(str(self.lane), str(shared))
+        self.lane.symlink_to(shared)
+        sd = shared / "sessions" / SID
+        sd.mkdir(parents=True)
+        old = sd / "task_dirs_before.toolu_OLD"
+        old.write_text('{"v": 1, "folders": []}', encoding="utf-8")
+        two_days = time.time() - 2 * 86400
+        os.utime(old, (two_days, two_days))
+        self.shell_call("cp -r", lambda: self._task(shared, "999-x"), tuid="toolu_LL")
+        self.assertTrue(old.exists())
+        self.assertEqual(self.flagged(), [".agent/tasks/999-x"])
 
     def test_a_folder_name_outside_the_task_pattern_is_ignored(self):
         self.shell_call("mk", lambda: (self.lane / "tasks" / "notes").mkdir())
@@ -391,11 +489,22 @@ class HeldUntilResolved(_Project):
 
     def test_anything_but_the_way_out_is_refused(self):
         os.symlink(self.base, self.proj / "link")
+        # `jump/..` is, physically, another project holding its own `.claude/bin/tasks` (impl panel r1 I3, codex)
+        other = self.base / "other"
+        (other / "sub").mkdir(parents=True)
+        (other / ".claude" / "bin").mkdir(parents=True)
+        (other / ".claude" / "bin" / "tasks").write_text("#!/bin/bash\n", encoding="utf-8")
+        os.symlink(other / "sub", self.proj / "jump")
+        (self.proj / ".claude" / "bin").mkdir(parents=True, exist_ok=True)
+        (self.proj / ".claude" / "bin" / "tasks").write_text("#!/bin/bash\n", encoding="utf-8")
         for cmd in ("ls", "rm -r .agent/tasks/999-x; ls", "rm -r .agent/tasks/999-x && echo ok",
                     "rm -r .agent/tasks/999-x | cat", "rm -r .agent/tasks/999-x .agent/tasks/001-a",
                     "rm -r .agent/tasks/*", "rm -r .agent/tasks", "rm -r $D", "rm -r .agent/tasks/999-x > /dev/null",
                     "rmdir -p .agent/tasks/999-x", "rm -r .agent/tasks/999-x\nls", "/tmp/evil/tasks adopt x",
-                    "tasks status; ls", "rm -r link/../proj/.agent/tasks/999-x",
+                    "tasks status; ls", "rm -r link/../proj/.agent/tasks/999-x", "tasks status",
+                    "jump/../.claude/bin/tasks adopt 999-x", ".claude/bin/tasks status; ls",
+                    ".claude/bin/tasks status && ls", ".claude/bin/tasks status | cat",
+                    ".claude/bin/tasks status > /tmp/x", "cd .agent; ls",
                     "rm -i .agent/tasks/999-x", "cd /tmp && ls", "cd", "mv .agent/tasks/999-x /tmp/x",
                     "rm -r \"$(echo .agent/tasks/999-x)\"", "rm -r '.agent/tasks/999-x"):
             with self.subTest(cmd=cmd):
@@ -406,7 +515,7 @@ class HeldUntilResolved(_Project):
                     f"rm -r {self.proj}/.agent/tasks/999-x", "rm -r './.agent/tasks/999-x'",
                     'rm -r ".agent/tasks/999-x"', "rmdir .agent/tasks/999-x", "rm -r -- .agent/tasks/999-x",
                     "rm --recursive --force .agent/tasks/999-x", ".claude/bin/tasks adopt .agent/tasks/999-x",
-                    "tasks status", f"{CLI} adopt 999-x", f"cd {self.proj}", "cd .agent",
+                    f"{CLI} adopt 999-x", f"cd {self.proj}", "cd .agent",
                     "rm -r .agent/tasks/001-a/../999-x"):           # `..` through a real folder: the same folder
             with self.subTest(cmd=cmd):
                 blocked, err, _ = self.pre(cmd)
@@ -444,6 +553,39 @@ class HeldUntilResolved(_Project):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertFalse(self.edit()[0])
         self.assertIsNone(self.flagged())
+
+    def test_a_hold_outlives_the_registry_and_adopt_ends_it(self):
+        # impl panel r1 I6 (fable): with the registry gone nothing knows the folder — still held, and said
+        (self.lane / "task-registry").unlink()
+        blocked, err, _ = self.edit()
+        self.assertTrue(blocked)
+        self.assertIn("task registry", err)
+        self.assertTrue(any(j.get("hook") == "task-dir-watch" and j.get("decision") == "record"
+                            and "registry" in j.get("reason", "") for j in self.journal()), self.journal())
+        r = self.cli("adopt", ".agent/tasks/999-x")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertFalse(self.edit()[0])
+        self.assertIsNone(self.flagged())
+
+    def test_an_unreadable_registry_at_a_hold_is_journaled(self):
+        # impl panel r1 I7 (fable): not held (its repair must stay possible), but journaled
+        real = self.base / "reg"
+        (self.lane / "task-registry").rename(real)
+        (self.lane / "task-registry").symlink_to(real)
+        self.assertFalse(self.edit()[0])
+        self.assertTrue(any(j.get("hook") == "task-dir-watch" and j.get("decision") == "record"
+                            and j.get("reason") == "task registry unreadable" for j in self.journal()),
+                        self.journal())
+
+    def test_a_flag_lock_never_had_holds_without_hanging(self):
+        # impl panel r1 I14: the flag's lock is waited for a bounded time; not had, a flagged session stays held
+        lock = self.lane / "sessions" / SID / "task_dir_flag.lock"
+        with open(lock, "a") as fh:
+            fcntl.flock(fh, fcntl.LOCK_EX)
+            t0 = time.monotonic()
+            blocked, err, _ = self.edit()
+            self.assertLess(time.monotonic() - t0, 15)
+        self.assertTrue(blocked, err)
 
     def test_a_watch_that_cannot_run_holds_a_flagged_session(self):
         # fail closed while a flag stands, as the gate holds on a status it cannot read; a post is never held
@@ -536,12 +678,50 @@ class TheClose(_Project):
             r = self.cli("work", "done")
         self.assertNotIn("995-r", r.stdout + r.stderr)
 
+    def test_a_file_in_tasks_never_refuses_the_close(self):
+        # impl panel r1 I11: a FILE with a task-like name is no task folder
+        self._active()
+        (self.lane / "tasks" / "999-notes.md").write_text("x\n", encoding="utf-8")
+        r = self.cli("work", "done")
+        self.assertNotIn("999-notes.md", r.stdout + r.stderr)
+
     def test_the_close_without_a_registry_says_nothing_of_folders(self):
         self._active()
         (self.lane / "task-registry").unlink()
         self._task(self.lane, "999-x")
         r = self.cli("work", "done")
         self.assertNotIn("999-x", r.stdout + r.stderr)
+
+
+class TheCloseRechecks(unittest.TestCase):
+    """Impl panel r1 I2 (codex, reproduced): a folder made while the close's verify ran must still refuse it."""
+
+    def test_a_folder_made_during_verify_refuses_the_close(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        d = Path(tmp.name) / "repo"
+        subprocess.run(["git", "init", "-q", str(d)], check=True)
+        late = "python3 -c \"import os; os.mkdir('.agent/tasks/999-late')\""
+        (d / ".agent" / "tasks" / "001-t").mkdir(parents=True)
+        (d / ".agent" / "config.json").write_text(json.dumps({"verify": late, "panel_required_for": []}),
+                                                  encoding="utf-8")
+        (d / ".agent" / "tasks" / "001-t" / "task.md").write_text(
+            "# 001 - T\n\n## Status\npending\n\n## Risk\nreversible\n\n## Work Plan\n- [x] G1: do it\n",
+            encoding="utf-8")
+        (d / ".agent" / "task-registry").write_text(HEADER + "\n001-t\tnew\t2026-10-14T00:00:00Z\n",
+                                                   encoding="utf-8")
+        env = dict(os.environ, PYTHONPATH=str(PLUGIN), PLAYBOOK_SESSION_ID="s196-close-late", HOME=tmp.name)
+        env.pop("BASH_ENV", None)
+        r = subprocess.run([sys.executable, "-m", "tasks.cli", "work", "1"], cwd=d, env=env, capture_output=True,
+                           text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r = subprocess.run([sys.executable, "-m", "tasks.cli", "work", "done"], cwd=d, env=env,
+                           capture_output=True, text=True, timeout=120)
+        self.assertNotIn("Task 001 done.", r.stdout)
+        self.assertIn("[PASS] python3 -c", r.stdout)               # verify ran — and made the folder
+        self.assertIn("appeared while this close ran: 999-late", r.stderr)
+        self.assertIn("## Status\nin_progress", (d / ".agent" / "tasks" / "001-t" / "task.md").read_text(
+            encoding="utf-8"))
 
 
 class BelowTheFloor(_Project):

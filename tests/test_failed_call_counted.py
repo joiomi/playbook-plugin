@@ -119,6 +119,12 @@ class AFailedCallIsCounted(unittest.TestCase):
         for line in filter(None, echo[0].splitlines()):
             self.assertEqual(json.loads(line)["hookSpecificOutput"]["hookEventName"], "PostToolUseFailure")
 
+    def test_a_failed_edit_is_a_tool_but_not_a_write(self):
+        # impl panel r1 I5 (fable): a failed Edit changed nothing — a write only when a shell call failed
+        self.call("Edit", {"file_path": str(self.proj / "src" / "a.py"), "old_string": "zzz", "new_string": "y"},
+                  lambda: None, failed=True, tuid="toolu_E1")
+        self.assertEqual(self.counters(), {"tools": 1, "writes": 0})
+
     def test_a_failed_write_is_not_write_logged(self):
         # the write log copies the file from DISK after a Write: after a failed one that copy is the OLD content,
         # logged as if the agent had written it

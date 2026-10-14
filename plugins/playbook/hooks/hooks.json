@@ -66,7 +66,7 @@
         ]
       },
       {
-        "matcher": "Bash|Shell|run_terminal_command|Write|write",
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|search_replace|write|Bash|Shell|StrReplace|run_terminal_command",
         "hooks": [
           {
             "type": "command",
@@ -88,7 +88,7 @@
         ]
       },
       {
-        "matcher": "Bash|Shell|run_terminal_command|Write|write",
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|search_replace|write|Bash|Shell|StrReplace|run_terminal_command",
         "hooks": [
           {
             "type": "command",

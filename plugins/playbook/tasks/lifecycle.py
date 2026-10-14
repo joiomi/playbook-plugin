@@ -1033,6 +1033,21 @@ def cmd_work(cmd_args):
                         if not _base3 or _base3[2] != _freshness["pd6_base_run"]:
                             raise CloseRaceRefused("the post-D6 PASS tail certification started from "
                                                    "is no longer the newest finished run")
+                    # Task 196 (impl panel r1 I2, codex, reproduced): a task folder made while verify ran must
+                    # still refuse the close — the check before verify is repeated here, under the task lock, at the
+                    # commit (`--force --reason` overrides, as there).
+                    if not force:
+                        from tasks.registry import RegistryUnreadable as _RU196, unknown_now as _un196
+                        try:
+                            _late196 = _un196(project_path, agent_dir)
+                        except _RU196 as _e196:
+                            raise CloseRaceRefused(f"the task registry became unreadable while this close ran "
+                                                   f"({_e196}).")
+                        if _late196:
+                            raise CloseRaceRefused(
+                                "task folder(s) the playbook CLI did not make appeared while this close ran: "
+                                + ", ".join(_late196) + " — adopt (`.claude/bin/tasks adopt <folder>`) or remove "
+                                "each, then re-run `tasks work done`.")
                     if _freshness and _freshness.get("bound") and not owner_ok:
                         from tasks.core import bound_stale_close as _bsc3
                         _ok3, _msg3, _ = _bsc3(Path(project_path), task_file.parent,

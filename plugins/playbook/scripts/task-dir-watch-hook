@@ -8,8 +8,9 @@
 # project, the session's lane and its directory, and calls python only when there is something to decide: a flag
 # standing, or — for a shell call or a Write — a registry in the lane or a snapshot of a call. The event and the tool
 # are read here only to skip python for an edit with no flag (an edit makes no folder); hooks.json passes no argument
-# (the dual-host form, `tasks/hooks_check.py`), and a payload this read misjudges reaches python, which decides. No `set -e`: a failure here leaves no snapshot (the post then flags every unknown
-# folder present) — and a crash while a flag stands holds the call (fail closed).
+# (the dual-host form, `tasks/hooks_check.py`), and a payload this read misjudges reaches python, which decides.
+# No `set -e`: a failure here leaves no snapshot (the post then flags every unknown folder present) — and a crash
+# while a flag stands holds the call (fail closed).
 
 if [ "${PLAYBOOK_ROLE:-}" = "monitor" ]; then
     cat > /dev/null
@@ -48,9 +49,13 @@ FLAG="$SESSION_DIR/task_dir_flag"
 PB_FLAGGED=false
 { [ -e "$FLAG" ] || [ -L "$FLAG" ]; } && PB_FLAGGED=true
 if [ "$PB_FLAGGED" != true ]; then
-    # an edit (never a Write) before it runs, with no flag: nothing to hold, nothing it could make
-    PB_KEY='"(tool_name|toolName)"[[:space:]]*:[[:space:]]*"(Edit|MultiEdit|NotebookEdit|search_replace|StrReplace)"'
-    [[ "$INPUT" =~ $PB_KEY ]] && exit 0
+    # Claude's Edit/MultiEdit of an EXISTING file, with no flag: nothing to hold, nothing it could make — an empty
+    # old_string creates the file and its folders (task 196 I12, measured), so that one goes on to python
+    PB_KEY='"tool_name"[[:space:]]*:[[:space:]]*"(Edit|MultiEdit)"'
+    PB_CREATES='"old_string"[[:space:]]*:[[:space:]]*""'
+    if [[ "$INPUT" =~ $PB_KEY ]] && ! [[ "$INPUT" =~ $PB_CREATES ]]; then
+        exit 0
+    fi
     if [ ! -e "$AGENT_DIR/task-registry" ] && [ ! -L "$AGENT_DIR/task-registry" ] \
        && ! compgen -G "$SESSION_DIR/task_dirs_before*" > /dev/null; then
         exit 0

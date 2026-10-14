@@ -278,8 +278,12 @@ if [ "$AGENT_WRITABLE" = true ]; then
     # NotebookEdit were counted as tools but not as writes until task 173, so a
     # turn whose only act was one of them read to the stop hook as a chat reply
     # — and its rule for a turn a notification started is "no write".
-    case "$TOOL_NAME" in
-        Edit|Write|MultiEdit|NotebookEdit|Bash)
+    # A FAILED call (task 196) is a write only when it was a shell call — what it did before failing is unknown; a
+    # failed Edit/Write changed nothing (impl panel r1 I5, fable).
+    PB_WRITE_TOOLS="Edit|Write|MultiEdit|NotebookEdit|Bash"
+    [ "$PB_HOOK_EVENT" = PostToolUseFailure ] && PB_WRITE_TOOLS="Bash"
+    case "|$PB_WRITE_TOOLS|" in
+        *"|$TOOL_NAME|"*)
             WRITES_VAL=$(read_counter_int "$COUNTER_FILE" writes)
             write_counter "$COUNTER_FILE" writes $(( WRITES_VAL + 1 ))
             ;;

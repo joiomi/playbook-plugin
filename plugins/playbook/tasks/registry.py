@@ -235,14 +235,17 @@ def _creating(agent_dir) -> "tuple[bool, int | None]":
 
 
 def unknown_now(project_path, agent_dir, names: "list[str] | None" = None, *,
-                git_timeout: float = 30.0) -> "list[str] | None":
+                git_timeout: float = 30.0, no_registry: str = "none") -> "list[str] | None":
     """The task folders standing under the lane's `tasks/` (all of them, or those among `names`) that are not known
     — registered (a `reserved` line not counting) or committed (the git rule) — with a creation in progress left out:
     the registry is read holding the lane lock SHARED when it can be had at once (then no creator is between its
     rename and its registration), and while a creator holds it, a `reserved` folder is that creation (task 196, plan
     panel P14; read under the lock, a creator that registers and lets go between two reads cannot make a folder look
-    hand-made). None when the lane has no registry (nothing is known by provenance then — plan panel P2). A name the
-    git rule cannot answer within `git_timeout` is unknown. Never waits, never writes. Raises RegistryUnreadable."""
+    hand-made). With no registry: None (`no_registry="none"`, the close — nothing is known by provenance then, plan
+    panel P2), or what the git rule alone does not know (`"git"`, the watch — a call during which the registry vanished,
+    a hold that outlives it: task 196's impl panel r1 I6). Only DIRECTORIES count (a file `12-notes.md` is no task
+    folder — impl panel r1 I11). A name the git rule cannot answer within `git_timeout` is unknown. Never waits, never
+    writes. Raises RegistryUnreadable."""
     lane = Path(agent_dir)
     tasks_dir = lane / "tasks"
     if names is None:
@@ -257,9 +260,11 @@ def unknown_now(project_path, agent_dir, names: "list[str] | None" = None, *,
         if fd is not None:
             os.close(fd)                  # lets the shared lock go
     if entries is None:
-        return None
+        if no_registry != "git":
+            return None
+        entries = {}
     left = [n for n in names
-            if LOOSE_TASK_DIR_RE.match(n) and os.path.lexists(tasks_dir / n)
+            if LOOSE_TASK_DIR_RE.match(n) and os.path.isdir(tasks_dir / n)
             and entries.get(n) in (None, "reserved") and not (creating and entries.get(n) == "reserved")]
     strict = [n for n in left if TASK_DIR_RE.fullmatch(n)]   # only such a name can be a committed task
     committed = _committed_task_mds(project_path, lane, strict, timeout=git_timeout) if strict else set()
