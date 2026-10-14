@@ -1791,8 +1791,8 @@ def _reader_pipeline_reads_data(line):
 
 
 def _heredoc_plan(text):
-    """Every heredoc of `text` as (its opener's logical line, how many heredocs that line opens, whether the tag is
-    quoted, where the body starts, where its tag line starts), read as bash reads them — operators outside quotes,
+    """Every heredoc of `text` as (its opener's logical line, whether the tag is quoted, where the body starts, where
+    its tag line starts), read as bash reads them — operators outside quotes,
     bodies after the line, each to the line that is its tag (tabs stripped for `<<-`). None when `text` is not PLAIN
     (see above), or holds an unterminated quote, an empty tag or a body that does not end: nothing is removed then."""
     plan, skeleton = [], []
@@ -1811,7 +1811,7 @@ def _heredoc_plan(text):
                     e = text.find("\n", i)
                     e = n if e == -1 else e
                     if (text[i:e].lstrip("\t") if dash else text[i:e]) == tag:
-                        plan.append((line, len(pending), quoted, start, i))
+                        plan.append((line, quoted, start, i))
                         i = min(e + 1, n)
                         break
                     i = e + 1
@@ -1871,8 +1871,8 @@ def _strip_quoted_heredoc_bodies(text):
     if not plan:
         return text
     out, last = [], 0
-    for line, ops, quoted, body_start, tag_start in plan:
-        if quoted and ops == 1 and _reader_pipeline_reads_data(line):
+    for line, quoted, body_start, tag_start in plan:
+        if quoted and _reader_pipeline_reads_data(line):
             out.append(text[last:body_start])
             last = tag_start
     out.append(text[last:])

