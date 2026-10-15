@@ -336,11 +336,13 @@ def close_state(project_path: Path, task_dir: Path, risk: str, rnd: dict, rec: "
             "missing": names_nothing(Path(project_path), guards)}
 
 
-def failed_state(risk: str, why: str) -> dict:
-    """The state when the rule cannot be evaluated: the judge is required (every doubt fails closed)."""
+def failed_state(risk: str, why: str, guards: "list[str] | None" = None) -> dict:
+    """The state when the rule cannot be evaluated: the judge is required (every doubt fails closed). `guards`:
+    the guard list already known — kept, so a later check that reads it still sees every listed file (the single
+    judge, run 1: an untrusted ledger used to erase it)."""
     return {"judge": True, "why": why, "reached": False, "rounds": 0, "allowed": 0, "cap": 0, "extended": False,
-            "changed": [], "behavioral": [], "can": False, "cause": why, "guards": [], "counted": False,
-            "risk": risk, "missing": []}
+            "changed": [], "behavioral": [], "can": False, "cause": why, "guards": list(guards or []),
+            "counted": False, "risk": risk, "missing": []}
 
 
 def post_panel_hold(task_dir: Path, key: str = "") -> str:

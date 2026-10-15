@@ -821,6 +821,7 @@ def cmd_work(cmd_args):
                                     and not _sr209.same_round(_nir209(task_file.parent), _pass209))
                 _st209 = None
                 _v209 = ""
+                _bad209 = ""
                 if _pass209 is not None:
                     if not _pass209.get("tree_state"):
                         # impl round 2, S3: an unstamped reviewed round in a git repository is an
@@ -857,7 +858,8 @@ def cmd_work(cmd_args):
                     _bad209 = _sr209.ledger_untrusted(task_file.parent)
                     if _bad209:
                         # impl round 3, T3: what the panels recorded cannot be read — every doubt fails closed
-                        _st209 = _sr209.failed_state(_gate_risk, f"{_bad209} — what the panels recorded cannot be trusted")
+                        _st209 = _sr209.failed_state(_gate_risk, f"{_bad209} — what the panels recorded cannot be trusted",
+                                                     guards=_st209.get("guards"))
                     if _mismatch209 and not owner_ok:
                         print(f"\nBlocked: cannot close task {prev_task} — the impl panel round that reviewed this "
                               "task's code is not judge.md's newest impl round (a below-quorum round sits on it, or it "
@@ -946,7 +948,8 @@ def cmd_work(cmd_args):
                 # during the judge call — the TOCTOU compare-and-swap below).
                 from tasks.core import post_d6_pass_base as _pdb209
                 _skip_tc209 = bool(_st209 is not None and _st209["judge"]
-                                   and not _pdb209(Path(project_path), task_file.parent))
+                                   and (_bad209 or not _pdb209(Path(project_path), task_file.parent)))
+                # (the single judge, run 1: while the ledger is untrusted no post-D6 PASS read from it is a base)
                 if (not _f_allowed and not force and not stale_panel_ok
                         and _carries and _impl is not None and _freshness
                         and _freshness.get("verdict") == "STALE"
@@ -1249,6 +1252,12 @@ def cmd_work(cmd_args):
                             except Exception:           # noqa: BLE001
                                 _moved209 = True
                         if (_st209 is not None and not _st209["judge"]) or _moved209:
+                            # the single judge, run 1: the ledger's trust is part of the decision — re-read here
+                            _bad_now209 = _sr209.ledger_untrusted(task_file.parent)
+                            if _bad_now209:
+                                raise CloseRaceRefused(
+                                    "the stop rule's answer changed while this close ran — "
+                                    f"{_bad_now209}: what the panels recorded cannot be trusted.")
                             try:
                                 _fp209 = tree_state_fingerprint(project_path)
                                 _rec_now = _sr209.panel_record(task_file.parent)

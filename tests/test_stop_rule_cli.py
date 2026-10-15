@@ -751,5 +751,38 @@ class RoundThreeFindings(_CloseFixture):
         self.assertHeld(self._close("--stale-panel-ok", "--reason", "x"), "MIND_MAP.md")
 
 
+
+class SingleJudgeRunOne(_CloseFixture):
+    """Task 209's post-panel single judge, run 1 (codex, 2 Critical): red on nested b106a56."""
+
+    def test_u1_an_untrusted_ledger_at_the_commit_refuses(self):
+        self.cfg["guard_paths"] = ["guard/"]
+        self.setup_task(rounds=2, change="")                       # a FRESH panel; the list recorded with it
+        self.cfg["guard_paths"] = []
+        self._write_cfg()
+
+        def break_it():
+            led = self.td / post_d6.RUNS_NAME
+            led.unlink()
+            led.mkdir()
+            (self.d / "guard" / "g.py").write_text("g = 9\n", encoding="utf-8")
+        code, err, out = self._close_in_process(break_it, "--force", "--reason", "x")
+        self.assertNotIn("Task 001 done.", out, err)
+        self.assertIn("cannot be read", err)
+
+    def test_u2_an_untrusted_ledger_keeps_the_guards_and_no_tail_certification(self):
+        self.cfg["guard_paths"] = ["tests/guard_fixture.py"]
+        self.setup_task(rounds=2, change="code.py")
+        self._post_d6("PASS")
+        (self.d / "tests" / "guard_fixture.py").write_text("# changed after the PASS\n", encoding="utf-8")
+        from tasks import review as R
+        from tasks import stop_rule as SRm
+        with mock.patch.object(SRm, "ledger_untrusted", lambda d: "the run ledger x cannot be read (PermissionError)"), \
+             mock.patch.object(R, "tail_cert_unavailable", lambda *a, **k: ""), \
+             mock.patch.object(R, "run_tail_cert_judge", lambda *a, **k: "PASS"):
+            code, err, out = self._close_in_process(lambda: None)
+        self.assertNotIn("Task 001 done.", out, err)
+
+
 if __name__ == "__main__":
     unittest.main()
