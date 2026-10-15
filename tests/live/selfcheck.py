@@ -537,6 +537,12 @@ def grok_entitlement() -> None:
           got("UNKNOWN", other) == "fail", True, got("UNKNOWN", other))
     check("E1 the 402 line inside the same real report passes", got("UNKNOWN", GROK_REPORT_AROUND) == "pass", True,
           got("UNKNOWN", GROK_REPORT_AROUND))
+    # a limit that is not credit (release panel r2, fable/sonnet/codex): a 429, a time limit
+    for words in ("Error: 429 Too Many Requests: rate limit exceeded", "Error: request exceeded time limit"):
+        other = GROK_REPORT_AROUND.replace(GROK_402_LINE, GROK_402_LINE.split("probe failed")[0]
+                                           + "probe failed for another reason: " + words)
+        check(f"E1 a grok line that names another limit ({words.split(': ', 1)[-1]}) fails", got("UNKNOWN", other) == "fail",
+              True, got("UNKNOWN", other))
 
 
 def seat_answer_bound() -> None:

@@ -33,6 +33,10 @@ GROK_WAIT = ("grok", "its seat answers out of credit (HTTP 402) until the subscr
                      "word of 2026-10-12: it stays in the panel and comes back by itself. This harness has no grok seat yet (`Judges` shims "
                      "claude and codex): its half is new code, written and reviewed once the credit returns")
 REMOVED = re.compile(r"\bGONE\b|model (was )?removed")
+# a credit or entitlement refusal in the CLI's own words — never a bare "limit" (a 429 rate limit, a time limit:
+# release panel r2, fable/sonnet/codex); grok's real one: "API error (status 402 Payment Required): Grok Build usage
+# balance exhausted" (task 185)
+CREDIT_REFUSAL = re.compile(r"\b402\b|payment required|balance exhausted|out of credits?|spending limit|not entitled", re.I)
 
 
 def entitlement_outcome(grok_verdict: "str | None", stdout: str, seat: str) -> str:
@@ -43,7 +47,7 @@ def entitlement_outcome(grok_verdict: "str | None", stdout: str, seat: str) -> s
     if grok_verdict == "OK":
         return "wait"
     own = [ln for ln in stdout.splitlines() if ln.split()[:1] == [seat]]
-    if grok_verdict not in (None, "GONE") and any(re.search(r"402|credit|spending|limit|entitle", ln, re.I) for ln in own):
+    if grok_verdict not in (None, "GONE") and any(CREDIT_REFUSAL.search(ln) for ln in own):
         return "pass"
     return "fail"
 

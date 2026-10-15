@@ -9,9 +9,9 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 **The 1.6.2 fix batch: guards and hooks first, then the review path** — PLAN §S14, tasks 187-206 on
 `fix/1.6.2-batch`. On 2026-10-13 the owner took the 49 items left after 1.6.1 and chose the ones that come before
 Phase B: those on a path he uses or in a guard that could stop blocking, and one test that had written his real home
-directory; ten of them he later moved to Phase B's inputs (listed under *Known limitations*). Every item here landed
-after a judge panel. Three holes found on the way were in 1.6.1 already and could let a close skip its check; they are
-marked **1.6.1's** below. The suite has 4712 tests (4327 at 1.6.1); CI is the same two Linux lanes.
+directory; nine of them he later moved to Phase B's inputs and one he kept as a written limit (both listed under
+*Known limitations*). Every item here landed after a judge panel. Six holes found on the way were in 1.6.1 already —
+three of them could let a close skip its check; they are marked **1.6.1's** below. The suite has 4712 tests (4327 at 1.6.1); CI is the same two Linux lanes.
 **Upgrading:** `/playbook:upgrade`, restart every Claude Code session (the hooks changed, and a new one — the
 task-folder watch — was added), then re-run `/playbook:init` in each project that uses the plugin: init now adds six
 lines to the project's `.gitignore` for the task registry (`.agent/task-registry`, its lock, a creator's temporary
@@ -156,12 +156,13 @@ task as not grave (PLAN.md, Phase B's inputs). What each costs you today:
 - **Moved to Phase B on 2026-10-13:** a research task's post-D6 delta is always empty (refused now, not passed: such a
   close takes a fresh panel or the owner's OK); `sandbox --print-argv` creates the extra `--rw` paths on the host;
   whether a background sub-agent's completion notice starts a turn is not measured; two older exits of the chat-log
-  hook reset no counts; installing the codex hooks again after the plugin moved doubles every hook; a kept git hook
-  protects its own file, not what it sources from the project; the codex adapter reads `~/.codex/config.toml` with a
+  hook reset no counts; installing the codex hooks again after the plugin moved doubles every hook; the codex adapter reads `~/.codex/config.toml` with a
   module of Python 3.11, so on 3.10 the (experimental) codex agent path reads codex's hooks as off — judges are not
   affected; the claude adapter finds no transcript folder for a project path with `_`, `.` or a space (no runtime
   path reads it); the live
   gauntlet has no grok seat; one live canary ran on a task never activated.
+- **Kept as a written limit by the owner (2026-10-13):** a git hook the sandbox keeps read-only protects its own
+  file, not what it sources or runs from the project.
 - **Still open from 1.6.1's list:** a turn a notification started is judged by a rule of its own; a records-only
   commit made after the last single-judge PASS makes the close refuse (it now names its cause); re-activating a task replaces its `### Recent
   Chat`; after the shell history is rotated, the commands that read it see the live file only; lines the logger gives
