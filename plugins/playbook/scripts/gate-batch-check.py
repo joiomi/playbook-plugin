@@ -67,11 +67,17 @@ A batch attests ALREADY-DONE work; two back-to-back batch writes look like
 end-of-task ticking. Do the next piece of work, then close its gates."""
 
 
+def open_gate_originals(old: str) -> "list[str]":
+    """The open gates' texts in `old` — the born-checked hint's candidates — on physical lines (task 214)."""
+    return [m.group(2) for line in old.split("\n")
+            if (m := GATE_RE.match(line)) and m.group(1) == " " and m.group(2).strip()]
+
+
 def gate_bodies(text: str) -> "tuple[list[str], list[str]]":
     """(checked_bodies, unchecked_bodies) — line-anchored, whitespace-normal."""
     checked: "list[str]" = []
     unchecked: "list[str]" = []
-    for line in text.splitlines():
+    for line in text.split("\n"):      # physical lines, as the gate counters (task 214): never splitlines()
         m = GATE_RE.match(line)
         if not m:
             continue
@@ -236,9 +242,7 @@ def main() -> int:
         # not memory. No near-miss → no hint (a fabricated gate must not be
         # blamed on some unrelated open gate).
         import difflib
-        open_originals = [m.group(2) for line in old.splitlines()
-                          if (m := GATE_RE.match(line)) and m.group(1) == " "
-                          and m.group(2).strip()]
+        open_originals = open_gate_originals(old)
         rendered = []
         for b in born:
             rendered.append(f"  - [x] {b}")

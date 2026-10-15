@@ -31,7 +31,9 @@ the real records before: every `tasks audit` stacked one more receipt into task.
   receipts in both files and the next audit writes them once; each receipt now ends with a `run` line, so two audits
   in the same second stay two receipts. The new receipt goes right under the heading; every other line of the section
   — and of the log — stays, in its order: a receipt is only a `### <time> · PASS|FAIL · commit …` heading with the
-  indented lines under it up to a gate or a fence, so a heading or a gate an agent adds in that section never moves. An unclosed fence inside
+  body lines of its own shape under it (result lines, finding lines eight spaces in, the `run` line) up to a fence,
+  so a heading or a gate an agent adds in that section never moves, and a finding shaped like a gate stays in its
+  receipt (task 214). An unclosed fence inside
   the section that would hide a later section is refused with both files unchanged, and `tasks audit` then exits
   non-zero; a log that cannot be read (a link, a FIFO, not UTF-8) or written leaves the older receipts in task.md and
   the command says so. A new `audit-log.md` is the task's own record to the panel tamper guard. Measured on copies of the real records: the move
@@ -51,8 +53,13 @@ the real records before: every `tasks audit` stacked one more receipt into task.
   second close receipt could turn `…\x85## Status\x85done` into a live `## Status` / `done` that the status reader
   then read. The audit and close receipt writers no longer turn such a character into a line break (an audit finding's
   own output is still split at it before the receipt is written, each piece indented eight spaces, so none can read as
-  a heading). The other task.md writers and readers that split lines the same way get their own task next (the
-  owner's ruling of 2026-10-15).
+  a heading). Task 214 (the owner's ruling of 2026-10-15: a separate task right after) moved the other task.md writers
+  and readers the same way: the handoff and handoff-and-block writers (the handoff minted a live `## Status` from such
+  a quote, and handoff-and-block refused the task as `done`), the gate check-off, the `## Risk` readers and the close's
+  re-read (two headings read as `unclassified` and refused a valid close), the parked items, the standing gates (a
+  heading inside a line made a required standing gate be skipped), the block reasons, the problem and latest-receipt
+  lines, the owner rulings of the SETTLED block (a decoy section inside a line replaced the real rulings), and the
+  batch-close guard's gate count.
 
 ## [1.6.3] — 2026-10-15
 

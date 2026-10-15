@@ -70,8 +70,8 @@ def extract_owner_rulings(task_text: str) -> "list[str]":
     """Lines of the LAST unfenced `## Owner rulings` section, verbatim (right-
     stripped); the `<!-- pin -->` marker, blank lines and blockquote guidance are
     dropped. A heading inside a code fence is an example, not a section."""
-    from tasks.core import _iter_fenced_flags
-    lines = task_text.splitlines()
+    from tasks.core import _iter_fenced_flags, _physical_lines
+    lines = _physical_lines(task_text)       # task 214: a heading inside a line is not the rulings section
     fenced = _iter_fenced_flags(lines, unclosed_is_live=False)
     start = None
     for i, ln in enumerate(lines):

@@ -1528,8 +1528,8 @@ def append_standing_gates(content: str, cfg: dict, task_num: int) -> "tuple[str,
             f"got {type(raw).__name__} — ignored"]
     issues: "list[str]" = []
     nnn = f"{int(task_num):03d}"
-    existing = {ln.strip()[3:].strip().lower()
-                for ln in content.splitlines() if ln.strip().startswith("## ")}
+    existing = {ln.strip()[3:].strip().lower()       # physical lines (task 214): a heading inside a line is none
+                for ln in _physical_lines(content) if ln.strip().startswith("## ")}
     blocks: "list[str]" = []
     seen: "set[str]" = set()
     for i, entry in enumerate(raw):
@@ -1894,7 +1894,7 @@ def extract_risk_from_text(text: str) -> str:
     The destructive-command guard read the task file TWICE — once for the
     status, once through `extract_risk` — so a write landing between them could
     pair one task's status with another's risk. One read, both answers."""
-    return _risk_from_lines(text.splitlines())
+    return _risk_from_lines(_physical_lines(text))       # task 214: the hooks' line model, never splitlines()
 
 
 def extract_risk(task_file) -> str:
@@ -1902,7 +1902,7 @@ def extract_risk(task_file) -> str:
     after the heading. Returns one of RISK_CLASSES, or 'unclassified' if the
     section is absent, blank, or holds an unrecognized value."""
     try:
-        lines = Path(task_file).read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = _physical_lines(Path(task_file).read_text(encoding="utf-8", errors="replace"))
     except OSError:
         return DEFAULT_RISK
     return _risk_from_lines(lines)
@@ -1960,7 +1960,7 @@ def has_risk_section(task_file) -> bool:
     documented legacy behavior, never toward inventing a block from an I/O error.
     """
     try:
-        lines = Path(task_file).read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = _physical_lines(Path(task_file).read_text(encoding="utf-8", errors="replace"))
     except OSError:
         return False
     # V2 + V8 (task 039, impl panel): fail toward STRICT on an uncertain parse.
@@ -4515,7 +4515,7 @@ def extract_parked_items(task_md_text: str) -> "list[str]":
     # Fence-aware (task 039): a fenced `## Parked` example must not mint phantom
     # debt items. Pure reader → fail OPEN (unclosed_is_live=True): a real ## Parked
     # under an unclosed fence must still surface. H2 via the strict ATX matcher.
-    lines = task_md_text.splitlines()
+    lines = _physical_lines(task_md_text)       # task 214: a U+0085 inside an item is not a second item
     in_section = False
     body: "list[str]" = []
     for i, _s in _iter_nonfenced(lines, unclosed_is_live=True):
@@ -5042,7 +5042,7 @@ def _extract_status(task_file: Path) -> str:
 def _extract_problem(task_file: Path) -> str:
     """Extract first line of Problem/Intent section from task file."""
     try:
-        lines = task_file.read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = _physical_lines(task_file.read_text(encoding="utf-8", errors="replace"))
         # Fence-aware (task 039): a fenced `## Intent`/`## Problem` example must
         # not be read as the live summary. Pure reader → fail OPEN.
         in_section = False
@@ -5265,12 +5265,17 @@ _AUDIT_LOG_HEAD = ("# Audit log\n\nThe older `tasks audit` receipts of this task
 # section — a heading an agent appended at the end of task.md — is not a receipt and never moves (all 787 receipt
 # headings of the 245 real records have this shape).
 _RECEIPT_HEAD_RE = re.compile(r"^### \S+ · (?:PASS|FAIL) · commit ")
+# A receipt's body line, by the same writer (task 214, task 213's J2): a result line, a finding line 8 spaces in,
+# the `run` line. "Up to a gate" cut a receipt whose sweep printed `- [x]` lines (all 13,387 body lines of the 788
+# real receipts match this).
+_RECEIPT_BODY_RE = re.compile(r"^(?:    - \[(?:CLEAN|FINDINGS(?:\(\d+\))?|ERROR)\] |        |    - run [0-9a-f]+\s*$)")
 
 
 def _receipt_entries(lines: "list[str]", start: int, end: int) -> "list[tuple[int, int]]":
     """[(first, last+1)] of each receipt in `lines[start:end]`: a receipt heading (`_RECEIPT_HEAD_RE`) outside a fence
-    and the lines that follow it while they are blank or indented and not a gate (impl round 2, S1: an open gate
-    under it must stay in task.md, where the stop hook and the close count it). A line that is neither — the owner's own note — ends the
+    and the lines that follow it while they are blank or of the receipt body's own grammar (`_RECEIPT_BODY_RE` —
+    task 214: an open gate under it stays in task.md, where the stop hook and the close count it, and a finding line
+    shaped like a gate stays in its receipt). A line that is neither — the owner's own note — ends the
     receipt and is not part of any (task 213, plan panel P3); so does a line that opens or lies in a code fence,
     whatever its indent, so a fenced note after a receipt is never split (impl round 1, R4). Fences only: a
     receipt's indented body is not an indented code block here."""
@@ -5280,8 +5285,7 @@ def _receipt_entries(lines: "list[str]", start: int, end: int) -> "list[tuple[in
     while i < end:
         if _RECEIPT_HEAD_RE.match(lines[i]) and not flags[i]:
             j = i + 1
-            while (j < end and not flags[j] and not _TRIM_GATE_RE.match(lines[j])
-                   and (not lines[j].strip() or lines[j][:1] in (" ", "\t"))):
+            while j < end and not flags[j] and (not lines[j].strip() or _RECEIPT_BODY_RE.match(lines[j])):
                 j += 1
             while j > i + 1 and not lines[j - 1].strip():
                 j -= 1
@@ -5486,7 +5490,7 @@ def compose_close(text: str, *, receipt_heading: str, receipt: str,
                 "pause. Re-read task.md, then re-run `tasks work done` if the "
                 "close is still right.")
     if expect_risk is not None:
-        now_risk = _risk_from_lines(text.splitlines())
+        now_risk = _risk_from_lines(lines)           # the physical lines read above (task 214)
         if now_risk != expect_risk:
             raise CloseRaceRefused(
                 f"`## Risk` changed from `{expect_risk}` to `{now_risk}` while this "
@@ -5559,7 +5563,7 @@ def write_handoff_and_block(task_file: Path, section: str, reason: str = "handof
     ts = datetime.datetime.now().astimezone().isoformat(timespec="minutes")
 
     def _t(text: str) -> str:
-        composed = _compose_handoff(text.splitlines(), section)
+        composed = _compose_handoff(_physical_lines(text), section)      # task 214
         return _compose_blocked(composed, clean, ts)
 
     _rewrite(task_file, _t)
@@ -5712,7 +5716,7 @@ def _latest_receipt_line(task_file: Path) -> "str | None":
     """The newest `### ...` entry heading under `## Verification Receipt`, or None
     when the task has no receipts yet (a handoff still works without one)."""
     try:
-        lines = task_file.read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = _physical_lines(task_file.read_text(encoding="utf-8", errors="replace"))
     except OSError:
         return None
     in_receipt = False
@@ -5807,7 +5811,7 @@ def write_handoff(task_file: Path, section: str) -> None:
     reaches into it — every handoff's judgment "stays behind as history" (the
     docs/CHANGELOG claim), not just the newest."""
     def _t(text: str) -> str:
-        lines = text.splitlines()
+        lines = _physical_lines(text)       # task 214: splitlines() + "\n".join minted lines from a U+0085 in a quote
         return _compose_handoff(lines, section)
 
     _rewrite(task_file, _t)
@@ -5877,7 +5881,7 @@ def _extract_block_reason(task_file: Path) -> "str | None":
     if not _is_blocked(task_file):     # a resumed task keeps its ## Blocked as history (task 189, Gemini #15)
         return None
     try:
-        lines = task_file.read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = _physical_lines(task_file.read_text(encoding="utf-8", errors="replace"))
     except OSError:
         return None
     return _block_reason_from_lines(lines)
@@ -5910,7 +5914,7 @@ def _block_reasons(task_file: Path) -> "list[str]":
     """EVERY reason in the live `## Blocked` section, oldest first (task 140: a task
     blocked twice records both; `Resumed …` stamps are not reasons)."""
     try:
-        lines = task_file.read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = _physical_lines(task_file.read_text(encoding="utf-8", errors="replace"))
     except OSError:
         return []
     out: "list[str]" = []
@@ -6051,7 +6055,7 @@ def task_done(project_path: Path, name_filter: str = "") -> dict:
     state: dict = {}
 
     def _t(text: str) -> "str | None":
-        lines = text.splitlines()
+        lines = _physical_lines(text)       # task 214: a gate inside a line is not a gate to flip
         # Find and check off the first unchecked gate
         for i, line in enumerate(lines):
             stripped = line.strip()
