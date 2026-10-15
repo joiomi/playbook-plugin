@@ -35,6 +35,17 @@ GROK_WAIT = ("grok", "its seat answers out of credit (HTTP 402) until the subscr
 REMOVED = re.compile(r"\bGONE\b|model (was )?removed")
 
 
+def entitlement_outcome(grok_verdict: "str | None", stdout: str) -> str:
+    """`tasks models check`'s verdict for the grok seat → "pass" (the refusal observed: not read as a removed model,
+    the CLI's own words kept), "wait" (grok answered OK — its credit is back, so the refusal cannot be observed on it;
+    the old clause FAILED the row there, task 206's plan panel A11) or "fail"."""
+    if grok_verdict == "OK":
+        return "wait"
+    if grok_verdict not in (None, "GONE") and re.search(r"402|credit|spending|limit|entitle", stdout, re.I):
+        return "pass"
+    return "fail"
+
+
 def timeout_reported(text: str) -> bool:
     """The product's own words for a judge cut by the hard limit — not merely `timeout` anywhere: the CLI prints
     a soft/hard clamp line with that word before the judge even starts (impl panel I6)."""
@@ -292,10 +303,13 @@ def model_availability(out: Path) -> int:
         run.clause("missing: a pin each real CLI rejects is GONE, and the check fails",
                    verdict.get(bogus_claude) == "GONE" and verdict.get(bogus_codex) == "GONE" and r.returncode != 0,
                    f"{verdict}; rc {r.returncode}")
-        run.clause("entitlement (grok, out of credit now): the refusal is NOT read as a removed model, and the CLI's own "
-                   "words are kept", verdict.get(grok_seat) not in (None, "GONE", "OK")
-                   and re.search(r"402|credit|spending|limit|entitle", r.stdout, re.I) is not None,
-                   f"grok verdict {verdict.get(grok_seat)}")
+        entitlement = entitlement_outcome(verdict.get(grok_seat), r.stdout)
+        if entitlement == "wait":
+            run.wait_for("grok", "its seat answered OK — its credit is back, so the entitlement refusal cannot be observed "
+                                 "on it (task 206); the case waits for a seat the account is not entitled to")
+        else:
+            run.clause("entitlement (grok, out of credit now): the refusal is NOT read as a removed model, and the CLI's "
+                       "own words are kept", entitlement == "pass", f"grok verdict {verdict.get(grok_seat)}")
         # the review path: a confirmed-removed pin stops the run; a timeout and a budget stop never read as removal
         _new_task(j, run, "quick", "avail-probe", "A one-line probe task.")
         j.seats([f"claude:{bogus_claude}"], f"claude:{bogus_claude}")

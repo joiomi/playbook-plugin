@@ -500,6 +500,30 @@ def triage_answer() -> None:
         check(f"REVIEW-TRIAGE (Q2) — {label}", rows_judge.names_the_defect(answer), want)
 
 
+# `tasks models check`'s line for the grok seat on 2026-10-13 (task 185's installed run), grok out of credit
+GROK_402_LINE = ('  grok:grok-4.7:medium         UNKNOWN            probe failed for another reason: Internal error: '
+                 '{ "message": "API error (status 402 Payment Required): Grok Build usage balance exhausted", '
+                 '"http_status": 402 }')
+
+
+def grok_entitlement() -> None:
+    """E1 (task 206, its plan panel A11, codex): the entitlement case is observed on grok while it is out of credit.
+    Once its credit is back it answers OK, and the old clause (`not in (None, GONE, OK)`) FAILED the row — a failure
+    of the scenario, not of the product, which §S14's Done refuses even when the row is waived. OK is now a WAIT."""
+    old = lambda v, out: v not in (None, "GONE", "OK") and re.search(r"402|credit|spending|limit|entitle", out, re.I) is not None  # noqa: E731
+    check("E1 the OLD clause on a grok seat that answers OK (its credit back) — it failed the row", old("OK", "OK"), False)
+    f = getattr(rows_judge, "entitlement_outcome", None)
+    got = (lambda v, out: f(v, out)) if f else (lambda v, out: "<no entitlement_outcome>")
+    check("E1 the real out-of-credit answer (UNKNOWN, the CLI's 402 words) is the entitlement case observed",
+          got("UNKNOWN", GROK_402_LINE) == "pass", True, got("UNKNOWN", GROK_402_LINE))
+    check("E1 grok answering OK waits (the refusal cannot be observed), it does not fail", got("OK", "OK") == "wait",
+          True, got("OK", "OK"))
+    check("E1 grok read as a removed model (GONE) fails", got("GONE", GROK_402_LINE) == "fail", True, got("GONE", GROK_402_LINE))
+    check("E1 no line for grok at all fails", got(None, "") == "fail", True, got(None, ""))
+    check("E1 a refusal without the CLI's own words fails", got("UNKNOWN", "probe failed") == "fail", True,
+          got("UNKNOWN", "probe failed"))
+
+
 def seat_answer_bound() -> None:
     """Q6 (task 170, impl round 2, codex): each seat's answer is its OWN log — `judge.log` for claude,
     `judge-codex.log` for codex — written by that step (newer than its start) that exited 0. Replay: claude's
@@ -869,8 +893,8 @@ def main(argv: "list[str]") -> int:
         signal.signal(s, lambda signum, _f: sys.exit(128 + signum))
     for f in (freehand, names, install_env, snapshot_whole, step_timeout, step_detached, gauntlet_quarantine,
               registry_probe, docker_timeout, gauntlet_missing_and_lock, spawn_interrupted, gauntlet_interrupted,
-              owner_distillation, gauntlet_windows, triage_answer, seat_answer_bound, double_signal, pre_exec_signal,
-              installed_root):
+              owner_distillation, gauntlet_windows, triage_answer, seat_answer_bound, grok_entitlement, double_signal,
+              pre_exec_signal, installed_root):
         f()
     print(f"selfcheck: {'every control holds' if not FAILED else f'{len(FAILED)} control(s) do not hold'}")
     return 1 if FAILED else 0
