@@ -386,6 +386,18 @@ class ImplRoundTwo(_Dir):
         self.assertEqual(log.count("# Audit log"), 1)
         self.assertEqual(len(self.entries(log)), 3)
 
+    def test_an_owners_note_right_under_the_title_stays(self):                        # post-D6 run 1, J1 (codex)
+        core.record_audit_receipt(self.tf, receipt("10:00:01"))
+        core.record_audit_receipt(self.tf, receipt("10:00:02"))
+        text = self.log.read_text(encoding="utf-8").replace("# Audit log\n\n", "# Audit log\n\nMy note under the title.\n\n", 1)
+        self.log.write_text(text, encoding="utf-8")
+        core.record_audit_receipt(self.tf, receipt("10:00:03"))
+        log = self.log.read_text(encoding="utf-8")
+        self.assertIn("My note under the title.", log)
+        explanation = core._AUDIT_LOG_HEAD.split("\n")[2]
+        self.assertEqual(log.count(explanation), 1, log[:400])
+        self.assertEqual(log.count("# Audit log"), 1)
+
     def test_a_fenced_head_line_in_the_log_stays(self):                               # S2 (codex)
         core.record_audit_receipt(self.tf, receipt("10:00:01"))
         core.record_audit_receipt(self.tf, receipt("10:00:02"))

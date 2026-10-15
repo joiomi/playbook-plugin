@@ -5359,18 +5359,16 @@ def record_audit_receipt(task_file: Path, entry: str) -> "str | None":
         old_lines = _physical_lines(old)
         old_found = _receipt_entries(old_lines, 0, len(old_lines))
         logged = ["\n".join(old_lines[a:b]).rstrip() for a, b in old_found]
-        # the log's head is removed by POSITION — its `# Audit log` line and the paragraph after it — never line by
-        # line: that dropped every blank line and any line equal to a head line (impl round 2, S2)
-        head_end = 0
-        if old_lines and old_lines[0].strip() == "# Audit log":
-            head_end = 1
-            while head_end < len(old_lines) and not old_lines[head_end].strip():
-                head_end += 1
-            while (head_end < len(old_lines) and old_lines[head_end].strip()
-                   and not _RECEIPT_HEAD_RE.match(old_lines[head_end])):
-                head_end += 1
+        # only the lines this function wrote leave as the log's head: its first line when it is `# Audit log`, and a
+        # line equal to the generated explanation before the first receipt — never a line by its look elsewhere (impl
+        # round 2, S2: blank lines and a fenced `# Audit log` were dropped), never a paragraph by its place (post-D6
+        # run 1, J1: an owner's note right under the title was dropped)
+        generated = _physical_lines(_AUDIT_LOG_HEAD)[2]
+        first_receipt = old_found[0][0] if old_found else len(old_lines)
+        head = {k for k in range(first_receipt)
+                if (k == 0 and old_lines[k].strip() == "# Audit log") or (k > 0 and old_lines[k] == generated)}
         log_other = _squeeze_blank([ln for k, ln in enumerate(old_lines)
-                                    if k >= head_end and not any(a <= k < b for a, b in old_found)])
+                                    if k not in head and not any(a <= k < b for a, b in old_found)])
         # task.md's receipts are the newer ones; a logged one equal to one of them is a crash's copy (R3)
         merged = moving + [e for e in logged if e not in moving]
         try:
