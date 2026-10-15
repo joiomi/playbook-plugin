@@ -251,9 +251,9 @@ def panel_quorum(out: Path) -> int:
                  ("fraction 0.6", 0.6, True), ("invalid 'banana'", "banana", True))
         for label, value, passes in cases:
             j.config(panel_quorum=value)
-            # the review path passes the seat's model id, not its alias: sonnet is `claude-sonnet-5` (provider/models.json)
+            # the review path passes the seat's model id, not its alias: sonnet is `claude-sonnet-5-5` (provider/models.json, task 203)
             r = j.tasks(run, f"panel, quorum {label}", "panel-review", "--bare", "--prompt", QUESTION,
-                        PB_SHIM_FAIL_MODELS="claude-sonnet-5")
+                        PB_SHIM_FAIL_MODELS="claude-sonnet-5-5")
             out_ = r.stdout + r.stderr
             v = re.search(r"PANEL (PASS|FAIL): (\d+)/(\d+) judges succeeded, quorum (\d+)", out_)
             got = v.groups() if v else None

@@ -180,7 +180,7 @@ class TheSingleJudgeIsAskedForFindingsOnly(_Project):
 class APanelIsResolvedAgainstItsQuorum(_Project):
     """haiku fails on purpose in each case below (two of three answer), unless said otherwise."""
 
-    def panel(self, quorum: "str | None", fail=("claude-haiku-4-5",)):
+    def panel(self, quorum: "str | None", fail=("claude-haiku-5-5",)):
         env = dict(self.env, PB_STUB_FAIL_MODELS=" ".join(fail))
         if quorum is not None:
             env["PLAYBOOK_PANEL_QUORUM"] = quorum
@@ -211,7 +211,7 @@ class APanelIsResolvedAgainstItsQuorum(_Project):
         self.assertIn("banana", r.stderr)
 
     def test_control_majority_fails_when_two_of_three_fail(self):
-        self.assertIn("PANEL FAIL: 1/3", self.verdict(self.panel(None, fail=("claude-haiku-4-5", "claude-sonnet-5"))))
+        self.assertIn("PANEL FAIL: 1/3", self.verdict(self.panel(None, fail=("claude-haiku-5-5", "claude-sonnet-5-5"))))
 
 
 if __name__ == "__main__":

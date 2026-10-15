@@ -37,7 +37,7 @@ if str(_HERE.parent) not in sys.path:
 from tests._bwrap_standin import bwrap_usable  # noqa: E402
 from tests._judge_stub import TASKS, clean_env, stub_bin  # noqa: E402
 
-HAIKU, SONNET = "claude-haiku-4-5", "claude-sonnet-5"
+HAIKU, SONNET = "claude-haiku-5-5", "claude-sonnet-5-5"   # the shipped aliases' ids (task 203, #44)
 
 
 class _Scratch(unittest.TestCase):

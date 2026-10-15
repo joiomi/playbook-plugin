@@ -237,7 +237,7 @@ class ClaudeConfiguredModelsTest(unittest.TestCase):
         with mock.patch.object(mc, "_claude_configured_models", return_value=[]):
             cands = mc.claude_candidate_models(["opus", "sonnet", "haiku", "codex:gpt-5.5", "agy"])
         self.assertIn("claude-fable-5", cands)
-        self.assertIn("claude-sonnet-5", cands)
+        self.assertIn("claude-sonnet-5-5", cands)          # the shipped alias's target since task 203 (#44)
 
     def test_configured_model_leads_candidates(self):
         with tempfile.TemporaryDirectory() as td, \
@@ -546,6 +546,21 @@ class CheckPinsTest(unittest.TestCase):
             mc.parse_codex_cache("[1,2,3]")
 
 
+class ShippedSonnetAndHaikuAliasTest(unittest.TestCase):
+    """Task 203 (#44): the shipped `sonnet` and `haiku` aliases name what Claude Code 2.1.296's own `--model sonnet` /
+    `--model haiku` ran (task 184, read from its sessions' stream events). Reads the shipped file itself."""
+
+    _SHIPPED = Path(sandbox.__file__).parent / "models.json"
+
+    def test_the_aliases_follow_claude_code(self):
+        aliases = sandbox._parse_models_json(self._SHIPPED)
+        self.assertEqual(aliases["sonnet"], ("claude", "claude-sonnet-5-5", ()))
+        self.assertEqual(aliases["haiku"], ("claude", "claude-haiku-5-5", ()))
+        with mock.patch.object(sandbox, "MODEL_ALIASES", aliases):
+            self.assertEqual(sandbox.resolve_judge_spec("sonnet"), ("claude", "claude-sonnet-5-5"))
+            self.assertEqual(sandbox.resolve_judge_spec("haiku"), ("claude", "claude-haiku-5-5"))
+
+
 class ShippedOpusAliasTest(unittest.TestCase):
     """Task 094: the shipped `opus` alias names Opus 5.5 (1M); Opus 4.8 stays
     reachable by an explicit pin. Reads the shipped file itself, not the
@@ -800,7 +815,7 @@ class DetectProvidersTest(unittest.TestCase):
         # configured id even though it's also a shipped alias target.
         self.assertEqual(ids[0], "claude-opus-4-8[1m]")
         self.assertEqual(len(ids), len(set(ids)))
-        self.assertIn("claude-sonnet-5", ids)
+        self.assertIn("claude-sonnet-5-5", ids)             # the shipped alias's target since task 203 (#44)
         self.assertTrue(all(m["efforts"] == [] for m in c["models"]))
 
     def test_codex_models_and_per_model_efforts_from_cache(self):

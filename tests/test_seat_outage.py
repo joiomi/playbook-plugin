@@ -41,6 +41,13 @@ AGY = "(FAILED — agy quota exhausted: error: Individual quota reached. Resets 
 # 2026-10-08 (task 156's first impl panel, judge.md): one plain line on stdout, exit 1.
 CLAUDE_LIMIT = ("(FAILED — exit 1)\n[stdout tail]\n"
                 "You've hit your weekly limit · resets Oct 13, 6pm (Europe/Bucharest)\n\n")
+# codex's workspace out of credits, byte for byte as both codex seats of task 177's impl round 1 returned it
+# (2026-10-10 20:30, its judge.md): no reset time is given (task 203, #34).
+CODEX_CREDITS = ('(FAILED — exit 1)\n[stdout tail]\n'
+                 '{"type":"error","message":"Your workspace is out of credits. Ask your workspace owner to refill in '
+                 'order to continue."}\n'
+                 '{"type":"turn.failed","error":{"message":"Your workspace is out of credits. Ask your workspace owner '
+                 'to refill in order to continue."}}')
 
 
 def _pin_clock(test, now=NOW):
@@ -70,6 +77,16 @@ class ClassifyOutage(unittest.TestCase):
         self.assertEqual(so.classify_outage(CODEX, NOW)["until"], "2026-10-07T19:33+03:00")
         self.assertEqual(so.classify_outage(CODEX_DATE, NOW)["until"], "2026-10-10T00:11+03:00")
         self.assertEqual(so.classify_outage(AGY, NOW)["until"], "2026-10-07T18:34:13+03:00")
+
+    def test_a_codex_workspace_out_of_credits_is_an_outage_with_no_end(self):     # task 203, #34
+        for provider in ("codex", None):
+            with self.subTest(provider=provider):
+                self.assertEqual(so.classify_outage(CODEX_CREDITS, NOW, provider=provider),
+                                 {"reason": "codex: workspace out of credits", "until": None})
+
+    def test_the_credits_sentence_quoted_is_no_outage(self):              # task 203, #34
+        self.assertIsNone(so.classify_outage(CODEX_CREDITS.replace("(FAILED — exit 1)", "A review:"), NOW))
+        self.assertIsNone(so.classify_outage(CODEX_CREDITS, NOW, provider="claude"))
 
     def test_a_clock_time_long_past_today_means_tomorrow(self):
         # passed more than six hours ago → the next such time (a time passed only
@@ -416,6 +433,17 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
         code, out, _ = self._panel(models, self._judge(), codex_available=True)
         self.assertNotIn("gpt-5.5", self.calls, "a seat out of credit was called again")
         self.assertIn("Skipped out of credit: codex:gpt-5.5", out)
+
+    def test_a_codex_workspace_out_of_credits_is_recorded_then_skipped(self):     # task 203, #34
+        models = self.CLAUDE[:2] + ("codex:gpt-5.5",)
+        code, out, _ = self._panel(models, self._judge(outage=("gpt-5.5",), outage_text=CODEX_CREDITS),
+                                   codex_available=True)
+        self.assertIn("Recorded codex:gpt-5.5 as out of credit", out)
+        record = json.loads(so._record(self.d / ".agent").read_text(encoding="utf-8"))
+        self.assertEqual(record["codex:gpt-5.5"]["until"], None)
+        self.calls.clear()
+        code, out, _ = self._panel(models, self._judge(), codex_available=True)
+        self.assertNotIn("gpt-5.5", self.calls, "a seat out of credit was called again")
 
     def test_a_seat_the_owner_enabled_while_the_panel_ran_is_not_recorded_again(self):
         # PLAN S11 item 3 (task 165): the panel that started before the owner's

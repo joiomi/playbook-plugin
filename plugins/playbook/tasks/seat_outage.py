@@ -46,6 +46,8 @@ def _record(agent_dir: Path) -> Path:
 _GROK_OUT = ("402 payment required", "usage balance exhausted")
 _CODEX_OUT = re.compile(r"you(?:'|’)ve hit your usage limit", re.I)
 _CODEX_AT = re.compile(r"try again at ([^.\"\n]+?)(?:\.|\"|\n|$)", re.I)
+# a codex WORKSPACE out of credits gives no reset time (task 177's capture, 2026-10-10; task 203, #34)
+_CODEX_CREDITS = re.compile(r"your workspace is out of credits", re.I)
 _AGY_OUT = re.compile(r"agy quota exhausted", re.I)
 _AGY_IN = re.compile(r"resets in (?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?", re.I)
 # claude prints its account limit as ONE plain line on stdout and exits 1 (both
@@ -181,6 +183,8 @@ def classify_outage(output_text: str, now: Optional[_dt.datetime] = None,
         return {"reason": "codex: usage limit reached"
                 + (f" (try again at {m.group(1).strip()})" if m else ""),
                 "until": at.isoformat(timespec="minutes") if at else None}
+    if _CODEX_CREDITS.search(text):
+        return {"reason": "codex: workspace out of credits", "until": None}
     if _AGY_OUT.search(text):
         m = _AGY_IN.search(text)
         if m and any(m.groups()):
