@@ -109,7 +109,12 @@ def names_nothing(project_path: Path, patterns: "list[str]") -> "list[str]":
         if not stem or stem in (".", "*"):
             continue
         glob_at = min([stem.index(c) for c in "*?[" if c in stem] or [len(stem)])
-        base = stem[:glob_at].rsplit("/", 1)[0] if glob_at < len(stem) else stem
+        if glob_at < len(stem):
+            head = stem[:glob_at]
+            # a glob's folder part — none for a root-level glob such as `CLAUDE*.md` (impl round 2, S8)
+            base = head.rsplit("/", 1)[0] if "/" in head else ""
+        else:
+            base = stem
         if base and not (Path(project_path) / base).exists():
             out.append(pat)
     return out
@@ -232,16 +237,35 @@ def judge_required(risk: str, can: bool, behavioral: "list[str]", changed: "list
 # ── the close (W3) ───────────────────────────────────────────────────────────
 
 def panel_record(task_dir: Path) -> "dict | None":
-    """The reservation of the task's newest impl round — its `**Round-id:**` is the reservation's id (task 149) —
-    as the run ledger merges it, or None (a round from before, a ledger without it)."""
+    """What the task's impl panels ran under, from EVERY impl panel reservation in the run ledger (impl round 2,
+    S2: the newest one alone let a below-quorum round, or a second panel after `## Risk` was lowered, replace what
+    the reviewed one recorded): the stricter risk of them all, the union of their guard lists, the larger cap per
+    risk. None when no reservation recorded any of it (panels from before task 209)."""
     from tasks import post_d6
-    rid = (post_d6.newest_impl_round(Path(task_dir)) or {}).get("round_id") or ""
-    if not rid:
+    recs = [r for r in post_d6.read_runs(Path(task_dir))
+            if r.get("kind") == "panel" and r.get("mode") in (None, "impl")
+            and any(k in r for k in ("risk", "guard_paths", "rounds_cap"))]
+    if not recs:
         return None
-    for r in post_d6.read_runs(Path(task_dir)):
-        if r.get("id") == rid and r.get("kind") == "panel":
-            return r
-    return None
+    risks = [r.get("risk") for r in recs if isinstance(r.get("risk"), str) and r.get("risk")]
+    risk = None
+    for x in risks:
+        risk = stricter(risk, x) if risk else x
+    guards = sorted({g for r in recs for g in _recorded_guards(r)})
+    caps = dict(DEFAULT_ROUNDS)
+    seen = [_recorded_caps(r) for r in recs if isinstance(r.get("rounds_cap"), dict)]
+    if seen:
+        caps = {k: max(c[k] for c in seen) for k in DEFAULT_ROUNDS}
+    return {"risk": risk, "guard_paths": guards, "rounds_cap": caps if seen else None}
+
+
+def same_round(a: "dict | None", b: "dict | None") -> bool:
+    """Two parsed rounds are the same round: by Round-id when both have one, else by their text."""
+    if not a or not b:
+        return False
+    if a.get("round_id") and b.get("round_id"):
+        return a["round_id"] == b["round_id"]
+    return (a.get("body") or "").rstrip() == (b.get("body") or "").rstrip()
 
 
 def _recorded_caps(rec: "dict | None") -> "dict[str, int]":
@@ -299,7 +323,7 @@ def failed_state(risk: str, why: str) -> dict:
             "risk": risk, "missing": []}
 
 
-def post_panel_hold(task_dir: Path) -> str:
+def post_panel_hold(task_dir: Path, key: str = "") -> str:
     """Why a close the stop rule sends to no judge must still wait, from the post-D6 runs after the newest impl
     panel (impl round 1, R6): the ledger is corrupt, the newest run has not finished, or the newest finished run
     COUNTED a Critical — grave, by the owner's definition; a FAIL with only Important findings does not hold it
@@ -309,7 +333,7 @@ def post_panel_hold(task_dir: Path) -> str:
     if post_d6.ledger_corrupt_lines(td):
         return (f"the post-D6 run ledger ({post_d6.RUNS_NAME}) has corrupt lines — a run that counted a Critical "
                 "could be hidden in them; repair it, or let the owner decide (--owner-ok).")
-    key = post_d6.panel_key(post_d6.newest_impl_round(td))
+    key = key or post_d6.panel_key(post_d6.newest_impl_round(td))   # the reviewed round's, when the caller has it
     every = [r for r in post_d6.read_runs(td) if key and r.get("panel") == key and r.get("kind") != "panel"]
     if every and every[-1].get("status") != "done":
         return (f"the newest post-D6 run ({every[-1].get('id')}) has not finished — wait for it, or record it "

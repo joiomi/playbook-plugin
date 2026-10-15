@@ -233,7 +233,7 @@ class _CloseFixture(unittest.TestCase):
             encoding="utf-8")
 
     def setup_task(self, risk="assertive", rounds=2, rec=None, change="code.py", critical_last=False,
-                   on_top="", tamper=""):
+                   on_top="", tamper="", top_rec=None, older_rec=None, stamp=True, archive_pass=False):
         from tasks.core import build_panel_snapshot, format_panel_snapshot_line, tree_state_fingerprint
         self._write_cfg()
         self._set_risk(risk)
@@ -242,22 +242,31 @@ class _CloseFixture(unittest.TestCase):
         assert r.returncode == 0, r.stderr
         fp = tree_state_fingerprint(self.d)
         lines = ["**Critical** — `code.py:1` x."] if critical_last else ["fine"]
+        stamp_lines = (f"**Tree-state:** {fp}\n\n{format_panel_snapshot_line(build_panel_snapshot(self.d, fp))}\n\n"
+                       if stamp else "")
         newest = rnd(rid="aaaaaaaaaaaa", judge_lines=lines).replace(
             "**Round-id:** aaaaaaaaaaaa\n\n",
-            f"**Round-id:** aaaaaaaaaaaa\n\n**Tree-state:** {fp}\n\n"
-            f"{format_panel_snapshot_line(build_panel_snapshot(self.d, fp))}\n\n"
+            "**Round-id:** aaaaaaaaaaaa\n\n" + stamp_lines
             + (f"**Tamper guard:** {tamper}\n\n" if tamper else ""))
         older = "".join(rnd(rid=f"{i:012x}") for i in range(rounds - 1, 0, -1))
-        (self.td / "judge.md").write_text(on_top + newest + older, encoding="utf-8")
+        if archive_pass:
+            # the reviewed round lives in judge-archive.md, five newer plan rounds in judge.md (round 2, S4)
+            (self.td / "judge-archive.md").write_text(newest + older, encoding="utf-8")
+            (self.td / "judge.md").write_text(
+                "".join(rnd("Plan", rid=f"{0xbbbbbbbbbbb0 + i:012x}") for i in range(5)), encoding="utf-8")
+        else:
+            (self.td / "judge.md").write_text(on_top + newest + older, encoding="utf-8")
+        for rid, extra in (("ffffffffffff", top_rec), ("000000000001", older_rec)):
+            if extra is not None:
+                post_d6.append_run(self.td, {"id": rid, "kind": "panel", "status": "reserved", "mode": "impl", **extra})
+                post_d6.append_run(self.td, {"id": rid, "kind": "panel", "status": "done"})
         record = {"risk": risk, "rounds_cap": {"reversible": 1, "assertive": 2, "irreversible": 2},
                   "guard_paths": list(self.cfg.get("guard_paths") or [])}
         record.update(rec or {})
         post_d6.append_run(self.td, {"id": "aaaaaaaaaaaa", "kind": "panel", "status": "reserved", "mode": "impl",
                                      **record})
         post_d6.append_run(self.td, {"id": "aaaaaaaaaaaa", "kind": "panel", "status": "done"})
-        self.panel = post_d6.panel_key(post_d6.newest_impl_round(self.td))
-        # the reviewed round is the newest impl round, unless a (below-quorum) impl round was put on top
-        assert self.panel == "aaaaaaaaaaaa" or "# Panel Impl Review" in on_top, self.panel
+        self.panel = "aaaaaaaaaaaa"            # the reviewed round's key (post-D6 runs after it key to it)
         if change:
             p = self.d / change
             p.write_text(p.read_text(encoding="utf-8") + "# changed after the panel\n", encoding="utf-8")
@@ -381,11 +390,19 @@ class TheJudgeWhereItIsNeeded(_CloseFixture):
         self._no_snapshot()
         self.assertHeld(self._close("--stale-panel-ok", "--reason", "x"), "no post-D6 run follows")
 
-    def test_q7_with_nothing_the_delta_could_decide_it_closes_and_says_so(self):
+    def test_q7_with_nothing_the_delta_could_decide_it_keeps_the_old_rule(self):
+        # impl round 2, S1: the no-judge exit is for a plain STALE with a LISTED delta; an unlistable one keeps
+        # the project's own rule — a reason without the opt-in, the binding with it
         self.setup_task(rounds=2, change="code.py")              # assertive, no guard list
         self._no_snapshot()
         self.assertClosed(self._close("--stale-panel-ok", "--reason", "x"))
-        self.assertIn("the delta could not be listed", self._receipt())
+        self.assertNotIn("no judge read after the last panel", self._receipt())
+
+    def test_q7_an_unlistable_delta_at_the_cap_stays_bound_with_the_opt_in(self):
+        self.cfg["stale_panel_requires_post_d6"] = "2026-01-01"
+        self.setup_task(rounds=2, change="code.py")
+        self._no_snapshot()
+        self.assertHeld(self._close("--stale-panel-ok", "--reason", "x"), "no post-D6 run follows")
 
     def test_q10_a_listed_json_and_a_listed_test_file(self):               # plan panel P9
         for listed in ("hooks/hooks.json", "tests/guard_fixture.py"):
@@ -585,6 +602,95 @@ class RoundOneFindings(_CloseFixture):
         code, err, out = self._close_in_process(another, "--force", "--reason", "x")
         self.assertNotIn("Task 001 done.", out, err)
         self.assertIn("changed while this close ran", err)
+
+
+
+class RoundTwoFindings(_CloseFixture):
+    """Task 209's impl panel round 2 (S1-S9): each red on nested 057a47b."""
+
+    def _opt_in_no_guards(self):
+        self.cfg["stale_panel_requires_post_d6"] = "2026-01-01"
+
+    def test_s1_an_exclude_over_code_at_the_cap_stays_bound(self):              # gemini, opus, sonnet
+        self._opt_in_no_guards()
+        self.setup_task(rounds=2, change="")
+        self.cfg["fingerprint_exclude"] = ["code.py"]
+        self._write_cfg()
+        self.assertHeld(self._close("--stale-panel-ok", "--reason", "x"), "no post-D6 run follows")
+
+    def test_s1_a_degraded_tamper_guard_at_the_cap_stays_bound(self):
+        self._opt_in_no_guards()
+        self.setup_task(rounds=2, change="code.py", tamper="degraded — the porcelain could not be read")
+        self.assertHeld(self._close("--stale-panel-ok", "--reason", "x"), "no post-D6 run follows")
+
+    def test_s1_control_a_plain_stale_at_the_cap_still_closes_on_the_reason(self):
+        self._opt_in_no_guards()
+        self.setup_task(rounds=2, change="code.py")
+        self.assertClosed(self._close("--stale-panel-ok", "--reason", "x"))
+
+    def test_s2_a_below_quorum_round_on_top_cannot_shed_the_guard_list(self):    # codex, grok, sonnet
+        self.cfg["guard_paths"] = ["guard/"]
+        self.setup_task(risk="reversible", rounds=1, change="", on_top=rnd(verdict="FAIL", rid="ffffffffffff"),
+                        top_rec={"risk": "reversible", "guard_paths": [],
+                                 "rounds_cap": {"reversible": 1, "assertive": 2, "irreversible": 2}})
+        self.cfg["guard_paths"] = []
+        self._write_cfg()
+        (self.d / "guard" / "g.py").write_text("g = 3\n", encoding="utf-8")
+        self.assertHeld(self._close(), "guard/g.py")
+
+    def test_s2_the_hold_reads_the_reviewed_rounds_runs(self):
+        # a below-quorum round on top must not hide a post-D6 run of the reviewed round that counted a Critical
+        self.cfg["guard_paths"] = ["guard/"]
+        self.setup_task(risk="reversible", rounds=1, change="code.py", on_top=rnd(verdict="FAIL", rid="ffffffffffff"))
+        post_d6.append_run(self.td, {"id": "runC", "panel": self.panel, "status": "done", "verdict": "FAIL",
+                                     "critical": 1, "important": 0})
+        self.assertHeld(self._close(), "counted a Critical")
+
+    def test_s4_the_owner_closes_an_archived_rounds_guard_change(self):
+        self.cfg["guard_paths"] = ["guard/"]
+        self.setup_task(risk="reversible", rounds=1, change="guard/g.py", archive_pass=True)
+        r = self._close("--owner-ok", "--reason", "the owner read the guard change")
+        self.assertClosed(r)
+        self.assertIn('owner-ok: "the owner read the guard change"', self._receipt())
+
+    def test_s2_a_risk_lowered_between_two_panels_frees_nothing(self):          # opus
+        self.setup_task(risk="assertive", rounds=2, change="code.py",
+                        older_rec={"risk": "irreversible", "guard_paths": [],
+                                   "rounds_cap": {"reversible": 1, "assertive": 2, "irreversible": 2}})
+        self.assertHeld(self._close("--stale-panel-ok", "--reason", "x"), "irreversible")
+
+    def test_s3_an_unstamped_round_without_a_panel_policy(self):                # codex
+        del self.cfg["panel_required_for"]
+        self.setup_task(risk="irreversible", rounds=1, change="code.py", stamp=False)
+        self.assertHeld(self._close(), "cannot be listed")
+        self.assertHeld(self._close("--stale-panel-ok", "--reason", "x"), "cannot be listed")
+
+    def test_s4_the_reviewed_round_in_the_archive_still_counts(self):           # grok, codex
+        self.cfg["guard_paths"] = ["guard/"]
+        self.setup_task(risk="reversible", rounds=1, change="guard/g.py", archive_pass=True)
+        self.assertHeld(self._close(), "guard/g.py")
+
+    def test_s5_a_guarded_test_file_is_not_left_to_tail_certification(self):    # opus
+        self.cfg["guard_paths"] = ["tests/guard_fixture.py"]
+        # no judge can start here: a missing default judge and a PATH without the judge programs
+        (self.d / ".agent" / "models.json").write_text('{"panel": ["pi"], "default_judge": "pi"}', encoding="utf-8")
+        self.setup_task(rounds=2, change="tests/guard_fixture.py")
+        self.env["PATH"] = "/usr/bin:/bin"
+        r = self._close()
+        self.assertHeld(r, "Stop rule (D6)", "tests/guard_fixture.py")
+        self.assertNotIn("tail certification", r.stderr)
+
+    def test_s6_a_run_that_counts_a_critical_while_the_close_runs(self):        # codex
+        self.cfg["stale_panel_requires_post_d6"] = "2026-01-01"
+        self.cfg["guard_paths"] = ["guard/"]
+        self.setup_task(rounds=2, change="code.py")
+
+        def a_critical():
+            post_d6.append_run(self.td, {"id": "runLate", "panel": self.panel, "status": "done", "verdict": "FAIL",
+                                         "critical": 1, "important": 0})
+        code, err, out = self._close_in_process(a_critical, "--stale-panel-ok", "--reason", "x")
+        self.assertNotIn("Task 001 done.", out, err)
+        self.assertIn("counted a Critical", err)
 
 
 if __name__ == "__main__":

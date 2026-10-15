@@ -299,7 +299,9 @@ def parse_verdict(text: str, delta_files: "set[str] | None" = None, exists=None)
         # the finding's whole text: from its marker to the next marker (or the end)
         later = [b for b in bounds if b > (i, m.start())]
         nxt = later[0][0] if later else len(lines)
-        span = "\n".join([ln[m.start():]] + lines[i + 1:max(i + 1, nxt)])
+        # the first line up to the next marker on it (impl round 2, S9: a later finding's text on the same line)
+        first = ln[m.start():later[0][1]] if later and later[0][0] == i else ln[m.start():]
+        span = "\n".join([first] + lines[i + 1:max(i + 1, nxt)])
         tag = _TAG_AFTER_RE.match(ln, m.end())
         t = tag.group(1).upper() if tag else ""
         if t == "SETTLED":

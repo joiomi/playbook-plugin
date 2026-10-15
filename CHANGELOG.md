@@ -17,7 +17,8 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   bound as well; any other
   change after the last round closes with `--stale-panel-ok --reason` (even where `stale_panel_requires_post_d6` is
   set) and the receipt names the files no judge read. The panel's reservation records the risk, the caps and the
-  guard list, so lowering any of them after the panel frees nothing; the decision is made again at the commit.
+  guard list, and the close reads every impl panel's record, so lowering any of them after a panel frees nothing; the
+  decision is made again at the commit.
   `review_rounds` and `guard_paths` in `.agent/config.json` (docs/configuration.md, "The review stop rule").
 - **The post-panel judge runs at most twice, then the owner** (the owner's 2026-10-13 18:37 rule): a Critical in
   run 2 no longer opens run 3 by itself — `tasks impl-review <N> --owner-ok --reason "…"` does.

@@ -100,6 +100,14 @@ class GuardPaths(unittest.TestCase):
         self.assertTrue(SR.guarded("./src//hooks/x.sh", ["src/hooks/"]))
         self.assertFalse(SR.guarded("src/hooksmith.sh", ["./src/hooks/"]))
 
+    def test_a_root_level_glob_names_something(self):                  # impl round 2, S8 (gemini)
+        d = Path(tempfile.mkdtemp(prefix="pb209g-"))
+        self.addCleanup(shutil.rmtree, d, True)
+        (d / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+        (d / "hooks").mkdir()
+        self.assertEqual(SR.names_nothing(d, ["CLAUDE*.md", "hooks/*.sh", "./hooks/"]), [])
+        self.assertEqual(SR.names_nothing(d, ["nothere/*.py", "gone.py"]), ["nothere/*.py", "gone.py"])
+
     def test_an_empty_pattern_matches_nothing(self):
         self.assertFalse(SR.guarded("a.py", ["", "/"]))
 
@@ -335,6 +343,13 @@ class MinorSeverity(unittest.TestCase):
                 "**Minor** — `a.py:1` reads oddly.\n\nCAP: 1/5 reported, exhausted\n")
         r = parse_verdict(text, {"a.py"}, exists=lambda p: p == "keep.py")
         self.assertEqual((r["pre_existing"], r["important"], r["minor"], r["verdict"]), (1, 0, 1, "PASS"))
+
+    def test_a_second_finding_on_the_same_line_is_not_the_firsts_text(self):   # impl round 2, S9 (gemini)
+        from tasks.post_d6 import parse_verdict
+        text = ("**Important** [PRE-EXISTING] [file: keep.py] an old flaw. **Important** `a.py:1` a new one.\n\n"
+                "CAP: 2/5 reported, exhausted\n")
+        r = parse_verdict(text, {"a.py"}, exists=lambda p: p == "keep.py")
+        self.assertEqual((r["pre_existing"], r["important"]), (1, 1))
 
     def test_a_minor_marker_is_not_a_counted_finding(self):
         from tasks.post_d6 import _FINDING_RE

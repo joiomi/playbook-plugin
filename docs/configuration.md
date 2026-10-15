@@ -500,17 +500,21 @@ The owner's rule D6 (2026-09-25) and his ruling of 2026-10-13 18:37, made the pl
   `review_rounds` sets a cap per risk (a positive integer; anything else keeps the default, with a warning). Plan
   panels are not capped.
 - **After a panel, the judge only where it matters.** A close of a task whose newest impl round that met its
-  quorum is followed by a change (a STALE tree — whatever plan or below-quorum round was written on top since)
+  quorum (in `judge.md` or `judge-archive.md`) is followed by a change (a STALE tree — whatever plan or below-quorum round was written on top since)
   needs the post-panel single judge's PASS on the current tree (`tasks impl-review <N>`, then `tasks work done
   --stale-panel-ok --reason "…"`) or `--owner-ok --reason "…"` when a changed file — code, test, doc or record — is
   under `guard_paths`, on a task of any risk; when the task is irreversible or unclassified and its code changed, in
   every project (`panel_required_for` plays no part: the owner's "fără nicio configurare"); or when the change cannot
   be listed and the answer depends on it — so also, in a git repository, when the freshness verdict is not a plain
-  STALE (a degraded tamper guard, an exclude over code, a missing or unreadable stamp: no delta is trusted). That holds before the last round
+  STALE (a degraded tamper guard, an exclude over code, a missing or unreadable stamp: no delta is trusted), and
+  when the reviewed round itself is unstamped whatever the freshness gate says. That holds before the last round
   too and binds `--force` as well — the binding of the section above, whatever its date says. When a below-quorum
   impl round sits on the reviewed one, no judge's PASS can be bound to it: a panel that meets its quorum, or the
-  owner. A docs or tests tail is still tried by tail certification first (a plain `tasks work done`).
-- **Otherwise**, after the last round the cap allows, `--stale-panel-ok --reason "…"` closes — even where
+  owner. A docs or tests tail is still tried by tail certification first (a plain `tasks work done`) — except a
+  change the rule sends to the post-panel judge, which tail certification does not take until a post-D6 PASS is the
+  base.
+- **Otherwise** — on a plain STALE whose delta could be listed — after the last round the cap allows,
+  `--stale-panel-ok --reason "…"` closes — even where
   `stale_panel_requires_post_d6` is set — and the receipt and the enforcement journal name what no judge read:
   `stop rule (D6): 2 of 2 impl rounds used (assertive); no judge read after the last panel (N file(s)): …`. Before
   the last round the project's own rule stands (the opt-in binding, else a reason). A reversible task's close names
@@ -523,11 +527,12 @@ The owner's rule D6 (2026-09-25) and his ruling of 2026-10-13 18:37, made the pl
   `/`), and a pattern that names nothing in the project is warned about at the close. Absent or empty: nothing is
   listed, and after a panel only an irreversible or unclassified task's code gets the judge. A value that is not a
   list of non-empty strings is read as every path.
-- What the panel ran under — the risk, the caps, the guard list — is recorded with its reservation; the close takes
-  the stricter risk of the two, the larger cap and both guard lists, so lowering `## Risk`, a cap or the list after
+- What each impl panel ran under — the risk, the caps, the guard list — is recorded with its reservation; the close
+  takes the stricter risk of them all and today's, the larger cap and every guard list, so lowering `## Risk`, a cap or the list after
   the panel frees nothing. The decision is made again at the commit, inside the task lock: a change of the judge
   requirement or of the cap state refuses the close, and under `--force` (which skips the tree check) so does a
-  tree that moved — even after a FRESH panel — or a different list of changed files.
+  tree that moved — even after a FRESH panel — or a different list of changed files; a post-D6 run that counted a
+  Critical meanwhile refuses it too.
 - The post-panel judge runs at most twice after a panel; a third run needs `tasks impl-review <N> --owner-ok
   --reason "…"` (until task 209 a Critical in run 2 opened run 3 by itself).
 - Judges have a third severity: at most three `**Minor**` findings below the counted ones, never counted and
