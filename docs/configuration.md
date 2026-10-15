@@ -463,8 +463,9 @@ two lines that carry the run's nonce, which no content can forge. A scope's comm
 object id before git reads it: a value that is a git option (`--output=…` made git write a file and lose sight
 of the commits it should have listed, in 1.6.1 too) is refused — the snapshot itself is the agent's record and
 is not authenticated. A submodule move is listed whatever a local `diff.ignoreSubmodules` or a `.gitmodules`
-`ignore=` says (`--ignore-submodules=none`), by tail certification, the freshness fingerprint and the post-D6
-delta alike (1.6.1 hid it: tail certification certified over it, the fingerprint read FRESH). For a documentation-only delta the close says which of
+`ignore=` says (`--ignore-submodules=none`), by tail certification, the freshness fingerprint, the records-only
+exemption and the post-D6 delta alike (1.6.1 hid it: tail certification certified over it, the fingerprint
+read FRESH, and a bump committed with a task record read as records-only). For a documentation-only delta the close says which of
 three things happened: no judge ran — the delta could not be put before one (its size against the 98,304-byte
 payload one judge can be sent, or the file that could not be read), the tamper snapshot could not be taken, or
 the judge's adapter could not be resolved or built, or its program is not installed; the judge returned FAIL; or there is no usable verdict, with

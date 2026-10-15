@@ -884,6 +884,22 @@ class ASubmoduleMoveIsNeverHidden(unittest.TestCase):
         can, beh, non = tail_cert_delta(self.d, self.snap, self.fp)
         self.assertIn("lib", beh)
 
+    def test_a_bump_committed_with_a_record_is_no_records_only_commit(self):   # the single judge's run 1, S1-1
+        # 1.6.1 too: `records_only_delta`'s two diffs let the setting hide the gitlink, so the panel read FRESH
+        from tasks.core import records_only_delta
+        rec = self.d / ".agent" / "tasks" / "001-t"
+        rec.mkdir(parents=True)
+        (rec / "task.md").write_text("# t\n", encoding="utf-8")
+        self._g(self.d, "add", "-A")
+        self._g(self.d, "commit", "-qm", "the task's record")
+        fp = tree_state_fingerprint(self.d)
+        snap = build_panel_snapshot(self.d, fp)
+        self._move()
+        (rec / "task.md").write_text("# t, triaged\n", encoding="utf-8")
+        self._g(self.d, "add", "-A")
+        self._g(self.d, "commit", "-qm", "the record, and a submodule bump with it")
+        self.assertFalse(records_only_delta(self.d, snap, fp))
+
     def test_the_post_d6_delta_lists_it(self):
         import tasks.core as core
         from unittest import mock

@@ -3075,14 +3075,16 @@ def records_only_delta(project_path: Path, snapshot: "dict | None",
                               capture_output=True, text=True, timeout=30)
         if head.returncode != 0 or head.stdout.strip() == f0:
             return False
-        diff = subprocess.run(["git", "diff", "--quiet", f0, "HEAD", "--", ".", *exclude],
+        # task 202 (the single judge's run 1, S1-1 — 1.6.1's): a submodule bump committed with a record must not
+        # hide behind a local `diff.ignoreSubmodules` / `.gitmodules` `ignore=` (the panel then read FRESH)
+        diff = subprocess.run(["git", "diff", "--quiet", "--ignore-submodules=none", f0, "HEAD", "--", ".", *exclude],
                               cwd=project_path, capture_output=True, timeout=60)
         if diff.returncode != 0:          # 1 = a non-excluded path changed; >1 = error
             return False
         # Round 3 (U4): only TASK RECORDS may make a commit "records-only" —
         # `.agent/config.json` (the verify contract) and `models.json` are
         # fingerprint-excluded too, but a committed policy change stays STALE.
-        names = subprocess.run(["git", "diff", "--name-only", "-z", f0, "HEAD"],
+        names = subprocess.run(["git", "diff", "--name-only", "-z", "--ignore-submodules=none", f0, "HEAD"],
                                cwd=project_path, capture_output=True, text=True,
                                timeout=60)
         if names.returncode != 0:
