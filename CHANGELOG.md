@@ -148,9 +148,10 @@ task as not grave (PLAN.md, Phase B's inputs). What each costs you today:
   `claude-sonnet-4-6` / `claude-haiku-4-5`.
 - **A nested `claude -p` shares the session's pointer** (task 193): its own stop is held by the outer task's open
   gates, and its prompt is logged as yours.
-- **A task made while you are back on 1.6.1, after 1.6.2 ran, is unknown to 1.6.2** when you upgrade again: remove
-  `.agent/task-registry` before the upgrade (the next session enrols every folder) or `tasks adopt` that folder (task
-  206).
+- **A task made while you are back on 1.6.1, after 1.6.2 ran, is unknown to 1.6.2** when you upgrade again: its close
+  is refused ("task folder(s) the playbook CLI did not make") until you `tasks adopt` that folder or commit it.
+  Removing `.agent/task-registry` does not help — on purpose, a deleted registry enrols nothing, so it cannot clear a
+  folder made by hand (measured, task 206).
 - **Moved to Phase B on 2026-10-13:** a research task's post-D6 delta is always empty (refused now, not passed: such a
   close takes a fresh panel or the owner's OK); `sandbox --print-argv` creates the extra `--rw` paths on the host;
   whether a background sub-agent's completion notice starts a turn is not measured; two older exits of the chat-log
