@@ -1240,7 +1240,9 @@ def _classify_tamper(project_path: Path, task_file: Path | None, before: dict, a
                      # ONE lock per task directory, always named `task.md.lock`
                      # (058 impl panel r2, sonnet #3: a `judge.md.lock` literal
                      # was exempted but nothing ever creates it).
-                     "vetting-ledger.json", "task.md.lock"}
+                     "vetting-ledger.json", "task.md.lock",
+                     # task 213 (plan panel P1): `tasks audit` moves the older receipts there
+                     "audit-log.md"}
                     | _jln())) + ")"
             if tracked == "untracked":
                 line_exempt.append(_prefixed(prefix, re.escape(_td) + r"/"))

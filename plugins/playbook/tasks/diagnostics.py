@@ -110,15 +110,22 @@ def cmd_audit(cmd_args):
         print(f"  [{tag}] {r['name']} — {r['why']}", flush=True)
     if task_file:
         import subprocess as _sp
-        from tasks.core import upsert_task_section
         try:
             _head = _sp.run(["git", "rev-parse", "HEAD"], cwd=project_path,
                             capture_output=True, text=True).stdout.strip()
         except (OSError, _sp.SubprocessError):
             _head = ""
         receipt = format_audit_receipt(audit, head_sha=_head)
-        upsert_task_section(task_file, "Pre-Panel Audit", receipt)
-        print(f"  Receipt recorded in {task_file.relative_to(project_path)}")
+        # task 213: task.md keeps the newest receipt; the older ones move to audit-log.md beside it
+        from tasks.core import record_audit_receipt
+        try:
+            _warn = record_audit_receipt(task_file, receipt)
+        except ValueError as e:
+            print(f"  Receipt NOT recorded: {e}", file=sys.stderr)
+        else:
+            print(f"  Receipt recorded in {task_file.relative_to(project_path)}")
+            if _warn:
+                print(f"  warning: {_warn}", file=sys.stderr)
     else:
         # task 116: a bare audit with no active task is a plain scan — say so, so a PASS is
         # never read as "this task's audit is recorded"

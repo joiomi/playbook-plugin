@@ -5253,6 +5253,85 @@ def upsert_task_section(task_file: Path, heading: str, entry: str) -> None:
     _rewrite(p, _t)
 
 
+AUDIT_LOG_NAME = "audit-log.md"
+_AUDIT_LOG_HEAD = ("# Audit log\n\nThe older `tasks audit` receipts of this task, newest first; the newest is in task.md's "
+                   "`## Pre-Panel Audit` (task 213).\n")
+
+
+def _receipt_entries(lines: "list[str]", start: int, end: int) -> "list[tuple[int, int]]":
+    """[(first, last+1)] of each receipt in `lines[start:end]`: a `### ` line outside a fence and the lines that
+    follow it while they are blank or indented. A line that is neither — the owner's own note — ends the
+    receipt and is not part of any (task 213, plan panel P3)."""
+    flags = _iter_fenced_flags(lines, unclosed_is_live=False)
+    out: "list[tuple[int, int]]" = []
+    i = start
+    while i < end:
+        if lines[i].startswith("### ") and not flags[i]:
+            j = i + 1
+            while j < end and (not lines[j].strip() or lines[j][:1] in (" ", "\t")):
+                j += 1
+            while j > i + 1 and not lines[j - 1].strip():
+                j -= 1
+            out.append((i, j))
+            i = j
+        else:
+            i += 1
+    return out
+
+
+def record_audit_receipt(task_file: Path, entry: str) -> "str | None":
+    """Record a `tasks audit` receipt (task 213, PHASE-B.md item 2; the owner: "Doar cea nouă în fișă"): task.md's
+    `## Pre-Panel Audit` keeps only `entry`; the receipts it held move, newest first, to `audit-log.md` beside it.
+
+    One `task_lock` hold covers the read and both writes, so two audits cannot lose each other's receipt (plan
+    panel P2); the log is written first and deduplicated on whole entries, so a crash between the writes doubles
+    nothing at the next audit (same-second receipts with different bodies are two entries). The section is found
+    with the writers' guarded span: an unclosed fence that hides a following section refuses — ValueError, both
+    files unchanged (P3). Only receipts move; any other line of the section stays. A log that cannot be read
+    strictly or written leaves the older receipts in task.md (the new one is still recorded) and returns a
+    warning (P4); None otherwise."""
+    from tasks.filelock import task_lock
+    p = Path(task_file)
+    log = p.parent / AUDIT_LOG_NAME
+    marker = "## Pre-Panel Audit"
+    with task_lock(p):
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except FileNotFoundError:
+            text = ""
+        lines = text.splitlines()
+        span = _writer_section_span(lines, marker)            # ValueError → nothing written
+        found = _receipt_entries(lines, span[0] + 1, span[1]) if span else []
+        if not found:
+            atomic_write(p, _compose_upsert(text, marker, entry))
+            return None
+        moving = ["\n".join(lines[a:b]).rstrip() for a, b in found]
+
+        def _keep_history(why: str) -> str:
+            atomic_write(p, _compose_upsert(text, marker, entry))
+            return f"{AUDIT_LOG_NAME} {why} — the older receipts stay in task.md this time"
+        try:
+            old = log.read_text(encoding="utf-8") if log.exists() else ""
+        except (OSError, UnicodeDecodeError) as e:
+            return _keep_history(f"cannot be read ({e.__class__.__name__})")
+        old_lines = old.splitlines()
+        logged = ["\n".join(old_lines[a:b]).rstrip() for a, b in _receipt_entries(old_lines, 0, len(old_lines))]
+        merged: "list[str]" = []
+        for e in moving + logged:                             # task.md's receipts are the newer ones
+            if e not in merged:
+                merged.append(e)
+        try:
+            atomic_write(log, _AUDIT_LOG_HEAD + "\n" + "\n\n".join(merged) + "\n")
+        except OSError as e:
+            return _keep_history(f"cannot be written ({e.__class__.__name__})")
+        first, last = found[0][0], found[-1][1]
+        kept = [ln for k, ln in enumerate(lines[first:last], first)
+                if not any(a <= k < b for a, b in found)]
+        new_lines = lines[:first] + entry.rstrip("\n").splitlines() + [""] + kept + lines[last:]
+        atomic_write(p, "\n".join(new_lines).rstrip("\n") + "\n")
+    return None
+
+
 _UNSET = object()     # "the caller captured no baseline for this check" (task 058)
 
 
