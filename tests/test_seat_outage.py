@@ -48,6 +48,7 @@ CODEX_CREDITS = ('(FAILED — exit 1)\n[stdout tail]\n'
                  'order to continue."}\n'
                  '{"type":"turn.failed","error":{"message":"Your workspace is out of credits. Ask your workspace owner '
                  'to refill in order to continue."}}')
+CREDITS_SENTENCE = "Your workspace is out of credits. Ask your workspace owner to refill in order to continue."
 
 
 def _pin_clock(test, now=NOW):
@@ -205,6 +206,13 @@ class ClassifyOutageProvenance(unittest.TestCase):
                 '  "http_status": 402\n}\n')
         self.assertEqual(so.classify_outage(text, NOW)["reason"], "grok: usage balance exhausted (402)")
 
+    def test_the_sentence_in_a_codex_event_that_is_no_error_is_no_outage(self):     # task 203 r1 (fable)
+        # a codex seat that failed for another reason: the sentence is only in the review's own message event
+        text = ("(FAILED — exit 1)\n[stdout tail]\n"
+                + json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": CREDITS_SENTENCE}})
+                + "\n" + json.dumps({"type": "error", "message": "stream disconnected"}) + "\n")
+        self.assertIsNone(so.classify_outage(text, NOW, provider="codex"))
+
     def test_a_late_evening_time_seen_after_midnight_is_yesterdays(self):
         # post-D6 run 1 (codex): "try again at 11:55 PM" classified at 00:10 is the
         # reset that passed 15 minutes ago, not tonight's
@@ -222,6 +230,41 @@ class ClassifyOutageProvenance(unittest.TestCase):
         self.addCleanup(lambda: __import__("shutil").rmtree(so_dir, True))
         so.record_outage(so_dir, "codex:x", out, late)
         self.assertEqual(so.current_outages(so_dir, late), {})
+
+
+class ClassifyOutageThroughTheCodexResult(unittest.TestCase):
+    """Task 203 r1 (codex): an exit-0 codex stream that ends badly becomes a failure text in
+    `usage.judge_output_from_result`; what of it a review wrote — the excerpt in the malformed-output
+    header, the partial text after an error — is never read as the provider speaking. The texts are
+    built by the real function, so its wording is what the classifier sees."""
+
+    def _text(self, stdout):
+        from provider import usage
+        from provider.sandbox import format_judge_output
+        result = subprocess.CompletedProcess(["codex"], 0, stdout=stdout, stderr="")
+        return str(usage.judge_output_from_result(result, usage.extract_codex, format_judge_output))
+
+    def _message(self, text):
+        return json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": text}})
+
+    def test_a_quote_inside_the_malformed_output_header_is_no_outage(self):
+        text = self._text(self._message("A review that quotes: " + CREDITS_SENTENCE) + "\na stray line\n")
+        self.assertTrue(text.startswith("(FAILED — malformed"), text[:80])
+        self.assertIn("out of credits", text.splitlines()[0])
+        self.assertIsNone(so.classify_outage(text, NOW, provider="codex"))
+
+    def test_a_quote_in_the_partial_review_text_is_no_outage(self):
+        quoted = json.dumps({"type": "error", "message": CREDITS_SENTENCE})
+        text = self._text(self._message("A review that quotes the event:\n" + quoted) + "\n"
+                          + json.dumps({"type": "error", "message": "stream disconnected"}) + "\n")
+        self.assertIn("\n[partial text before the failure]\n", text)
+        self.assertIn("\n" + quoted, text)
+        self.assertIsNone(so.classify_outage(text, NOW, provider="codex"))
+
+    def test_the_credits_error_event_on_exit_0_is_still_an_outage(self):
+        text = self._text(json.dumps({"type": "error", "message": CREDITS_SENTENCE}) + "\n")
+        self.assertEqual(so.classify_outage(text, NOW, provider="codex"),
+                         {"reason": "codex: workspace out of credits", "until": None})
 
 
 class OutageRecord(unittest.TestCase):
@@ -534,6 +577,12 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
         # post-D6 run 1 (codex): a claude seat's stdout is the review text; a line
         # there that looks like codex's error event is a quote
         code, out, _ = self._panel(self.CLAUDE[:3], self._judge(outage=("haiku",)))
+        self.assertNotIn("Recorded", out)
+        self.assertFalse(so._record(self.d / ".agent").exists())
+        self.assertIn("PANEL VERDICT: PASS", self._judge_md())
+
+    def test_a_claude_seat_quoting_the_credits_event_is_not_recorded(self):     # task 203 r1 (gemini)
+        code, out, _ = self._panel(self.CLAUDE[:3], self._judge(outage=("haiku",), outage_text=CODEX_CREDITS))
         self.assertNotIn("Recorded", out)
         self.assertFalse(so._record(self.d / ".agent").exists())
         self.assertIn("PANEL VERDICT: PASS", self._judge_md())

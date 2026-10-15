@@ -21204,10 +21204,24 @@
           "boundary": "subprocess",
           "negative_control": {
             "path": "tests/test_seat_outage.py",
-            "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_a_claude_seat_quoting_the_event_is_not_recorded"
+            "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_a_claude_seat_quoting_the_credits_event_is_not_recorded"
           },
           "limitations": [
-            "Task 203 (#34): the real panel, judges faked at the adapter."
+            "Task 203 (#34): the real panel, judges faked at the adapter.",
+            "Impl round 1 (gemini): the negative control quotes the credits event itself."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_seat_outage.py",
+          "reference": "ClassifyOutageThroughTheCodexResult.test_the_credits_error_event_on_exit_0_is_still_an_outage",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_seat_outage.py",
+            "reference": "ClassifyOutageThroughTheCodexResult.test_a_quote_inside_the_malformed_output_header_is_no_outage"
+          },
+          "limitations": [
+            "Task 203 r1 (codex): an exit-0 codex stream, turned into its failure text by the real `usage.judge_output_from_result`; the review's words in it (the malformed-output head's excerpt, the partial text after an error) are never read as the provider's."
           ]
         }
       ],

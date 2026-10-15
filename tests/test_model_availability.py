@@ -560,6 +560,17 @@ class ShippedSonnetAndHaikuAliasTest(unittest.TestCase):
             self.assertEqual(sandbox.resolve_judge_spec("sonnet"), ("claude", "claude-sonnet-5-5"))
             self.assertEqual(sandbox.resolve_judge_spec("haiku"), ("claude", "claude-haiku-5-5"))
 
+    def test_the_files_own_sentence_names_the_same_models(self):     # task 203 r1 (gemini, fable, opus, sonnet)
+        import json
+        import re
+        data = json.loads(self._SHIPPED.read_text(encoding="utf-8"))
+        family = re.search(r"Current Claude family \([^)]*\): ([^.]*)\.", data["_doc"])
+        self.assertIsNotNone(family, "the _doc names no Claude family")
+        named = dict(pair.split("=", 1) for pair in family.group(1).replace(" ", "").split(","))
+        self.assertEqual(sorted(named), ["fable", "haiku", "opus", "sonnet"])
+        for alias, model in named.items():
+            self.assertEqual(data["aliases"][alias][1], model, alias)
+
 
 class ShippedOpusAliasTest(unittest.TestCase):
     """Task 094: the shipped `opus` alias names Opus 5.5 (1M); Opus 4.8 stays

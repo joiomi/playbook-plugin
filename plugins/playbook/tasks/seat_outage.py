@@ -130,6 +130,14 @@ def _parse_codex_time(raw: str, now: _dt.datetime) -> Optional[_dt.datetime]:
 # limit line is read by a narrower rule in classify_outage (task 158).
 _EVENT_STREAM_PROVIDERS = ("codex", "grok", "agy")
 
+# What provider/usage.py's judge_output_from_result writes when a codex stream ends
+# badly on exit 0: the malformed-output head quotes the stdout it could not parse,
+# and the error head is followed by the review's partial text — a review's words,
+# never the provider's (task 203 r1, codex).
+_MALFORMED_HEAD = "(FAILED — malformed or unrecognized structured judge output:"
+_ERROR_HEAD = "(FAILED — the judge CLI reported an error:"
+_PARTIAL_TEXT = "[partial text before the failure]"
+
 
 def classify_outage(output_text: str, now: Optional[_dt.datetime] = None,
                     provider: Optional[str] = None) -> Optional[dict]:
@@ -142,6 +150,10 @@ def classify_outage(output_text: str, now: Optional[_dt.datetime] = None,
         return None
     now = now or _dt.datetime.now().astimezone()
     lines = text.lstrip().splitlines()
+    if lines[0].startswith(_MALFORMED_HEAD):
+        return None
+    if lines[0].startswith(_ERROR_HEAD):
+        lines = lines[:next((i for i, ln in enumerate(lines) if ln.strip() == _PARTIAL_TEXT), len(lines))]
     kept, section, claude_stdout = lines[:1], "", []
     for ln in lines[1:]:
         if ln.strip() in ("[stdout tail]", "[stderr tail]"):
