@@ -9,16 +9,19 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 **The review stop rule as the plugin's default** — PHASE-B.md item 1, task 209. Until now the round cap (the owner's
 rule D6) and the rule that after the last panel a single judge reads only the code that guards (his ruling of
 2026-10-13 18:37) lived in one project's CLAUDE.md, and no CLI enforced them; his answers of 2026-10-15 made them the
-plugin's, in every project. Every part landed after three impl panel rounds and two post-panel single-judge runs. The
+plugin's, in every project. It went through three impl panel rounds and two post-panel single-judge runs (the last fix
+is read by no judge — Known limitations). The
 suite has 4827 tests (4712 at 1.6.2); CI is the same two Linux lanes.
 **Upgrading:** `/playbook:upgrade`, restart every Claude Code session, then re-run `/playbook:init` in each project
 that uses the plugin, so its CLAUDE.md block takes the template's new "Review rounds stop by `## Risk`" bullet and the
-post-panel judge's two runs. Only `## Correctness Contract` changed in the template; init replaces the template-owned
+post-panel judge's two runs. Only `## Correctness Contract` and the `## CLI` line of `tasks work done` changed in the
+template; init replaces the template-owned
 sections, and any project text inside them is saved to `.agent/backups/CLAUDE.md.<UTC>.bak` and named in its output.
 Init does not touch `.agent/config.json`: `guard_paths` — the project's code that guards — is each project's own list;
 without one, after a panel only an irreversible or unclassified task's code gets the judge. **A task already in
-flight** meets the change at once, without init: a third impl panel without a Critical in round 2 is refused, and so
-is an irreversible task's stale close on a reason alone — the owner's `--owner-ok --reason "…"` passes either, recorded.
+flight** meets the change at once, without init: an impl panel past the cap is refused (a reversible task's second, an
+assertive or irreversible task's third without a Critical in round 2), and so is an irreversible task's stale close on
+a reason alone when its code changed after the panel — the owner's `--owner-ok --reason "…"` passes either, recorded.
 
 ### Changed
 
@@ -48,10 +51,11 @@ is an irreversible task's stale close on a reason alone — the owner's `--owner
   findings, never counted, never stopping anything; the `CAP:` line still counts the Critical and Important ones
   exactly, and a Minor ends the finding before it.
 - **Changed outcomes, by design:** an irreversible task's stale close on `--stale-panel-ok --reason` or `--force
-  --reason` alone — also in a project without `panel_required_for`, and on an unstamped round — and an in-flight
-  task's third impl panel without a Critical in round 2, are now refused; a reversible task whose change after its
-  impl panel touches `guard_paths` needs the judge too, and a reversible task gets no second impl round after a
-  Critical.
+  --reason` alone when its code changed after the panel, the delta cannot be listed (an unstamped round included), or
+  a changed file is under `guard_paths` — also in a project without `panel_required_for` — is now refused (a docs or
+  tests change alone still closes); so is an in-flight task's impl panel past the cap — a reversible task's second, an
+  assertive or irreversible task's third without a Critical in round 2; and a reversible task whose change after its
+  impl panel touches `guard_paths` needs the judge too.
 
 ### Known limitations
 
