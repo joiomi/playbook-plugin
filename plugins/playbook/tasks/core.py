@@ -5261,9 +5261,16 @@ _AUDIT_LOG_HEAD = ("# Audit log\n\nThe older `tasks audit` receipts of this task
                    "`## Pre-Panel Audit` (task 213).\n")
 
 
+# A receipt's heading as `audit.format_audit_receipt` writes it (task 213, impl round 2, S1): any other `### ` in the
+# section — a heading an agent appended at the end of task.md — is not a receipt and never moves (all 787 receipt
+# headings of the 245 real records have this shape).
+_RECEIPT_HEAD_RE = re.compile(r"^### \S+ · (?:PASS|FAIL) · commit ")
+
+
 def _receipt_entries(lines: "list[str]", start: int, end: int) -> "list[tuple[int, int]]":
-    """[(first, last+1)] of each receipt in `lines[start:end]`: a `### ` line outside a fence and the lines that
-    follow it while they are blank or indented. A line that is neither — the owner's own note — ends the
+    """[(first, last+1)] of each receipt in `lines[start:end]`: a receipt heading (`_RECEIPT_HEAD_RE`) outside a fence
+    and the lines that follow it while they are blank or indented and not a gate (impl round 2, S1: an open gate
+    under it must stay in task.md, where the stop hook and the close count it). A line that is neither — the owner's own note — ends the
     receipt and is not part of any (task 213, plan panel P3); so does a line that opens or lies in a code fence,
     whatever its indent, so a fenced note after a receipt is never split (impl round 1, R4). Fences only: a
     receipt's indented body is not an indented code block here."""
@@ -5271,9 +5278,10 @@ def _receipt_entries(lines: "list[str]", start: int, end: int) -> "list[tuple[in
     out: "list[tuple[int, int]]" = []
     i = start
     while i < end:
-        if lines[i].startswith("### ") and not flags[i]:
+        if _RECEIPT_HEAD_RE.match(lines[i]) and not flags[i]:
             j = i + 1
-            while j < end and not flags[j] and (not lines[j].strip() or lines[j][:1] in (" ", "\t")):
+            while (j < end and not flags[j] and not _TRIM_GATE_RE.match(lines[j])
+                   and (not lines[j].strip() or lines[j][:1] in (" ", "\t"))):
                 j += 1
             while j > i + 1 and not lines[j - 1].strip():
                 j -= 1
@@ -5351,9 +5359,18 @@ def record_audit_receipt(task_file: Path, entry: str) -> "str | None":
         old_lines = _physical_lines(old)
         old_found = _receipt_entries(old_lines, 0, len(old_lines))
         logged = ["\n".join(old_lines[a:b]).rstrip() for a, b in old_found]
-        head = set(_physical_lines(_AUDIT_LOG_HEAD))
+        # the log's head is removed by POSITION — its `# Audit log` line and the paragraph after it — never line by
+        # line: that dropped every blank line and any line equal to a head line (impl round 2, S2)
+        head_end = 0
+        if old_lines and old_lines[0].strip() == "# Audit log":
+            head_end = 1
+            while head_end < len(old_lines) and not old_lines[head_end].strip():
+                head_end += 1
+            while (head_end < len(old_lines) and old_lines[head_end].strip()
+                   and not _RECEIPT_HEAD_RE.match(old_lines[head_end])):
+                head_end += 1
         log_other = _squeeze_blank([ln for k, ln in enumerate(old_lines)
-                                    if not any(a <= k < b for a, b in old_found) and ln not in head])
+                                    if k >= head_end and not any(a <= k < b for a, b in old_found)])
         # task.md's receipts are the newer ones; a logged one equal to one of them is a crash's copy (R3)
         merged = moving + [e for e in logged if e not in moving]
         try:

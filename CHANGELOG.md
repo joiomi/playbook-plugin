@@ -30,7 +30,8 @@ the real records before: every `tasks audit` stacked one more receipt into task.
   both writes are one task-lock hold; the log is written first, so a crash between the two writes leaves the moved
   receipts in both files and the next audit writes them once; each receipt now ends with a `run` line, so two audits
   in the same second stay two receipts. The new receipt goes right under the heading; every other line of the section
-  — and of the log — stays, in its order, and a fenced note after a receipt is never split. An unclosed fence inside
+  — and of the log — stays, in its order: a receipt is only a `### <time> · PASS|FAIL · commit …` heading with the
+  indented lines under it up to a gate or a fence, so a heading or a gate an agent adds in that section never moves. An unclosed fence inside
   the section that would hide a later section is refused with both files unchanged, and `tasks audit` then exits
   non-zero; a log that cannot be read (a link, a FIFO, not UTF-8) or written leaves the older receipts in task.md and
   the command says so. A new `audit-log.md` is the task's own record to the panel tamper guard. Measured on copies of the real records: the move
@@ -48,8 +49,10 @@ the real records before: every `tasks audit` stacked one more receipt into task.
   U+0085, U+2028, vertical tab or form feed inside a line written into task.md — a judge's quote, an audit finding's
   source line — became a real line break when a receipt was written into an existing section, so a second audit or a
   second close receipt could turn `…\x85## Status\x85done` into a live `## Status` / `done` that the status reader
-  then read. The audit and close receipt writers now keep such a character inside its line. The other task.md
-  writers that split lines the same way get their own task next (the owner's ruling of 2026-10-15).
+  then read. The audit and close receipt writers no longer turn such a character into a line break (an audit finding's
+  own output is still split at it before the receipt is written, each piece indented eight spaces, so none can read as
+  a heading). The other task.md writers and readers that split lines the same way get their own task next (the
+  owner's ruling of 2026-10-15).
 
 ## [1.6.3] — 2026-10-15
 

@@ -439,6 +439,10 @@ def generate_retro_task(
     # Header
     lines.append(f"# Retro {first:03d}–{last:03d}")
     lines.append("")
+    # task 213 (impl round 2, S4): the pointer to the guide every render carries since the instructions moved there
+    from tasks.template import pointer
+    lines.append(pointer())
+    lines.append("")
     lines.append("> **Intent is satisfied top-down:** user words → Intent → gates → code → tests.")
     lines.append("> Does each level faithfully serve the one above?")
     lines.append("> **Work is justified bottom-up:** tests → code → gates → Intent → user words.")

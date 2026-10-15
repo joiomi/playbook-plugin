@@ -576,3 +576,5 @@ class ScaffoldRisk(unittest.TestCase):
                       "the scaffold must point to where the field is explained")
         from tasks.template import guide_text
         self.assertIn("Set this at the Structure gate", guide_text())
+        # impl round 2 (S4): the scaffold points to the guide at the top too, as every render does (Q6)
+        self.assertIn("`.claude/bin/tasks guide", text.split("\n## Status\n", 1)[0])

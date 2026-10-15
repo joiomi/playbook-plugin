@@ -348,6 +348,55 @@ class ImplRoundOne(_Dir):
         self.assertEqual(len(self.entries(log)), 2)
 
 
+class ImplRoundTwo(_Dir):
+    """Impl round 2: S1 (opus — GRAVE: a gate left task.md), S2 (grok and three Minors — the log's head)."""
+
+    def test_a_heading_and_its_open_gates_appended_in_the_section_stay(self):        # S1
+        core.record_audit_receipt(self.tf, receipt("10:00:01"))
+        self.tf.write_text(self.tf.read_text(encoding="utf-8")
+                           + "\n### Round 2 fixes\n  - [ ] G9 an open indented gate\n- [ ] G10 an open gate\n",
+                           encoding="utf-8")
+        before = core._gate_counts(self.tf.read_text(encoding="utf-8"))
+        core.record_audit_receipt(self.tf, receipt("10:00:02"))
+        after = self.tf.read_text(encoding="utf-8")
+        self.assertEqual(core._gate_counts(after), before)
+        self.assertIn("### Round 2 fixes\n  - [ ] G9 an open indented gate", after)
+        log = self.log.read_text(encoding="utf-8")
+        self.assertNotIn("Round 2 fixes", log)
+        self.assertNotIn("G9", log)
+        self.assertEqual(len(self.entries(log)), 1)
+
+    def test_an_indented_gate_right_under_a_receipt_stays(self):                      # S1, no heading between
+        core.record_audit_receipt(self.tf, receipt("10:00:01"))
+        self.tf.write_text(self.tf.read_text(encoding="utf-8") + "  - [ ] G11 an indented open gate\n",
+                           encoding="utf-8")
+        before = core._gate_counts(self.tf.read_text(encoding="utf-8"))
+        core.record_audit_receipt(self.tf, receipt("10:00:02"))
+        self.assertEqual(core._gate_counts(self.tf.read_text(encoding="utf-8")), before)
+        self.assertNotIn("G11", self.log.read_text(encoding="utf-8"))
+
+    def test_an_owners_paragraphs_in_the_log_keep_their_blank_line(self):            # S2
+        core.record_audit_receipt(self.tf, receipt("10:00:01"))
+        core.record_audit_receipt(self.tf, receipt("10:00:02"))
+        self.log.write_text(self.log.read_text(encoding="utf-8") + "\nPara one.\n\nPara two.\n", encoding="utf-8")
+        core.record_audit_receipt(self.tf, receipt("10:00:03"))
+        core.record_audit_receipt(self.tf, receipt("10:00:04"))
+        log = self.log.read_text(encoding="utf-8")
+        self.assertIn("Para one.\n\nPara two.", log)
+        self.assertEqual(log.count("# Audit log"), 1)
+        self.assertEqual(len(self.entries(log)), 3)
+
+    def test_a_fenced_head_line_in_the_log_stays(self):                               # S2 (codex)
+        core.record_audit_receipt(self.tf, receipt("10:00:01"))
+        core.record_audit_receipt(self.tf, receipt("10:00:02"))
+        example = "```text\n# Audit log\n```"
+        self.log.write_text(self.log.read_text(encoding="utf-8") + "\n" + example + "\n", encoding="utf-8")
+        core.record_audit_receipt(self.tf, receipt("10:00:03"))
+        log = self.log.read_text(encoding="utf-8")
+        self.assertIn(example, log)
+        self.assertTrue(log.startswith("# Audit log\n"))
+
+
 class TheLogIsOpenedSafely(_Dir):
     """Impl round 1, m1 (opus): `audit-log.md` is read under the task lock — a FIFO there hung every writer of the
     task; a link was followed. Either keeps the history in task.md and warns."""
