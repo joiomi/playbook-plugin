@@ -31,7 +31,7 @@ COMMANDS = (
     "models", "plan-review", "impl-review", "judge", "context", "intent",
     "timeline", "tagger", "tag", "retro", "status", "audit", "blocked",
     "handoff", "parked", "freehand", "adopt", "doctor", "environment", "detect-verify", "merge-doctor",
-    "mindmap-sync", "log", "prepare-merge", "compact", "recall", "dashboard",
+    "mindmap-sync", "log", "prepare-merge", "compact", "recall", "dashboard", "guide",
 )
 
 
@@ -268,6 +268,11 @@ def _main():
         from tasks.mindmap import cmd_recall
         cmd_recall(cmd_args)
 
+    elif cmd == "guide":
+        # The single copy of the template's instructions (task 213): a task.md points here.
+        from tasks.lifecycle import cmd_guide
+        cmd_guide(cmd_args)
+
     else:
         print(f"Unknown command: {cmd}", file=sys.stderr)
         print_usage()
@@ -290,6 +295,7 @@ _ARGS = {
     "retro": ((), ("--since",), 0),
     "freehand": ((), (), ("log",)),   # task 138 G1-3: any other word was ignored and made a freehand task
     "audit": ((), (), "taskno"),
+    "guide": ((), (), 1),
 }
 def _ARGS_TASK_EXISTS(num: str) -> bool:
     """Does task `num` exist in this project's lane? (read-only)"""
@@ -308,6 +314,7 @@ _USAGE = {
     "retro": "tasks retro [--since N]", "freehand": "tasks freehand [log]", "audit": "tasks audit [<N>]",
     "new": "tasks new <type> <name> [intent words …]  (intent words starting with `--` go after a `--`)",
     "adopt": "tasks adopt <task folder name>",
+    "guide": "tasks guide [<type>]",
     "work": 'tasks work <N> [--force] [--reopen]  |  tasks work done [--force|--stale-panel-ok|--owner-ok --reason "why"]',
 }
 
@@ -345,7 +352,7 @@ def _ARGS_TASK_IS_DONE(num: str) -> bool:
 
 def _writes_nothing(cmd: str, cmd_args: list) -> bool:
     """An invocation documented to write nothing, so it skips the session GC."""
-    if cmd == "merge-doctor":
+    if cmd in ("merge-doctor", "guide"):
         return True
     return cmd in ("compact", "prepare-merge", "tag") and "--dry-run" in cmd_args
 

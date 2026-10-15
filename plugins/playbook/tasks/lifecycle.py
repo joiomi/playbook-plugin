@@ -1730,6 +1730,8 @@ def cmd_work(cmd_args):
             # Re-read for chat injection and display
             task_content = full_content
             print(f"Expanded stub to full {stub_type} template.")
+            print()
+            _print_guide(stub_type)
         _activate_status_then_publish(task_file, task_num, _resume_target, _reopen_target,
                                       _pointer_tmp, session_state)
     finally:
@@ -1867,6 +1869,8 @@ def cmd_new(cmd_args):
     else:
         print(f"Next: fill in task.md gates, then ask user to run: tasks work {task_num}")
     print()
+    if not is_stub:
+        _print_guide(task_type)
 
     # quick/light skip the full playbook-guide dump — shedding that
     # ceremony is their reason to exist (light still routes review by
@@ -1890,6 +1894,23 @@ def cmd_new(cmd_args):
                 print(content.rstrip())
                 print()
                 print(f"Now fill in {task_file.relative_to(project_path)} — design a good task.md.")
+
+
+def _print_guide(task_type) -> None:
+    """The single copy of the template's instructions, for the gates about to be filled (task 213)."""
+    from tasks.template import guide_text
+    print(f"=== TASK GUIDE (again: tasks guide {task_type}) ===")
+    print(guide_text(task_type))
+    print()
+
+
+def cmd_guide(cmd_args):
+    """`tasks guide [<type>]` — prints the guide; writes nothing (task 213)."""
+    from tasks.template import guide_text
+    task_type = cmd_args[0] if cmd_args else None
+    if task_type and task_type not in PLAYBOOKS and task_type not in ("quick", "light"):
+        print(f"(no built-in type {task_type!r} — the whole guide follows)", file=sys.stderr)
+    print(guide_text(task_type))
 
 
 def cmd_blocked(cmd_args):

@@ -106,6 +106,28 @@ class NothingLostOrDoubled(_Dir):
         for s in ("10:00:01", "10:00:02", "10:00:04"):
             self.assertEqual(sum(s in e for e in allr), 1, (s, allr))
 
+    def test_a_death_at_the_second_write_loses_nothing(self):                       # W6: the order of the writes
+        core.record_audit_receipt(self.tf, receipt("10:00:01"))
+        core.record_audit_receipt(self.tf, receipt("10:00:02"))
+        real, calls = core.atomic_write, []
+
+        def die_at_the_second_write(path, text, **kw):
+            calls.append(Path(path).name)
+            if len(calls) == 2:
+                raise SystemExit("simulated: the process dies at its second write")
+            return real(path, text, **kw)
+        core.atomic_write = die_at_the_second_write
+        try:
+            with self.assertRaises(SystemExit):
+                core.record_audit_receipt(self.tf, receipt("10:00:03"))
+        finally:
+            core.atomic_write = real
+        self.assertEqual(calls, [core.AUDIT_LOG_NAME, "task.md"])
+        core.record_audit_receipt(self.tf, receipt("10:00:04"))
+        allr = self.entries(self.tf.read_text(encoding="utf-8")) + self.entries(self.log.read_text(encoding="utf-8"))
+        for s in ("10:00:01", "10:00:02", "10:00:04"):
+            self.assertEqual(sum(s in e for e in allr), 1, (s, allr))
+
     def test_two_receipts_with_the_same_heading_and_different_bodies_both_survive(self):
         core.record_audit_receipt(self.tf, receipt("10:00:01", body="first"))
         core.record_audit_receipt(self.tf, receipt("10:00:01", body="second"))
@@ -145,6 +167,24 @@ class TheSectionIsFoundSafely(_Dir):
         self.assertIn("A note the owner wrote here.", self.tf.read_text(encoding="utf-8"))
         self.assertNotIn("A note the owner", self.log.read_text(encoding="utf-8"))
 
+    def test_a_note_after_a_receipt_stays_in_task_md(self):                          # W6: an entry's end
+        core.record_audit_receipt(self.tf, receipt("10:00:01"))
+        text = self.tf.read_text(encoding="utf-8").replace(
+            "    - [CLEAN] conflict-markers — clean\n", "    - [CLEAN] conflict-markers — clean\nThe owner's note after it.\n", 1)
+        self.tf.write_text(text, encoding="utf-8")
+        core.record_audit_receipt(self.tf, receipt("10:00:02"))
+        self.assertIn("The owner's note after it.", self.tf.read_text(encoding="utf-8"))
+        self.assertNotIn("The owner's note", self.log.read_text(encoding="utf-8"))
+
+    def test_a_fenced_receipt_line_inside_the_section_is_not_a_receipt(self):         # W6: fences in the section
+        core.record_audit_receipt(self.tf, receipt("10:00:01"))
+        quoted = "```text\n### 2026-01-01T00:00:00+00:00 · PASS · commit quoted\n```\n"
+        text = self.tf.read_text(encoding="utf-8").replace("## Pre-Panel Audit\n", "## Pre-Panel Audit\n\n" + quoted, 1)
+        self.tf.write_text(text, encoding="utf-8")
+        core.record_audit_receipt(self.tf, receipt("10:00:02"))
+        self.assertIn(quoted, self.tf.read_text(encoding="utf-8"))
+        self.assertNotIn("commit quoted", self.log.read_text(encoding="utf-8"))
+
     def test_a_fenced_heading_is_not_the_section(self):
         self.tf.write_text(TASK + "\n```text\n## Pre-Panel Audit\n### quoted · PASS · commit x\n```\n",
                            encoding="utf-8")
@@ -181,6 +221,26 @@ class TheSectionIsFoundSafely(_Dir):
         warning = core.record_audit_receipt(self.tf, receipt("10:00:02"))
         self.assertTrue(warning)
         self.assertEqual(len(self.entries(self.tf.read_text(encoding="utf-8"))), 2)
+
+    def test_a_log_readable_but_not_writable_leaves_the_history_in_task_md(self):    # W6: the WRITE error path
+        core.record_audit_receipt(self.tf, receipt("10:00:01"))
+        core.record_audit_receipt(self.tf, receipt("10:00:02"))
+        before_log = self.log.read_bytes()
+        real = core.atomic_write
+
+        def log_write_fails(path, text, **kw):
+            if Path(path).name == core.AUDIT_LOG_NAME:
+                raise OSError("simulated: no space for the log")
+            return real(path, text, **kw)
+        core.atomic_write = log_write_fails
+        try:
+            warning = core.record_audit_receipt(self.tf, receipt("10:00:03"))
+        finally:
+            core.atomic_write = real
+        self.assertIn("cannot be written", warning or "")
+        heads = [e[:29] for e in self.entries(self.tf.read_text(encoding="utf-8"))]
+        self.assertEqual(heads, ["### 2026-10-15T10:00:03+03:00", "### 2026-10-15T10:00:02+03:00"])
+        self.assertEqual(self.log.read_bytes(), before_log)
 
 
 class ThroughTheCli(unittest.TestCase):

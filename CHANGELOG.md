@@ -20,6 +20,28 @@ cut and dropped (it used to say "dropped sections: (none)" while notes were cut)
 elision markers (1.6.3's could push a fitting selection over the budget and slice its tail). The owner's rulings also
 ride first in the SETTLED block, so they reach a judge twice when the trim keeps them.
 
+**One audit receipt in task.md, the template's instructions written once** — PHASE-B.md item 2 (second part), task
+213, the owner's answers of 2026-10-15 ("Doar cea nouă în fișă", "Scris o dată, nu în fiecare fișă"). Measured on
+the real records before: every `tasks audit` stacked one more receipt into task.md although only the newest is read
+(the freshness note), and every task.md carried the template's instruction paragraphs, which no code reads.
+- `tasks audit` keeps only the newest receipt in task.md's `## Pre-Panel Audit`; the ones it held move, newest first,
+  to `audit-log.md` beside it. **This moves data:** at the next audit of an open task its older receipts leave
+  task.md — nothing is deleted, and a script in the development record of task 213 puts them back. The read and
+  both writes are one task-lock hold; the log is written first and a receipt already in it is not written twice (a
+  crash between the two writes doubles nothing); a section hidden by an unclosed fence is refused with both files
+  unchanged; a log that cannot be read or written leaves the older receipts in task.md and the command says so. A new
+  `audit-log.md` is the task's own record to the panel tamper guard. Measured on copies of the real records: the move
+  removes a median 9.6 % of a task.md here (newest 60; 5.3 % over all 204) and 15.6 % in a second project (p90
+  17.1 % / 32.3 %); on all 209 records with a receipt, task.md kept exactly one and the log every one.
+- A new task.md carries no instruction paragraphs: one line at the top points to `tasks guide <type>`, and `## Risk`
+  holds its value and one line pointing to what each value means (the guide, and CLAUDE.md's Correctness Contract).
+  The text moved verbatim into one copy — new command **`tasks guide [<type>]`** — which `tasks new` prints for the
+  type it creates, every type (a stub: when `tasks work` expands it). A fresh render is 36 % smaller for the Build
+  pattern (8864 → 5660 characters), 51 % for light, 75 % for quick; on the real records that text was a median 9.3 % of a
+  task.md here (6.7 % for the newest 60) and 4.3 % in the second project. The judges' trim still drops it from a
+  task.md made before this change: all 735 trims of the 245 real records are byte-identical to task 212's.
+- Item 8 of PHASE-B.md re-measures whether the Risk choices change now that the explanation is not in the file.
+
 ## [1.6.3] — 2026-10-15
 
 **The review stop rule as the plugin's default** — PHASE-B.md item 1, task 209. Until now the round cap (the owner's

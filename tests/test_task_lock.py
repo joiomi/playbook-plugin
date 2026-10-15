@@ -233,6 +233,15 @@ class NoUnapprovedDirectWriters(unittest.TestCase):
         ("merge_prep.py", "atomic_write(task_md"):
             "offline merge preparation — single-process by construction, and it "
             "renumbers whole task trees rather than editing a live record",
+        # task 213: `tasks audit` keeps the newest receipt in task.md and moves the older ones to audit-log.md
+        ("core.py", "atomic_write(p, _compose_upsert(text, marker, entry))"):
+            "inside record_audit_receipt's two-file move, which holds the task lock across the read and "
+            "both writes (its keep-the-history arm: no receipt leaves task.md)",
+        ("core.py", "atomic_write(log, _AUDIT_LOG_HEAD"):
+            "the same move's first write — the log, under the same held lock; written before task.md, "
+            "so a death between the two writes leaves a receipt in both, deduplicated at the next audit",
+        ("core.py", 'atomic_write(p, "\\n".join(new_lines)'):
+            "the same move's second write — task.md, under the same held lock",
     }
 
     def test_every_direct_task_writer_is_approved(self):

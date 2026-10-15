@@ -568,5 +568,11 @@ class ScaffoldRisk(unittest.TestCase):
         text = scaffold.read_text(encoding="utf-8")
         self.assertLess(text.index("\n## Status\n"), text.index("\n## Risk\n"),
                         "## Risk must follow ## Status, as in every other template")
-        self.assertIn("Set this at the Structure gate", text,
-                      "the scaffold must carry the template's explanation of the field")
+        # Task 213: the explanation is written once, in the guide; the scaffold points to it (on purpose —
+        # this line asserted the explanation itself before the owner's "Scris o dată, nu în fiecare fișă").
+        self.assertNotIn("Set this at the Structure gate", text)
+        risk_block = text.split("\n## Risk\n", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("`.claude/bin/tasks guide`", risk_block,
+                      "the scaffold must point to where the field is explained")
+        from tasks.template import guide_text
+        self.assertIn("Set this at the Structure gate", guide_text())

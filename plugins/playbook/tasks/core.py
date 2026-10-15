@@ -1048,7 +1048,9 @@ def template_commentary_lines() -> "frozenset[str]":
     from an over-budget task.md (task 212, the owner's "șablonul pleacă"). Only `>` lines:
     a field value (`pending`, `unclassified`), a separator, a placeholder, a heading or a
     gate is never template text to drop, even when it reads the same (plan panel T1).
-    Built once per process."""
+    Since task 213 a render keeps only its pointers; the text it used to carry is the guide's
+    (`template.guide_text`), verbatim — so the guide's `>` lines are members too, and a task.md
+    written before the move still loses that text when trimmed (Q8). Built once per process."""
     global _TEMPLATE_COMMENTARY
     if _TEMPLATE_COMMENTARY is None:
         from tasks import template as _t
@@ -1056,6 +1058,7 @@ def template_commentary_lines() -> "frozenset[str]":
         for ty in [None, "quick", "light", *PLAYBOOKS]:
             lines.update(_t.render_template(1, "X", ty).splitlines())
         lines.update(_t.standing_orders().splitlines())
+        lines.update(_t.guide_text().splitlines())
         _TEMPLATE_COMMENTARY = frozenset(ln for ln in lines if ln.startswith(">") and ln.strip(">").strip())
     return _TEMPLATE_COMMENTARY
 

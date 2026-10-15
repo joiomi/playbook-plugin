@@ -1,0 +1,27 @@
+> **Gate discipline:** One gate → do work → check box → next gate.
+> Never backfill. The document IS the execution trace. Closing several ALREADY-DONE gates in one edit is allowed ONLY when each line carries its own outcome note (hook-enforced, max 5; a bare batch tick is blocked; where no hook runs, keep to one gate at a time).
+> **Never born checked:** write each gate BEFORE you do its step, then check it — a gate may never be born checked. To record work you already finished, add the gate unchecked, then check it in a SEPARATE edit with its outcome note.
+> **Closing a gate:** check the box, append your outcome. Never replace the original text.
+> **Sanctioned compaction (the one exception):** when this file grows past the review context budget, old *Plan Review / Implementation Review triage narrative* may move VERBATIM to `task-archive.md` (same dir). Never gates, never Intent/Design/Parked/receipts — moving history is not deleting it. Do it mechanically: wrap each cold block in `<!-- archive:start -->` … `<!-- archive:end -->` then run `.claude/bin/tasks compact <N>` (it refuses to move a gate, a pin, or a protected heading, so a mismark fails loud).
+> Design Phase = orientation (one gate, brief answer). Work Plan = real work (one gate, full effort).
+> If you see the same gate 5+ times in the hook echo, you're drifting — STOP and update.
+> **Before filling this in:** run `.claude/bin/tasks work <N>` to activate this task. Hooks won't enforce until activated.
+> **Set this at the Structure gate** to one of: `reversible` / `irreversible` / `assertive`.
+> - `reversible` — the question is whether the WORLD reverts, not the diff: touches only code/config that `git revert` fully undoes. A change that deletes/migrates persisted data, alters an on-disk format, rotates a secret, rewrites history, or publishes/asserts a claim about the world is NOT reversible even when its diff reverts cleanly. Normal bar.
+> - `irreversible` — deletes/migrates data, rotates a secret, rewrites history, or publishes. Needs a named rollback plan + explicit confirmation, and cannot light-close.
+> - `assertive` — changes a **claim about the world** (docs, a calibration, a measurement, a "verified accurate"). Reviewed for the claim AND its instrument regardless of diff size — a docs-only diff can be the most review-worthy thing a task produces. Cannot light-close.
+> - Leaving it `unclassified` is **not** the cheap way out: an unset gate cannot be evaluated, so the close is held to the same bar as `assertive`/`irreversible` (review evidence, or `--force --reason`). One word here is the whole cost.
+> **Write a 1-sentence answer for each gate.** A bare checkmark means you skipped it.
+> Complete these gates before writing the work plan.
+> (The `/playbook` skill has workflow patterns if you need a reference.)
+> For each work section: what could go wrong? How will you know it worked? (specific check, not "looks good")
+> Standard feature: 6-8 work gates + tests. Large tasks work fine — if >15 gates, add a mid-point checkpoint to reassess direction.
+> Never backfill. The document IS the execution trace. Batch-closing ALREADY-DONE gates needs an outcome note per line (hook-enforced; where no hook runs, one gate at a time).
+> **Never born checked:** write the gate BEFORE you do its step, then check it — a gate may never be born checked. To record work you already finished, add it unchecked, then check it in a SEPARATE edit with its outcome.
+> **Selection rule:** quick is for declared-reversible trivia only — anything touching docs, claims, data, or publishing belongs in `light` or heavier (risk decides review; smallness never does).
+> **Light shape** — small, sub-day work; ceremony compressed, review NEVER waived: risk decides review, smallness never does. If this grows beyond small, convert: `tasks new <type> <name>`.
+> Gate discipline unchanged: one gate → do work → check box with its outcome. Never backfill. Batch-closing ALREADY-DONE gates needs an outcome note per line (hook-enforced; where no hook runs, one at a time).
+> **Selection rule:** `quick` is for declared-reversible trivia only; docs, claims, data, or publishing belong here or heavier.
+> Fix/Verify pairs. What could this break?
+> Apply lenses consistently. Assess first, decide action after.
+> Rounds: hypothesis → test → result → checkpoint. Stop when converging.

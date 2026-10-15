@@ -328,7 +328,7 @@ def check_task_bloat(project_path) -> "dict | None":
             findings.append(
                 f"{tf.parent.name}/task.md is {size:,} bytes (> {threshold:,}) — "
                 "judges will see a trimmed view; compact old review narrative to "
-                "task-archive.md (see the task sticker) or pin what must survive")
+                "task-archive.md (see `tasks guide`, Gate discipline) or pin what must survive")
     if not seen_any:
         return None
     return {

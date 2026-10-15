@@ -1651,7 +1651,7 @@
         {
           "type": "manual/human judgment",
           "path": "tests/test_risk_wording.py",
-          "reference": "TestRiskBlockWording.test_reversible_asks_the_world_question",
+          "reference": "TestGuideRiskWording.test_reversible_asks_the_world_question",
           "boundary": "human-review",
           "negative_control": null,
           "limitations": [

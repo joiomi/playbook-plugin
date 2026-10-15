@@ -37,13 +37,10 @@ A playbook template **must** have:
 
 **Include domain knowledge inline.** The sp-eval template embeds CLI commands, budget guidelines, failure modes, and verification methods. An agent using the template gets the accumulated knowledge without reading separate docs. This is the template's main value — it's a compressed expert.
 
-**Use the sticker.** The first lines after the title should be a blockquote with gate discipline instructions. This is what the agent sees every time it opens the file:
+**Point to the guide, don't copy it.** The gate discipline, what each `## Risk` value means and the standing orders are written once, in the guide `tasks new` prints and `tasks guide` prints again (since task 213 the built-in templates carry only a one-line pointer — the copied text was a median 4–9 % of a task.md and no code read it). The first line after the title should be that pointer; add only the discipline that is specific to your template's domain:
 
 ```markdown
-> **Gate discipline:** One gate → do work → check box → next gate.
-> Close several ALREADY-DONE gates in one edit only with a per-line outcome
-> note (hook-enforced, max 5); never backfill invented work. The document IS
-> the execution trace.
+> How to fill this in — gate discipline, what each `## Risk` value means: `.claude/bin/tasks guide <type>` (printed when the task was created).
 ```
 
 **End with a direction note for dynamic expansion.** If agents will add gates during execution:
@@ -57,7 +54,7 @@ A playbook template **must** have:
 ```markdown
 # {{NNN}} - {{TITLE}}
 
-> Gate discipline sticker here.
+> How to fill this in: `.claude/bin/tasks guide <type>`.
 
 ## Status
 pending

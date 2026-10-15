@@ -502,14 +502,17 @@ class TestAuditCommand(WorkReadoptBase):
         self.assertIn("AUDIT PASS", r.stdout)
         self.assertIn("## Pre-Panel Audit", tf.read_text(encoding="utf-8"))
 
-    def test_reaudit_stacks_entries_under_one_heading(self):
+    def test_reaudit_keeps_one_entry_under_one_heading_and_logs_the_older(self):
+        # task 213 (the owner: "Doar cea nouă în fișă"): this test pinned the receipts STACKING in task.md
+        # before; now task.md keeps the newest and the older one moves to audit-log.md — changed on purpose
         tf = self._task("042")
         (self.project / "src.py").write_text("x = 1\n", encoding="utf-8")
         self.assertEqual(self.run_tasks("audit", "042").returncode, 0)
         self.assertEqual(self.run_tasks("audit", "042").returncode, 0)
         body = tf.read_text(encoding="utf-8")
         self.assertEqual(body.count("## Pre-Panel Audit"), 1, body)
-        self.assertEqual(body.count("### "), 2)
+        self.assertEqual(body.count("### "), 1)
+        self.assertEqual((tf.parent / "audit-log.md").read_text(encoding="utf-8").count("\n### "), 1)
 
     def test_conflict_marker_fails_the_audit(self):
         self._task("041")

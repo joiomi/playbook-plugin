@@ -2,8 +2,9 @@
 
 task.md IS the execution trace and grows monotonically; once it outgrows the
 review budget a judge reads it through a keyhole (see `audit.check_task_bloat`).
-The sticker's remedy is to move OLD review-round narrative VERBATIM to
-`task-archive.md`, leaving a pointer — "moving history is not deleting it". That
+The guide's remedy (`tasks guide`, Gate discipline — every task.md's sticker until
+task 213) is to move OLD review-round narrative VERBATIM to `task-archive.md`,
+leaving a pointer — "moving history is not deleting it". That
 was hand cut-and-paste: tedious and risky enough that it rarely happened, so
 task files bloated and reviews degraded.
 

@@ -9,8 +9,14 @@ across the record. The operative question is whether the WORLD (persisted
 data, on-disk formats, secrets, history, published claims) reverts.
 
 These tests pin the corrected wording at both teaching sites: the `## Risk`
-block every rendered task carries, and the CLAUDE.md template `init` seeds.
-The old bare definition is asserted ABSENT — it is the misreading itself.
+explanation and the CLAUDE.md template `init` seeds. The old bare definition is
+asserted ABSENT — it is the misreading itself.
+
+Task 213 (the owner, 2026-10-15: "Scris o dată, nu în fiecare fișă"): the
+explanation moved, verbatim, from every rendered task.md into the single copy
+`tasks guide` prints (and `tasks new` prints for the type); the `## Risk` block
+of a task.md keeps its value and one line pointing there. The class below reads
+the guide; it was `TestRiskBlockWording` (on a render) before the move.
 """
 
 from __future__ import annotations
@@ -23,7 +29,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PLAYBOOK = REPO_ROOT / "plugins" / "playbook"
 sys.path.insert(0, str(PLAYBOOK))
 
-from tasks.template import render_template  # noqa: E402
+from tasks.template import guide_text, render_template  # noqa: E402
 
 CLAUDE_MD_TEMPLATE = PLAYBOOK / "scripts" / "CLAUDE.md.template"
 
@@ -39,15 +45,23 @@ WORLD_QUESTION = "the WORLD reverts, not the diff"
 EXCLUSION_TOKENS = ("data", "secret", "history", "claim")
 
 
-class TestRiskBlockWording(unittest.TestCase):
-    """The `## Risk` block in every rendered task teaches world-revertibility."""
+class TestGuideRiskWording(unittest.TestCase):
+    """The guide's Risk section — printed for every task type — teaches world-revertibility."""
 
     def _risk_block(self, task_type: str) -> str:
-        content = render_template(1, "wording probe", task_type)
-        self.assertIn("## Risk", content)
-        block = content.split("## Risk", 1)[1]
-        # The block ends at the next section; keep only the Risk teaching text.
-        return block.split("\n## ", 1)[0]
+        content = guide_text(task_type)
+        self.assertIn("### Risk\n", content)
+        block = content.split("### Risk\n", 1)[1]
+        # The section ends at the next one; keep only the Risk teaching text.
+        return block.split("\n### ", 1)[0]
+
+    def test_every_rendered_risk_block_points_to_it(self):
+        for task_type in ("feature", "quick", "light"):
+            with self.subTest(task_type=task_type):
+                block = render_template(1, "wording probe", task_type).split("\n## Risk\n", 1)[1]
+                block = block.split("\n## ", 1)[0]
+                self.assertIn("`.claude/bin/tasks guide`", block)
+                self.assertNotIn(WORLD_QUESTION, block)
 
     def test_reversible_asks_the_world_question(self):
         for task_type in ("feature", "quick"):

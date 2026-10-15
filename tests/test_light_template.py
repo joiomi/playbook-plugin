@@ -45,7 +45,7 @@ PLUGIN = _HERE.parent / "plugins/playbook"
 sys.path.insert(0, str(PLUGIN))
 
 from tasks.core import has_review_evidence  # noqa: E402
-from tasks.template import render_template  # noqa: E402
+from tasks.template import guide_text, render_template  # noqa: E402
 
 SESSION = "pid-light-test"
 
@@ -128,11 +128,14 @@ class RenderedShape(unittest.TestCase):
         self.assertFalse(has_review_evidence(tf, impl_only=True),
                          "the light template itself mints review evidence")
 
+    # Task 213: the stickers moved, verbatim, into the guide `tasks new` prints for the type (the owner's
+    # "Scris o dată, nu în fiecare fișă"); the two tests below read them there, on purpose.
     def test_selection_rule_on_both_stickers(self):
-        self.assertIn("quick", self.text.lower())
-        quick = render_template(1, "Trivia", "quick")
-        self.assertIn("light", quick.lower(),
+        self.assertIn("**Selection rule:** `quick`", guide_text("light"))
+        self.assertIn("belongs in `light` or heavier", guide_text("quick"),
                       "quick's sticker must carry the selection rule too")
+        for ttype in ("light", "quick"):
+            self.assertIn(f"tasks guide {ttype}`", render_template(1, "X", ttype))
 
     def test_born_checked_guidance_on_every_sticker(self):
         # S3 (1.5.41): `born-checked` is the single most frequent block —
@@ -143,7 +146,7 @@ class RenderedShape(unittest.TestCase):
         # SEPARATE edit with its outcome. Pins the guidance text so it cannot
         # silently regress.
         for ttype in ("build", "light", "quick"):
-            text = render_template(1, "X", ttype).lower()
+            text = guide_text(ttype).lower()
             self.assertIn("born checked", text,
                           f"{ttype} sticker missing the born-checked rule")
             self.assertIn("separate edit", text,

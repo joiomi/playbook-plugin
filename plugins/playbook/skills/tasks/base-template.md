@@ -1,15 +1,9 @@
 # {num:03d} - {title}
 
-> **Gate discipline:** One gate → do work → check box → next gate.
-> Never backfill. The document IS the execution trace. Batch-closing ALREADY-DONE gates needs an outcome note per line (hook-enforced; where no hook runs, one gate at a time).
-> **Closing a gate:** check the box, append your outcome. Never replace the original text.
-> Design Phase = orientation (one gate, brief answer). Work Plan = real work (one gate, full effort).
-> If you see the same gate 5+ times in the hook echo, you're drifting — STOP and update.
+> How to fill this in — gate discipline, what each `## Risk` value means: `.claude/bin/tasks guide <type>` (printed when the task was created).
 
 ## Status
 pending
-
-> **Before filling this in:** run `tasks work <N>` to activate this task. Hooks won't enforce until activated.
 
 ## Intent
 (what we want to achieve — the outcome, not the activity)
@@ -26,10 +20,6 @@ pending
 ---
 
 ## Design Phase
-
-> **Write a 1-sentence answer for each gate.** A bare checkmark means you skipped it.
-> Complete these gates before writing the work plan.
-> (The `/playbook` skill has workflow patterns if you need a reference.)
 
 ### Understand
 - [ ] Restate the request in my own words. What does the user actually want?
@@ -61,9 +51,6 @@ pending
 
 ## Work Plan
 
-> For each work section: what could go wrong? How will you know it worked? (specific check, not "looks good")
-> Standard feature: 6-8 work gates + tests. Large tasks work fine — if >15 gates, add a mid-point checkpoint to reassess direction.
-
 (write work gates here)
 
 ---
@@ -85,8 +72,3 @@ pending
 (Findings or ideas that emerged during work but are out of scope. Describe each with enough context for a future task to pick it up.)
 
 ---
-
-## Standing Orders
-- **Expand dynamically**: When you discover something you'll need to do, write new gates immediately — don't wait until you get there.
-- **Steer openly**: If your direction changes, edit your open (unchecked) gates to reflect reality. The plan is alive, not a contract.
-- **Never defer awareness**: The moment you realize work exists, capture it. Forgetting is the failure mode, not having too many gates.

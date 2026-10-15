@@ -20,7 +20,15 @@ def header(num: int, title: str) -> str:
     return f"# {num:03d} - {title}"
 
 
+def pointer(task_type: "str | None" = None) -> str:
+    """The one line a task.md keeps of the instructions: where the single copy is (task 213, the owner's
+    "Scris o dată, nu în fiecare fișă")."""
+    return (f"> How to fill this in — gate discipline, what each `## Risk` value means: "
+            f"`.claude/bin/tasks guide {task_type or 'feature'}` (printed when the task was created).")
+
+
 def sticker() -> str:
+    """The full types' gate discipline — in the guide only (task 213)."""
     return """\
 > **Gate discipline:** One gate \u2192 do work \u2192 check box \u2192 next gate.
 > Never backfill. The document IS the execution trace. Closing several ALREADY-DONE gates in one edit is allowed ONLY when each line carries its own outcome note (hook-enforced, max 5; a bare batch tick is blocked; where no hook runs, keep to one gate at a time).
@@ -32,24 +40,31 @@ def sticker() -> str:
 
 
 def status() -> str:
-    return """\
-## Status
-pending
+    return "## Status\npending\n\n" + risk()
 
-> **Before filling this in:** run `.claude/bin/tasks work <N>` to activate this task. Hooks won't enforce until activated.
 
-""" + risk()
+def status_note() -> str:
+    """What `## Status` used to explain in every task.md — in the guide only (task 213)."""
+    return ("> **Before filling this in:** run `.claude/bin/tasks work <N>` to activate this task. "
+            "Hooks won't enforce until activated.")
 
 
 def risk() -> str:
     """The `## Risk` field with its explanation. Its own function so a generator
     that writes its own `## Status` (the retro scaffold — task 080, S1c) still
     offers the field: without the heading, `has_risk_section` reads the record
-    as pre-1.5.0 and the close takes the lenient legacy path."""
+    as pre-1.5.0 and the close takes the lenient legacy path. Task 213: the value and one pointer line; what
+    each class means is in the guide (`risk_explanation`) and in CLAUDE.md's Correctness Contract."""
     return """\
 ## Risk
 unclassified
 
+> One word: `reversible` / `irreversible` / `assertive` — what each means: `.claude/bin/tasks guide` (Risk), or CLAUDE.md's "Correctness Contract"."""
+
+
+def risk_explanation() -> str:
+    """The `## Risk` explanation every task.md used to carry — in the guide only (task 213)."""
+    return """\
 > **Set this at the Structure gate** to one of: `reversible` / `irreversible` / `assertive`.
 > - `reversible` — the question is whether the WORLD reverts, not the diff: touches only code/config that `git revert` fully undoes. A change that deletes/migrates persisted data, alters an on-disk format, rotates a secret, rewrites history, or publishes/asserts a claim about the world is NOT reversible even when its diff reverts cleanly. Normal bar.
 > - `irreversible` — deletes/migrates data, rotates a secret, rewrites history, or publishes. Needs a named rollback plan + explicit confirmation, and cannot light-close.
@@ -74,9 +89,12 @@ def intent_why_refs(playbook: str) -> str:
 
 
 def design_phase_intro() -> str:
-    return """\
-## Design Phase
+    return "## Design Phase"
 
+
+def design_phase_note() -> str:
+    """The Design Phase's instructions — in the guide only (task 213)."""
+    return """\
 > **Write a 1-sentence answer for each gate.** A bare checkmark means you skipped it.
 > Complete these gates before writing the work plan.
 > (The `/playbook` skill has workflow patterns if you need a reference.)"""
@@ -151,9 +169,6 @@ def judge_section() -> str:
 def work_plan() -> str:
     return """\
 ## Work Plan
-
-> For each work section: what could go wrong? How will you know it worked? (specific check, not "looks good")
-> Standard feature: 6-8 work gates + tests. Large tasks work fine — if >15 gates, add a mid-point checkpoint to reassess direction.
 
 (write work gates here)
 
@@ -621,8 +636,6 @@ def work_plan_fix() -> str:
     return """\
 ## Work Plan
 
-> Fix/Verify pairs. What could this break?
-
 - [ ] Fix: (what to change)
 - [ ] Verify: (grep/test that confirms the fix)
 - [ ] Side effects: anything else that changed? Adjacent code still works?
@@ -644,8 +657,6 @@ def work_plan_investigate() -> str:
     """Investigate-specific work plan — round structure."""
     return """\
 ## Work Plan
-
-> Rounds: hypothesis → test → result → checkpoint. Stop when converging.
 
 ### Round 1: [focus]
 - **Hypothesis:** (before testing)
@@ -682,8 +693,6 @@ def work_plan_evaluate() -> str:
     return """\
 ## Work Plan
 
-> Apply lenses consistently. Assess first, decide action after.
-
 ### Lenses
 | Lens | What it measures |
 |------|-----------------|
@@ -709,6 +718,45 @@ def standing_orders() -> str:
 - **Expand dynamically**: When you discover something you'll need to do, write new gates immediately \u2014 don't wait until you get there.
 - **Steer openly**: If your direction changes, edit your open (unchecked) gates to reflect reality. The plan is alive, not a contract.
 - **Never defer awareness**: The moment you realize work exists, capture it. Forgetting is the failure mode, not having too many gates."""
+
+
+# Task 213 (PHASE-B.md item 2; the owner, 2026-10-15: "Scris o dată, nu în fiecare fișă"): the instructions every
+# task.md used to carry — the gate discipline, the Status and Risk explanations, the Design Phase and Work Plan
+# notes, the Standing Orders — are written here once, verbatim, and printed by `tasks new` / `tasks guide`. A
+# task.md keeps `pointer()` at the top and `risk()`'s one pointer line under its value.
+WORK_PLAN_NOTES = {
+    "Build": """\
+> For each work section: what could go wrong? How will you know it worked? (specific check, not "looks good")
+> Standard feature: 6-8 work gates + tests. Large tasks work fine — if >15 gates, add a mid-point checkpoint to reassess direction.""",
+    "Fix": "> Fix/Verify pairs. What could this break?",
+    "Investigate": "> Rounds: hypothesis → test → result → checkpoint. Stop when converging.",
+    "Evaluate": "> Apply lenses consistently. Assess first, decide action after.",
+}
+
+
+def _guide_sections(task_type: "str | None") -> "list[tuple[str, str]]":
+    """(title, text) of the guide for one task type; every section for no type or one the CLI does not know."""
+    full = [("Gate discipline (feature, build, refactor, ops, bugfix, cleanup, research, audit, eval)", sticker()),
+            ("Gate discipline (light)", sticker_light()), ("Gate discipline (quick)", sticker_quick())]
+    common = [("Status", status_note()), ("Risk", risk_explanation())]
+    notes = [(f"Work Plan ({pattern}: {', '.join(t for t, p in PLAYBOOKS.items() if p == pattern)})", text)
+             for pattern, text in WORK_PLAN_NOTES.items()]
+    if task_type == "quick":
+        return [full[2]] + common
+    if task_type == "light":
+        return [full[1]] + common
+    pattern = PLAYBOOKS.get(task_type) if task_type else None
+    if pattern is None:
+        return full + common + [("Design Phase", design_phase_note())] + notes + [
+            ("Standing Orders", standing_orders().split("\n", 1)[1])]
+    return ([("Gate discipline", sticker())] + common + [("Design Phase", design_phase_note())]
+            + [n for n in notes if n[0].startswith(f"Work Plan ({pattern}:")]
+            + [("Standing Orders", standing_orders().split("\n", 1)[1])])
+
+
+def guide_text(task_type: "str | None" = None) -> str:
+    """The single copy of the template's instructions (task 213) — for `task_type`, or all of it."""
+    return "\n\n".join(f"### {title}\n{text}" for title, text in _guide_sections(task_type))
 
 
 # ---------------------------------------------------------------------------
@@ -794,6 +842,7 @@ Tasks CLI:
   Create:
     tasks new <type> <name> [intent]   create task (intent fills ## Intent)
     tasks new --stub <type> <name> [intent]   stub (expands on work)
+    tasks guide [<type>]       how to fill a task.md in (printed by `tasks new`)
   Review:
     tasks plan-review <N>      blind plan review
     tasks impl-review <N>      blind impl review
@@ -960,7 +1009,8 @@ Commands:
                       --reason is the blunt whole-policy override. --force and
                       --stale-panel-ok both need --reason.
   audit [<N>]         Run mechanical pre-panel sweeps (conflict markers, merge
-                      artifacts, stale markers, + project sweeps); receipt to task.md
+                      artifacts, stale markers, + project sweeps); the newest receipt in
+                      task.md, the older ones in audit-log.md beside it
   parked [--all]      List open parked items across tasks (--all: incl. resolved)
   blocked "<reason>"  Pause the active task awaiting the owner's decision — an
                       honest state (not a faked checkbox); resume with work <N>
@@ -974,6 +1024,8 @@ Commands:
                       hand-made one that should stay) with the lane's task registry
   new <type> <name> [intent]   Create task (intent pre-fills ## Intent)
   new --stub <type> <name> [intent]   Create stub (expands on work)
+  guide [<type>]      How to fill a task.md in — gate discipline, what each ## Risk value
+                      means, the standing orders; printed by `new` (a stub: when it expands)
   list [--pending]    List all tasks with status
   status              Show head position for active tasks
   compact <N> [--dry-run]  Move <!-- archive:start/end --> narrative from a bloated
@@ -1070,7 +1122,7 @@ def render_quick_template(num: int, title: str) -> str:
     """Minimal task.md for sub-hour fixes and small work. ~3 gates, no ceremony."""
     parts = [
         header(num, title),
-        sticker_quick(),
+        pointer("quick"),
         status(),
         "## Intent\n(one line — what to do and how to verify)",
         "---",
@@ -1095,7 +1147,7 @@ def render_light_template(num: int, title: str) -> str:
     """
     parts = [
         header(num, title),
-        sticker_light(),
+        pointer("light"),
         status(),
         "## Intent\n(one line — what to do and what proves it worked)",
         "## References\n(optional context; recent chat lands here at activation)",
@@ -1152,8 +1204,8 @@ def render_template(num: int, title: str, task_type: str | None = None) -> str:
     common_start = [
         header(num, title),
     ]
-    if _eval_cfg.get("sticker", "on") != "off":
-        common_start.append(sticker())
+    if _eval_cfg.get("sticker", "on") != "off":    # the arena's switch: since task 213 it turns the pointer off
+        common_start.append(pointer(task_type))
     common_start += [
         status(),
         intent_why_refs(playbook_ref),
@@ -1164,7 +1216,6 @@ def render_template(num: int, title: str, task_type: str | None = None) -> str:
     common_end += [
         pre_review(),
         parked(),
-        standing_orders(),
     ]
 
     if pattern_name == "Fix":

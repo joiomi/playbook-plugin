@@ -25,10 +25,12 @@ class TemplateCommentary(unittest.TestCase):
     never a field value, a separator, a placeholder, a heading or a gate."""
 
     def test_every_member_is_a_rendered_blockquote_line(self):
+        # task 213 (P8): or a line of the guide — the text the renders carried until then, moved there verbatim
         rendered = set()
         for ty in [None, "quick", "light", *core.PLAYBOOKS]:
             rendered |= set(template.render_template(1, "X", ty).splitlines())
         rendered |= set(template.standing_orders().splitlines())
+        rendered |= set(template.guide_text().splitlines())
         members = core.template_commentary_lines()
         self.assertTrue(members, "the set is empty")
         for ln in members:

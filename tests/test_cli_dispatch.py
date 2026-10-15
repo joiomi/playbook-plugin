@@ -96,6 +96,7 @@ _BASELINE = {
     "compact": (1, "'compact' requires a task number"),
     "recall": (1, "'recall' requires a node id or keyword"),
     "dashboard": (0, "PLAYBOOK DASHBOARD"),
+    "guide": (0, "### Gate discipline (feature"),             # task 213: the single copy of the template text
 }
 
 
