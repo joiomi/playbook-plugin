@@ -5264,14 +5264,16 @@ _AUDIT_LOG_HEAD = ("# Audit log\n\nThe older `tasks audit` receipts of this task
 def _receipt_entries(lines: "list[str]", start: int, end: int) -> "list[tuple[int, int]]":
     """[(first, last+1)] of each receipt in `lines[start:end]`: a `### ` line outside a fence and the lines that
     follow it while they are blank or indented. A line that is neither — the owner's own note — ends the
-    receipt and is not part of any (task 213, plan panel P3)."""
-    flags = _iter_fenced_flags(lines, unclosed_is_live=False)
+    receipt and is not part of any (task 213, plan panel P3); so does a line that opens or lies in a code fence,
+    whatever its indent, so a fenced note after a receipt is never split (impl round 1, R4). Fences only: a
+    receipt's indented body is not an indented code block here."""
+    flags = _iter_fenced_flags(lines, unclosed_is_live=False, track_indented_code=False)
     out: "list[tuple[int, int]]" = []
     i = start
     while i < end:
         if lines[i].startswith("### ") and not flags[i]:
             j = i + 1
-            while j < end and (not lines[j].strip() or lines[j][:1] in (" ", "\t")):
+            while j < end and not flags[j] and (not lines[j].strip() or lines[j][:1] in (" ", "\t")):
                 j += 1
             while j > i + 1 and not lines[j - 1].strip():
                 j -= 1
@@ -5282,17 +5284,46 @@ def _receipt_entries(lines: "list[str]", start: int, end: int) -> "list[tuple[in
     return out
 
 
+def _read_audit_log(log: Path) -> str:
+    """The log's text, "" when there is none — read only from a regular file, never through a link, never blocking
+    (task 213, impl round 1, m1: it is read under the task lock, and a FIFO there hung every writer of the task).
+    OSError / UnicodeDecodeError otherwise: the caller keeps the history in task.md."""
+    import stat as _stat
+    try:
+        fd = os.open(log, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return ""
+    with os.fdopen(fd, "rb") as fh:
+        if not _stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+            raise OSError(f"{AUDIT_LOG_NAME} is not a regular file")
+        return fh.read().decode("utf-8")
+
+
+def _squeeze_blank(lines: "list[str]") -> "list[str]":
+    """`lines` without blank lines at either end and with each run of blank lines inside kept as one."""
+    out: "list[str]" = []
+    for ln in lines:
+        if ln.strip() or (out and out[-1].strip()):
+            out.append(ln)
+    while out and not out[-1].strip():
+        out.pop()
+    return out
+
+
 def record_audit_receipt(task_file: Path, entry: str) -> "str | None":
     """Record a `tasks audit` receipt (task 213, PHASE-B.md item 2; the owner: "Doar cea nouă în fișă"): task.md's
     `## Pre-Panel Audit` keeps only `entry`; the receipts it held move, newest first, to `audit-log.md` beside it.
 
     One `task_lock` hold covers the read and both writes, so two audits cannot lose each other's receipt (plan
-    panel P2); the log is written first and deduplicated on whole entries, so a crash between the writes doubles
-    nothing at the next audit (same-second receipts with different bodies are two entries). The section is found
-    with the writers' guarded span: an unclosed fence that hides a following section refuses — ValueError, both
-    files unchanged (P3). Only receipts move; any other line of the section stays. A log that cannot be read
-    strictly or written leaves the older receipts in task.md (the new one is still recorded) and returns a
-    warning (P4); None otherwise."""
+    panel P2); the log is written first, so a crash between the writes leaves the moved receipts in both files — at
+    the next audit a logged receipt equal to one being moved is that copy and is not written twice. Nothing else is
+    deduplicated: each receipt carries its own run line (`format_audit_receipt`), so two audits in one second are
+    two receipts, and identical older ones stacked in task.md all move (impl round 1, R3). The section is found
+    with the writers' guarded span: an unclosed fence inside it that hides a following section refuses —
+    ValueError, both files unchanged (P3). The new receipt goes right under the heading, as `_compose_upsert` puts
+    it, so a fenced quote in the section never reads as the newest (R5); only receipts move, every other line of
+    the section — and of the log (m4) — stays, in its order. A log that cannot be read strictly or written leaves
+    the older receipts in task.md (the new one is still recorded) and returns a warning (P4); None otherwise."""
     from tasks.filelock import task_lock
     p = Path(task_file)
     log = p.parent / AUDIT_LOG_NAME
@@ -5302,7 +5333,7 @@ def record_audit_receipt(task_file: Path, entry: str) -> "str | None":
             text = p.read_text(encoding="utf-8", errors="replace")
         except FileNotFoundError:
             text = ""
-        lines = text.splitlines()
+        lines = _physical_lines(text)                         # never splitlines(): see _compose_upsert (R2)
         span = _writer_section_span(lines, marker)            # ValueError → nothing written
         found = _receipt_entries(lines, span[0] + 1, span[1]) if span else []
         if not found:
@@ -5314,23 +5345,27 @@ def record_audit_receipt(task_file: Path, entry: str) -> "str | None":
             atomic_write(p, _compose_upsert(text, marker, entry))
             return f"{AUDIT_LOG_NAME} {why} — the older receipts stay in task.md this time"
         try:
-            old = log.read_text(encoding="utf-8") if log.exists() else ""
+            old = _read_audit_log(log)
         except (OSError, UnicodeDecodeError) as e:
             return _keep_history(f"cannot be read ({e.__class__.__name__})")
-        old_lines = old.splitlines()
-        logged = ["\n".join(old_lines[a:b]).rstrip() for a, b in _receipt_entries(old_lines, 0, len(old_lines))]
-        merged: "list[str]" = []
-        for e in moving + logged:                             # task.md's receipts are the newer ones
-            if e not in merged:
-                merged.append(e)
+        old_lines = _physical_lines(old)
+        old_found = _receipt_entries(old_lines, 0, len(old_lines))
+        logged = ["\n".join(old_lines[a:b]).rstrip() for a, b in old_found]
+        head = set(_physical_lines(_AUDIT_LOG_HEAD))
+        log_other = _squeeze_blank([ln for k, ln in enumerate(old_lines)
+                                    if not any(a <= k < b for a, b in old_found) and ln not in head])
+        # task.md's receipts are the newer ones; a logged one equal to one of them is a crash's copy (R3)
+        merged = moving + [e for e in logged if e not in moving]
         try:
-            atomic_write(log, _AUDIT_LOG_HEAD + "\n" + "\n\n".join(merged) + "\n")
+            atomic_write(log, _AUDIT_LOG_HEAD + ("\n" + "\n".join(log_other) + "\n" if log_other else "")
+                         + "\n" + "\n\n".join(merged) + "\n")
         except OSError as e:
             return _keep_history(f"cannot be written ({e.__class__.__name__})")
-        first, last = found[0][0], found[-1][1]
-        kept = [ln for k, ln in enumerate(lines[first:last], first)
-                if not any(a <= k < b for a, b in found)]
-        new_lines = lines[:first] + entry.rstrip("\n").splitlines() + [""] + kept + lines[last:]
+        s0, s1 = span
+        inside = {k for a, b in found for k in range(a, b)}
+        others = _squeeze_blank([lines[k] for k in range(s0 + 1, s1) if k not in inside])
+        body = [""] + _physical_lines(entry.rstrip("\n")) + ([""] + others if others else []) + [""]
+        new_lines = lines[:s0 + 1] + body + lines[s1:]
         atomic_write(p, "\n".join(new_lines).rstrip("\n") + "\n")
     return None
 
@@ -5482,11 +5517,14 @@ def _compose_upsert(text: str, marker: str, entry: str) -> str:
     the readers, so a valid `## X ##` / `##\tX` is found by the WRITER too and
     not appended as a duplicate the reader then reads stale.
     """
-    lines = text.splitlines()
+    # physical lines (task 213, impl round 1, R2 — GRAVE on 1.6.3): `splitlines()` + `"\n".join` turned a U+0085 /
+    # U+2028 / VT / FF inside a line — a judge's quote, an audit finding's source line — into a real line, and a
+    # second receipt then minted a live `## Status` / `done`
+    lines = _physical_lines(text)
     fenced = _closed_fence_line_indices(lines)
     for i, ln in enumerate(lines):
         if i not in fenced and _atx_h2_text(ln) == marker:
-            new = lines[:i + 1] + ["", *entry.rstrip("\n").splitlines()] + lines[i + 1:]
+            new = lines[:i + 1] + ["", *_physical_lines(entry.rstrip("\n"))] + lines[i + 1:]
             return "\n".join(new) + "\n"
     return text.rstrip("\n") + f"\n\n{marker}\n\n{entry.rstrip()}\n"
 

@@ -10,8 +10,10 @@ Prints three tables and a suggested pairing:
               commits from `**Panel-snapshot:**` when present. Playbook PREPENDS new
               rounds, so the file is NEWEST-FIRST: never read position as chronology.
   RECEIPTS  — `### <ts> · … · commit <sha>` lines from task.md (Pre-Panel Audit +
-              Verification Receipt), chronological. An audit receipt is written just
-              before a panel launches, so it dates a round.
+              Verification Receipt), task-archive.md and audit-log.md (since task 213
+              task.md keeps only the newest audit receipt; the older ones are there),
+              chronological. An audit receipt is written just before a panel launches,
+              so it dates a round.
   COMMITS   — the repo's commits between the first receipt − pad and the last + pad.
 Snapshot scope commits are the only DETERMINISTIC link (plugin ≥ task 039, HowFar ≥
 015); everything else is dated evidence for a human decision. Read-only.
@@ -134,8 +136,9 @@ def main(argv=None) -> int:
                 judge_text += read_text(p) + "\n"
         task_text = read_text(tdir / "task.md") if (tdir / "task.md").is_file() else ""
         archive_text = read_text(tdir / "task-archive.md") if (tdir / "task-archive.md").is_file() else ""
+        log_text = read_text(tdir / "audit-log.md") if (tdir / "audit-log.md").is_file() else ""
         rounds = parse_rounds(judge_text)
-        receipts = parse_receipts(task_text) + parse_receipts(archive_text)
+        receipts = parse_receipts(task_text) + parse_receipts(archive_text) + parse_receipts(log_text)
         receipts.sort(key=lambda r: _parse_ts(r["ts"]))
         commits = window_commits(a.repo, receipts, a.pad_minutes)
         trimmed = parse_trim_pointers(judge_text)
@@ -170,7 +173,7 @@ def main(argv=None) -> int:
         print("   (no rounds found)")
     print("   (* = that scope had dirty files at panel time)")
     print()
-    print("RECEIPTS (task.md, chronological)")
+    print("RECEIPTS (task.md, task-archive.md, audit-log.md — chronological)")
     for r in receipts:
         print(f"   {r['ts']}  {r['kind']:<12} {short(r['commit'])}  {r['text'][:60]}")
     if not receipts:

@@ -679,6 +679,22 @@ class PanelHardeningTests(unittest.TestCase):
         self.assertEqual(meta["mapping"]["fix_commits"], [self.fx.c2])
         self.assertIn("triage I1", meta["mapping"]["evidence"])
 
+    # --- task 213 (impl round 1, opus R1): the older audit receipts live in audit-log.md now ---------
+    def test_map_rounds_reads_the_audit_log_beside_task_md(self):
+        (self.fx.taskdir / "audit-log.md").write_text(
+            "# Audit log\n\n### 2026-08-24T12:59:59+03:00 · PASS · commit " + "9" * 40 + "\n    - [CLEAN] x — y\n",
+            encoding="utf-8")
+        import io
+        from contextlib import redirect_stdout
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = map_rounds.main(["--workspace", str(self.fx.ws), "--task", "7", "--repo", str(self.fx.repo)])
+        out = buf.getvalue()
+        self.assertEqual(rc, 0, out)
+        receipts = out.split("RECEIPTS", 1)[1].split("COMMITS", 1)[0]
+        self.assertIn("12:59:59", receipts)
+        self.assertLess(receipts.index("12:59:59"), receipts.index("13:06:25"))   # chronological
+
     # --- grok #1 / sol #2: legacy records are flagged, archive triage is surfaced -----
     def test_map_rounds_flags_trim_pointer_and_count_mismatch_and_reads_archive(self):
         self.fx.add_legacy_artifacts()

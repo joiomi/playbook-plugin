@@ -1130,6 +1130,9 @@ class TheExitCodesTheReferenceStates(unittest.TestCase):
         # task 209: an impl panel round past the D6 cap of the task's `## Risk`
         "a round past the D6 cap of the task's `## Risk` is refused, exit 2, nothing spent":
             ("tests/test_stop_rule_cli.py", "PanelCap", "test_q1_a_third_round_without_a_critical_in_round_2_is_refused"),
+        # task 213 (impl round 1, m6): an audit whose receipt could not be recorded
+        "a later section) the command exits non-zero":
+            ("tests/test_audit_receipt_move.py", "ThroughTheCli", "test_a_refused_receipt_fails_the_audit"),
         # task 173: `tasks intent <N>` without the approval of what it quotes
         "and exits 2. The same line ends with the flag that approves exactly that":
             ("tests/test_intent_cost_question.py", "ThroughTheCommandLine",

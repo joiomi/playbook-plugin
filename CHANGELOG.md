@@ -27,20 +27,29 @@ the real records before: every `tasks audit` stacked one more receipt into task.
 - `tasks audit` keeps only the newest receipt in task.md's `## Pre-Panel Audit`; the ones it held move, newest first,
   to `audit-log.md` beside it. **This moves data:** at the next audit of an open task its older receipts leave
   task.md — nothing is deleted, and a script in the development record of task 213 puts them back. The read and
-  both writes are one task-lock hold; the log is written first and a receipt already in it is not written twice (a
-  crash between the two writes doubles nothing); a section hidden by an unclosed fence is refused with both files
-  unchanged; a log that cannot be read or written leaves the older receipts in task.md and the command says so. A new
-  `audit-log.md` is the task's own record to the panel tamper guard. Measured on copies of the real records: the move
-  removes a median 9.6 % of a task.md here (newest 60; 5.3 % over all 204) and 15.6 % in a second project (p90
+  both writes are one task-lock hold; the log is written first, so a crash between the two writes leaves the moved
+  receipts in both files and the next audit writes them once; each receipt now ends with a `run` line, so two audits
+  in the same second stay two receipts. The new receipt goes right under the heading; every other line of the section
+  — and of the log — stays, in its order, and a fenced note after a receipt is never split. An unclosed fence inside
+  the section that would hide a later section is refused with both files unchanged, and `tasks audit` then exits
+  non-zero; a log that cannot be read (a link, a FIFO, not UTF-8) or written leaves the older receipts in task.md and
+  the command says so. A new `audit-log.md` is the task's own record to the panel tamper guard. Measured on copies of the real records: the move
+  removes a median 9.6 % of a task.md here (newest 60; 5.4 % over all 204) and 15.6 % in a second project (p90
   17.1 % / 32.3 %); on all 209 records with a receipt, task.md kept exactly one and the log every one.
 - A new task.md carries no instruction paragraphs: one line at the top points to `tasks guide <type>`, and `## Risk`
   holds its value and one line pointing to what each value means (the guide, and CLAUDE.md's Correctness Contract).
   The text moved verbatim into one copy — new command **`tasks guide [<type>]`** — which `tasks new` prints for the
   type it creates, every type (a stub: when `tasks work` expands it). A fresh render is 36 % smaller for the Build
-  pattern (8864 → 5660 characters), 51 % for light, 75 % for quick; on the real records that text was a median 9.3 % of a
+  pattern (8864 → 5660 characters), 51 % for light, 75 % for quick; on the real records that text was a median 9.2 % of a
   task.md here (6.7 % for the newest 60) and 4.3 % in the second project. The judges' trim still drops it from a
   task.md made before this change: all 735 trims of the 245 real records are byte-identical to task 212's.
 - Item 8 of PHASE-B.md re-measures whether the Risk choices change now that the explanation is not in the file.
+- **A fake `## Status` line could be minted (found in 1.6.3 by this task's panel; fixed for the receipt writers).** A
+  U+0085, U+2028, vertical tab or form feed inside a line written into task.md — a judge's quote, an audit finding's
+  source line — became a real line break when a receipt was written into an existing section, so a second audit or a
+  second close receipt could turn `…\x85## Status\x85done` into a live `## Status` / `done` that the status reader
+  then read. The audit and close receipt writers now keep such a character inside its line. The other task.md
+  writers that split lines the same way get their own task next (the owner's ruling of 2026-10-15).
 
 ## [1.6.3] — 2026-10-15
 

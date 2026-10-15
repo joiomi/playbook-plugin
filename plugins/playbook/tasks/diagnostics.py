@@ -103,6 +103,7 @@ def cmd_audit(cmd_args):
             task_file = m[0] if m else None
 
     print("Running pre-panel audit...", flush=True)
+    receipt_refused = False
     audit = run_audit(project_path)
     for r in audit["results"]:
         n = len([ln for ln in r["output"].splitlines() if ln.strip()])
@@ -121,6 +122,7 @@ def cmd_audit(cmd_args):
         try:
             _warn = record_audit_receipt(task_file, receipt)
         except ValueError as e:
+            receipt_refused = True
             print(f"  Receipt NOT recorded: {e}", file=sys.stderr)
         else:
             print(f"  Receipt recorded in {task_file.relative_to(project_path)}")
@@ -136,6 +138,10 @@ def cmd_audit(cmd_args):
         print("  Fix the error-severity findings (or a broken sweep) before "
               "reviewing — a red audit means mechanically-detectable issues remain.",
               file=sys.stderr)
+        sys.exit(1)
+    if receipt_refused:
+        # task 213, impl round 1 (m6, grok): a PASS whose receipt was not recorded vouches for nothing
+        print("  The receipt was NOT recorded (above) — fix task.md and run the audit again.", file=sys.stderr)
         sys.exit(1)
 
 

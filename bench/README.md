@@ -273,7 +273,8 @@ READ-ONLY and write only under `bench/corpus/`:
 
 1. `map_rounds.py --workspace WS --task N --repo PATH` prints the round↔commit
    **evidence**: judge.md rounds in FILE order (playbook prepends, so newest-first),
-   task.md audit receipts chronologically, the repo's commits in the receipt window,
+   the audit receipts chronologically (task.md, task-archive.md and, since task 213, the
+   older ones in `audit-log.md`), the repo's commits in the receipt window,
    and — where a `**Panel-snapshot:**` exists (plugin ≥ task 039, HowFar ≥ 014) — the
    deterministic pairing. Legacy records (trim pointers, fewer receipts than rounds) are
    flagged AMBIGUOUS; their triage lives in `task-archive.md`. The human decides.

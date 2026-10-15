@@ -38,6 +38,7 @@ from __future__ import annotations
 import datetime
 import os
 import re
+import secrets
 import subprocess
 import tempfile
 from pathlib import Path
@@ -987,7 +988,8 @@ def format_audit_receipt(audit: dict, *, timestamp: str | None = None, head_sha:
     """Render ONE receipt ENTRY for the `## Pre-Panel Audit` section (the heading
     belongs to core.upsert_task_section, newest entry first). The `commit` field
     is load-bearing: audit_freshness_note compares it to HEAD to tell a current
-    audit from a stale one."""
+    audit from a stale one. The last line names the run (task 213, impl round 1, R3): two audits in one second
+    with the same results must stay two receipts when `core.record_audit_receipt` moves them to the log."""
     ts = timestamp or datetime.datetime.now().astimezone().isoformat(timespec="seconds")
     out = [f"### {ts} · {'PASS' if audit['passed'] else 'FAIL'} · commit {head_sha or '(unknown)'}"]
     for r in audit["results"]:
@@ -999,5 +1001,6 @@ def format_audit_receipt(audit: dict, *, timestamp: str | None = None, head_sha:
         if r["status"] in ("findings", "error"):
             for ln in _finding_lines(r["output"], limit=5):
                 out.append(f"        {ln[:200]}")
+    out.append(f"    - run {secrets.token_hex(6)}")
     out.append("")
     return "\n".join(out)
