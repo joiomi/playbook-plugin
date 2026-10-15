@@ -8,8 +8,9 @@ manager runs without one (measured before this was written).
 
 The release flow is the owner's own, on scratch repositories: a bare repository stands for the
 GitHub repository, a clone of it is the "release clone" the marketplace is a directory of. The
-older install is v1.6.0 (the nested `main`); the newer is the CANDIDATE commit with its version
-set to 1.6.1 in the scratch clone only. The upgrade's and init's own shell blocks are taken from
+older install is v1.6.0 (pinned by its commit); the newer is the CANDIDATE commit, published under
+its own version. (v1.6.0 stays the older copy: the rollback row's seam is a file that differs between
+the two copies, and 1.6.1 and 1.6.2 share it byte for byte — task 205.) The upgrade's and init's own shell blocks are taken from
 the installed copy's `commands/upgrade.md` and `commands/init.md` and run as they are written."""
 from __future__ import annotations
 
@@ -25,7 +26,9 @@ from pathlib import Path
 from common import INSTALLED, NESTED, ROOT, Run, clean_env, owner_home_guard, snapshot
 
 OLD_REF = "d3b5364"                   # v1.6.0, the release of 2026-10-09 — pinned: `main` moves at each release (task 185)
-NEW_VERSION = "1.6.1"
+# the candidate's own version, so the scratch release carries the label of the code it holds: a pin published a 1.6.2
+# candidate as "1.6.1" (task 205)
+NEW_VERSION = json.loads((NESTED / "plugins" / "playbook" / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))["version"]
 MARKET = "playbook-x-marketplace"
 NAME = "gauntlet-project"
 USER_CLAUDE = "# My project\n\nMy own rules, written by hand.\n\n## Notes\n- keep this\n"
