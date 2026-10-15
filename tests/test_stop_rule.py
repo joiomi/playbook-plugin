@@ -94,6 +94,12 @@ class GuardPaths(unittest.TestCase):
         self.assertFalse(SR.guarded("plugins/x/scripts/stop-hook.md", ["plugins/x/scripts/*-hook"]))
         self.assertTrue(SR.guarded("plugins/x/hooks/z", ["plugins/x/hooks/"]))   # a trailing slash is the same
 
+    def test_both_sides_are_normalised(self):                         # impl round 1, R5
+        self.assertTrue(SR.guarded("src/hooks/x.sh", ["./src/hooks/"]))
+        self.assertTrue(SR.guarded("src/hooks/x.sh", ["/src//hooks"]))
+        self.assertTrue(SR.guarded("./src//hooks/x.sh", ["src/hooks/"]))
+        self.assertFalse(SR.guarded("src/hooksmith.sh", ["./src/hooks/"]))
+
     def test_an_empty_pattern_matches_nothing(self):
         self.assertFalse(SR.guarded("a.py", ["", "/"]))
 
@@ -192,8 +198,11 @@ class PanelDecision(unittest.TestCase):
         self.assertFalse(SR.panel_decision("assertive", self._rounds(1, 0), SR.DEFAULT_ROUNDS)[0])
 
     def test_reversible_takes_one(self):
+        # impl round 1, R7 (sonnet): the owner's words give the extension only to the two-round risks
         self.assertFalse(SR.panel_decision("reversible", self._rounds(0), SR.DEFAULT_ROUNDS)[0])
-        self.assertTrue(SR.panel_decision("reversible", self._rounds(1), SR.DEFAULT_ROUNDS)[0])
+        self.assertFalse(SR.panel_decision("reversible", self._rounds(1), SR.DEFAULT_ROUNDS)[0])
+        caps = {**SR.DEFAULT_ROUNDS, "reversible": 2}
+        self.assertTrue(SR.panel_decision("reversible", self._rounds(0, 1), caps)[0])
 
     def test_unclassified_is_the_high_bar(self):
         self.assertTrue(SR.panel_decision("unclassified", self._rounds(0), SR.DEFAULT_ROUNDS)[0])
@@ -238,11 +247,10 @@ class JudgeRequired(unittest.TestCase):
         # no guard list and no automatic judge for the risk: nothing the delta could change
         for risk in ("reversible", "assertive"):
             self.assertFalse(SR.judge_required(risk, False, [], [], [])[0], risk)
-        self.assertFalse(SR.judge_required("irreversible", False, [], [], [], panel_regime=False)[0])
 
-    def test_the_automatic_judge_is_the_panel_regimes(self):
-        self.assertFalse(SR.judge_required("irreversible", True, ["a.py"], ["a.py"], [], panel_regime=False)[0])
-        self.assertTrue(SR.judge_required("irreversible", True, ["a.py"], ["a.py"], ["a.py"], panel_regime=False)[0])
+    def test_the_automatic_judge_needs_no_configuration(self):        # impl round 1, R3: the owner's words
+        self.assertTrue(SR.judge_required("irreversible", True, ["a.py"], ["a.py"], [])[0])
+        self.assertTrue(SR.judge_required("unclassified", True, ["a.py"], ["a.py"], [])[0])
 
     def test_a_longer_guard_list_never_frees_a_close(self):
         beh = ["a.py", "hooks/x.sh", "lib/y.py"]
@@ -320,6 +328,13 @@ class MinorSeverity(unittest.TestCase):
             self.assertIn("never counted", text, name)
             self.assertIn("the CAP line counts the Critical and Important ones", text, name)
             self.assertIn("`more remain` only when you dropped a Critical or Important one", text, name)
+
+    def test_a_minor_ends_the_finding_before_it(self):                 # impl round 1, R8 (codex)
+        from tasks.post_d6 import parse_verdict
+        text = ("**Important** [PRE-EXISTING] [file: keep.py] keep.py has an old flaw.\n"
+                "**Minor** — `a.py:1` reads oddly.\n\nCAP: 1/5 reported, exhausted\n")
+        r = parse_verdict(text, {"a.py"}, exists=lambda p: p == "keep.py")
+        self.assertEqual((r["pre_existing"], r["important"], r["minor"], r["verdict"]), (1, 0, 1, "PASS"))
 
     def test_a_minor_marker_is_not_a_counted_finding(self):
         from tasks.post_d6 import _FINDING_RE

@@ -232,7 +232,8 @@ class _CloseFixture(unittest.TestCase):
             f"# 001 - T\n\n## Status\npending\n\n## Risk\n{risk}\n\n## Work Plan\n- [x] G1: do it\n",
             encoding="utf-8")
 
-    def setup_task(self, risk="assertive", rounds=2, rec=None, change="code.py", critical_last=False):
+    def setup_task(self, risk="assertive", rounds=2, rec=None, change="code.py", critical_last=False,
+                   on_top="", tamper=""):
         from tasks.core import build_panel_snapshot, format_panel_snapshot_line, tree_state_fingerprint
         self._write_cfg()
         self._set_risk(risk)
@@ -244,9 +245,10 @@ class _CloseFixture(unittest.TestCase):
         newest = rnd(rid="aaaaaaaaaaaa", judge_lines=lines).replace(
             "**Round-id:** aaaaaaaaaaaa\n\n",
             f"**Round-id:** aaaaaaaaaaaa\n\n**Tree-state:** {fp}\n\n"
-            f"{format_panel_snapshot_line(build_panel_snapshot(self.d, fp))}\n\n")
+            f"{format_panel_snapshot_line(build_panel_snapshot(self.d, fp))}\n\n"
+            + (f"**Tamper guard:** {tamper}\n\n" if tamper else ""))
         older = "".join(rnd(rid=f"{i:012x}") for i in range(rounds - 1, 0, -1))
-        (self.td / "judge.md").write_text(newest + older, encoding="utf-8")
+        (self.td / "judge.md").write_text(on_top + newest + older, encoding="utf-8")
         record = {"risk": risk, "rounds_cap": {"reversible": 1, "assertive": 2, "irreversible": 2},
                   "guard_paths": list(self.cfg.get("guard_paths") or [])}
         record.update(rec or {})
@@ -254,7 +256,8 @@ class _CloseFixture(unittest.TestCase):
                                      **record})
         post_d6.append_run(self.td, {"id": "aaaaaaaaaaaa", "kind": "panel", "status": "done"})
         self.panel = post_d6.panel_key(post_d6.newest_impl_round(self.td))
-        assert self.panel == "aaaaaaaaaaaa", self.panel
+        # the reviewed round is the newest impl round, unless a (below-quorum) impl round was put on top
+        assert self.panel == "aaaaaaaaaaaa" or "# Panel Impl Review" in on_top, self.panel
         if change:
             p = self.d / change
             p.write_text(p.read_text(encoding="utf-8") + "# changed after the panel\n", encoding="utf-8")
@@ -277,6 +280,30 @@ class _CloseFixture(unittest.TestCase):
 
     def _receipt(self):
         return (self.td / "task.md").read_text(encoding="utf-8")
+
+    def _close_in_process(self, during, *flags):
+        from tasks import cli as tcli
+        from tasks import core as tcore
+        real = tcore.format_verify_receipt
+
+        def fake(*a, **kw):
+            during()
+            return real(*a, **kw)
+        err, out = io.StringIO(), io.StringIO()
+        code = None
+        cwd = os.getcwd()
+        os.chdir(self.d)
+        try:
+            with mock.patch.dict(os.environ, {"PLAYBOOK_SESSION_ID": "pid-t209", "HOME": self.env["HOME"]}), \
+                 mock.patch.object(tcore, "format_verify_receipt", fake), \
+                 mock.patch.object(sys, "argv", ["tasks", "work", "done", *flags]), \
+                 contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+                tcli.main()
+        except SystemExit as e:
+            code = e.code
+        finally:
+            os.chdir(cwd)
+        return code, err.getvalue(), out.getvalue()
 
     def assertClosed(self, r):
         self.assertTrue(self._done(r), r.stdout + r.stderr)
@@ -430,30 +457,6 @@ class TheDecisionIsMadeAgainAtTheCommit(_CloseFixture):
         super().setUp()
         self.cfg["guard_paths"] = ["guard/"]
 
-    def _close_in_process(self, during, *flags):
-        from tasks import cli as tcli
-        from tasks import core as tcore
-        real = tcore.format_verify_receipt
-
-        def fake(*a, **kw):
-            during()
-            return real(*a, **kw)
-        err, out = io.StringIO(), io.StringIO()
-        code = None
-        cwd = os.getcwd()
-        os.chdir(self.d)
-        try:
-            with mock.patch.dict(os.environ, {"PLAYBOOK_SESSION_ID": "pid-t209", "HOME": self.env["HOME"]}), \
-                 mock.patch.object(tcore, "format_verify_receipt", fake), \
-                 mock.patch.object(sys, "argv", ["tasks", "work", "done", *flags]), \
-                 contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
-                tcli.main()
-        except SystemExit as e:
-            code = e.code
-        finally:
-            os.chdir(cwd)
-        return code, err.getvalue(), out.getvalue()
-
     def test_q12_a_guard_entry_added_while_the_close_runs(self):
         self.setup_task(rounds=2, change="code.py")
 
@@ -477,6 +480,111 @@ class TheDecisionIsMadeAgainAtTheCommit(_CloseFixture):
         self.setup_task(rounds=2, change="code.py")
         code, err, out = self._close_in_process(lambda: None, "--stale-panel-ok", "--reason", "x")
         self.assertIn("Task 001 done.", out, err)
+
+
+
+class RoundOneFindings(_CloseFixture):
+    """Task 209's impl panel round 1 (R1-R10): each a close that slipped through, red on b136443."""
+
+    def test_r1_a_plan_round_on_top_does_not_hide_a_guard_change(self):          # grok, codex
+        self.cfg["guard_paths"] = ["guard/"]
+        self.setup_task(risk="reversible", rounds=1, change="guard/g.py", on_top=rnd("Plan", rid="eeeeeeeeeeee"))
+        self.assertHeld(self._close(), "guard/g.py")
+
+    def test_r1_a_below_quorum_round_on_top_does_not_free_an_irreversible_task(self):
+        self.setup_task(risk="irreversible", rounds=1, change="code.py",
+                        on_top=rnd(verdict="FAIL", rid="ffffffffffff"))
+        self.assertHeld(self._close("--force", "--reason", "x"), "below-quorum")
+
+    def test_r2_a_fresh_panel_under_force_with_a_guard_file_changed_meanwhile(self):   # codex
+        self.cfg["guard_paths"] = ["guard/"]
+        self.setup_task(rounds=2, change="")
+
+        def touch():
+            (self.d / "guard" / "g.py").write_text("g = 2\n", encoding="utf-8")
+        code, err, out = self._close_in_process(touch, "--force", "--reason", "x")
+        self.assertNotIn("Task 001 done.", out, err)
+        self.assertIn("guard/g.py", err)
+
+    def test_r3_the_automatic_judge_needs_no_panel_policy(self):                   # codex, grok: the owner's words
+        del self.cfg["panel_required_for"]
+        self.setup_task(risk="irreversible", rounds=1, change="code.py")
+        self.assertHeld(self._close(), "irreversible")
+        self.assertHeld(self._close("--stale-panel-ok", "--reason", "x"), "irreversible")
+
+    def test_r4_a_degraded_tamper_guard_does_not_free_a_guard_list(self):          # opus
+        self.cfg["guard_paths"] = ["guard/"]
+        self.setup_task(rounds=2, change="", tamper="degraded — the porcelain could not be read")
+        self.assertHeld(self._close("--stale-panel-ok", "--reason", "x"), "no post-D6 run follows")
+
+    def test_r4_an_exclude_over_code_does_not_free_an_irreversible_task(self):     # opus
+        self.setup_task(risk="irreversible", rounds=1, change="")
+        self.cfg["fingerprint_exclude"] = ["code.py"]
+        self._write_cfg()
+        self.assertHeld(self._close("--stale-panel-ok", "--reason", "x"), "no post-D6 run follows")
+
+    def test_r5_a_pattern_spelled_with_dot_slash_still_guards(self):              # opus, sonnet
+        self.cfg["guard_paths"] = ["./guard//"]
+        self.setup_task(rounds=2, change="guard/g.py")
+        self.assertHeld(self._close("--stale-panel-ok", "--reason", "x"), "guard/g.py")
+
+    def test_r5_a_pattern_that_names_nothing_is_said(self):
+        self.cfg["guard_paths"] = ["nothere/", "guard/"]
+        self.setup_task(rounds=2, change="code.py")
+        r = self._close("--stale-panel-ok", "--reason", "x")
+        self.assertIn("`guard_paths` entry 'nothere/' names nothing in the project", r.stderr)
+
+    def _at_cap_with_opt_in(self):
+        self.cfg["stale_panel_requires_post_d6"] = "2026-01-01"
+        self.cfg["guard_paths"] = ["guard/"]
+        self.setup_task(rounds=2, change="code.py")
+
+    def test_r6_a_post_panel_run_that_counted_a_critical_holds_the_no_judge_close(self):   # sonnet
+        self._at_cap_with_opt_in()
+        post_d6.append_run(self.td, {"id": "runC", "panel": self.panel, "status": "done", "verdict": "FAIL",
+                                     "critical": 1, "important": 0})
+        self.assertHeld(self._close("--stale-panel-ok", "--reason", "x"), "counted a Critical")
+
+    def test_r6_an_unfinished_run_or_a_corrupt_ledger_holds_it(self):
+        self._at_cap_with_opt_in()
+        post_d6.append_run(self.td, {"id": "runR", "panel": self.panel, "status": "reserved"})
+        self.assertHeld(self._close("--stale-panel-ok", "--reason", "x"), "has not finished")
+        post_d6.append_run(self.td, {"id": "runR", "status": "failed"})
+        with open(self.td / post_d6.RUNS_NAME, "a", encoding="utf-8") as fh:
+            fh.write("{not json\n")
+        self.assertHeld(self._close("--stale-panel-ok", "--reason", "x"), "corrupt")
+
+    def test_r6_a_run_with_only_important_findings_does_not_hold_it(self):        # ruling (b): not grave
+        self._at_cap_with_opt_in()
+        post_d6.append_run(self.td, {"id": "runI", "panel": self.panel, "status": "done", "verdict": "FAIL",
+                                     "critical": 0, "important": 2})
+        self.assertClosed(self._close("--stale-panel-ok", "--reason", "x"))
+
+    def test_r9_a_reversible_tasks_close_names_what_no_judge_read(self):          # codex: D2's words
+        self.cfg["guard_paths"] = ["guard/"]
+        self.setup_task(risk="reversible", rounds=1, change="code.py")
+        self.assertClosed(self._close())
+        self.assertIn("no judge read after the last panel", self._receipt())
+        self.assertIn("code.py", self._receipt())
+
+    def test_r10_a_cap_raised_while_the_close_runs(self):                        # grok
+        self._at_cap_with_opt_in()
+
+        def raise_cap():
+            self.cfg["review_rounds"] = {"assertive": 3}
+            self._write_cfg()
+        code, err, out = self._close_in_process(raise_cap, "--stale-panel-ok", "--reason", "x")
+        self.assertNotIn("Task 001 done.", out, err)
+        self.assertIn("changed while this close ran", err)
+
+    def test_r10_the_files_changed_under_force_while_the_close_runs(self):
+        self._at_cap_with_opt_in()
+
+        def another():
+            (self.d / "MIND_MAP.md").write_text("# map, changed during the close\n", encoding="utf-8")
+        code, err, out = self._close_in_process(another, "--force", "--reason", "x")
+        self.assertNotIn("Task 001 done.", out, err)
+        self.assertIn("changed while this close ran", err)
 
 
 if __name__ == "__main__":

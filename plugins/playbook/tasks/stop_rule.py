@@ -19,6 +19,7 @@ ones — that is not tagged `[SETTLED]`; a `[PRE-EXISTING]` one counts (a panel 
 outside of, as `parse_verdict` counts it without one).
 LIMIT (as task 108's run cap): D6 says a Critical that was ACCEPTED; the CLI sees one a judge wrote."""
 import fnmatch
+import posixpath
 import re
 import sys
 from pathlib import Path
@@ -78,16 +79,40 @@ def resolve_guard_paths(cfg: "dict | None", warn: bool = True) -> "list[str]":
     return [x.strip() for x in raw]
 
 
+def _norm(path: str) -> str:
+    """A path or pattern as the comparison reads it: `./`, `//` and a trailing `/` folded (`posixpath.normpath`), a
+    leading `/` dropped (impl round 1, R5: `./hooks/`, or a `code_roots` entry `./src`, matched nothing)."""
+    s = posixpath.normpath(path.strip()) if path.strip() else ""
+    return s.lstrip("/")
+
+
 def guarded(path: str, patterns: "list[str]") -> bool:
     """Whether a project-relative path (a `code_roots` scope's prefixed with its name, as the close's delta names
-    it) is under one of the patterns: the path itself, anything below it, or an `fnmatch` glob (`*` crosses `/`)."""
+    it) is under one of the patterns: the path itself, anything below it, or an `fnmatch` glob (`*` crosses `/`);
+    both sides normalised (`_norm`); `.` is the whole project."""
+    p = _norm(path)
     for pat in patterns:
-        stem = pat.rstrip("/")
+        stem = _norm(pat)
         if not stem:
             continue
-        if path == stem or path.startswith(stem + "/") or fnmatch.fnmatchcase(path, pat):
+        if stem == "." or p == stem or p.startswith(stem + "/") or fnmatch.fnmatchcase(p, stem):
             return True
     return False
+
+
+def names_nothing(project_path: Path, patterns: "list[str]") -> "list[str]":
+    """The patterns that name nothing in the project — a typo guards nothing, so the close says so (impl round 1,
+    R5). A plain pattern must exist as a file or folder; a glob's folder part (before its first `*?[`) must."""
+    out = []
+    for pat in patterns:
+        stem = _norm(pat)
+        if not stem or stem in (".", "*"):
+            continue
+        glob_at = min([stem.index(c) for c in "*?[" if c in stem] or [len(stem)])
+        base = stem[:glob_at].rsplit("/", 1)[0] if glob_at < len(stem) else stem
+        if base and not (Path(project_path) / base).exists():
+            out.append(pat)
+    return out
 
 
 def _read_rounds(task_dir: Path) -> "list[dict]":
@@ -148,7 +173,9 @@ def round_criticals(rnd: dict) -> int:
 def allowed_rounds(risk: str, rounds: "list[dict]", caps: "dict[str, int]") -> "tuple[int, int, bool]":
     """(cap, rounds allowed, extended): the cap, plus one when the cap's last round counted a Critical."""
     cap = cap_for(risk, caps)
-    extended = len(rounds) >= cap and round_criticals(rounds[cap - 1]) > 0
+    # the owner's words give the extension to the two-round risks only — "a 3-a doar dacă runda 2 a găsit o
+    # problemă Critical" (impl round 1, R7): a cap of 1 has none
+    extended = cap >= 2 and len(rounds) >= cap and round_criticals(rounds[cap - 1]) > 0
     return cap, cap + (1 if extended else 0), extended
 
 
@@ -183,13 +210,13 @@ def stricter(a: "str | None", b: "str | None") -> str:
 
 
 def judge_required(risk: str, can: bool, behavioral: "list[str]", changed: "list[str]", patterns: "list[str]",
-                   cause: str = "", panel_regime: bool = True) -> "tuple[bool, str]":
+                   cause: str = "") -> "tuple[bool, str]":
     """After an impl panel: does what changed since it need the single judge before a stale close? (required, why).
-    `behavioral` = the code paths of the delta, `changed` = every path of it (code, tests, docs, records);
-    `panel_regime` = the project requires a panel for this risk (`panel_required_for`) — the automatic judge on an
-    irreversible or unclassified task's code is that regime's; a listed guard file needs it on any task. A delta
+    `behavioral` = the code paths of the delta, `changed` = every path of it (code, tests, docs, records). An
+    irreversible or unclassified task's code needs it in every project — the owner: "Fără nicio configurare"
+    (impl round 1, R3: it used to depend on `panel_required_for`); a listed guard file needs it on any task. A delta
     that cannot be listed requires the judge wherever the answer would depend on it."""
-    high = panel_regime and risk not in ("reversible", "assertive")
+    high = risk not in ("reversible", "assertive")
     if not can:
         if patterns or high:
             return True, f"the delta since the panel cannot be listed ({cause or 'unknown cause'})"
@@ -228,13 +255,15 @@ def _recorded_guards(rec: "dict | None") -> "list[str]":
 
 
 def close_state(project_path: Path, task_dir: Path, risk: str, rnd: dict, rec: "dict | None",
-                cfg: "dict | None" = None, panel_regime: bool = True) -> dict:
+                cfg: "dict | None" = None, listable: bool = True, why_not: str = "") -> dict:
     """What a STALE close of the carrying impl round `rnd` needs (the caller decides the verdict). `risk` is the
     close's gate risk (`stricter` of the recorded and the current one). The guard list is the union of the one the
     panel's reservation recorded and today's; the caps the larger of the two per risk — below the cap a project's
     own binding still applies, so a larger cap is never the easier close. Keys: judge, why, reached, rounds,
     allowed, cap, extended, changed, behavioral, can, cause, guards, counted (False when the rounds could not be
-    read: then never `reached`)."""
+    read: then never `reached`), missing (guard patterns that name nothing). `listable` False: the freshness verdict
+    is not a plain STALE (a degraded tamper guard, an exclude over code, a missing or unreadable stamp), so no delta
+    is trusted — the judge is required wherever a guard list or the automatic judge applies (impl round 1, R4)."""
     from tasks.core import load_config, tail_cert_delta_why
     if cfg is None:
         try:
@@ -244,9 +273,13 @@ def close_state(project_path: Path, task_dir: Path, risk: str, rnd: dict, rec: "
     guards = sorted(set(resolve_guard_paths(cfg, warn=False)) | set(_recorded_guards(rec)))
     now, then = resolve_rounds(cfg, warn=False), _recorded_caps(rec)
     caps = {k: max(now[k], then[k]) for k in now}
-    can, beh, non, cause = tail_cert_delta_why(Path(project_path), rnd.get("snapshot"), rnd.get("tree_state") or "")
+    if listable:
+        can, beh, non, cause = tail_cert_delta_why(Path(project_path), rnd.get("snapshot"),
+                                                   rnd.get("tree_state") or "")
+    else:
+        can, beh, non, cause = False, [], [], why_not or "the freshness verdict is not a plain STALE"
     changed = sorted(set(beh) | set(non))
-    judge, why = judge_required(risk, can, beh, changed, guards, cause, panel_regime)
+    judge, why = judge_required(risk, can, beh, changed, guards, cause)
     try:
         rounds = impl_rounds(Path(task_dir))
         counted = True
@@ -255,14 +288,37 @@ def close_state(project_path: Path, task_dir: Path, risk: str, rnd: dict, rec: "
     cap, allowed, extended = allowed_rounds(risk, rounds, caps)
     return {"judge": judge, "why": why, "reached": counted and len(rounds) >= allowed, "rounds": len(rounds),
             "allowed": allowed, "cap": cap, "extended": extended, "changed": changed, "behavioral": beh,
-            "can": can, "cause": cause, "guards": guards, "counted": counted, "risk": risk}
+            "can": can, "cause": cause, "guards": guards, "counted": counted, "risk": risk,
+            "missing": names_nothing(Path(project_path), guards)}
 
 
 def failed_state(risk: str, why: str) -> dict:
     """The state when the rule cannot be evaluated: the judge is required (every doubt fails closed)."""
     return {"judge": True, "why": why, "reached": False, "rounds": 0, "allowed": 0, "cap": 0, "extended": False,
             "changed": [], "behavioral": [], "can": False, "cause": why, "guards": [], "counted": False,
-            "risk": risk}
+            "risk": risk, "missing": []}
+
+
+def post_panel_hold(task_dir: Path) -> str:
+    """Why a close the stop rule sends to no judge must still wait, from the post-D6 runs after the newest impl
+    panel (impl round 1, R6): the ledger is corrupt, the newest run has not finished, or the newest finished run
+    COUNTED a Critical — grave, by the owner's definition; a FAIL with only Important findings does not hold it
+    (his ruling (b) of 2026-10-13 16:30). "" when nothing holds it."""
+    from tasks import post_d6
+    td = Path(task_dir)
+    if post_d6.ledger_corrupt_lines(td):
+        return (f"the post-D6 run ledger ({post_d6.RUNS_NAME}) has corrupt lines — a run that counted a Critical "
+                "could be hidden in them; repair it, or let the owner decide (--owner-ok).")
+    key = post_d6.panel_key(post_d6.newest_impl_round(td))
+    every = [r for r in post_d6.read_runs(td) if key and r.get("panel") == key and r.get("kind") != "panel"]
+    if every and every[-1].get("status") != "done":
+        return (f"the newest post-D6 run ({every[-1].get('id')}) has not finished — wait for it, or record it "
+                "failed if its process is gone.")
+    done = [r for r in every if r.get("status") == "done"]
+    if done and int(done[-1].get("critical") or 0) > 0:
+        return (f"the newest post-D6 run ({done[-1].get('id')}) counted a Critical — fix it and run the judge "
+                "again (two runs at most), or let the owner decide (--owner-ok).")
+    return ""
 
 
 def _names(files: "list[str]", limit: int = 40) -> str:

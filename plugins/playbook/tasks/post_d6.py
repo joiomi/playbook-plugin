@@ -288,12 +288,17 @@ def parse_verdict(text: str, delta_files: "set[str] | None" = None, exists=None)
     real_files = None       # the delta's files by their real paths, built when a field first needs them
     lines = (text or "").splitlines()
     marks = [(i, m) for i, ln in enumerate(lines) for m in _FINDING_RE.finditer(ln)]
-    counts["minor"] = sum(1 for ln in lines for _ in _MINOR_RE.finditer(ln))
+    minors = [(i, m.start()) for i, ln in enumerate(lines) for m in _MINOR_RE.finditer(ln)]
+    counts["minor"] = len(minors)
+    # every severity marker bounds the finding before it — a Minor too, though it is never counted (task 209,
+    # impl round 1, R8: a Minor citing a delta file used to make the PRE-EXISTING finding above it count)
+    bounds = sorted([(i, m.start()) for i, m in marks] + minors)
     for k, (i, m) in enumerate(marks):
         ln = lines[i]
         found += 1
         # the finding's whole text: from its marker to the next marker (or the end)
-        nxt = marks[k + 1][0] if k + 1 < len(marks) else len(lines)
+        later = [b for b in bounds if b > (i, m.start())]
+        nxt = later[0][0] if later else len(lines)
         span = "\n".join([ln[m.start():]] + lines[i + 1:max(i + 1, nxt)])
         tag = _TAG_AFTER_RE.match(ln, m.end())
         t = tag.group(1).upper() if tag else ""
@@ -307,7 +312,7 @@ def parse_verdict(text: str, delta_files: "set[str] | None" = None, exists=None)
         # the delta did not change AND the text cites no delta file at a line —
         # 1.6.1's check, kept as a reason to count: never fewer counted than 1.6.1.
         if t == "PRE-EXISTING" and delta_files is not None:
-            seg_end = marks[k + 1][1].start() if k + 1 < len(marks) and marks[k + 1][0] == i else len(ln)
+            seg_end = later[0][1] if later and later[0][0] == i else len(ln)
             # two fields on the first line, or a value whose any reading names a delta
             # file, is ambiguous: counted (task 201, impl round 2: R2-1, R2-4, R2-5)
             fields = list(_FILE_FIELD_RE.finditer(ln, m.end(), seg_end))

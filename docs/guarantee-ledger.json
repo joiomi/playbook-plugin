@@ -21692,7 +21692,7 @@
     {
       "id": "PB-REVIEW-STOP-RULE",
       "category": "risk-and-close",
-      "statement": "The review stop rule (task 209, PHASE-B.md item 1; the owner's answers of 2026-10-15): `tasks panel-review <N> --mode impl` counts the task's impl panel rounds that met their quorum (`PANEL VERDICT: PASS` in the round's header, in judge.md and judge-archive.md, a round in both counted once; a below-quorum or a plan round is not one) and refuses — under the reservation's task lock, before any judge is spawned or anything written, exit 2, in its own words — a round past the cap of the task's `## Risk` (`review_rounds` in `.agent/config.json`; by default reversible 1, assertive 2, irreversible 2, an unset or unknown risk the larger high cap), plus one round when the cap's last round counted a `**Critical**` a judge wrote (not `[SETTLED]`; one leading `> ` stripped; a format-2 round's unquoted lines not read); `--owner-ok --reason` passes it and is recorded in the panel's reservation with the risk, the caps and the guard list. A plain-STALE close of a task whose newest round is an impl PASS needs a post-D6 PASS on the current tree (PB-STALE-CLOSE-BOUND's binding, whatever its opt-in date says, `--force` included) or `--owner-ok`: when a changed file — code, test, doc or record — is under the union of the recorded and current `guard_paths` (any risk; before the last round too); when the stricter of the recorded and current risk is irreversible or unclassified, the project requires a panel for it and code changed; or when the delta cannot be listed and a guard list or that automatic judge depends on it. Otherwise, after the last round the larger of the recorded and current caps allows, `--stale-panel-ok --reason` closes without that binding and the receipt and the enforcement journal name the files no judge read; below it the project's own rule stands. The decision is re-made inside the task lock at the commit, `--force` included. Post-D6 single-judge runs after a panel stop at two without `--owner-ok`. A judge's `**Minor**` findings are counted apart and never enter the verdict or the CAP line's equality.",
+      "statement": "The review stop rule (task 209, PHASE-B.md item 1; the owner's answers of 2026-10-15): `tasks panel-review <N> --mode impl` counts the task's impl panel rounds that met their quorum (`PANEL VERDICT: PASS` in the round's header, in judge.md and judge-archive.md, a round in both counted once; a below-quorum or a plan round is not one) and refuses — under the reservation's task lock, before any judge is spawned or anything written, exit 2, in its own words — a round past the cap of the task's `## Risk` (`review_rounds` in `.agent/config.json`; by default reversible 1, assertive 2, irreversible 2, an unset or unknown risk the larger high cap), plus one round, where the cap is 2 or more, when the cap's last round counted a `**Critical**` a judge wrote (not `[SETTLED]`; one leading `> ` stripped; a format-2 round's unquoted lines not read); `--owner-ok --reason` passes it and is recorded in the panel's reservation with the risk, the caps and the guard list. A close of a task whose newest quorum-PASS impl round — whatever round was written on top of it — is followed by a change needs a post-D6 PASS on the current tree (PB-STALE-CLOSE-BOUND's binding, whatever its opt-in date says, `--force` included) or `--owner-ok`: when a changed file — code, test, doc or record — is under the union of the recorded and current `guard_paths` (any risk; before the last round too); when the stricter of the recorded and current risk is irreversible or unclassified and code changed (in every project); or when the delta cannot be listed — in a git repository, a freshness verdict that is not a plain STALE included — and a guard list or that automatic judge depends on it; a below-quorum impl round written on that round refuses such a close unless a quorum panel or `--owner-ok`; both sides of the guard match are normalised and a pattern naming nothing is warned about. Otherwise, after the last round the larger of the recorded and current caps allows, `--stale-panel-ok --reason` closes without that binding (a reversible task's plain close too) and the receipt and the enforcement journal name the files no judge read — unless the post-D6 ledger is corrupt, its newest run unfinished, or its newest run counted a Critical; below it the project's own rule stands. The decision is re-made inside the task lock at the commit — a changed judge requirement or cap state refuses, and under `--force` so does a moved tree (after a FRESH panel too) or a different list of changed files. Post-D6 single-judge runs after a panel stop at two without `--owner-ok`. A judge's `**Minor**` findings are counted apart, never enter the verdict or the CAP line's equality, and bound the finding before them.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/stop_rule.py",
@@ -22088,6 +22088,145 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "RoundOneFindings.test_r1_a_plan_round_on_top_does_not_hide_a_guard_change",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_stop_rule_cli.py",
+            "reference": "TheJudgeWhereItIsNeeded.test_q11_a_reversible_task_that_changed_other_code_closes_as_before"
+          },
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "RoundOneFindings.test_r1_a_below_quorum_round_on_top_does_not_free_an_irreversible_task",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "RoundOneFindings.test_r2_a_fresh_panel_under_force_with_a_guard_file_changed_meanwhile",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_stop_rule_cli.py",
+            "reference": "TheDecisionIsMadeAgainAtTheCommit.test_control_nothing_changes_while_it_runs"
+          },
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "RoundOneFindings.test_r3_the_automatic_judge_needs_no_panel_policy",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "RoundOneFindings.test_r4_a_degraded_tamper_guard_does_not_free_a_guard_list",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "RoundOneFindings.test_r4_an_exclude_over_code_does_not_free_an_irreversible_task",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "RoundOneFindings.test_r5_a_pattern_spelled_with_dot_slash_still_guards",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "RoundOneFindings.test_r5_a_pattern_that_names_nothing_is_said",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "RoundOneFindings.test_r6_a_post_panel_run_that_counted_a_critical_holds_the_no_judge_close",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_stop_rule_cli.py",
+            "reference": "RoundOneFindings.test_r6_a_run_with_only_important_findings_does_not_hold_it"
+          },
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "RoundOneFindings.test_r6_an_unfinished_run_or_a_corrupt_ledger_holds_it",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "RoundOneFindings.test_r9_a_reversible_tasks_close_names_what_no_judge_read",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "RoundOneFindings.test_r10_a_cap_raised_while_the_close_runs",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "RoundOneFindings.test_r10_the_files_changed_under_force_while_the_close_runs",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_stop_rule.py",
+          "reference": "MinorSeverity.test_a_minor_ends_the_finding_before_it",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_stop_rule.py",
+          "reference": "GuardPaths.test_both_sides_are_normalised",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_light_template.py",
+          "reference": "CloseSideBar.test_unclassified_close_passes_with_review_evidence",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Outside a git repository an untrusted verdict stays advisory where the freshness gate does not hold (task 209's full verify found the first form refused this close; mutant M48)."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -22103,10 +22242,11 @@
         "Added by task 209 (PHASE-B.md item 1), on the nested branch `phase-b`, not released.",
         "D6 says a Critical that was ACCEPTED; the CLI sees one a judge wrote (as task 108's run cap did).",
         "`--owner-ok` is an accountability marker an agent can type, not an authentication.",
-        "The guard list is the project's to keep right; an empty list leaves only the automatic judge of irreversible or unclassified tasks, and only where the project requires a panel for that risk.",
+        "The guard list is the project's to keep right (a pattern naming nothing is warned about, never refused); an empty list leaves only the automatic judge of irreversible or unclassified tasks' code.",
         "A task with no impl panel round is out of the rule's reach (nothing to be stale against); plan panels are not capped.",
         "What the panel recorded lives in the run ledger, an agent-writable record; a deleted ledger leaves the current config and risk only.",
-        "Measured on this workspace's records (task 209 `evidence/rounds_control.out`): the five tasks with a third impl round (164, 182, 194, 195, 199) each had a Critical in round 2; no task from 093 on exceeds what the cap allows."
+        "Measured on this workspace's records (task 209 `evidence/rounds_control.out`): the five tasks with a third impl round (164, 182, 194, 195, 199) each had a Critical in round 2; no task from 093 on exceeds what the cap allows.",
+        "Impl panel round 1 (task 209) found ten ways the first form let a close through or misread the owner's words (R1-R10 in the task record); each has a test above that failed on nested b136443."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],

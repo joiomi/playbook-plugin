@@ -10,9 +10,11 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   2026-10-15 — until now it lived in one project's CLAUDE.md and no CLI enforced it). `tasks panel-review <N>
   --mode impl` refuses an impl round past the cap of the task's `## Risk` — reversible 1, assertive/irreversible 2,
   one more only when the cap's last round counted a Critical — with exit 2 and nothing spent; past it only
-  `--owner-ok --reason "…"`, recorded. After a panel, a stale close needs the post-panel judge's PASS on the
-  current tree only for an irreversible or unclassified task's code (where the project requires a panel for it) or
-  a file under the new `guard_paths` list — before the last round too, and `--force` is bound as well; any other
+  `--owner-ok --reason "…"`, recorded (a cap of 1 has no extension). After a panel, a stale close needs the
+  post-panel judge's PASS on the current tree only for an irreversible or unclassified task's code (in every project)
+  or a file under the new `guard_paths` list — before the last round too, whatever round was written on top, with an
+  untrusted delta (a degraded tamper guard, an exclude over code, a missing stamp) read as needing it, and `--force`
+  bound as well; any other
   change after the last round closes with `--stale-panel-ok --reason` (even where `stale_panel_requires_post_d6` is
   set) and the receipt names the files no judge read. The panel's reservation records the risk, the caps and the
   guard list, so lowering any of them after the panel frees nothing; the decision is made again at the commit.
@@ -22,8 +24,10 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 - **A `**Minor**` severity** for judges (the owner, 2026-10-15): at most three below the counted findings, never
   counted, never stopping anything; the `CAP:` line still counts the Critical and Important ones exactly.
 - **Changed outcomes, by design:** an irreversible task's stale close on `--stale-panel-ok --reason` or `--force
-  --reason` alone, and an in-flight task's third impl panel without a Critical in round 2, are now refused; a
-  reversible task whose change after its impl panel touches `guard_paths` needs the judge too.
+  --reason` alone — also in a project without `panel_required_for`, and on an unstamped round — and an in-flight
+  task's third impl panel without a Critical in round 2, are now refused; a reversible task whose change after its
+  impl panel touches `guard_paths` needs the judge too, and a reversible task gets no second impl round after a
+  Critical.
 
 ## [1.6.2] — 2026-10-15
 

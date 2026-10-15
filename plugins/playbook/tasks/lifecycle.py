@@ -612,11 +612,6 @@ def cmd_work(cmd_args):
                 _gate_risk = _sr209.stricter(_rec_risk209, risk)
                 _panel_req = any(resolve_panel_required(project_path, _r)
                                  for _r in {risk, _gate_risk, _rec_risk209} if _r)
-                # the stop rule's automatic judge belongs to the panel regime; an unset risk is in it
-                # wherever a high-consequence risk is (it is held to that bar everywhere else)
-                _regime209 = _panel_req or (
-                    _gate_risk not in ("reversible", "assertive", "irreversible")
-                    and any(resolve_panel_required(project_path, _r) for _r in ("assertive", "irreversible")))
                 _evidence = (has_panel_impl_evidence(task_file) if _panel_req
                              else has_review_evidence(task_file, impl_only=True))
 
@@ -802,19 +797,39 @@ def cmd_work(cmd_args):
                 # as everywhere else (agy).
                 _bound_verdicts = ("STALE", "TAMPER-GUARD-DEGRADED", "EXCLUDE-COVERS-CODE",
                                    "NO-STAMP", "UNREADABLE")
-                # Task 209 (PHASE-B.md item 1): the review stop rule on a plain STALE verdict of
-                # the newest impl round (a PASS) — decided on what changed since the panel,
-                # whatever the position against the D6 cap (plan panel P1). Every doubt makes the
-                # judge required (`close_state` fails closed; an exception here too).
+                # Task 209 (PHASE-B.md item 1): the review stop rule, decided on what changed since
+                # the newest impl round that met its quorum — whatever the position against the D6
+                # cap (plan panel P1) and whatever round sits on it (impl round 1, R1: a plan round,
+                # a below-quorum impl round). A verdict that is not a plain STALE trusts no delta
+                # (R4). Every doubt makes the judge required (`close_state` fails closed; an
+                # exception here too).
+                _pass209 = next((r for r in _rounds if r["mode"] == "impl" and r["verdict"] == "PASS"), None)
+                _below209 = bool(_pass209 is not None and _impl is not None and _impl is not _pass209)
                 _st209 = None
-                if (_rounds and _rounds[0]["mode"] == "impl" and _rounds[0]["verdict"] == "PASS"
-                        and _freshness and _freshness.get("verdict") == "STALE"):
+                _v209 = ""
+                if _pass209 is not None:
+                    if _pass209 is _rounds[0]:
+                        # outside a git repository no tree can be compared and no judge bound to one:
+                        # an untrusted verdict there stays what it was (advisory where not held), as
+                        # NO-STAMP is for a non-git project (task 060)
+                        if (_freshness and _freshness.get("verdict") in _bound_verdicts
+                                and (_freshness["verdict"] == "STALE" or _git_here)):
+                            _v209 = _freshness["verdict"]
+                    elif _now_fp and _pass209.get("tree_state") and _now_fp != _pass209["tree_state"]:
+                        from tasks.core import records_only_delta as _rod209
+                        if not _rod209(Path(project_path), _pass209.get("snapshot"), _pass209["tree_state"]):
+                            _v209 = "STALE"
+                if _v209:
                     try:
                         _st209 = _sr209.close_state(Path(project_path), task_file.parent,
-                                                    _gate_risk, _rounds[0], _rec209,
-                                                    panel_regime=_regime209)
+                                                    _gate_risk, _pass209, _rec209,
+                                                    listable=(_v209 == "STALE"),
+                                                    why_not=f"the freshness verdict is {_v209}")
                     except Exception as _e209:          # noqa: BLE001
                         _st209 = _sr209.failed_state(_gate_risk, f"the stop rule could not be evaluated ({_e209})")
+                    for _m209 in (_st209.get("missing") or []):
+                        print(f"  ⚠ `guard_paths` entry {_m209!r} names nothing in the project — it guards "
+                              "nothing (.agent/config.json).", file=sys.stderr, flush=True)
                 _held209 = bool(_carries and _gate_risk != "reversible")   # the freshness gate holds this close
                 if (_carries and _impl is not None and _freshness
                         and _freshness.get("verdict") in _bound_verdicts
@@ -822,7 +837,13 @@ def cmd_work(cmd_args):
                         and _gate_risk != "reversible"):
                     if _st209 is not None and not _st209["judge"] and _st209["reached"]:
                         # D2 (the owner, 2026-10-15): after the last round D6 allows, a change no
-                        # judge needs closes on the reason, and the receipt names what no judge read
+                        # judge needs closes on the reason, and the receipt names what no judge read —
+                        # unless a post-panel run holds it (impl round 1, R6)
+                        _hold209 = "" if owner_ok else _sr209.post_panel_hold(task_file.parent)
+                        if _hold209:
+                            print(f"\nBlocked: cannot close task {prev_task} — {_hold209}",
+                                  file=sys.stderr, flush=True)
+                            sys.exit(1)
                         _freshness["stop_rule"] = _sr209.receipt_clause(_st209)
                         if owner_ok and reason and reason.strip():
                             _freshness["bound"] = f'owner-ok: "{" ".join(reason.split())}"'
@@ -851,6 +872,15 @@ def cmd_work(cmd_args):
                 # post-panel PASS on this tree, or the owner (`--force` bound too, as above).
                 if _st209 is not None and _st209["judge"] and not _held209:
                     from tasks.core import bound_stale_close
+                    if _below209 and not owner_ok:
+                        # impl round 1, R1: the post-D6 runs key to the newest impl round, a
+                        # below-quorum one here — no judge's PASS can be bound to the reviewed round
+                        print(f"\nBlocked: cannot close task {prev_task} — a below-quorum impl panel round "
+                              "sits on the impl round that reviewed this task's code, so no post-panel judge "
+                              "can be bound to it. Run an impl panel that meets its quorum, or let the owner "
+                              'decide:  tasks work done --owner-ok --reason "…"\n'
+                              + _sr209.block_hint(_st209, prev_task), file=sys.stderr, flush=True)
+                        sys.exit(1)
                     _b_ok, _b_msg, _b_note = bound_stale_close(
                         Path(project_path), task_file.parent,
                         owner_ok_reason=(reason if owner_ok else None),
@@ -862,6 +892,16 @@ def cmd_work(cmd_args):
                     if _b_note:
                         _freshness["bound"] = _b_note
                         _freshness["bound_rule_on"] = _st209["why"]
+                # Task 209 (impl round 1, R9): every close the rule leaves without a judge after the
+                # last round names what no judge read — a reversible task's too.
+                if (_st209 is not None and not _st209["judge"] and _st209["reached"] and not _held209
+                        and _freshness is not None and "stop_rule" not in _freshness):
+                    _hold209 = "" if owner_ok else _sr209.post_panel_hold(task_file.parent)
+                    if _hold209:
+                        print(f"\nBlocked: cannot close task {prev_task} — {_hold209}",
+                              file=sys.stderr, flush=True)
+                        sys.exit(1)
+                    _freshness["stop_rule"] = _sr209.receipt_clause(_st209)
                 # TAIL CERTIFICATION (task 036, owner decision A). When the panel
                 # is STALE and would block, but the ONLY post-panel delta is in
                 # non-behavioral file classes (docs/tests/ledger/claim docs), a
@@ -1150,23 +1190,46 @@ def cmd_work(cmd_args):
                                                why=str(_freshness.get("bound_rule_on") or ""))
                         if not _ok3:
                             raise CloseRaceRefused(f"the post-D6 binding no longer holds: {_msg3}")
-                    # Task 209 (plan panel P11): a close that took no judge re-makes the stop
-                    # rule's decision here, under the task lock — the config (guard list) and the
-                    # tree (`--force` skips the tree check above) are read again.
-                    if (_st209 is not None and not _st209["judge"] and not owner_ok
-                            and not _freshness.get("bound_rule_on")):
-                        try:
-                            _rec_now = _sr209.panel_record(task_file.parent)
-                            _st_now = _sr209.close_state(
-                                Path(project_path), task_file.parent,
-                                _sr209.stricter((_rec_now or {}).get("risk") or None, _gate_risk),
-                                _rounds[0], _rec_now, panel_regime=_regime209)
-                        except Exception as _e209b:     # noqa: BLE001
-                            _st_now = _sr209.failed_state(_gate_risk, f"the stop rule could not be evaluated ({_e209b})")
-                        if _st_now["judge"]:
-                            raise CloseRaceRefused(
-                                "the stop rule's answer changed while this close ran — it now needs the "
-                                f"post-panel judge: {_st_now['why']}.")
+                    # Task 209 (plan panel P11; impl round 1, R2 and R10): a close that took no
+                    # judge re-makes the stop rule's decision here, under the task lock — the config
+                    # (guard list, caps) and the tree are read again; under `--force` (which skips
+                    # the tree check above) a tree that moved re-makes it even after a FRESH panel.
+                    if (not owner_ok and _pass209 is not None
+                            and not (_freshness or {}).get("bound_rule_on")):
+                        _moved209 = False
+                        if force:
+                            try:
+                                _moved209 = tree_state_fingerprint(project_path) != _now_fp
+                            except Exception:           # noqa: BLE001
+                                _moved209 = True
+                        if (_st209 is not None and not _st209["judge"]) or _moved209:
+                            try:
+                                _fp209 = tree_state_fingerprint(project_path)
+                                _rec_now = _sr209.panel_record(task_file.parent)
+                                _risk_now = _sr209.stricter((_rec_now or {}).get("risk") or None, _gate_risk)
+                                if _fp209 and _pass209.get("tree_state") and _fp209 == _pass209["tree_state"]:
+                                    _st_now = None      # the reviewed tree itself: nothing changed since
+                                else:
+                                    _st_now = _sr209.close_state(
+                                        Path(project_path), task_file.parent, _risk_now, _pass209, _rec_now,
+                                        listable=(_v209 in ("", "STALE")),
+                                        why_not=f"the freshness verdict is {_v209}")
+                            except Exception as _e209b:     # noqa: BLE001
+                                _st_now = _sr209.failed_state(
+                                    _gate_risk, f"the stop rule could not be evaluated ({_e209b})")
+                            _was = "the stop rule's answer changed while this close ran — "
+                            if _st_now is not None and _st_now["judge"]:
+                                raise CloseRaceRefused(f"{_was}it now needs the post-panel judge: {_st_now['why']}.")
+                            if (_st_now is not None and _st209 is not None
+                                    and _st_now["reached"] != _st209["reached"]):
+                                raise CloseRaceRefused(
+                                    f"{_was}the D6 cap state moved ({_st209['rounds']} of {_st209['allowed']} "
+                                    f"rounds → {_st_now['rounds']} of {_st_now['allowed']}).")
+                            if (force and _st_now is not None and _st209 is not None
+                                    and _st_now["changed"] != _st209["changed"]):
+                                raise CloseRaceRefused(
+                                    f"{_was}the files changed after the panel are not the ones this close was "
+                                    "decided on (now: " + ", ".join(_st_now["changed"][:8]) + ").")
                 try:
                     _rewrite(task_file, lambda _txt: _bound_still_holds() or compose_close(
                         _txt, receipt_heading="Verification Receipt",

@@ -494,32 +494,40 @@ The owner's rule D6 (2026-09-25) and his ruling of 2026-10-13 18:37, made the pl
   met their quorum (`PANEL VERDICT: PASS` in the round's header, in `judge.md` and `judge-archive.md`; a
   below-quorum round and a plan round are not rounds) and refuses one past the cap of the task's risk — exit 2,
   before any judge is called or anything is written. The defaults are D6's; an unset or unknown risk takes the
-  larger of the assertive and irreversible caps. One round more is allowed when the cap's last round counted a
-  Critical — a `**Critical**` finding a judge wrote that is not tagged `[SETTLED]` (a `[PRE-EXISTING]` one counts:
-  a panel has no delta). Past that only `--owner-ok --reason "…"`, recorded in the panel's reservation.
+  larger of the assertive and irreversible caps. Where the cap is 2 or more, one round more is allowed when the
+  cap's last round counted a Critical — a `**Critical**` finding a judge wrote that is not tagged `[SETTLED]` (a
+  `[PRE-EXISTING]` one counts: a panel has no delta); a cap of 1 has no extension (the owner's words). Past that only `--owner-ok --reason "…"`, recorded in the panel's reservation.
   `review_rounds` sets a cap per risk (a positive integer; anything else keeps the default, with a warning). Plan
   panels are not capped.
-- **After a panel, the judge only where it matters.** A stale close (the plain `STALE` verdict) of a task whose
-  newest round is an impl PASS needs the post-panel single judge's PASS on the current tree (`tasks impl-review
-  <N>`, then `tasks work done --stale-panel-ok --reason "…"`) or `--owner-ok --reason "…"` when a changed file — code,
-  test, doc or record — is under `guard_paths`, on a task of any risk; when the task is irreversible or unclassified,
-  the project requires a panel for it (`panel_required_for`) and its code changed; or when the change cannot be
-  listed and the answer depends on it. That holds before the last round too and binds `--force` as well — the
-  binding of the section above, whatever its date says. A docs or tests tail is still tried by tail certification
-  first (a plain `tasks work done`).
+- **After a panel, the judge only where it matters.** A close of a task whose newest impl round that met its
+  quorum is followed by a change (a STALE tree — whatever plan or below-quorum round was written on top since)
+  needs the post-panel single judge's PASS on the current tree (`tasks impl-review <N>`, then `tasks work done
+  --stale-panel-ok --reason "…"`) or `--owner-ok --reason "…"` when a changed file — code, test, doc or record — is
+  under `guard_paths`, on a task of any risk; when the task is irreversible or unclassified and its code changed, in
+  every project (`panel_required_for` plays no part: the owner's "fără nicio configurare"); or when the change cannot
+  be listed and the answer depends on it — so also, in a git repository, when the freshness verdict is not a plain
+  STALE (a degraded tamper guard, an exclude over code, a missing or unreadable stamp: no delta is trusted). That holds before the last round
+  too and binds `--force` as well — the binding of the section above, whatever its date says. When a below-quorum
+  impl round sits on the reviewed one, no judge's PASS can be bound to it: a panel that meets its quorum, or the
+  owner. A docs or tests tail is still tried by tail certification first (a plain `tasks work done`).
 - **Otherwise**, after the last round the cap allows, `--stale-panel-ok --reason "…"` closes — even where
   `stale_panel_requires_post_d6` is set — and the receipt and the enforcement journal name what no judge read:
   `stop rule (D6): 2 of 2 impl rounds used (assertive); no judge read after the last panel (N file(s)): …`. Before
-  the last round the project's own rule stands (the opt-in binding, else a reason). A refused close says which exit
-  the rule leaves.
+  the last round the project's own rule stands (the opt-in binding, else a reason). A reversible task's close names
+  them too. A post-panel run still holds such a close when the ledger is corrupt, the newest run has not finished,
+  or the newest run COUNTED a Critical (grave, by the owner's definition; a FAIL with only Important findings does
+  not). A refused close says which exit the rule leaves.
 - `guard_paths` — the project's code that guards: patterns matched against the changed paths as the close names
   them (project-relative; a `code_roots` scope's start with its name). A pattern matches the path itself, anything
-  below it, or as an `fnmatch` glob (`*` crosses `/`). Absent or empty: nothing is listed, and after a panel only an
-  irreversible or unclassified task's code gets the judge. A value that is not a list of non-empty strings is read
-  as every path.
+  below it, or as an `fnmatch` glob (`*` crosses `/`); both sides are normalised (`./`, `//`, a leading or trailing
+  `/`), and a pattern that names nothing in the project is warned about at the close. Absent or empty: nothing is
+  listed, and after a panel only an irreversible or unclassified task's code gets the judge. A value that is not a
+  list of non-empty strings is read as every path.
 - What the panel ran under — the risk, the caps, the guard list — is recorded with its reservation; the close takes
   the stricter risk of the two, the larger cap and both guard lists, so lowering `## Risk`, a cap or the list after
-  the panel frees nothing. The decision is made again at the commit, inside the task lock, `--force` included.
+  the panel frees nothing. The decision is made again at the commit, inside the task lock: a change of the judge
+  requirement or of the cap state refuses the close, and under `--force` (which skips the tree check) so does a
+  tree that moved — even after a FRESH panel — or a different list of changed files.
 - The post-panel judge runs at most twice after a panel; a third run needs `tasks impl-review <N> --owner-ok
   --reason "…"` (until task 209 a Critical in run 2 opened run 3 by itself).
 - Judges have a third severity: at most three `**Minor**` findings below the counted ones, never counted and

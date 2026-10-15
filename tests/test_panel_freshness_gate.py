@@ -1299,8 +1299,15 @@ class ClosePathMatrix(unittest.TestCase):
         self.assertNotIn(BLOCK_MARKER, r2.stderr)
 
     def test_irreversible_stale_without_policy_is_advisory(self):
-        # Judge A4: a voluntary panel in a no-policy project must not block.
+        # Judge A4: a voluntary panel in a no-policy project must not block — the freshness gate. Task 209 (the
+        # owner's D2, 2026-10-15: "Fără nicio configurare: un task ireversibil … primește automat judecătorul";
+        # impl round 1, R3): an IRREVERSIBLE task's change after its impl panel now needs the post-panel judge in
+        # every project, so the advisory close is shown on an assertive task.
         d, td, env = self._setup(risk="irreversible", panel_cfg=None)
+        r = self._close(d, env)
+        self.assertNotIn("Task 001 done.", r.stdout)
+        self.assertIn("the stop rule needs the post-panel judge", r.stderr)
+        d, td, env = self._setup(risk="assertive", panel_cfg=None)
         r = self._close(d, env)
         self.assertIn("Task 001 done.", r.stdout, r.stderr)
         self.assertIn("STALE", self._receipt(td))
@@ -1352,6 +1359,13 @@ class ClosePathMatrix(unittest.TestCase):
         r = self._close(d, env)
         self.assertNotIn("Task 001 done.", r.stdout, "NO-STAMP must not close irreversible")
         self.assertIn("no stamp", (r.stdout + r.stderr).lower())
+        # Task 209 (impl round 1, R3 + R4): on an irreversible task the unknown delta needs the post-panel judge,
+        # so a reason alone no longer closes it; the override's record is shown on an assertive task.
+        r = self._close(d, env, "--stale-panel-ok", "--reason", "stamp lost, delta reviewed by hand")
+        self.assertNotIn("Task 001 done.", r.stdout)
+        self.assertIn("the freshness verdict is NO-STAMP", r.stderr)
+        d, td, env = self._setup(risk="assertive", panel_cfg="all", stamp=False)
+        self.assertNotIn("Task 001 done.", self._close(d, env).stdout, "NO-STAMP must not close assertive")
         r = self._close(d, env, "--stale-panel-ok", "--reason", "stamp lost, delta reviewed by hand")
         self.assertIn("Task 001 done.", r.stdout, r.stderr)
         self.assertIn("no stamp recorded", self._receipt(td))
