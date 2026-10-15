@@ -21,7 +21,9 @@ Init does not touch `.agent/config.json`: `guard_paths` — the project's code t
 without one, after a panel only an irreversible or unclassified task's code gets the judge. **A task already in
 flight** meets the change at once, without init: an impl panel past the cap is refused (a reversible task's second, an
 assertive or irreversible task's third without a Critical in round 2), and so is an irreversible task's stale close on
-a reason alone when its code changed after the panel — the owner's `--owner-ok --reason "…"` passes either, recorded.
+a reason alone when its code changed after the panel; a stale close whose reviewed impl round is no longer `judge.md`'s
+newest (a below-quorum round written on it) waits for a quorum panel, and a post-panel run that counted a Critical holds
+a close that took no judge — the owner's `--owner-ok --reason "…"` passes each, recorded.
 
 ### Changed
 
@@ -50,10 +52,12 @@ a reason alone when its code changed after the panel — the owner's `--owner-ok
 - **A `**Minor**` severity for judges** (the owner: "Da, „Minor” separat, nenumărat"): at most three below the counted
   findings, never counted, never stopping anything; the `CAP:` line still counts the Critical and Important ones
   exactly, and a Minor ends the finding before it.
-- **Changed outcomes, by design:** an irreversible task's stale close on `--stale-panel-ok --reason` or `--force
-  --reason` alone when its code changed after the panel, the delta cannot be listed (an unstamped round included), or
-  a changed file is under `guard_paths` — also in a project without `panel_required_for` — is now refused (a docs or
-  tests change alone still closes); so is an in-flight task's impl panel past the cap — a reversible task's second, an
+- **Changed outcomes, by design:** an irreversible or unclassified task's stale close on `--stale-panel-ok --reason`
+  or `--force --reason` alone when its code changed after the panel, the delta cannot be listed (an unstamped round
+  included), or a changed file is under `guard_paths` — also in a project without `panel_required_for` — is now refused
+  (after the last round the cap allows, a docs or tests change alone still closes; before it the project's own rule
+  stands); a stale close of a task of any risk whose reviewed impl round is no longer `judge.md`'s newest waits for a
+  quorum panel or the owner; so is an in-flight task's impl panel past the cap — a reversible task's second, an
   assertive or irreversible task's third without a Critical in round 2; and a reversible task whose change after its
   impl panel touches `guard_paths` needs the judge too.
 
