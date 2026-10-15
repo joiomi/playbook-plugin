@@ -732,7 +732,9 @@ class RoundThreeFindings(_CloseFixture):
         led = self.td / post_d6.RUNS_NAME
         led.unlink()
         led.mkdir()
-        self.assertHeld(self._close("--stale-panel-ok", "--reason", "x"), "cannot be read")
+        # refused at the decision (the judge required), not only by the commit's re-check (mutant M61)
+        self.assertHeld(self._close("--stale-panel-ok", "--reason", "x"), "cannot be read",
+                        "the stop rule needs the post-panel judge")
 
     def test_t3_a_corrupt_ledger_too(self):
         self.cfg["guard_paths"] = ["guard/"]
@@ -769,6 +771,40 @@ class SingleJudgeRunOne(_CloseFixture):
         code, err, out = self._close_in_process(break_it, "--force", "--reason", "x")
         self.assertNotIn("Task 001 done.", out, err)
         self.assertIn("cannot be read", err)
+
+    def test_u3_a_ledger_deleted_or_emptied_during_the_close_keeps_what_was_read(self):   # judge run 2
+        for how in ("delete", "empty"):
+            with self.subTest(how=how):
+                self.setUp()
+                self.cfg["guard_paths"] = ["guard/"]
+                self.setup_task(rounds=2, change="")
+                self.cfg["guard_paths"] = []
+                self._write_cfg()
+
+                def lose_it(how=how):
+                    led = self.td / post_d6.RUNS_NAME
+                    if how == "delete":
+                        led.unlink()
+                    else:
+                        led.write_text("", encoding="utf-8")
+                    (self.d / "guard" / "g.py").write_text("g = 9\n", encoding="utf-8")
+                code, err, out = self._close_in_process(lose_it, "--force", "--reason", "x")
+                self.assertNotIn("Task 001 done.", out, err)
+                self.assertIn("guard/g.py", err)
+
+    def test_u4_no_tail_certification_while_the_ledger_is_untrusted(self):      # mutant M64
+        # an unguarded docs change after a PASS read from a ledger that cannot be trusted is not certified either
+        self.cfg["guard_paths"] = ["guard/"]
+        self.setup_task(rounds=2, change="code.py")
+        self._post_d6("PASS")
+        (self.d / "NOTES.md").write_text("# a note after the PASS\n", encoding="utf-8")
+        from tasks import review as R
+        from tasks import stop_rule as SRm
+        with mock.patch.object(SRm, "ledger_untrusted", lambda d: "the run ledger x cannot be read (PermissionError)"), \
+             mock.patch.object(R, "tail_cert_unavailable", lambda *a, **k: ""), \
+             mock.patch.object(R, "run_tail_cert_judge", lambda *a, **k: "PASS"):
+            code, err, out = self._close_in_process(lambda: None)
+        self.assertNotIn("Task 001 done.", out, err)
 
     def test_u2_an_untrusted_ledger_keeps_the_guards_and_no_tail_certification(self):
         self.cfg["guard_paths"] = ["tests/guard_fixture.py"]

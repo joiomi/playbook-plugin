@@ -260,6 +260,23 @@ def panel_record(task_dir: Path) -> "dict | None":
     return {"risk": risk, "guard_paths": guards, "rounds_cap": caps if seen else None}
 
 
+def merge_records(a: "dict | None", b: "dict | None") -> "dict | None":
+    """Two `panel_record` answers as one — the stricter risk, the union of the guard lists, the larger cap per risk:
+    the record read when the close decided stays in force at its commit, whatever happened to the ledger meanwhile
+    (the single judge, run 2: a ledger deleted or emptied during a `--force` close shed the recorded guard list)."""
+    have = [r for r in (a, b) if r]
+    if not have:
+        return None
+    risk = None
+    for r in have:
+        x = r.get("risk")
+        if isinstance(x, str) and x:
+            risk = stricter(risk, x) if risk else x
+    seen = [_recorded_caps(r) for r in have if isinstance(r.get("rounds_cap"), dict)]
+    return {"risk": risk, "guard_paths": sorted({g for r in have for g in _recorded_guards(r)}),
+            "rounds_cap": ({k: max(c[k] for c in seen) for k in DEFAULT_ROUNDS} if seen else None)}
+
+
 def ledger_untrusted(task_dir: Path) -> str:
     """Why the run ledger cannot be trusted as the record of what the panels ran under (impl round 3, T3: a read
     error made `read_runs` return nothing, so the recorded guard list and risk vanished): it exists but cannot be

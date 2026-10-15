@@ -1260,7 +1260,8 @@ def cmd_work(cmd_args):
                                     f"{_bad_now209}: what the panels recorded cannot be trusted.")
                             try:
                                 _fp209 = tree_state_fingerprint(project_path)
-                                _rec_now = _sr209.panel_record(task_file.parent)
+                                # the record read at the decision stays in force (the single judge, run 2)
+                                _rec_now = _sr209.merge_records(_rec209, _sr209.panel_record(task_file.parent))
                                 _risk_now = _sr209.stricter((_rec_now or {}).get("risk") or None, _gate_risk)
                                 if _fp209 and _pass209.get("tree_state") and _fp209 == _pass209["tree_state"]:
                                     _st_now = None      # the reviewed tree itself: nothing changed since
