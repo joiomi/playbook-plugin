@@ -4,31 +4,65 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+## [1.6.3] — 2026-10-15
+
+**The review stop rule as the plugin's default** — PHASE-B.md item 1, task 209. Until now the round cap (the owner's
+rule D6) and the rule that after the last panel a single judge reads only the code that guards (his ruling of
+2026-10-13 18:37) lived in one project's CLAUDE.md, and no CLI enforced them; his answers of 2026-10-15 made them the
+plugin's, in every project. Every part landed after three impl panel rounds and two post-panel single-judge runs. The
+suite has 4827 tests (4712 at 1.6.2); CI is the same two Linux lanes.
+**Upgrading:** `/playbook:upgrade`, restart every Claude Code session, then re-run `/playbook:init` in each project
+that uses the plugin, so its CLAUDE.md block takes the template's new "Review rounds stop by `## Risk`" bullet and the
+post-panel judge's two runs. Only `## Correctness Contract` changed in the template; init replaces the template-owned
+sections, and any project text inside them is saved to `.agent/backups/CLAUDE.md.<UTC>.bak` and named in its output.
+Init does not touch `.agent/config.json`: `guard_paths` — the project's code that guards — is each project's own list;
+without one, after a panel only an irreversible or unclassified task's code gets the judge. **A task already in
+flight** meets the change at once, without init: a third impl panel without a Critical in round 2 is refused, and so
+is an irreversible task's stale close on a reason alone — the owner's `--owner-ok --reason "…"` passes either, recorded.
+
 ### Changed
 
-- **The review stop rule is the plugin's default** (task 209, PHASE-B.md item 1; the owner's answers of
-  2026-10-15 — until now it lived in one project's CLAUDE.md and no CLI enforced it). `tasks panel-review <N>
-  --mode impl` refuses an impl round past the cap of the task's `## Risk` — reversible 1, assertive/irreversible 2,
-  one more only when the cap's last round counted a Critical — with exit 2 and nothing spent; past it only
-  `--owner-ok --reason "…"`, recorded (a cap of 1 has no extension). After a panel, a stale close needs the
-  post-panel judge's PASS on the current tree only for an irreversible or unclassified task's code (in every project)
-  or a file under the new `guard_paths` list — before the last round too, whatever round was written on top, with an
-  untrusted delta (a degraded tamper guard, an exclude over code, a missing stamp) read as needing it, and `--force`
-  bound as well; any other
-  change after the last round closes with `--stale-panel-ok --reason` (even where `stale_panel_requires_post_d6` is
-  set) and the receipt names the files no judge read. The panel's reservation records the risk, the caps and the
-  guard list, and the close reads every impl panel's record, so lowering any of them after a panel frees nothing; the
-  decision is made again at the commit.
-  `review_rounds` and `guard_paths` in `.agent/config.json` (docs/configuration.md, "The review stop rule").
-- **The post-panel judge runs at most twice, then the owner** (the owner's 2026-10-13 18:37 rule): a Critical in
-  run 2 no longer opens run 3 by itself — `tasks impl-review <N> --owner-ok --reason "…"` does.
-- **A `**Minor**` severity** for judges (the owner, 2026-10-15): at most three below the counted findings, never
-  counted, never stopping anything; the `CAP:` line still counts the Critical and Important ones exactly.
+- **Impl panel rounds stop by `## Risk`** (the owner, 2026-10-15: "Da, implicit, cu setare per proiect"). `tasks
+  panel-review <N> --mode impl` counts the task's impl rounds that met their quorum (in `judge.md` and
+  `judge-archive.md`) and refuses one past the cap — reversible 1, assertive and irreversible 2, one more only when a
+  two-round cap's last round counted a Critical — with exit 2, before any judge is called; past it only `--owner-ok
+  --reason "…"`, recorded with the panel's reservation. `review_rounds` in `.agent/config.json` sets the caps per
+  project. Plan panels are not capped.
+- **After a panel, the post-panel judge only where it matters** (the owner: "Automat la ireversibil + listă
+  opțională"). A stale close needs the single judge's PASS on the current tree (`tasks impl-review <N>`, then
+  `--stale-panel-ok --reason`) or `--owner-ok` when an irreversible or unclassified task's code changed after its
+  panel (in every project), or when a changed file — of any kind — is under the new `guard_paths` list; before the
+  last round too, and `--force` is bound as well. Where that answer cannot be known — a delta that cannot be listed,
+  an unstamped round, a degraded tamper guard, an exclude over code (in a git repository), or a run ledger that cannot
+  be read — the judge is required wherever a guard list or the automatic judge applies. Any other change after the
+  last round closes with `--stale-panel-ok --reason` (even where `stale_panel_requires_post_d6` is set) and the receipt
+  and the enforcement journal name the files no judge read; a post-panel run that counted a Critical still holds it.
+  What every impl panel ran under — the risk, the caps, the guard list — is recorded with its reservation and the
+  close reads all of them, so lowering any of them after a panel frees nothing; when the reviewed round is not
+  `judge.md`'s newest impl round (a below-quorum round on it, or it archived), every stale close waits for a panel that
+  meets its quorum or the owner; tail certification does not take a guarded file; the decision is made again at the
+  commit. Docs: `docs/configuration.md`, "The review stop rule".
+- **The post-panel judge runs at most twice, then the owner** (the owner's 2026-10-13 18:37 rule): a Critical in run
+  2 no longer opens run 3 by itself — `tasks impl-review <N> --owner-ok --reason "…"` does.
+- **A `**Minor**` severity for judges** (the owner: "Da, „Minor” separat, nenumărat"): at most three below the counted
+  findings, never counted, never stopping anything; the `CAP:` line still counts the Critical and Important ones
+  exactly, and a Minor ends the finding before it.
 - **Changed outcomes, by design:** an irreversible task's stale close on `--stale-panel-ok --reason` or `--force
   --reason` alone — also in a project without `panel_required_for`, and on an unstamped round — and an in-flight
   task's third impl panel without a Critical in round 2, are now refused; a reversible task whose change after its
   impl panel touches `guard_paths` needs the judge too, and a reversible task gets no second impl round after a
   Critical.
+
+### Known limitations
+
+- D6 counts a Critical that was ACCEPTED; the CLI sees one a judge wrote. `--owner-ok` is a marker an agent can type,
+  not an authentication. A task with no impl panel round is out of the rule's reach; the guard list is the project's
+  to keep right (a pattern that names nothing is warned about).
+- A file under `guard_paths` that is also in `fingerprint_exclude` is invisible on a close the freshness gate does not
+  hold, and a `--force` close that began on a FRESH panel has no baseline for its file-list re-check (a guarded file
+  changed meanwhile is caught) — both on PLAN.md's Phase B inputs.
+- The last fix (a run ledger deleted or emptied during a `--force` close kept the recorded guard list) was read by no
+  judge: the owner closed after the second single-judge run, 2026-10-15 12:11.
 
 ## [1.6.2] — 2026-10-15
 
