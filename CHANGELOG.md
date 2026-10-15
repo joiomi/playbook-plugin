@@ -4,6 +4,27 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+### Changed
+
+- **The review stop rule is the plugin's default** (task 209, PHASE-B.md item 1; the owner's answers of
+  2026-10-15 — until now it lived in one project's CLAUDE.md and no CLI enforced it). `tasks panel-review <N>
+  --mode impl` refuses an impl round past the cap of the task's `## Risk` — reversible 1, assertive/irreversible 2,
+  one more only when the cap's last round counted a Critical — with exit 2 and nothing spent; past it only
+  `--owner-ok --reason "…"`, recorded. After a panel, a stale close needs the post-panel judge's PASS on the
+  current tree only for an irreversible or unclassified task's code (where the project requires a panel for it) or
+  a file under the new `guard_paths` list — before the last round too, and `--force` is bound as well; any other
+  change after the last round closes with `--stale-panel-ok --reason` (even where `stale_panel_requires_post_d6` is
+  set) and the receipt names the files no judge read. The panel's reservation records the risk, the caps and the
+  guard list, so lowering any of them after the panel frees nothing; the decision is made again at the commit.
+  `review_rounds` and `guard_paths` in `.agent/config.json` (docs/configuration.md, "The review stop rule").
+- **The post-panel judge runs at most twice, then the owner** (the owner's 2026-10-13 18:37 rule): a Critical in
+  run 2 no longer opens run 3 by itself — `tasks impl-review <N> --owner-ok --reason "…"` does.
+- **A `**Minor**` severity** for judges (the owner, 2026-10-15): at most three below the counted findings, never
+  counted, never stopping anything; the `CAP:` line still counts the Critical and Important ones exactly.
+- **Changed outcomes, by design:** an irreversible task's stale close on `--stale-panel-ok --reason` or `--force
+  --reason` alone, and an in-flight task's third impl panel without a Critical in round 2, are now refused; a
+  reversible task whose change after its impl panel touches `guard_paths` needs the judge too.
+
 ## [1.6.2] — 2026-10-15
 
 **The 1.6.2 fix batch: guards and hooks first, then the review path** — PLAN §S14, tasks 187-206 on

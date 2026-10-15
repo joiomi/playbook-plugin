@@ -437,7 +437,9 @@ Off unless set. `.agent/config.json` `"stale_panel_requires_post_d6": "<YYYY-MM-
 exit from the freshness gate, for an `assertive`, `irreversible` or unclassified task whose impl panel was
 reserved on or after that date (local time): `--stale-panel-ok` and `--force` no longer override the gate on a
 reason alone — a stale panel, a degraded tamper guard, an exclude that hides code, a missing or unreadable stamp.
-Removing the key later does not free a task whose panel ran under it. The close goes through only when
+Removing the key later does not free a task whose panel ran under it. (Since task 209 the same binding applies in
+every project wherever [the review stop rule](#the-review-stop-rule-review_rounds-guard_paths) needs the post-panel
+judge, and a plain-STALE close it sends to no judge after the last round is not bound by it.) The close goes through only when
 
 - the newest post-D6 single-judge run (`tasks impl-review <N>` after the newest impl panel) is finished and a **PASS** that
   recorded the tree it reviewed, under the same `.agent/config.json`, and since then only `.agent/` records
@@ -475,6 +477,56 @@ the judge's adapter could not be resolved or built, or its program is not instal
 the reason (the call to the judge timed out or failed — the close shows what came back and does not guess
 whether a judge process ran — its answer has no verdict line, or it was discarded because the tree changed
 while it ran). Each needs a fresh panel.
+
+### The review stop rule (`review_rounds`, `guard_paths`)
+
+The owner's rule D6 (2026-09-25) and his ruling of 2026-10-13 18:37, made the plugin's default by his answers of
+2026-10-15 (task 209, PHASE-B.md item 1). On in every project; the two keys only change it:
+
+```json
+{
+  "review_rounds": {"reversible": 1, "assertive": 2, "irreversible": 2},
+  "guard_paths": ["hooks/", "scripts/*-hook", "src/auth/"]
+}
+```
+
+- **Panel rounds stop by `## Risk`.** `tasks panel-review <N> --mode impl` counts the task's impl panel rounds that
+  met their quorum (`PANEL VERDICT: PASS` in the round's header, in `judge.md` and `judge-archive.md`; a
+  below-quorum round and a plan round are not rounds) and refuses one past the cap of the task's risk — exit 2,
+  before any judge is called or anything is written. The defaults are D6's; an unset or unknown risk takes the
+  larger of the assertive and irreversible caps. One round more is allowed when the cap's last round counted a
+  Critical — a `**Critical**` finding a judge wrote that is not tagged `[SETTLED]` (a `[PRE-EXISTING]` one counts:
+  a panel has no delta). Past that only `--owner-ok --reason "…"`, recorded in the panel's reservation.
+  `review_rounds` sets a cap per risk (a positive integer; anything else keeps the default, with a warning). Plan
+  panels are not capped.
+- **After a panel, the judge only where it matters.** A stale close (the plain `STALE` verdict) of a task whose
+  newest round is an impl PASS needs the post-panel single judge's PASS on the current tree (`tasks impl-review
+  <N>`, then `tasks work done --stale-panel-ok --reason "…"`) or `--owner-ok --reason "…"` when a changed file — code,
+  test, doc or record — is under `guard_paths`, on a task of any risk; when the task is irreversible or unclassified,
+  the project requires a panel for it (`panel_required_for`) and its code changed; or when the change cannot be
+  listed and the answer depends on it. That holds before the last round too and binds `--force` as well — the
+  binding of the section above, whatever its date says. A docs or tests tail is still tried by tail certification
+  first (a plain `tasks work done`).
+- **Otherwise**, after the last round the cap allows, `--stale-panel-ok --reason "…"` closes — even where
+  `stale_panel_requires_post_d6` is set — and the receipt and the enforcement journal name what no judge read:
+  `stop rule (D6): 2 of 2 impl rounds used (assertive); no judge read after the last panel (N file(s)): …`. Before
+  the last round the project's own rule stands (the opt-in binding, else a reason). A refused close says which exit
+  the rule leaves.
+- `guard_paths` — the project's code that guards: patterns matched against the changed paths as the close names
+  them (project-relative; a `code_roots` scope's start with its name). A pattern matches the path itself, anything
+  below it, or as an `fnmatch` glob (`*` crosses `/`). Absent or empty: nothing is listed, and after a panel only an
+  irreversible or unclassified task's code gets the judge. A value that is not a list of non-empty strings is read
+  as every path.
+- What the panel ran under — the risk, the caps, the guard list — is recorded with its reservation; the close takes
+  the stricter risk of the two, the larger cap and both guard lists, so lowering `## Risk`, a cap or the list after
+  the panel frees nothing. The decision is made again at the commit, inside the task lock, `--force` included.
+- The post-panel judge runs at most twice after a panel; a third run needs `tasks impl-review <N> --owner-ok
+  --reason "…"` (until task 209 a Critical in run 2 opened run 3 by itself).
+- Judges have a third severity: at most three `**Minor**` findings below the counted ones, never counted and
+  stopping nothing; the `CAP:` line counts the Critical and Important ones only.
+- Limits: the CLI sees a Critical a judge wrote, not one the agent accepted (D6's word); `--owner-ok` is a marker an
+  agent can type, not an authentication; a task with no impl panel is out of the rule's reach (nothing to be stale
+  against); the guard list is the project's to keep right.
 
 ### The verify-contract guard (a change to `verify` is made visible)
 

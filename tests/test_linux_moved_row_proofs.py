@@ -1127,6 +1127,9 @@ class TheExitCodesTheReferenceStates(unittest.TestCase):
         "the command exits 1, names them and creates nothing": "test_a_second_bare_retro_exits_1_and_creates_nothing",
         'are refused before anything runs (exit 2, "Nothing changed.")':
             "test_each_listed_command_refuses_an_unknown_option_with_exit_2",
+        # task 209: an impl panel round past the D6 cap of the task's `## Risk`
+        "a round past the D6 cap of the task's `## Risk` is refused, exit 2, nothing spent":
+            ("tests/test_stop_rule_cli.py", "PanelCap", "test_q1_a_third_round_without_a_critical_in_round_2_is_refused"),
         # task 173: `tasks intent <N>` without the approval of what it quotes
         "and exits 2. The same line ends with the flag that approves exactly that":
             ("tests/test_intent_cost_question.py", "ThroughTheCommandLine",

@@ -2912,7 +2912,8 @@ def post_d6_pass_base(project_path: Path, task_dir: Path) -> "tuple[dict, str, s
 
 
 def bound_stale_close(project_path: Path, task_dir: Path, *,
-                      owner_ok_reason: "str | None") -> "tuple[bool, str, str]":
+                      owner_ok_reason: "str | None", rule_on: bool = False,
+                      why: str = "") -> "tuple[bool, str, str]":
     """PB-STALE-CLOSE-BOUND (PLAN S12b, task 149) — (allowed, refusal, receipt note).
 
     The owner's D6-amended rule, enforced where the workspace opts in with
@@ -2929,7 +2930,13 @@ def bound_stale_close(project_path: Path, task_dir: Path, *,
     Any other change since the PASS (code, a test, docs, a root `*.md`) goes
     through a fresh post-D6 judge or tail certification (a plain `work done`).
     A task whose newest panel reservation predates the opt-in date keeps the old
-    rule. Every doubt (no runs, no descriptor, a git error) refuses."""
+    rule. Every doubt (no runs, no descriptor, a git error) refuses.
+
+    Task 209 (PHASE-B.md item 1): `rule_on` — the stop rule needs the post-panel
+    judge for this close (`tasks.stop_rule.judge_required`: an irreversible or
+    unclassified task's code, a file under `guard_paths`, a delta that cannot be
+    listed) — applies the binding in EVERY project, whatever the opt-in and its
+    date say; `why` is the rule's reason, said in the refusal."""
     from tasks import post_d6 as _pd6
     # The panel reservations as WRITTEN (impl panel r1, codex-high: the merged view
     # takes the completion time) — and only impl panels, or panels recorded before
@@ -2979,18 +2986,20 @@ def bound_stale_close(project_path: Path, task_dir: Path, *,
         # agy) — after the dates are validated, so a malformed one still refuses
         # (post-D6 run 1, codex)
         return True, "", f'owner-ok: "{" ".join(owner_ok_reason.split())}"'
-    if not dates:
+    if not dates and not rule_on:
         return True, "", ""
-    since = min(dates)
-    if newest is None:
+    since = min(dates) if dates else None
+    if rule_on:
+        pass                              # task 209: no date frees it, and none is needed to date the panel
+    elif newest is None:
         # every doubt refuses (r2, opus; post-D6 run 2, codex): the rule is on and a
         # carrying impl panel exists, but no reservation of ITS OWN dates it
         return False, ("the stale-close rule is on, but no panel reservation in "
                        f"{_pd6.RUNS_NAME} belongs to this task's newest impl round "
                        f"(Round-id {_rid or 'none'}) — a panel from before task 149, or a deleted ledger.\n"
                        '  Run a post-D6 judge, or let the owner decide:  tasks work done --owner-ok --reason "…"'), ""
-    day = _local_day(newest.get("ts"))
-    if day is not None and day < since:
+    day = _local_day(newest.get("ts")) if (newest is not None and not rule_on) else None
+    if day is not None and since is not None and day < since:
         return True, "", ""               # the task's impl panel predates the opt-in: old rule
     runs = _pd6.read_runs(Path(task_dir))
     if _pd6.ledger_corrupt_lines(Path(task_dir)):
@@ -3010,6 +3019,9 @@ def bound_stale_close(project_path: Path, task_dir: Path, *,
                        "  Wait for it, or record it failed if its process is gone."), ""
     after = [r for r in every if r.get("status") == "done"]
     if not after:
+        if rule_on:
+            return False, (f"the stop rule needs the post-panel judge for this close ({why or 'see above'}), "
+                           "and no post-D6 run follows the newest impl panel.\n" + exits), ""
         return False, ("this workspace binds a stale close to a post-D6 PASS "
                        f"({STALE_CLOSE_OPT_IN}={since.isoformat()}), and no post-D6 run follows "
                        "the newest impl panel.\n" + exits), ""
@@ -3963,6 +3975,9 @@ def format_verify_receipt(entries, head_sha, risk, *, reason=None, timestamp=Non
                     line += f', accepted: "{" ".join(ar.split())}"'
                 if freshness.get("bound"):
                     line += f"; {' '.join(str(freshness['bound']).split())}"
+                if freshness.get("stop_rule"):
+                    # task 209: after the last round D6 allows, a change no judge needed — named
+                    line += f"; {' '.join(str(freshness['stop_rule']).split())}"
             out.append(line)
         # Task 059 (impl-panel r3, sonnet #2): the tamper degradation can coexist
         # with another verdict (EXCLUDE-COVERS-CODE / NO-STAMP / UNREADABLE) and

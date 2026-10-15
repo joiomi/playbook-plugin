@@ -302,10 +302,14 @@ class RunCap(_TmpDir):
         self.assertEqual(n, 3)
         self.assertIn("--owner-ok", msg)
 
-    def test_third_run_allowed_after_a_critical_in_run_two(self):
-        ok, n, _ = post_d6.gate_run([self.rec("fp1"), self.rec("fp1", critical=1)], "fp1")
-        self.assertTrue(ok)
+    def test_third_run_refused_even_after_a_critical_in_run_two(self):
+        # Task 209 (PHASE-B.md item 1, D4): the owner's 2026-10-13 18:37 rule as the plugin's — "two runs at
+        # most, then the owner decides"; it was: run 3 allowed after a Critical in run 2 (task 108).
+        ok, n, msg = post_d6.gate_run([self.rec("fp1"), self.rec("fp1", critical=1)], "fp1")
+        self.assertFalse(ok)
         self.assertEqual(n, 3)
+        self.assertIn("two runs at most", msg)
+        self.assertIn("--owner-ok", msg)
 
     def test_third_run_allowed_with_owner_ok_reason(self):
         ok, n, _ = post_d6.gate_run([self.rec("fp1"), self.rec("fp1")], "fp1",

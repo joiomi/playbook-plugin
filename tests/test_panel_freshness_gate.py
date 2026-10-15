@@ -1162,7 +1162,14 @@ class ClosePathMatrix(unittest.TestCase):
         self.assertIn("## Status\nin_progress", self._receipt(td))   # not closed (task 140: activation writes in_progress)
 
     def test_override_needs_reason_then_closes_with_recorded_reason(self):
+        # Task 209 (D2, the owner 2026-10-15): an IRREVERSIBLE task's change after its panel now needs the
+        # post-panel judge — a reason no longer carries it (tests/test_stop_rule_cli.py has the rule); the
+        # reason rule itself is unchanged, and is shown on an assertive task.
         d, td, env = self._setup(risk="irreversible", panel_cfg="all")
+        r = self._close(d, env, "--stale-panel-ok", "--reason", "journal only, diff reviewed")
+        self.assertNotIn("Task 001 done.", r.stdout)
+        self.assertIn("the stop rule needs the post-panel judge", r.stderr)
+        d, td, env = self._setup(risk="assertive", panel_cfg="all")
         r = self._close(d, env, "--stale-panel-ok")
         self.assertNotIn("Task 001 done.", r.stdout)
         r = self._close(d, env, "--stale-panel-ok", "--reason", "journal only, diff reviewed")
@@ -1495,7 +1502,14 @@ class ClosePathMatrix(unittest.TestCase):
         # Judge F5 / design A8: --force keeps whole-policy semantics; the
         # shared --reason lands as the FORCED reason, and the freshness clause
         # still records STALE (Leg 1 is unconditional).
+        # Task 209 (D2): on an IRREVERSIBLE task --force no longer passes a change the post-panel judge
+        # has not read (bound as `stale_panel_requires_post_d6` binds it, task 149); the attribution is shown
+        # on an assertive task.
         d, td, env = self._setup(risk="irreversible", panel_cfg="all")
+        r = self._close(d, env, "--force", "--reason", "emergency close")
+        self.assertNotIn("Task 001 done.", r.stdout)
+        self.assertIn("the stop rule needs the post-panel judge", r.stderr)
+        d, td, env = self._setup(risk="assertive", panel_cfg="all")
         r = self._close(d, env, "--force", "--reason", "emergency close")
         self.assertIn("Task 001 done.", r.stdout, r.stderr)
         receipt = self._receipt(td)

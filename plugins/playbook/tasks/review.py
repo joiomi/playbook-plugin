@@ -1485,10 +1485,18 @@ def _cmd_panel_review(cmd_args):
     no_mind_map = False
     bare = False
     models_flag = None  # --models CSV → explicit judge set for this run
+    owner_ok_flag = False  # --owner-ok --reason "…" (task 209: an impl round past the D6 cap)
+    owner_ok_reason = None
     remaining_args = []
     i = 0
     while i < len(cmd_args):
-        if cmd_args[i] == "--mode" and i + 1 < len(cmd_args):
+        if cmd_args[i] == "--owner-ok":
+            owner_ok_flag = True
+            i += 1
+        elif cmd_args[i] == "--reason" and i + 1 < len(cmd_args):
+            owner_ok_reason = cmd_args[i + 1]
+            i += 2
+        elif cmd_args[i] == "--mode" and i + 1 < len(cmd_args):
             review_mode = cmd_args[i + 1]
             i += 2
         elif cmd_args[i] == "--models" and i + 1 < len(cmd_args):
@@ -1522,6 +1530,10 @@ def _cmd_panel_review(cmd_args):
     if review_mode not in ("plan", "impl"):
         print(f"Error: unknown mode '{review_mode}'", file=sys.stderr)
         sys.exit(1)
+    if owner_ok_flag and not (owner_ok_reason or "").strip():
+        print('Error: --owner-ok requires --reason "why the owner allows another impl panel '
+              'round" — the acceptance must be on the record.', file=sys.stderr)
+        sys.exit(2)
 
     task_num = remaining_args[0] if remaining_args else ""
     if task_num.isdigit():
@@ -1530,7 +1542,7 @@ def _cmd_panel_review(cmd_args):
     # Task number is optional; --prompt required when omitted
     if not task_num and not extra_prompt:
         print("Error: 'panel-review' requires a task number or --prompt", file=sys.stderr)
-        print("Usage: tasks panel-review [<number>] [--mode plan|impl] [--models codex:gpt-5.5,agy,...] [--prompt \"...\"] [--no-mind-map] [--bare] [--web-search] [--timeout SECONDS] [--soft-timeout SECONDS] [--budget USD]", file=sys.stderr)
+        print("Usage: tasks panel-review [<number>] [--mode plan|impl] [--models codex:gpt-5.5,agy,...] [--prompt \"...\"] [--no-mind-map] [--bare] [--web-search] [--timeout SECONDS] [--soft-timeout SECONDS] [--budget USD] [--owner-ok --reason \"...\"]", file=sys.stderr)
         sys.exit(1)
 
     project_path = find_project_root()
@@ -1871,9 +1883,44 @@ def _cmd_panel_review(cmd_args):
     if task_file:
         from tasks import post_d6 as _pd6p
         from tasks.core import STALE_CLOSE_OPT_IN, load_config as _lc149
-        _ok_p, _prid = _pd6p.reserve_panel(
-            task_file, stale_after=(timeout_secs + 900) if timeout_secs else 7200,
-            mode=review_mode, bound_since=(str(_lc149(project_path).get(STALE_CLOSE_OPT_IN) or "") or None))
+        # Task 209 (PHASE-B.md item 1): an impl round past the D6 cap is refused under the reservation's lock,
+        # before anything is spent; the reservation records what the close decides by (risk, caps, guard list).
+        _gate209, _rec209 = None, None
+        if review_mode == "impl":
+            from tasks import stop_rule as _sr
+            from tasks.core import extract_risk as _er209
+            _cfg209 = _lc149(project_path)
+            _risk209 = _er209(task_file)
+            _caps209 = _sr.resolve_rounds(_cfg209)
+            _rec209 = {"risk": _risk209, "rounds_cap": _caps209,
+                       "guard_paths": _sr.resolve_guard_paths(_cfg209, warn=False)}
+            if owner_ok_flag:
+                _rec209["owner_ok"] = " ".join(owner_ok_reason.split())
+
+            def _gate209():
+                try:
+                    _rs = _sr.impl_rounds(task_file.parent)
+                except _sr.RoundsUnreadable as _e:
+                    if owner_ok_flag:
+                        return ""
+                    return (f"D6 round cap: the impl rounds cannot be counted — {_e}. Nothing was spent.\n"
+                            f'  Repair it, or let the owner decide:  tasks panel-review {task_num} --mode impl '
+                            '--owner-ok --reason "…"')
+                _allowed, _msg = _sr.panel_decision(_risk209, _rs, _caps209, task=task_num)
+                if _allowed or owner_ok_flag:
+                    if not _allowed:
+                        print(f"  D6 round cap passed by the owner: impl round {len(_rs) + 1} "
+                              f'(owner-ok: "{_rec209["owner_ok"]}")', file=sys.stderr, flush=True)
+                    return ""
+                return _msg
+        try:
+            _ok_p, _prid = _pd6p.reserve_panel(
+                task_file, stale_after=(timeout_secs + 900) if timeout_secs else 7200,
+                mode=review_mode, bound_since=(str(_lc149(project_path).get(STALE_CLOSE_OPT_IN) or "") or None),
+                gate=_gate209, record=_rec209)
+        except _pd6p.PanelRefused as _refused:
+            print(str(_refused), file=sys.stderr, flush=True)
+            sys.exit(2)
         if not _ok_p:
             print(_pd6p.panel_refusal(task_file), file=sys.stderr, flush=True)
             sys.exit(2)

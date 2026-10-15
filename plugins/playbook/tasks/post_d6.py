@@ -146,6 +146,10 @@ def settled_block(task_file: Path, cap: int = SETTLED_CAP) -> str:
 _FINDING_RE = re.compile(
     r"(?:^|(?<=[.!?:)]))[ \t]*(?:[-*+]\s+|\d+[.)]\s+)?\*\*\s*\[?\s*(Critical|Important)\b",
     re.IGNORECASE)
+# Task 209 (D3, the owner 2026-10-15): a Minor finding, written apart — counted on its own, never in the verdict
+# and never in the CAP line's equality (plan panel P6: an unmarked finding must stay a mismatch).
+_MINOR_RE = re.compile(
+    r"(?:^|(?<=[.!?:)]))[ \t]*(?:[-*+]\s+|\d+[.)]\s+)?\*\*\s*\[?\s*Minor\b", re.IGNORECASE)
 # The tag counts only RIGHT AFTER the severity marker (inside or just after the
 # bold), never a literal "[SETTLED]" later in the finding's prose — a `[file: …]`
 # field may stand between the two (task 201: judges reorder fixed markers).
@@ -279,11 +283,12 @@ def parse_verdict(text: str, delta_files: "set[str] | None" = None, exists=None)
     parseable: a missing final `CAP: k/5` line, or one whose k differs from the
     recognised findings, fails CLOSED as `unparsed` (errs toward one more review)."""
     counts = {"critical": 0, "important": 0, "settled": 0, "contradicted": 0,
-              "pre_existing": 0}
+              "pre_existing": 0, "minor": 0}
     found = 0
     real_files = None       # the delta's files by their real paths, built when a field first needs them
     lines = (text or "").splitlines()
     marks = [(i, m) for i, ln in enumerate(lines) for m in _FINDING_RE.finditer(ln)]
+    counts["minor"] = sum(1 for ln in lines for _ in _MINOR_RE.finditer(ln))
     for k, (i, m) in enumerate(marks):
         ln = lines[i]
         found += 1
@@ -340,7 +345,8 @@ def verdict_line(v: dict) -> str:
         " · INCOMPLETE — more remain (fail closed)" if v.get("incomplete") else "")
     return (f"POST-D6 VERDICT: {v['verdict']} — counted {v['critical']} Critical / "
             f"{v['important']} Important (incl. {v['contradicted']} SETTLED-CONTRADICTED); "
-            f"not counted: {v['settled']} SETTLED, {v['pre_existing']} PRE-EXISTING{extra}")
+            f"not counted: {v['settled']} SETTLED, {v['pre_existing']} PRE-EXISTING, "
+            f"{v.get('minor', 0)} Minor{extra}")
 
 
 # ── (b) the delta ────────────────────────────────────────────────────────────
@@ -894,19 +900,19 @@ def append_run(task_dir: Path, rec: dict) -> None:
 def gate_run(runs: "list[dict]", panel_fp: str, owner_ok: "str | None" = None
              ) -> "tuple[bool, int, str]":
     """(allowed, this run's number after the panel, refusal text). Runs 1-2 are
-    free; run k >= 3 needs a counted Critical in run k-1, or an owner-ok reason.
-    LIMIT: "accepted" is the triage's word — the ledger knows the judge COUNTED a
-    Critical, not that the agent accepted it."""
+    free; run k >= 3 needs an owner-ok reason — the owner's rule of 2026-10-13
+    18:37 made the plugin's (task 209, PHASE-B.md item 1): "two runs at most,
+    then the owner decides". Until task 209 a counted Critical in run 2 opened
+    run 3 by itself (task 108)."""
     prior = [r for r in runs if r.get("panel") == panel_fp and r.get("kind") != "panel"]
     n = len(prior) + 1
     if n <= 2:
         return True, n, ""
     if owner_ok and owner_ok.strip():
         return True, n, ""
-    if n == 3 and int(prior[-1].get("critical") or 0) > 0:
-        return True, n, ""
-    why = ("run 2 counted no Critical (D6: a third run only after a Critical)" if n == 3
-           else "D6 allows no fourth run without the owner")
+    why = ("the stop rule allows the post-panel judge two runs at most, then the owner decides"
+           + (" (run 2 counted a Critical: fix it, and let the owner decide on a third run)"
+              if n == 3 and int(prior[-1].get("critical") or 0) > 0 else ""))
     return False, n, (
         f"post-D6 run cap: this would be single-judge run {n} after impl panel "
         f"{panel_fp}, and {why}. Nothing was spent. Close on the last verdict, or let "
@@ -975,22 +981,34 @@ def _owner_fields() -> dict:
     return {"pid": os.getpid(), "host": socket.gethostname()}
 
 
+class PanelRefused(Exception):
+    """The `gate` passed to `reserve_panel` refused the panel (task 209: the D6 round cap); the text says why."""
+
+
 def reserve_panel(task_file, stale_after: float = 7200, *, mode: "str | None" = None,
-                  bound_since: "str | None" = None) -> "tuple[bool, str]":
+                  bound_since: "str | None" = None, gate=None, record: "dict | None" = None
+                  ) -> "tuple[bool, str]":
     """A panel's reservation (round 2): taken BEFORE the panel's tamper snapshot so
-    a concurrent single judge cannot append under it; never counted by the cap."""
+    a concurrent single judge cannot append under it; never counted by the cap.
+    Task 209: `gate()` runs under the same lock, after the in-progress check — a
+    non-empty answer raises `PanelRefused` with it, nothing written; `record` adds
+    fields to the reservation (the risk, caps and guard list the close reads)."""
     import secrets
     from tasks.filelock import task_lock
     task_file = Path(task_file)
     with task_lock(task_file):
         if _live_reservation(read_runs(task_file.parent), "", stale_after):
             return False, ""
+        refusal = gate() if gate is not None else ""
+        if refusal:
+            raise PanelRefused(refusal)
         rid = secrets.token_hex(6)
         # task 149: the panel's mode and the stale-close opt-in in force when it ran
         # — a later removal of the opt-in must not free this task from it
         extra = {k: v for k, v in (("mode", mode), ("bound_since", bound_since)) if v}
         append_run(task_file.parent, {"id": rid, "kind": "panel", "status": "reserved",
-                                      "expires_after": float(stale_after), **_owner_fields(), **extra})
+                                      "expires_after": float(stale_after), **_owner_fields(),
+                                      **(record or {}), **extra})
     return True, rid
 
 

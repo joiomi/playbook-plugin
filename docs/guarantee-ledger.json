@@ -7140,7 +7140,7 @@
     {
       "id": "PB-PANEL-FRESHNESS",
       "category": "judges-and-reviews",
-      "statement": "Panel evidence is stamped to the reviewed tree — the tree fingerprinted BEFORE the judges spawn; when the tree moves during the review the round keeps that pre-review stamp, says so in its header, and carries no tail-certification descriptor, and when git cannot fingerprint it before the review the round carries NO stamp rather than the post-review one (task 085); when panel evidence is required by policy (panel_required_for), a close held to the high-consequence bar (assertive, irreversible, or an unset/unclassified risk) blocks on stale evidence while a reversible close stays advisory, the override is refused without a reason and records the reason when given, and a fresh stamp closes cleanly. As of task 036 (owner decision A, 2026-08-27) a STALE close whose only post-panel delta is in non-behavioral file classes (a *.md under docs/ or named README*/CHANGELOG*/MIND_MAP*, a *.json under docs/, any *.md at the project root — CLAUDE.md, PLAN.md, … (owner decision H2, 2026-09-25, widening H's root CLAUDE.md; the OUTER project root only: a nested code_roots checkout's own root *.md and any *.md below the root keep the other rules) — and anything under tests/; root .agent/ task records are instead excluded from the freshness fingerprint entirely, so an .agent/ edit never stales a panel and never enters the certified delta) may instead satisfy freshness via a single-judge TAIL CERTIFICATION that re-reviews the F0-anchored close delta (the changed-path set and the current closing content; an original uncommitted at F0 is not persisted, so that path is reviewed current-vs-HEAD) and emits a structured TAIL-CERT: PASS/FAIL; any behavioral (code) delta — including a code comment, a config.json, a non-.md top-level file, a .md below the root that is neither under docs/ nor a doc name, or the source endpoint of a rename into docs/ — still forces a fresh full panel, and the mechanism fails closed — naming each refusal's own cause in one printable line, and which of the re-check's conditions discarded a PASS (task 202) — on a missing/mismatched descriptor, a changed code_roots scope set or fingerprint_exclude set (the exclude pathspecs are hashed into the fingerprint since task 051, so a post-panel exclude reads STALE instead of FRESH and is then rejected), a git error, a stale tree with no attributable delta, a non-PASS verdict, a tree that mutates during the judge call (a TOCTOU compare-and-swap), a `code_roots` scope whose RESOLVED identity (real path relative to the project) differs from the descriptor's, or an owner `fingerprint_exclude` that covers source. Task 060: an ABSENT fingerprint is no longer fail-open — in a git repo, a carrying high-consequence close blocks NO-STAMP (the round has no `**Tree-state:**`) and UNREADABLE (git cannot fingerprint the tree at close: every git return code on the outer path is read, a corrupt index / missing HEAD / unresolvable toplevel yields no fingerprint instead of a clean-looking one), with the same two exits as STALE and a receipt line on the override path; a non-git project keeps the advisory NO-STAMP. EXCLUDE-COVERS-CODE: an owner `fingerprint_exclude` pathspec that covers a source path (behavioral by file class and not bookkeeping-shaped `.md/.rst/.log`) makes every fingerprint blind to that code, so the close blocks it regardless of FRESH/STALE, the panel stamp warns and emits no descriptor, and tail certification refuses. The fingerprint resolves untracked content against the repo toplevel (a project in a SUBDIRECTORY of a larger repo hashes real content, not a doubled-prefix miss), decodes every git text read with `surrogateescape` and hashes the material with it (a `core.quotePath=false` non-UTF-8 name neither crashes the close nor collides with a sibling), tokens an untracked symlink by its link text, and binds each `code_roots` scope's resolved identity into the material and the descriptor. A STALE read explained ENTIRELY by outer-HEAD commits that touch only task records (`.agent[/<lane>]/tasks/`, session pointers, the journal, the chat log — not `.agent/config.json` or `models.json`; typically committing the task's own record after its panel) reads FRESH and the receipt says `records-only delta`: the round's descriptor must authenticate to its stamp, the exclude set must be unchanged, `git diff F0 HEAD` outside the excluded pathspecs must be empty, and the fingerprint recomputed with the outer HEAD set back to the round's F0 commit must equal the stamp; any doubt or git error keeps it STALE (task 085). The certifying judge's diff is asked for with `--no-color --no-textconv` and fixed `a/`/`b/` prefixes, and sits between two lines carrying the run's nonce (task 202, Gemini #7 and #6); a scope's snapshot `commit` (and the post-D6 delta's `base`) must be a full object id (40 or 64 hex) before any git call reads it, so no value of it is a git option (task 202, impl rounds 1-2: `--output=…` made git write a file and lose sight of commits, 1.6.1 too); and a submodule move is listed by the enumeration, the dirty map, the fingerprint and the records-only exemption whatever a git setting says (`--ignore-submodules=none`; 1.6.1 hid it).",
+      "statement": "Panel evidence is stamped to the reviewed tree — the tree fingerprinted BEFORE the judges spawn; when the tree moves during the review the round keeps that pre-review stamp, says so in its header, and carries no tail-certification descriptor, and when git cannot fingerprint it before the review the round carries NO stamp rather than the post-review one (task 085); when panel evidence is required by policy (panel_required_for), a close held to the high-consequence bar (assertive, irreversible, or an unset/unclassified risk) blocks on stale evidence while a reversible close stays advisory, the override is refused without a reason and records the reason when given (since task 209 a reason alone no longer carries a close the review stop rule sends to the post-panel judge — PB-REVIEW-STOP-RULE; the gate reads the stricter of the risk the panel recorded and the current one), and a fresh stamp closes cleanly. As of task 036 (owner decision A, 2026-08-27) a STALE close whose only post-panel delta is in non-behavioral file classes (a *.md under docs/ or named README*/CHANGELOG*/MIND_MAP*, a *.json under docs/, any *.md at the project root — CLAUDE.md, PLAN.md, … (owner decision H2, 2026-09-25, widening H's root CLAUDE.md; the OUTER project root only: a nested code_roots checkout's own root *.md and any *.md below the root keep the other rules) — and anything under tests/; root .agent/ task records are instead excluded from the freshness fingerprint entirely, so an .agent/ edit never stales a panel and never enters the certified delta) may instead satisfy freshness via a single-judge TAIL CERTIFICATION that re-reviews the F0-anchored close delta (the changed-path set and the current closing content; an original uncommitted at F0 is not persisted, so that path is reviewed current-vs-HEAD) and emits a structured TAIL-CERT: PASS/FAIL; any behavioral (code) delta — including a code comment, a config.json, a non-.md top-level file, a .md below the root that is neither under docs/ nor a doc name, or the source endpoint of a rename into docs/ — still forces a fresh full panel, and the mechanism fails closed — naming each refusal's own cause in one printable line, and which of the re-check's conditions discarded a PASS (task 202) — on a missing/mismatched descriptor, a changed code_roots scope set or fingerprint_exclude set (the exclude pathspecs are hashed into the fingerprint since task 051, so a post-panel exclude reads STALE instead of FRESH and is then rejected), a git error, a stale tree with no attributable delta, a non-PASS verdict, a tree that mutates during the judge call (a TOCTOU compare-and-swap), a `code_roots` scope whose RESOLVED identity (real path relative to the project) differs from the descriptor's, or an owner `fingerprint_exclude` that covers source. Task 060: an ABSENT fingerprint is no longer fail-open — in a git repo, a carrying high-consequence close blocks NO-STAMP (the round has no `**Tree-state:**`) and UNREADABLE (git cannot fingerprint the tree at close: every git return code on the outer path is read, a corrupt index / missing HEAD / unresolvable toplevel yields no fingerprint instead of a clean-looking one), with the same two exits as STALE and a receipt line on the override path; a non-git project keeps the advisory NO-STAMP. EXCLUDE-COVERS-CODE: an owner `fingerprint_exclude` pathspec that covers a source path (behavioral by file class and not bookkeeping-shaped `.md/.rst/.log`) makes every fingerprint blind to that code, so the close blocks it regardless of FRESH/STALE, the panel stamp warns and emits no descriptor, and tail certification refuses. The fingerprint resolves untracked content against the repo toplevel (a project in a SUBDIRECTORY of a larger repo hashes real content, not a doubled-prefix miss), decodes every git text read with `surrogateescape` and hashes the material with it (a `core.quotePath=false` non-UTF-8 name neither crashes the close nor collides with a sibling), tokens an untracked symlink by its link text, and binds each `code_roots` scope's resolved identity into the material and the descriptor. A STALE read explained ENTIRELY by outer-HEAD commits that touch only task records (`.agent[/<lane>]/tasks/`, session pointers, the journal, the chat log — not `.agent/config.json` or `models.json`; typically committing the task's own record after its panel) reads FRESH and the receipt says `records-only delta`: the round's descriptor must authenticate to its stamp, the exclude set must be unchanged, `git diff F0 HEAD` outside the excluded pathspecs must be empty, and the fingerprint recomputed with the outer HEAD set back to the round's F0 commit must equal the stamp; any doubt or git error keeps it STALE (task 085). The certifying judge's diff is asked for with `--no-color --no-textconv` and fixed `a/`/`b/` prefixes, and sits between two lines carrying the run's nonce (task 202, Gemini #7 and #6); a scope's snapshot `commit` (and the post-D6 delta's `base`) must be a full object id (40 or 64 hex) before any git call reads it, so no value of it is a git option (task 202, impl rounds 1-2: `--output=…` made git write a file and lose sight of commits, 1.6.1 too); and a submodule move is listed by the enumeration, the dirty map, the fingerprint and the records-only exemption whatever a git setting says (`--ignore-submodules=none`; 1.6.1 hid it).",
       "owner": [
         {
           "path": "plugins/playbook/tasks/core.py",
@@ -7371,7 +7371,9 @@
           "reference": "ClosePathMatrix.test_override_needs_reason_then_closes_with_recorded_reason",
           "boundary": "subprocess",
           "negative_control": null,
-          "limitations": []
+          "limitations": [
+            "Since task 209 the test first shows an irreversible task's reason-only close refused (the stop rule), then the reason rule on an assertive task."
+          ]
         },
         {
           "type": "executable integration",
@@ -20008,7 +20010,7 @@
     {
       "id": "PB-POST-D6-PROTOCOL",
       "category": "judges-and-reviews",
-      "statement": "The post-D6 review protocol (task 108): both context builders (panel and single judge) deliver FIRST a SETTLED block — the task's last unfenced `## Owner rulings` lines verbatim plus the judge.md/judge-archive.md triage bullets whose VERDICT is `REJECT` (right after the bullet, after its bold title, or ending inside the bold title — not a mention in prose; never a line a judge wrote into a round 1.6.2 wrote, where every judge line is quoted — task 200) — under a header that says a ruling closes a design choice, never a correctness defect; every impl panel round's header carries a unique `**Round-id:**` (with the verdict, the tree-state, the snapshot and the tamper receipt read from the round's HEADER only, each at a line start — task 200; from 1.6.2 its H1 is followed by the writer's `**Round-format:** 2` mark, a provenance label honoured only in a file's leading run of headings, which no reader decides on) and its Panel-snapshot records per scope a `base` tree of the working state (staged, unstaged, untracked) built in a temporary GIT_INDEX_FILE without changing the real index or `git status`; `impl-review` after an impl panel delivers the diff base → current working tree — opening with a `DELTA FILES` list of every path it changed (at most a sixth of the cap when the delta is cut, every name counted, a name that is not UTF-8 or not printable shown as `\\xNN`), and refused before any run is reserved, with nothing spent or written, when that list is empty: an empty delta never yields a PASS (task 201) — refusing to send anything when a tree, the scope set or a scope's directory moves between building the delta and the tamper baseline, sizing task.md by 1.6.1's rule — the budget left after SETTLED, the map and the delta held at min(its whole length, a quarter of the budget) — and then giving the delta what SETTLED, the map and the task leave, a quarter at least (task 201) (a head-clamp tells the judge) (an unchanged file absent, an untracked file present; a scope set or scope directory changed since the panel refuses the delta; the delta is handed file by file — code first, then tests, then docs, the ledger and records, over all scopes, the smaller diff first inside each class, the classes being the close's own (`classify_delta_paths`), a rename classed by both its names, and each run of files under a line that names its class and scope — one scope's files of a class can come in several runs (task 178, PLAN S11 item 28); over budget, the names of the files handed whole, of the one cut part-way with how much of it went out, and of the ones left out — every one counted, as many written as fit in a sixth of the cap — then the stat of the same two trees (asked for without colour, like the name list and the diff — task 201; the diff without a textconv driver, and every call with `--ignore-submodules=none` — task 202) — its listing kept to a third of the cap at most: cut there, with one line saying so, when it is longer — the exact diff commands — after the path and line count of `<lane>/journal/post-d6/<task folder>-<run id>.patch`, the whole delta (at most 1,000,000 chars) the CLI wrote into the lane journal — gitignored by init's block; never through a linked `journal` or `post-d6` — for this run before its tamper baseline, when it could (task 201) — and the diff as far as it fits, and the same counts and names in the note the CLI prints; a scope whose file list does not pair one to one with its patch is handed in git's own order under a line that says so — after the code and tests of the scopes that pair, before the docs — and nothing of it is dropped), computes POST-D6 VERDICT (PASS = no counted Critical or Important; a tag counts only right after the severity marker (a `[file: …]` field may stand between — task 201); [SETTLED] is not counted, [SETTLED-CONTRADICTED] is, and [PRE-EXISTING] is not counted only when a delta was delivered, the finding's first line names in its ONE `[file: <path>]` field — no `]`-ended reading of which, raw (`:line` kept) or normalised, names a delta file — a real file from the project root that the FULL delta did not change — not absolute, no `..`, neither a listed path nor its `a/`/`b/` spelling nor the end of one, compared as written and by its real path (links resolved; one that resolves out of the project is none) against the listed files' real paths — AND the finding (its whole text) cites no file the FULL delta changed (task 201, #6: the field added, the text check kept as a reason to count) — the file set is taken before any truncation and holds both paths of a rename, each scope-relative and scope-prefixed; the check is deliberately at FILE level (owner amendment 2026-09-30: judges often cite wrong lines, and file level errs toward more review); the response's last non-empty line must BE a whole, bare (not code-spanned) CAP line whose count equals the recognised findings, and `more remain` is incomplete — otherwise the verdict fails closed), and RESERVES each run under the task lock before any judge is spawned: runs 1-2 after a panel are free, run 3 needs a counted Critical in run 2, run 4+ always needs `--owner-ok --reason`; a refused run exits 2 with nothing spent, one review at a time per task — a panel reserves before its tamper snapshot too, so a panel and a single judge exclude each other (a live reservation — while its owning process runs (POSIX, same host; recorded pid + host), otherwise by its OWN recorded expiry — refuses a second one without writing — its append would void the first run by tamper; a reservation past the horizon it recorded — the hard review timeout plus 10 minutes for a single judge, plus 15 for a panel; two hours for either when the review runs with no hard timeout (`--timeout unlimited`) — counts as spent), a corrupt ledger line refuses every new reservation until repaired (or `--owner-ok`), a run killed at its hard timeout counts (verdict TIMEOUT), a run that produced no review releases its reservation, and every owner-ok reason is recorded and named in the close receipt.",
+      "statement": "The post-D6 review protocol (task 108): both context builders (panel and single judge) deliver FIRST a SETTLED block — the task's last unfenced `## Owner rulings` lines verbatim plus the judge.md/judge-archive.md triage bullets whose VERDICT is `REJECT` (right after the bullet, after its bold title, or ending inside the bold title — not a mention in prose; never a line a judge wrote into a round 1.6.2 wrote, where every judge line is quoted — task 200) — under a header that says a ruling closes a design choice, never a correctness defect; every impl panel round's header carries a unique `**Round-id:**` (with the verdict, the tree-state, the snapshot and the tamper receipt read from the round's HEADER only, each at a line start — task 200; from 1.6.2 its H1 is followed by the writer's `**Round-format:** 2` mark, a provenance label honoured only in a file's leading run of headings, which no reader decides on) and its Panel-snapshot records per scope a `base` tree of the working state (staged, unstaged, untracked) built in a temporary GIT_INDEX_FILE without changing the real index or `git status`; `impl-review` after an impl panel delivers the diff base → current working tree — opening with a `DELTA FILES` list of every path it changed (at most a sixth of the cap when the delta is cut, every name counted, a name that is not UTF-8 or not printable shown as `\\xNN`), and refused before any run is reserved, with nothing spent or written, when that list is empty: an empty delta never yields a PASS (task 201) — refusing to send anything when a tree, the scope set or a scope's directory moves between building the delta and the tamper baseline, sizing task.md by 1.6.1's rule — the budget left after SETTLED, the map and the delta held at min(its whole length, a quarter of the budget) — and then giving the delta what SETTLED, the map and the task leave, a quarter at least (task 201) (a head-clamp tells the judge) (an unchanged file absent, an untracked file present; a scope set or scope directory changed since the panel refuses the delta; the delta is handed file by file — code first, then tests, then docs, the ledger and records, over all scopes, the smaller diff first inside each class, the classes being the close's own (`classify_delta_paths`), a rename classed by both its names, and each run of files under a line that names its class and scope — one scope's files of a class can come in several runs (task 178, PLAN S11 item 28); over budget, the names of the files handed whole, of the one cut part-way with how much of it went out, and of the ones left out — every one counted, as many written as fit in a sixth of the cap — then the stat of the same two trees (asked for without colour, like the name list and the diff — task 201; the diff without a textconv driver, and every call with `--ignore-submodules=none` — task 202) — its listing kept to a third of the cap at most: cut there, with one line saying so, when it is longer — the exact diff commands — after the path and line count of `<lane>/journal/post-d6/<task folder>-<run id>.patch`, the whole delta (at most 1,000,000 chars) the CLI wrote into the lane journal — gitignored by init's block; never through a linked `journal` or `post-d6` — for this run before its tamper baseline, when it could (task 201) — and the diff as far as it fits, and the same counts and names in the note the CLI prints; a scope whose file list does not pair one to one with its patch is handed in git's own order under a line that says so — after the code and tests of the scopes that pair, before the docs — and nothing of it is dropped), computes POST-D6 VERDICT (PASS = no counted Critical or Important; a tag counts only right after the severity marker (a `[file: …]` field may stand between — task 201); [SETTLED] is not counted, [SETTLED-CONTRADICTED] is, and [PRE-EXISTING] is not counted only when a delta was delivered, the finding's first line names in its ONE `[file: <path>]` field — no `]`-ended reading of which, raw (`:line` kept) or normalised, names a delta file — a real file from the project root that the FULL delta did not change — not absolute, no `..`, neither a listed path nor its `a/`/`b/` spelling nor the end of one, compared as written and by its real path (links resolved; one that resolves out of the project is none) against the listed files' real paths — AND the finding (its whole text) cites no file the FULL delta changed (task 201, #6: the field added, the text check kept as a reason to count) — the file set is taken before any truncation and holds both paths of a rename, each scope-relative and scope-prefixed; the check is deliberately at FILE level (owner amendment 2026-09-30: judges often cite wrong lines, and file level errs toward more review); the response's last non-empty line must BE a whole, bare (not code-spanned) CAP line whose count equals the recognised findings, and `more remain` is incomplete — otherwise the verdict fails closed), and RESERVES each run under the task lock before any judge is spawned: runs 1-2 after a panel are free and run 3+ needs `--owner-ok --reason` (task 209, the owner's 2026-10-13 18:37 rule made the plugin's: two runs at most, then the owner; until then a counted Critical in run 2 opened run 3); a refused run exits 2 with nothing spent, one review at a time per task — a panel reserves before its tamper snapshot too, so a panel and a single judge exclude each other (a live reservation — while its owning process runs (POSIX, same host; recorded pid + host), otherwise by its OWN recorded expiry — refuses a second one without writing — its append would void the first run by tamper; a reservation past the horizon it recorded — the hard review timeout plus 10 minutes for a single judge, plus 15 for a panel; two hours for either when the review runs with no hard timeout (`--timeout unlimited`) — counts as spent), a corrupt ledger line refuses every new reservation until repaired (or `--owner-ok`), a run killed at its hard timeout counts (verdict TIMEOUT), a run that produced no review releases its reservation, and every owner-ok reason is recorded and named in the close receipt.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/post_d6.py",
@@ -20514,11 +20516,11 @@
         {
           "type": "executable unit",
           "path": "tests/test_post_d6.py",
-          "reference": "RunCap.test_third_run_allowed_after_a_critical_in_run_two",
+          "reference": "RunCap.test_third_run_refused_even_after_a_critical_in_run_two",
           "boundary": "unit",
           "negative_control": null,
           "limitations": [
-            "`run 3 needs a counted Critical in run 2` — the ALLOWING side: with a Critical counted in run 2, run 3 is permitted. Left out of task 172's first list of citations (its impl panel, opus: without it no cited proof failed if a Critical stopped opening run 3)."
+            "`run 3+ needs --owner-ok` — even after a counted Critical in run 2 (task 209, D4). Until task 209 this proof was the ALLOWING side of `run 3 needs a counted Critical in run 2` (task 172's impl panel, opus); it was red on the old `gate_run` and is green on the new one."
           ]
         },
         {
@@ -20934,7 +20936,7 @@
       ],
       "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "\"Accepted Critical\" (D6) is read as a Critical the judge COUNTED; whether the agent accepted it in triage is not machine-read (owner-accepted 2026-09-29: it errs toward one more review, never one fewer).",
+        "\"Accepted Critical\" (D6) is read as a Critical the judge COUNTED; whether the agent accepted it in triage is not machine-read (owner-accepted 2026-09-29: it errs toward one more review, never one fewer). Since task 209 no Critical opens a post-D6 run; the D6 round cap of impl panels (PB-REVIEW-STOP-RULE) reads it the same way.",
         "Text 1.6.1 wrote does not separate a judge's own output from agent triage, so a judge-written `REJECT` bullet there is still delivered as settled; SETTLED lowers the count only for a finding the next judge itself tags, and [SETTLED-CONTRADICTED] still counts (owner-accepted 2026-09-29). From 1.6.2 every judge line is quoted, so in a round 1.6.2 writes none is such a bullet (task 200, #3 — S11 item R9, shipped).",
         "No ref keeps a base tree alive: a base pruned by `git gc` makes the single judge review the whole task, with a `NO post-panel delta` context receipt.",
         "The cap counts runs after the NEWEST impl panel: a new panel starts a new count — by design (the owner's rule is \"after the last panel\", and panels are themselves bounded by D6's round cap).",
@@ -21305,7 +21307,7 @@
     {
       "id": "PB-STALE-CLOSE-BOUND",
       "category": "risk-and-close",
-      "statement": "Where `.agent/config.json` sets `stale_panel_requires_post_d6` to a date, or the task's impl panel was reserved while it was set (the earlier of the two dates is in force) — a close of an assertive, irreversible or unclassified task that overrides the freshness gate (a STALE, tamper-degraded, exclude-covers-code, unstamped or unreadable verdict; with `--stale-panel-ok` and with `--force`) and whose impl panel was reserved on or after that date is refused unless the newest post-D6 single-judge run after the newest impl panel is finished and a PASS that recorded the tree it reviewed, under the same `.agent/config.json`, with nothing but `.agent/` records and `MIND_MAP*.md` changed since (re-checked at the commit; a delta since the PASS that cannot be computed exactly is refused with its cause, task 202), the run ledger is not corrupt, and a reservation dates the panel; the binding is re-checked inside the lock the close commits under; or `tasks work done --owner-ok --reason \"…\"` is given, which is written to the receipt and the enforcement journal. Tail certification after such a PASS certifies the delta since the tree that PASS reviewed, and saves its judge's output beside the task.",
+      "statement": "Where `.agent/config.json` sets `stale_panel_requires_post_d6` to a date, or the task's impl panel was reserved while it was set (the earlier of the two dates is in force) — a close of an assertive, irreversible or unclassified task that overrides the freshness gate (a STALE, tamper-degraded, exclude-covers-code, unstamped or unreadable verdict; with `--stale-panel-ok` and with `--force`) and whose impl panel was reserved on or after that date is refused unless the newest post-D6 single-judge run after the newest impl panel is finished and a PASS that recorded the tree it reviewed, under the same `.agent/config.json`, with nothing but `.agent/` records and `MIND_MAP*.md` changed since (re-checked at the commit; a delta since the PASS that cannot be computed exactly is refused with its cause, task 202), the run ledger is not corrupt, and a reservation dates the panel; the binding is re-checked inside the lock the close commits under; or `tasks work done --owner-ok --reason \"…\"` is given, which is written to the receipt and the enforcement journal. Tail certification after such a PASS certifies the delta since the tree that PASS reviewed, and saves its judge's output beside the task. Since task 209 (PB-REVIEW-STOP-RULE) the same binding applies in EVERY project where the review stop rule needs the post-panel judge; and a plain STALE close after the last impl round D6 allows, whose change it sends to no judge, closes on `--stale-panel-ok --reason` WITHOUT this binding, the receipt naming the files no judge read.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/core.py",
@@ -21330,6 +21332,10 @@
         {
           "path": "plugins/playbook/tasks/core.py",
           "reference": "symbol:tail_cert_delta_why"
+        },
+        {
+          "path": "plugins/playbook/tasks/stop_rule.py",
+          "reference": "symbol:close_state"
         }
       ],
       "failure_consequence": "High",
@@ -21679,6 +21685,430 @@
       "follow_up_phases": [
         8
       ],
+      "required_live_evidence": [],
+      "semantic_protocol": null,
+      "violation_reproduction": null
+    },
+    {
+      "id": "PB-REVIEW-STOP-RULE",
+      "category": "risk-and-close",
+      "statement": "The review stop rule (task 209, PHASE-B.md item 1; the owner's answers of 2026-10-15): `tasks panel-review <N> --mode impl` counts the task's impl panel rounds that met their quorum (`PANEL VERDICT: PASS` in the round's header, in judge.md and judge-archive.md, a round in both counted once; a below-quorum or a plan round is not one) and refuses — under the reservation's task lock, before any judge is spawned or anything written, exit 2, in its own words — a round past the cap of the task's `## Risk` (`review_rounds` in `.agent/config.json`; by default reversible 1, assertive 2, irreversible 2, an unset or unknown risk the larger high cap), plus one round when the cap's last round counted a `**Critical**` a judge wrote (not `[SETTLED]`; one leading `> ` stripped; a format-2 round's unquoted lines not read); `--owner-ok --reason` passes it and is recorded in the panel's reservation with the risk, the caps and the guard list. A plain-STALE close of a task whose newest round is an impl PASS needs a post-D6 PASS on the current tree (PB-STALE-CLOSE-BOUND's binding, whatever its opt-in date says, `--force` included) or `--owner-ok`: when a changed file — code, test, doc or record — is under the union of the recorded and current `guard_paths` (any risk; before the last round too); when the stricter of the recorded and current risk is irreversible or unclassified, the project requires a panel for it and code changed; or when the delta cannot be listed and a guard list or that automatic judge depends on it. Otherwise, after the last round the larger of the recorded and current caps allows, `--stale-panel-ok --reason` closes without that binding and the receipt and the enforcement journal name the files no judge read; below it the project's own rule stands. The decision is re-made inside the task lock at the commit, `--force` included. Post-D6 single-judge runs after a panel stop at two without `--owner-ok`. A judge's `**Minor**` findings are counted apart and never enter the verdict or the CAP line's equality.",
+      "owner": [
+        {
+          "path": "plugins/playbook/tasks/stop_rule.py",
+          "reference": "symbol:impl_rounds"
+        },
+        {
+          "path": "plugins/playbook/tasks/stop_rule.py",
+          "reference": "symbol:round_criticals"
+        },
+        {
+          "path": "plugins/playbook/tasks/stop_rule.py",
+          "reference": "symbol:allowed_rounds"
+        },
+        {
+          "path": "plugins/playbook/tasks/stop_rule.py",
+          "reference": "symbol:panel_decision"
+        },
+        {
+          "path": "plugins/playbook/tasks/stop_rule.py",
+          "reference": "symbol:judge_required"
+        },
+        {
+          "path": "plugins/playbook/tasks/stop_rule.py",
+          "reference": "symbol:stricter"
+        },
+        {
+          "path": "plugins/playbook/tasks/stop_rule.py",
+          "reference": "symbol:close_state"
+        },
+        {
+          "path": "plugins/playbook/tasks/stop_rule.py",
+          "reference": "symbol:guarded"
+        },
+        {
+          "path": "plugins/playbook/tasks/review.py",
+          "reference": "symbol:_cmd_panel_review"
+        },
+        {
+          "path": "plugins/playbook/tasks/post_d6.py",
+          "reference": "symbol:reserve_panel"
+        },
+        {
+          "path": "plugins/playbook/tasks/post_d6.py",
+          "reference": "symbol:gate_run"
+        },
+        {
+          "path": "plugins/playbook/tasks/post_d6.py",
+          "reference": "symbol:parse_verdict"
+        },
+        {
+          "path": "plugins/playbook/tasks/core.py",
+          "reference": "symbol:bound_stale_close"
+        },
+        {
+          "path": "plugins/playbook/tasks/lifecycle.py",
+          "reference": "symbol:cmd_work"
+        },
+        {
+          "path": "plugins/playbook/tasks/template.py",
+          "reference": "symbol:post_d6_clauses"
+        }
+      ],
+      "failure_consequence": "High",
+      "claim_kind": "mechanical",
+      "proofs": [
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "PanelCap.test_q1_a_third_round_without_a_critical_in_round_2_is_refused",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_stop_rule_cli.py",
+            "reference": "PanelCap.test_q1_the_second_round_runs"
+          },
+          "limitations": [
+            "Through `cmd_panel_review` with the claude adapter faked: the adapter is never called, the run ledger is byte-identical, the text says the cap and `--owner-ok`, never 'in progress'."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "PanelCap.test_q2_a_quoted_critical_in_round_2_allows_a_third",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_stop_rule_cli.py",
+            "reference": "PanelCap.test_q2_a_settled_critical_does_not"
+          },
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "PanelCap.test_q2_an_unquoted_critical_in_a_format_1_round_2_allows_a_third",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "PanelCap.test_q2_a_below_quorum_round_and_a_plan_round_are_not_rounds",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "PanelCap.test_q2_an_archived_round_counts",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "PanelCap.test_q2_a_record_that_cannot_be_read_refuses",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "PanelCap.test_q3_the_owner_allows_a_round_past_the_cap_and_it_is_recorded",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "PanelCap.test_q3_owner_ok_without_a_reason_is_refused_before_anything",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "PanelCap.test_a_plan_panel_is_never_capped",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "PanelCap.test_a_reversible_task_takes_one_round",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "PanelCap.test_the_project_changes_the_cap",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "TheJudgeWhereItIsNeeded.test_q4_a_guard_file_at_the_cap",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_stop_rule_cli.py",
+            "reference": "TheJudgeWhereItIsNeeded.test_q11_a_reversible_task_that_changed_other_code_closes_as_before"
+          },
+          "limitations": [
+            "Closes run as real `tasks.cli work done` subprocesses in a git project without `stale_panel_requires_post_d6`."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "TheJudgeWhereItIsNeeded.test_q4_a_guard_file_below_the_cap",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "TheJudgeWhereItIsNeeded.test_q4_an_irreversible_tasks_code_below_the_cap",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_stop_rule_cli.py",
+            "reference": "TheJudgeWhereItIsNeeded.test_q4_an_irreversible_tasks_docs_alone_need_no_judge"
+          },
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "TheJudgeWhereItIsNeeded.test_q4_an_unclassified_tasks_code",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "TheJudgeWhereItIsNeeded.test_q7_a_guard_list_emptied_after_the_panel",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "TheJudgeWhereItIsNeeded.test_q7_a_risk_lowered_after_the_panel",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "TheJudgeWhereItIsNeeded.test_q7_a_delta_that_cannot_be_listed_with_a_guard_list",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_stop_rule_cli.py",
+            "reference": "TheJudgeWhereItIsNeeded.test_q7_with_nothing_the_delta_could_decide_it_closes_and_says_so"
+          },
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "TheJudgeWhereItIsNeeded.test_q7_a_delta_that_cannot_be_listed_on_an_irreversible_task",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "TheJudgeWhereItIsNeeded.test_q10_a_listed_json_and_a_listed_test_file",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "TheJudgeWhereItIsNeeded.test_q11_a_reversible_task_that_changed_a_guard_file",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "NoJudgeAfterTheLastRound.test_q5_the_reason_closes_and_the_receipt_names_what_no_judge_read",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_stop_rule_cli.py",
+            "reference": "NoJudgeAfterTheLastRound.test_q6_below_the_cap_the_opt_in_still_binds"
+          },
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "NoJudgeAfterTheLastRound.test_q5_without_the_flag_the_block_names_it",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "NoJudgeAfterTheLastRound.test_q5_a_critical_in_round_2_leaves_round_3_open",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "NoJudgeAfterTheLastRound.test_q7_a_cap_lowered_after_the_panel_frees_nothing",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "TheDecisionIsMadeAgainAtTheCommit.test_q12_a_guard_entry_added_while_the_close_runs",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_stop_rule_cli.py",
+            "reference": "TheDecisionIsMadeAgainAtTheCommit.test_control_nothing_changes_while_it_runs"
+          },
+          "limitations": [
+            "The close runs in-process; the change is made inside `format_verify_receipt`, which the close calls between its decision and its commit."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "TheDecisionIsMadeAgainAtTheCommit.test_q12_a_guard_file_changed_under_force_while_the_close_runs",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_stop_rule.py",
+          "reference": "Criticals.test_a_quoted_critical_counts_in_a_format_2_round",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_stop_rule.py",
+          "reference": "Criticals.test_an_unquoted_line_in_a_format_2_round_is_the_writers",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_stop_rule.py",
+          "reference": "Rounds.test_a_round_in_both_files_is_one_round",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_stop_rule.py",
+          "reference": "Rounds.test_a_legacy_round_in_both_files_is_one_round_whatever_its_trailing_spaces",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_stop_rule.py",
+          "reference": "PanelDecision.test_a_larger_cap_never_refuses_what_a_smaller_allows",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_stop_rule.py",
+          "reference": "JudgeRequired.test_a_longer_guard_list_never_frees_a_close",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_stop_rule.py",
+          "reference": "GuardPaths.test_a_list_that_cannot_be_read_guards_everything",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_stop_rule.py",
+          "reference": "MinorSeverity.test_minors_are_counted_apart_and_never_fail_a_run",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_stop_rule.py",
+          "reference": "MinorSeverity.test_an_unmarked_finding_is_not_hidden_by_a_minor",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_stop_rule.py",
+          "reference": "MinorSeverity.test_every_review_prompt_asks_for_minors_apart",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_post_d6.py",
+          "reference": "RunCap.test_third_run_refused_even_after_a_critical_in_run_two",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": []
+        }
+      ],
+      "applicable_platforms": [
+        "linux"
+      ],
+      "applicable_providers": [
+        "claude",
+        "codex",
+        "grok"
+      ],
+      "status": "verified_by_current_executable_evidence",
+      "missing_evidence_or_limitation": [
+        "Added by task 209 (PHASE-B.md item 1), on the nested branch `phase-b`, not released.",
+        "D6 says a Critical that was ACCEPTED; the CLI sees one a judge wrote (as task 108's run cap did).",
+        "`--owner-ok` is an accountability marker an agent can type, not an authentication.",
+        "The guard list is the project's to keep right; an empty list leaves only the automatic judge of irreversible or unclassified tasks, and only where the project requires a panel for that risk.",
+        "A task with no impl panel round is out of the rule's reach (nothing to be stale against); plan panels are not capped.",
+        "What the panel recorded lives in the run ledger, an agent-writable record; a deleted ledger leaves the current config and risk only.",
+        "Measured on this workspace's records (task 209 `evidence/rounds_control.out`): the five tasks with a third impl round (164, 182, 194, 195, 199) each had a Critical in round 2; no task from 093 on exceeds what the cap allows."
+      ],
+      "follow_up_phases": [],
       "required_live_evidence": [],
       "semantic_protocol": null,
       "violation_reproduction": null

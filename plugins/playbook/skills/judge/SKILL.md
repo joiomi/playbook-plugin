@@ -146,4 +146,4 @@ The judge's role should match what you're evaluating:
 - **Judging trivia**: Reserve for things that matter. Not formatting choices.
 - **Leaking context**: Don't paste conversation into the prompt. Blindness is the feature.
 - **Multiple judges for one thing**: One judge per evaluation. If you disagree, argue back yourself — don't spawn another judge hoping for a different answer.
-- **Verbose findings**: Eval data shows 3.5KB judge sections help (score 17), 4.7KB hurts (score 11). Max 5 findings, Critical/Important only. Each: 1-2 sentence problem + 1 sentence fix. The agent's attention budget is finite — concise findings steer, verbose findings become noise.
+- **Verbose findings**: Eval data shows 3.5KB judge sections help (score 17), 4.7KB hurts (score 11). Max 5 findings that count, Critical/Important; below them at most 3 `**Minor**` ones, never counted (task 209, the owner's D3 of 2026-10-15). Each: 1-2 sentence problem + 1 sentence fix. The agent's attention budget is finite — concise findings steer, verbose findings become noise.

@@ -598,7 +598,25 @@ def cmd_work(cmd_args):
                 # PANEL-grade (all available judges, quorum PASS) — for the
                 # configured risk classes, or "all". Otherwise single-judge
                 # impl evidence suffices as before.
-                _panel_req = resolve_panel_required(project_path, risk)
+                # Task 209 (PHASE-B.md item 1, plan panel P7): the risk the newest impl panel ran
+                # under, recorded with its reservation — lowering `## Risk` after a panel frees
+                # nothing: the review gates below take the stricter of the two (the verify
+                # contract above keeps the task's own risk).
+                from tasks import stop_rule as _sr209
+                try:
+                    _rec209 = _sr209.panel_record(task_file.parent)
+                except Exception:
+                    _rec209 = None
+                _rec_risk209 = (_rec209 or {}).get("risk")
+                _rec_risk209 = _rec_risk209 if isinstance(_rec_risk209, str) and _rec_risk209 else None
+                _gate_risk = _sr209.stricter(_rec_risk209, risk)
+                _panel_req = any(resolve_panel_required(project_path, _r)
+                                 for _r in {risk, _gate_risk, _rec_risk209} if _r)
+                # the stop rule's automatic judge belongs to the panel regime; an unset risk is in it
+                # wherever a high-consequence risk is (it is held to that bar everywhere else)
+                _regime209 = _panel_req or (
+                    _gate_risk not in ("reversible", "assertive", "irreversible")
+                    and any(resolve_panel_required(project_path, _r) for _r in ("assertive", "irreversible")))
                 _evidence = (has_panel_impl_evidence(task_file) if _panel_req
                              else has_review_evidence(task_file, impl_only=True))
 
@@ -765,7 +783,7 @@ def cmd_work(cmd_args):
                         _freshness = {"verdict": "SINGLE-TAMPER-DEGRADED",
                                       "detail": _sj_detail}
                 _f_allowed, _f_reason = freshness_gate_decision(
-                    risk=risk, panel_required=_panel_req,
+                    risk=_gate_risk, panel_required=_panel_req,
                     evidence_carries=_carries,
                     round_fp=(_impl["tree_state"] if _impl else ""),
                     now_fp=_now_fp, force=force,
@@ -784,24 +802,66 @@ def cmd_work(cmd_args):
                 # as everywhere else (agy).
                 _bound_verdicts = ("STALE", "TAMPER-GUARD-DEGRADED", "EXCLUDE-COVERS-CODE",
                                    "NO-STAMP", "UNREADABLE")
+                # Task 209 (PHASE-B.md item 1): the review stop rule on a plain STALE verdict of
+                # the newest impl round (a PASS) — decided on what changed since the panel,
+                # whatever the position against the D6 cap (plan panel P1). Every doubt makes the
+                # judge required (`close_state` fails closed; an exception here too).
+                _st209 = None
+                if (_rounds and _rounds[0]["mode"] == "impl" and _rounds[0]["verdict"] == "PASS"
+                        and _freshness and _freshness.get("verdict") == "STALE"):
+                    try:
+                        _st209 = _sr209.close_state(Path(project_path), task_file.parent,
+                                                    _gate_risk, _rounds[0], _rec209,
+                                                    panel_regime=_regime209)
+                    except Exception as _e209:          # noqa: BLE001
+                        _st209 = _sr209.failed_state(_gate_risk, f"the stop rule could not be evaluated ({_e209})")
+                _held209 = bool(_carries and _gate_risk != "reversible")   # the freshness gate holds this close
                 if (_carries and _impl is not None and _freshness
                         and _freshness.get("verdict") in _bound_verdicts
                         and (stale_panel_ok or force)
-                        and risk != "reversible"):
+                        and _gate_risk != "reversible"):
+                    if _st209 is not None and not _st209["judge"] and _st209["reached"]:
+                        # D2 (the owner, 2026-10-15): after the last round D6 allows, a change no
+                        # judge needs closes on the reason, and the receipt names what no judge read
+                        _freshness["stop_rule"] = _sr209.receipt_clause(_st209)
+                        if owner_ok and reason and reason.strip():
+                            _freshness["bound"] = f'owner-ok: "{" ".join(reason.split())}"'
+                    else:
+                        from tasks.core import bound_stale_close
+                        _rule209 = bool(_st209 is not None and _st209["judge"])
+                        _b_ok, _b_msg, _b_note = bound_stale_close(
+                            Path(project_path), task_file.parent,
+                            owner_ok_reason=(reason if owner_ok else None),
+                            rule_on=_rule209, why=(_st209 or {}).get("why", ""))
+                        if not _b_ok:
+                            print(f"\nBlocked: cannot close task {prev_task} — {_b_msg}"
+                                  + (("\n" + _sr209.block_hint(_st209, prev_task)) if _st209 else ""),
+                                  file=sys.stderr, flush=True)
+                            sys.exit(1)
+                        if _b_note:
+                            _freshness["bound"] = _b_note
+                            if _rule209:
+                                _freshness["bound_rule_on"] = _st209["why"]
+                            if owner_ok and not force:
+                                # the owner's decision carries the stale close
+                                _f_allowed = True
+                                _freshness["accepted_reason"] = reason
+                # Task 209 (plan panel P10): a close the freshness gate does not hold — a reversible
+                # task, or no panel requirement — whose change the stop rule sends to the judge: the
+                # post-panel PASS on this tree, or the owner (`--force` bound too, as above).
+                if _st209 is not None and _st209["judge"] and not _held209:
                     from tasks.core import bound_stale_close
                     _b_ok, _b_msg, _b_note = bound_stale_close(
                         Path(project_path), task_file.parent,
-                        owner_ok_reason=(reason if owner_ok else None))
+                        owner_ok_reason=(reason if owner_ok else None),
+                        rule_on=True, why=_st209["why"])
                     if not _b_ok:
-                        print(f"\nBlocked: cannot close task {prev_task} — {_b_msg}",
-                              file=sys.stderr, flush=True)
+                        print(f"\nBlocked: cannot close task {prev_task} — {_b_msg}\n"
+                              + _sr209.block_hint(_st209, prev_task), file=sys.stderr, flush=True)
                         sys.exit(1)
                     if _b_note:
                         _freshness["bound"] = _b_note
-                        if owner_ok and not force:
-                            # the owner's decision carries the stale close
-                            _f_allowed = True
-                            _freshness["accepted_reason"] = reason
+                        _freshness["bound_rule_on"] = _st209["why"]
                 # TAIL CERTIFICATION (task 036, owner decision A). When the panel
                 # is STALE and would block, but the ONLY post-panel delta is in
                 # non-behavioral file classes (docs/tests/ledger/claim docs), a
@@ -941,12 +1001,13 @@ def cmd_work(cmd_args):
                         _f_reason = (_f_reason
                                      + f"\n  (tail certification: {_tc_clause})")
                 if not _f_allowed:
-                    print(f"\nBlocked: cannot close task {prev_task} — {_f_reason}",
+                    print(f"\nBlocked: cannot close task {prev_task} — {_f_reason}"
+                          + (("\n" + _sr209.block_hint(_st209, prev_task)) if _st209 else ""),
                           file=sys.stderr, flush=True)
                     sys.exit(1)
 
                 allowed, block_reason = close_decision(
-                    risk=risk, verify_declared=bool(commands),
+                    risk=_gate_risk, verify_declared=bool(commands),
                     verify_failed=verify_failed,
                     # impl-grade only: a plan-phase review cannot vouch for
                     # what was BUILT.
@@ -1023,7 +1084,9 @@ def cmd_work(cmd_args):
                 # too, which the fingerprint cannot see.
                 if _freshness and _freshness.get("bound") and not owner_ok:
                     from tasks.core import bound_stale_close as _bsc
-                    _ok2, _msg2, _ = _bsc(Path(project_path), task_file.parent, owner_ok_reason=None)
+                    _ok2, _msg2, _ = _bsc(Path(project_path), task_file.parent, owner_ok_reason=None,
+                                          rule_on=bool(_freshness.get("bound_rule_on")),
+                                          why=str(_freshness.get("bound_rule_on") or ""))
                     if not _ok2:
                         print(f"Blocked: cannot close task {prev_task} — the tree or the config "
                               f"changed while this close was running: {_msg2}",
@@ -1082,9 +1145,28 @@ def cmd_work(cmd_args):
                     if _freshness and _freshness.get("bound") and not owner_ok:
                         from tasks.core import bound_stale_close as _bsc3
                         _ok3, _msg3, _ = _bsc3(Path(project_path), task_file.parent,
-                                               owner_ok_reason=None)
+                                               owner_ok_reason=None,
+                                               rule_on=bool(_freshness.get("bound_rule_on")),
+                                               why=str(_freshness.get("bound_rule_on") or ""))
                         if not _ok3:
                             raise CloseRaceRefused(f"the post-D6 binding no longer holds: {_msg3}")
+                    # Task 209 (plan panel P11): a close that took no judge re-makes the stop
+                    # rule's decision here, under the task lock — the config (guard list) and the
+                    # tree (`--force` skips the tree check above) are read again.
+                    if (_st209 is not None and not _st209["judge"] and not owner_ok
+                            and not _freshness.get("bound_rule_on")):
+                        try:
+                            _rec_now = _sr209.panel_record(task_file.parent)
+                            _st_now = _sr209.close_state(
+                                Path(project_path), task_file.parent,
+                                _sr209.stricter((_rec_now or {}).get("risk") or None, _gate_risk),
+                                _rounds[0], _rec_now, panel_regime=_regime209)
+                        except Exception as _e209b:     # noqa: BLE001
+                            _st_now = _sr209.failed_state(_gate_risk, f"the stop rule could not be evaluated ({_e209b})")
+                        if _st_now["judge"]:
+                            raise CloseRaceRefused(
+                                "the stop rule's answer changed while this close ran — it now needs the "
+                                f"post-panel judge: {_st_now['why']}.")
                 try:
                     _rewrite(task_file, lambda _txt: _bound_still_holds() or compose_close(
                         _txt, receipt_heading="Verification Receipt",
@@ -1146,6 +1228,11 @@ def cmd_work(cmd_args):
                                         "stale close owner-ok" if owner_ok else "stale close bound",
                                         session_id=session_id,
                                         command=_flat(str(_freshness["bound"])))
+                        if _freshness and _freshness.get("stop_rule"):
+                            # task 209: a close after the last round D6 allows that no judge read
+                            _pbj.append(agent_dir, "close", "record", "stale close no judge (stop rule)",
+                                        session_id=session_id,
+                                        command=_flat(str(_freshness["stop_rule"])))
                 except Exception:
                     pass
                 if _dirty:
