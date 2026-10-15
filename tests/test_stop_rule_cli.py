@@ -639,12 +639,18 @@ class RoundTwoFindings(_CloseFixture):
         self.assertHeld(self._close(), "guard/g.py")
 
     def test_s2_the_hold_reads_the_reviewed_rounds_runs(self):
-        # a below-quorum round on top must not hide a post-D6 run of the reviewed round that counted a Critical
-        self.cfg["guard_paths"] = ["guard/"]
-        self.setup_task(risk="reversible", rounds=1, change="code.py", on_top=rnd(verdict="FAIL", rid="ffffffffffff"))
-        post_d6.append_run(self.td, {"id": "runC", "panel": self.panel, "status": "done", "verdict": "FAIL",
-                                     "critical": 1, "important": 0})
-        self.assertHeld(self._close(), "counted a Critical")
+        # a below-quorum round on top must not hide a post-D6 run that counted a Critical — filed under the
+        # reviewed round's key or, as `impl-review` files it, under the round on top (impl round 3, T1: such a
+        # close is refused outright)
+        for key in ("aaaaaaaaaaaa", "ffffffffffff"):
+            with self.subTest(key=key):
+                self.setUp()
+                self.cfg["guard_paths"] = ["guard/"]
+                self.setup_task(risk="reversible", rounds=1, change="code.py",
+                                on_top=rnd(verdict="FAIL", rid="ffffffffffff"))
+                post_d6.append_run(self.td, {"id": "runC", "panel": key, "status": "done", "verdict": "FAIL",
+                                             "critical": 1, "important": 0})
+                self.assertHeld(self._close(), "meets its quorum")
 
     def test_s4_the_owner_closes_an_archived_rounds_guard_change(self):
         self.cfg["guard_paths"] = ["guard/"]
@@ -691,6 +697,58 @@ class RoundTwoFindings(_CloseFixture):
         code, err, out = self._close_in_process(a_critical, "--stale-panel-ok", "--reason", "x")
         self.assertNotIn("Task 001 done.", out, err)
         self.assertIn("counted a Critical", err)
+
+
+
+class RoundThreeFindings(_CloseFixture):
+    """Task 209's impl panel round 3 (T1-T4): each red on nested 2f54579."""
+
+    def test_t1_a_below_quorum_round_on_top_refuses_even_a_no_judge_close(self):   # codex, sonnet, opus
+        self.cfg["guard_paths"] = ["guard/"]
+        self.setup_task(risk="reversible", rounds=1, change="code.py", on_top=rnd(verdict="FAIL", rid="ffffffffffff"))
+        self.assertHeld(self._close(), "meets its quorum")
+        self.assertClosed(self._close("--owner-ok", "--reason", "the owner read it"))
+
+    def test_t1_an_archived_reviewed_round_refuses_too(self):                     # gemini, codex, grok
+        self.cfg["guard_paths"] = ["guard/"]
+        self.setup_task(risk="reversible", rounds=1, change="code.py", archive_pass=True)
+        self.assertHeld(self._close(), "meets its quorum")
+
+    def test_t2_a_guarded_file_after_a_post_d6_pass_is_not_tail_certified(self):   # grok, opus
+        self.cfg["guard_paths"] = ["tests/guard_fixture.py"]
+        (self.d / ".agent" / "models.json").write_text('{"panel": ["pi"], "default_judge": "pi"}', encoding="utf-8")
+        self.setup_task(rounds=2, change="code.py")
+        self._post_d6("PASS")
+        (self.d / "tests" / "guard_fixture.py").write_text("# changed after the PASS\n", encoding="utf-8")
+        self.env["PATH"] = "/usr/bin:/bin"
+        r = self._close()
+        self.assertHeld(r, "under `guard_paths`")
+
+    def test_t3_an_unreadable_ledger_keeps_what_the_panels_recorded(self):        # codex
+        self.cfg["guard_paths"] = ["guard/"]
+        self.setup_task(rounds=2, change="guard/g.py")
+        self.cfg["guard_paths"] = []
+        self._write_cfg()
+        led = self.td / post_d6.RUNS_NAME
+        led.unlink()
+        led.mkdir()
+        self.assertHeld(self._close("--stale-panel-ok", "--reason", "x"), "cannot be read")
+
+    def test_t3_a_corrupt_ledger_too(self):
+        self.cfg["guard_paths"] = ["guard/"]
+        self.setup_task(rounds=2, change="guard/g.py")
+        self.cfg["guard_paths"] = []
+        self._write_cfg()
+        with open(self.td / post_d6.RUNS_NAME, "a", encoding="utf-8") as fh:
+            fh.write("{not json\n")
+        self.assertHeld(self._close("--stale-panel-ok", "--reason", "x"), "corrupt")
+
+    def test_t4_a_guarded_map_file_is_not_free_drift_after_the_pass(self):        # grok
+        self.cfg["guard_paths"] = ["MIND_MAP.md"]
+        self.setup_task(rounds=2, change="MIND_MAP.md")
+        self._post_d6("PASS")
+        (self.d / "MIND_MAP.md").write_text("# map, changed again after the PASS\n", encoding="utf-8")
+        self.assertHeld(self._close("--stale-panel-ok", "--reason", "x"), "MIND_MAP.md")
 
 
 if __name__ == "__main__":

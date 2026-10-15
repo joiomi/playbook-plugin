@@ -21692,7 +21692,7 @@
     {
       "id": "PB-REVIEW-STOP-RULE",
       "category": "risk-and-close",
-      "statement": "The review stop rule (task 209, PHASE-B.md item 1; the owner's answers of 2026-10-15): `tasks panel-review <N> --mode impl` counts the task's impl panel rounds that met their quorum (`PANEL VERDICT: PASS` in the round's header, in judge.md and judge-archive.md, a round in both counted once; a below-quorum or a plan round is not one) and refuses — under the reservation's task lock, before any judge is spawned or anything written, exit 2, in its own words — a round past the cap of the task's `## Risk` (`review_rounds` in `.agent/config.json`; by default reversible 1, assertive 2, irreversible 2, an unset or unknown risk the larger high cap), plus one round, where the cap is 2 or more, when the cap's last round counted a `**Critical**` a judge wrote (not `[SETTLED]`; one leading `> ` stripped; a format-2 round's unquoted lines not read); `--owner-ok --reason` passes it and is recorded in the panel's reservation with the risk, the caps and the guard list. A close of a task whose newest quorum-PASS impl round (judge.md or judge-archive.md) — whatever round was written on top of it — is followed by a change needs a post-D6 PASS on the current tree (PB-STALE-CLOSE-BOUND's binding, whatever its opt-in date says, `--force` included) or `--owner-ok`: when a changed file — code, test, doc or record — is under the union of the recorded and current `guard_paths` (any risk; before the last round too); when the stricter of the recorded and current risk is irreversible or unclassified and code changed (in every project); or when the delta cannot be listed — in a git repository, a freshness verdict that is not a plain STALE and an unstamped reviewed round included — and a guard list or that automatic judge depends on it; a below-quorum impl round written on that round refuses such a close unless a quorum panel or `--owner-ok`; both sides of the guard match are normalised and a pattern naming nothing is warned about. Otherwise, on a plain STALE with a listed delta, after the last round the larger cap allows (every impl panel's recorded caps and today's), `--stale-panel-ok --reason` closes without that binding (a reversible task's plain close too) and the receipt and the enforcement journal name the files no judge read — unless the post-D6 ledger is corrupt, its newest run unfinished, or its newest run counted a Critical; below it the project's own rule stands; a change that needs the judge is not left to tail certification before a post-D6 PASS. The recorded risk is the stricter of every impl panel reservation's and today's, the guard list the union of all. The decision is re-made inside the task lock at the commit — a changed judge requirement or cap state refuses, and under `--force` so does a moved tree (after a FRESH panel too) or a different list of changed files, and so does a post-D6 run that counted a Critical meanwhile. Post-D6 single-judge runs after a panel stop at two without `--owner-ok`. A judge's `**Minor**` findings are counted apart, never enter the verdict or the CAP line's equality, and bound the finding before them.",
+      "statement": "The review stop rule (task 209, PHASE-B.md item 1; the owner's answers of 2026-10-15): `tasks panel-review <N> --mode impl` counts the task's impl panel rounds that met their quorum (`PANEL VERDICT: PASS` in the round's header, in judge.md and judge-archive.md, a round in both counted once; a below-quorum or a plan round is not one) and refuses — under the reservation's task lock, before any judge is spawned or anything written, exit 2, in its own words — a round past the cap of the task's `## Risk` (`review_rounds` in `.agent/config.json`; by default reversible 1, assertive 2, irreversible 2, an unset or unknown risk the larger high cap), plus one round, where the cap is 2 or more, when the cap's last round counted a `**Critical**` a judge wrote (not `[SETTLED]`; one leading `> ` stripped; a format-2 round's unquoted lines not read); `--owner-ok --reason` passes it and is recorded in the panel's reservation with the risk, the caps and the guard list. A close of a task whose newest quorum-PASS impl round (judge.md or judge-archive.md) — whatever round was written on top of it — is followed by a change needs a post-D6 PASS on the current tree (PB-STALE-CLOSE-BOUND's binding, whatever its opt-in date says, `--force` included) or `--owner-ok`: when a changed file — code, test, doc or record — is under the union of the recorded and current `guard_paths` (any risk; before the last round too); when the stricter of the recorded and current risk is irreversible or unclassified and code changed (in every project); or when the delta cannot be listed — in a git repository, a freshness verdict that is not a plain STALE and an unstamped reviewed round included — and a guard list or that automatic judge depends on it; when that round is not judge.md's newest impl round (a below-quorum round on it, or it archived) every stale close is refused unless a quorum panel or `--owner-ok`; a run ledger that cannot be read or has corrupt lines makes the judge required; both sides of the guard match are normalised and a pattern naming nothing is warned about. Otherwise, on a plain STALE with a listed delta, after the last round the larger cap allows (every impl panel's recorded caps and today's), `--stale-panel-ok --reason` closes without that binding (a reversible task's plain close too) and the receipt and the enforcement journal name the files no judge read — unless the post-D6 ledger is corrupt, its newest run unfinished, or its newest run counted a Critical; below it the project's own rule stands; a change that needs the judge is not left to tail certification before a post-D6 PASS, nor a guarded file after one, and a guarded `MIND_MAP*.md` is no free drift after a bound PASS. The recorded risk is the stricter of every impl panel reservation's and today's, the guard list the union of all. The decision is re-made inside the task lock at the commit — a changed judge requirement or cap state refuses, and under `--force` so does a moved tree (after a FRESH panel too) or a different list of changed files, and so does a post-D6 run that counted a Critical meanwhile. Post-D6 single-judge runs after a panel stop at two without `--owner-ok`. A judge's `**Minor**` findings are counted apart, never enter the verdict or the CAP line's equality, and bound the finding before them.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/stop_rule.py",
@@ -22334,6 +22334,54 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "RoundThreeFindings.test_t1_a_below_quorum_round_on_top_refuses_even_a_no_judge_close",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "RoundThreeFindings.test_t1_an_archived_reviewed_round_refuses_too",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "RoundThreeFindings.test_t2_a_guarded_file_after_a_post_d6_pass_is_not_tail_certified",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "RoundThreeFindings.test_t3_an_unreadable_ledger_keeps_what_the_panels_recorded",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "RoundThreeFindings.test_t3_a_corrupt_ledger_too",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "RoundThreeFindings.test_t4_a_guarded_map_file_is_not_free_drift_after_the_pass",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
         }
       ],
       "applicable_platforms": [
@@ -22355,7 +22403,8 @@
         "Measured on this workspace's records (task 209 `evidence/rounds_control.out`): the five tasks with a third impl round (164, 182, 194, 195, 199) each had a Critical in round 2; no task from 093 on exceeds what the cap allows.",
         "Impl panel round 1 (task 209) found ten ways the first form let a close through or misread the owner's words (R1-R10 in the task record); each has a test above that failed on nested b136443.",
         "Impl panel round 2 (task 209) found nine more (S1-S9); four were grave (guards that failed open: a non-STALE verdict at the cap, the newest reservation instead of all, an unstamped round outside the panel bar, the reviewed round archived); S7 — a guard file inside `fingerprint_exclude` on a close the freshness gate does not hold — is a Phase B input (not grave).",
-        "When the reviewed round is archived, or a below-quorum impl round sits on it, the post-D6 binding cannot key to it: the close is refused until a quorum panel or `--owner-ok`."
+        "When the reviewed round is archived, or a below-quorum impl round sits on it, the post-D6 binding cannot key to it: the close is refused until a quorum panel or `--owner-ok`.",
+        "Impl panel round 3 (task 209, the last D6 allows) found T1-T4, fixed (T1: a reviewed round that is not judge.md's newest impl round refuses every stale close until a quorum panel or the owner; T2-T4 above); T5 — a non-guard file changed during a `--force` close that began on a FRESH panel — is a Phase B input (not grave)."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],

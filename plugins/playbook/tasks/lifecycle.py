@@ -810,10 +810,15 @@ def cmd_work(cmd_args):
                     _pass209 = next((r for r in _rounds if r["mode"] == "impl" and r["verdict"] == "PASS"), None)
                 _newest209 = bool(_rounds and _rounds[0]["mode"] == "impl" and _rounds[0]["verdict"] == "PASS"
                                   and _sr209.same_round(_rounds[0], _pass209))
-                _below209 = bool(_pass209 is not None and _impl is not None
-                                 and not _sr209.same_round(_impl, _pass209))
                 _key209 = (_pass209 or {}).get("round_id") or (_pass209 or {}).get("tree_state") or ""
                 _now209 = _now_fp if (_impl is not None or _pass209 is None) else tree_state_fingerprint(project_path)
+                if _now209 and not _now_fp:
+                    _now_fp = _now209   # impl round 3, T1: the commit's tree check needs it (an archived round)
+                # impl round 3, T1: the post-D6 runs, the binding and `impl-review` key to judge.md's newest impl
+                # round; when that is not the reviewed one, nothing they record can be bound to it
+                from tasks.post_d6 import newest_impl_round as _nir209
+                _mismatch209 = bool(_pass209 is not None
+                                    and not _sr209.same_round(_nir209(task_file.parent), _pass209))
                 _st209 = None
                 _v209 = ""
                 if _pass209 is not None:
@@ -849,6 +854,18 @@ def cmd_work(cmd_args):
                         # skipped, and the owner-ok note would have had nowhere to go)
                         _freshness = {"verdict": _v209, "round_fp": _pass209.get("tree_state") or "?",
                                       "now_fp": _now209 or "?"}
+                    _bad209 = _sr209.ledger_untrusted(task_file.parent)
+                    if _bad209:
+                        # impl round 3, T3: what the panels recorded cannot be read — every doubt fails closed
+                        _st209 = _sr209.failed_state(_gate_risk, f"{_bad209} — what the panels recorded cannot be trusted")
+                    if _mismatch209 and not owner_ok:
+                        print(f"\nBlocked: cannot close task {prev_task} — the impl panel round that reviewed this "
+                              "task's code is not judge.md's newest impl round (a below-quorum round sits on it, or it "
+                              "was moved to judge-archive.md), so no post-panel judge or run can be bound to it. Run an "
+                              'impl panel that meets its quorum, or let the owner decide:  tasks work done --owner-ok '
+                              '--reason "…"' + (f"\n  Stop rule (D6): {_st209['why']}" if _st209.get("why") else ""),
+                              file=sys.stderr, flush=True)
+                        sys.exit(1)
                     for _m209 in (_st209.get("missing") or []):
                         print(f"  ⚠ `guard_paths` entry {_m209!r} names nothing in the project — it guards "
                               "nothing (.agent/config.json).", file=sys.stderr, flush=True)
@@ -896,15 +913,6 @@ def cmd_work(cmd_args):
                 # post-panel PASS on this tree, or the owner (`--force` bound too, as above).
                 if _st209 is not None and _st209["judge"] and not _held209:
                     from tasks.core import bound_stale_close
-                    if _below209 and not owner_ok:
-                        # impl round 1, R1: the post-D6 runs key to the newest impl round, a
-                        # below-quorum one here — no judge's PASS can be bound to the reviewed round
-                        print(f"\nBlocked: cannot close task {prev_task} — a below-quorum impl panel round "
-                              "sits on the impl round that reviewed this task's code, so no post-panel judge "
-                              "can be bound to it. Run an impl panel that meets its quorum, or let the owner "
-                              'decide:  tasks work done --owner-ok --reason "…"\n'
-                              + _sr209.block_hint(_st209, prev_task), file=sys.stderr, flush=True)
-                        sys.exit(1)
                     _b_ok, _b_msg, _b_note = bound_stale_close(
                         Path(project_path), task_file.parent,
                         owner_ok_reason=(reason if owner_ok else None),
@@ -972,6 +980,13 @@ def cmd_work(cmd_args):
                     _tc_noverdict = ""
                     _tc_unavail = (tail_cert_unavailable(project_path, _snap)
                                    if (_tc_can and not _tc_beh) else "")
+                    # impl round 3, T2: a certified delta that holds a guarded path — after a post-D6 PASS
+                    # too — is the post-panel judge's to read, not tail certification's
+                    _tcg209 = [x for x in (_tc_non if (_tc_can and not _tc_beh) else [])
+                               if _st209 is not None and _sr209.guarded(x, _st209.get("guards") or [])]
+                    if _tcg209:
+                        _tc_unavail = ("the delta holds files under `guard_paths` (" + ", ".join(_tcg209[:8])
+                                       + ") — the post-panel judge reads them: tasks impl-review " + prev_task)
                     if _tc_unavail:
                         print(f"  … tail certification cannot run: {_tc_unavail} — "
                               "no judge is called", file=sys.stderr, flush=True)

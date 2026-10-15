@@ -508,11 +508,12 @@ The owner's rule D6 (2026-09-25) and his ruling of 2026-10-13 18:37, made the pl
   be listed and the answer depends on it — so also, in a git repository, when the freshness verdict is not a plain
   STALE (a degraded tamper guard, an exclude over code, a missing or unreadable stamp: no delta is trusted), and
   when the reviewed round itself is unstamped whatever the freshness gate says. That holds before the last round
-  too and binds `--force` as well — the binding of the section above, whatever its date says. When a below-quorum
-  impl round sits on the reviewed one, no judge's PASS can be bound to it: a panel that meets its quorum, or the
-  owner. A docs or tests tail is still tried by tail certification first (a plain `tasks work done`) — except a
+  too and binds `--force` as well — the binding of the section above, whatever its date says. When the reviewed
+  round is not judge.md's newest impl round (a below-quorum round sits on it, or it was moved to the archive), no
+  post-panel run can be bound to it: every stale close of the task is refused until an impl panel that meets its
+  quorum, or the owner. A run ledger that cannot be read, or has corrupt lines, makes the judge required. A docs or tests tail is still tried by tail certification first (a plain `tasks work done`) — except a
   change the rule sends to the post-panel judge, which tail certification does not take until a post-D6 PASS is the
-  base.
+  base, nor ever a file under `guard_paths`; after a bound PASS a guarded `MIND_MAP*.md` is no free drift either.
 - **Otherwise** — on a plain STALE whose delta could be listed — after the last round the cap allows,
   `--stale-panel-ok --reason "…"` closes — even where
   `stale_panel_requires_post_d6` is set — and the receipt and the enforcement journal name what no judge read:

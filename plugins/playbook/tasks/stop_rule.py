@@ -19,6 +19,7 @@ ones — that is not tagged `[SETTLED]`; a `[PRE-EXISTING]` one counts (a panel 
 outside of, as `parse_verdict` counts it without one).
 LIMIT (as task 108's run cap): D6 says a Critical that was ACCEPTED; the CLI sees one a judge wrote."""
 import fnmatch
+import os
 import posixpath
 import re
 import sys
@@ -257,6 +258,25 @@ def panel_record(task_dir: Path) -> "dict | None":
     if seen:
         caps = {k: max(c[k] for c in seen) for k in DEFAULT_ROUNDS}
     return {"risk": risk, "guard_paths": guards, "rounds_cap": caps if seen else None}
+
+
+def ledger_untrusted(task_dir: Path) -> str:
+    """Why the run ledger cannot be trusted as the record of what the panels ran under (impl round 3, T3: a read
+    error made `read_runs` return nothing, so the recorded guard list and risk vanished): it exists but cannot be
+    read, or has corrupt lines. "" for an absent or clean ledger."""
+    from tasks import post_d6
+    p = Path(task_dir) / post_d6.RUNS_NAME
+    if not os.path.lexists(p):
+        return ""
+    try:
+        with open(p, encoding="utf-8") as fh:
+            fh.read()
+    except (OSError, UnicodeDecodeError) as e:
+        return f"the run ledger {post_d6.RUNS_NAME} cannot be read ({e.__class__.__name__})"
+    bad = post_d6.ledger_corrupt_lines(Path(task_dir))
+    if bad:
+        return f"the run ledger {post_d6.RUNS_NAME} has {bad} corrupt line(s)"
+    return ""
 
 
 def same_round(a: "dict | None", b: "dict | None") -> bool:

@@ -3043,7 +3043,14 @@ def bound_stale_close(project_path: Path, task_dir: Path, *,
     if not can:
         return False, (f"the delta since the post-D6 PASS ({last.get('id')}) cannot be computed "
                        f"exactly ({why}).\n" + exits), ""
-    other = beh + [x for x in non if not re.fullmatch(r"MIND_MAP[^/]*\.md", x)]
+    # task 209 (impl round 3, T4): where the stop rule needs the judge, a guarded map file is no free drift
+    _guards: "list[str]" = []
+    if rule_on:
+        from tasks import stop_rule as _sr
+        _guards = sorted(set(_sr.resolve_guard_paths(load_config(Path(project_path)), warn=False))
+                         | set((_sr.panel_record(Path(task_dir)) or {}).get("guard_paths") or []))
+    other = beh + [x for x in non if not re.fullmatch(r"MIND_MAP[^/]*\.md", x)
+                   or (_guards and _sr.guarded(x, _guards))]
     if other:
         return False, (f"changed since the post-D6 PASS ({last.get('id')}): {', '.join(other[:8])}"
                        + (" …" if len(other) > 8 else "") + " — only `.agent/` records and "
