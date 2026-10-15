@@ -4,6 +4,167 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+## [1.6.2] — 2026-10-15
+
+**The 1.6.2 fix batch: guards and hooks first, then the review path** — PLAN §S14, tasks 187-206 on
+`fix/1.6.2-batch`. On 2026-10-13 the owner took the 49 items left after 1.6.1 and chose the ones that come before
+Phase B: those on a path he uses or in a guard that could stop blocking, and one test that had written his real home
+directory; ten of them he later moved to Phase B's inputs (listed under *Known limitations*). Every item here landed
+after a judge panel. Three holes found on the way were in 1.6.1 already and could let a close skip its check; they are
+marked **1.6.1's** below. The suite has 4712 tests (4327 at 1.6.1); CI is the same two Linux lanes.
+**Upgrading:** `/playbook:upgrade`, restart every Claude Code session (the hooks changed, and a new one — the
+task-folder watch — was added), then re-run `/playbook:init` in each project that uses the plugin: init now adds six
+lines to the project's `.gitignore` for the task registry (`.agent/task-registry`, its lock, a creator's temporary
+folder), a machine-local file the session-start hook writes in every project with `tasks/`; without them it shows up
+as an untracked file you could commit. The shell logger and `monitor-nudge.sh` did not change.
+
+### Changed
+
+- **A task folder made by hand is caught after the command, not guessed before it** (tasks 195, 196, 197; the
+  owner's four answers of 2026-10-13). Until 1.6.1 a shell command was refused BEFORE it ran when its text looked as
+  if it could make a folder under `.agent/tasks/` — the word `mkdir`, a brace, a `$'…'` — next to a task path; that
+  refused harmless commands too (a commit message, a note that only named the word). Now:
+  - the CLI keeps a **registry** beside each lane's `tasks/` of every task folder it made (`tasks new`, `tasks
+    freehand`, `tasks retro`); the folders that already exist are enrolled the first time it is read, and `tasks adopt
+    <dir>` registers one that should stay. Every creator builds the folder under a temporary name, registers it and
+    renames it in under ONE per-lane lock — six `tasks new` at once had made five folders numbered 001 (measured);
+  - a new hook, **the task-folder watch**, looks after every shell or edit call (a failed one too) for a task folder
+    the registry does not know; it then holds the NEXT tool call of the session that made it until the folder is
+    removed or adopted (removing exactly that folder, the `tasks` commands and the read tools still run), and writes a
+    journal line. The close checks again;
+  - the pre-run check for shell commands is gone; the check before a Write of a `task.md` stays.
+  Below Python 3.10 the watch does nothing.
+
+- **The destructive-command guard reads quotes as bash does** (task 199). A `` `…` `` or `$( … )` inside single
+  quotes is text, so a commit message or a note that quotes a dangerous command in backticks passes — in a plain
+  command of data commands (`echo`, `printf`, `cat`, `tee`, `git commit`, …); and the body of a quoted heredoc that a
+  data reader takes (`cat <<'EOF'`, `python3 - <<'PY'`) is data, so a script that only holds the text `curl … | sh` in
+  a string passes. On the workspace's own command history, 84 refusals became 24 and none was added. A few shapes 1.6.1
+  allowed are refused now on purpose (an echo literal inside a loop, a body that a program other than those readers
+  takes — the ledger, PB-COMMAND-DANGEROUS, lists them). **1.6.1's:** a command group spread over lines (`{` newline
+  `echo '…'` newline `} | bash`) and `echo $'it\'s'; rm -rf /` were allowed — both refused now.
+
+- **A judge can no longer write the review record's structure** (task 200). `judge.md` separated review rounds by
+  headings a judge could print itself: a judge block holding `# Panel Impl Review` was read as a second round, and a
+  judge could plant a `REJECT` triage line that later reviews trusted. A round's facts now come from the writer's own
+  lines, every line a judge wrote is quoted (`> `), and the files already on disk keep being read. The single claude
+  judge runs with the same read-only tools as the panel's claude seat (Read, Glob, Grep).
+
+- **The judge after the last panel gets a delta it can use** (task 201). An empty delta is refused before any judge
+  is called (nothing spent; a records-only tail closes by tail certification). Each finding names its file in a fixed
+  field `[file: <path>]`; a `[PRE-EXISTING]` finding is left uncounted only when that field names a real file the
+  delta does not change. The delta gets what the judge's context has left after the rulings, the map and the task; when
+  it must be cut, the whole delta is written to the lane's journal and named, so a judge with no shell can read it.
+
+- **Tail certification says why it cannot certify** (task 202). Each refusal names its own cause (no snapshot, a
+  stamp mismatch, a changed scope or exclude set, an owner exclude over code, a moved scope, a git error, …) and the
+  commit it compared against, in place of "tail certification unavailable"; the bound stale close says the same. The
+  certifying judge reads the change between two lines that carry a one-time nonce, which no content can forge.
+
+- **A codex workspace that is out of credits is skipped like any seat out of credit** (task 203). Codex's "Your
+  workspace is out of credits" is recorded as a seat outage with no end (until `tasks models enable`), and the next
+  panel does not call that seat again. A review that only quotes the sentence is not an outage.
+
+- **The `sonnet` and `haiku` aliases name what Claude Code runs** (task 203): `claude-sonnet-5-5` and
+  `claude-haiku-5-5`, what Claude Code 2.1.296's own `--model sonnet` / `--model haiku` ran (task 184). A panel that
+  names its seats explicitly is unaffected.
+
+### Fixed
+
+- **1.6.1's: tail certification and the freshness check could miss a code change** (task 202, measured on 1.6.1).
+  Three holes, each able to close a task over a change no judge read:
+  - the panel's recorded `commit` went to git unchecked — a value shaped like a git option (`--output=<path>`) made
+    git write a file and list no commits, so a code commit could be certified as docs. Only an object id is accepted
+    now (a forged REAL id still passes: the snapshot is the agent's record — a known limit below);
+  - with `diff.ignoreSubmodules=all` (a local git setting, or `ignore=` in `.gitmodules`) a submodule move was
+    invisible to tail certification (certified) and to the freshness check (read FRESH). Every git call that counts
+    asks `--ignore-submodules=none`;
+  - a submodule bump committed together with a task record read as "records only", so the panel read FRESH and
+    nothing was checked.
+  The last two need a submodule in the project; the first needs a panel's record to be forged.
+
+- **1.6.1's: a session clean-up could delete behind a link** (task 194). When `.agent/sessions` was a link, the
+  hooks' sweep of old session folders deleted in the link's target. Nothing is deleted behind a link now, every
+  deletion holds the directory it checked, and a linked `.agent/sessions` is not written.
+
+- **The hooks find the task's record by its folder's name** (task 192). Three hooks looked for the record with a path
+  pattern that also matched the project's own folder when its name begins with a task number and a dash.
+
+- **A path to a task record through a link is seen** (task 198). The guard against hand-made task records (and the
+  batch-close guard) judged a path by its text: one that reaches `.agent` through a link with another name passed
+  both (measured). They resolve the path now and know the active record by identity. And a backslash is a character
+  of a name on Linux: a folder `proj\other` beside `proj` is no longer judged inside it.
+
+- **A nested agent's prompt no longer resets your turn** (task 193, measured first). A `claude -p` that the session's
+  agent starts resolves to the same session, and its prompt zeroed the outer turn's tool and write counts, so the
+  outer turn could end as a "chat reply" with gates open. A prompt whose hook chain holds more than one agent resets
+  nothing now.
+
+- **The stop hook reads the prompt generation before its input** (task 193). The window in which your prompt could be
+  counted to the turn before it is smaller; what still runs before that read is a known limit below.
+
+- **Every Claude hook that can check the Python floor does** (tasks 192, 193, 194). `session-start-hook`,
+  `session-end-hook`, `stop-hook`, `chat-log-hook`, `task-gate-hook` and `state-echo-hook` check the interpreter, each
+  in its own way: the task gate fails closed (below 3.10 no edit is authorized; a shell command passes with the
+  message), the stop hook still counts gates without Python, the others say so and do nothing.
+
+- **Hooks write nothing through a planted link and never wait on a FIFO** (tasks 192, 193, 194). Hooks were measured
+  writing through links planted under `.agent/` (a counter's target truncated, a prompt appended to another file) and
+  hanging on FIFOs (the gate then failed open at its timeout). The journal, the chat log, the counters, the marks and
+  the state echo's writes refuse a link or a FIFO now (one timed race remains, stated in the ledger).
+
+- **A fresh multi-user clone gets no stray session folder** (task 192), and an unresolved session identity writes
+  what the process walk read, with a daily cap, so the intermittent "no session identity" can be traced; it did not
+  recur in its capture window and stays a bound.
+
+- **task.md writers no longer lose a section behind an open code fence** (task 189). `tasks blocked` and the handoff
+  could delete or hide content when an unclosed ``` sat inside `## Blocked` / `## Handoff`; they refuse now with the
+  file unchanged. Also: a detached HEAD is labelled `(detached)`, and the block reason is read only while the task is
+  blocked. (These came from the triage of a Gemini model's 19 candidates against this code, task 188: ten real, nine
+  not.)
+
+- **A bold lead-in line after the last gate no longer blocks a close** (task 190). With every gate checked, `tasks
+  work done` could answer "Next open gate: - **…**:" from a line of prose; the head position is the first live open
+  gate or `(all gates checked)`.
+
+- **Your real home directory is safe from the test suite** (task 187). The multi-user fixture's init scenarios ran
+  against the real `~/.claude` — on 2026-10-12 one replaced the live shell logger. They run under their own HOME now,
+  and a control breaks init's refusal against a sentinel HOME to prove it stays contained.
+
+### Known limitations
+
+Known before this release and left out of it by the owner's decisions of 2026-10-13 (task 191) or routed by a batch
+task as not grave (PLAN.md, Phase B's inputs). What each costs you today:
+
+- **The stop hook's start-up still runs before it reads the prompt generation** (task 193). A prompt of yours that
+  completes in that short window can still be counted to the turn before it. The host's own `prompt_id`, which every
+  Claude Code hook payload carries, would close it (Phase B).
+- **The panel snapshot in `judge.md` is the agent's record** (task 202): a `commit` forged as a real object id still
+  hides a code commit from tail certification.
+- **Only the panel records a seat out of credit**; the single judge and tail certification do not, so they can call
+  such a seat again (task 202). And a genuine codex credits error followed by a stray output line is not recorded
+  either (task 203).
+- **The claude adapter's old fan-out names older models** (task 203): a bare `claude` seat and `claude:haiku-4-5` run
+  `claude-sonnet-4-6` / `claude-haiku-4-5`.
+- **A nested `claude -p` shares the session's pointer** (task 193): its own stop is held by the outer task's open
+  gates, and its prompt is logged as yours.
+- **A task made while you are back on 1.6.1, after 1.6.2 ran, is unknown to 1.6.2** when you upgrade again: remove
+  `.agent/task-registry` before the upgrade (the next session enrols every folder) or `tasks adopt` that folder (task
+  206).
+- **Moved to Phase B on 2026-10-13:** a research task's post-D6 delta is always empty (refused now, not passed: such a
+  close takes a fresh panel or the owner's OK); `sandbox --print-argv` creates the extra `--rw` paths on the host;
+  whether a background sub-agent's completion notice starts a turn is not measured; two older exits of the chat-log
+  hook reset no counts; installing the codex hooks again after the plugin moved doubles every hook; a kept git hook
+  protects its own file, not what it sources from the project; the codex adapter reads `~/.codex/config.toml` with a
+  module of Python 3.11, so on 3.10 the (experimental) codex agent path reads codex's hooks as off — judges are not
+  affected; the claude adapter finds no transcript folder for a project path with `_`, `.` or a space (no runtime
+  path reads it); the live
+  gauntlet has no grok seat; one live canary ran on a task never activated.
+- **Still open from 1.6.1's list:** a turn a notification started is judged by a rule of its own; a records-only
+  commit made after the last single-judge PASS makes the close refuse (it now names its cause); re-activating a task replaces its `### Recent
+  Chat`; after the shell history is rotated, the commands that read it see the live file only; lines the logger gives
+  back in bulk can be torn; audit receipts read STALE once committed and superseded receipts stay in the record.
+
 ## [1.6.1] — 2026-10-13
 
 **The S11 batch: what the second live gauntlet found, fixed, and the ledger's live rows run for real** — PLAN S11,
