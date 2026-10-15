@@ -152,6 +152,25 @@ class StageTwoMustKeep(unittest.TestCase):
         self.assertIn("end-of-note-V1", out)
         self.assertIn("end-of-note-V2", out)
 
+    def test_the_title_is_kept_whatever_the_newer_section_fills(self):
+        # mutation run (W6, M12): with a newer section sized to fill exactly what the kept part leaves, a title
+        # that is not in the kept set is the section the newest-first fill drops. The title chunk carries text of
+        # its own (an older template's sticker): a bare title is shorter than the marker that would replace it,
+        # so the fill kept it anyway and the mutant survived the first version of this test.
+        older_sticker = "> **Older sticker:** " + "s" * 300 + "\n\n"
+        for d in range(1_000, 2_900, 25):
+            text = _record(work=_gates(2, 20), after=_fat("Notes", 30_000) + _fat("Debrief", d))
+            text = text.replace("# 007 - Example Task\n\n", "# 007 - Example Task\n\n" + older_sticker, 1)
+            out, _ = core.select_task_context(text, 3_000)
+            self.assertIn("# 007 - Example Task", out, f"Debrief {d}")
+
+    def test_the_templates_tail_sections_go_before_an_older_section(self):
+        # mutation run (W6, M9): the Verification Receipt is newer than Notes, yet it is sent last
+        text = _record(work=_gates(2, 20), after=_fat("Notes", 1_500) + _fat("Verification Receipt", 1_500))
+        out, receipt = core.select_task_context(text, len(text) - 1_000)
+        self.assertIn("## Notes", out)
+        self.assertIn("Verification Receipt", receipt.split("· dropped:")[1])
+
     def test_a_small_newer_section_survives_a_fat_older_one(self):
         text = _record(work=_gates(2, 20), after=_fat("Notes", 30_000) + _fat("Debrief", 300))
         out, receipt = core.select_task_context(text, 3_000)

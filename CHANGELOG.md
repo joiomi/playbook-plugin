@@ -4,6 +4,19 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+**The judges' trim keeps the Work Plan** — PHASE-B.md item 2 (first part), task 212. A task.md longer than a judge's
+window used to be cut by keeping Intent/Design and filling from the end of the file, where the template's standing
+orders and the stacked audit receipts sit — so the Work Plan, the record of what was done and checked, went first:
+measured on the real records at the 50K argv window (the grok seat), 18 of 203 task.md here and 22 of 41 in a second
+project lost it whole. Now the template's own commentary, the standing orders and the older audit receipts go first;
+the title, Status, Risk, Intent, Why, Design, Handoff, Owner rulings, the Work Plan and the review sections are kept
+(the owner's rulings of 2026-10-15); when they alone do not fit, gate notes are cut — each keeps its start and points
+to its line in task.md — then prose, and no gate line is lost: 0 of 244 records at 25K, 50K and 100K. The price,
+measured: at 50K, notes are cut in 11 + 16 records and prose in 1 + 3. The judge's prompt now says what was not sent,
+cut and dropped (it used to say "dropped sections: (none)" while notes were cut), and the selection counts its own
+elision markers (1.6.3's could push a fitting selection over the budget and slice its tail). The owner's rulings also
+ride first in the SETTLED block, so they reach a judge twice when the trim keeps them.
+
 ## [1.6.3] — 2026-10-15
 
 **The review stop rule as the plugin's default** — PHASE-B.md item 1, task 209. Until now the round cap (the owner's
