@@ -39,9 +39,10 @@ as an untracked file you could commit. The shell logger and `monitor-nudge.sh` d
   quotes is text, so a commit message or a note that quotes a dangerous command in backticks passes — in a plain
   command of data commands (`echo`, `printf`, `cat`, `tee`, `git commit`, …); and the body of a quoted heredoc that a
   data reader takes (`cat <<'EOF'`, `python3 - <<'PY'`) is data, so a script that only holds the text `curl … | sh` in
-  a string passes. On the workspace's own command history, 84 refusals became 24 and none was added. A few shapes 1.6.1
-  allowed are refused now on purpose (an echo literal inside a loop, a body that a program other than those readers
-  takes — the ledger, PB-COMMAND-DANGEROUS, lists them). **1.6.1's:** a command group spread over lines (`{` newline
+  a string passes. On the workspace's own command history, 84 refusals became 34: 52 commands are allowed now, and 2 that
+  1.6.1 allowed are refused — a python that runs the file its own command just wrote (the owner's ruling). Other shapes
+  1.6.1 allowed are refused on purpose too (an echo literal inside a loop; the ledger, PB-COMMAND-DANGEROUS, lists
+  them). **1.6.1's:** a command group spread over lines (`{` newline
   `echo '…'` newline `} | bash`) and `echo $'it\'s'; rm -rf /` were allowed — both refused now.
 
 - **A judge can no longer write the review record's structure** (task 200). `judge.md` separated review rounds by
@@ -149,9 +150,9 @@ task as not grave (PLAN.md, Phase B's inputs). What each costs you today:
 - **A nested `claude -p` shares the session's pointer** (task 193): its own stop is held by the outer task's open
   gates, and its prompt is logged as yours.
 - **A task made while you are back on 1.6.1, after 1.6.2 ran, is unknown to 1.6.2** when you upgrade again: its close
-  is refused ("task folder(s) the playbook CLI did not make") until you `tasks adopt` that folder or commit it.
-  Removing `.agent/task-registry` does not help — on purpose, a deleted registry enrols nothing, so it cannot clear a
-  folder made by hand (measured, task 206).
+  is refused ("task folder(s) the playbook CLI did not make") until you `tasks adopt` that folder or commit it. Or
+  remove `.agent/task-registry`: the next `tasks work <N>` or session start enrols every folder of the lane — any
+  made by hand too, so `tasks adopt` is the narrower way (both measured, task 206).
 - **Moved to Phase B on 2026-10-13:** a research task's post-D6 delta is always empty (refused now, not passed: such a
   close takes a fresh panel or the owner's OK); `sandbox --print-argv` creates the extra `--rw` paths on the host;
   whether a background sub-agent's completion notice starts a turn is not measured; two older exits of the chat-log

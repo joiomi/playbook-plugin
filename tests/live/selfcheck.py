@@ -504,6 +504,12 @@ def triage_answer() -> None:
 GROK_402_LINE = ('  grok:grok-4.7:medium         UNKNOWN            probe failed for another reason: Internal error: '
                  '{ "message": "API error (status 402 Payment Required): Grok Build usage balance exhausted", '
                  '"http_status": 402 }')
+# the same report around it (task 185's installed run, trimmed): the quota block's credits line and the grok section's
+# header print credit words in every report
+GROK_REPORT_AROUND = ("=== Judge pin verdicts (.agent/models.json ⊕ shipped) ===\n" + GROK_402_LINE + "\n\n"
+                      "=== codex models (cache writer 0.160.0, installed 0.160.0, fetched 0.0d ago) ===\n"
+                      "  AI credits (spent after the plan quota runs out): 0\n\n"
+                      "=== grok models (account-entitled list from `grok models`) ===\n  grok-4.7\n")
 
 
 def grok_entitlement() -> None:
@@ -513,7 +519,8 @@ def grok_entitlement() -> None:
     old = lambda v, out: v not in (None, "GONE", "OK") and re.search(r"402|credit|spending|limit|entitle", out, re.I) is not None  # noqa: E731
     check("E1 the OLD clause on a grok seat that answers OK (its credit back) — it failed the row", old("OK", "OK"), False)
     f = getattr(rows_judge, "entitlement_outcome", None)
-    got = (lambda v, out: f(v, out)) if f else (lambda v, out: "<no entitlement_outcome>")
+    seat = "grok:grok-4.7:medium"
+    got = (lambda v, out: f(v, out, seat)) if f else (lambda v, out: "<no entitlement_outcome>")
     check("E1 the real out-of-credit answer (UNKNOWN, the CLI's 402 words) is the entitlement case observed",
           got("UNKNOWN", GROK_402_LINE) == "pass", True, got("UNKNOWN", GROK_402_LINE))
     check("E1 grok answering OK waits (the refusal cannot be observed), it does not fail", got("OK", "OK") == "wait",
@@ -522,6 +529,14 @@ def grok_entitlement() -> None:
     check("E1 no line for grok at all fails", got(None, "") == "fail", True, got(None, ""))
     check("E1 a refusal without the CLI's own words fails", got("UNKNOWN", "probe failed") == "fail", True,
           got("UNKNOWN", "probe failed"))
+    # the real report always carries other credit words (release panel r1, fable/opus/gemini): the quota block and
+    # the grok section's header — a grok UNKNOWN for another reason (a timeout) must still fail
+    other = GROK_REPORT_AROUND.replace(GROK_402_LINE, GROK_402_LINE.split("probe failed")[0]
+                                       + "probe failed for another reason: timed out after 60 s")
+    check("E1 a non-credit UNKNOWN inside a real report (the quota block's credits line, the grok header) fails",
+          got("UNKNOWN", other) == "fail", True, got("UNKNOWN", other))
+    check("E1 the 402 line inside the same real report passes", got("UNKNOWN", GROK_REPORT_AROUND) == "pass", True,
+          got("UNKNOWN", GROK_REPORT_AROUND))
 
 
 def seat_answer_bound() -> None:

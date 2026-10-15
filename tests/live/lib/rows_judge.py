@@ -35,13 +35,15 @@ GROK_WAIT = ("grok", "its seat answers out of credit (HTTP 402) until the subscr
 REMOVED = re.compile(r"\bGONE\b|model (was )?removed")
 
 
-def entitlement_outcome(grok_verdict: "str | None", stdout: str) -> str:
+def entitlement_outcome(grok_verdict: "str | None", stdout: str, seat: str) -> str:
     """`tasks models check`'s verdict for the grok seat → "pass" (the refusal observed: not read as a removed model,
-    the CLI's own words kept), "wait" (grok answered OK — its credit is back, so the refusal cannot be observed on it;
-    the old clause FAILED the row there, task 206's plan panel A11) or "fail"."""
+    the CLI's own words kept ON THE SEAT'S OWN LINE — the report always holds other credit words: the quota block's credits line,
+    the grok section's header; task 206's release panel r1), "wait" (grok answered OK — its credit is back, so the
+    refusal cannot be observed on it; the old clause FAILED the row there, its plan panel A11) or "fail"."""
     if grok_verdict == "OK":
         return "wait"
-    if grok_verdict not in (None, "GONE") and re.search(r"402|credit|spending|limit|entitle", stdout, re.I):
+    own = [ln for ln in stdout.splitlines() if ln.split()[:1] == [seat]]
+    if grok_verdict not in (None, "GONE") and any(re.search(r"402|credit|spending|limit|entitle", ln, re.I) for ln in own):
         return "pass"
     return "fail"
 
@@ -303,7 +305,7 @@ def model_availability(out: Path) -> int:
         run.clause("missing: a pin each real CLI rejects is GONE, and the check fails",
                    verdict.get(bogus_claude) == "GONE" and verdict.get(bogus_codex) == "GONE" and r.returncode != 0,
                    f"{verdict}; rc {r.returncode}")
-        entitlement = entitlement_outcome(verdict.get(grok_seat), r.stdout)
+        entitlement = entitlement_outcome(verdict.get(grok_seat), r.stdout, grok_seat)
         if entitlement == "wait":
             run.wait_for("grok", "its seat answered OK — its credit is back, so the entitlement refusal cannot be observed "
                                  "on it (task 206); the case waits for a seat the account is not entitled to")
