@@ -1069,11 +1069,13 @@ def template_commentary_lines() -> "frozenset[str]":
 # through task.md — the SETTLED block reads rejected findings from judge.md, and here 50 of 64 tasks keep them in
 # task.md alone.
 _MUST_KEEP_HEADING = re.compile(
-    r'^(status|risk|intent|why|design|handoff|owner rulings|work plan|work|plan review|implementation review|review)\b',
+    r'^(status|risk|intent|why|design|handoff|owner rulings|work plan|work|plan review|implementation review|review'
+    r'|phase \d+|findings)\b',           # a retro record's journal: its phases and findings (impl round 2, S2)
     re.IGNORECASE)
 # Sent only after every other section: the template's standing text and the machine's own receipts.
 _SENT_LAST_HEADING = re.compile(
-    r'^(standing orders|pre-panel audit|verification receipt|references)\b', re.IGNORECASE)
+    r'^(standing orders|pre-panel audit|verification receipt)\b', re.IGNORECASE)   # References (the user's words)
+    # fill with the ordinary sections (impl round 2, S8)
 _TRIM_HEADING_RE = re.compile(r'^#{1,2}\s')
 _TRIM_GATE_RE = re.compile(r'^([ \t]*)- \[[ xX]\] ?')
 # Shrinking the kept sections when they alone do not fit (impl round 1 of task 212, R3-R6), each step the LEAST
@@ -1115,9 +1117,11 @@ def _standing_order_lines() -> "frozenset[str]":
     return _STANDING_ORDER_LINES
 
 
-def _trim_fenced(lines: "list[tuple[int, str]]", unclosed_is_live: bool = False) -> "list[bool]":
+def _trim_fenced(lines: "list[tuple[int, str]]", unclosed_is_live: bool = False,
+                 track_indented_code: bool = True) -> "list[bool]":
     # fail CLOSED by default: a line after an unclosed fence is never taken for template text to drop
-    return _iter_fenced_flags([ln.rstrip("\r\n") for _, ln in lines], unclosed_is_live=unclosed_is_live)
+    return _iter_fenced_flags([ln.rstrip("\r\n") for _, ln in lines], unclosed_is_live=unclosed_is_live,
+                              track_indented_code=track_indented_code)
 
 
 def _trim_indent(s: str) -> int:
@@ -1142,7 +1146,8 @@ def _trim_split(text: str) -> "list[dict]":
         # `<!-- pin -->` on its own line within the first 3 lines UNDER the heading: the author says the
         # section is load-bearing (it lives below the heading, never in it — headings are parsed exactly)
         s["pinned"] = any(ln.strip() == "<!-- pin -->" for _, ln in s["lines"][1:4])
-        g = [ln for k, (_, ln) in enumerate(s["lines"]) if k in _trim_gate_lines(s["lines"])]
+        gates = _trim_gate_lines(s["lines"])          # once per section (impl round 2, S8: it was per line)
+        g = [ln for k, (_, ln) in enumerate(s["lines"]) if k in gates]
         s["gates"] = (len(g), sum(1 for ln in g if re.match(r'^[ \t]*- \[[xX]\]', ln)))
     return secs
 
@@ -1175,8 +1180,9 @@ def _trim_template_text(secs: "list[dict]") -> "tuple[int, int]":
 
 def _trim_gate_lines(lines: "list[tuple[int, str]]") -> "set[int]":
     """The indexes of the gate lines. Found fail-OPEN (impl round 1, R7): a checkbox after an unclosed fence
-    is still a gate — the cut keeps it rather than read it as prose."""
-    fl = _trim_fenced(lines, unclosed_is_live=True)
+    is still a gate — the cut keeps it rather than read it as prose. No indented-code tracking (impl round 2, S3):
+    a nested checkbox indented four spaces after a blank line is a gate, as the lifecycle's scanner reads it."""
+    fl = _trim_fenced(lines, unclosed_is_live=True, track_indented_code=False)
     return {k for k, (_, ln) in enumerate(lines) if not fl[k] and _TRIM_GATE_RE.match(ln)}
 
 
@@ -1221,11 +1227,15 @@ def _trim_notes(lines: "list[tuple[int, str]]", keep_chars: int, cut: "set[int]"
         cont = " ".join(ln.strip() for _, ln in lines[a + 1:b] if ln.strip())
         full = (body + " " + cont).strip() if cont else body
         title = next((t for t in _template_gate_titles() if body.startswith(t)), None)
-        keep = (len(title) if title else min(len(body), 120)) + keep_chars
-        if len(full) <= keep + 40:
+        tlen = len(title) if title else min(len(body), 120)
+        if len(full) <= tlen + keep_chars + 40 and tlen <= 120:
             continue
+        # the title is kept up to 120 characters — a template gate's too (impl round 2, S1: the template's longest
+        # titles run to 612 characters and crowded the agent's notes out: "șablonul pleacă") — then the note's start
+        shown = full[:tlen] if tlen <= 120 else full[:120].rstrip() + " …"
         cut.add(no)
-        out[a:b] = [(no, f"{first[:m.end()]}{full[:keep].rstrip()} [… note cut — task.md line {no}]\n")]
+        out[a:b] = [(no, f"{first[:m.end()]}{shown}{full[tlen:tlen + keep_chars].rstrip()}"
+                         f" [… note cut — task.md line {no}]\n")]
     return out
 
 
@@ -1235,7 +1245,12 @@ def _trim_prose(lines: "list[tuple[int, str]]", keep_chars: int, pinned: bool, t
     the owner's rulings — R4, R5), else the start. A long line keeps its part; a fence goes whole, never half.
     -> (lines, cut?)."""
     in_unit = {k for a, b in _trim_gate_units(lines) for k in range(a, b)}
-    prose = [k for k in range(1, len(lines)) if k not in in_unit and not _TRIM_SUBHEADING_RE.match(lines[k][1])]
+    fl = _trim_fenced(lines)
+    # a `###` line is structure only outside a fence (impl round 2, S7: one inside a fence stopped the fence walk
+    # and left the fence open)
+    prose = [k for k in range(1, len(lines))
+             if k not in in_unit and not (_TRIM_SUBHEADING_RE.match(lines[k][1]) and not fl[k])]
+    prose_set = set(prose)
     order = list(reversed(prose)) if tail else prose
     acc, c = 0, None
     for k in order:
@@ -1245,7 +1260,6 @@ def _trim_prose(lines: "list[tuple[int, str]]", keep_chars: int, pinned: bool, t
         acc += len(lines[k][1])
     if c is None:
         return lines, False
-    fl = _trim_fenced(lines)
     part = None
     room = keep_chars - acc
     if not fl[c] and room > 40:
@@ -1253,15 +1267,19 @@ def _trim_prose(lines: "list[tuple[int, str]]", keep_chars: int, pinned: bool, t
         part = ("… " + text[-room:].lstrip() + "\n") if tail else (text[:room].rstrip() + " …\n")
     else:
         step = 1 if tail else -1             # to the fence's far side: the block goes whole
-        while 0 < c + step < len(lines) and fl[c] and fl[c + step] and (c + step) in set(prose):
+        while 0 < c + step < len(lines) and fl[c] and fl[c + step] and (c + step) in prose_set:
             c += step
     gone = [k for k in prose if (k <= c if tail else k >= c) and lines[k][1].strip()]
     if not gone:
         return lines, False
     first, last = lines[gone[0]][0], lines[gone[-1]][0]
     what = ("a pinned section; " if pinned else "") + ("older text; " if tail else "")
-    marker = (lines[c][0], f"[… prose cut — {what}task.md lines {first}-{last} …]\n")
-    prose_set = set(prose)
+    marker = (lines[c][0], f"[… prose cut — {what}{len(gone)} line(s) of task.md lines {first}-{last} …]\n")
+    saved = sum(len(lines[k][1]) for k in prose if (k <= c if tail else k >= c)) - len(part or "")
+    if saved <= len(marker[1]):
+        # a cut that saves no more than its own marker is not made: the size then never grows as the limit
+        # falls, so the search for the least cut stays sound (impl round 2, S6)
+        return lines, False
     out: "list[tuple[int, str]]" = []
     for k, x in enumerate(lines):
         dropped = k in prose_set and (k <= c if tail else k >= c)
@@ -1288,7 +1306,9 @@ def _trim_assemble(secs: "list[dict]", keep: "list[bool]") -> str:
             # the names without their `#`: the marker must not read as a heading of the payload
             names = "; ".join(f"{s['head'] or '(preamble)'}" + (
                 f" — not sent: {s['gates'][0]} gate(s), {s['gates'][1]} checked" if s["gates"][0] else "")
-                for s in run)
+                for s in run[:5])
+            if len(run) > 5:             # impl round 2, S5: a long list of names took the room of gates
+                names += f"; and {len(run) - 5} more"
             out.append(f"\n\n[... {len(run)} section(s) elided to fit context budget: {names} ...]\n\n")
             run.clear()
     for s, k in zip(secs, keep):
@@ -1319,10 +1339,20 @@ def _trim_shrink(secs: "list[dict]", keep: "list[bool]", budget: int) -> "tuple[
     sections whose prose was cut, fits?). Leaves each section's lines at the cut it returns."""
     base = [list(s["lines"]) for s in secs]
 
+    # Status and Risk keep their value line — the fact the close bar turns on — and nothing else is spared there
+    # (impl round 2, S4: exempting the whole section let a long explanation under Risk push gates out)
+    floor: "dict[int, int]" = {}
+    for i, s in enumerate(secs):
+        if keep[i] and _TRIM_FIELD_HEADING.match(s["head"] or ""):
+            acc = 0
+            for _, ln in base[i][1:]:
+                acc += len(ln)
+                if ln.strip():
+                    break
+            floor[i] = acc
+
     def _tier(i: int) -> "int | None":
         head = secs[i]["head"] or ""
-        if _TRIM_FIELD_HEADING.match(head):
-            return None          # Status and Risk hold one value each — the fact the close bar turns on
         if _TRIM_RULINGS_HEADING.match(head):
             return 2
         return 1 if secs[i]["pinned"] else 0
@@ -1336,6 +1366,8 @@ def _trim_shrink(secs: "list[dict]", keep: "list[bool]", budget: int) -> "tuple[
             s = secs[i]
             lines = _trim_notes(base[i], notes_at, cut)
             at = limits[t] if t is not None else None
+            if at is not None and i in floor:
+                at = max(at, floor[i])
             if at is not None:
                 head = s["head"] or ""
                 tail = bool(_TRIM_REVIEW_HEADING.match(head) or _TRIM_RULINGS_HEADING.match(head))
@@ -1448,6 +1480,8 @@ def trim_notice(receipt: str, task_path: str, transport: bool = True) -> str:
     m = re.search(r"· dropped: (.+?)(?: · WARNING|$)", receipt)
     if m and m.group(1).strip() != "(none)":
         parts.append(f"dropped sections: {m.group(1)[:200]}")
+    if "hard-truncated" in receipt:
+        parts.append("WARNING: hard-truncated — some gate titles were not sent")
     where = " to fit your transport" if transport else ""
     return (f"your inline copy of {task_path} was TRIMMED{where} ({'; '.join(parts) or 'some sections'}) — "
             f"read {task_path} in the repo for the full trace.")

@@ -11,10 +11,11 @@ measured on the real records at the 50K argv window (the grok seat), 18 of 203 t
 project lost it whole. Now the template's own commentary, the standing orders and the older audit receipts go first;
 the title, Status, Risk, Intent, Why, Design, Handoff, Owner rulings, the Work Plan and the review sections are kept
 (the owner's rulings of 2026-10-15); when they alone do not fit, each step takes the least cut that fits — gate notes
-(each keeps its start and points to its line in task.md), then the notes down to the titles, then prose, his rulings
-last and their newest kept — and no gate line is lost: 0 of 244 records at 25K, 50K and 100K, nor a ruling line. The
-price, measured: at 50K, notes are cut in 11 + 17 records, prose in 1 + 3, and the oldest review triage bullets go
-first (6 + 54 of them at 50K; 1.6.3 lost 233 + 292). The judge's prompt now says what was not sent,
+(each keeps its title up to 120 characters — a template gate's too — the start of its note and a pointer to its line
+in task.md), then the notes down to the titles, then prose, his rulings last and their newest kept — and no gate of a
+kept section is lost (a retro record's phases count as its journal): 0 of 244 records at 25K, 50K and 100K, nor a
+ruling line. The price, measured: at 50K, notes are cut in 15 + 17 records, prose in 1 + 3, and the oldest review
+triage bullets go first (6 + 51 of them at 50K; 1.6.3 lost 233 + 292). The judge's prompt now says what was not sent,
 cut and dropped (it used to say "dropped sections: (none)" while notes were cut), and the selection counts its own
 elision markers (1.6.3's could push a fitting selection over the budget and slice its tail). The owner's rulings also
 ride first in the SETTLED block, so they reach a judge twice when the trim keeps them.

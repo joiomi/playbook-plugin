@@ -301,6 +301,113 @@ class ImplRoundOne(unittest.TestCase):
         self.assertIn("- [ ] S1 my own standing gate", out)
 
 
+class ImplRoundTwo(unittest.TestCase):
+    """Impl panel round 2 (S1-S8): its judges' reproductions."""
+
+    def _count(self, text, prefix="- [x] W"):
+        return text.count(prefix)
+
+    def test_a_long_template_title_does_not_crowd_out_the_notes(self):               # S1
+        long_title = max(core._template_gate_titles(), key=len)
+        self.assertGreater(len(long_title), 300)
+        work = "".join(f"- [x] {long_title} — note-start-{i} " + "n" * 500 + "\n" for i in range(1, 21))
+        text = _record(work=work)
+        out, _ = core.select_task_context(text, 8_000)
+        self.assertLessEqual(len(out), 8_000)
+        for i in range(1, 21):
+            self.assertIn(f"note-start-{i} ", out)
+
+    def test_a_retro_records_phases_are_kept(self):                                    # S2
+        phases = "## Phase 2: Per-Task Review\n" + _gates(6, 200, "P") + "\n## Findings\n" + _gates(3, 100, "F")
+        # a newer Debrief that fills the room: the newest-first fill kept it and dropped the phases
+        text = _record(work=_gates(2, 20), after=phases + _fat("Debrief", 3_800))
+        out, _ = core.select_task_context(text, 5_000)
+        self.assertLessEqual(len(out), 5_000)
+        self.assertEqual(out.count("- [x] P"), 6)
+        self.assertEqual(out.count("- [x] F"), 3)
+
+    def test_a_nested_gate_after_a_blank_line_stays(self):                           # S3
+        work = "".join(f"- [x] W{i} parent — " + "p" * 900 + f"\n\n    - [x] W{i}.1 child — c\n" for i in range(1, 6))
+        text = _record(work=work)
+        out, _ = core.select_task_context(text, 2_500)
+        self.assertLessEqual(len(out), 2_500)
+        for i in range(1, 6):
+            self.assertIn(f"- [x] W{i}.1 child", out)
+
+    def test_a_long_risk_explanation_does_not_cost_gates(self):                      # S4
+        text = _record(work=_gates(10, 20), risk="assertive\n" + "e" * 10_000)
+        out, _ = core.select_task_context(text, 5_000)
+        self.assertLessEqual(len(out), 5_000)
+        self.assertIn("## Risk\nassertive", out)
+        self.assertEqual(self._count(out), 10)
+
+    def test_the_risk_value_survives_when_all_ordinary_prose_goes(self):             # S4 (mutation run M29)
+        # a big pinned section forces the unpinned prose to 0 before the pinned cut: the Risk value stays
+        pinned = "## Pinned big\n<!-- pin -->\n" + "b" * 20_000 + "\n\n"
+        text = _record(work=_gates(5, 20), risk="assertive\n" + "e" * 10_000, after=pinned)
+        out, _ = core.select_task_context(text, 1_500)
+        self.assertLessEqual(len(out), 1_500)
+        self.assertIn("## Risk\nassertive", out)
+        self.assertEqual(self._count(out), 5)
+
+    def test_many_dropped_sections_do_not_cost_gates(self):                          # S5
+        after = "".join(f"## Notes section number {k} with a long heading of eighty characters …\n" + "x" * 3_000 + "\n"
+                        for k in range(30))       # none fits: every heading lands in the marker
+        text = _record(work=_gates(100, 4), before=after)   # the marker stands before the Work Plan
+        out, _ = core.select_task_context(text, 5_000)
+        self.assertLessEqual(len(out), 5_000)
+        self.assertEqual(self._count(out), 100)
+
+    def test_short_pinned_sections_do_not_break_the_search(self):                    # S6
+        # codex's shape: a cut marker is longer than a short pinned section's prose, so cutting every pinned
+        # section to 0 is LARGER than cutting only the big one — the room is set where only the latter fits
+        pins = "".join(f"## Pinned {k}\n<!-- pin -->\nshort pinned prose {k}\n\n" for k in range(30))
+        small = _record(work=_gates(130, 4), after=pins + "## Pinned big\n<!-- pin -->\n" + "b" * 100 + "\n\n")
+        text = _record(work=_gates(130, 4), after=pins + "## Pinned big\n<!-- pin -->\n" + "b" * 10_000 + "\n\n")
+        room = len(small) + 200
+        out, _ = core.select_task_context(text, room)
+        self.assertLessEqual(len(out), room)
+        self.assertEqual(self._count(out), 130)
+        self.assertIn("short pinned prose 29", out)
+
+    def test_a_fenced_subheading_does_not_leave_a_fence_open(self):                  # S7
+        # the cut lands on the fence's line after its `### inside` (gemini's shape): the fence must go whole
+        body = ["```text\n"] + [f"line {k} " + "q" * 80 + "\n" for k in range(40)] + ["### inside\n", "more\n", "```\n",
+                                                                                         "i" * 4_000 + "\n"]
+        lines = [(1, "## Intent\n")] + [(k + 2, ln) for k, ln in enumerate(body)]
+        keep = sum(len(ln) for ln in body[:41]) + 2        # opener + 40 lines fit; the next line does not
+        out, did = core._trim_prose(lines, keep, False, False)
+        self.assertTrue(did)
+        fences = [ln for _, ln in out if ln.startswith("```")]
+        self.assertEqual(len(fences) % 2, 0, "".join(ln for _, ln in out)[-300:])
+
+    def test_the_users_words_go_before_a_machine_receipt(self):                     # S8 (References)
+        # at the smallest room that carries the owner's words, the (smaller, newer) audit receipt must not have
+        # been sent before them — it was, while References was a send-last section
+        refs = "## References\n\n### Recent Chat\n\n```text\nthe owner's own words " + "w" * 1_000 + "\n```\n\n"
+        text = _record(work=_gates(2, 20), before=refs, after=_receipts(1) + _fat("Notes", 30_000))
+        out, room = "", 0
+        for room in range(800, 3_000, 10):
+            out, _ = core.select_task_context(text, room)
+            if "the owner's own words" in out:
+                break
+        self.assertIn("the owner's own words", out)
+        self.assertNotIn("### 2026-10-15T10:00", out, f"room {room}")
+
+    def test_the_notice_carries_a_hard_cut(self):                                    # S8 (grok)
+        receipt = ("task.md 9,000 → 3,000 chars · gate notes cut: 48 · kept: Work Plan · dropped: (none)"
+                   " · WARNING: the headings and gate titles … hard-truncated — raise the budget")
+        self.assertIn("WARNING: hard-truncated", core.trim_notice(receipt, "t.md"))
+
+    def test_a_long_section_is_cut_quickly(self):                                    # S8 (speed)
+        import time
+        notes = "## Notes\n" + "".join(f"log line {k} " + "z" * 3 + "\n" for k in range(4_000))
+        text = _record(work=_gates(10, 50), after=notes + _fat("Debrief", 70_000))
+        t0 = time.monotonic()
+        core.select_task_context(text, 50_000)
+        self.assertLess(time.monotonic() - t0, 2.0)
+
+
 class TheJudgesNotice(unittest.TestCase):
     """Q10: the notice a judge reads says what was removed, cut and dropped."""
 
