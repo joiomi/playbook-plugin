@@ -529,7 +529,7 @@ class ScaffoldPinsTheTaskTable(unittest.TestCase):
         self.assertLess(selected.count("\n| 0"), 40)
         # since task 212 the pinned table is cut by the prose step (its start kept), not by a blind
         # slice of the payload's tail: the receipt warns and the cut's own marker names the pin
-        self.assertIn("prose cut: Structural Summary", receipt)
+        self.assertIn("Structural Summary", receipt.split("· prose cut: ")[1].split(" · ")[0])
         self.assertIn("WARNING", receipt)
         self.assertIn("prose cut — a pinned section;", selected)
 

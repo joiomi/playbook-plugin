@@ -138,7 +138,8 @@ class StageTwoMustKeep(unittest.TestCase):
         self.assertNotIn("WARNING", receipt, "the elision markers pushed a fitting selection over the budget")
 
     def test_a_light_tasks_work_section_is_kept(self):
-        text = _record(work=_gates(4, 200), work_heading="Work", after=_fat("Review", 4_000))
+        # (the fat section is "Notes": a light task's "## Review" is kept since the owner's W4c ruling)
+        text = _record(work=_gates(4, 200), work_heading="Work", after=_fat("Notes", 4_000))
         out, _ = core.select_task_context(text, 5_000)
         for i in range(1, 5):
             self.assertIn(f"end-of-note-W{i}", out)
@@ -184,7 +185,7 @@ class StageThreeEveryGateStays(unittest.TestCase):
     def test_notes_are_cut_every_gate_kept_with_its_original_line(self):
         text = _record(work=_gates(40, 1_500))
         out, receipt = core.select_task_context(text, 20_000)
-        self.assertLessEqual(len(out), 20_000 + 200)
+        self.assertLessEqual(len(out), 20_000)
         self.assertEqual(out.count("- [x] W"), 40)
         lines = text.splitlines()
         for i in (1, 17, 40):
@@ -196,9 +197,108 @@ class StageThreeEveryGateStays(unittest.TestCase):
     def test_a_huge_intent_does_not_push_out_the_gates(self):
         text = _record(work=_gates(10, 300)).replace("make the thing", "i" * 60_000)
         out, receipt = core.select_task_context(text, 20_000)
-        self.assertLessEqual(len(out), 20_000 + 200)
+        self.assertLessEqual(len(out), 20_000)
         self.assertEqual(out.count("- [x] W"), 10)
         self.assertIn("prose cut:", receipt)
+
+
+class ImplRoundOne(unittest.TestCase):
+    """Impl panel round 1 (R1-R9): the cases its judges built against the first version."""
+
+    def _gate_lines(self, text):
+        return [ln for ln in text.splitlines() if ln.lstrip().startswith(("- [ ]", "- [x]"))]
+
+    def test_nested_gates_stay_when_the_parent_note_is_cut(self):                      # R1
+        work = "".join(f"- [x] W{i} parent — " + "p" * 1_500 + "\n"
+                       + "".join(f"  - [x] W{i}.{k} child — " + "c" * 400 + "\n" for k in range(1, 4))
+                       for i in range(1, 9))
+        text = _record(work=work)
+        out, _ = core.select_task_context(text, 9_000)
+        self.assertLessEqual(len(out), 9_000)
+        self.assertEqual(len(self._gate_lines(out)), len(self._gate_lines(text)))
+        self.assertIn("  - [x] W8.3 child", out)
+
+    def test_an_outcome_written_below_its_gate_keeps_its_start(self):                  # R2
+        work = "".join(f"- [x] W{i} step\n  outcome-start-{i} " + "o" * 1_500 + "\n" for i in range(1, 11))
+        text = _record(work=work)
+        out, _ = core.select_task_context(text, 6_000)
+        self.assertLessEqual(len(out), 6_000)
+        for i in range(1, 11):
+            self.assertIn(f"outcome-start-{i}", out)
+
+    def test_a_checkbox_after_an_unclosed_fence_is_still_a_gate(self):                # R7
+        work = "intro\n```python\nx = 1\n" + _gates(8, 600)
+        text = _record(work=work)
+        out, _ = core.select_task_context(text, 3_500)
+        self.assertLessEqual(len(out), 3_500)
+        self.assertEqual(out.count("- [x] W"), 8)
+
+    def test_subheadings_stay_above_their_gates(self):                                 # R8
+        design = ("## Design Phase\n\n### Understand\n" + "u" * 3_000 + "\n" + _gates(2, 40, "U")
+                  + "### Structure\n" + "s" * 3_000 + "\n" + _gates(2, 40, "S"))
+        text = _record(work=_gates(2, 40), before=design)
+        out, _ = core.select_task_context(text, 3_000)
+        self.assertLessEqual(len(out), 3_000)
+        self.assertIn("### Structure", out)
+        self.assertLess(out.index("### Structure"), out.index("- [x] S1"))
+
+    def test_rulings_stay_whole_when_cutting_notes_is_enough(self):                   # R5
+        rulings = "## Owner rulings\n<!-- pin -->\n" + "".join(f"- ruling-{i} " + "r" * 200 + "\n" for i in range(1, 14))
+        text = _record(work=_gates(30, 1_500), before=rulings)
+        out, _ = core.select_task_context(text, 12_000)
+        self.assertLessEqual(len(out), 12_000)
+        for i in range(1, 14):
+            self.assertIn(f"- ruling-{i} ", out)
+        self.assertNotIn("prose cut", out)
+
+    def test_the_intent_is_cut_before_the_rulings(self):                              # R5 (mutation run M21)
+        rulings = "## Owner rulings\n" + "".join(f"- ruling-{i} " + "r" * 220 + "\n" for i in range(1, 14))
+        text = _record(work=_gates(3, 40), before=rulings).replace("make the thing", "i" * 20_000)
+        out, receipt = core.select_task_context(text, 6_000)
+        self.assertLessEqual(len(out), 6_000)
+        for i in range(1, 14):
+            self.assertIn(f"- ruling-{i} ", out)
+        self.assertIn("Intent", receipt.split("· prose cut: ")[1].split(" · ")[0])
+
+    def test_the_newest_ruling_survives_a_rulings_cut(self):                           # R5 (grok)
+        rulings = "## Owner rulings\n" + "".join(f"- ruling-{i} " + "r" * 400 + "\n" for i in range(1, 41))
+        text = _record(work=_gates(3, 40), before=rulings)
+        out, _ = core.select_task_context(text, 5_000)
+        self.assertLessEqual(len(out), 5_000)
+        self.assertIn("- ruling-40 ", out)
+
+    def test_the_newest_triage_survives_a_review_cut(self):                           # R4
+        triage = "## Implementation Review\n\n" + "".join(f"- **T{i}** a finding " + "t" * 300 + "\n" for i in range(1, 31))
+        text = _record(work=_gates(3, 40), after=triage)
+        out, _ = core.select_task_context(text, 4_000)
+        self.assertLessEqual(len(out), 4_000)
+        self.assertIn("**T30** a finding", out)
+
+    def test_no_other_section_is_sent_once_kept_content_is_cut(self):                 # R3
+        text = _record(work=_gates(20, 1_000), after=_fat("Debrief", 800))
+        out, receipt = core.select_task_context(text, len(text) - 1_000)
+        self.assertIn("gate notes cut:", receipt)
+        self.assertIn("Debrief", receipt.split("· dropped:")[1])
+        self.assertIn("n" * 500, out, "notes were cut further than the room needed")
+
+    def test_gates_are_not_sliced_while_prose_remains(self):                           # R6 (codex)
+        text = _record(work="w" * 20_000 + "\n" + _gates(30, 300)).replace("make the thing", "i" * 20_000)
+        out, receipt = core.select_task_context(text, 5_000)
+        self.assertLessEqual(len(out), 5_000)
+        self.assertEqual(out.count("- [x] W"), 30)
+
+    def test_titles_alone_over_the_room_say_so(self):                                  # R6
+        text = _record(work=_gates(400, 50), risk="assertive")
+        out, receipt = core.select_task_context(text, 3_000)
+        self.assertLessEqual(len(out), 3_000)
+        self.assertIn("gate titles of the kept and pinned sections alone exceed the budget", receipt)
+        self.assertIn("## Risk\nassertive", out, "the last step cut the Risk value")
+
+    def test_an_authors_own_line_in_the_standing_orders_stays(self):                  # R9
+        so = template.standing_orders() + "\n- [ ] S1 my own standing gate\n\n"
+        text = _record(work=_gates(2, 20), after=so + _fat("Notes", 30_000))
+        out, _ = core.select_task_context(text, 3_000)
+        self.assertIn("- [ ] S1 my own standing gate", out)
 
 
 class TheJudgesNotice(unittest.TestCase):
