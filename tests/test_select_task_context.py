@@ -60,18 +60,21 @@ class SelectTaskContext(unittest.TestCase):
     def test_recent_section_survives_when_old_middle_dropped(self):
         # Intent(orientation) + three big middle sections + a small recent one.
         # Budget fits orientation + the recent tail but not the fat middle.
+        # (Task 212: the fat middle is "Notes", "Scratch" and "Log", not "Work Plan", "Plan Review" and
+        # "Implementation Review" — those are kept now; this pins the newest-first fill among the sections
+        # a trim may drop — plan panel T10, the owner's W4c ruling.)
         text = (
             section("Intent", 500)
-            + section("Work Plan", 8000)
-            + section("Plan Review", 8000)
-            + section("Implementation Review", 8000)
+            + section("Notes", 8000)
+            + section("Scratch", 8000)
+            + section("Log", 8000)
             + section("Debrief", 500)
         )
         out, receipt = select_task_context(text, 3000)
         self.assertIn("## Intent", out)          # orientation kept
         self.assertIn("## Debrief", out)         # most-recent kept — the head-slice failure
-        self.assertNotIn("body-of-Plan-Review", out)  # fat middle dropped
-        self.assertIn("Plan Review", receipt)    # and named in the receipt
+        self.assertNotIn("body-of-Scratch", out)  # fat middle dropped
+        self.assertIn("Scratch", receipt)        # and named in the receipt
         self.assertIn("dropped:", receipt)
 
     def test_orientation_survives_even_when_old_and_large(self):
@@ -109,11 +112,15 @@ class SelectTaskContext(unittest.TestCase):
             self.assertIn("B", receipt)
 
     def test_output_bounded_even_when_orientation_overflows(self):
-        # Single orientation section far larger than the budget: kept, but bounded.
+        # Single orientation section far larger than the budget: kept, but bounded — since task 212 by
+        # cutting its prose (its start kept, a pointer to the lines that went), loudly, not by a blind slice.
         text = section("Design", 50_000)
         out, receipt = select_task_context(text, 5000)
         self.assertLessEqual(len(out), 5000 + 80)  # budget + short marker
-        self.assertIn("hard-truncated", receipt)
+        self.assertIn("## Design", out)
+        self.assertIn("body-of-Design", out)
+        self.assertIn("prose cut: Design", receipt)
+        self.assertIn("WARNING", receipt)
 
 
 if __name__ == "__main__":

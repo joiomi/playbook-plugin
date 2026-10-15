@@ -527,8 +527,11 @@ class ScaffoldPinsTheTaskTable(unittest.TestCase):
         text = scaffold.read_text(encoding="utf-8")
         selected, receipt = select_task_context(text, 2_000)
         self.assertLess(selected.count("\n| 0"), 40)
-        self.assertIn("hard-truncated", receipt)
-        self.assertIn("pinned", selected[-120:])
+        # since task 212 the pinned table is cut by the prose step (its start kept), not by a blind
+        # slice of the payload's tail: the receipt warns and the cut's own marker names the pin
+        self.assertIn("prose cut: Structural Summary", receipt)
+        self.assertIn("WARNING", receipt)
+        self.assertIn("prose cut — a pinned section;", selected)
 
     def test_the_pin_does_not_hide_the_table_from_the_next_retro(self):
         # `retro_carry_over` reads the rows of that same section

@@ -1044,91 +1044,335 @@ def split_md_sections(text: str) -> "list[tuple[str | None, str]]":
     return sections
 
 
+_TEMPLATE_COMMENTARY: "frozenset[str] | None" = None
+
+
+def template_commentary_lines() -> "frozenset[str]":
+    """The template's own commentary — every `> ` line the CLI's task templates render
+    (each task type, light, quick, the standing orders) — which the judges' trim may drop
+    from an over-budget task.md (task 212, the owner's "șablonul pleacă"). Only `>` lines:
+    a field value (`pending`, `unclassified`), a separator, a placeholder, a heading or a
+    gate is never template text to drop, even when it reads the same (plan panel T1).
+    Built once per process."""
+    global _TEMPLATE_COMMENTARY
+    if _TEMPLATE_COMMENTARY is None:
+        from tasks import template as _t
+        lines: "set[str]" = set()
+        for ty in [None, "quick", "light", *PLAYBOOKS]:
+            lines.update(_t.render_template(1, "X", ty).splitlines())
+        lines.update(_t.standing_orders().splitlines())
+        _TEMPLATE_COMMENTARY = frozenset(ln for ln in lines if ln.startswith(">") and ln.strip(">").strip())
+    return _TEMPLATE_COMMENTARY
+
+
+# Task 212 (PHASE-B.md item 2; the owner, 2026-10-15): what a judge must never lose — the task's title, Status,
+# Risk, Intent, Why, Design, Handoff, his rulings and the Work Plan (a light task's Work) — and what goes first:
+# the template's own text and the older audit receipts ("Jurnalul rămâne, șablonul pleacă"); when even the kept
+# part does not fit, every gate stays with the start of its note ("Toți pașii, note scurtate"). Measured before
+# it: at the 50K argv window 21 of 41 WoW task.md and 18 of 202 here lost the whole Work Plan. The review
+# sections too (his ruling at the task's checkpoint): the triage of the previous round reaches the next judge only
+# through task.md — the SETTLED block reads rejected findings from judge.md, and here 50 of 64 tasks keep them in
+# task.md alone.
+_MUST_KEEP_HEADING = re.compile(
+    r'^(status|risk|intent|why|design|handoff|owner rulings|work plan|work|plan review|implementation review|review)\b',
+    re.IGNORECASE)
+# Sent only after every other section: the template's standing text and the machine's own receipts.
+_SENT_LAST_HEADING = re.compile(
+    r'^(standing orders|pre-panel audit|verification receipt|references)\b', re.IGNORECASE)
+_TRIM_HEADING_RE = re.compile(r'^#{1,2}\s')
+_TRIM_GATE_RE = re.compile(r'^([ \t]*)- \[[ xX]\] ?')
+# Shrinking steps for the kept sections, in order: gate notes to N characters, then their prose to N
+# characters, then the notes to the gate's title alone ("notes", 0) — never a gate line dropped.
+_TRIM_STEPS = (("notes", 600), ("notes", 300), ("notes", 150),
+               ("prose", 2000), ("prose", 800), ("prose", 200), ("notes", 0))
+_TEMPLATE_GATE_TITLES: "tuple[str, ...] | None" = None
+
+
+def _template_gate_titles() -> "tuple[str, ...]":
+    """The CLI's own gate texts (what follows `- [ ] ` in a render), longest first: a cut keeps a
+    template gate's whole title (plan panel T4)."""
+    global _TEMPLATE_GATE_TITLES
+    if _TEMPLATE_GATE_TITLES is None:
+        from tasks import template as _t
+        titles: "set[str]" = set()
+        for ty in [None, "quick", "light", *PLAYBOOKS]:
+            for ln in _t.render_template(1, "X", ty).splitlines():
+                m = _TRIM_GATE_RE.match(ln)
+                if m and ln[m.end():].strip():
+                    titles.add(ln[m.end():].rstrip())
+        _TEMPLATE_GATE_TITLES = tuple(sorted(titles, key=len, reverse=True))
+    return _TEMPLATE_GATE_TITLES
+
+
+def _trim_fenced(lines: "list[tuple[int, str]]") -> "list[bool]":
+    # fail CLOSED for what a cut decides: a line after an unclosed fence is never taken for template text or a gate
+    return _iter_fenced_flags([ln.rstrip("\r\n") for _, ln in lines], unclosed_is_live=False)
+
+
+def _trim_indent(s: str) -> int:
+    return len(s.expandtabs(4)) - len(s.expandtabs(4).lstrip(" "))
+
+
+def _trim_split(text: str) -> "list[dict]":
+    """The level-1/2 sections of task.md, each line with its line number in the ORIGINAL text (a cut note
+    points back to it — plan panel T5). A heading inside a code fence is content, not a boundary (T6):
+    a fenced `## Example` in the Work Plan must not carry the gates after it out of the Work Plan."""
+    raw = text.splitlines(keepends=True)
+    fenced = _iter_fenced_flags([ln.rstrip("\r\n") for ln in raw], unclosed_is_live=True)
+    secs: "list[dict]" = []
+    for i, ln in enumerate(raw):
+        if _TRIM_HEADING_RE.match(ln) and not fenced[i]:
+            secs.append({"head": ln.lstrip("#").strip(), "level1": not ln.startswith("##"), "lines": [(i + 1, ln)]})
+        elif secs:
+            secs[-1]["lines"].append((i + 1, ln))
+        else:
+            secs.append({"head": None, "level1": False, "lines": [(i + 1, ln)]})
+    for s in secs:
+        # `<!-- pin -->` on its own line within the first 3 lines UNDER the heading: the author says the
+        # section is load-bearing (it lives below the heading, never in it — headings are parsed exactly)
+        s["pinned"] = any(ln.strip() == "<!-- pin -->" for _, ln in s["lines"][1:4])
+        fl = _trim_fenced(s["lines"])
+        g = [ln for k, (_, ln) in enumerate(s["lines"]) if _TRIM_GATE_RE.match(ln) and not fl[k]]
+        s["gates"] = (len(g), sum(1 for ln in g if re.match(r'^[ \t]*- \[[xX]\]', ln)))
+    return secs
+
+
+def _trim_template_text(secs: "list[dict]") -> "tuple[int, int]":
+    """Stage 1: the template's commentary lines out (never inside a fence, never a value — T1), the standing
+    orders to one line, the audit receipts to the newest. -> (lines removed, older receipts not sent)."""
+    commentary = template_commentary_lines()
+    removed = older = 0
+    for s in secs:
+        lines, name = s["lines"], s["head"] or ""
+        if s["head"] is not None and re.match(r'^standing orders\b', name, re.IGNORECASE):
+            body = [x for x in lines[1:] if x[1].strip()]
+            if body:
+                removed += len(body)
+                s["lines"] = [lines[0], (lines[0][0], "(the template's standing orders, the same in every task"
+                                                      " — not sent)\n\n")]
+            continue
+        fl = _trim_fenced(lines)
+        kept = [x for k, x in enumerate(lines) if k == 0 or fl[k] or x[1].rstrip("\r\n") not in commentary]
+        removed += len(lines) - len(kept)
+        if s["head"] is not None and re.match(r'^pre-panel audit\b', name, re.IGNORECASE):
+            fl = _trim_fenced(kept)
+            heads = [k for k, x in enumerate(kept) if x[1].startswith("### ") and not fl[k]]
+            if len(heads) >= 2:          # receipts stack newest first
+                older += len(heads) - 1
+                kept = kept[:heads[1]] + [(kept[heads[1]][0], f"({len(heads) - 1} older audit receipt(s) not sent"
+                                                               " — task.md has them)\n\n")]
+        s["lines"] = kept
+    return removed, older
+
+
+def _trim_gate_units(lines: "list[tuple[int, str]]") -> "list[tuple[int, int]]":
+    """[(start, end)] of each gate: its line plus the lines indented below it (a blank line stays inside
+    when the next line is indented deeper). A gate line inside a fence is not a gate."""
+    fl = _trim_fenced(lines)
+    spans, k = [], 0
+    while k < len(lines):
+        m = None if fl[k] else _TRIM_GATE_RE.match(lines[k][1])
+        if not m:
+            k += 1
+            continue
+        ind = _trim_indent(m.group(1))
+        j = k + 1
+        while j < len(lines):
+            t = lines[j][1]
+            if not t.strip():
+                nxt = next((lines[q][1] for q in range(j + 1, len(lines)) if lines[q][1].strip()), "")
+                if nxt and _trim_indent(nxt) > ind:
+                    j += 1
+                    continue
+                break
+            if _trim_indent(t) > ind:
+                j += 1
+                continue
+            break
+        while j > k + 1 and not lines[j - 1][1].strip():
+            j -= 1
+        spans.append((k, j))
+        k = j
+    return spans
+
+
+def _trim_notes(lines: "list[tuple[int, str]]", keep_chars: int, cut: "set[int]") -> "list[tuple[int, str]]":
+    """Every gate whose note runs past `keep_chars` (after its title) becomes one line: the title, the start
+    of the note and a pointer to its line in task.md; its indented continuation goes (a whole fence with it)."""
+    out = list(lines)
+    for a, b in reversed(_trim_gate_units(lines)):
+        no, first = lines[a]
+        m = _TRIM_GATE_RE.match(first)
+        if m is None:
+            continue
+        body = first[m.end():].rstrip("\r\n")
+        title = next((t for t in _template_gate_titles() if body.startswith(t)), None)
+        keep = (len(title) if title else min(len(body), 120)) + keep_chars
+        if b - a == 1 and len(body) <= keep + 40:
+            continue
+        cut.add(no)
+        out[a:b] = [(no, f"{first[:m.end()]}{body[:keep].rstrip()} [… note cut — task.md line {no}]\n")]
+    return out
+
+
+def _trim_prose(lines: "list[tuple[int, str]]", keep_chars: int, pinned: bool) -> "tuple[list, bool]":
+    """A kept section's prose (not its heading, not a gate) past `keep_chars` goes, with a pointer to the
+    lines it held; a fence goes whole, never half. -> (lines, cut?)."""
+    units = _trim_gate_units(lines)
+    in_unit = {k for a, b in units for k in range(a, b)}
+    prose = [k for k in range(1, len(lines)) if k not in in_unit]
+    acc, c = 0, None
+    for k in prose:
+        if acc + len(lines[k][1]) > keep_chars:
+            c = k
+            break
+        acc += len(lines[k][1])
+    if c is None:
+        return lines, False
+    fl = _trim_fenced(lines)
+    head = None
+    if not fl[c] and keep_chars - acc > 40:
+        head = lines[c][1][:keep_chars - acc].rstrip() + " …\n"     # the start of a long line stays
+    else:
+        while c > 1 and fl[c] and fl[c - 1] and (c - 1) not in in_unit:
+            c -= 1                       # back to the fence's opener: a fence goes whole
+    gone = [k for k in prose if k >= c and lines[k][1].strip()]
+    if not gone:
+        return lines, False
+    first, last = lines[gone[0]][0], lines[gone[-1]][0]
+    what = "a pinned section; " if pinned else ""
+    marker = (lines[c][0], f"[… prose cut — {what}task.md lines {first}-{last} …]\n\n")
+    prose_set = set(prose)
+    out: "list[tuple[int, str]]" = []
+    for k, x in enumerate(lines):
+        if k == c:
+            if head is not None:
+                out.append((x[0], head))
+            out.append(marker)
+        if not (k in prose_set and k >= c):
+            out.append(x)
+    return out, True
+
+
+def _trim_assemble(secs: "list[dict]", keep: "list[bool]") -> str:
+    out: "list[str]" = []
+    run: "list[dict]" = []
+
+    def _flush() -> None:
+        if run:
+            # the names without their `#`: the marker must not read as a heading of the payload
+            names = "; ".join(f"{s['head'] or '(preamble)'}" + (
+                f" — not sent: {s['gates'][0]} gate(s), {s['gates'][1]} checked" if s["gates"][0] else "")
+                for s in run)
+            out.append(f"\n\n[... {len(run)} section(s) elided to fit context budget: {names} ...]\n\n")
+            run.clear()
+    for s, k in zip(secs, keep):
+        if k:
+            _flush()
+            out.append("".join(ln for _, ln in s["lines"]))
+        else:
+            run.append(s)
+    _flush()
+    return "".join(out)
+
+
 def select_task_context(text: str, budget: int) -> "tuple[str, str]":
-    """Fit a task.md into `budget` chars, keeping both ends, and describe the cut.
+    """Fit a task.md into `budget` chars for a judge and describe the cut.
 
-    Returns (selected_text, receipt). The receipt is '' when nothing was dropped;
-    otherwise it is a single human line naming the kept and dropped sections, e.g.
-    'task.md 169,036 → 49,210 chars · kept: Intent, Design, Debrief · dropped:
-    Work Plan, Plan Review'. Elisions are also marked inline in selected_text so a
-    reader of the payload itself sees the gap.
+    Returns (selected_text, receipt). The receipt is '' when the text fits (it is then returned
+    verbatim); otherwise one line, e.g. 'task.md 169,036 → 49,210 chars · template text not sent:
+    31 line(s) · audit receipts: the newest of 7 · gate notes cut: 12 · kept: … · dropped: Notes'
+    — the new fields stand BEFORE `· kept:`, because `review.py`'s notices read `· dropped:` to the
+    end (`trim_notice`). Every gap is also marked inline, a dropped section with its gate count.
 
-    Selection: (1) always keep any leading preamble and the orientation sections
-    (Intent / Design / Handoff); (2) then fill from the MOST RECENT section
-    backwards until the budget is spent. Order is preserved on output."""
+    Selection (task 212, the owner's rules above): (1) the template's commentary, the standing
+    orders and the older audit receipts go; (2) the task's title, Status, Risk, Intent, Why,
+    Design, Handoff, Owner rulings, the Work Plan / Work and pinned sections are kept; if they alone
+    do not fit, their gate notes are cut, then their prose, then the notes to the gate titles —
+    every gate line stays, each cut pointing at its line in task.md; (3) the other sections fill
+    what is left, the MOST RECENT first, the template's tail sections and References last. Only if
+    the gate titles alone exceed the room is the text cut hard, with a WARNING."""
     if len(text) <= budget:
         return text, ""
 
-    sections = split_md_sections(text)
-    n = len(sections)
-    keep = [False] * n
-    used = 0
+    secs = _trim_split(text)
+    n_template, n_older = _trim_template_text(secs)
+    n = len(secs)
+    must = [s["head"] is None or s["level1"] or bool(_MUST_KEEP_HEADING.match(s["head"])) or s["pinned"]
+            for s in secs]
+    keep = list(must)
 
-    def _pinned(chunk: str) -> bool:
-        # `<!-- pin -->` on its own line within the first 3 lines UNDER the
-        # heading marks an author-pinned section: the selection heuristic can't
-        # know which old section is load-bearing this time, so the author says
-        # so. The marker deliberately lives BELOW the heading, never inside it —
-        # heading text is parsed exactly by receipts/evidence/selection, and a
-        # decorated heading would break that family (the 1.5.1 accretion bug's
-        # shape).
-        for ln in chunk.splitlines()[1:4]:
-            if ln.strip() == "<!-- pin -->":
-                return True
-        return False
+    cut_notes: "set[int]" = set()
+    prose_cut: "list[str]" = []
+    if len(_trim_assemble(secs, keep)) > budget:
+        base = [list(s["lines"]) for s in secs]
+        notes_at: int = 10 ** 9
+        prose_at: "int | None" = None
+        for kind, chars in _TRIM_STEPS:
+            notes_at, prose_at = (chars, prose_at) if kind == "notes" else (notes_at, chars)
+            cut_notes, prose_cut = set(), []
+            for i, s in enumerate(secs):
+                if not must[i]:
+                    continue
+                lines = _trim_notes(base[i], notes_at, cut_notes)
+                if prose_at is not None:
+                    lines, did = _trim_prose(lines, prose_at, s["pinned"])
+                    if did:
+                        prose_cut.append(s["head"] or "(preamble)")
+                s["lines"] = lines
+            if len(_trim_assemble(secs, keep)) <= budget:
+                break
 
-    for i, (heading, chunk) in enumerate(sections):
-        if heading is None or _ORIENTATION_HEADING.match(heading) or _pinned(chunk):
-            keep[i] = True
-            used += len(chunk)
+    order = ([i for i in range(n - 1, -1, -1) if not must[i] and not _SENT_LAST_HEADING.match(secs[i]["head"] or "")]
+             + [i for i in range(n - 1, -1, -1) if not must[i] and _SENT_LAST_HEADING.match(secs[i]["head"] or "")])
+    for i in order:
+        keep[i] = True
+        if len(_trim_assemble(secs, keep)) > budget:
+            keep[i] = False
 
-    for i in range(n - 1, -1, -1):
-        if keep[i]:
-            continue
-        if used + len(sections[i][1]) <= budget:
-            keep[i] = True
-            used += len(sections[i][1])
-
-    out: list[str] = []
-    dropped: list[str] = []
-    run = 0
-    for i, (heading, chunk) in enumerate(sections):
-        name = heading if heading else "(preamble)"
-        if keep[i]:
-            if run:
-                out.append(
-                    f"\n\n[... {run} section(s) elided to fit context budget ...]\n\n"
-                )
-                run = 0
-            out.append(chunk)
-        else:
-            dropped.append(name)
-            run += 1
-    if run:
-        out.append(f"\n\n[... {run} section(s) elided to fit context budget ...]\n\n")
-
-    selected = "".join(out)
-    # Safety floor: orientation alone can exceed the budget. Keep it (orientation
-    # wins) but bound the payload so it can never overflow an argv limit, and say
-    # so in the receipt — silence is the one thing forbidden here.
-    overflowed = False
-    if len(selected) > budget:
-        selected = (selected[:budget]
-                    + "\n\n[... hard-truncated: orientation+pinned sections exceeded budget ...]")
-        overflowed = True
-
-    kept_names = [
-        (sections[i][0] or "(preamble)") for i in range(n) if keep[i]
-    ]
-    receipt = (
-        f"task.md {len(text):,} → {len(selected):,} chars"
-        f" · kept: {', '.join(kept_names) or '(none)'}"
-        f" · dropped: {', '.join(dropped) or '(none)'}"
-    )
+    selected = _trim_assemble(secs, keep)
+    # The safety floor: the gate titles of the kept sections alone exceed the room. The payload must still never
+    # overflow an argv limit — cut, and say so loudly.
+    overflowed = len(selected) > budget
     if overflowed:
-        receipt += (" · WARNING: orientation+pinned sections exceed the budget, "
-                    "hard-truncated — unpin something or raise the budget")
+        selected = (selected[:budget]
+                    + "\n\n[... hard-truncated: kept and pinned sections exceeded budget ...]")
+
+    names = [s["head"] or "(preamble)" for s in secs]
+    receipt = f"task.md {len(text):,} → {len(selected):,} chars"
+    if n_template:
+        receipt += f" · template text not sent: {n_template} line(s)"
+    if n_older:
+        receipt += f" · audit receipts: the newest of {n_older + 1}"
+    if cut_notes:
+        receipt += f" · gate notes cut: {len(cut_notes)}"
+    if prose_cut:
+        receipt += f" · prose cut: {', '.join(prose_cut)}"
+    receipt += (f" · kept: {', '.join(nm for nm, k in zip(names, keep) if k) or '(none)'}"
+                f" · dropped: {', '.join(nm for nm, k in zip(names, keep) if not k) or '(none)'}")
+    if overflowed:
+        receipt += (" · WARNING: the gate titles of the kept and pinned sections alone exceed the budget,"
+                    " hard-truncated — raise the budget")
+    elif prose_cut:
+        receipt += " · WARNING: the kept and pinned sections exceed the budget — their prose was cut"
     return selected, receipt
+
+
+def trim_notice(receipt: str, task_path: str, transport: bool = True) -> str:
+    """The line a judge reads about its trimmed task.md: what was not sent, what was cut and which sections
+    were dropped — from `select_task_context`'s receipt — and where the full file is (plan panel T2: a trim
+    that dropped no section used to tell the judge "dropped sections: (none)" while its notes were cut)."""
+    parts = []
+    for key in ("template text not sent", "audit receipts", "gate notes cut", "prose cut"):
+        m = re.search(r"· (" + re.escape(key) + r": [^·]+?)(?= · |$)", receipt)
+        if m:
+            parts.append(m.group(1).strip())
+    m = re.search(r"· dropped: (.+?)(?: · WARNING|$)", receipt)
+    if m and m.group(1).strip() != "(none)":
+        parts.append(f"dropped sections: {m.group(1)[:200]}")
+    where = " to fit your transport" if transport else ""
+    return (f"your inline copy of {task_path} was TRIMMED{where} ({'; '.join(parts) or 'some sections'}) — "
+            f"read {task_path} in the repo for the full trace.")
 
 
 # ── Consequence classification + evidence contract at close (P1 / P2) ────────

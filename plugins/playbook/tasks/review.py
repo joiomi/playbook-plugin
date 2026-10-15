@@ -1622,18 +1622,10 @@ def _cmd_panel_review(cmd_args):
                     task_content, max(5_000, min(budget // 2, budget - _used - 2_000)))
                 if task_receipt:
                     receipts.append(task_receipt)
-                    # Aliased on purpose: other arms' local `import re`
-                    # statements make bare `re` a local of main() for the
-                    # WHOLE function, so this path (only reached when the
-                    # task was actually trimmed) crashed UnboundLocal from
-                    # 1.5.3 until the 1.5.9 judge caught it.
-                    import re as _re
-                    _dm = _re.search(r"· dropped: (.+?)(?: · WARNING|$)", task_receipt)
-                    _dropped = (_dm.group(1)[:200] if _dm else "some sections")
-                    trim_notice = (
-                        f"your inline copy of {task_path} was TRIMMED to fit "
-                        f"your transport (dropped sections: {_dropped}) — read "
-                        f"{task_path} in the repo for the full trace.")
+                    # Task 212 (plan panel T2): what was not sent, cut and dropped, read from the
+                    # receipt by one helper — a trim that drops no section but cuts notes says so.
+                    from tasks.core import trim_notice as _trim_notice
+                    trim_notice = _trim_notice(task_receipt, str(task_path), transport=True)
                 parts.append(f"=== {task_path} ===\n{task_content}")
             else:
                 # Taskless: include recent chat log as project context
@@ -2975,14 +2967,9 @@ def _cmd_single_review(cmd, cmd_args):
         context_parts.append(_mm_part)
     if task_receipt:
         context_receipts.append(task_receipt)
-        # Aliased for the same reason as the panel arm's trim-notice site:
-        # bare `re` is an unbound main() local on this path (judge F1).
-        import re as _re
-        _dm = _re.search(r"· dropped: (.+?)(?: · WARNING|$)", task_receipt)
-        sj_trim_notice = (
-            f"your inline copy of {task_path} was TRIMMED "
-            f"(dropped sections: {(_dm.group(1)[:200] if _dm else 'some sections')}) — "
-            f"read {task_path} in the repo for the full trace.")
+        # Task 212 (plan panel T2): the same helper as the panel arm's notice.
+        from tasks.core import trim_notice as _trim_notice
+        sj_trim_notice = _trim_notice(task_receipt, str(task_path), transport=False)
     context_parts.append(f"=== {task_path} ===\n{task_content}")
     system_context = "\n\n".join(context_parts)
     if len(system_context) > MAX_CONTEXT_CHARS:
