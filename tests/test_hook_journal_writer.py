@@ -600,6 +600,23 @@ class Rotation(_Project):
         self.assertEqual(b.wait(timeout=60), 0)
         self.assertEqual(len(self.archives()), 1, self.archives())
 
+    def test_an_append_waits_while_the_journal_is_held_exclusively(self):
+        """The owner, 2026-10-16 22:21 ("Lacăt la fiecare rând"): each append holds a SHARED lock on the journal
+        directory, so it waits while a rename or a compression holds it exclusively — no line can be in flight then,
+        whatever the clock (the post-panel judge's run 2: a forward clock step made a held file look idle)."""
+        (self.lane / "journal").mkdir(exist_ok=True)
+        holder = subprocess.Popen(["flock", "-x", str(self.lane / "journal"), "sleep", "0.8"])
+        try:
+            time.sleep(0.2)
+            t0 = time.monotonic()
+            r = self.run_hook(self.in_lane("exit 0"))
+            waited = time.monotonic() - t0
+        finally:
+            holder.wait()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertGreaterEqual(waited, 0.45)                    # it waited for the exclusive holder
+        self.assertEqual(len(self.lines()), 1)
+
     def test_a_held_lock_means_no_rotation_and_the_line_is_written(self):
         self.fill()
         holder = subprocess.Popen(["flock", str(self.lane / "journal"), "sleep", "5"])

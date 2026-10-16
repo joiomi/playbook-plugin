@@ -198,8 +198,11 @@ stop and every duration left none.
   guard's python writes its own line, with the rule that decided; without `pb_journal` it decides as before.
 - The hook-payload normalizer's frame is v4: the event, the tool-call id, the subagent id and the host session id,
   read by the JSON parser, so a key of the same name nested in a tool's input cannot stand in for them.
-- What it costs (`scripts/bench_hook_journal.py`, CPU time per run, the hooks with and without the line): +0.4 to
-  +0.9 ms for a bash hook, +4.3 ms for the guard's python (it loads `pb_journal` and `pathlib` for the line).
+- What it costs (`scripts/bench_hook_journal.py`, CPU time per run, the hooks with and without the line): +1.6 to
+  +1.9 ms for a bash hook, +3.8 ms for the guard's python (it loads `pb_journal` and `pathlib` for the line). Each
+  append holds a shared lock on the journal directory, and renaming or compressing holds it exclusively, so no line
+  can be in flight while a closed file is compressed, whatever the clock — the owner's answer of 22:21, "Lacăt la
+  fiecare rând", after the post-panel judge found a forward clock jump defeating the time rule; ~0.8 ms of the cost.
 - Past 20 MB the file is closed: renamed to `hooks.jsonl.archived-<stamp>-<epoch>-<pid>` (the name records the rename
   time), then compressed beside it 10 minutes after that rename and after its last write (measured: 20 MB → 1.9 MB in 0.18 s) — a hook that opened it just before the
   rename can still append, and an immediate compression lost that line (impl panel round 1, reproduced); every

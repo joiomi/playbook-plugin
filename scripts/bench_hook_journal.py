@@ -7,8 +7,9 @@ once (the exit runner still runs the hooks' own exit actions — the shell log's
 hooks ran before this journal too), and `command_guard.py` runs `main()` alone. Prints each hook's medians and the
 added cost. Usage:
     python3 scripts/bench_hook_journal.py <plugins/playbook/scripts> <empty work dir> [M=60]
-2026-10-16 on the owner's Linux host (load average 9.6, 80 runs each), CPU time added: task-gate +0.89 ms, state-echo
-+0.39 ms, stop +0.88 ms, command-guard +4.31 ms (its python loads pb_journal and pathlib for the line)."""
+2026-10-16 on the owner's Linux host, 80 runs each, CPU time added: before the append lock (load 9.6) task-gate
++0.89 ms, state-echo +0.39, stop +0.88, command-guard +4.31 (its python loads pb_journal and pathlib); with each append
+under a shared `flock` (the owner, 22:21; load 0.6) task-gate +1.57, state-echo +1.88, stop +1.94, command-guard +3.79."""
 import json
 import os
 import resource

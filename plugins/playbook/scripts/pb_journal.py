@@ -303,11 +303,37 @@ def append_hook_run(project_root, *, hook, event="", tool="", tool_use_id="", se
             data = (json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
             if len(data) > _HJ_LINE_MAX:
                 return
-        _write_record(lane, rec, name="hooks.jsonl", data=data)
+        _hj_append_locked(lane, rec, data)
     except OSError:
         return                              # a sink that cannot be written (a FIFO: ENXIO) is skipped quietly, as in bash
     except Exception as exc:                # defence in depth: never propagate
         _warn(exc)
+
+
+def _hj_append_locked(lane: Path, rec, data) -> None:
+    """The append under a SHARED lock on the journal directory (the owner, 2026-10-16 22:21: "Lacăt la fiecare rând"):
+    renaming and compressing hold it exclusively, so no line is in flight while a closed file is compressed, whatever
+    the clock. A wait of 1 s that runs out appends anyway (a line is not dropped for the lock)."""
+    import fcntl
+    fd = None
+    try:
+        fd = os.open(str(lane / "journal"), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        deadline = time.monotonic() + 1.0
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(0.01)
+    except OSError:
+        pass                                    # no journal directory yet: `_write_record` makes it; nothing to race
+    try:
+        _write_record(lane, rec, name="hooks.jsonl", data=data)
+    finally:
+        if fd is not None:
+            os.close(fd)
 
 
 def hook_ms(start: str = "", fallback: float = 0.0):

@@ -252,6 +252,22 @@ class ThePythonWriter(_Tmp):
         with gzip.open(gz[0], "rt") as f:
             self.assertIn('"held-late"', f.read())
 
+    def test_an_append_waits_while_the_journal_is_held_exclusively(self):
+        """The owner 22:21: the python writer's append holds a shared lock too."""
+        if not shutil.which("flock"):
+            self.skipTest("no flock(1)")
+        self.journal.parent.mkdir()
+        holder = subprocess.Popen(["flock", "-x", str(self.journal.parent), "sleep", "0.8"])
+        try:
+            time.sleep(0.2)
+            t0 = time.monotonic()
+            self.pbj.append_hook_run(self.project, hook="x")
+            waited = time.monotonic() - t0
+        finally:
+            holder.wait()
+        self.assertGreaterEqual(waited, 0.45)
+        self.assertEqual(len(self.lines()), 1)
+
     def test_a_held_lock_means_no_rotation(self):
         if not shutil.which("flock"):
             self.skipTest("no flock(1)")
@@ -513,6 +529,24 @@ class ThreeWritersOneAnswer(_Tmp):
         subprocess.run([bash_or_skip(), str(NUDGE)], input=agent_call, cwd=str(p),
                        env=self.env(PLAYBOOK_SESSION_ID="judge"), capture_output=True, text=True, timeout=20)
         self.assertEqual(len(self.lines(p / ".agent" / "journal" / "hooks.jsonl")), 1)          # opus r1 I1
+
+    def test_the_nudge_waits_while_the_journal_is_held_exclusively(self):
+        if not shutil.which("flock"):
+            self.skipTest("no flock(1)")
+        p = self.root / "nudlock"
+        (p / ".agent" / "journal").mkdir(parents=True)
+        (p / ".agent" / "tasks").mkdir()
+        holder = subprocess.Popen(["flock", "-x", str(p / ".agent" / "journal"), "sleep", "0.8"])
+        try:
+            time.sleep(0.2)
+            t0 = time.monotonic()
+            subprocess.run([bash_or_skip(), str(NUDGE)], input=self.PAYLOAD, cwd=str(p), env=self.env(),
+                           capture_output=True, text=True, timeout=20)
+            waited = time.monotonic() - t0
+        finally:
+            holder.wait()
+        self.assertGreaterEqual(waited, 0.45)
+        self.assertEqual(len(self.lines(p / ".agent" / "journal" / "hooks.jsonl")), 1)
 
     def test_the_same_cut_of_a_text_full_of_quotes(self):
         """`detail` is cut where its ESCAPED form reaches the cap — the same place in bash and python (P04 of the

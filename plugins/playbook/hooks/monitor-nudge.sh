@@ -136,7 +136,16 @@ _pb_nudge_journal() {
             case "$rc" in ''|*[!0-9]*) rc=255 ;; esac
             printf -v line '{"ts":"%s","hook":"monitor-nudge","event":"%s","tool":"%s","tool_use_id":"%s","session_id":"%s","host_session_id":"%s","agent_id":"%s","decision":"%s","detail":"%s","ms":%s,"exit":%s,"error":"%s"}' \
                 "$ts" "$event" "$tool" "$tuid" "$sid" "$hsid" "$agent" "$decision" "$detail" "$ms" "$rc" "$error"
-            [ "${#line}" -lt 1024 ] && { printf '%s\n' "$line" >> "$hfile"; } 2>/dev/null
+            # under a SHARED lock on the journal directory, as the plugin's writers (the owner 22:21; compression is exclusive)
+            if [ "${#line}" -lt 1024 ]; then
+                if command -v flock >/dev/null 2>&1 && { exec 208<"$jdir"; } 2>/dev/null; then
+                    flock -s -w 1 208 2>/dev/null
+                    { printf '%s\n' "$line" >> "$hfile"; } 2>/dev/null
+                    { exec 208<&-; } 2>/dev/null
+                else
+                    { printf '%s\n' "$line" >> "$hfile"; } 2>/dev/null
+                fi
+            fi
         fi
     fi
     exit "$rc"
