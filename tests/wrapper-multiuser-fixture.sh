@@ -543,8 +543,8 @@ echo "=== S13: launch-monitor resolves lane + root without hardcoding ==="
 echo "=== S14: init provisions the lane, never a phantom root lane ==="
 {
     INIT="$SCRIPTS/init"
-    # init writes ~/.claude/{bash-log.*,settings.json} and a shell rc line, so it
-    # gets an isolated HOME. These runs used the developer's REAL home until task
+    # init writes ~/.claude/settings.json (and removes an old shell logger from
+    # ~/.claude and the shell rc files), so it gets an isolated HOME. These runs used the developer's REAL home until task
     # 027 — every suite run mutated the machine it was testing on.
     S14_HOME="$WORK/s14-home"; mkdir -p "$S14_HOME"
 
@@ -678,15 +678,13 @@ echo "=== S15: NO surface mints a root lane on a fresh clone (impl-panel I2) ===
     assert_eq "$(ls -1 "$d/.agent" | tr '\n' ' ')" "alice " "S15 .agent contains ONLY the pre-existing lane"
 }
 
-echo "=== S16: shell command loggers write the lane the CLI reads (impl-panel I6) ==="
+echo "=== S16: the shell log is written into the lane the CLI reads (task 221: the hook writes it) ==="
 {
-    # These shipped with zero automated coverage while carrying the trickiest
-    # semantics in the change (DEBUG-trap errexit, CRLF, multi-line markers).
-    # Note `zsh -f`: without it zsh sources ~/.zshenv, which on a dogfooding
-    # host loads the INSTALLED (old) logger and double-logs — that faked six
-    # failures during development.
-    BASH_LOG="$SCRIPTS/bash-log.sh"
-    ZSH_LOG="$SCRIPTS/bash-log.zsh"
+    # Since task 221 the PostToolUse hook writes the agent's command into `bash_history` of the lane
+    # `resolve_agent_dir` names, where `agent_dir_writable` allows it — the lane every other hook writes and the
+    # tasks CLI reads. The BASH_ENV loggers that kept their own copy of the lane policy here (and S17's DEBUG-trap
+    # cases) are retired with them; these are the same marker shapes, through the REAL state-echo-hook.
+    S16_HOME="$WORK/s16-home"; mkdir -p "$S16_HOME"
 
     cli_lane() {   # the file the tasks CLI will read (canonical cross-language form)
         PYTHONPATH="$SCRIPTS/.." python3 -c '
@@ -696,36 +694,23 @@ from tasks.core import resolve_agent_dir, canonical_path
 print(canonical_path(resolve_agent_dir(Path(sys.argv[1]))))
 ' "$1" 2>/dev/null
     }
-
-    write_marker() {   # $1=dir  $2=python-escaped bytes
-        python3 -c '
-import sys, pathlib
-d = pathlib.Path(sys.argv[1]); (d/".agent").mkdir(parents=True, exist_ok=True)
-with open(d/".agent"/"current_user", "w", newline="") as fh:
-    fh.write(sys.argv[2])
-' "$1" "$2"
+    log_hook() {   # $1 = project: one Bash call through the real PostToolUse hook
+        (cd "$1" && printf '%s' '{"tool_name":"Bash","tool_input":{"command":"echo s16-probe"}}' \
+            | env -u BASH_ENV -u PLAYBOOK_ROLE PLAYBOOK_SESSION_ID=pid-s16 HOME="$S16_HOME" \
+              bash "$SCRIPTS/state-echo-hook" >/dev/null 2>&1) || true
     }
-
-    # zsh is optional on the host: skip the zsh-logger half cleanly when it is
-    # absent (otherwise `set -e` + a 127 from a missing zsh aborts the whole
-    # fixture, losing the bash-logger, S15, and S18 session-GC coverage).
-    if command -v zsh >/dev/null 2>&1; then _HAVE_ZSH=1; else
-        _HAVE_ZSH=0
-        echo "  (zsh not installed — S16 zsh-logger assertions skipped)"
-    fi
-    log_bash() { (cd "$1" && bash -c 'source "$1"; echo probe >/dev/null' _ "$BASH_LOG" >/dev/null 2>&1); }
-    log_zsh()  { [ "$_HAVE_ZSH" = 1 ] || return 0; (cd "$1" && ZSH_EXECUTION_STRING="echo probe" zsh -f -c "source '$ZSH_LOG'" >/dev/null 2>&1); }
+    histories() { find "$1" -name bash_history | wc -l | tr -d ' '; }
 
     # --- legacy: root, and it must be the file the CLI reads ---
     d="$WORK/s16-legacy"; build_project "$d" legacy
-    log_bash "$d"; log_zsh "$d"
+    log_hook "$d"
     assert_eq "$(ls "$d/.agent/bash_history" 2>/dev/null)" "$d/.agent/bash_history" \
         "S16 legacy: history at the root lane"
     assert_eq "$(_canonical_path "$d/.agent")" "$(cli_lane "$d")" "S16 legacy: writer lane == CLI reader lane"
 
     # --- multi-user: the lane, and NOT the root ---
     d="$WORK/s16-mu"; build_project "$d" multi-user alice
-    log_bash "$d"; log_zsh "$d"
+    log_hook "$d"
     [ -f "$d/.agent/alice/bash_history" ] \
         && pass "S16 multi-user: history in .agent/alice/" \
         || fail "S16 multi-user: no lane history file"
@@ -733,207 +718,41 @@ with open(d/".agent"/"current_user", "w", newline="") as fh:
         && fail "S16 multi-user: also wrote the root history" \
         || pass "S16 multi-user: no root history"
     assert_eq "$(_canonical_path "$d/.agent/alice/bash_history")" "$(cli_lane "$d")/bash_history" \
-        "S16 multi-user: writer file == the file tasks retro/context read"
-    # Both shells logged into the same file (bash always; zsh only if present).
-    _EXPECT_LOGS=$([ "$_HAVE_ZSH" = 1 ] && echo 2 || echo 1)
-    assert_eq "$(grep -c 'AGENT' "$d/.agent/alice/bash_history")" "$_EXPECT_LOGS" \
-        "S16 shells appended to the lane file (bash$([ "$_HAVE_ZSH" = 1 ] && echo '+zsh'))"
+        "S16 multi-user: writer file == the lane the CLI reads"
+    assert_eq "$(grep -c '| AGENT | echo s16-probe$' "$d/.agent/alice/bash_history")" "1" \
+        "S16 multi-user: the command is one line"
 
-    # --- CRLF marker: must resolve, not silently disable logging ---
+    # --- CRLF marker: resolves to the lane ---
     d="$WORK/s16-crlf"; mkdir -p "$d/.agent/alice/tasks"
-    write_marker "$d" 'alice
-'
-    python3 -c '
-import pathlib,sys
-p=pathlib.Path(sys.argv[1])/".agent"/"current_user"
-open(p,"w",newline="").write("alice\r\n")' "$d"
-    log_bash "$d"; log_zsh "$d"
+    printf 'alice\r\n' > "$d/.agent/current_user"
+    log_hook "$d"
     [ -f "$d/.agent/alice/bash_history" ] \
-        && pass "S16 CRLF marker still logs to the lane" \
-        || fail "S16 CRLF marker silently disabled logging"
+        && pass "S16 CRLF marker logs to the lane" \
+        || fail "S16 CRLF marker lost the line"
 
-    # --- smuggled second line: must NOT resolve to lane 'alice' ---
+    # --- no trailing newline: still the lane ---
+    d="$WORK/s16-nonl"; mkdir -p "$d/.agent/alice/tasks"
+    printf 'alice' > "$d/.agent/current_user"
+    log_hook "$d"
+    [ -f "$d/.agent/alice/bash_history" ] \
+        && pass "S16 no-trailing-newline marker logs to the lane" \
+        || fail "S16 no-trailing-newline marker lost the line"
+
+    # --- smuggled second line, invalid markers, fresh clone: nothing written anywhere ---
     d="$WORK/s16-smuggle"; mkdir -p "$d/.agent/alice/tasks"
-    python3 -c '
-import pathlib,sys
-p=pathlib.Path(sys.argv[1])/".agent"/"current_user"
-open(p,"w",newline="").write("alice\n../evil\n")' "$d"
-    log_bash "$d"; log_zsh "$d"
-    [ -f "$d/.agent/alice/bash_history" ] \
-        && fail "S16 multi-line marker resolved to lane alice" \
-        || pass "S16 multi-line marker rejected (no lane history)"
-    [ -f "$d/.agent/bash_history" ] \
-        && fail "S16 multi-line marker fell back to the root" \
-        || pass "S16 multi-line marker wrote nothing at all"
-
-    # --- invalid marker: nothing written anywhere, shell survives ---
+    printf 'alice\n../evil\n' > "$d/.agent/current_user"
+    log_hook "$d"
+    assert_eq "$(histories "$d")" "0" "S16 multi-line marker: no history anywhere"
     for bad in "../evil" "" "." "has space"; do
         d="$WORK/s16-bad$(echo "$bad" | tr -c 'a-z' '_')"
         mkdir -p "$d/.agent/alice/tasks"
         printf '%s\n' "$bad" > "$d/.agent/current_user"
-        set +e
-        out="$( (cd "$d" && bash -c 'source "$1"; echo probe >/dev/null; echo ALIVE' _ "$BASH_LOG" 2>&1) )"
-        set -e
-        assert_contains "$out" "ALIVE" "S16[$bad] shell survives"
-        assert_eq "$(find "$d" -name bash_history | wc -l | tr -d ' ')" "0" \
-            "S16[$bad] wrote no history anywhere"
+        log_hook "$d"
+        assert_eq "$(histories "$d")" "0" "S16[$bad] wrote no history anywhere"
     done
-
-    # --- no trailing newline: read returns 1; errexit must not fire ---
-    d="$WORK/s16-nonl"; mkdir -p "$d/.agent/alice/tasks"
-    printf 'alice' > "$d/.agent/current_user"
-    set +e
-    out="$( (cd "$d" && bash -c 'set -e; source "$1"; echo probe >/dev/null; echo ALIVE' _ "$BASH_LOG" 2>&1) )"
-    set -e
-    assert_contains "$out" "ALIVE" "S16 no-trailing-newline marker: errexit did not fire"
-    [ -f "$d/.agent/alice/bash_history" ] \
-        && pass "S16 no-trailing-newline marker still logs to the lane" \
-        || fail "S16 no-trailing-newline marker lost the log"
-}
-
-echo "=== S17: DEBUG trap must not kill set -e hooks (field report 2026-07-21) ==="
-{
-    # A bare `return` in a DEBUG-trap filter arm propagates the STALE $? of the
-    # hook's previous command; a DEBUG trap returning non-zero kills a `set -e`
-    # shell. Delivery path: BASH_ENV sources bash-log.sh into every
-    # non-interactive bash, i.e. every PostToolUse hook. state-echo-hook died
-    # at its first false `&&` conditional — silently, gate logging dead.
-    #
-    # S16's set -e probes could never catch this: their probe commands are
-    # `echo …`, which no filter arm matches, so the bare-return path never ran
-    # with a stale $?. The victim below is the failing shape: a false `&&`
-    # short-circuit (errexit-exempt, leaves $?=1) followed by a command that
-    # MATCHES a filter arm — one victim per arm family.
-    BASH_LOG="$SCRIPTS/bash-log.sh"
-
-    d="$WORK/s17"; build_project "$d" legacy
-    cat > "$d/victim.sh" <<'VICTIM'
-set -e
-IS_FREEHAND=false
-[ "$IS_FREEHAND" = true ] && echo "freehand branch"
-ARM_CMD
-echo "REACHED-THE-END"
-VICTIM
-
-    run_victim() {   # $1=bash-log file  $2=arm command; echoes output, RC in $?
-        local log_file="$1" arm="$2"
-        sed "s|ARM_CMD|$arm|" "$d/victim.sh" > "$d/victim-armed.sh"
-        (cd "$d" && BASH_ENV="$log_file" bash victim-armed.sh 2>&1)
-    }
-
-    # One representative per filter-arm family (test/[[ /assignment/source).
-    ARMS='[ -d /tmp ]
-[[ -n ok ]]
-HISTFILE=/dev/null
-source /dev/null'
-    while IFS= read -r arm; do
-        set +e
-        out="$(run_victim "$BASH_LOG" "$arm")"; rc=$?
-        set -e
-        assert_eq "$rc" "0" "S17[$arm] hook shell survives"
-        assert_contains "$out" "REACHED-THE-END" "S17[$arm] hook ran to completion"
-    done <<< "$ARMS"
-
-    # The patched-trap row of the field report's table: logging still works.
-    grep -q "REACHED-THE-END" "$d/.agent/bash_history" \
-        && pass "S17 bash_history still logs after the fix" \
-        || fail "S17 fix lost command logging"
-
-    # Negative control 1: bare-return mutant kills the victim.
-    # Loop over all 4 arms to ensure none are vacuous.
-    #
-    # The sed is range-scoped to the `case "$BASH_COMMAND"` block on purpose:
-    # `) return 0 ;;` also matches the three marker-validation arms further
-    # down, and an unscoped mutant would revert those too. They are unreachable
-    # in this victim (legacy shape, no `current_user`), so it would still go
-    # red — but for partly the wrong reason, and it would stop isolating the
-    # filter arms the moment a marker enters the scenario.
-    # Remove the hook-process fast path too: even when it does not match, its
-    # successful `case` resets the stale status that this historical mutant is
-    # meant to expose. Found by its end-of-line marker, not its text: task 088
-    # changed that line twice, the exact-text pattern stopped matching, and all
-    # four controls went vacuous. The counts below prove the deletion ran.
-    sed -e '/# PB-S17-FAST-PATH$/d' \
-        -e '/case "\$BASH_COMMAND" in/,/esac/ s|) return 0 ;;|) return ;;|' \
-        "$BASH_LOG" > "$d/bash-log-mutant-arms.sh"
-    assert_eq "$(grep -c ') return ;;' "$d/bash-log-mutant-arms.sh")" "4" \
-        "S17 negative control (arms): mutant reverted exactly the 4 filter arms"
-    # The unmutated logger must count exactly 1 marked line, the mutant 0, and
-    # the mutant must hold no other `$0` check that could reset the status.
-    assert_eq "$(grep -c '# PB-S17-FAST-PATH$' "$BASH_LOG")" "1" \
-        "S17 negative control (arms): the logger has one marked hook fast path"
-    assert_eq "$(grep -c '# PB-S17-FAST-PATH$' "$d/bash-log-mutant-arms.sh" || true)" "0" \
-        "S17 negative control (arms): mutant removed the hook fast path"
-    assert_eq "$(grep -v '^[[:space:]]*#' "$d/bash-log-mutant-arms.sh" | grep -cF '${0##' || true)" "0" \
-        "S17 negative control (arms): mutant keeps no other \$0 check (comments aside)"
-    while IFS= read -r arm; do
-        set +e
-        out="$(run_victim "$d/bash-log-mutant-arms.sh" "$arm")"; rc=$?
-        set -e
-        [ "$rc" -ne 0 ] \
-            && pass "S17 negative control (arms): bare-return mutant kills victim on [$arm] (rc=$rc)" \
-            || fail "S17 negative control (arms) VACUOUS: victim survived bare-return mutant on [$arm]"
-        assert_eq "$(printf '%s' "$out" | grep -c 'REACHED-THE-END' || true)" "0" \
-            "S17 negative control (arms): mutant died before the end on [$arm]"
-    done <<< "$ARMS"
-
-    # Now make bash_history a directory so append fails.
-    rm -f "$d/.agent/bash_history"
-    mkdir "$d/.agent/bash_history"
-
-    # Test the append-failure path: when bash_history is unwritable (e.g. is a directory),
-    # the fixed trap must return 0 and not kill the host shell.
-    set +e
-    out="$(run_victim "$BASH_LOG" "echo hello")"; rc=$?
-    set -e
-    assert_eq "$rc" "0" "S17 append-failure: hook shell survives unwritable history"
-    assert_contains "$out" "REACHED-THE-END" "S17 append-failure: hook ran to completion"
-    # …and silently. `echo … >> file 2>/dev/null` does not suppress a failure to
-    # OPEN the file (bash reports it before applying the redirect), so the
-    # unguarded form emits one "Is a directory" per command into hook output,
-    # which the agent then reads. The append must be wrapped in a brace group.
-    assert_eq "$(printf '%s' "$out" | grep -ci 'is a directory' || true)" "0" \
-        "S17 append-failure: no per-command stderr noise leaks into hook output"
-
-    # Negative control 2: no-append-failure-guard mutant kills the victim.
-    # Revert only the guard on the append line, leaving the arms fixed.
-    sed 's/^\( *\){ echo \(.*\); } 2>\/dev\/null || return 0$/\1echo \2/' \
-        "$BASH_LOG" > "$d/bash-log-mutant-append.sh"
-    assert_eq "$(grep -c 'return 0' "$d/bash-log-mutant-append.sh")" \
-        "$(( $(grep -c 'return 0' "$BASH_LOG") - 1 ))" \
-        "S17 negative control (append): mutant dropped exactly one guard"
-    set +e
-    out="$(run_victim "$d/bash-log-mutant-append.sh" "echo hello")"; rc=$?
-    set -e
-    [ "$rc" -ne 0 ] \
-        && pass "S17 negative control (append): mutant without append guard kills victim on failure (rc=$rc)" \
-        || fail "S17 negative control (append) VACUOUS: victim survived mutant without append guard on failure"
-    assert_eq "$(printf '%s' "$out" | grep -c 'REACHED-THE-END' || true)" "0" \
-        "S17 negative control (append): mutant without append guard died before the end"
-
-    # Negative control 3: the brace group is load-bearing, not style. Revert it
-    # to the inline `echo … >> file 2>/dev/null || return 0` form — which keeps
-    # the shell ALIVE (the `|| return 0` is intact) but stops suppressing the
-    # open error. Without this control, "simplifying" the braces away would
-    # stay green while every hook shell regained per-command stderr noise.
-    # Delimiter is '#', not '|': the pattern contains `||`, which would end a
-    # '|'-delimited s/// early (BSD sed: "bad flag in substitute command").
-    sed 's#{ echo \(.*\); } 2>/dev/null || return 0#echo \1 2>/dev/null || return 0#' \
-        "$BASH_LOG" > "$d/bash-log-mutant-inline.sh"
-    # Aimed at the APPEND line (`{ echo …`): task 088's rotation carry-forward
-    # is another brace group ending in `bash_history"; }`, and counting that
-    # made this assertion fail on a correct mutant. The logger must hold one.
-    assert_eq "$(grep -c '{ echo .*bash_history"; }' "$BASH_LOG")" "1" \
-        "S17 negative control (inline): the logger has one braced append"
-    assert_eq "$(grep -c '{ echo .*bash_history"; }' "$d/bash-log-mutant-inline.sh")" "0" \
-        "S17 negative control (inline): mutant actually removed the brace group"
-    set +e
-    out="$(run_victim "$d/bash-log-mutant-inline.sh" "echo hello")"; rc=$?
-    set -e
-    assert_eq "$rc" "0" "S17 negative control (inline): shell still survives (guard intact)"
-    [ "$(printf '%s' "$out" | grep -ci 'is a directory' || true)" -gt 0 ] \
-        && pass "S17 negative control (inline): inline form leaks the open error (proves the braces work)" \
-        || fail "S17 negative control (inline) VACUOUS: no leak from the inline form"
+    d="$WORK/s16-fresh-clone"; build_project "$d" multi-user
+    log_hook "$d"
+    assert_eq "$(histories "$d")" "0" "S16 fresh clone (lanes, no marker): no history anywhere"
 }
 
 echo "=== S18: SessionStart GC must not delete a live session (field report 2026-07-29) ==="

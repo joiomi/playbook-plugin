@@ -289,36 +289,6 @@ class VerifyItemsTest(unittest.TestCase):
                               if i["name"] == "verify tool: pytest"]), 1)
 
 
-class LoggingItemTest(unittest.TestCase):
-    def _item(self, *, file_present, bash_env):
-        tmp = tempfile.TemporaryDirectory()
-        home = Path(tmp.name)
-        (home / ".claude").mkdir()
-        if file_present:
-            (home / ".claude" / "bash-log.sh").write_text("# stub", encoding="utf-8")
-        settings = {}
-        if bash_env is not None:
-            settings = {"env": {"BASH_ENV": bash_env}}
-        (home / ".claude" / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
-        with mock.patch.object(env.Path, "home", return_value=home):
-            item = env._logging_item()
-        tmp.cleanup()
-        return item
-
-    def test_wired_is_ok(self):
-        item = self._item(file_present=True, bash_env="/home/u/.claude/bash-log.sh")
-        self.assertTrue(item["present"])
-
-    def test_file_present_but_not_wired(self):
-        item = self._item(file_present=True, bash_env=None)
-        self.assertFalse(item["present"])
-        self.assertIn("playbook:init", item["hint"])
-
-    def test_wired_but_file_absent(self):
-        item = self._item(file_present=False, bash_env="/home/u/.claude/bash-log.sh")
-        self.assertFalse(item["present"])
-
-
 class ReportAndCliTest(unittest.TestCase):
     def _report(self, installed, system="Linux"):
         with mock.patch.object(env.shutil, "which", side_effect=_which(installed)), \
@@ -332,14 +302,15 @@ class ReportAndCliTest(unittest.TestCase):
         cats = {i["category"] for i in report["items"]}
         self.assertIn("provider", cats)
         self.assertIn("sandbox", cats)
-        self.assertIn("logging", cats)
+        # task 221: the shell log is written by the hook — no BASH_ENV wiring to recommend
+        self.assertNotIn("logging", cats)
 
     def test_suggestions_are_only_absent_items(self):
         report = self._report({"bwrap", "codex", "grok", "agy", "pi", "rg", "ast-grep", "fd"})
         sug = env.suggestions(report)
         self.assertTrue(all(not i["present"] for i in sug))
-        # everything present except logging (home is nonexistent) → 1 suggestion
-        self.assertEqual([i["category"] for i in sug], ["logging"])
+        # everything present → nothing to suggest (task 221 took the `logging` item away)
+        self.assertEqual(sug, [])
 
     def test_render_suggest_only_hides_ok(self):
         report = self._report({"bwrap", "codex", "grok", "agy", "pi", "rg", "ast-grep", "fd"})
@@ -372,13 +343,11 @@ class ReportAndCliTest(unittest.TestCase):
                                   side_effect=RuntimeError("Could not determine home directory.")):
             report = env.environment_report(None)  # must not raise
             self.assertIn("items", report)
-            log = [i for i in report["items"] if i["category"] == "logging"][0]
-            self.assertFalse(log["present"])
             with redirect_stdout(io.StringIO()):
                 self.assertEqual(env.cli_environment([], Path("/tmp")), 0)  # no crash
 
     def test_json_suggest_only_filters_the_json(self):
-        report = self._report({"bwrap", "codex", "grok", "agy", "pi", "rg", "ast-grep", "fd"})  # only logging absent
+        report = self._report({"bwrap", "codex", "grok", "agy", "pi", "rg", "ast-grep", "fd"})  # nothing absent
         with mock.patch.object(env, "environment_report", return_value=report):
             buf = io.StringIO()
             with redirect_stdout(buf):

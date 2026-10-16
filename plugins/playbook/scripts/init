@@ -34,7 +34,8 @@ files are reported as skipped, not overwritten.
 
 Provisions: .agent/ state dirs (or .agent/<user>/ in a multi-user repo),
 .claude/bin/ wrappers, settings.json permissions, CLAUDE.md, MIND_MAP.md stub,
-the monitor scaffold, and the shell bash-log hookup.
+the monitor scaffold; and it removes the BASH_ENV shell logger an earlier
+version installed (task 221: the hook writes the shell log now).
 
 Normally invoked for you by /playbook:init.
 USAGE
@@ -66,26 +67,6 @@ require_lane_marker "$PROJECT_DIR" "playbook init"
 AGENT_DIR="$(resolve_agent_dir "$PROJECT_DIR")"
 # Label paths relative to the project in the created/skipped summary.
 AGENT_REL="${AGENT_DIR#"$PROJECT_DIR"/}"
-
-# Resolve the host-shell rc file up front. It is one of the files the snapshot
-# below must protect, and the choice depends only on $SHELL / $HOME — nothing
-# init has created yet — so it is safe to decide here. (Section (e) reuses
-# RC_FILE and SOURCE_LINE; they are set once, here.)
-SHELL_NAME="$(basename "$SHELL" 2>/dev/null)"
-if [ "$SHELL_NAME" = "zsh" ]; then
-    RC_FILE="$HOME/.zshenv"
-    SOURCE_LINE='[ -f ~/.claude/bash-log.zsh ] && source ~/.claude/bash-log.zsh'
-else
-    # ~/.bashrc is interactive-only; CC runs non-interactive bash.
-    # BASH_ENV is sourced by bash for every non-interactive shell — the right hook.
-    # Prefer ~/.bash_profile (login shell sets env for all children); fall back to ~/.profile.
-    if [ -f "$HOME/.bash_profile" ] || [ ! -f "$HOME/.profile" ]; then
-        RC_FILE="$HOME/.bash_profile"
-    else
-        RC_FILE="$HOME/.profile"
-    fi
-    SOURCE_LINE='export BASH_ENV=~/.claude/bash-log.sh'
-fi
 
 # ── Transactional snapshot / rollback (PB-INSTALL-ROLLBACK) ─────────────────
 # Before the first mutation, snapshot every file init may modify and record
@@ -121,7 +102,9 @@ $AGENT_DIR/monitor/rules.md
 $HOME/.claude/bash-log.sh
 $HOME/.claude/bash-log.zsh
 $HOME/.claude/settings.json
-$RC_FILE"
+$HOME/.bash_profile
+$HOME/.profile
+$HOME/.zshenv"
     # Every directory init may create; the helper removes only the ones that did
     # NOT pre-exist and are empty after file cleanup (deepest first). A freshly
     # created .agent/ is kept because it then holds the backup.
@@ -179,6 +162,7 @@ REGEN=()
 _nudge_pre=0; [ -f "$PROJECT_DIR/.claude/hooks/monitor-nudge.sh" ] && _nudge_pre=1
 SKIPPED=()
 FAILED=()
+REMOVED=()   # what init once installed and takes away again (task 221: the old shell logger)
 
 # --- (a) <agent-dir>/tasks/ ---
 if [ ! -d "$AGENT_DIR/tasks" ]; then
@@ -352,107 +336,100 @@ for provider_wrapper in playbook-codex playbook-agy playbook-grok playbook-pi; d
     fi
 done
 
-# --- (e) bash history logging ---
-# BEGIN:bash-log
+# --- (e) the old shell logger, removed (task 221) ---
+# BEGIN:retire-shell-logger
 #
-# `bash-log.sh` is deployed on EVERY host, regardless of login shell, because
-# Claude Code's Bash tool is /bin/bash no matter what $SHELL says — and the
-# settings.json injection below always points BASH_ENV at it. Before task 027
-# the $SHELL branch deployed ONLY bash-log.zsh on zsh hosts while still setting
-# BASH_ENV=~/.claude/bash-log.sh, so on every zsh install that variable
-# dangled at a nonexistent file and CC-side command logging was silently dead.
-# (Task 023 found this but deferred it deliberately: fixing it ARMS bash-log's
-# DEBUG trap on every zsh host, which was unsafe until the trap's set -e kill
-# path was fixed. That shipped in v1.4.6, so it is safe now — this change must
-# never be cherry-picked back before it.)
-#
-# The $SHELL branch now decides only the EXTRA host-shell integration: an
-# interactive zsh needs bash-log.zsh + a .zshenv source line, since zsh ignores
-# BASH_ENV.
-deploy_bash_log() {   # $1 = filename under $SCRIPT_DIR; deploys to ~/.claude/
-    local file="$1" src="$SCRIPT_DIR/$1" dest="$HOME/.claude/$1" tmp
-    [ -f "$src" ] || return 0
-    mkdir -p "$HOME/.claude"
-    # Normalize CRLF→LF on the way out. These files are SOURCED by every hook
-    # shell, and a CRLF copy (a checkout with autocrlf) breaks that; normalizing at
-    # deploy time also makes the up-to-date comparison meaningful, since
-    # comparing a CRLF source against an LF destination never matches and would
-    # re-copy on every single init run. Written through a temp + atomic mv, the
-    # same shape the rest of init uses (and no process substitution, which needs
-    # /dev/fd and is shakier inside the sandboxes we run under).
-    tmp="$dest.tmp.$$"
-    tr -d '\r' < "$src" > "$tmp" || { rm -f "$tmp"; FAILED+=("~/.claude/$file (normalize failed)"); return 0; }
-    if [ ! -f "$dest" ]; then
-        mv "$tmp" "$dest"
-        CREATED+=("~/.claude/$file")
-    elif cmp -s "$tmp" "$dest"; then
-        rm -f "$tmp"
-        SKIPPED+=("~/.claude/$file (unchanged)")
-    else
-        mv "$tmp" "$dest"
-        CREATED+=("~/.claude/$file (updated)")
-    fi
-}
-
-# SHELL_NAME, RC_FILE, and SOURCE_LINE were resolved up front (before the
-# snapshot), since the rc file is one of the snapshotted paths.
-# The bash variant is what BASH_ENV names, so it is unconditional.
-BASH_LOG_SRC="$SCRIPT_DIR/bash-log.sh"
-
-if [ -f "$BASH_LOG_SRC" ]; then
-    deploy_bash_log "bash-log.sh"
-    # zsh hosts additionally get the zsh variant for their interactive shells.
-    if [ "$SHELL_NAME" = "zsh" ]; then
-        deploy_bash_log "bash-log.zsh"
-    fi
-
-    if grep -qF 'claude/bash-log' "$RC_FILE" 2>/dev/null; then
-        SKIPPED+=("$RC_FILE (source line exists)")
-    else
-        { echo ""; echo "# claude-playbook: command logging"; echo "$SOURCE_LINE"; } >> "$RC_FILE"
-        CREATED+=("$RC_FILE (source line added)")
-    fi
-
-    # Inject BASH_ENV into ~/.claude/settings.json so CC passes it to every bash shell it spawns.
-    # This is the reliable path — CC reads settings.json env key and injects vars before tool calls.
-    CC_SETTINGS="$HOME/.claude/settings.json"
-    CC_SETTINGS_PY="$CC_SETTINGS"
-    BASH_ENV_RESULT=$(PB_CC_SETTINGS_PATH="$CC_SETTINGS_PY" PB_ATOMIC_PY="$ATOMIC_PY" python3 -I -c "
-import json, os, tempfile
+# Up to 1.6.x init deployed a command logger — ~/.claude/bash-log.sh (and bash-log.zsh on a zsh host) — and wired
+# it through BASH_ENV in ~/.claude/settings.json and a two-line block in a shell rc file, so every bash on the machine
+# sourced it and wrote every simple command of every shell: on 2026-10-15, 45,083 lines for 1,666 commands of the
+# agent's. The shell log is now written by the PostToolUse hook from the agent's exact command (the owner,
+# 2026-10-16: "Hook-ul scrie"), and init removes only what it once wrote ("Init îl scoate"):
+#   - ~/.claude/bash-log.sh / bash-log.zsh: a regular file whose FIRST line is the logger's own header;
+#   - "BASH_ENV" in ~/.claude/settings.json "env", when it names ~/.claude/bash-log.sh (an "env" left empty goes too);
+#   - in ~/.bash_profile, ~/.profile, ~/.zshenv: the line "# claude-playbook: command logging" followed by the exact
+#     line init wrote under it (and the blank line init put before it) — a block a person changed is left, said so.
+# Every one of these files is in the transaction's snapshot above (TXN_FILES): it is copied to the kept user backup
+# before anything changes, and a failure restores it. A rc file that is a symbolic link is edited at its target, the
+# link kept. Anything init cannot read or does not recognise is left as it is — never a failure.
+RETIRE_RESULT=$(PB_HOME="$HOME" PB_ATOMIC_PY="$ATOMIC_PY" python3 -I -c '
+import json, os
 import importlib.util as _ilu
-_s = _ilu.spec_from_file_location('_pb_atomic_write', os.environ['PB_ATOMIC_PY'])
+_s = _ilu.spec_from_file_location("_pb_atomic_write", os.environ["PB_ATOMIC_PY"])
 _m = _ilu.module_from_spec(_s); _s.loader.exec_module(_m); atomic_write = _m.atomic_write
-# I4: path via env, not interpolated (single-quote paths would SyntaxError).
-path = os.environ['PB_CC_SETTINGS_PATH']
-# Always bash-log.sh — CC's Bash tool is /bin/bash regardless of user's login shell.
-# Point BASH_ENV at the SAME dir deploy_bash_log wrote to, which uses the shell's
-# $HOME, so BASH_ENV can never name a DIFFERENT dir than where the file was
-# deployed (a dangling reference — the bug this path exists to prevent; up to
-# 1.5.47 Windows' expanduser preferred USERPROFILE). Derive from $HOME (always set
-# under the bash that runs init); fall back to expanduser only if it is unset.
-home = os.environ.get('HOME') or os.path.expanduser('~')
-dest = os.path.join(home, '.claude', 'bash-log.sh')
+home = os.environ["PB_HOME"]
+HEADERS = {"bash-log.sh": "# claude-playbook: project-scoped command logging (bash)",
+           "bash-log.zsh": "# claude-playbook: project-scoped command logging (zsh)"}
+MARK = "# claude-playbook: command logging"
+LINES = ("export BASH_ENV=~/.claude/bash-log.sh", "[ -f ~/.claude/bash-log.zsh ] && source ~/.claude/bash-log.zsh")
+out = []
+for name, head in HEADERS.items():
+    p = os.path.join(home, ".claude", name)
+    try:
+        if os.path.islink(p) or not os.path.isfile(p):
+            continue
+        with open(p, encoding="utf-8", errors="replace") as fh:
+            first = fh.readline().rstrip("\r\n")
+        if first == head:
+            os.remove(p)
+            out.append("REMOVED\t~/.claude/" + name + " (the old shell logger)")
+        else:
+            out.append("KEPT\t~/.claude/" + name + " (not the playbook logger: left as it is)")
+    except OSError as e:
+        out.append("KEPT\t~/.claude/" + name + " (could not be read: " + str(e) + ")")
+p = os.path.join(home, ".claude", "settings.json")
 try:
-    data = json.loads(open(path).read()) if os.path.exists(path) else {}
-    env = data.setdefault('env', {})
-    if env.get('BASH_ENV') == dest:
-        print('SKIPPED')
-    else:
-        env['BASH_ENV'] = dest
-        atomic_write(path, json.dumps(data, indent=2) + '\n')
-        print('CREATED')
-except Exception as e:
-    print('ERROR:' + str(e))
-" 2>&1)
-    case "$BASH_ENV_RESULT" in
-        CREATED)  CREATED+=("~/.claude/settings.json (BASH_ENV set)") ;;
-        SKIPPED)  SKIPPED+=("~/.claude/settings.json (BASH_ENV already set)") ;;
-        ERROR:*)  FAILED+=("~/.claude/settings.json: ${BASH_ENV_RESULT#ERROR:}") ;;
+    if os.path.isfile(p) and not os.path.islink(p):
+        with open(p, encoding="utf-8") as fh:
+            data = json.loads(fh.read())
+        env = data.get("env") if isinstance(data, dict) else None
+        if isinstance(env, dict) and env.get("BASH_ENV") in (os.path.join(home, ".claude", "bash-log.sh"),
+                                                             "~/.claude/bash-log.sh"):
+            del env["BASH_ENV"]
+            if not env:
+                del data["env"]
+            atomic_write(p, json.dumps(data, indent=2) + "\n")
+            out.append("REMOVED\t~/.claude/settings.json (BASH_ENV of the old shell logger)")
+except (OSError, ValueError) as e:
+    out.append("KEPT\t~/.claude/settings.json (could not be read: " + (str(e).splitlines() or [""])[0] + ")")
+for rc in (".bash_profile", ".profile", ".zshenv"):
+    p = os.path.join(home, rc)
+    try:
+        real = os.path.realpath(p)
+        if not os.path.isfile(real):
+            continue
+        with open(real, encoding="utf-8", newline="") as fh:
+            text = fh.read()
+        lines = text.split("\n")
+        keep, i, gone, odd = [], 0, 0, 0
+        while i < len(lines):
+            if lines[i].rstrip("\r") == MARK:
+                if i + 1 < len(lines) and lines[i + 1].rstrip("\r") in LINES:
+                    if keep and keep[-1].strip() == "":
+                        keep.pop()
+                    i += 2
+                    gone += 1
+                    continue
+                odd += 1
+            keep.append(lines[i])
+            i += 1
+        if gone:
+            mode = os.stat(real).st_mode & 0o7777
+            atomic_write(real, "\n".join(keep))
+            os.chmod(real, mode)
+            out.append("REMOVED\t~/" + rc + " (the old shell logger lines)")
+        if odd:
+            out.append("KEPT\t~/" + rc + " (an old-logger block a person changed: left as it is)")
+    except (OSError, UnicodeDecodeError) as e:
+        out.append("KEPT\t~/" + rc + " (could not be read: " + str(e) + ")")
+print("\n".join(out))
+' 2>&1) || RETIRE_RESULT="KEPT"$'\t'"the old shell logger (could not be looked at)"
+while IFS=$'\t' read -r _what _item; do
+    case "$_what" in
+        REMOVED) REMOVED+=("$_item") ;;
+        KEPT)    SKIPPED+=("$_item") ;;
     esac
-else
-    SKIPPED+=("bash-log (not bundled in plugin scripts — skipping)")
-fi
-# END:bash-log
+done <<< "$RETIRE_RESULT"
+# END:retire-shell-logger
 
 # --- (g) Monitor scaffolding ---
 # Scaffolds <agent-dir>/monitor/ (per-user state dir) + .claude/hooks/monitor-nudge.sh
@@ -612,6 +589,12 @@ if [ ${#REGEN[@]} -gt 0 ]; then
     echo "Regenerated (playbook-managed, refreshed on every init):"
     for item in "${REGEN[@]}"; do
         echo "  ~ $item"
+    done
+fi
+if [ ${#REMOVED[@]} -gt 0 ]; then
+    echo "Removed (installed by an earlier version; the files as they were are in the user backup named below):"
+    for item in "${REMOVED[@]}"; do
+        echo "  x $item"
     done
 fi
 if [ ${#SKIPPED[@]} -gt 0 ]; then

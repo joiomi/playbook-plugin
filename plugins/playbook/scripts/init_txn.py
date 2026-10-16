@@ -3,7 +3,8 @@
 
 `scripts/init` mutates project files (CLAUDE.md, .gitignore, .claude/settings.json,
 the .claude/bin wrappers, the monitor scaffold, .agent/config.json, MIND_MAP.md)
-and user files (~/.claude/bash-log.*, the shell rc file, ~/.claude/settings.json).
+and user files (~/.claude/settings.json; and, where an earlier version installed a shell logger, the
+~/.claude/bash-log.* files and the shell rc files init removes it from — task 221).
 Before this helper existed, a failure partway through left a half-provisioned,
 possibly mixed-version install and could have clobbered a hand-written CLAUDE.md,
 .gitignore, or shell rc file with no way back.

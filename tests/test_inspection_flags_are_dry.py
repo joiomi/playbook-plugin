@@ -109,34 +109,6 @@ class LauncherHelpIsDry(unittest.TestCase):
                 self.assertFalse(sessions.exists() and any(sessions.iterdir()))
 
 
-class BashLogSkipsHookInternals(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.project = Path(self.tmp.name) / "project"
-        # A root `.agent/tasks/` is what makes the root a lane: without it the
-        # logger has no lane it can prove it owns and skips (PB-LANE-RESOLUTION),
-        # which would make the agent-shell half of this test vacuous.
-        (self.project / ".agent/tasks").mkdir(parents=True)
-        self.history = self.project / ".agent/bash_history"
-
-    def test_hook_shell_is_not_logged_but_agent_shell_is(self):
-        hook = Path(self.tmp.name) / "probe-hook"
-        hook.write_text("#!/bin/bash\necho hook-ran\n", encoding="utf-8")
-        hook.chmod(0o755)
-        env = dict(os.environ, BASH_ENV=str(SCRIPTS / "bash-log.sh"))
-        r = subprocess.run([bash_or_skip(), str(hook)], cwd=self.project, env=env,
-                           capture_output=True, text=True, timeout=30)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertFalse(self.history.exists(), "hook internals polluted history")
-
-        r = subprocess.run([bash_or_skip(), "-c", "echo agent-ran"], cwd=self.project,
-                           env=env, capture_output=True, text=True, timeout=30)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertTrue(self.history.exists(), "real Bash tool shell was not logged")
-        self.assertIn("echo agent-ran", self.history.read_text(encoding="utf-8"))
-
-
 class MonitorAndSandboxHelpAreDry(unittest.TestCase):
     """PB-CLI-HELP-MONITOR-SANDBOX (PLAN S8b, task 100): `monitor -h/--help/help` and
     `sandbox -h/--help` return usage without starting an agent or a monitor and

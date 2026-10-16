@@ -791,11 +791,14 @@ class InitFromAPackagedInstall(unittest.TestCase):
         for line in ("# --- playbook runtime state (machine-local; managed by playbook init) ---",
                      ".agent/sessions/", ".agent/bash_history", ".agent/chat_log.md"):
             self.assertIn(line, ignored)
-        # logger wiring: the copy init deployed IS the shipped logger, and the setting names it
-        self.assertEqual((claude / "bash-log.sh").read_bytes(),
-                         (self.packaged / "scripts" / "bash-log.sh").read_bytes())
-        self.assertEqual(json.loads((claude / "settings.json").read_text(encoding="utf-8"))["env"]["BASH_ENV"],
-                         str(claude / "bash-log.sh"))
+        # no shell logger any more (task 221: the PostToolUse hook writes the shell log): nothing in ~/.claude,
+        # no BASH_ENV, no rc line
+        self.assertFalse((claude / "bash-log.sh").exists())
+        settings = claude / "settings.json"
+        if settings.exists():
+            self.assertNotIn("BASH_ENV", json.loads(settings.read_text(encoding="utf-8")).get("env", {}))
+        for rc in (".bash_profile", ".profile", ".zshenv"):
+            self.assertFalse((self.home / rc).exists(), rc)
 
     def _version_through_the_wrapper(self):
         r = self._run([self.project / ".claude" / "bin" / "tasks", "--version"])
@@ -815,31 +818,23 @@ class InitFromAPackagedInstall(unittest.TestCase):
         self.manifest.unlink()
         self.assertEqual(self._version_through_the_wrapper(), self.NEWER_BESIDE_IT)
 
-    def _logged(self, **extra):
+    def test_init_removes_an_older_logger_and_only_its_wiring(self):
+        # task 221, the owner 2026-10-16: "Init îl scoate" — what an older init installed, and nothing else
         import json
-        setting = json.loads((self.home / ".claude" / "settings.json").read_text(encoding="utf-8"))["env"]["BASH_ENV"]
-        r = self._run([bash_or_skip(), "-c", "echo reached-the-history >/dev/null"], BASH_ENV=setting, **extra)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        history = self.project / ".agent" / "bash_history"
-        return history.read_text(encoding="utf-8") if history.exists() else ""
-
-    def test_a_shell_started_with_the_setting_init_wrote_reaches_the_history(self):
-        # plan panel (both codex seats): bytes and a setting do not show that the
-        # logger RUNS — a shell started the way the harness starts one has to log
-        self._init()
-        self.assertRegex(self._logged(),
-                         r"(?m)^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d \| AGENT \| echo reached-the-history > /dev/null$")
-
-    def test_control_a_shell_that_opts_out_leaves_no_line(self):
-        self._init()
-        self.assertNotIn("reached-the-history", self._logged(PLAYBOOK_NO_BASHLOG="1"))
-
-    def test_init_replaces_an_older_logger_copy(self):
-        (self.home / ".claude").mkdir(exist_ok=True)
-        (self.home / ".claude" / "bash-log.sh").write_text("# an older logger\n", encoding="utf-8")
-        self._init()
-        self.assertEqual((self.home / ".claude" / "bash-log.sh").read_bytes(),
-                         (self.packaged / "scripts" / "bash-log.sh").read_bytes())
+        claude = self.home / ".claude"
+        claude.mkdir(exist_ok=True)
+        (claude / "bash-log.sh").write_text("# claude-playbook: project-scoped command logging (bash)\n# old\n",
+                                            encoding="utf-8")
+        (claude / "settings.json").write_text(json.dumps({"env": {"BASH_ENV": str(claude / "bash-log.sh"),
+                                                                  "KEEP": "1"}, "model": "x"}), encoding="utf-8")
+        (self.home / ".profile").write_text("export A=1\n\n# claude-playbook: command logging\n"
+                                            "export BASH_ENV=~/.claude/bash-log.sh\n", encoding="utf-8")
+        r = self._init()
+        self.assertFalse((claude / "bash-log.sh").exists())
+        self.assertEqual(json.loads((claude / "settings.json").read_text(encoding="utf-8")),
+                         {"env": {"KEEP": "1"}, "model": "x"})
+        self.assertEqual((self.home / ".profile").read_text(encoding="utf-8"), "export A=1\n")
+        self.assertIn("Removed", r.stdout)
 
 
 # --------------------------------------------------------------------------- #
@@ -932,64 +927,6 @@ class AProjectWhosePathHoldsASpaceAnAccentAndAQuote(unittest.TestCase):
                       PATH=f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual((self.project / "written-inside").read_text(encoding="utf-8"), "contained")
-
-
-# --------------------------------------------------------------------------- #
-# PB-SHELL-ATTRIBUTION — "zsh and Windows/Git Bash logger behavior lack live
-# platform evidence." Windows is not claimed any more and zsh is not installed
-# where these tests were written, so the row speaks of the BASH logger only. Its
-# clauses were checked one by one against the tests that assert them (task 169,
-# W4); three had none, and one was not true as written.
-# --------------------------------------------------------------------------- #
-class TheBashLoggersLine(unittest.TestCase):
-    LOGGER = SCRIPTS / "bash-log.sh"
-
-    def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp()).resolve()
-        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
-        self.project = self.tmp / "proj"
-        os.makedirs(self.project.joinpath(".agent", "tasks"))
-        self.history = self.project / ".agent" / "bash_history"
-
-    def _shell(self, *argv, **extra):
-        r = subprocess.run([bash_or_skip(), *argv], cwd=self.project, capture_output=True, text=True,
-                           timeout=180, env=child_env(BASH_ENV=str(self.LOGGER), **extra))
-        self.assertEqual(r.returncode, 0, r.stderr[-400:])
-        return self.history.read_text(encoding="utf-8").splitlines() if self.history.exists() else []
-
-    def test_a_line_is_a_timestamp_the_agent_tag_and_the_command(self):
-        lines = self._shell("-c", "echo one-command >/dev/null")
-        self.assertEqual(len(lines), 1, lines)
-        self.assertRegex(lines[0], r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d \| AGENT \| echo one-command > /dev/null$")
-
-    def test_any_value_but_empty_and_zero_opts_the_shell_out(self):
-        # the statement: "installs no trap in a shell started with PLAYBOOK_NO_BASHLOG
-        # set to anything but \"\" or \"0\"" — the bound test tries 1 and 0 only
-        for value in ("yes", "false", "x", " "):
-            with self.subTest(value=value):
-                self.assertEqual(self._shell("-c", "echo opted-out >/dev/null", PLAYBOOK_NO_BASHLOG=value), [])
-        self.assertEqual(len(self._shell("-c", "echo not-opted-out >/dev/null", PLAYBOOK_NO_BASHLOG="")), 1)
-
-    def _twice_with_between(self, distinct_commands: int):
-        """A script that runs one command, then `distinct_commands` different ones, then
-        the first again → how many times the first is in the history."""
-        script = self.tmp / "many-commands.sh"
-        filler = "\n".join(f"true {i:04d}-{'x' * 96}" for i in range(distinct_commands))
-        script.write_text(f"echo the-repeated-one >/dev/null\n{filler}\necho the-repeated-one >/dev/null\n",
-                          encoding="utf-8")
-        lines = self._shell(str(script))
-        return sum(1 for ln in lines if ln.endswith("| AGENT | echo the-repeated-one > /dev/null"))
-
-    def test_a_command_is_written_once_while_the_shell_remembers_it(self):
-        self.assertEqual(self._twice_with_between(5), 1)
-
-    def test_what_the_row_admits_the_memory_is_reset_past_64_kib(self):
-        # plan panel, task 169 (codex-high): "each distinct command text once per shell
-        # process" is not the whole truth — the logger keeps what it has seen in one
-        # string and starts it afresh once that passes 65,536 characters (bash 3.2 has no
-        # associative arrays; the bound is deliberate). 700 distinct commands of 100
-        # characters pass it, and the first command, run again, is written again.
-        self.assertEqual(self._twice_with_between(700), 2)
 
 
 # --------------------------------------------------------------------------- #

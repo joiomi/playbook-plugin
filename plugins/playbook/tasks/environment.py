@@ -12,8 +12,8 @@ four categories:
             write-blast-radius guarantee (Linux bubblewrap).
   verify    the command-word binaries the project's declared `verify` command
             calls but that are not on PATH — a missing one makes close fail.
-  logging   the ~/.claude/bash-log.sh (BASH_ENV) wiring that feeds chat/task
-            attribution.
+(The shell log needs nothing installed: since task 221 the PostToolUse hook writes it — the `logging` item for the
+~/.claude/bash-log.sh BASH_ENV wiring went with that logger.)
 
 Surfaced by `tasks environment [--json]`, an advisory section in `tasks doctor`,
 and `/playbook:init`. Stdlib only.
@@ -276,32 +276,6 @@ def _verify_items(project_root: Optional[Path]) -> list[dict]:
     return items
 
 
-# ── shell command logging ─────────────────────────────────────────────────────
-
-def _logging_item() -> dict:
-    # Path.home() raises when HOME is unset AND there's no passwd entry for the
-    # UID (containers run as an arbitrary UID) — keep it inside the guard so
-    # environment_report honors its "never raises" contract.
-    present = False
-    try:
-        home = Path.home()
-        bash_log = home / ".claude" / "bash-log.sh"
-        settings = home / ".claude" / "settings.json"
-        data = json.loads(settings.read_text(encoding="utf-8"))
-        env = data.get("env") if isinstance(data, dict) else None
-        be = env.get("BASH_ENV") if isinstance(env, dict) else None
-        wired = bool(be) and be.endswith("/.claude/bash-log.sh")
-        present = bash_log.is_file() and wired
-    except (OSError, ValueError, RuntimeError):
-        present = False
-    return _item("shell command logging (BASH_ENV)", "logging", present,
-                 SEV_RECOMMENDED,
-                 "logs each bash command to the chat log, which feeds task "
-                 "attribution (`tasks log`) and retros",
-                 "re-run `/playbook:init` — it deploys ~/.claude/bash-log.sh and "
-                 "sets BASH_ENV in ~/.claude/settings.json")
-
-
 # ── report + render ───────────────────────────────────────────────────────────
 
 def environment_report(project_root: Optional[Path] = None) -> dict:
@@ -312,7 +286,6 @@ def environment_report(project_root: Optional[Path] = None) -> dict:
     items.extend(_search_items())
     items.append(_sandbox_item())
     items.extend(_verify_items(project_root))
-    items.append(_logging_item())
     return {"platform": platform.system(), "items": items}
 
 
@@ -321,13 +294,12 @@ def suggestions(report: dict) -> list[dict]:
     return [i for i in report["items"] if not i["present"]]
 
 
-_CATEGORY_ORDER = ["provider", "search", "sandbox", "verify", "logging"]
+_CATEGORY_ORDER = ["provider", "search", "sandbox", "verify"]
 _CATEGORY_TITLE = {
     "provider": "Agent CLIs (extra judge seats)",
     "search": "Search / navigation (faster than grep)",
     "sandbox": "Sandbox containment",
     "verify": "Verify-command tooling",
-    "logging": "Shell command logging",
 }
 
 

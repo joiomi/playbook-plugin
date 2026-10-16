@@ -14,8 +14,9 @@ init run can leave non-zero, and prove the same two things every time:
 
 The three routes:
   * a `set -e` hard abort         — a read-only `.claude/bin` breaks a wrapper write
-  * the soft FAILED summary       — a read-only `~/.claude` (permission denied) fails
-                                     the bash-log deploy, so init exits 1 at its summary
+  * the soft FAILED summary       — a malformed project `settings.json` fails its merge,
+                                     so init exits 1 at its summary — after it removed an
+                                     old shell logger (task 221), which must come back too
   * a trapped interrupt (SIGTERM) — a python3 shim signals the run mid-merge
 
 A negative control proves the byte-identity assertion has teeth: with the
@@ -194,8 +195,6 @@ class InitRollback(unittest.TestCase):
         for rel in PROVISIONED:
             self.assertFalse((self.project / rel).exists(),
                              f"created path survived rollback: {rel}")
-        self.assertFalse((self.home / ".claude" / "bash-log.sh").exists(),
-                         "user-level bash-log.sh survived rollback")
 
     # ---- the three induced-failure vectors --------------------------------
 
@@ -212,18 +211,28 @@ class InitRollback(unittest.TestCase):
         self._assert_restored_and_clean(
             r, originals, expect_modified=str(self.project / ".claude" / "settings.json"))
 
-    def test_permission_denied_soft_failed_rolls_back(self):
-        """Read-only `~/.claude` → the bash-log deploy fails (permission denied),
-        so init reaches its summary with a FAILED entry and exits 1. By then the
-        seeded CLAUDE.md/.gitignore are merged and the rc file appended; all must
-        be restored byte-identically."""
+    def test_soft_failed_summary_rolls_back_the_old_logger_removal_too(self):
+        """A malformed project `settings.json` → its merge fails, init goes on to its summary with a FAILED entry
+        and exits 1. By then it has removed the old shell logger (task 221: the file, its BASH_ENV, its rc
+        lines) and merged CLAUDE.md/.gitignore; every one must be restored byte-identically — the removed
+        logger file included."""
         originals = self._seed_modifiable_files()
-        claude = self.home / ".claude"
-        self._make_readonly_or_skip(claude)  # r-x: cannot create files
+        settings = self.project / ".claude" / "settings.json"
+        settings.write_text("{ this is not json\n", encoding="utf-8")
+        logger = self.home / ".claude" / "bash-log.sh"
+        logger.write_text("# claude-playbook: project-scoped command logging (bash)\n# an old copy\n",
+                          encoding="utf-8")
+        rc = self.home / ".bash_profile"
+        rc.write_text(SEED_RC + "\n# claude-playbook: command logging\nexport BASH_ENV=~/.claude/bash-log.sh\n",
+                      encoding="utf-8")
+        user_settings = self.home / ".claude" / "settings.json"
+        user_settings.write_text('{\n  "env": {"KEEP": "1", "BASH_ENV": "~/.claude/bash-log.sh"}\n}\n',
+                                 encoding="utf-8")
+        for path in (settings, logger, rc, user_settings):
+            originals[path] = path.read_bytes()
         r = self._run()
-        os.chmod(claude, 0o700)
-        self._assert_restored_and_clean(
-            r, originals, expect_modified=str(self.project / "CLAUDE.md"))
+        self.assertIn("settings.json", r.stdout + r.stderr)
+        self._assert_restored_and_clean(r, originals, expect_modified=str(rc))
 
     def test_interrupt_signal_rolls_back(self):
         """A SIGTERM mid-run (Ctrl-C class) is trapped → init exits non-zero →

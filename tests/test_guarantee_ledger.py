@@ -109,7 +109,6 @@ class _LedgerFixture(unittest.TestCase):
             "reference": "scenario:S15",
             "invocation": (
                 "env -u PLAYBOOK_SESSION_ID -u PLAYBOOK_ROLE "
-                "BASH_ENV=<repo>/plugins/playbook/scripts/bash-log.sh "
                 "bash <repo>/tests/wrapper-multiuser-fixture.sh"
             ),
             "observed": (
@@ -117,7 +116,7 @@ class _LedgerFixture(unittest.TestCase):
                 ".agent/bash_history on a fresh multi-user clone."
             ),
             "platforms": ["linux"],
-            "artifacts": ["plugins/playbook/scripts/bash-log.sh"],
+            "artifacts": ["plugins/playbook/scripts/gate-echo-lib.sh"],
             "phase": 2,
         }
         return entry
@@ -914,7 +913,7 @@ _SCHEMA_CONSTRAINT_MUTANTS += [
      "artifacts must be a non-empty string array"),
     ("/$defs/violationReproduction/properties/artifacts#uniqueItems",
      lambda t, d: _violation(t, d).__setitem__(
-         "artifacts", ["plugins/playbook/scripts/bash-log.sh"] * 2),
+         "artifacts", ["plugins/playbook/scripts/gate-echo-lib.sh"] * 2),
      "duplicate implicated artifacts"),
     ("/$defs/violationReproduction/properties/artifacts/items#minLength",
      lambda t, d: _violation(t, d).__setitem__("artifacts", ["  "]),
@@ -1023,7 +1022,7 @@ class RuleMutationCoverage(_LedgerFixture):
     def test_section_owner_on_a_non_markdown_file_rejected(self):
         data = self.mutated()
         data["guarantees"][0]["owner"] = [
-            {"path": "plugins/playbook/scripts/bash-log.sh",
+            {"path": "plugins/playbook/scripts/gate-echo-lib.sh",
              "reference": "section:Whatever"}]
         self.assertRejectedWith(
             data, "owner references are only defined for Markdown files")
@@ -1047,7 +1046,7 @@ class RuleMutationCoverage(_LedgerFixture):
     def test_shell_evidence_outside_tests_rejected(self):
         data = self.mutated()
         proof = self.first_real_proof(data)
-        proof["path"] = "plugins/playbook/scripts/bash-log.sh"
+        proof["path"] = "plugins/playbook/scripts/gate-echo-lib.sh"
         proof["reference"] = "scenario:S1"
         self.assertRejectedWith(
             data, "shell executable evidence must be a tracked tests/ scenario")

@@ -5,7 +5,7 @@ creating the file when absent, preserving every existing entry and key, skipping
 (SKIPPED, byte-identical) when all three are already present, and refusing rather
 than clobbering a malformed settings file.
 
-Hermetic: HOME is a temp dir (init also deploys ~/.claude/bash-log.*), so the
+Hermetic: HOME is a temp dir (init also edits files under HOME), so the
 developer's real settings are never touched.
 
 Run: python3 tests/test_init_deny_list.py

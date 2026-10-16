@@ -36,8 +36,6 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLUGIN = REPO_ROOT / "plugins" / "playbook"
 SCRIPTS = PLUGIN / "scripts"
-BASH_LOG = SCRIPTS / "bash-log.sh"
-ZSH_LOG = SCRIPTS / "bash-log.zsh"
 
 sys.path.insert(0, str(PLUGIN))
 
@@ -72,29 +70,23 @@ RAW_MARKERS = [
 ]
 
 
-# The no-marker shapes: the `lanes_without_marker` list each one produces, and
-# the answer the bundled Bash logger must give for it. The logger decides on two
-# filesystem facts only — the marker, and whether root `.agent/tasks/` is a
-# directory — so it writes the root on exactly the two shapes that have root
-# `tasks/` and skips every other one. That makes it deliberately STRICTER than
-# the three reference implementations, never looser; TestResolverParity asserts
-# both halves.
+# The no-marker shapes, and the `lanes_without_marker` list each one produces in every implementation.
 #
-# (name, builder, lanes_expected, logger_expected)
+# (name, builder, lanes_expected)
 NO_MARKER_SHAPES = [
-    ("bare",        lambda a: None,                                        [], "skip"),
-    ("config_only", lambda a: (a / "config.json").write_text("{}\n"),      [], "skip"),
-    ("sessions",    lambda a: (a / "sessions").mkdir(),                    [], "skip"),
-    ("child_no_tasks", lambda a: (a / "alice").mkdir(),                    [], "skip"),
-    ("root_tasks",  lambda a: (a / "tasks").mkdir(),                       [], "root"),
-    ("one_lane",    lambda a: (a / "alice" / "tasks").mkdir(parents=True),  ["alice"], "skip"),
+    ("bare",        lambda a: None,                                        []),
+    ("config_only", lambda a: (a / "config.json").write_text("{}\n"),      []),
+    ("sessions",    lambda a: (a / "sessions").mkdir(),                    []),
+    ("child_no_tasks", lambda a: (a / "alice").mkdir(),                    []),
+    ("root_tasks",  lambda a: (a / "tasks").mkdir(),                       []),
+    ("one_lane",    lambda a: (a / "alice" / "tasks").mkdir(parents=True),  ["alice"]),
     ("two_lanes",   lambda a: [(a / n / "tasks").mkdir(parents=True)
-                               for n in ("alice", "bob")],                 ["alice", "bob"], "skip"),
+                               for n in ("alice", "bob")],                 ["alice", "bob"]),
     ("lane_plus_junk", lambda a: [(a / "alice" / "tasks").mkdir(parents=True),
                                   (a / "sessions").mkdir(),
-                                  (a / "config.json").write_text("{}\n")],  ["alice"], "skip"),
+                                  (a / "config.json").write_text("{}\n")],  ["alice"]),
     ("mixed",       lambda a: [(a / "tasks").mkdir(),
-                               (a / "alice" / "tasks").mkdir(parents=True)], [], "root"),
+                               (a / "alice" / "tasks").mkdir(parents=True)], []),
 ]
 
 
@@ -258,37 +250,6 @@ class TestResolverParity(TempProjectCase):
         )
         return proc.returncode, proc.stdout.strip()
 
-    def _bash_log_resolve(self, project: Path, expected_lane: str | None):
-        """Run bash-log.sh against the project; return (rc, resolved_lane_name_or_None)."""
-        if expected_lane:
-            (project / ".agent" / expected_lane).mkdir(parents=True, exist_ok=True)
-        for h in project.glob(".agent/**/bash_history"):
-            h.unlink()
-        if (project / ".agent" / "bash_history").exists():
-            (project / ".agent" / "bash_history").unlink()
-
-        script = (
-            f'BASH_COMMAND="my_test_command"\n'
-            f'source "{SCRIPTS}/bash-log.sh"\n'
-            f'_cpb_log_cmd\n'
-        )
-        proc = subprocess.run(
-            [bash_or_skip(), "-c", script], capture_output=True, text=True, cwd=str(project)
-        )
-        if proc.returncode != 0:
-            return proc.returncode, None
-
-        histories = list(project.glob(".agent/**/bash_history"))
-        if not histories:
-            return 0, None
-        if len(histories) > 1:
-            raise ValueError(f"Multiple histories written: {histories}")
-
-        rel = histories[0].relative_to(project / ".agent")
-        if rel.name == "bash_history" and len(rel.parts) == 1:
-            return 0, ""
-        return 0, rel.parts[0]
-
     def _shell_lanes_without_marker(self, project: Path):
         """gate-echo-lib.sh's lanes_without_marker, as a sorted list."""
         proc = subprocess.run(
@@ -298,43 +259,10 @@ class TestResolverParity(TempProjectCase):
         )
         return proc.returncode, sorted(x for x in proc.stdout.split() if x)
 
-    def _logger_target(self, project: Path):
-        """Run the bundled bash logger for real; return "root", a lane name, or None.
-
-        `BASH_ENV` is stripped so a dogfooding host's INSTALLED logger cannot be
-        sourced into the probe shell and log a second time.
-        """
-        env = {k: v for k, v in os.environ.items()
-               if k not in ("BASH_ENV", "PLAYBOOK_SESSION_ID", "PLAYBOOK_ROLE")}
-        subprocess.run(
-            [bash_or_skip(), "--noprofile", "--norc", "-c",
-             'source "$1"\necho parity_probe >/dev/null\n', "_",
-             str(SCRIPTS / "bash-log.sh")],
-            cwd=str(project), env=env, capture_output=True, text=True,
-        )
-        written = sorted((project / ".agent").rglob("bash_history"))
-        if not written:
-            return None
-        if len(written) > 1:
-            raise ValueError(f"logger wrote more than one history: {written}")
-        rel = written[0].relative_to(project / ".agent")
-        return "root" if len(rel.parts) == 1 else rel.parts[0]
-
-    def test_logger_is_never_looser_than_lanes_without_marker(self):
-        """The bundled Bash logger against the three reference implementations.
-
-        It agrees with them wherever root `.agent/tasks/` exists — the root is a
-        real lane there, and refusing it would kill logging for every legacy and
-        mixed project. On every OTHER marker-absent shape it is deliberately
-        stricter: it skips where `resolve_agent_dir` still answers the root. The
-        cost is a missing forensic log on a project that has no `tasks/` yet, and
-        it heals the moment anything creates one.
-
-        The direction is what matters, so it is asserted rather than left to the
-        table: the logger may never write the root where a reference reports that
-        a per-user lane exists. That is the Critical fresh-clone contamination.
-        """
-        for name, build, expected, logger_expected in NO_MARKER_SHAPES:
+    def test_no_marker_shapes_agree_across_all_three(self):
+        """The marker-absent shapes give the same `lanes_without_marker` list in provider.paths, tasks.core and
+        gate-echo-lib.sh — the hooks' resolver, which the shell log's writer uses since task 221."""
+        for name, build, expected in NO_MARKER_SHAPES:
             with self.subTest(shape=name):
                 project = self.tmp / f"nm_{name}"
                 agent = project / ".agent"
@@ -342,28 +270,11 @@ class TestResolverParity(TempProjectCase):
                 build(agent)
                 self.assertFalse((agent / "current_user").exists(),
                                  "these shapes are the MARKER-ABSENT half")
-
-                self.assertEqual(sorted(lanes_without_marker(project)), expected,
-                                 "provider.paths")
-
+                self.assertEqual(sorted(lanes_without_marker(project)), expected, "provider.paths")
                 rc, shell_lanes = self._shell_lanes_without_marker(project)
-                self.assertEqual(rc, 0, "gate-echo-lib.sh exited non-zero")
-                self.assertEqual(shell_lanes, expected, "gate-echo-lib.sh")
-
+                self.assertEqual((rc, shell_lanes), (0, expected), "gate-echo-lib.sh")
                 rc, core_lanes = self._python_core_lanes(project)
-                self.assertEqual(rc, 0, f"tasks.core exited {rc}")
-                self.assertEqual(core_lanes, expected, "tasks.core")
-
-                target = self._logger_target(project)
-                self.assertEqual(
-                    target, None if logger_expected == "skip" else "root",
-                    f"the logger's answer for {name} is decided by the marker "
-                    f"and root .agent/tasks/ alone — wrote {target!r}")
-                if target is not None:
-                    self.assertEqual(
-                        expected, [],
-                        f"the logger elected the root on {name}, where the "
-                        f"reference implementations report lanes {expected}")
+                self.assertEqual((rc, core_lanes), (0, expected), "tasks.core")
 
     def _python_core_lanes(self, project: Path):
         """tasks/core.py's lanes_without_marker, out-of-process, as a sorted list."""
@@ -391,9 +302,6 @@ class TestResolverParity(TempProjectCase):
         1.5.34 and is Phase 4's to reconcile; it is pinned so a reconciliation
         has to update this test deliberately.
 
-        The logger is no longer part of it. It consults no child of `.agent/` at
-        all, so this is just another marker-absent shape with no root `tasks/`
-        and it skips, like every other one.
         """
         project = self.tmp / "dot_lane"
         (project / ".agent" / ".hidden" / "tasks").mkdir(parents=True)
@@ -408,14 +316,8 @@ class TestResolverParity(TempProjectCase):
         rc, shell_lanes = self._shell_lanes_without_marker(project)
         self.assertEqual((rc, shell_lanes), (0, []),
                          "gate-echo-lib.sh started counting dot-named lanes — if "
-                         "this is the Phase 4 reconciliation, the logger must move "
-                         "with it and this test must be rewritten, not deleted")
-
-        self.assertIsNone(
-            self._logger_target(project),
-            "a marker-absent shape with no root .agent/tasks/ must skip, "
-            "whatever the children of .agent/ are named",
-        )
+                         "this is the Phase 4 reconciliation, this test must be "
+                         "rewritten, not deleted")
 
     def test_valid_markers_agree_across_all_three(self):
         for name in VALID_MARKERS:
@@ -433,9 +335,6 @@ class TestResolverParity(TempProjectCase):
                 self.assertEqual(rc, 0, f"gate-echo-lib exited {rc}")
                 self.assertEqual(out, expected, "gate-echo-lib.sh")
 
-                rc, resolved_lane = self._bash_log_resolve(p, name)
-                self.assertEqual(rc, 0, f"bash-log.sh exited {rc}")
-                self.assertEqual(resolved_lane, name, "bash-log.sh")
 
     def test_invalid_markers_rejected_by_all_three(self):
         for bad in INVALID_MARKERS:
@@ -451,9 +350,6 @@ class TestResolverParity(TempProjectCase):
                 rc, _ = self._bash_resolve(p)
                 self.assertNotEqual(rc, 0, "gate-echo-lib.sh accepted an invalid marker")
 
-                rc, resolved_lane = self._bash_log_resolve(p, None)
-                self.assertEqual(rc, 0, f"bash-log.sh exited {rc}")
-                self.assertIsNone(resolved_lane, "bash-log.sh accepted an invalid marker")
 
     def _write_raw(self, project: Path, data: str) -> None:
         (project / ".agent").mkdir(parents=True, exist_ok=True)
@@ -519,13 +415,6 @@ class TestResolverParity(TempProjectCase):
                     self.assertNotIn(f"nudge-{name}", proc.stdout,
                                      "monitor-nudge.sh delivered from a rejected marker")
 
-                # 5. bash-log.sh's inline copy
-                rc, resolved_lane = self._bash_log_resolve(p, expected)
-                self.assertEqual(rc, 0, f"bash-log.sh exited {rc}")
-                if expected:
-                    self.assertEqual(resolved_lane, expected, "bash-log.sh")
-                else:
-                    self.assertIsNone(resolved_lane, "bash-log.sh accepted a bad raw marker")
 
     def test_absent_marker_is_root_for_all_three(self):
         p = make_project(self.tmp / "legacy", "legacy")
@@ -533,9 +422,6 @@ class TestResolverParity(TempProjectCase):
         self.assertEqual(str(resolve_agent_dir(p)), expected)
         self.assertEqual(self._python_core_resolve(p), (0, expected))
         self.assertEqual(self._bash_resolve(p), (0, expected))
-        rc, resolved_lane = self._bash_log_resolve(p, "")
-        self.assertEqual(rc, 0)
-        self.assertEqual(resolved_lane, "")
 
 
 # ── 3. Rewired provider surfaces ─────────────────────────────────────────────
@@ -1013,706 +899,11 @@ class TestSplitBrainEndToEnd(TempProjectCase):
         self.assertEqual(denied.returncode, 2, "hook allowed an edit with no active task")
 
 
-# ── 5. The bundled shell loggers' lane policy (PB-LANE-RESOLUTION) ───────────
-#
-# The Critical violation the Phase 1 guarantee ledger recorded. On a fresh clone
-# of a multi-user repo — `.agent/<user>/` lanes present, the gitignored
-# `.agent/current_user` marker absent, no root `.agent/tasks/` — both bundled
-# loggers initialised the lane to the ROOT `.agent` and only reassigned it
-# inside the `current_user` branch. The marker-absent path therefore fell
-# through and appended to the SHARED root `.agent/bash_history`: the cross-user
-# contamination the lane model exists to prevent, while the lane's own history
-# file was never written at all.
-#
-# The policy pinned below:
-#
-#     valid marker                          -> the validated user lane
-#     no marker + root `.agent/tasks/`      -> the root IS a legitimate lane
-#     no marker + NO per-user lane present  -> the root IS a legitimate lane
-#     no marker + a per-user lane present   -> owner unknown; skip logging
-#     invalid / unusable marker             -> owner unknown; skip logging
-#
-# A "per-user lane" is exactly what `provider/paths.py::lanes_without_marker`
-# counts: a direct child directory of `.agent/` that itself contains `tasks/`.
-# The logger therefore writes the root precisely when `lanes_without_marker` is
-# empty and skips precisely when it is not, on every shape a supported surface
-# can produce — and that is asserted, not asserted in prose: `TestResolverParity.test_logger_agrees_with_lanes_without_marker`
-# runs the same vector table through all three reference implementations and the
-# logger. An earlier revision of this fix skipped whenever there was no root
-# `.agent/tasks/`, which diverged from all three on four shapes (bare `.agent/`,
-# `.agent/config.json` only, `.agent/sessions/` only, a non-lane child) and lost
-# history that `tasks retro` and `tasks context` still read from the root.
-#
-# One shape is deliberately OUTSIDE that table because no single expected value
-# can hold all four implementations: a DOT-named lane. See
-# `test_dot_named_lane_is_a_known_shell_python_divergence`, which pins the split
-# as a fact rather than leaving it to be rediscovered.
-#
-# The root-lane cases are deliberate ADVERSE CONTROLS, not decoration: a blanket
-# "never log to root" fix satisfies every marker-absent assertion here while
-# silently killing logging for every legacy, single-user, and mixed-layout
-# project. It is the same exemption wrapper scenario S6 defends.
-#
-# These cases execute the REAL bundled `bash-log.sh` through `bash` and inspect
-# filesystem effects. They never rely on an inherited `BASH_ENV`: the host may
-# be dogfooding the plugin, in which case the INSTALLED (possibly stale) logger
-# would be sourced into every probe shell and log a second time, masking the
-# candidate's behavior. Every probe therefore runs with `BASH_ENV` stripped and
-# sources the repository copy by explicit path.
-#
-# zsh may not be installed on this host, so `bash-log.zsh` is not executed here.
-# It is held to the same policy structurally (`ZshLoggerSourceParity`); CI runs
-# its lane shapes under a real zsh (.github/workflows/verify.yml).
+# ── 5. (retired) ─────────────────────────────────────────────────────────────
+# The bundled BASH_ENV shell loggers had their own copy of the lane policy, held here until task 221
+# retired them: the shell log is written by the PostToolUse hook into `resolve_agent_dir`'s lane, where
+# `agent_dir_writable` allows it — the resolver section 2 holds to the other two.
 
-PROBE = "playbook_lane_probe_command"
-
-
-class LoggerProbeCase(unittest.TestCase):
-    """Runs the bundled bash logger for real and reports what it wrote."""
-
-    def setUp(self) -> None:
-        self._tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self._tmp.cleanup)
-        self.root = Path(self._tmp.name)
-
-    # ── project shapes ───────────────────────────────────────────────────
-    def make_lane_project(self, name: str, *, lanes=(), root_tasks=False,
-                     dirs=(), files=(),
-                     marker: str | None = None, marker_bytes: str | None = None) -> Path:
-        project = self.root / name
-        (project / ".agent").mkdir(parents=True)
-        if root_tasks:
-            (project / ".agent" / "tasks").mkdir()
-        for lane in lanes:
-            (project / ".agent" / lane / "tasks").mkdir(parents=True)
-        for name_ in dirs:
-            (project / ".agent" / name_).mkdir(parents=True, exist_ok=True)
-        for name_ in files:
-            (project / ".agent" / name_).write_text("{}\n", encoding="utf-8")
-        if marker is not None:
-            marker_bytes = marker + "\n"
-        if marker_bytes is not None:
-            # newline="" so the exact bytes land on disk (CRLF vectors would
-            # otherwise be translated back to LF and stop testing anything).
-            with open(project / ".agent" / "current_user", "w", newline="") as fh:
-                fh.write(marker_bytes)
-        return project
-
-    # ── the probe ────────────────────────────────────────────────────────
-    def run_logger(self, project: Path, *, errexit: bool = False,
-                   prelude: str = "", epilogue: str = ""):
-        """Source the bundled logger in a real bash and run one command.
-
-        Returns the CompletedProcess. `ALIVE` on stdout proves the shell
-        survived the DEBUG trap — a logger that skips must skip by returning,
-        never by exiting or by tripping the host shell's errexit.
-
-        `prelude` runs BEFORE the logger is sourced, which is where a host
-        shell's `shopt`/`set` options come from: this file is sourced via
-        BASH_ENV into a shell the logger does not control, so it inherits
-        whatever globbing and error options that shell already set.
-        `epilogue` runs after the probe, to observe what the logger left behind.
-        """
-        env = {k: v for k, v in os.environ.items() if k != "BASH_ENV"}
-        env.pop("PLAYBOOK_SESSION_ID", None)
-        env.pop("PLAYBOOK_ROLE", None)
-        script = (
-            (prelude + "\n" if prelude else "")
-            + ("set -e\n" if errexit else "")
-            + 'source "$1"\n'
-            + f"echo {PROBE} >/dev/null\n"
-            + "echo ALIVE\n"
-            + (epilogue + "\n" if epilogue else "")
-        )
-        return subprocess.run(
-            [bash_or_skip(), "--noprofile", "--norc", "-c", script, "_", str(BASH_LOG)],
-            cwd=str(project), env=env, text=True, capture_output=True,
-        )
-
-    # ── observations ─────────────────────────────────────────────────────
-    def histories(self, project: Path) -> list[str]:
-        """Every bash_history under the project, as `.agent`-relative paths.
-
-        `.as_posix()` (not `str()`): the lane names here are compared against
-        forward-slash literals like `alice/bash_history`, and native `str()`
-        would yield `alice\\bash_history` on Windows. as_posix() is the same
-        value off Windows, so Linux/macOS behaviour is unchanged.
-        """
-        agent = project / ".agent"
-        return sorted(
-            p.relative_to(agent).as_posix()
-            for p in agent.rglob("bash_history")
-        )
-
-    def lane_decision(self, project: Path) -> str:
-        """The logger's answer as one label: 'skip', 'root', or 'lane:<name>'."""
-        hist = self.histories(project)
-        if not hist:
-            return "skip"
-        if hist == ["bash_history"]:
-            return "root"
-        return "lane:" + "+".join(sorted(h.rsplit("/", 1)[0] for h in hist))
-
-    def assert_logged_probe(self, project: Path, rel: str) -> None:
-        path = project / ".agent" / rel
-        self.assertTrue(path.is_file(), f"{rel} was not written")
-        body = path.read_text(encoding="utf-8")
-        self.assertIn(PROBE, body, f"{rel} exists but holds no probe line")
-        self.assertRegex(body, r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d \| AGENT \| ",
-                         "history line lost its timestamp/actor framing")
-
-
-# ── 1. marker absent, lanes present, no root lane: the violation ─────────────
-
-class MarkerAbsentWithLanes(LoggerProbeCase):
-    """RED before the fix: the logger wrote the shared root `.agent/bash_history`."""
-
-    def test_marker_absent_with_one_lane_writes_nothing(self):
-        project = self.make_lane_project("fresh-clone", lanes=["alice"])
-        result = self.run_logger(project)
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("ALIVE", result.stdout, "the probe shell did not survive")
-        self.assertFalse(
-            (project / ".agent" / "bash_history").exists(),
-            "the logger created the SHARED root .agent/bash_history on a fresh "
-            "clone — the cross-user contamination PB-LANE-RESOLUTION records",
-        )
-        self.assertFalse(
-            (project / ".agent" / "alice" / "bash_history").exists(),
-            "the logger guessed a lane it had no marker for",
-        )
-        self.assertEqual(self.histories(project), [],
-                         "ownership is unknown here; nothing may be written")
-
-    def test_non_lane_siblings_do_not_cancel_a_real_lane(self):
-        """A real lane plus junk: still the fresh-clone shape, still a skip.
-
-        `lanes_without_marker` reports `['alice']` here, and there is no root
-        `.agent/tasks/`, so nothing may be written.
-        """
-        project = self.make_lane_project("lane-plus-junk", lanes=["alice"],
-                                          dirs=["sessions"], files=["config.json"])
-        result = self.run_logger(project)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.histories(project), [],
-                         "a non-lane sibling cancelled a real per-user lane")
-
-    def test_marker_absent_with_several_lanes_picks_none_of_them(self):
-        project = self.make_lane_project("many-lanes", lanes=["alice", "bob", "carol"])
-        result = self.run_logger(project)
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.histories(project), [],
-                         "no lane may be selected arbitrarily without a marker")
-
-    def test_marker_absent_leaves_the_lane_directory_untouched(self):
-        """Not just the history file: the fresh clone must be byte-identical."""
-        project = self.make_lane_project("untouched", lanes=["alice"])
-        before = sorted(str(p.relative_to(project)) for p in project.rglob("*"))
-        self.run_logger(project)
-        after = sorted(str(p.relative_to(project)) for p in project.rglob("*"))
-        self.assertEqual(before, after, "the logger created state on a fresh clone")
-
-    def test_marker_absent_under_errexit_does_not_kill_the_shell(self):
-        """Skipping must be a `return 0`, never a bare return or an exit.
-
-        This logger runs in a DEBUG trap sourced into every hook shell; a
-        non-zero return there kills a `set -e` host (field report 2026-07-21).
-        """
-        project = self.make_lane_project("errexit", lanes=["alice"])
-        result = self.run_logger(project, errexit=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("ALIVE", result.stdout)
-
-    def test_marker_absent_deep_subdirectory_still_writes_nothing(self):
-        """The walk finds the same `.agent`; the answer must not change."""
-        project = self.make_lane_project("deep", lanes=["alice"])
-        deep = project / "src" / "pkg" / "mod"
-        deep.mkdir(parents=True)
-        env = {k: v for k, v in os.environ.items()
-               if k not in ("BASH_ENV", "PLAYBOOK_SESSION_ID", "PLAYBOOK_ROLE")}
-        result = subprocess.run(
-            [bash_or_skip(), "--noprofile", "--norc", "-c",
-             f'source "$1"\necho {PROBE} >/dev/null\necho ALIVE\n', "_", str(BASH_LOG)],
-            cwd=str(deep), env=env, text=True, capture_output=True,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.histories(project), [])
-
-
-# ── 2. valid marker: the user's lane, and only the user's lane ───────────────
-
-class ValidMarker(LoggerProbeCase):
-
-    def test_valid_marker_writes_the_lane_not_the_root(self):
-        project = self.make_lane_project("mu", lanes=["alice"], marker="alice")
-        result = self.run_logger(project)
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assert_logged_probe(project, "alice/bash_history")
-        self.assertFalse((project / ".agent" / "bash_history").exists(),
-                         "wrote the shared root as well as the lane")
-        self.assertEqual(self.histories(project), ["alice/bash_history"])
-
-    def test_valid_marker_wins_over_a_root_lane(self):
-        """Mixed layout WITH a marker: the marker decides, not the root."""
-        project = self.make_lane_project("mixed-marked", lanes=["alice"],
-                                    root_tasks=True, marker="alice")
-        self.run_logger(project)
-        self.assertEqual(self.histories(project), ["alice/bash_history"])
-
-    def test_crlf_marker_still_resolves_the_lane(self):
-        """A Windows checkout must not silently disable logging."""
-        project = self.make_lane_project("crlf", lanes=["alice"], marker_bytes="alice\r\n")
-        self.run_logger(project)
-        self.assertEqual(self.histories(project), ["alice/bash_history"])
-
-    def test_marker_without_a_trailing_newline_still_resolves(self):
-        project = self.make_lane_project("nonl", lanes=["alice"], marker_bytes="alice")
-        self.run_logger(project)
-        self.assertEqual(self.histories(project), ["alice/bash_history"])
-
-    def test_valid_marker_whose_lane_dir_is_missing_writes_nothing(self):
-        """The named lane does not exist yet: skip, never fall back to root."""
-        project = self.make_lane_project("ghost", lanes=["alice"], marker="bob")
-        result = self.run_logger(project)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.histories(project), [],
-                         "fell back to the root when the marked lane was absent")
-
-
-# ── 3. invalid / unusable marker: skip, and never fall back to the root ──────
-
-UNUSABLE_MARKER_BYTES = [
-    ("empty", ""),
-    ("blank_line", "\n"),
-    ("dot", ".\n"),
-    ("dotdot", "..\n"),
-    ("traversal", "../evil\n"),
-    ("slash", "a/b\n"),
-    ("dash_lead", "-dash\n"),
-    ("underscore_lead", "_under\n"),
-    ("space", "has space\n"),
-    ("hidden", ".hidden\n"),
-    ("smuggled_second_line", "alice\n../evil\n"),
-    ("two_lines", "alice\nbob\n"),
-    ("crlf_two_lines", "alice\r\nbob\r\n"),
-    ("at_sign", "alice@evil\n"),
-]
-
-
-class InvalidMarker(LoggerProbeCase):
-
-    def test_invalid_markers_skip_and_never_write_the_root(self):
-        for name, raw in UNUSABLE_MARKER_BYTES:
-            with self.subTest(marker=name):
-                project = self.make_lane_project(f"bad-{name}", lanes=["alice"],
-                                            marker_bytes=raw)
-                result = self.run_logger(project)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn("ALIVE", result.stdout, "shell did not survive")
-                self.assertEqual(
-                    self.histories(project), [],
-                    "an unusable marker must skip logging, not fall back to "
-                    "the shared root",
-                )
-
-    def test_invalid_marker_does_not_write_the_root_even_with_a_root_lane(self):
-        """A root lane exists, but the marker is the authority and it is broken.
-
-        The root-tasks exemption is for the marker-ABSENT case only; a present
-        but unusable marker means the owning lane is unknown, and answering the
-        root anyway is exactly the contamination this guarantee forbids.
-        """
-        project = self.make_lane_project("bad-with-root", lanes=["alice"],
-                                    root_tasks=True, marker_bytes="../evil\n")
-        result = self.run_logger(project)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.histories(project), [])
-
-    def test_unreadable_marker_skips(self):
-        project = self.make_lane_project("unreadable", lanes=["alice"], marker="alice")
-        marker = project / ".agent" / "current_user"
-        marker.chmod(0o000)
-        self.addCleanup(marker.chmod, 0o644)
-        if os.access(marker, os.R_OK):   # running as root: the mode is advisory
-            self.skipTest("cannot make a file unreadable for this user")
-        result = self.run_logger(project)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.histories(project), [],
-                         "an unreadable marker fell back to a lane or the root")
-
-
-# ── 4. ADVERSE CONTROL: the legitimate root lane must keep logging ───────────
-
-class LegitimateRootLane(LoggerProbeCase):
-    """Rejects a blanket "never log to root" implementation.
-
-    Wrapper scenario S6 defends the same exemption at the wrapper boundary:
-    root `.agent/tasks/` means the root IS a lane, and refusing it would break
-    every legacy project. The tail of the class pins the other side of that one
-    fact: without root `.agent/tasks/` there is no root lane to elect.
-    """
-
-    def test_legacy_root_lane_logs_to_the_root(self):
-        project = self.make_lane_project("legacy", root_tasks=True)
-        result = self.run_logger(project)
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assert_logged_probe(project, "bash_history")
-        self.assertEqual(self.histories(project), ["bash_history"])
-
-    def test_mixed_layout_without_a_marker_logs_to_the_root(self):
-        """Scenario S6's exact shape: root tasks AND a lane, no marker."""
-        project = self.make_lane_project("mixed", lanes=["alice"], root_tasks=True)
-        result = self.run_logger(project)
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assert_logged_probe(project, "bash_history")
-        self.assertFalse((project / ".agent" / "alice" / "bash_history").exists())
-
-    def test_root_lane_appends_rather_than_truncates(self):
-        project = self.make_lane_project("append", root_tasks=True)
-        self.run_logger(project)
-        self.run_logger(project)
-        body = (project / ".agent" / "bash_history").read_text(encoding="utf-8")
-        self.assertEqual(body.count(PROBE), 2, "the logger truncated the history")
-
-    def test_bare_agent_directory_writes_nothing(self):
-        """`.agent/` with nothing in it: no marker and no root `tasks/`.
-
-        `resolve_agent_dir` answers `<root>/.agent` here, so the logger is
-        stricter than it: nothing is written, and nothing is contaminated
-        either. It starts logging as soon as `tasks/` exists.
-        """
-        project = self.make_lane_project("bare")
-        result = self.run_logger(project)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.histories(project), [])
-
-    def test_committed_config_only_writes_nothing(self):
-        """The reachable shape, and the one the strictness actually costs.
-
-        `.agent/config.json` is documented as committable and git tracks no
-        empty `tasks/`, so a clone of a single-user project arrives with exactly
-        this. `tasks retro`/`tasks context` read the root file, so until `init`
-        creates `tasks/` this project has no shell history — a missing forensic
-        log, deliberately preferred over electing a lane nobody owns.
-        """
-        project = self.make_lane_project("committed-config", files=["config.json"])
-        result = self.run_logger(project)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.histories(project), [])
-
-    def test_sessions_dir_only_writes_nothing(self):
-        project = self.make_lane_project("sessions-only", dirs=["sessions"])
-        result = self.run_logger(project)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.histories(project), [])
-
-    def test_child_directory_without_tasks_writes_nothing(self):
-        """`.agent/alice/` with no `alice/tasks/`: not a lane, and not the root.
-
-        The children of `.agent/` are not consulted at all, so this shape is
-        indistinguishable from a bare `.agent/` — no root `tasks/`, no write.
-        """
-        project = self.make_lane_project("child-no-tasks", dirs=["alice"])
-        result = self.run_logger(project)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.histories(project), [])
-
-    def test_root_logging_under_errexit_does_not_kill_the_shell(self):
-        """The root path must still be a clean `return 0` for a `set -e` host."""
-        project = self.make_lane_project("errexit-root", root_tasks=True)
-        result = self.run_logger(project, errexit=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("ALIVE", result.stdout)
-        self.assert_logged_probe(project, "bash_history")
-
-
-# ── 5. HOST SHELL OPTIONS: the logger does not control the shell it lives in ─
-
-# (label, prelude, errexit) — what a host shell may already have set when
-# BASH_ENV sources this logger into it.
-HOST_SHELL_OPTIONS = [
-    ("default",           "",                   False),
-    ("errexit",           "",                   True),
-    ("nounset",           "set -u",             False),
-    ("pipefail",          "set -o pipefail",    False),
-    ("failglob",          "shopt -s failglob",  False),
-    ("nullglob",          "shopt -s nullglob",  False),
-    ("dotglob",           "shopt -s dotglob",   False),
-    ("extglob",           "shopt -s extglob",   False),
-    ("failglob+errexit",  "shopt -s failglob",  True),
-    ("nullglob+errexit",  "shopt -s nullglob",  True),
-    ("dotglob+errexit",   "shopt -s dotglob",   True),
-    # Not a shell option but the same class of leak: a non-empty GLOBIGNORE
-    # makes bash match dotfiles, exactly as dotglob does.
-    ("globignore",        "GLOBIGNORE=x",       False),
-    # The three a glob in this file could not survive. Measured on the 1.5.34
-    # candidate, which globbed `.agent/`'s children looking for a per-user lane:
-    # each of these silently turned a required skip into a write of the SHARED
-    # root — with globbing off the pattern stayed literal and matched nothing,
-    # and `GLOBIGNORE='*'` discarded every match. They are the regression guard
-    # for that glob staying deleted, and they pass trivially without it.
-    ("noglob_set_f",      "set -f",             False),
-    ("noglob_set_o",      "set -o noglob",      False),
-    ("globignore_star",   "GLOBIGNORE='*'",     False),
-]
-
-
-class HostShellOptionMatrix(LoggerProbeCase):
-    """Every in-policy shape under every host shell option combination.
-
-    This dimension was entirely untested until a reviewer found that the
-    per-user-lane scan — the file's only glob — was evaluated by the HOST
-    shell's rules, and the file is sourced into a shell it does not control.
-    `shopt -s failglob` raised an error before the scan's `-d` guard could run;
-    `set -f`, `set -o noglob` and `GLOBIGNORE='*'` each turned a required skip
-    into a write of the shared root. The scan is gone: the decision now rests on
-    two `-f`/`-d` tests that no shell option reaches, and this matrix is what
-    keeps it that way.
-
-    Four things are asserted for every cell, because three of them were the
-    symptoms: exit 0, `ALIVE` on stdout, EMPTY stderr, and the same lane
-    decision the shape gets under default options. The decision must be a
-    property of the project layout alone — never of the caller's shell options.
-    """
-
-    # The marker shapes complete the policy answers; NO_MARKER_SHAPES supplies
-    # the other nine with the logger's own answer already in the table.
-    # (name, marker, expected) — both carry a real `alice` lane, so the marker
-    # is the only thing deciding the answer.
-    MARKER_SHAPES = [
-        ("valid_marker",   "alice",   "lane:alice"),
-        ("invalid_marker", "../evil", "skip"),
-    ]
-
-    def _cases(self):
-        for name, build, _lanes_expected, logger_expected in NO_MARKER_SHAPES:
-            yield name, build, None, logger_expected
-        for name, marker, expected in self.MARKER_SHAPES:
-            yield name, None, marker, expected
-
-    def _make(self, name, build, marker, suffix):
-        if marker is not None:
-            return self.make_lane_project(
-                f"{name}-{suffix}", lanes=["alice"], marker=marker)
-        project = self.make_lane_project(f"{name}-{suffix}")
-        build(project / ".agent")
-        return project
-
-    def test_every_in_policy_shape_survives_every_host_shell_option(self):
-        for shape, build, marker, expected in self._cases():
-            for label, prelude, errexit in HOST_SHELL_OPTIONS:
-                with self.subTest(shape=shape, host_options=label):
-                    project = self._make(shape, build, marker, label)
-                    result = self.run_logger(project, prelude=prelude, errexit=errexit)
-
-                    self.assertEqual(
-                        result.returncode, 0,
-                        f"{shape} under `{label}`: the host shell died "
-                        f"(stderr={result.stderr!r})")
-                    self.assertIn(
-                        "ALIVE", result.stdout,
-                        f"{shape} under `{label}`: the host shell never reached "
-                        f"the command after the probe")
-                    self.assertEqual(
-                        result.stderr, "",
-                        f"{shape} under `{label}`: the logger wrote to stderr, "
-                        f"which hook output feeds back to the agent")
-                    self.assertEqual(
-                        self.lane_decision(project), expected,
-                        f"{shape} under `{label}`: the host shell's options "
-                        f"changed the lane decision")
-
-    def test_the_logger_leaves_the_hosts_globbing_options_untouched(self):
-        """No residue: the host shell's options must survive the logger.
-
-        The deleted scan had to switch `failglob` off to run at all, and so had
-        to switch it back on both exits. Nothing globs here now, so nothing may
-        be switched at all — a leak would silently change how every later glob
-        in the user's own shell behaves.
-        """
-        probe = (
-            'if shopt -q failglob; then echo "failglob=set"; else echo "failglob=unset"; fi\n'
-            'if shopt -q nullglob; then echo "nullglob=set"; else echo "nullglob=unset"; fi\n'
-            'if shopt -q dotglob; then echo "dotglob=set"; else echo "dotglob=unset"; fi'
-        )
-        for shape, lanes, decision in (("bare", [], "skip"),
-                                       ("one_lane", ["alice"], "skip")):
-            for host_has_failglob in (True, False):
-                with self.subTest(shape=shape, failglob_set_by_host=host_has_failglob):
-                    project = self.make_lane_project(
-                        f"{shape}-residue-{host_has_failglob}", lanes=lanes)
-                    result = self.run_logger(
-                        project,
-                        prelude="shopt -s failglob" if host_has_failglob else "",
-                        epilogue=probe)
-
-                    self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertEqual(self.lane_decision(project), decision)
-                    want = "set" if host_has_failglob else "unset"
-                    self.assertIn(f"failglob={want}", result.stdout,
-                                  "the logger changed the host's failglob")
-                    self.assertIn("nullglob=unset", result.stdout,
-                                  "the logger leaked nullglob into the host shell")
-                    self.assertIn("dotglob=unset", result.stdout,
-                                  "the logger leaked dotglob into the host shell")
-
-    def test_dotglob_no_longer_moves_the_dot_named_lane_answer(self):
-        """`shopt -s dotglob` and a non-empty `GLOBIGNORE` used to move this.
-
-        `.agent/.hidden/tasks/` was visible to the deleted scan under either
-        option and invisible without them, so the same project got two different
-        answers. With no glob left the shape is just a marker-absent project with
-        no root `tasks/`: skip, under all three preludes.
-        """
-        default = self.make_lane_project("dot-default", lanes=[".hidden"])
-        projects = {opt: self.make_lane_project(f"dot-{n}", lanes=[".hidden"])
-                    for n, opt in (("dotglob", "shopt -s dotglob"),
-                                   ("globignore", "GLOBIGNORE=x"))}
-
-        results = {"": self.run_logger(default)}
-        for opt, project in projects.items():
-            results[opt] = self.run_logger(project, prelude=opt)
-
-        for opt, result in results.items():
-            with self.subTest(host_options=opt or "default"):
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(result.stderr, "")
-                self.assertIn("ALIVE", result.stdout)
-
-        self.assertEqual(self.lane_decision(default), "skip",
-                         "no root .agent/tasks/, so there is nothing to write")
-        for opt, project in projects.items():
-            with self.subTest(host_options=opt):
-                self.assertEqual(
-                    self.lane_decision(project), "skip",
-                    f"`{opt}` moved the answer, so something is reading the "
-                    f"children of .agent/ again")
-
-
-# ── 6. zsh: source-level parity only (zsh is not installed on this host) ─────
-
-class ZshLoggerSourceParity(unittest.TestCase):
-    """The zsh logger carries the identical lane policy — checked as SOURCE.
-
-    zsh is unavailable here, so this asserts structure, not behavior. The
-    executed-zsh cell is Phase 8 work and is recorded as unverified, not green.
-    """
-
-    def setUp(self) -> None:
-        self.bash = BASH_LOG.read_text(encoding="utf-8")
-        self.zsh = ZSH_LOG.read_text(encoding="utf-8")
-        # EVERY assertion in this class runs against CODE, never the raw file.
-        # A reviewer found the raw-text form was a false green: these files
-        # DOCUMENT their own idioms in comments, so an `assertIn(<idiom>, src)`
-        # was satisfied by the comment explaining the idiom and stayed green
-        # after the code itself had been changed.
-        self.bash_code = "\n".join(self._code_lines(self.bash))
-        self.zsh_code = "\n".join(self._code_lines(self.zsh))
-        self.code = (("bash", self.bash_code), ("zsh", self.zsh_code))
-
-    def test_both_loggers_gate_the_root_on_root_tasks(self):
-        for label, src in self.code:
-            with self.subTest(shell=label):
-                self.assertRegex(
-                    src, r'-d\s+"\$[_A-Za-z]*[Dd]ir/\.agent/tasks"',
-                    f"{label} logger lost the root-lane (.agent/tasks) exemption",
-                )
-
-    @staticmethod
-    def _code_lines(src: str) -> list[str]:
-        return [ln.strip() for ln in src.splitlines()
-                if ln.strip() and not ln.strip().startswith("#")]
-
-    LANE_INIT = re.compile(r'^(local\s+)?_(cpb_log_)?lane=""$')
-    LANE_IS_ROOT = re.compile(
-        r'^(local\s+)?_(cpb_log_)?lane="\$[_A-Za-z]*[Dd]ir/\.agent"$')
-    MARKER_TEST = re.compile(r'^if \[\[ -f "\$[_A-Za-z]*[Dd]ir/\.agent/current_user" \]\]')
-    ROOT_TASKS_GUARD = re.compile(r'^elif \[\[ -d "\$[_A-Za-z]*[Dd]ir/\.agent/tasks" \]\]')
-
-    def test_neither_logger_initialises_the_lane_to_the_bare_root(self):
-        """The defect itself: `_lane=<root>` BEFORE the marker is consulted.
-
-        The root is a valid answer — but only as the `.agent/tasks/` branch's
-        conclusion, never as the starting value that a marker-absent path can
-        fall through to. So this asserts placement, not absence: the lane is
-        initialised empty, and every assignment of the bare root sits directly
-        under the root-tasks guard, which is now its ONLY legitimate origin.
-        """
-        for label, src in (("bash", self.bash), ("zsh", self.zsh)):
-            with self.subTest(shell=label):
-                lines = self._code_lines(src)
-                marker_at = [i for i, ln in enumerate(lines) if self.MARKER_TEST.match(ln)]
-                self.assertEqual(len(marker_at), 1,
-                                 f"{label}: expected exactly one marker test")
-                marker_at = marker_at[0]
-
-                init_at = [i for i, ln in enumerate(lines) if self.LANE_INIT.match(ln)]
-                self.assertEqual(len(init_at), 1,
-                                 f"{label}: lane is not initialised exactly once as unknown")
-                self.assertLess(init_at[0], marker_at,
-                                f"{label}: lane initialised after the marker test")
-
-                for i, ln in enumerate(lines):
-                    if not self.LANE_IS_ROOT.match(ln):
-                        continue
-                    self.assertGreater(
-                        i, marker_at,
-                        f"{label} logger still defaults the lane to the shared root")
-                    self.assertRegex(
-                        lines[i - 1], self.ROOT_TASKS_GUARD,
-                        f"{label} logger selects the root somewhere other than "
-                        f"the .agent/tasks/ exemption, which is its only "
-                        f"legitimate origin",
-                    )
-
-    def test_the_zsh_logger_leaves_no_variable_in_the_users_environment(self):
-        """`~/.zshenv` is the user's own shell, so every scratch name goes.
-
-        Derived from the code rather than hard-coded, so a new `_cpb_log_*`
-        variable cannot be introduced without also being cleaned up, and none
-        of the existing ones can be dropped from the `unset` line. Asserted
-        against CODE: the raw file mentions these names in its comments.
-        """
-        lines = self._code_lines(self.zsh)
-        unset_lines = [ln for ln in lines if ln.startswith("unset ")]
-        self.assertEqual(len(unset_lines), 1,
-                         "expected exactly one `unset` line in bash-log.zsh")
-        cleaned = set(unset_lines[0].split()[1:])
-
-        introduced = set()
-        for ln in lines:
-            if ln.startswith("unset "):
-                continue
-            introduced.update(re.findall(r'(?:^|;\s*)(_cpb_log_\w+)=', ln))
-            introduced.update(re.findall(r'^for (_cpb_log_\w+) in ', ln))
-            introduced.update(re.findall(r'^\{?\s*read -r (_cpb_log_\w+)', ln))
-
-        self.assertTrue(introduced, "no _cpb_log_* variables found — the "
-                                    "derivation itself broke")
-        self.assertEqual(
-            introduced - cleaned, set(),
-            "bash-log.zsh leaves variables behind in the user's environment")
-        self.assertEqual(
-            cleaned - introduced, set(),
-            "bash-log.zsh unsets names it never assigns — stale unset list")
-
-    def test_both_loggers_validate_the_marker_with_the_same_arms(self):
-        for arm in (r'""\|"\."\|"\.\."', r'\[a-zA-Z0-9\]\*', r'\*\[!a-zA-Z0-9_\.-\]\*'):
-            for label, src in self.code:
-                with self.subTest(shell=label, arm=arm):
-                    self.assertRegex(src, arm,
-                                     f"{label} logger lost a marker validation arm")
-
-    def test_both_loggers_reject_a_second_marker_line(self):
-        for label, src in self.code:
-            with self.subTest(shell=label):
-                self.assertRegex(src, r'read -r _\S*u.*read -r _\S*extra',
-                                 f"{label} logger lost the one-line marker contract")
 
 if __name__ == "__main__":
     unittest.main()

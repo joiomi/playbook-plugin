@@ -92,11 +92,14 @@ GITIGNORE_ENTRIES = (
     ".agent/backups/",
     ".agent/bash_history",
     ".agent/*/bash_history",
-    # Task 088: bash-log.sh rotates a history past 50 MB to this name; unignored,
-    # an archive is a ~50 MB untracked file in `git status` and in the close's
-    # tree fingerprint.
+    # A history past 50 MB is renamed to this name (task 088; the hook's writer
+    # since task 221); unignored, an archive is a ~50 MB untracked file in
+    # `git status` and in the close's tree fingerprint.
     ".agent/bash_history.archived-*",
     ".agent/*/bash_history.archived-*",
+    # Task 221: a line the writer could not lock in waits in a spool file of its own.
+    ".agent/bash_history.spool*",
+    ".agent/*/bash_history.spool*",
     ".agent/chat_log.md",
     ".agent/*/chat_log.md",
     ".agent/chat_log_counter*",

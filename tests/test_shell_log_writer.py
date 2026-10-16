@@ -313,5 +313,34 @@ class Rotation(_Lane):
         self.assertEqual(self.commands()[-1], "next")
 
 
+class TheWritersFilesAreIgnored(unittest.TestCase):
+    """The files the writer makes beside the history are runtime state: the seeded `.gitignore` block covers them,
+    or an archive (~50 MB) and a spool show in `git status` and in the close's tree fingerprint (task 088's rule)."""
+
+    def test_the_seeded_ignore_block_covers_archives_and_spools(self):
+        import importlib.util
+        git = shutil.which("git")
+        if not git:
+            self.skipTest("git not on PATH")
+        merge = SCRIPTS / "claude-md-merge.py"
+        spec = importlib.util.spec_from_file_location("claude_md_merge", merge)
+        assert spec is not None and spec.loader is not None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run([git, "init", "-q", str(repo)], check=True)
+            (repo / ".gitignore").write_bytes(("\n".join(mod.GITIGNORE_ENTRIES) + "\n").encode())
+            for rel in (".agent/bash_history", ".agent/alice/bash_history",
+                        ".agent/bash_history.archived-20261016-101010-42",
+                        ".agent/alice/bash_history.archived-20261016-101010-42",
+                        ".agent/bash_history.spool-20261016-101010-42-123",
+                        ".agent/alice/bash_history.spool-20261016-101010-42-123",
+                        ".agent/bash_history.spooling-20261016-101010-42-123",
+                        ".agent/alice/bash_history.spooling-20261016-101010-42-123"):
+                r = subprocess.run([git, "-C", str(repo), "check-ignore", "-q", rel])
+                self.assertEqual(r.returncode, 0, f"{rel} is not ignored")
+
+
 if __name__ == "__main__":
     unittest.main()
