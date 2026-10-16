@@ -200,11 +200,15 @@ stop and every duration left none.
   read by the JSON parser, so a key of the same name nested in a tool's input cannot stand in for them.
 - What it costs (`scripts/bench_hook_journal.py`, CPU time per run, the hooks with and without the line): +0.4 to
   +0.9 ms for a bash hook, +4.3 ms for the guard's python (it loads `pb_journal` and `pathlib` for the line).
-- Past 20 MB the file is closed: renamed to `hooks.jsonl.archived-<stamp>-<pid>` and compressed beside it (measured:
-  20 MB → 1.9 MB in 0.18 s), every archive kept — the owner's answer of 18:04, "Comprimate, toate"; about one run in
-  32 looks at the size (`PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK`).
-- Limits: a hook the host kills at its time limit writes nothing; the monitor's own session and a judge's write
-  nothing (their hooks exit first); the duration starts at the hook's first line (bash's start and a `BASH_ENV` file
+- Past 20 MB the file is closed: renamed to `hooks.jsonl.archived-<stamp>-<pid>`, then compressed beside it once its
+  last write is over 10 minutes old (measured: 20 MB → 1.9 MB in 0.18 s) — a hook that opened it just before the
+  rename can still append, and an immediate compression lost that line (impl panel round 1, reproduced); every
+  archive is kept — the owner's answer of 18:04, "Comprimate, toate"; about one run in 32 looks
+  (`PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK`).
+- Not written: a review's session (`judge`, `tail-cert`) and a nested run (codex's Stop runs the stop hook as a
+  subprocess: one line for the run); a python hook's error names the exception type only.
+- Limits: a hook the host kills at its time limit writes nothing; the monitor's own session writes nothing (its hooks
+  exit first); the duration starts at the hook's first line (bash's start and a `BASH_ENV` file
   are not in it) and includes the shell log's lock wait; where a `BASH_ENV` file sets a DEBUG trap, `error` names
   that trap; the bash writers check then append, so a FIFO swapped in between can hang one run; task-dir-watch reads
   the tool-call id by pattern; `.claude/hooks/monitor-nudge.sh` writes its line only after `/playbook:init` copies the

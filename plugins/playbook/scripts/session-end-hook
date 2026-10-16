@@ -22,7 +22,7 @@ if ! python3 -I -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)
     echo "playbook: needs python3 >= 3.10 (found: ${PB_PY_FOUND:-no python3 on PATH}) — session cleanup skipped; upgrade python3" >&2
     # recorded in the hook journal too (task 222, plan panel codex I4): its writer needs no python
     { source "$(cd "$(dirname "$0")" && pwd)/gate-echo-lib.sh" && pb_hook_begin session-end; } 2>/dev/null || true
-    PB_HJ_DECISION=skip; PB_HJ_DETAIL="python < 3.10"
+    PB_HJ_EVENT=SessionEnd; PB_HJ_DECISION=skip; PB_HJ_DETAIL="python < 3.10"
     exit 0
 fi
 
@@ -125,6 +125,11 @@ case "$SESSION_ID" in ''|.|..|*/*) exit 0 ;; esac
 ( cd "$AGENT_DIR/sessions" 2>/dev/null && _pb_cwd_is "$PROJECT_DIR" "$AGENT_DIR/sessions" || exit 0
   [ -L "./$SESSION_ID" ] && exit 0
   rm -rf -- "./$SESSION_ID" ) 2>/dev/null || true
-PB_HJ_DETAIL="session directory removed"
+# the line says what is there now, not what was tried (impl panel r1, grok: a link or a failed rm read "removed")
+if [ -e "$SESSION_DIR" ] || [ -L "$SESSION_DIR" ]; then
+    PB_HJ_DETAIL="kept: not removed"
+else
+    PB_HJ_DETAIL="session directory removed"
+fi
 
 exit 0

@@ -147,6 +147,19 @@ class TheRunner(_Project):
         self.assertEqual(r.returncode, 3)
         self.assertEqual(self.lines()[-1]["error"], "exit 3")      # the exit as written, no line of the earlier failure
 
+    def test_a_judges_session_and_a_nested_run_write_no_line_and_keep_their_actions(self):
+        """Impl panel r1: a review must not write the project (opus I1), and codex's Stop runs the stop hook as a
+        subprocess whose run its own line already says (sonnet I2). The exit actions still run, the status is kept."""
+        out = self.root / "acted"
+        for env in ({"PLAYBOOK_SESSION_ID": "judge"}, {"PLAYBOOK_SESSION_ID": "tail-cert"},
+                    {"PLAYBOOK_HOOK_NESTED": "1"}):
+            with self.subTest(env=env):
+                out.unlink(missing_ok=True)
+                r = self.run_hook(self.in_lane(f"pb_on_exit 'touch {out}'\nexit 2"), **env)
+                self.assertEqual(r.returncode, 2, r.stderr)
+                self.assertTrue(out.exists())
+                self.assertFalse(self.journal.exists())
+
     def test_without_pb_hook_begin_nothing_is_written(self):
         script = 'source "$1"\nPROJECT_DIR="$2"; AGENT_DIR="$2/.agent"\nexit 0\n'
         r = subprocess.run([bash_or_skip(), "-c", script, "_", str(LIB), str(self.proj)], cwd=str(self.proj),
@@ -262,6 +275,15 @@ class TheToolCallId(_Project):
                    '"tool_response":{"tool_use_id":"decoy-out"},"tool_use_id":"toolu_REAL","duration_ms":4}')
         self.run_hook(self.in_lane("exit 0"), payload=payload)
         self.assertEqual(self.lines()[-1]["tool_use_id"], "toolu_REAL")
+
+    def test_a_nested_agent_id_after_the_tool_input_is_not_the_callers(self):
+        """Impl panel r1 (codex I3, reproduced on the nudge): the Agent tool's response carries `agentId` (live capture);
+        a main agent's call has no top-level agent_id, and the line must not borrow the subagent's."""
+        payload = ('{"session_id":"s","hook_event_name":"PostToolUse","tool_name":"Agent","tool_input":{"prompt":"x"},'
+                   '"tool_response":{"agentId":"a-sub","agent_id":"a-sub2"},"tool_use_id":"toolu_A"}')
+        self.run_hook(self.in_lane("exit 0"), payload=payload)
+        rec = self.lines()[-1]
+        self.assertEqual((rec["agent_id"], rec["tool_use_id"]), ("", "toolu_A"))
 
     def test_a_key_quoted_inside_a_string_is_not_taken(self):
         payload = ('{"session_id":"s","hook_event_name":"PreToolUse","tool_name":"Bash",'
@@ -416,18 +438,61 @@ class Rotation(_Project):
     def archives(self):
         return sorted((self.lane / "journal").glob("hooks.jsonl.archived-*"))
 
-    def test_past_the_limit_the_file_is_closed_compressed_and_kept(self):
+    def age(self, path, seconds=1200):
+        old = time.time() - seconds
+        os.utime(path, (old, old))
+
+    def test_past_the_limit_the_file_is_closed_then_compressed_once_idle_and_kept(self):
+        """Impl panel r1 (codex, grok, opus — G1, grave): a closed file is compressed only once no hook can still be
+        writing to it — its mtime over 10 minutes old, on a later sampled run."""
         n = self.fill()
         r = self.run_hook(self.in_lane("exit 0"), PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1")
         self.assertEqual(r.returncode, 0, r.stderr)
         arch = self.archives()
         self.assertEqual(len(arch), 1, arch)
+        self.assertFalse(arch[0].name.endswith(".gz"), arch[0].name)        # just closed: not compressed yet
+        self.assertEqual([r["hook"] for r in self.lines()], ["t-hook"])
+        self.run_hook(self.in_lane("exit 0"), PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1")
+        self.assertFalse(self.archives()[0].name.endswith(".gz"))            # still fresh
+        self.age(arch[0])
+        self.run_hook(self.in_lane("exit 0"), PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1")
+        arch = self.archives()
+        self.assertEqual(len(arch), 1, arch)
         self.assertTrue(arch[0].name.endswith(".gz"), arch[0].name)
         with gzip.open(arch[0], "rt") as f:
-            old = f.read().splitlines()
-        self.assertEqual(len(old), n)
-        recs = self.lines()
-        self.assertEqual([r["hook"] for r in recs], ["t-hook"])
+            self.assertEqual(len(f.read().splitlines()), n)
+
+    def test_a_line_on_a_descriptor_held_across_the_rename_survives(self):
+        """G1: a writer that opened the file before the rename and writes later puts its line in the closed file, and
+        the compression that comes later keeps it (the old immediate gzip + rm dropped it — codex reproduced it)."""
+        self.fill()
+        held = open(self.journal, "a")
+        try:
+            self.run_hook(self.in_lane("exit 0"), PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1")
+            held.write(json.dumps({"hook": "held-late"}) + "\n")
+            held.flush()
+        finally:
+            held.close()
+        arch = self.archives()
+        self.assertEqual(len(arch), 1, arch)
+        self.age(arch[0])
+        self.run_hook(self.in_lane("exit 0"), PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1")
+        gz = self.archives()[0]
+        self.assertTrue(gz.name.endswith(".gz"), gz.name)
+        with gzip.open(gz, "rt") as f:
+            self.assertIn('"held-late"', f.read())
+
+    def test_the_duration_counts_the_journals_own_work(self):
+        """Impl panel r1 (codex I2): rotation and compression run before the duration is taken."""
+        self.fill()
+        self.run_hook(self.in_lane("exit 0"), PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1")
+        self.age(self.archives()[0])
+        slow = self.root / "slow-gzip"
+        slow.mkdir()
+        (slow / "gzip").write_text(f'#!/bin/sh\nsleep 1\nexec {shutil.which("gzip")} "$@"\n')
+        (slow / "gzip").chmod(0o755)
+        self.run_hook(self.in_lane("exit 0"), PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1", PATH=f"{slow}:{os.environ['PATH']}")
+        self.assertGreaterEqual(self.lines()[-1]["ms"], 900)
 
     def test_under_the_limit_or_unsampled_nothing_rotates(self):
         self.fill(size=1000)
@@ -448,8 +513,7 @@ class Rotation(_Project):
             self.assertEqual(p.wait(timeout=60), 0)
         arch = self.archives()
         self.assertEqual(len(arch), 1, arch)
-        with gzip.open(arch[0], "rt") as f:
-            closed = [json.loads(x)["hook"] for x in f.read().splitlines()]
+        closed = [json.loads(x)["hook"] for x in arch[0].read_text().splitlines()]
         new = [r["hook"] for r in self.lines()]
         self.assertEqual(closed.count("r") + new.count("r"), 6)          # no line lost: before or after the rename
 
@@ -493,6 +557,8 @@ class Rotation(_Project):
         stub.mkdir()
         (stub / "gzip").write_text("#!/bin/sh\nexit 1\n")
         (stub / "gzip").chmod(0o755)
+        self.run_hook(self.in_lane("exit 0"), PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1")
+        self.age(self.archives()[0])
         r = self.run_hook(self.in_lane("exit 0"), PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1",
                           PATH=f"{stub}:{os.environ['PATH']}")
         self.assertEqual(r.returncode, 0, r.stderr)

@@ -215,7 +215,7 @@ def append_lifecycle(agent_dir, *, event, task, detail="", session_id="") -> Non
 # --- The hook journal (task 222, PHASE-B item 2) ---------------------------------------------------------------------
 # The owner, 2026-10-16 10:26: "Istoric curat + jurnal de hook-uri". One line per run of a playbook hook, in
 # `<lane>/journal/hooks.jsonl` — the same fields, caps, line bound, lane and sink rules as the bash writer
-# (`gate-echo-lib.sh::hook_journal_append`; tests/test_hook_journal_parity.py holds the two, and monitor-nudge.sh's
+# (`gate-echo-lib.sh::hook_journal_append`; tests/test_hook_journal_python.py holds the two, and monitor-nudge.sh's
 # inline copy, to the same answers). Python writes it for the hooks that are python: codex's three and
 # command_guard.py. Past 20 MB the file is closed — renamed, compressed, kept (the owner, 2026-10-16 18:04: "Comprimate,
 # toate") — so a project whose only hooks are python rotates too (plan panel 2026-10-16: codex, grok, opus).
@@ -247,13 +247,17 @@ def _hj_text(value, cap: int) -> str:
 
 
 def resolve_hook_lane(project_root) -> "Path | None":
-    """The lane a hook-journal line may go to, or None — STRICTER than `resolve_lane_dir`, as the bash writer is: an
-    invalid marker is None (not the root lane), the fresh-clone shape is None, and so is a lane that is missing, a
-    symbolic link or not writable."""
+    """The lane a hook-journal line may go to, or None — STRICTER than `resolve_lane_dir`, as the bash writer is: a
+    directory that is not a playbook project (no `.agent/tasks`, no lane with `tasks/` — codex's hooks fall back to
+    their working directory: impl panel r1, opus) is None, an invalid marker is None (not the root lane), the
+    fresh-clone shape is None, and so is a lane that is missing, a symbolic link or not writable."""
     try:
         if not project_root:
             return None
         agent = Path(project_root) / ".agent"
+        if not (agent / "tasks").is_dir() and not (agent.is_dir() and any(
+                (c / "tasks").is_dir() for c in agent.iterdir())):
+            return None
         marker = agent / "current_user"
         lane = resolve_lane_dir(project_root)
         if lane is None:
@@ -269,13 +273,21 @@ def resolve_hook_lane(project_root) -> "Path | None":
 
 
 def append_hook_run(project_root, *, hook, event="", tool="", tool_use_id="", session_id="", host_session_id="",
-                    agent_id="", decision="", detail="", ms=None, exit_code=0, error="") -> None:
+                    agent_id="", decision="", detail="", ms=None, exit_code=0, error="", timing=None) -> None:
     """Append one hook-journal line for a run of `hook` in the project at `project_root`. Never raises; a write that
-    cannot be made is skipped. `ms` is the run's duration (None when unknown)."""
+    cannot be made is skipped. `ms` is the run's duration (None when unknown); `timing` = (start stamp, fallback
+    time) instead makes the duration be taken AFTER the journal's own rotation (impl panel r1, codex). No line for a
+    review's session (`PLAYBOOK_SESSION_ID` judge / tail-cert: a review must not write the project — opus)."""
     try:
+        if os.environ.get("PLAYBOOK_SESSION_ID", "") in ("judge", "tail-cert"):
+            return
         lane = resolve_hook_lane(project_root)
         if lane is None:
             return
+        if not (lane / "journal").is_symlink():
+            _hj_rotate(lane / "journal")
+        if timing is not None:
+            ms = hook_ms(*timing)
         if not (isinstance(ms, int) and not isinstance(ms, bool) and ms >= 0):
             ms = None
         code = exit_code if isinstance(exit_code, int) and not isinstance(exit_code, bool) else 255
@@ -290,7 +302,6 @@ def append_hook_run(project_root, *, hook, event="", tool="", tool_use_id="", se
             data = (json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
             if len(data) > _HJ_LINE_MAX:
                 return
-        _hj_rotate(lane / "journal")
         _write_record(lane, rec, name="hooks.jsonl", data=data)
     except OSError:
         return                              # a sink that cannot be written (a FIFO: ENXIO) is skipped quietly, as in bash
@@ -379,7 +390,7 @@ class HookRun:
                             tool=s("tool_name", "toolName"), tool_use_id=s("tool_use_id", "toolUseId"),
                             session_id=self.session_id, host_session_id=s("session_id", "sessionId"),
                             agent_id=s("agent_id", "agentId"), decision=decision, detail=self.detail,
-                            ms=hook_ms(self.start, self.t0), exit_code=code, error=self.error or error)
+                            exit_code=code, error=self.error or error, timing=(self.start, self.t0))
         except Exception as exc:
             _warn(exc)
 
@@ -393,7 +404,7 @@ def run_hook(run: "HookRun", main) -> int:
         run.finish(e.code if isinstance(e.code, int) else (0 if e.code is None else 1))
         raise
     except BaseException as e:
-        run.finish(1, f"{type(e).__name__}: {e}")
+        run.finish(1, type(e).__name__)          # the type only: a message can carry a path (impl panel r1, sonnet)
         raise
     run.finish(rc)
     return rc
@@ -412,18 +423,32 @@ class NoRun:
 
 
 def _hj_rotate(jdir: Path) -> None:
-    """About one run in 32 (PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK, 1-1000) looks at the size; past the limit, under a lock
-    on the journal directory taken without waiting and after a second look, the file is renamed to an archive name that
-    does not exist yet and compressed beside it (stdlib gzip); the uncompressed copy is removed only once the compressed
-    one is in place. Every archive is kept. A busy lock: no rotation this run. Never raises."""
+    """About one run in 32 (PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK, 1-1000) looks at the journal directory. Under a lock on
+    it taken without waiting (busy: nothing this run): past the limit, after a second look, the file is renamed to an
+    archive name that does not exist yet; a closed file is compressed (stdlib gzip) only once idle — its mtime over 10
+    minutes old — since a hook that opened it before the rename can still append (impl panel r1: codex, grok, opus;
+    the bash writer's rule). Every archive is kept. Never raises."""
     try:
         every = os.environ.get("PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK", "32")
         every = int(every) if every.isdigit() and len(every) <= 4 and 1 <= int(every) <= 1000 else 32
         if int.from_bytes(os.urandom(2), "big") % every != 0:     # not `random`: its import costs the guard ~0.5 ms
             return
         jfile = jdir / "hooks.jsonl"
-        st = os.lstat(jfile)
-        if not stat.S_ISREG(st.st_mode) or st.st_size <= _HJ_LIMIT or jdir.is_symlink():
+        try:
+            st = os.lstat(jfile)
+            big = stat.S_ISREG(st.st_mode) and st.st_size > _HJ_LIMIT
+        except OSError:
+            big = False
+
+        def closed():
+            try:
+                names = os.listdir(jdir)
+            except OSError:
+                return []
+            return [jdir / n for n in sorted(names) if n.startswith("hooks.jsonl.archived-")
+                    and not n.endswith(".gz") and ".gz.tmp-" not in n]
+        idle = bool(closed())
+        if not (big or idle):
             return
         import fcntl
         fd = os.open(str(jdir), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
@@ -432,15 +457,21 @@ def _hj_rotate(jdir: Path) -> None:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except OSError:
                 return
-            st = os.lstat(jfile)
-            if not stat.S_ISREG(st.st_mode) or st.st_size <= _HJ_LIMIT:
-                return
-            arch = jdir / f"hooks.jsonl.archived-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
-            if os.path.lexists(arch):
-                return
-            os.link(jfile, arch)            # no clobber, as `mv -n`
-            os.unlink(jfile)
-            _hj_compress(arch)
+            if big:
+                st = os.lstat(jfile)
+                if stat.S_ISREG(st.st_mode) and st.st_size > _HJ_LIMIT:
+                    arch = jdir / f"hooks.jsonl.archived-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
+                    if not os.path.lexists(arch):
+                        os.link(jfile, arch)            # no clobber, as `mv -n`
+                        os.unlink(jfile)
+            now = time.time()
+            for arch in closed():
+                try:
+                    st = os.lstat(arch)
+                except OSError:
+                    continue
+                if stat.S_ISREG(st.st_mode) and now - st.st_mtime > 600:
+                    _hj_compress(arch)
         finally:
             os.close(fd)
     except Exception:

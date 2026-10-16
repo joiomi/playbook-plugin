@@ -1092,6 +1092,7 @@ def _active_task_stop_decision(project_root: Path, session_id: str) -> dict:
     stop_hook = playbook_scripts_dir() / "stop-hook"
     env = os.environ.copy()
     env["PLAYBOOK_SESSION_ID"] = session_id
+    env["PLAYBOOK_HOOK_NESTED"] = "1"      # codex-stop-hook's own line says this run: the stop hook writes none (task 222)
     try:
         result = subprocess.run(
             ["bash", str(stop_hook)],

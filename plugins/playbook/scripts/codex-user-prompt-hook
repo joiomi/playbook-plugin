@@ -119,7 +119,7 @@ def main() -> int:
         _RUN.note("ok", "logged")
     except Exception as exc:
         print(f"[codex-user-prompt-hook] skipped: {exc}", file=sys.stderr)
-        _RUN.note("error", "skipped", f"{type(exc).__name__}: {exc}")
+        _RUN.note("error", "skipped", type(exc).__name__)     # the type only (impl panel r1, sonnet)
     return 0
 
 

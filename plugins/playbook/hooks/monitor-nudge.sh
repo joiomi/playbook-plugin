@@ -74,14 +74,31 @@ fi
 # writer, which this file cannot source: the same fields, caps and sink rules (no line in the fresh-clone shape, for a
 # lane that is a link or not writable, through a linked journal/, into a hooks.jsonl that is a link or not a regular
 # file — a FIFO would hang the hook); no rotation of its own (the plugin's hooks rotate the file).
-# tests/test_hook_journal_parity.py holds the three writers to the same answers. Always keeps the exit status.
+# tests/test_hook_journal_python.py holds the three writers to the same answers. Always keeps the exit status. No
+# line for a review's session (judge, tail-cert).
 PB_HJ_DECISION=""; PB_HJ_DETAIL=""
 _pb_nudge_journal() {
     local rc=$? LC_ALL=C lane="$AGENT_DIR" p="$PROJECT_DIR" jdir hfile ts ms=null t0="${_PB_HJ_T0:-}" t1="${EPOCHREALTIME:-}"
-    local re v sub event tool tuid hsid agent decision error="" fresh=false
+    local re v h k sub event tool tuid sid hsid agent decision detail line error="" fresh=false
     set +e
+    case "${PLAYBOOK_SESSION_ID:-}" in judge|tail-cert) exit "$rc" ;; esac
     _pbn_id() { v="${1:0:$(( $2 * 2 ))}"; v="${v//[^A-Za-z0-9._:@\/+=-]/}"; v="${v:0:$2}"; }
-    _pbn_first() { re="\"($1)\"[[:space:]]*:[[:space:]]*\"([^\"]*)\""; v=""; [[ "$INPUT" =~ $re ]] && v="${BASH_REMATCH[2]}"; }
+    # the head only: before the first tool input, within 4 KiB (a nested `agentId` is not the caller's — impl panel r1)
+    _pbn_first() {
+        re="\"($1)\"[[:space:]]*:[[:space:]]*\"([^\"]*)\""; v=""; h="${INPUT:0:4096}"
+        h="${h%%\"tool_input\"*}"; h="${h%%\"toolInput\"*}"
+        [[ "$h" =~ $re ]] && v="${BASH_REMATCH[2]}"
+    }
+    # escaped, control characters as spaces, at most $2 bytes cut on a whole character and a whole escape
+    _pbn_text() {
+        v="${1:0:$(( $2 * 2 ))}"; v="${v//[$'\001'-$'\037'$'\177']/ }"; v="${v//\\/\\\\}"; v="${v//\"/\\\"}"
+        if [ "${#v}" -gt "$2" ]; then
+            k=0; h="$2"
+            while [ "$k" -lt 3 ] && [ "$h" -gt 0 ] && [[ "${v:h:1}" == [$'\x80'-$'\xbf'] ]]; do h=$(( h - 1 )); k=$(( k + 1 )); done
+            v="${v:0:h}"
+            if [[ "$v" =~ \\+$ ]] && (( ${#BASH_REMATCH[0]} % 2 )); then v="${v%\\}"; fi
+        fi
+    }
     if [ ! -f "$p/.agent/current_user" ] && [ ! -d "$p/.agent/tasks" ]; then
         for sub in "$p/.agent"/*/; do [ -d "${sub}tasks" ] && fresh=true && break; done
     fi
@@ -99,7 +116,8 @@ _pb_nudge_journal() {
             if [[ "$event" == *Tool* ]]; then
                 v="$INPUT"; [ "${#v}" -le 4096 ] || v="${v:${#v}-4096}"
                 re='.*"(tool_use_id|toolUseId)"[[:space:]]*:[[:space:]]*"([^"]*)"'
-                if [[ "$v" =~ $re ]]; then v="${BASH_REMATCH[2]}"; else _pbn_first 'tool_use_id|toolUseId'; fi
+                if [[ "$v" =~ $re ]]; then v="${BASH_REMATCH[2]}"
+                else re='"(tool_use_id|toolUseId)"[[:space:]]*:[[:space:]]*"([^"]*)"'; v=""; [[ "$INPUT" =~ $re ]] && v="${BASH_REMATCH[2]}"; fi
                 _pbn_id "$v" 64; tuid="$v"
             fi
             _pbn_first 'session_id|sessionId'; _pbn_id "$v" 64; hsid="$v"
@@ -109,16 +127,16 @@ _pb_nudge_journal() {
             if [ -z "$decision" ]; then
                 case "$rc" in 2) decision=block ;; 0) decision=ok ;; *) decision=error ;; esac
             fi
+            _pbn_id "$decision" 16; decision="$v"
+            _pbn_text "$PB_HJ_DETAIL" 128; detail="$v"
             case "$rc" in
                 0|2) ;;
-                *) v="${BASH_COMMAND:0:480}"; v="${v//[$'\001'-$'\037'$'\177']/ }"; v="${v//\\/\\\\}"; v="${v//\"/\\\"}"
-                   v="${v:0:240}"; if [[ "$v" =~ \\+$ ]] && (( ${#BASH_REMATCH[0]} % 2 )); then v="${v%\\}"; fi
-                   error="$v" ;;
+                *) _pbn_text "$BASH_COMMAND" 240; error="$v" ;;
             esac
             case "$rc" in ''|*[!0-9]*) rc=255 ;; esac
-            printf '{"ts":"%s","hook":"monitor-nudge","event":"%s","tool":"%s","tool_use_id":"%s","session_id":"%s","host_session_id":"%s","agent_id":"%s","decision":"%s","detail":"%s","ms":%s,"exit":%s,"error":"%s"}\n' \
-                "$ts" "$event" "$tool" "$tuid" "$sid" "$hsid" "$agent" "${decision:0:16}" "$PB_HJ_DETAIL" "$ms" "$rc" "$error" \
-                >> "$hfile" 2>/dev/null
+            printf -v line '{"ts":"%s","hook":"monitor-nudge","event":"%s","tool":"%s","tool_use_id":"%s","session_id":"%s","host_session_id":"%s","agent_id":"%s","decision":"%s","detail":"%s","ms":%s,"exit":%s,"error":"%s"}' \
+                "$ts" "$event" "$tool" "$tuid" "$sid" "$hsid" "$agent" "$decision" "$detail" "$ms" "$rc" "$error"
+            [ "${#line}" -lt 1024 ] && printf '%s\n' "$line" >> "$hfile" 2>/dev/null
         fi
     fi
     exit "$rc"

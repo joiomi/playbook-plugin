@@ -35,12 +35,14 @@ def pre(tool, tool_input, tid="toolu_PRE1", **extra):
     return d
 
 
-def post(tool, tool_input, tid="toolu_POST1", event="PostToolUse", **extra):
-    d = {"session_id": "host-1", "transcript_path": "/t", "cwd": "/c", "permission_mode": "default",
+def post(tool, tool_input, tid="toolu_POST1", event="PostToolUse", head=None, **extra):
+    """A Post payload in Claude's key order: `head` keys before `tool_input`, `extra` (a `tool_response`, an
+    `agent_id`…) after it; a PostToolUse without a given `tool_response` gets `{}`."""
+    d = {"session_id": "host-1", "transcript_path": "/t", "cwd": "/c", "permission_mode": "default", **(head or {}),
          "hook_event_name": event, "tool_name": tool, "tool_input": tool_input}
     d.update(extra)
     if event == "PostToolUse":
-        d["tool_response"] = {}
+        d.setdefault("tool_response", {})
     d["tool_use_id"] = tid
     if event == "PostToolUseFailure":
         d["error"] = "Exit code 1"
@@ -161,8 +163,9 @@ class TheTaskGate(_Project):
                                       "old_string": "- [ ] one\n- [ ] two\n- [ ] three",
                                       "new_string": "- [x] one\n- [x] two\n- [x] three"}), 2, "block",
                  "gate batch refused")
-        self.one(self.H, pre("Bash", {"command": ".claude/bin/tasks new quick x"}), 2, "block", "judge session",
-                 PLAYBOOK_SESSION_ID="judge")
+        # a judge's session is refused, and writes no line (impl panel r1, opus: a review must not write the project)
+        r, new = self.hook(self.H, pre("Bash", {"command": ".claude/bin/tasks new quick x"}), PLAYBOOK_SESSION_ID="judge")
+        self.assertEqual((r.returncode, new), (2, []), r.stderr)
 
     def test_below_the_python_floor(self):
         self.one(self.H, pre("Edit", {"file_path": str(self.project / "src" / "app.py")}), 2, "block",
@@ -211,7 +214,8 @@ class TheStateEcho(_Project):
 
     def test_the_frame_gives_the_calls_own_ids(self):
         rec, _ = self.one(self.H, post("mcp__x__y", {"tool_use_id": "decoy-in", "agent_id": "decoy-a"},
-                                       tid="toolu_REAL", tool_response={"tool_use_id": "decoy-out"}),
+                                       tid="toolu_REAL", tool_response={"tool_use_id": "decoy-out"},
+                                       head={"meta": {"agent_id": "decoy-head"}}),     # nested, BEFORE tool_input
                           0, "context", "")
         self.assertEqual((rec["tool_use_id"], rec["agent_id"], rec["event"], rec["tool"]),
                          ("toolu_REAL", "", "PostToolUse", "mcp__x__y"))
@@ -269,7 +273,8 @@ class TheOthers(_Project):
     def test_session_start_and_end(self):
         start = {"session_id": "host-1", "hook_event_name": "SessionStart", "source": "startup"}
         self.one("session-start-hook", start, 0, "ok", "session set up")
-        self.one("session-start-hook", start, 0, "skip", "python < 3.10", PATH=self.stub_python())
+        rec, _ = self.one("session-start-hook", start, 0, "skip", "python < 3.10", PATH=self.stub_python())
+        self.assertEqual(rec["event"], "SessionStart")                  # gemini r1: the floor arm names its event
         end = {"session_id": "host-1", "hook_event_name": "SessionEnd", "reason": "clear"}
         self.one("session-end-hook", end, 0, "ok", "kept: reason clear")
         self.one("session-end-hook", dict(end, reason="logout"), 0, "ok", "kept: not this process's session")
@@ -278,7 +283,22 @@ class TheOthers(_Project):
         self.one("session-end-hook", dict(end, reason="logout"), 0, "ok", "session directory removed",
                  PLAYBOOK_SESSION_ID="sess-x")
         self.assertFalse(other.exists())
-        self.one("session-end-hook", end, 0, "skip", "python < 3.10", PATH=self.stub_python())
+        # grok r1: a session directory that is a link inside `sessions` is kept, and the line says so
+        (self.root / "elsewhere").mkdir()
+        (self.agent / "sessions" / "sess-l").symlink_to(self.root / "elsewhere")
+        self.one("session-end-hook", dict(end, reason="logout"), 0, "ok", "kept",
+                 PLAYBOOK_SESSION_ID="sess-l")
+        self.assertTrue((self.agent / "sessions" / "sess-l").is_symlink())
+        if os.geteuid() != 0:                       # a directory rm cannot empty (root removes anyway)
+            stuck = self.agent / "sessions" / "sess-r" / "locked"
+            stuck.mkdir(parents=True)
+            (stuck / "f").write_text("x")
+            stuck.chmod(0o555)
+            self.one("session-end-hook", dict(end, reason="logout"), 0, "ok", "kept: not removed",
+                     PLAYBOOK_SESSION_ID="sess-r")
+            stuck.chmod(0o755)
+        rec, _ = self.one("session-end-hook", end, 0, "skip", "python < 3.10", PATH=self.stub_python())
+        self.assertEqual(rec["event"], "SessionEnd")
 
     def test_the_task_folder_watch(self):
         H = "task-dir-watch-hook"

@@ -29,6 +29,7 @@ if _os.environ.get("PLAYBOOK_ROLE") == "monitor":
     _sys.exit(0)
 
 import json
+import re
 import os
 import sys
 from pathlib import Path
@@ -54,6 +55,20 @@ def _journal_run(hook):
 
 
 _PBJ, _RUN = _journal_run("codex-apply-patch")
+
+
+def _block_detail(reason) -> str:
+    """The hook journal's detail for a block: a fixed word for what refused it — never the reason's text, which names
+    the patch's paths (impl panel r1, sonnet, codex: the journal holds no path)."""
+    text = str(reason or "")
+    m = re.match(r"task (\d+) is blocked", text)
+    if m:
+        return f"task {m.group(1)} blocked"
+    for start, word in (("no active task", "no active task"), ("could not read apply_patch payload", "payload unreadable"),
+                        ("could not parse apply_patch body", "patch unparsable")):
+        if text.startswith(start):
+            return word
+    return "blocked"
 
 
 def _floor_exit(version_info, event: str):
@@ -179,7 +194,7 @@ def main() -> int:
         # Couldn't read or parse stdin — we don't know the event. Fail-open
         # because we can't tell if blocking is appropriate, and bricking every
         # tool call on a parser glitch is worse than a silent allow.
-        _RUN.note("error", "payload unreadable", f"{type(exc).__name__}: {exc}")
+        _RUN.note("error", "payload unreadable", type(exc).__name__)
         return 0
 
     _write_sentinel(event or "unknown")
@@ -207,7 +222,7 @@ def main() -> int:
                 return 0  # allow
             # W0(e) decision: exit 2 + stderr is the model-visible channel.
             print(decision.get("reason", "blocked by Playbook"), file=sys.stderr)
-            _RUN.note("block", str(decision.get("reason", "blocked by Playbook")).split("\n", 1)[0])
+            _RUN.note("block", _block_detail(decision.get("reason", "")))
             return 2
 
         if event == "PostToolUse":
@@ -231,7 +246,7 @@ def main() -> int:
         msg = f"[codex-apply-patch-hook] internal error: {exc}"
         # the hook journal (task 222, plan panel opus I4): an internal error, not a decision, whatever the exit says
         _RUN.note("error", "internal error" + (" (PreToolUse fail-closed)" if event == "PreToolUse" else ""),
-                  f"{type(exc).__name__}: {exc}")
+                  type(exc).__name__)
         if event == "PreToolUse":
             print(f"{msg} (PreToolUse fail-closed)", file=sys.stderr)
             return 2

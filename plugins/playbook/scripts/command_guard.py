@@ -2798,7 +2798,7 @@ def main() -> int:
         # into an ALLOW with no trace (plan panel 077, sol:medium #4).
         print("playbook command-guard: classifier error, failing OPEN "
               "(%s: %s)" % (exc.__class__.__name__, exc), file=sys.stderr)
-        _RUN.note("allow", "fail open: classifier error", "%s: %s" % (exc.__class__.__name__, exc))
+        _RUN.note("allow", "fail open: classifier error", exc.__class__.__name__)     # the type only (impl panel r1)
         return 0
     if verdict != "block":
         return 0

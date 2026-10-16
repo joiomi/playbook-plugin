@@ -125,7 +125,7 @@ def main() -> int:
             _RUN.note("allow", "released")
     except Exception as exc:
         print(f"[codex-stop-hook] skipped: {exc}", file=sys.stderr)
-        _RUN.note("error", "skipped", f"{type(exc).__name__}: {exc}")
+        _RUN.note("error", "skipped", type(exc).__name__)     # the type only (impl panel r1, sonnet)
     return 0
 
 

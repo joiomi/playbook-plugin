@@ -270,7 +270,7 @@ Every line has the same thirteen keys, in this order:
 | `detail` | the hook's short why, from a fixed vocabulary: `echo full`, `echo reminder`, `quiet`, `failed call counted`, `released: no active task`, `held: 2 unchecked gate(s) in task 007`, `active task 007`, `no active task`, `gate batch refused`, `git-push-force`, `session id injected`, `logged M042`, `nudge delivered`, … |
 | `ms` | how long the hook ran, whole milliseconds from its FIRST line to its exit; `null` when bash has no `EPOCHREALTIME` |
 | `exit` | the hook's exit status |
-| `error` | on a failure, what failed: the hook's own name for it, or its own failing source line (`line 214: cat "$f"`, as written in the hook — never a command of the agent's) |
+| `error` | on a failure, what failed: the hook's own name for it, its own failing source line (`line 214: cat "$f"`, as written in the hook — never a command of the agent's), or a python hook's exception TYPE (`RuntimeError` — its message, which can carry a path, stays on stderr) |
 
 Example (a live session, task 222):
 
@@ -289,26 +289,34 @@ and ends with that same status: a journal failure never changes a decision. The 
 the python side writes the guard's line, with the rule that decided. The payload's ids come from the hook-payload
 normalizer's frame (v4) where the hook reads it (the task gate, the state echo), else by pattern: `tool_use_id` is
 the last match in the payload's last 4 KiB (Claude's comes after the tool's input and response), the event, the
-host session and the agent the first match (they come before any tool input — measured on a live session).
+host session and the agent the first match in the payload's HEAD — before its first tool input, within 4 KiB (they
+come before any tool input in every payload captured; the Agent tool's response carries a nested `agentId`, which must
+not stand in for the caller's).
 
 Each line is one append of at most 1,024 bytes (Linux's `PIPE_BUF` is 4,096), so hooks side by side tear none. Ids
 keep only id characters; `detail` and `error` are escaped and cut on a whole character and a whole escape. Nothing is
-written outside a playbook project, in the fresh-clone shape (lanes, no marker), with an invalid `.agent/current_user`,
+written outside a playbook project (no `.agent/tasks`, no lane with `tasks/`), in the fresh-clone shape (lanes, no
+marker), with an invalid `.agent/current_user`,
 into a lane that is a link or not writable, through a linked `journal/`, or into a `hooks.jsonl` that is a link or not
 a regular file. The bash writers check and then append, so a process that swaps the file for a FIFO between the two
 can still hang one hook run; the python writer opens non-blocking and without following a link.
 
 **Rotation (the owner, 2026-10-16 18:04: "Comprimate, toate").** About one run in 32 (`PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK`)
-looks at the file's size. Past 20 MB, under a lock on the journal directory taken without waiting and after a second
-look, the file is renamed to `hooks.jsonl.archived-<YYYYmmdd-HHMMSS>-<pid>` and compressed to `….gz` beside it
-(measured: 20 MB → 1.9 MB in 0.18 s); the uncompressed copy is removed only once the compressed one is in place, and
-every archive is kept — no hook deletes a journal file. A busy lock means no rotation on that run. Without `gzip`, on
-a failure, or if the hook is killed meanwhile, the closed file stays uncompressed. A line written while another hook
-renames the file lands in the closed file or the new one, never nowhere.
+looks at the journal directory, under a lock on it taken without waiting (a busy lock: nothing on that run). Past 20
+MB, after a second look, the file is renamed to `hooks.jsonl.archived-<YYYYmmdd-HHMMSS>-<pid>`. A closed file is
+compressed to `….gz` beside it only once it is idle — on a later such run, when its last write is over 10 minutes old
+(measured: 20 MB → 1.9 MB in 0.18 s) — because a hook that opened the file just before the rename can still append to
+it, and a line written after `gzip` had read it would have gone with the uncompressed copy (impl panel round 1; the
+hosts stop a hook after at most a minute). The uncompressed copy is removed only once the compressed one is in place,
+and every archive is kept — no hook deletes a journal file. Without `gzip`, on a failure, or if the hook is killed
+meanwhile, the closed file stays uncompressed. A line written while another hook renames the file lands in the
+closed file or the new one. That work runs before the duration is taken, so a run that rotated says so in its `ms`.
 
-**Not recorded:** a hook the host kills at its time limit (it runs no exit trap); the role skips — the monitor's own
-session (`PLAYBOOK_ROLE=monitor`) and a judge's (`judge`, `tail-cert`), whose hooks exit before anything; a hook that
-finds no playbook project. **Bounds:** the duration starts at the hook's first line — bash's own start and a
+**Not recorded:** a hook the host kills at its time limit (it runs no exit trap); the monitor's own session
+(`PLAYBOOK_ROLE=monitor`: its hooks exit before anything); a review's session (`PLAYBOOK_SESSION_ID` `judge` or
+`tail-cert`: no writer writes a line — a review must not write the project); a nested run (`PLAYBOOK_HOOK_NESTED=1`:
+codex's Stop runs the stop hook as a subprocess, and codex-stop's own line says the run); a hook that finds no
+playbook project. **Bounds:** the duration starts at the hook's first line — bash's own start and a
 `BASH_ENV` file are not in it — and includes the shell log's lock wait (up to 2 s); where a `BASH_ENV` file sets a
 DEBUG trap, `error` names that trap instead of the failing line; task-dir-watch's `tool_use_id` is read by pattern,
 so a host whose payload put a nested object carrying the same key AFTER the id could mislabel it.

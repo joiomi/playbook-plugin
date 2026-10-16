@@ -60,7 +60,7 @@ fi
 if [ -n "$PB_FLOOR_MSG" ]; then
     # recorded in the hook journal too (task 222, plan panel codex I4): its writer needs no python
     { source "$(cd "$(dirname "$0")" && pwd)/gate-echo-lib.sh" && pb_hook_begin session-start; } 2>/dev/null || true
-    PB_HJ_DECISION=skip; PB_HJ_DETAIL="python < 3.10"
+    PB_HJ_EVENT=SessionStart; PB_HJ_DECISION=skip; PB_HJ_DETAIL="python < 3.10"
     exit 0
 fi
 

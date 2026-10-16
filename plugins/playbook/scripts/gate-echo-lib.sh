@@ -1621,9 +1621,14 @@ PB_HJ_TOOL_USE_ID=""
 PB_HJ_AGENT_ID=""
 PB_HJ_HOST_SESSION=""
 
-# pb_hook_begin NAME — from here on, this run writes its line when the hook exits.
+# pb_hook_begin NAME — from here on, this run writes its line when the hook exits. The runner is installed in every
+# case (it runs the hook's own exit actions); no LINE is written for a review's session (`judge`, `tail-cert`: a review
+# must not write the project — impl panel r1, opus) nor for a nested run (`PLAYBOOK_HOOK_NESTED=1`: codex's Stop runs
+# the stop hook as a subprocess, and its own line already says the run — impl panel r1, sonnet).
 pb_hook_begin() {
     _PB_HJ_HOOK="$1"
+    [ "${PLAYBOOK_HOOK_NESTED:-}" != 1 ] || _PB_HJ_HOOK=""
+    case "${PLAYBOOK_SESSION_ID:-}" in judge|tail-cert) _PB_HJ_HOOK="" ;; esac
     trap '_PB_HJ_ERR_CMD=$BASH_COMMAND; _PB_HJ_ERR_LINE=$LINENO' ERR
     trap '_pb_hj_exit' EXIT
 }
@@ -1654,7 +1659,7 @@ _pb_hj_exit() {
 # by pattern from $INPUT. Always returns 0 and prints nothing.
 hook_journal_append() {
     local LC_ALL=C      # lengths and cuts in bytes
-    local rc="$1" failing="${2:-}" lane="" jdir hfile line ts t0="${_PB_HJ_T0:-}" t1="${EPOCHREALTIME:-}" ms=null v
+    local rc="$1" failing="${2:-}" lane="" jdir hfile line ts t0="${_PB_HJ_T0:-}" t1 ms=null v
     local hook event tool tuid sid hsid agent decision detail error
     [ -n "$_PB_HJ_HOOK" ] || return 0
     _pb_hj_lane
@@ -1667,6 +1672,8 @@ hook_journal_append() {
         mkdir "$jdir" 2>/dev/null || [ -d "$jdir" ] || return 0
     fi
     _pb_sink_ok "$jdir" "$hfile" || return 0
+    _pb_hj_rotate "$jdir" "$hfile"      # before the duration is taken: the journal's own work counts (impl panel r1, codex)
+    t1="${EPOCHREALTIME:-}"
     case "$rc" in ''|*[!0-9]*) rc=255 ;; esac
     TZ=UTC0 printf -v ts '%(%Y-%m-%dT%H:%M:%SZ)T' -1 2>/dev/null || return 0
     if [[ "$t0" =~ ^[0-9]{1,12}[.,][0-9]{6}$ ]] && [[ "$t1" =~ ^[0-9]{1,12}[.,][0-9]{6}$ ]]; then
@@ -1719,7 +1726,6 @@ hook_journal_append() {
         line="${line%%,\"detail\":*},\"detail\":\"\",\"ms\":$ms,\"exit\":$rc,\"error\":\"\"}"
         [ "${#line}" -lt "$_PB_HJ_LINE_MAX" ] || return 0
     fi
-    _pb_hj_rotate "$jdir" "$hfile"
     _pb_sink_ok "$jdir" "$hfile" || return 0
     { printf '%s\n' "$line" >> "$hfile"; } 2>/dev/null || true
     return 0
@@ -1768,12 +1774,17 @@ _pb_hj_fresh_clone() {
     return 1
 }
 
-# Sets `v` to the value of the payload's first key named by the alternation $1 ($INPUT). Linear; read only for keys
-# that come before any tool input in the host's payload (measured, task 222: the event, the session, the agent).
+# Sets `v` to the value of the payload's first key named by the alternation $1, searched only in the payload's HEAD:
+# before its first `"tool_input"` (grok: `"toolInput"`) and within 4 KiB. The event, the session and the agent come
+# before any tool input in every payload captured (task 222); a key of the same name nested in a tool's input or
+# response is not the call's (impl panel r1, codex — the Agent tool's response carries `agentId`), and an absent key
+# costs a 4 KiB scan, not the whole payload (sonnet).
 _pb_hj_first() {
-    local re="\"($1)\"[[:space:]]*:[[:space:]]*\"([^\"]*)\""
+    local re="\"($1)\"[[:space:]]*:[[:space:]]*\"([^\"]*)\"" h="${INPUT:0:4096}"
+    h="${h%%\"tool_input\"*}"
+    h="${h%%\"toolInput\"*}"
     v=""
-    if [[ "${INPUT:-}" =~ $re ]]; then v="${BASH_REMATCH[2]}"; fi
+    if [[ "$h" =~ $re ]]; then v="${BASH_REMATCH[2]}"; fi
     return 0
 }
 
@@ -1787,7 +1798,8 @@ _pb_hj_tool_use_id() {
     if [[ "$t" =~ $re ]]; then
         v="${BASH_REMATCH[2]}"
     else
-        _pb_hj_first 'tool_use_id|toolUseId'
+        re='"(tool_use_id|toolUseId)"[[:space:]]*:[[:space:]]*"([^"]*)"'
+        if [[ "${INPUT:-}" =~ $re ]]; then v="${BASH_REMATCH[2]}"; fi
     fi
     return 0
 }
@@ -1819,31 +1831,49 @@ _pb_hj_text() {
     return 0
 }
 
-# About one run in 32 (PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK, 1-1000) looks at the size. Past the limit, under a lock on the
-# journal directory taken without waiting and after a second look, the file is renamed to an archive name that does not
-# exist yet, then compressed (`gzip`) to a temporary name renamed beside it; the uncompressed copy is removed only once
-# the compressed one is in place. Every archive is kept. No lock, no `flock`, a busy lock: no rotation this run; no
-# `gzip`, a failure, a kill: the closed file stays uncompressed.
+# About one run in 32 (PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK, 1-1000) looks at the journal directory. Under a lock on it taken
+# without waiting (busy: nothing this run): past the limit, after a second look, the file is renamed to an archive name
+# that does not exist yet; and a closed file is compressed (`gzip`) only once it is idle — its mtime over 10 minutes
+# old — because a hook that opened the file before the rename can still append to it, and a line written after gzip
+# read it would go with the uncompressed copy (impl panel r1, codex, grok, opus — reproduced). Every archive is kept.
+# No `flock`, no `gzip`, a failure, a kill: the closed file stays as it is.
 _pb_hj_rotate() {
-    local jdir="$1" hfile="$2" every="${PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK:-32}" size stamp arch
+    local jdir="$1" hfile="$2" every="${PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK:-32}" size stamp arch a now mt big=false idle=false
     [[ "$every" =~ ^[0-9]{1,4}$ ]] && [ "$((10#$every))" -ge 1 ] && [ "$((10#$every))" -le 1000 ] || every=32
     [ $(( RANDOM % 10#$every )) -eq 0 ] || return 0
-    [ -f "$hfile" ] && [ ! -L "$hfile" ] || return 0
-    size=$(stat -c %s -- "$hfile" 2>/dev/null) || return 0
-    case "$size" in ''|*[!0-9]*) return 0 ;; esac
-    [ "$size" -gt "$_PB_HJ_LIMIT" ] || return 0
+    if [ -f "$hfile" ] && [ ! -L "$hfile" ]; then
+        size=$(stat -c %s -- "$hfile" 2>/dev/null) || size=0
+        case "$size" in ''|*[!0-9]*) size=0 ;; esac
+        [ "$size" -le "$_PB_HJ_LIMIT" ] || big=true
+    fi
+    for a in "$jdir"/hooks.jsonl.archived-*; do
+        case "$a" in *.gz|*.gz.tmp-*) continue ;; esac
+        [ -f "$a" ] && [ ! -L "$a" ] && idle=true && break
+    done
+    [ "$big" = true ] || [ "$idle" = true ] || return 0
     command -v flock >/dev/null 2>&1 || return 0
     { exec 207<"$jdir"; } 2>/dev/null || return 0
     if flock -n 207 2>/dev/null; then
-        size=$(stat -c %s -- "$hfile" 2>/dev/null) || size=0
-        case "$size" in ''|*[!0-9]*) size=0 ;; esac
-        if [ "$size" -gt "$_PB_HJ_LIMIT" ] && [ -f "$hfile" ] && [ ! -L "$hfile" ] \
-           && printf -v stamp '%(%Y%m%d-%H%M%S)T' -1 2>/dev/null; then
-            arch="$jdir/hooks.jsonl.archived-$stamp-$$"
-            if [ ! -e "$arch" ] && [ ! -L "$arch" ] && mv -n -- "$hfile" "$arch" 2>/dev/null \
-               && [ -f "$arch" ] && [ ! -L "$arch" ]; then
-                _pb_hj_compress "$arch"
+        if [ "$big" = true ]; then
+            size=$(stat -c %s -- "$hfile" 2>/dev/null) || size=0
+            case "$size" in ''|*[!0-9]*) size=0 ;; esac
+            if [ "$size" -gt "$_PB_HJ_LIMIT" ] && [ -f "$hfile" ] && [ ! -L "$hfile" ] \
+               && printf -v stamp '%(%Y%m%d-%H%M%S)T' -1 2>/dev/null; then
+                arch="$jdir/hooks.jsonl.archived-$stamp-$$"
+                if [ ! -e "$arch" ] && [ ! -L "$arch" ]; then
+                    mv -n -- "$hfile" "$arch" 2>/dev/null || true
+                fi
             fi
+        fi
+        if [ "$idle" = true ] && printf -v now '%(%s)T' -1 2>/dev/null; then
+            for a in "$jdir"/hooks.jsonl.archived-*; do
+                case "$a" in *.gz|*.gz.tmp-*) continue ;; esac
+                [ -f "$a" ] && [ ! -L "$a" ] || continue
+                mt=$(stat -c %Y -- "$a" 2>/dev/null) || continue
+                case "$mt" in ''|*[!0-9]*) continue ;; esac
+                [ $(( now - mt )) -gt 600 ] || continue
+                _pb_hj_compress "$a"
+            done
         fi
     fi
     { exec 207<&-; } 2>/dev/null || true
