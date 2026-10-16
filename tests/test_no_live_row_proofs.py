@@ -361,8 +361,11 @@ class TagDryRunWritesNothing(_Project):
         self.env["TZ"] = "UTC"
         self.log = self.project / ".agent" / "chat_log.md"
         self.log.write_text(chat_log_text(3), encoding="utf-8")
-        (self.project / ".agent" / "bash_history").write_text(
-            "2026-07-02 09:00:00 | AGENT | tasks work 7\n", encoding="utf-8")
+        # task 221: the activation is the CLI's own journal record (UTC), not a shell-history line
+        (self.project / ".agent" / "journal").mkdir(exist_ok=True)
+        (self.project / ".agent" / "journal" / "enforcement.jsonl").write_text(
+            '{"ts":"2026-07-02T09:00:00Z","session_id":"","hook":"tasks","decision":"record","reason":"work",'
+            '"task":"007"}\n', encoding="utf-8")
 
     def test_tag_dry_run_previews_and_leaves_the_tree_byte_identical(self):
         before = snapshot(self.project)
@@ -548,19 +551,20 @@ class RetroReportCountsAnnotatedGates(_Project):
 # ── PB-CLI-TIMELINE-TAGGER ────────────────────────────────────────────────────
 class TimelineAndTaggerNameTheMissingFile(_Project):
     """Single-user repo: each command exits 1 naming the input it lacks —
-    including tagger's SECOND check (chat log present, shell history absent)."""
+    including tagger's SECOND check (chat log present, the transition journal absent; task 221: the
+    transitions are the CLI's journal records, not shell-history lines)."""
 
     def test_missing_inputs_exit_one_with_the_path(self):
         r = self.cli("timeline")
         self.assertEqual(r.returncode, 1)
-        self.assertIn("No .agent/bash_history found.", r.stderr)
+        self.assertIn("No .agent/journal/enforcement.jsonl found.", r.stderr)
         r = self.cli("tagger")
         self.assertEqual(r.returncode, 1)
         self.assertIn("No .agent/chat_log.md found.", r.stderr)
         (self.project / ".agent" / "chat_log.md").write_text(chat_log_text(1), encoding="utf-8")
         r = self.cli("tagger")
         self.assertEqual(r.returncode, 1)
-        self.assertIn("No .agent/bash_history found.", r.stderr)
+        self.assertIn("No .agent/journal/enforcement.jsonl found.", r.stderr)
 
 
 class _ContaminatedMerge(_Project):

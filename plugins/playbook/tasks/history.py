@@ -14,6 +14,7 @@ spans into chat_log.md) and `retro` (a generated retro task). Imports stdlib
 from __future__ import annotations
 
 import datetime
+import os
 import re
 import sys
 from pathlib import Path
@@ -316,9 +317,21 @@ def activations(agent_dir: Path):
             yield stamp, f"tasks work done (task {task})"
 
 
+def _require_transition_journal(project_path: Path) -> None:
+    """Exit 1 naming the lane's journal when it does not exist — the one input the task transitions are read from
+    (task 221; before, the shell history: `No .agent/<lane>/bash_history found.`)."""
+    from tasks.retro import transition_journal
+    journal = transition_journal(resolve_agent_dir(project_path))
+    if not os.path.lexists(journal):
+        print(f"No {journal.relative_to(project_path).as_posix()} found. (`tasks work`, `tasks new` and "
+              "`tasks work done` record the task transitions there.)", file=sys.stderr)
+        sys.exit(1)
+
+
 def cmd_timeline(cmd_args):
     """The `tasks timeline` arm — body moved verbatim from cli.py (1.5.9 split)."""
     project_path = find_project_root()
+    _require_transition_journal(project_path)
     printed = 0
     for stamp, cmd in activations(resolve_agent_dir(project_path)):
         print(f"{stamp} UTC  {cmd}")
@@ -334,6 +347,7 @@ def cmd_tagger(cmd_args):
     if not chat_log.exists():
         print(f"No {chat_log.relative_to(project_path).as_posix()} found.", file=sys.stderr)
         sys.exit(1)
+    _require_transition_journal(project_path)
 
     import re
 
@@ -405,6 +419,7 @@ def cmd_tag(cmd_args):
     if not chat_log.exists():
         print(f"No {chat_log.relative_to(project_path).as_posix()} found.", file=sys.stderr)
         sys.exit(1)
+    _require_transition_journal(project_path)
 
     import re
     from bisect import bisect_right

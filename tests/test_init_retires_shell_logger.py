@@ -2,7 +2,7 @@
 
 The owner, 2026-10-16: "Init îl scoate" — init removes only what it once wrote: the 2 lines in the shell rc file,
 BASH_ENV in ~/.claude/settings.json, the file ~/.claude/bash-log.sh, keeping a backup copy. Up to 1.6.x init deployed
-that logger and every bash on the machine sourced it; the shell log is written by the PostToolUse hook now.
+that logger and every non-interactive bash started with its BASH_ENV sourced it; the shell log is written by the PostToolUse hook now.
 
 Every run here uses a disposable HOME and project (never the real ones: memory `fixture-s15-writes-real-home`).
 

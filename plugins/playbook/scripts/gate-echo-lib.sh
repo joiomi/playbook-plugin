@@ -1423,7 +1423,7 @@ journal_enforcement() {
 # --- The shell log (PHASE-B item 2, task 221) ------------------------------------------------------------------------
 # shell_log_append AGENT_DIR COMMAND — the agent's shell command as ONE line of AGENT_DIR/bash_history. The owner,
 # 2026-10-16: the log keeps only the agent's own commands ("Doar comenzile mele") and the hook that receives the exact
-# command writes it ("Hook-ul scrie"). Before, a logger sourced into every bash on the machine through BASH_ENV wrote
+# command writes it ("Hook-ul scrie"). Before, a logger sourced through BASH_ENV into every non-interactive bash wrote
 # every simple command of every shell — the hooks', the `tasks` launcher's, Claude Code's snapshot: on 2026-10-15,
 # 45,083 lines for 1,666 commands of the agent's.
 #

@@ -60,9 +60,10 @@ class MultiUserHintsNameTheLane(unittest.TestCase):
         r = _run(self.proj, "log")
         self.assertIn(".agent/alice/chat_log.md not found", r.stderr)
 
-    def test_missing_bash_history_names_the_lane_path(self):
+    def test_missing_transition_journal_names_the_lane_path(self):
+        # task 221: the task transitions are the CLI's journal records, not shell-log lines
         r = _run(self.proj, "timeline")
-        self.assertIn("No .agent/alice/bash_history found.", r.stderr)
+        self.assertIn("No .agent/alice/journal/enforcement.jsonl found.", r.stderr)
 
     def test_missing_lane_tasks_dir_names_the_lane(self):
         import shutil

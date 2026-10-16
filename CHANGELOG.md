@@ -107,15 +107,15 @@ were about 8 % of all the text held before a compaction.
   or inside it — are more (tasks 219-220: position rules missed a note written inside the text and took a checked
   gate moved onto the open one's place for its tick); while a copy of the same text is still open, the new match
   must sit above it, so a later copy ticked out of order is a skip. A gate added, moved or unticked above it is
-  logged "left open"; a reworded gate is the same gate.
+  logged "left open"; a reworded gate is the same gate. Until now any change of the gate's line logged the
+  previous gate as done — a false `[x]` the retros read — and printed "Gate at line N is still open above
+  completed gate"; the skip warning now means a gate below the open one was checked.
 - Known limits (task 220's last review; none lets a guard open or touches a file of the user's — what they can cost is
   the `chat_log.md` record of a tick, missing or wrong): a tick that also changes the gate's
   own words is read as a reword (no `[x]`); edits that tick a gate AND add, delete or check another gate with the same
   or a span-matching text in the same save can be read wrongly (a "left open" entry, or an `[x]` for a gate still
   open); a hook killed between storing the gate and appending its `[x]` entry loses that entry (the agent is still
-  told); in eval mode two overlapping calls can log one tick twice. Until now any change of the gate's line logged the previous gate as done —
-  a false `[x]` the retros read — and printed "Gate at line N is still open above completed gate"; the skip warning
-  now means a gate below the open one was checked.
+  told); in eval mode two overlapping calls can log one tick twice.
 - A change is delivered once and not lost: the call that prints it claims it while it holds the counters lock (the
   claim names the hook's pid and its start time), and checks, prints and acknowledges it in a third short hold, inside
   the same one-wait limit; a side-by-side call stays quiet, a hook that lost its claim prints nothing, and a change
@@ -128,6 +128,44 @@ were about 8 % of all the text held before a compaction.
   either answer exists in 77 compactions of the transcripts (a run is recorded only when the hook prints); the
   release's live check is to compact an interactive session and see the next call print in full. Until then a missed
   marker costs at most 10 calls. Likewise not verified live: that a subagent's payload carries `agent_id`.
+
+**The shell log keeps only the agent's commands, written by the hook** — PHASE-B.md item 2, task 221, the owner's
+answers of 2026-10-16 ("Doar comenzile mele", "Istoric curat + jurnal de hook-uri", "Hook-ul scrie", "Init îl
+scoate"). Measured before: on 2026-10-15 the shell log held 45,083 lines for 1,666 commands of the agent's — the
+hooks' own commands, the `tasks` launcher's and Claude Code's shell snapshot were most of it — because a logger was
+sourced through `BASH_ENV` into every non-interactive bash started with it in its environment — on the owner's
+host the whole desktop session — and it cost each of them time (a small script: 2.2 → 7.2 ms, measured).
+- `.agent/<lane>/bash_history` is written by the PostToolUse hook from the command its payload carries: one line per
+  Bash or Monitor tool call — a failed one, a subagent's, grok's (renamed by the normaliser), codex's `exec_command`
+  (a string, or `[shell, -c|-lc, script]`) — `YYYY-mm-dd HH:MM:SS | AGENT | <command>` in local time, the command
+  whole with `\` written `\\`, a newline `\n` and a CR `\r`; the task gate's own `export PLAYBOOK_SESSION_ID=<this
+  session>; ` prefix is left out. Measured live (`claude -p`, the tree plugin): 9 Bash calls → 9 lines, in order,
+  none twice.
+- One writer, `gate-echo-lib.sh::shell_log_append`, under `flock` on the lane directory; a writer that gets no lock
+  within `PLAYBOOK_SHELL_LOG_LOCK_WAIT` (1 s by default) writes a spool file of its own, which the next writer holding
+  the lock appends — no line is appended unlocked; past 50 MB the file is renamed to `bash_history.archived-…` under
+  the lock, nothing carried. Not through a link, not into a FIFO, not where the hook may not write; written from an
+  EXIT trap after the hook's count and answer. It adds a median +5.5 ms to a Bash call's hook
+  (`scripts/bench_shell_log.py`).
+- The task windows of retro, `tasks timeline`, `tagger`, `tag` and `intent` come from the transitions the `tasks` CLI
+  records in the journal when they happen (`tasks work N`, `tasks new`, `tasks work done`; `docs/enforcement-journal.md`,
+  family 4), not from command lines: a skipped `&&` branch, a heredoc or a grep naming `tasks work 5` ran nothing.
+  Timeline stamps now say UTC; timeline, tagger and tag name a missing journal the way they named a missing history.
+- The BASH_ENV logger is retired: `scripts/bash-log.sh`/`.zsh` are gone, init installs no logger, `tasks doctor` and
+  `tasks environment` no longer report one, CI no longer runs the zsh step, `PLAYBOOK_NO_BASHLOG` is gone. `/playbook:init`
+  removes what an earlier version installed — `~/.claude/bash-log.sh`/`.zsh` when their first line is the logger's
+  header, a `BASH_ENV` naming `~/.claude/bash-log.sh` in `~/.claude/settings.json`, the exact two-line block in
+  `~/.bash_profile`, `~/.profile` or `~/.zshenv` — each file first copied to its kept user backup (a failed run
+  restores them); anything it does not recognise is left and named under "Skipped". Its summary lists them under
+  "Removed".
+- Known limits: the stamp is when the tool call returned — a background command's launch; a command run after a `cd`
+  into another project is logged in the session's project; no line where the hook does not run or read the payload
+  (killed at its 5 s limit, python3 below 3.10, an Esc-interrupted call — not measured, a release manual check), nor
+  for a failing grok or codex command if that host sends no PostToolUse for it (not measured); a project's
+  activations from before this version are only in its shell log, so those tasks' windows start at their first gate
+  entry; until `/playbook:init` is re-run after the update, the old logger keeps writing beside the hook (measured:
+  27 snapshot lines per session), and a desktop session keeps an exported `BASH_ENV` until the next login (bash
+  ignores it once the file is gone). The hook journal the owner asked for in the same answer is the next task.
 
 ## [1.6.3] — 2026-10-15
 

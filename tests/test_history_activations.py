@@ -113,6 +113,7 @@ class TimelineShowsEveryActivation(_Project):
     def test_a_shell_log_naming_an_activation_adds_nothing(self):
         (self.project / ".agent" / "bash_history").write_text(
             "2026-10-01 10:00:00 | AGENT | rg \"tasks work 5\" && .claude/bin/tasks work 6\n", encoding="utf-8")
+        self.journal.write_text(NOISE, encoding="utf-8")          # a journal with no transition in it
         r = self.cli("timeline")
         self.assertEqual([ln for ln in r.stdout.splitlines() if "tasks " in ln], [])
         self.assertIn("no task transition recorded", r.stderr)

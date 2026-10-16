@@ -4370,7 +4370,8 @@
         "Task 199 impl panel r2 (PASS 5/5, 1 Critical, 16 Important), each vector run in bash: #10's premise — a single quote keeps `$( … )` literal — is false wherever bash reads the string again (nineteen contexts measured: `let`, `declare`, `typeset`, `local`, `printf -v`, `read`, `unset`, `test -v`, `[ -v`, `[[ -v`, `[[ -eq`, `eval`, `trap`, `declare -n`, `${!x}`, an assignment's subscript, `${a[…]}`, `(( a[…] ))`, `${x:off}`), so #10 now holds only in a PLAIN command of data commands (above); the rest reads quote-blind, the 1.6.1 behaviour, and its over-blocks stay (`declare -i x='…'`, `[[ 1 -eq '…' ]]` and `unset 'a[…]'` are inert in bash but refused). Fixed with it: the Critical (`$'…'` inside `$( … )`, and `echo $'it\\'s'; rm -rf /`, which 1.6.1 allowed — the segment splitters read `$'…'` now), names rebound through wrappers, eval or a sourced file, a writing reader followed by any runner, `bash -oc`/`bash -c -`/`bash -c 2>&1`, a subshell's `)#`, `\"$(printf \"#\")\"`, and task 073's masks reading physical lines (an opener inside a string; a line of a multi-line eval string). NOT covered, older, PLAN Phase B: a `case` pattern's `)` inside `$( … )` closes it early (`$(case a in a) rm -rf /;; esac)`); nested escaped backticks (`` `echo \\`rm -rf /\\`` ``).",
         "Task 199 impl panel r3 (PASS 5/5, 4 Critical — two older —, 13 Important), each vector run in bash or git: on #10's path a data command that wrote a file then run (`echo '$(…)' > s.sh; bash s.sh`), `eval` receiving stdin (`… | eval bash`), a value a program hands to a shell (`GIT_EDITOR='…' git commit`, `git -c core.editor=…`, `LESSOPEN=…`), `$$'…'` in the splitters, a `<<$'EOF'` delimiter, a redirection glued to the heredoc word, `BASH_CMDS[python3]=/bin/bash` — regressions, all fixed; and the older `true; bash <<< '…'` (the herestring reader looked at a line's first command), fixed. NOT covered, older, PLAN Phase B: `_one_substitution` keeps one quote flag, so a `$( … )` nested in `\"…\"` nested in `$( … )` mispairs; `_strip_comments` knows no backtick span (``echo ` #`; rm -rf /``).",
         "Task 199, the single judge after the last round (run 1, codex, FAIL — 2 Critical, 3 Important), each run in bash or git with GIT_EDITOR unset: `printf '…' >s.sh; eval 'bash s.sh'` (eval after a written file), `>&s.sh` (bash's `>word 2>&1` form), `git commit -qe` (an editor option inside a cluster), `git --namespace commit -c core.editor=… commit` (the first `commit` word was a value) — regressions, fixed; and `echo 'BASH_CMDS is …'` read as a rebinding (an over-block), fixed: `git commit` now passes only with an allowlist of options, the subcommand found by its position, `BASH_CMDS`/`BASH_ALIASES`/`PATH` only as assignments.",
-        "Task 199, the single judge after the last round (run 2, codex, FAIL — 2 Critical, 2 Important), each run in bash with a harmless command: a line continuation inside an assignment's name (`PA\\⏎TH=…`, refused by 1.6.1), a quoted write target (`>'s.sh' /dev/null` was read as a write to /dev/null), a `$'E\\qOF'` delimiter (bash keeps `\\q`) — regressions — and `bash <<< '…' 2>/dev/null`, `bash <<< $'…'` (older); and, by my own probe after it, a variable set without an `=` word (`read PATH`, `printf -v PATH`, `getopts`, `eval 'read …'`) and a file python writes run on a LATER line (`sh s.sh`) or by a background job beside it — regressions, refused by 1.6.1. Fixed by the owner's ruling of 19:07, prudence over precision: no body is removed from a command that sets a variable, writes a file another command may run or quotes its delimiter in `$'…'`/`$\"…\"`; the write targets are read as written; the herestring's operand is its first word, decoded. The ruling of 19:38 narrowed the write clause after the corpus showed it refused a file only written (`cat > $S/f <<'EOF'` holding a backticked dangerous command; 1.6.1 allows it). Cost, accepted: an assignment anywhere in the command (`export X=…; python3 - <<'PY'`, `PYTHONPATH=. python3 - …`) keeps the body, the 1.6.1 behaviour. No judge read these fixes (the ruling of 19:07: close without another run)."
+        "Task 199, the single judge after the last round (run 2, codex, FAIL — 2 Critical, 2 Important), each run in bash with a harmless command: a line continuation inside an assignment's name (`PA\\⏎TH=…`, refused by 1.6.1), a quoted write target (`>'s.sh' /dev/null` was read as a write to /dev/null), a `$'E\\qOF'` delimiter (bash keeps `\\q`) — regressions — and `bash <<< '…' 2>/dev/null`, `bash <<< $'…'` (older); and, by my own probe after it, a variable set without an `=` word (`read PATH`, `printf -v PATH`, `getopts`, `eval 'read …'`) and a file python writes run on a LATER line (`sh s.sh`) or by a background job beside it — regressions, refused by 1.6.1. Fixed by the owner's ruling of 19:07, prudence over precision: no body is removed from a command that sets a variable, writes a file another command may run or quotes its delimiter in `$'…'`/`$\"…\"`; the write targets are read as written; the herestring's operand is its first word, decoded. The ruling of 19:38 narrowed the write clause after the corpus showed it refused a file only written (`cat > $S/f <<'EOF'` holding a backticked dangerous command; 1.6.1 allows it). Cost, accepted: an assignment anywhere in the command (`export X=…; python3 - <<'PY'`, `PYTHONPATH=. python3 - …`) keeps the body, the 1.6.1 behaviour. No judge read these fixes (the ruling of 19:07: close without another run).",
+        "2026-10-16 (task 221): the parked local-time item above is moot — no reader compares the shell log's stamps with UTC any more; the task windows come from the CLI's journal records, stamped UTC."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],
@@ -5326,7 +5327,7 @@
     {
       "id": "PB-LANE-RESOLUTION",
       "category": "sessions-and-attribution",
-      "statement": "Every surface that reads or writes runtime state resolves the per-user lane — the tasks CLI, the shell wrapper, the shared shell library, the provider hooks, the monitor, and the bash and zsh command loggers (the zsh one is run with a real zsh against the four lane shapes by CI, the `bash-log.zsh lane shapes (real zsh)` step of .github/workflows/verify.yml, and held to the bash one by a source-level test here, where zsh is not installed) — and on a fresh multi-user clone whose gitignored .agent/current_user marker is absent, no surface invents a root lane: no task, chat log, journal, shell history or session state is written at the root.",
+      "statement": "Every surface that reads or writes runtime state resolves the per-user lane — the tasks CLI, the shell wrapper, the shared shell library, the provider hooks (the shell log's writer among them, task 221), and the monitor — and on a fresh multi-user clone whose gitignored .agent/current_user marker is absent, no surface invents a root lane: no task, chat log, journal, shell history or session state is written at the root.",
       "owner": [
         {
           "path": "plugins/playbook/provider/paths.py",
@@ -5357,12 +5358,8 @@
           "reference": "function:find_root"
         },
         {
-          "path": "plugins/playbook/scripts/bash-log.sh",
-          "reference": "function:_cpb_log_cmd"
-        },
-        {
-          "path": "plugins/playbook/scripts/bash-log.zsh",
-          "reference": "whole-file"
+          "path": "plugins/playbook/scripts/gate-echo-lib.sh",
+          "reference": "function:agent_dir_writable"
         }
       ],
       "failure_consequence": "Critical",
@@ -5391,7 +5388,7 @@
             "reference": "scenario:S4"
           },
           "limitations": [
-            "Measured with the shell logger disabled (BASH_ENV unset). Re-measured under the corrected 1.5.34 bundled logger: 274 passed, 0 failed. The stale INSTALLED copy at ~/.claude/bash-log.sh still fails the same two S15 assertions — see PB-LANE-RESOLUTION."
+            "The wrapper's lane and the CLI's agree (fixture run with BASH_ENV unset)."
           ]
         },
         {
@@ -5401,8 +5398,7 @@
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": [
-            "Measured with the shell logger disabled (BASH_ENV unset). Re-measured under the corrected 1.5.34 bundled logger: 274 passed, 0 failed. The stale INSTALLED copy at ~/.claude/bash-log.sh still fails the same two S15 assertions — see PB-LANE-RESOLUTION.",
-            "Proves the loggers write the lane the CLI reads when a valid marker exists; it does not cover the marker-absent case."
+            "S16 since task 221: the REAL state-echo-hook's shell-log line across the marker shapes — legacy root, the lane and never the root, CRLF and no-final-newline markers, and NO history anywhere for a two-line marker, four bad markers and a fresh clone; the file is the one `resolve_agent_dir` names for the CLI."
           ]
         },
         {
@@ -5416,34 +5412,6 @@
         {
           "type": "executable integration",
           "path": "tests/test_provider_multiuser.py",
-          "reference": "MarkerAbsentWithLanes.test_marker_absent_with_one_lane_writes_nothing",
-          "boundary": "subprocess",
-          "negative_control": {
-            "path": "tests/test_provider_multiuser.py",
-            "reference": "LegitimateRootLane.test_mixed_layout_without_a_marker_logs_to_the_root"
-          },
-          "limitations": [
-            "Executes the bundled bash-log.sh only, through bash, with BASH_ENV stripped so an installed logger cannot mask the result. bash-log.zsh carries the structurally identical correction; zsh is absent on this host, so this test source-compares it (ZshLoggerSourceParity) and CI's real-zsh step executes it.",
-            "Linux only (macOS and Windows are not claimed since 2026-10-08)."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_provider_multiuser.py",
-          "reference": "TestResolverParity.test_logger_is_never_looser_than_lanes_without_marker",
-          "boundary": "subprocess",
-          "negative_control": {
-            "path": "tests/test_provider_multiuser.py",
-            "reference": "LegitimateRootLane.test_legacy_root_lane_logs_to_the_root"
-          },
-          "limitations": [
-            "Runs one nine-shape table through the bundled bash logger and the three reference implementations and asserts the DIRECTION of the difference: the logger may never write the root on a shape where a reference reports that a per-user lane exists. It does not claim parity, which the logger no longer has. Executes the Bash logger only; bash-log.zsh is source-compared here (zsh absent on this host) and executed by CI's real-zsh step.",
-            "Linux only (macOS and Windows are not claimed since 2026-10-08)."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_provider_multiuser.py",
           "reference": "TestCodexHookFailurePolicy.test_fresh_clone_writes_no_root_state_from_either_hook",
           "boundary": "subprocess",
           "negative_control": {
@@ -5452,6 +5420,16 @@
           },
           "limitations": [
             "Task 100 (PLAN S8 binding audit, 2026-09-27): the provider-hook surface on a fresh multi-user clone (lanes present, marker absent) — neither hook mints a root lane or a root chat log. These are the codex hooks (experimental foreign surface); the Claude bash hooks resolve through gate-echo-lib.sh, whose marker-absent answer is pinned by the parity proofs above."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_provider_multiuser.py",
+          "reference": "TestResolverParity.test_no_marker_shapes_agree_across_all_three",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Nine marker-absent shapes through provider.paths, tasks.core and gate-echo-lib.sh — the hooks' resolver the shell log's writer uses."
           ]
         },
         {
@@ -5486,18 +5464,14 @@
       ],
       "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "CORRECTED in the bundled loggers. Neither bundled logger initialises the lane to the root any more, and each one now decides on exactly two filesystem facts: whether .agent/current_user is present and valid, and whether root .agent/tasks/ is a directory. A valid marker selects the validated user lane. No marker with a root .agent/tasks/ selects the root, which IS a real lane in the legacy and mixed layouts. Everything else writes nothing: no marker and no root tasks/, or a marker that is invalid or unusable. Nothing about the children of .agent/ is consulted, so the per-user-lane enumeration the previous candidate ran is deleted. That makes the loggers DELIBERATELY STRICTER than provider/paths.py::lanes_without_marker, tasks/core.py and gate-echo-lib.sh, and no parity with them is claimed here. The shapes it costs are the marker-absent ones with no root tasks/: a bare .agent/, a committed .agent/config.json and nothing else, a sessions/ directory only, and a child of .agent/ that has no tasks/ of its own. On each of those resolve_agent_dir still answers the root and tasks retro/tasks context still read <root>/.agent/bash_history, so nothing is written where the previous candidate wrote the root. That is a missing forensic log, never cross-user contamination, it is owner-ratified, and it heals as soon as anything creates .agent/tasks/ — which /playbook:init does. The direction of the difference is bound as a test rather than asserted in prose: TestResolverParity.test_logger_is_never_looser_than_lanes_without_marker runs one nine-shape table through all four implementations and requires that the logger never write the root on a shape where a reference reports that a per-user lane exists — the Critical fresh-clone case, which was reproduced red first and is green now. The enumeration was removed because it was this file's only glob and the file is sourced into a shell it does not control, so its result followed the HOST shell's globbing state. Measured on the previous candidate against .agent/alice/tasks/ with no marker, a shape that must skip: default options and shopt -s failglob skipped, while set -f, set -o noglob and GLOBIGNORE='*' each silently wrote the SHARED root. Those three preludes are now cells in tests/test_provider_multiuser.py::HostShellOptionMatrix, as the regression guard for the enumeration staying deleted; no broader invariance under arbitrary host shell state is claimed. Reproduced red first and then green by the hermetic logger cases in tests/test_provider_multiuser.py (MarkerAbsentWithLanes, ValidMarker, InvalidMarker, LegitimateRootLane), and tests/wrapper-multiuser-fixture.sh under the corrected bundled logger is 274 passed / 0 failed where it was 272 passed / 2 failed before.",
-        "plugins/playbook/scripts/bash-log.zsh received the structurally identical correction. zsh is not installed on this host, so the tests here compare its source — tests/test_provider_multiuser.py::ZshLoggerSourceParity: lane-initialisation placement, that the bare root is assigned only under the .agent/tasks/ guard, the marker validation arms, the one-line marker contract, and that the unset line still clears every variable the file introduces — and CI runs the real bash-log.zsh against the four lane shapes and asserts the files it writes (the `bash-log.zsh lane shapes (real zsh)` step of .github/workflows/verify.yml, which installs zsh first).",
-        "The stale INSTALLED copy at ~/.claude/bash-log.sh is deliberately unchanged and still reproduces the original two S15 failures, measured on this host. Neither copy is identified here by digest: a hash of the bundled logger went stale three times inside this correction while the substantive claim — installed is older, and lacks the hook-suppression guard — stayed true throughout. Installation is out of this candidate's scope, so a host still running the previously installed logger keeps the old behavior until the plugin is re-installed.",
         "One exemption this correction must not break, and one that was deliberately given up. (1) wrapper-multiuser-fixture.sh scenario S6's mixed layout, where root .agent/tasks/ makes the root a real lane, is this entry's distinct negative_control (LegitimateRootLane.test_mixed_layout_without_a_marker_logs_to_the_root); a blanket \"never log to root\" implementation was measured red there and on the fixture's S16 legacy assertion, and still is. (2) A project with no per-user lane and no root tasks/ yet — reachably, a clone of a single-user project that committed .agent/config.json, since git tracks no empty tasks/ — used to log the root and now skips. The variant that skips whenever root .agent/tasks/ is absent was previously rejected as over-strict; it is the ratified behavior now, and its cost is named above. LegitimateRootLane.test_committed_config_only_writes_nothing pins that shape, and test_bare_agent_directory_writes_nothing, test_sessions_dir_only_writes_nothing and test_child_directory_without_tasks_writes_nothing pin its siblings.",
         "Bounded blast radius of the corrected defect, retained for the record: .agent/bash_history and .agent/*/bash_history are both in the init-seeded gitignore block (plugins/playbook/scripts/claude-md-merge.py::GITIGNORE_ENTRIES), so a stray root history file never propagated between clones, and it never created .agent/tasks/, so it could not cascade into the mixed-layout exemption.",
-        "KNOWN PRECISION LIMIT, pre-existing and NOT introduced by this correction: a dot-named lane directory splits the shell family from the Python family. On .agent/.hidden/tasks/ with no marker, provider/paths.py and tasks/core.py report ['.hidden'] while gate-echo-lib.sh reports [] — measured — because it globs and globbing skips dotfiles. Unreachable through supported flows: validate_username rejects a leading dot, so no surface that reads the marker can select such a lane. Pinned by tests/test_provider_multiuser.py::TestResolverParity.test_dot_named_lane_is_a_known_shell_python_divergence. The loggers are no longer part of this split: they read no child of .agent/ at all, so a dot-named lane is just another marker-absent shape with no root tasks/ and they skip — under default options and under shopt -s dotglob or a non-empty GLOBIGNORE alike (HostShellOptionMatrix.test_dotglob_no_longer_moves_the_dot_named_lane_answer). Reconciling the shell and Python families belongs to Phase 4, which is listed in follow_up_phases.",
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
         "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21).",
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
-        "2026-10-12 (task 184, PLAN S11): the zsh cell, until now named unexecuted, IS executed — by CI, which installs zsh on the Linux runner and runs the real bash-log.zsh against the four lane shapes (valid marker, no marker with root tasks/, no marker without, an unusable marker; .github/workflows/verify.yml); a workflow step is not a ledger proof path, so the statement names it. Not on this host, which has no zsh.",
         "2026-10-12 (task 184, PLAN S11): live provider lane handoff observed on claude (scenario PB-LANE-RESOLUTION). NARROWED with a bound it found: `scripts/state-echo-hook:176` makes the session directory before it checks the fresh-clone shape (task-gate-hook and session-start-hook skip it); the directory stays empty. Parked on task 184 after the 1.6.1 release (not grave, older than this batch: 2026-07-20).",
-        "2026-10-13 (task 192, PLAN S14 T3, item #41): the bound above is closed — the state echo makes the session directory only where it may write (`AGENT_WRITABLE`), so a fresh clone's root gets none; the live scenario now asserts it (`no hook leaves a session directory at the root`)."
+        "2026-10-13 (task 192, PLAN S14 T3, item #41): the bound above is closed — the state echo makes the session directory only where it may write (`AGENT_WRITABLE`), so a fresh clone's root gets none; the live scenario now asserts it (`no hook leaves a session directory at the root`).",
+        "Task 221 retired the BASH_ENV shell loggers (bash and zsh), which held their own copy of this policy (two filesystem facts — the marker and root `.agent/tasks/` — and stricter than the three resolvers on marker-absent shapes) and their CI zsh step: the shell log is written by the hooks into `resolve_agent_dir`'s lane where `agent_dir_writable` allows, the resolver the parity table holds to the other two."
       ],
       "follow_up_phases": [
         4,
@@ -5732,11 +5706,15 @@
     {
       "id": "PB-SHELL-ATTRIBUTION",
       "category": "sessions-and-attribution",
-      "statement": "The Bash shell-command logger records agent shell commands with a timestamp and an AGENT tag, and suppresses hook-internal shells so implementation machinery does not enter the command history; it writes each distinct command text once per shell process and working directory (a loop body is one line, not one per iteration) for as long as the shell remembers the text — what it has seen is one string, started afresh once it passes 65,536 characters, after which an earlier text is written again — except activation-shaped text (`tasks` followed by ` work` or ` new`), which is written every time, installs no trap in a shell started with PLAYBOOK_NO_BASHLOG set to anything but \"\" or \"0\", logs nothing from a script whose own file name is statusline (a directory of that name does not count), and rotates a history found past 50 MB to bash_history.archived-<date>-<pid> before the first write each shell makes to that lane, so a history can overshoot 50 MB by what one shell writes (task 088, PLAN S5b). The rotation is done under a lock or not at all, and a death at any step of it leaves either the history as it was or an archive the next shell collects from (task 174, PLAN S11): the lock is `flock -n` on the file that has the live name, taken again on the new file before anything is given back, and where no lock can be had — no `flock` on PATH, or one that cannot lock on that mount — the history is not rotated (it grows; nothing in it is lost); before anything is moved a marker beside the history (`bash_history.archived-owes`) names the archive about to be made, and a shell that finds it gives back what that archive still owes and then removes it; the lines are given back twice — by the shell that rotated, at once, and once more by the next shell, the one that removes the marker; the carried lines are the newest 5 MiB of whole `tasks work`/`tasks new` lines; the fresh file is prepared and renamed into place with the archive made as a second name of the old one, so the live name never ceases to exist and never holds less than the carried lines — except where a hard link cannot be made: there the history is moved away and the lines are given back, by this shell or, after a death, by the next. For its own needs it starts no program per line: the stamp is bash's own (`printf '%(…)T'`), the `date` program being asked only where bash cannot make it and then started with logging off, as is the `find` of the first look; and neither a `bash_history` nor a user lane (`.agent/<user>`) that is a symbolic link is logged to (task 176, PLAN S11 item 26).",
+      "statement": "The shell log (`.agent/<lane>/bash_history`) holds the agent's own shell commands and nothing else: the PostToolUse hook (`state-echo-hook`; codex's `exec_command` hook) appends one line per Bash or Monitor tool call — a succeeded or a failed one, the main agent's or a subagent's, Claude's or grok's — `YYYY-mm-dd HH:MM:SS | AGENT | <command>` in local time, the command as the hook payload normaliser delivers it (cut at a NUL) with `\\` written `\\\\`, a newline `\\n` and a CR `\\r`, so the line is one physical line and reads back exactly, and with the task gate's own `export PLAYBOOK_SESSION_ID=<this session>; ` prefix left out; hooks, the `tasks` launcher and Claude Code's shell snapshot write no line. Its one writer, `gate-echo-lib.sh::shell_log_append`, appends under `flock` on the lane directory; a writer that gets no lock within PLAYBOOK_SHELL_LOG_LOCK_WAIT seconds writes its line to a spool file of its own, which the next writer holding the lock appends, so writers side by side lose and tear no line; past 50 MB the file is renamed under the lock to `bash_history.archived-<stamp>-<pid>` (nothing carried; no lock, no rotation); nothing is written through a linked lane or a history or spool that is a link or not a regular file, nor where the hook may not write, and the line is written after the hook's count and answer, from an EXIT trap that keeps its exit status.",
       "owner": [
         {
-          "path": "plugins/playbook/scripts/bash-log.sh",
-          "reference": "function:_cpb_log_cmd"
+          "path": "plugins/playbook/scripts/gate-echo-lib.sh",
+          "reference": "function:shell_log_append"
+        },
+        {
+          "path": "plugins/playbook/scripts/state-echo-hook",
+          "reference": "function:_pb_shell_log_on_exit"
         }
       ],
       "failure_consequence": "Medium",
@@ -5744,700 +5722,211 @@
       "proofs": [
         {
           "type": "executable integration",
-          "path": "tests/test_inspection_flags_are_dry.py",
-          "reference": "BashLogSkipsHookInternals.test_hook_shell_is_not_logged_but_agent_shell_is",
+          "path": "tests/test_shell_log_writer.py",
+          "reference": "OneCallOneLine.test_a_command_is_one_line_stamped_in_local_time",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_shell_log_writer.py",
+            "reference": "OneCallOneLine.test_trailing_newlines_are_dropped_and_an_empty_or_blank_command_writes_nothing"
+          },
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_shell_log_writer.py",
+          "reference": "OneCallOneLine.test_the_escape_reads_back_exactly",
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": [
-            "Bash logger only; the zsh variant is not executed by this test.",
-            "Exercised in a single-lane project; lane selection is PB-LANE-RESOLUTION's guarantee, not this one."
+            "A typed `\\n`, a real line break, backslashes, a CR, U+2028 / U+0085 / VT / FF, a trailing backslash and a tab each read back exactly, one physical line per command."
           ]
         },
         {
           "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "BashLogScope.test_a_loop_logs_each_command_text_once",
+          "path": "tests/test_shell_log_writer.py",
+          "reference": "SideBySide.test_writers_side_by_side_lose_and_tear_no_line",
           "boundary": "subprocess",
           "negative_control": {
-            "path": "tests/test_bash_log_scope.py",
-            "reference": "BashLogScope.test_distinct_commands_are_all_logged"
+            "path": "tests/test_shell_log_writer.py",
+            "reference": "SideBySide.test_a_held_lock_gives_a_spool_that_the_next_writer_appends"
           },
-          "limitations": []
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "BashLogScope.test_a_repeated_lifecycle_command_is_logged_each_time",
-          "boundary": "subprocess",
-          "negative_control": null,
           "limitations": [
-            "A stub `tasks` on PATH; the real CLI is not run."
+            "8 writers × 6 lines of 64 KiB each, real processes; a lock held by another process makes a spool, merged by the next writer — none appended unlocked."
           ]
         },
         {
           "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "BashLogScope.test_a_quoted_tasks_path_is_never_deduped",
+          "path": "tests/test_shell_log_writer.py",
+          "reference": "Rotation.test_a_history_past_50_mb_is_renamed_and_nothing_is_carried",
           "boundary": "subprocess",
           "negative_control": {
-            "path": "tests/test_bash_log_scope.py",
-            "reference": "BashLogScope.test_a_loop_that_only_mentions_the_task_dir_is_still_deduped"
+            "path": "tests/test_shell_log_writer.py",
+            "reference": "Rotation.test_a_small_history_is_not_renamed"
           },
           "limitations": []
         },
         {
           "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "BashLogScope.test_the_same_command_in_two_projects_is_logged_in_both",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": []
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "BashLogScope.test_rotation_is_checked_for_each_project",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": []
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "BashLogScope.test_rotation_carries_the_task_activations_forward",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": []
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "BashLogScope.test_a_shell_that_opts_out_logs_nothing",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": []
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "BashLogScope.test_a_script_named_statusline_is_not_logged",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": []
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "BashLogScope.test_a_directory_named_statusline_does_not_hide_its_scripts",
+          "path": "tests/test_shell_log_writer.py",
+          "reference": "Rotation.test_no_lock_no_rotation",
           "boundary": "subprocess",
           "negative_control": {
-            "path": "tests/test_bash_log_scope.py",
-            "reference": "BashLogScope.test_a_script_named_statusline_is_not_logged"
+            "path": "tests/test_shell_log_writer.py",
+            "reference": "Rotation.test_a_writer_without_flock_spools_and_never_rotates"
           },
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_shell_log_writer.py",
+          "reference": "Rotation.test_a_writer_killed_around_the_rename_leaves_the_history_under_one_name",
+          "boundary": "subprocess",
+          "negative_control": null,
           "limitations": [
-            "Since task 159 (2026-10-09) this is a REAL directory named `statusline-tests`; up to 1.5.47 the proof was a Git Bash backslash path, and the logger cut the name at its last backslash. On Linux a backslash is part of the name (`BashLogScope.test_a_backslash_is_part_of_the_script_name`)."
+            "A stand-in `mv` on PATH holds the writer before and after the rename; SIGKILL to its process group."
           ]
         },
         {
           "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "BashLogScope.test_a_history_past_50_mb_is_rotated",
+          "path": "tests/test_shell_log_writer.py",
+          "reference": "NeverThroughALink.test_a_history_that_is_a_link_is_left_alone",
           "boundary": "subprocess",
           "negative_control": {
-            "path": "tests/test_bash_log_scope.py",
-            "reference": "BashLogScope.test_a_small_history_is_not_rotated"
+            "path": "tests/test_shell_log_writer.py",
+            "reference": "NeverThroughALink.test_a_linked_lane_is_not_written"
           },
           "limitations": []
         },
         {
           "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "BashLogScope.test_rotation_under_errexit_keeps_the_shell_alive",
+          "path": "tests/test_shell_log_writer.py",
+          "reference": "NeverThroughALink.test_a_fifo_history_does_not_hang_the_writer",
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": []
         },
         {
           "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "BashLogScope.test_a_set_e_shell_survives_the_trap",
+          "path": "tests/test_shell_log_writer.py",
+          "reference": "NeverThroughALink.test_a_planted_spool_link_is_not_followed",
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": []
         },
         {
           "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationArchiveIsIgnored.test_the_seeded_ignore_block_covers_both_archive_names",
+          "path": "tests/test_shell_log_writer.py",
+          "reference": "TheWritersFilesAreIgnored.test_the_seeded_ignore_block_covers_archives_and_spools",
           "boundary": "subprocess",
           "negative_control": null,
-          "limitations": [
-            "Checks the block /playbook:init seeds; an existing project gets the entries only on re-init."
-          ]
+          "limitations": []
         },
         {
           "type": "executable integration",
-          "path": "tests/test_linux_moved_row_proofs.py",
-          "reference": "TheBashLoggersLine.test_a_line_is_a_timestamp_the_agent_tag_and_the_command",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "The line's whole shape. No earlier proof looked at the timestamp."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_linux_moved_row_proofs.py",
-          "reference": "TheBashLoggersLine.test_any_value_but_empty_and_zero_opts_the_shell_out",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "`yes`, `false`, `x` and a single space opt out; the empty value does not."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_linux_moved_row_proofs.py",
-          "reference": "TheBashLoggersLine.test_what_the_row_admits_the_memory_is_reset_past_64_kib",
+          "path": "tests/test_shell_log_hooks.py",
+          "reference": "TheAgentsCommands.test_a_bash_call_is_one_line",
           "boundary": "subprocess",
           "negative_control": {
-            "path": "tests/test_linux_moved_row_proofs.py",
-            "reference": "TheBashLoggersLine.test_a_command_is_written_once_while_the_shell_remembers_it"
+            "path": "tests/test_shell_log_hooks.py",
+            "reference": "TheAgentsCommands.test_calls_that_are_not_shell_commands_are_not_lines"
           },
           "limitations": [
-            "Shows the bound the statement now carries, not a protection: after 700 distinct commands of 100 characters the first command, run again, is written a second time."
+            "The REAL state-echo-hook as a subprocess on crafted payloads in a scratch project."
           ]
         },
         {
           "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_two_shells_that_find_it_big_together_make_one_archive",
+          "path": "tests/test_shell_log_hooks.py",
+          "reference": "TheAgentsCommands.test_a_failed_bash_call_is_one_line",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_shell_log_hooks.py",
+          "reference": "TheAgentsCommands.test_a_subagents_call_is_one_line",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_shell_log_hooks.py",
+          "reference": "TheAgentsCommands.test_a_grok_shell_call_is_one_line",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_shell_log_hooks.py",
+          "reference": "TheAgentsCommands.test_a_monitor_call_is_one_line",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_shell_log_hooks.py",
+          "reference": "TheAgentsCommands.test_the_session_prefix_the_task_gate_adds_is_left_out",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_shell_log_hooks.py",
+          "reference": "TheAgentsCommands.test_a_command_is_cut_at_a_nul_as_the_normaliser_cuts_it",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_shell_log_hooks.py",
+          "reference": "EveryWayOut.test_an_unresolved_session_still_logs",
           "boundary": "subprocess",
           "negative_control": {
-            "path": "tests/test_bash_log_scope.py",
-            "reference": "BashLogScope.test_a_history_past_50_mb_is_rotated"
+            "path": "tests/test_shell_log_hooks.py",
+            "reference": "EveryWayOut.test_a_read_only_agent_dir_gets_no_line_and_the_hook_answers"
           },
-          "limitations": [
-            "The real logger through BASH_ENV. Shell A is held at the rotation's time stamp — inside the lock — by a `date` stand-in on PATH while shell B runs: B does not get the lock, skips, logs; A finishes: ONE archive (over 50 MB), a small live file with the activations, both shells' lines in one or the other; after the next shell nothing owed and no line twice. On the old logger: `2 != 1` archives. Red in a copy without the lock, and in one that gives back without looking at what the live file holds (`['7', '8', '7', '8']`). The control: one shell alone does rotate (one archive, not none)."
-          ]
+          "limitations": []
         },
         {
           "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_a_shell_that_looked_before_another_rotated_does_not_rotate_again",
+          "path": "tests/test_shell_log_hooks.py",
+          "reference": "EveryWayOut.test_a_linked_session_directory_still_logs",
           "boundary": "subprocess",
           "negative_control": null,
-          "limitations": [
-            "Shell A is held right after its first look said the file was big (a `find` stand-in that answers, then waits) while B rotates start to end; A then opens the live name — the fresh file — locks it and must look again, by name: one archive, nothing owed. Red ONLY in a copy without that second look (`2 != 1`); six shells at once do not show it — written after that break had stayed green."
-          ]
+          "limitations": []
         },
         {
           "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_six_shells_at_once_make_one_archive",
+          "path": "tests/test_shell_log_hooks.py",
+          "reference": "EveryWayOut.test_a_held_log_lock_costs_neither_the_count_nor_the_time_limit",
           "boundary": "subprocess",
           "negative_control": null,
-          "limitations": [
-            "Six shells started together on one oversized history, nothing in the way: one archive, no stderr, nothing left behind. On the old logger three archives in one run and four in another (`3 != 1`, `4 != 1`). Timing-dependent by nature — it stayed GREEN in a copy without the second look under the lock; the two tests above are the deterministic ones."
-          ]
+          "limitations": []
         },
         {
           "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_a_rotation_that_dies_at_any_step_leaves_the_activations_in_the_live_file",
+          "path": "tests/test_shell_log_hooks.py",
+          "reference": "EveryWayOut.test_the_fallback_path_finds_the_command",
           "boundary": "subprocess",
           "negative_control": null,
-          "limitations": [
-            "A stand-in for `grep`, `ln` or `mv` exits 137 having done nothing but leave word that it was called (the test fails if it never was): after each, the live file still has both activation lines, the host shell (under `set -e`) lives and prints nothing on stderr, and after the next shells there is an archive, a small live file with both lines, nothing in preparation and nothing owed. On the old logger the `grep` case: `[] != ['7', '8']`. Red in a copy that goes on after a read that died. (`tail` is asked only where a cut is needed since task 176 — its death has a test of its own, below.)"
-          ]
+          "limitations": []
         },
         {
           "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_a_rotator_killed_outright_is_cleaned_up_after_by_the_next",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "SIGKILL of the rotating subshell at the rename: the host shell goes on, the live file keeps the activations, a prepared file is left (and the marker, and the archive's name on the file still in use); the next shell removes the first, takes that name back and rotates — ONE archive, holding the old history, nothing owed. Red in a copy that never removes leftovers, and in one that leaves the second name (`2 != 1`); on this task's first build: `2 != 1`."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_an_activation_written_during_the_rotation_reaches_the_live_file",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "A stand-in for `ln` appends an activation line to the history at that instant — after the lines were read out, before the rename: when the rotating shell is done the live file ends with activations 7, 8 and 99, and after the next shell's second giving-back still each once. Red in a copy where the rotating shell gives nothing back (`['7', '8'] != ['7', '8', '99']`) and in one that gives back without looking at what the live file holds (`['7', '8', '7', '8', '99']`)."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_functions_of_the_host_script_named_like_its_tools_are_not_called",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "The host script defines functions `mv`, `grep`, `ln`, `tail`, `cat`, `rm`, `wc`, `flock`, `find`, `printf`, `read` that print and return 0: the rotation is whole and none of them ran. Red in a copy that calls them bare (`hijacked-flock`, `hijacked-find`, … printed)."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_a_tool_that_is_itself_a_bash_script_is_not_a_logged_shell",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "`grep` on PATH is a bash wrapper script: the rotation completes and no command of the wrapper is in the history or the archive. Red in a copy that does not start the rotation's tools with logging off."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_where_a_hard_link_cannot_be_made_it_still_rotates",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "A stand-in `ln` fails as on a filesystem without hard links: one archive holding the old history, activations in the live file, nothing left behind, nothing on stderr. Red in a copy whose moved-away order does nothing (`0 != 1`); holds on the old logger, which never called `ln`."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_an_archive_that_already_exists_is_never_replaced",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "A `date` stand-in fixes the archive's stamp and the script itself takes that archive name (its own pid) before it enters the project: the older archive is what it was, the history is not rotated this time and keeps its activations, a `set -e` host lives, nothing is owed; the next shell rotates under another name. On the old logger and in a copy without the guard the older archive is replaced by the 51 MB history."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_a_lock_on_a_file_that_is_no_longer_the_history_is_no_lock",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "Shell A has opened the history and is held just before it takes the lock (a `flock` stand-in) while B rotates start to end; the test then plants what a death would leave — the marker, and one more activation in the archive — and holds the live file's lock itself. A gets a lock, on the OLD file: it settles nothing (marker still there, the line not given). With the lock free the next shell gives it: activations 7, 8, 55. Red in a copy where a lock on the old file counts."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_a_death_after_the_rename_is_finished_by_the_next_shell",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "Impl panel round 1 (codex-high, codex-medium). Another shell writes activation 99 between the read and the rename (a stand-in for `ln`), and every `grep` that reads an archive dies: after the first shell the live file has 7 and 8 — renamed, the late line not given back; after the next shell 7, 8, 99, one archive, nothing owed. On this task's first build: `['7', '8'] != ['7', '8', '99']`. Red in a copy that writes nothing down, in one whose callback does not look for the marker, in one that drops the marker without giving back, and in one that moves the history away first (`[] != ['7', '8']` after the first shell)."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_a_death_after_the_move_where_no_hard_link_can_be_made_is_finished_by_the_next_shell",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "Impl panel round 1 (sonnet, codex-medium). `ln` fails as where hard links cannot be made, and what gives the lines back dies: after the first shell the live file has NO activation — the stated window of limitation (2); after the next shell 7 and 8, one archive holding the old history, nothing owed. On this task's first build: `[] != ['7', '8']`. Red in the three copies named on the proof above."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_nothing_is_given_back_without_the_lock_of_the_new_live_file",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "A `flock` stand-in answers 1 — held by another shell — the SECOND time it is asked, i.e. for the file that has the live name after the rename: the rotator gives nothing back (7, 8; the line written meanwhile not there) and leaves the marker; the next shell gives it (7, 8, 99). Red in a copy that gives back without asking for that lock."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_a_marker_that_names_no_archive_of_this_lane_is_dropped",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "The marker says, in turn, `../../outside`, `../outside`, `/etc/hostname`, `bash_history`, `not-an-archive`, an archive name that is no file, its own name, nothing: each time it is removed, the live file is as it was (a planted file outside the lane with an activation-shaped line gives nothing), no archive appears, a `set -e` host lives, nothing on stderr. Red in a copy that does not check the name: `['7', '666'] != ['7']` for `../outside`, and for `bash_history` the live history itself is deleted (`[] != ['7']`)."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_a_marker_that_names_a_link_is_dropped",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "The marker names a well-formed archive name that is a symbolic link to a file outside the lane: nothing is read through it, the link and its target are untouched, the marker is removed. Red in a copy that reads a link as an archive (`['7', '666'] != ['7']`)."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_a_rename_that_happened_but_reported_failure_does_not_cost_the_archive",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "Impl panel round 1 (opus). A `mv` stand-in renames the prepared file into place and then exits 1: one archive, holding the old history; the live file small, with the activations; nothing owed. On this task's first build the archive — by then the only name of the old history — was deleted (`0 != 1 : []`). Red in a copy that goes by `mv`'s status."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_the_carried_lines_are_bounded_by_size_and_are_the_newest_whole_ones",
+          "path": "tests/test_shell_log_hooks.py",
+          "reference": "Codex.test_codex_commands_are_lines",
           "boundary": "subprocess",
           "negative_control": {
-            "path": "tests/test_bash_log_scope.py",
-            "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_six_thousand_short_activation_lines_are_all_carried"
+            "path": "tests/test_shell_log_hooks.py",
+            "reference": "Codex.test_a_codex_apply_patch_is_not_a_line"
           },
-          "limitations": [
-            "6,000 activation lines of 1,000 bytes (6 MB) in a history past 50 MB: what is carried is at most 5 MiB and within two lines of it, the fresh file starts with a whole line, every carried line is whole, and they are the newest, none missing. On this task's first build (5,000 lines): `5120000 not greater than 5240832`. Red in a copy with no bound (`6000000 not less than or equal to 5242880`) and in one that keeps the line that was cut (`the fresh file starts with a piece of a line … (879 bytes)`)."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_six_thousand_short_activation_lines_are_all_carried",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "6,000 activation lines of about 50 bytes: all 6,000 carried, in order. On this task's first build: `5000 != 6000`."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_without_flock_on_the_host_nothing_is_rotated",
-          "boundary": "subprocess",
-          "negative_control": {
-            "path": "tests/test_bash_log_scope.py",
-            "reference": "BashLogScope.test_a_history_past_50_mb_is_rotated"
-          },
-          "limitations": [
-            "The owner's ruling of 2026-10-10. PATH holds every command of the real one except `flock`, and the host script defines a FUNCTION called `flock`: no archive, the history past 50 MB still there and longer by the line just logged, both activations in it, no marker, nothing in preparation, a `set -e` host alive, the function not called, nothing on stderr. On this task's second build (round 1) the history was rotated there. Red in a copy that goes on when `flock` cannot be run."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_a_flock_that_cannot_lock_means_no_rotation",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "A `flock` stand-in exits 71 — it cannot lock at all: the same as a host without it — no archive, the history longer by the logged line, nothing owed. Round 1 of the impl panel (opus) had this case sent to an order without a lock, round 2 showed that order unsafe, the owner ruled: no lock, no rotation. Red in a copy where only a held lock stops the rotation."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_without_a_lock_what_is_owed_is_left_alone",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "Impl panel round 2 (all four seats). A marker and its archive are planted, PATH has no `flock`: the shell logs its line and settles nothing — the marker is there, the owed line not given. The next shell, on a PATH with `flock`, gives it (7, 9) and nothing is owed. On the second build the marker was settled without a lock. Red in a copy that goes on when `flock` cannot be run."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_the_marker_is_left_for_the_next_shell_which_gives_back_once_more",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "Impl panel round 2 (codex-high, codex-medium) and the owner's ruling on it. After the rotating shell the marker is still there, naming the archive; the test appends an activation to the archive — a line that was in flight at the rename; the next shell gives it back (7, 8, 77) and removes the marker; one archive, nothing in preparation. On the second build the rotating shell had removed the marker itself. Red in a copy where it does, in one that writes nothing down, and in one that drops the marker without giving back (`['7', '8'] != ['7', '8', '77']`)."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_a_live_file_that_ends_inside_a_line_is_closed_before_anything_is_given_back",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "Impl panel round 2 (codex-high). The live file ends with a piece of a line, as after a giving-back killed inside it; a marker and its archive hold the whole line: after the next shell the whole activation is a line of its own, the piece is a line of its own, the marker is gone. On the second build the whole line was appended straight after the piece (`…bin/2026-09-20 10:00:00 | AGENT | .claude/bin/tasks work 7`) — a line no reader takes for an activation. Red in a copy that does not close the unfinished line."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_activation_lines_of_exactly_the_bound_are_all_carried",
-          "boundary": "subprocess",
-          "negative_control": {
-            "path": "tests/test_bash_log_scope.py",
-            "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_the_carried_lines_are_bounded_by_size_and_are_the_newest_whole_ones"
-          },
-          "limitations": [
-            "Impl panel round 2 (codex-high). 5,120 activation lines of 1,024 bytes are exactly 5 MiB: all 5,120 are carried; of 5,121, the newest 5,120. On the second build: `5119 != 5120`, both times. Red in a copy that asks `tail -c` for the bound without the one byte more."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_a_history_that_is_a_link_is_neither_rotated_nor_given_to",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "A marker and the archive it names are planted, as a hostile checkout would ship them, and `bash_history` is a symbolic link to a file outside the lane: none of the archive's lines reach that file, the marker and the archive are left, the link is left. On the build of task 174's round 2 before its hardening the planted line was found in it, after its own `keep` line. Red in a copy where the rotation opens a history that is a link. (When this proof was written the file still got the shell's OWN logged lines, through the logger's append; since task 176 it gets none — the proofs of `WhatTheLoggerStartsForEveryShellAndLine` below.)"
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_a_history_that_is_a_dangling_link_makes_no_file_elsewhere",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "The same with a link to a file that does not exist: the file is not made, and the marker is left. Before task 174's hardening the planted line was its first line; until task 176 the logger's own append still made the file, and this test then only looked for the planted line in it. Red in the same copy."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_the_marker_is_not_written_through_a_planted_link",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "The marker's name is a dangling link to a path outside the lane and the history is past 50 MB: the path is not created, the marker is a regular file naming the one archive, the rotation is whole. Before task 174's hardening: `True is not false : the marker was written through the link`. Since task 176's round 2 this is defended twice — a marker that is a link is removed unread, and the marker is made anew when written — and the test goes red only in a copy with BOTH gone (`the marker was written through the link`)."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_the_prepared_file_is_not_written_through_a_planted_link",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "The prepared file's name (the second and the shell's pid, made known with a `date` stand-in) is a link to a file outside the lane: that file is unchanged, the live history is not a link, the rotation is whole. Before task 174's hardening the file held the carried lines and the live history became the link. Red in a copy that opens the prepared file instead of making it anew."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_what_is_given_back_is_not_written_through_a_planted_link",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "A planted marker and archive, and links to a file outside the lane under the three names the build of round 2 wrote to while giving back (`<archive>.owed.new`, `.held.new`, `.new`): the file is unchanged. Before: `'… tasks work 7\\n' != 'keep\\n'`. Red in a copy that keeps the giving-back's working files in the lane."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "WhatTheLoggerStartsForEveryShellAndLine.test_a_line_is_stamped_without_starting_date",
-          "boundary": "subprocess",
-          "negative_control": {
-            "path": "tests/test_bash_log_scope.py",
-            "reference": "WhatTheLoggerStartsForEveryShellAndLine.test_the_stamp_is_local_time_and_follows_tz"
-          },
-          "limitations": [
-            "The real logger through BASH_ENV; a stand-in for `date` first on PATH notes every call: a shell that logs four lines calls it never, each line has a stamp of the usual shape within ten seconds of the clock, a `set -e` host lives, nothing on stderr. On the logger before: `True is not false : a `date` program was started for a stamp`. Red in a copy that asks the program for every stamp."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "WhatTheLoggerStartsForEveryShellAndLine.test_the_stamp_is_local_time_and_follows_tz",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "A control — what the stamp SAYS did not change: with `TZ=Pacific/Kiritimati` (UTC+14) set outside the shell, and set inside a shell started under UTC, the logged stamp is that zone's time within ten seconds. Holds on the logger that called `date` too. Skipped where the host has no time-zone database."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "WhatTheLoggerStartsForEveryShellAndLine.test_where_bash_cannot_stamp_date_is_started_unlogged",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "The script switches bash's `printf` off (`enable -n printf` — how a test reaches the branch a bash older than 4.2 takes); `date` on PATH is a bash wrapper that stops itself past depth 4: it runs once for each of the three lines logged after that, at depth 1, the four lines have stamps, none of the wrapper's own commands is in the history, and nothing is on stderr. On the logger before: depths `[4, 3, 4, 2, …]`. Red in a copy that believes a stamp bash could not make (`[] != [1, 1, 1]`), in one that starts `date` logged (the wrapper's own line is in the history), and in one where bash's complaint is not silenced (stderr not empty)."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "WhatTheLoggerStartsForEveryShellAndLine.test_a_bash_wrapper_for_find_is_started_once_and_unlogged",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "A history exists, `find` on PATH is such a wrapper: it runs once for the shell and lane, at depth 1, and the history holds the script's commands and nothing of the wrapper's. On the logger before: `[4, 3, 2, 1] != [1]`. Red in a copy that starts `find` logged."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "WhatTheLoggerStartsForEveryShellAndLine.test_nothing_is_appended_through_a_history_that_is_a_link",
-          "boundary": "subprocess",
-          "negative_control": {
-            "path": "tests/test_bash_log_scope.py",
-            "reference": "WhatTheLoggerStartsForEveryShellAndLine.test_a_lane_that_is_a_real_file_is_logged_as_ever"
-          },
-          "limitations": [
-            "`bash_history` is a symbolic link to a file outside the lane: after a shell that logs, the file is byte for byte what it was, the link is left, a `set -e` host lives, nothing on stderr. On the logger before, the file held the user's lines after its own (`'keep\\n2026-10-10 … | AGENT | set -e\\n…' != 'keep\\n'`). Red in a copy without the look."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "WhatTheLoggerStartsForEveryShellAndLine.test_a_history_that_is_a_dangling_link_makes_no_file",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "The same with a link to a file that does not exist: it is not made. On the logger before: `True is not false : the append made the file the link points to`. Red in the same copy."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "WhatTheLoggerStartsForEveryShellAndLine.test_a_lane_that_is_a_real_file_is_logged_as_ever",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "The control of the two above: the same commands with an ordinary, empty history — three lines, in order."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "WhatTheLoggerStartsForEveryShellAndLine.test_what_is_owed_is_given_whole_where_the_script_switched_printf_off",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "A marker and its archive (two activation lines) are planted; the script switches `printf` and `read` off, then enters the project: both lines are given back, in order, the marker is removed, nothing on stderr. On the logger before task 176: `[] != ['… work 7', '… work 8']` — the marker read as empty and was dropped with nothing given. Red in a copy that reads the marker with bash's `read`, and in one that drops a line where everything fits (`['… work 8'] != […7, …8]`)."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "WhatTheLoggerStartsForEveryShellAndLine.test_a_history_past_the_limit_is_rotated_where_the_script_switched_printf_off",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "The same shell meets a history past 50 MB: one archive, a small live file with both activations, a marker naming the archive, nothing on stderr. On the logger before task 176: `0 != 1` — the marker could not be written, so nothing rotated. Red in a copy that writes the marker with bash's printf."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_a_cut_that_dies_leaves_the_history_as_it_was",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "6,000 activation lines of 1,000 bytes — past the bound, so the carried lines have to be cut — and a `tail` stand-in that dies in the cut (the test fails if it was never asked): the history is as it was (not rotated, all 6,000 lines, no marker, nothing in preparation), the host lives, nothing on stderr; the next shell rotates and carries the newest whole lines within the bound. Red in a copy that believes a cut that died."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_the_rotation_itself_refuses_a_history_that_is_a_link",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "Impl panel round 1 of task 176 (sonnet). `_cpb_rotate` is called directly — not through the callback — on a lane whose `bash_history` is a link to a file outside it, with a planted marker and archive: the file is unchanged, the marker and the archive are left, nothing is in preparation. Red in a copy where the rotation opens a history that is a link (and so are the two tests above, which reach it through the callback)."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "WhatTheLoggerStartsForEveryShellAndLine.test_what_is_owed_does_not_hang_on_cat_or_head",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "Impl panel round 1 of task 176 (opus, codex-high, codex-medium). A marker and its archive are owed; in turn `head` fails, `cat` fails when given only its input, `cat` says yes and writes nothing: each time both lines are given back and the marker removed, nothing on stderr. On the first build of this task: `[] != […7, …8]` with the failing `head`, `['… work 8'] != […7, …8]` with the silent `cat`. Red in a copy that reads the marker with a program."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "WhatTheLoggerStartsForEveryShellAndLine.test_a_marker_that_was_not_written_whole_stops_the_rotation",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "A history past the limit, and a `cat` that writes nothing, or writes something else, where the marker's line is asked of it: nothing is moved — no archive, the history past 50 MB with both activations, no marker, nothing in preparation. On the first build of this task the history was rotated with an empty marker. Red in a copy that does not read the marker back."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "WhatTheLoggerStartsForEveryShellAndLine.test_an_unfinished_line_that_could_not_be_closed_gets_nothing_glued_to_it",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "The live file ends inside a line, a marker and its archive hold the whole line, and the `cat` asked for the closing newline says yes and writes nothing: nothing is given and the marker stays; with the stand-in gone the next shell gives the whole line on a line of its own and removes the marker. Red in a copy that believes `cat` (the whole line glued to the piece, the marker gone)."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "WhatTheLoggerStartsForEveryShellAndLine.test_a_link_put_there_after_the_first_look_is_not_written_through",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "Impl panel round 1 of task 176 (codex-high). A `find` stand-in — the first look at the history's size — swaps the history for a link to a file outside the lane at that moment: the file is unchanged. On the first build of this task, which looked at the link before `find` ran: `'keep\\n… | AGENT | set -e\\n' != 'keep\\n'`. Red in a copy that looks before `find` runs, and in one that does not look."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "WhatTheLoggerStartsForEveryShellAndLine.test_a_user_lane_that_is_a_link_is_not_logged_to",
-          "boundary": "subprocess",
-          "negative_control": {
-            "path": "tests/test_bash_log_scope.py",
-            "reference": "WhatTheLoggerStartsForEveryShellAndLine.test_a_user_lane_that_is_a_directory_is_logged_as_ever"
-          },
-          "limitations": [
-            "Impl panel round 1 of task 176 (opus). `.agent/current_user` names a user whose lane is a symbolic link to a directory outside the project: after a shell that logs, that directory is empty; a `set -e` host lives, nothing on stderr. On the first build of this task: `['bash_history'] != []`. Red in a copy without the look at the lane."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "WhatTheLoggerStartsForEveryShellAndLine.test_a_user_lane_that_is_a_directory_is_logged_as_ever",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "The control of the one above: the same user, the lane an ordinary directory — the command is in that lane's history."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "RotationIsOneAtATimeAndLosesNoActivation.test_a_bound_that_cannot_be_looked_at_stops_the_carry",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "Impl panel round 2 of task 176 (codex-high). 6,000 activation lines of 1,000 bytes, and a `find` stand-in that fails when asked whether they are past the bound (the test fails if it was never asked): the history is not rotated — no archive, nothing in preparation, no marker, the host alive, nothing on stderr. On the build of round 1 it was rotated with all 6 MB carried. Red in a copy that takes a `find` that failed for \"they fit\"."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "WhatTheLoggerStartsForEveryShellAndLine.test_where_the_end_of_the_live_file_cannot_be_looked_at_nothing_is_given",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "Impl panel round 2 of task 176 (opus). The live file ends inside a line, a marker and its archive hold the whole line, and `tail` fails when asked for the last byte: nothing is given, the whole line is not glued to the piece, the marker stays, nothing on stderr; with the stand-in gone the next shell gives the line on a line of its own and removes the marker. On the build of round 1: the whole line glued to the piece. Red in a copy where a `tail` that failed has said \"it ends on a line\", and in one that gives to a file ending inside a line anyway."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "WhatTheLoggerStartsForEveryShellAndLine.test_a_live_file_that_ends_in_a_nul_byte_does_not_end_on_a_line",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "The same live file with one NUL byte after the piece; `_cpb_rotate` called directly: the whole line is given on a line of its own. On the build of round 1 the NUL read as nothing and the line was glued after it (`…bin/\\x002026-09-20 …`). Red in a copy that reads the last byte through a command substitution."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_bash_log_scope.py",
-          "reference": "WhatTheLoggerStartsForEveryShellAndLine.test_a_marker_that_cannot_be_ours_is_removed_without_being_read",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "Impl panel round 2 of task 176 (opus, codex-high). Two markers a project could ship, each naming a real archive that holds a line: one is a symbolic link to a file with that name in it, one has that name as its first line and a megabyte after it. Each is removed, nothing is given on its word, the file behind the link is untouched, a `set -e` host lives, nothing on stderr. On the build of round 1: `['.claude/bin/tasks work 666'] != []`, both. Red in a copy that reads a marker that is a link, and in one that reads a marker longer than a name."
-          ]
+          "limitations": []
         }
       ],
       "applicable_platforms": [
@@ -6448,15 +5937,13 @@
       ],
       "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "Lane selection is deliberately NOT claimed here. The confirmed fresh-clone root-lane violation is recorded once, authoritatively, on PB-LANE-RESOLUTION; this entry must not be read as evidence that shell commands reach the resolved lane.",
-        "The copy installed at ~/.claude/bash-log.sh is deployed by /playbook:init and is not updated by a plugin refresh. Measured on this host 2026-09-24: it is byte-identical to the bundled logger BEFORE task 088 (sha256 fe1f6f01...; the earlier 7488c02c... note is superseded — that copy now has the hook guard), so until /playbook:init is re-run it lacks the task-088 dedupe, opt-out, statusline skip and rotation.",
-        "Deliberate trade-off (task 088): an identical command text repeated in the same directory within ONE shell process (one Bash tool call — measured: consecutive calls run in different processes) is logged once, so `make test; make test` in one call leaves one line; activation-shaped `tasks … work|new` text is exempt. Measured on the 278-case wrapper fixture run under BASH_ENV: 1088 lines with the old logger, 443 with the new; one ~/.claude/statusline.sh render 38 -> 0. The zsh logger is unchanged (one line per `zsh -c`).",
-        "Task 174 (PLAN S11; retro 107 R13) replaced the limitation that stood here — \"Rotation is not locked or atomic: two shells that cross 50 MB at the same instant can both rotate …; a process killed between the move and the activation copy leaves those activations only in the archive; the copied activation lines are not size-bounded.\" All three were reproduced red on the old logger first (`2 != 1` archives; `[] != ['7', '8']`; `6000 != 5000`). Two impl panel rounds then took apart what the first build had stated as its own limits: a death in a fallback or between the rename and the second read (round 1 — rebuilt with the marker), and everything done where no lock can be had (round 2, all four seats — the owner ruled that such a host does not rotate). What is LEFT, stated: (1) where no lock can be had — `flock` is not a command on PATH (a minimal Linux image), or it cannot lock on that mount — the history is NOT rotated: it grows without bound, nothing in it is lost, and a marker found there is left alone (owner's ruling of 2026-10-10: \"Da, varianta 1\"). The logger before this task rotated there, with nothing to keep two shells apart. Nothing tells the user that rotation has stopped; (2) where a hard link cannot be made the history is moved away rather than replaced: the live file lacks the carried lines from the move until they are given back — milliseconds in a rotation that lives, until the next shell's first logged command in that lane in one that dies; (3) a line that is not an activation, written by another shell while a rotation is under way, lands in the archive, not in the live file — archived, never deleted; (4) a process that has the old file open at the rename and writes an activation into it AFTER the next shell's giving-back leaves that line in the archive only. A logged line is one open-write-close and is caught by that second giving-back (tested with a line appended to the archive between the two). A lock taken by every logged command would close the rest and is not built: measured 0.79 ms per call, against 0.96 ms for a logged line today (owner's ruling of 2026-10-10: \"Da: a doua trecere + limită declarată\"); (5) the carried lines are the NEWEST 5 MiB: an activation older than that is in an archive only, where `tasks retro`, `tasks timeline` and `tasks tag` do not read — and `tasks tag` then gives a chat message older than the oldest carried activation to the oldest carried task (its first-task rule, `history.py`). Measured on this plugin's own workspace on 2026-10-10: the 5,096 activation-shaped lines of a 52 MB history are 2.97 MB (583 bytes on average, 42,680 the longest). The owner ruled the same day that the bound stays and that `tasks tag` and `tasks timeline` get their own S11 item (keep the tags of older messages where an archive exists; say that the rest is in archives) — NOT built by this task; readers that read archives are not to be built; (6) lines given back after newer ones were written follow them in the file: `tasks timeline` prints in file order (retro and tag go by the stamp). A giving-back never gives a line the live file already holds, so of two identical activation lines (same second, same text) one can remain where a giving-back was cut short and repeated; (7) a rotation whose archive name is already taken (the same second and the same shell pid) does not rotate — the next shell does; (8) the lock's descriptor is opened for appending because over NFS an exclusive `flock` needs a descriptor open for writing (flock(2), \"NFS details\") — taken from the manual, NOT run on NFS: no test here has one; (9) a giving-back that keeps failing (an unreadable archive, a full disk) leaves the marker: until it succeeds the history is not rotated again, and every new shell in that lane reads that archive once at its first logged command. A new rotation over an unsettled marker would write a new name over the old debt, so it is not made; (10) the marker is in the lane from a rotation until the next shell that logs there — a one-line file named like an archive (`bash_history.archived-owes`). Shells that do not log (a script named `*-hook` or `statusline*`, a shell started with PLAYBOOK_NO_BASHLOG) never settle it; (11) cost, measured against the logger before this task (scratch run of 2026-10-10 18:53, with task 176's changes in): one rotation of a 51 MB history 14-15 → 38-43 ms, and 22 ms for the next shell's second giving-back; for a history holding 70,000 activation lines (6.2 MB of them) 0.30 → 1.26 s and 0.99 s for the next shell, its fresh file 7.2 MB before and 5.24 MB now (a shell's start is in task 176's limitation) — once per 50 MB of history, and no shell waits for another (the lock is asked for without blocking); (12) the lane comes with the project: a marker, an archive and symbolic links can be SHIPPED in `.agent/`, and the marker makes the first shell that logs there act. Found by the builder after impl panel round 2 and reproduced red on that build: a planted archive's lines were appended through a `bash_history` that is a link to a file outside the lane, and the marker, the prepared file and the giving-back's working files were written through links under their names. Closed here: a history that is a symbolic link is neither rotated nor given to; the marker and the prepared file are removed and then created only if absent (noclobber); the giving-back's working files are in a `mktemp -d` directory outside the lane (a rotator killed there leaves that directory to the system's cleaning of its temporary files). What a shipped marker can still do: have the activation-shaped lines of a shipped archive appended to that same project's own history — which the project could have shipped as well. NOT cured, older than this task and outside it: the logger's own line for every command is appended to `bash_history` even where that is a symbolic link (seen in the same runs: the file outside the lane got the shell's own lines) — parked on the task's record, and cured since by task 176. The files a rotation makes in the lane all begin with `bash_history.archived-` (the marker; `<archive>.new` while in preparation): the seeded ignore block covers them (tested) and the judges' read mask matches any name that starts `bash_history.` (`provider/sandbox.py::_is_record_file`; tested for an archive's name in tests/test_judge_read_mask.py, not for these). The whole rotation runs in one subshell with the host's `set -e`/`-u`/noclobber and its DEBUG trap switched off, calls its tools through `command` (a function of the host script named `mv` or `grep` is not called), uses since task 176 neither bash's `printf` nor its `read` — two builtins a host script can switch off (it still uses others: `export`, `exec`, `exit`) and starts them with PLAYBOOK_NO_BASHLOG=1 (a tool that is a bash wrapper script is not a logged shell). In the proofs below \"nothing owed\" is checked after one more shell — the one that removes the marker — and always together with \"no line was given twice\". NOT cured here, measured on 2026-10-10 and older than this task: the two tools the logger calls OUTSIDE the rotation, for every shell and every line — `find` for the first look, `date` for the stamp. A bash wrapper script on PATH for either is a logged shell that calls the same tool again, without end (a wrapper with a depth guard ran 30 times for `date` and 4 for `find`, to the guard's depth, on this logger and on the one before the task). The owner ruled it a small S11 task of its own — task 176, the limitation after this one: cured.",
-        "Task 176 (PLAN S11 item 26; the owner's rulings of 2026-10-10: \"În S11, task mic\", \"Da, în același task mic\") — what the callback starts for its own needs. Before it: the `date` program for every line's stamp and `find` once per shell and lane, each found on PATH — and where that is a bash script, a logged shell that asks for the same program (reproduced red with wrappers that stop themselves: depths `[4, 3, 2, 1] != [1]` for `find`, and to the guard's depth over and over for `date`); and the line was appended through a `bash_history` that is a symbolic link (the file behind it got the user's lines; a dangling link made the file), and into a user lane that is one (`['bash_history'] != []` in a directory outside the project). Found while testing, in the rotation: with bash's `printf` or `read` switched off by the host's script the giving-back dropped the first line owed, or dropped the marker with nothing given, and a history past the limit was not rotated; and the first replacements — `cat` for a line put in front of what is carried, `head` for the marker — had the same hole one step on (impl panel round 1: a `head` that fails, a `cat` that says yes and writes nothing). Now nothing is put in front of what is carried: it is written to a file and cut only where it is past the bound; the marker is read by bash itself (`$(<file)`), and read back after it is written; and (impl panel round 2) a marker that is a symbolic link, or longer than 255 bytes, is not a marker of ours — it is removed without being read, and nothing is given on its word. What is LEFT, stated: (1) the `date` branch is reached here only by switching the builtin off (`enable -n printf`); no bash older than 4.2 was run; (2) a lane whose `bash_history` is a symbolic link, and a user lane that is one, are not logged to, and nothing says so. The look at `bash_history` is made right before the name is opened: a link put there between that look and the open — two adjacent steps of the shell — is not closed; a shell redirection cannot open without following, and a program that could would be the process per line this task removed. The ROOT `.agent` as a symbolic link is followed as before: a user may keep it elsewhere, and a shipped link is followed only into a directory that already holds `tasks/` or `current_user`; (3) other builtins the logger uses, switched off by a host script, are not examined (with `echo` off the append would start the `echo` program; the rotation still uses `export`, `exec`, `exit`); (4) a tool on PATH that reports success without having done its work is believed — a `grep` that answers \"no lines\" cannot be told from the truth by any design. Where it could be done, the rotation looks instead of believing, or takes not being able to look for an answer of its own: the marker is read back after it is written; how the live file ends is looked at before a giving-back and again after the newline that closes an unfinished line (a `tail` or `wc` that fails means \"cannot tell\", and nothing is given); a `find` that fails stops the carry rather than say \"within the bound\", and leaves a marker whose length it could not tell for the next shell; (5) the zsh logger (`bash-log.zsh`) asks the `date` program for its stamp and appends with `>>` in the same way — not changed, not measured (this host has no zsh); deferred by the owner on 2026-10-10 until there is a machine with zsh to test on; (6) cost, measured against the logger before this task (scratch run of 2026-10-10 18:53): a shell with one logged line 5.0 → 3.9 ms; a shell that logs 300 different lines 436 → 65 ms, 1.45 → 0.22 ms a line.",
-        "Since task 169 (PLAN S11) this row is the BASH logger's only: `bash-log.zsh` left its owners. Windows is not claimed. The zsh variant is deployed on zsh hosts (PB-INIT-SCAFFOLD, fixture I1) and CI runs it under real zsh for the lanes it writes to, but its logging rules are claimed by no row — zsh is not installed on the host where these proofs were watched failing. Also proved there, clause by clause: the line's shape (timestamp, tag, command) and every opt-out value; and the dedupe clause was completed with its memory bound.",
-        "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here.",
-        "grok and codex enforcement paths are retained in code but EXPERIMENTAL (no support claim, no live evidence); antigravity and pi are experimental everywhere (owner decision 2026-08-21).",
-        "Owner decision D4 (PLAN S6), 2026-09-24 — accepted, not fixed (S5c stays parked): the stamp is local wall-clock time with no zone offset (`date '+%Y-%m-%d %H:%M:%S'` in bash-log.zsh; in bash-log.sh, since task 176, bash's own `printf '%(%Y-%m-%d %H:%M:%S)T'` — the same text in the same local time, tested with a far zone set outside and inside the shell), and readers convert it with the zone in force when they read (tasks/retro.py `bash_history_ts_to_utc`). So in the hour repeated when daylight saving time ends two moments carry the same stamp (measured, TZ=Europe/Bucharest: 2026-10-25 00:30 UTC and 01:30 UTC both write `2026-10-25 03:30:00`, and both read back as 00:30 UTC), and after the machine's time zone changes, older lines are converted with the new zone.",
+        "Lane selection is PB-LANE-RESOLUTION's guarantee: the writer uses the hooks' `resolve_agent_dir` and `agent_dir_writable` (no line on a fresh clone with no marker, nor on a bad marker).",
+        "Task 221 (PHASE-B item 2; the owner, 2026-10-16: \"Doar comenzile mele\", \"Hook-ul scrie\") replaced the BASH_ENV logger this row described: a script sourced through BASH_ENV into every non-interactive bash started with it that wrote every simple command of every such shell — on 2026-10-15 here, 45,083 lines for 1,666 commands of the agent's (5 Monitor among them). Measured live (task 221 W5, `claude -p` with the tree plugin, haiku): 9 Bash calls → 9 lines equal to them, in order, none twice; the same runs also had 27 lines of Claude Code's shell snapshot, written by the OLD logger still wired on that host — what init's removal ends (PB-INIT-SCAFFOLD).",
+        "The stamp is when the tool call RETURNED: a foreground command's end, a background command's launch (no hook runs when a background command ends — measured, task 221 W1). Local wall-clock time with no zone offset (owner decision D4, 2026-09-24, kept); no reader compares it with UTC any more — the task windows come from the CLI's journal records (PB-CLI-TIMELINE-TAGGER).",
+        "No line where the hook does not run or cannot read the payload: a hook killed at its 5 s limit, python3 below 3.10 (no payload is read), an interrupted call (not measured: an Esc needs a person — a release manual check). A call a PreToolUse hook blocked ran nothing and has no line (0 of 185 blocked calls in this project's transcripts had a Post event). A failing grok or codex command has a line only if that host sends PostToolUse for it (grok registers no PostToolUseFailure, codex only PostToolUse; not measured — no grok/codex agent session is run here). The user's own `!` commands are not the agent's and have no line.",
+        "A command the agent runs after a `cd` into another project is logged in the SESSION's project (the hook's lane), not the other one's.",
+        "Cost: the append adds a median +5.5 ms to a Bash call's state-echo hook (n=60, 2026-10-16, `scripts/bench_shell_log.py`) — see PB-PERFORMANCE-HOOKS.",
+        "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here; the grok and codex paths are tested with crafted payloads only.",
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`)."
       ],
       "follow_up_phases": [
@@ -8843,7 +8330,7 @@
     {
       "id": "PB-INIT-SCAFFOLD",
       "category": "installation-and-upgrade",
-      "statement": "/playbook:init creates the project task structure, settings, config, CLAUDE.md, MIND_MAP.md, logger wiring, the `.claude/bin` wrappers, and the gitignore runtime block.",
+      "statement": "/playbook:init creates the project task structure, settings, config, CLAUDE.md, MIND_MAP.md, the `.claude/bin` wrappers, and the gitignore runtime block; it installs no shell logger and removes the one an earlier version wired (task 221) — only that: the `~/.claude/bash-log.sh`/`.zsh` files whose first line is the logger's header, a `BASH_ENV` naming `~/.claude/bash-log.sh` in `~/.claude/settings.json`, and the exact two-line block init wrote into `~/.bash_profile`, `~/.profile` or `~/.zshenv`, each file first copied to init's kept user backup.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/init",
@@ -8851,7 +8338,7 @@
         },
         {
           "path": "plugins/playbook/scripts/init",
-          "reference": "function:deploy_bash_log"
+          "reference": "function:retire_shell_logger"
         },
         {
           "path": "plugins/playbook/commands/init.md",
@@ -8904,29 +8391,6 @@
         },
         {
           "type": "executable integration",
-          "path": "tests/init-bash-log-fixture.sh",
-          "reference": "scenario:I2",
-          "boundary": "subprocess",
-          "negative_control": {
-            "path": "tests/init-bash-log-fixture.sh",
-            "reference": "scenario:I5"
-          },
-          "limitations": [
-            "Logger wiring on a bash host: `~/.claude/bash-log.sh` deployed and `settings.json`'s BASH_ENV names that file; the rc line is written once."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/init-bash-log-fixture.sh",
-          "reference": "scenario:I1",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "Logger wiring on a zsh host: both variants deployed, BASH_ENV points at a file that exists."
-          ]
-        },
-        {
-          "type": "executable integration",
           "path": "tests/test_init_robustness.py",
           "reference": "InitRobustness.test_a_leading_dash_free_name_is_still_a_name",
           "boundary": "subprocess",
@@ -8942,7 +8406,7 @@
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": [
-            "init run from a PACKAGED copy (a versioned cache directory named by installed_plugins.json) in an empty project and a temp HOME: every artefact of the statement in one test, the deployed logger byte-identical to the shipped one and BASH_ENV naming it."
+            "init run from a PACKAGED copy (a versioned cache directory named by installed_plugins.json) in an empty project and a temp HOME: every artefact of the statement in one test, and no shell logger, no BASH_ENV, no rc file."
           ]
         },
         {
@@ -8961,25 +8425,73 @@
         {
           "type": "executable integration",
           "path": "tests/test_linux_moved_row_proofs.py",
-          "reference": "InitFromAPackagedInstall.test_a_shell_started_with_the_setting_init_wrote_reaches_the_history",
+          "reference": "InitFromAPackagedInstall.test_init_removes_an_older_logger_and_only_its_wiring",
           "boundary": "subprocess",
-          "negative_control": {
-            "path": "tests/test_linux_moved_row_proofs.py",
-            "reference": "InitFromAPackagedInstall.test_control_a_shell_that_opts_out_leaves_no_line"
-          },
+          "negative_control": null,
           "limitations": [
-            "A non-interactive bash child started with the BASH_ENV init wrote: its command is in the project's history. bash only."
+            "From the packaged copy: the old logger, its BASH_ENV (another env key kept) and its `.profile` block go; the summary says \"Removed\"."
           ]
         },
         {
           "type": "executable integration",
-          "path": "tests/test_linux_moved_row_proofs.py",
-          "reference": "InitFromAPackagedInstall.test_init_replaces_an_older_logger_copy",
+          "path": "tests/test_init_retires_shell_logger.py",
+          "reference": "TheOldWiringGoes.test_a_bash_host_loses_exactly_the_logger_its_key_and_its_lines",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_init_retires_shell_logger.py",
+            "reference": "WhatIsNotInitsIsLeft.test_a_foreign_bash_env_a_changed_block_and_a_foreign_logger_are_left"
+          },
+          "limitations": [
+            "Every other byte of the three files is kept; the backup init names holds all three as they were; a second run changes nothing more."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_init_retires_shell_logger.py",
+          "reference": "TheOldWiringGoes.test_a_zsh_host_loses_both_files_and_its_zshenv_line",
           "boundary": "subprocess",
           "negative_control": null,
-          "limitations": [
-            "An older ~/.claude/bash-log.sh is replaced by the shipped bytes when init runs."
-          ]
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_init_retires_shell_logger.py",
+          "reference": "TheOldWiringGoes.test_an_rc_file_that_is_a_link_is_edited_at_its_target",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_init_retires_shell_logger.py",
+          "reference": "TheOldWiringGoes.test_the_block_at_the_end_of_bash_profile_goes_with_its_blank_line",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_init_retires_shell_logger.py",
+          "reference": "WhatIsNotInitsIsLeft.test_a_link_named_like_the_logger_is_left",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_init_retires_shell_logger.py",
+          "reference": "WhatIsNotInitsIsLeft.test_a_mention_of_the_logger_outside_inits_block_is_left",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_init_retires_shell_logger.py",
+          "reference": "AFreshHome.test_gets_no_logger_no_bash_env_no_rc_line",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
         }
       ],
       "applicable_platforms": [
@@ -8993,7 +8505,7 @@
       "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
         "Proved (task 169, PLAN S11): init from a packaged install, on Linux. macOS and Windows are not claimed.",
-        "Logger wiring is a per-machine copy outside the plugin (~/.claude/bash-log.{sh,zsh}). Proved (task 169): init deploys the shipped bytes, replaces an older copy, and a shell started with the BASH_ENV it wrote logs into the project's history. Bound: the copy is refreshed by init, NOT by a plugin update — after an update it is the older logger until init is re-run (`tasks doctor` reports a stale copy with both hashes).",
+        "Task 221 (the owner, 2026-10-16: \"Init îl scoate\"): init no longer deploys a shell logger (the shell log is written by the PostToolUse hook, PB-SHELL-ATTRIBUTION) and removes the old wiring, under its own transaction (PB-INSTALL-ROLLBACK: a failed run restores what it removed). Until init is re-run after an update the old logger keeps writing every shell's commands into the same history. A desktop session keeps an exported BASH_ENV until the next login; bash ignores a BASH_ENV that names a missing file (measured, task 221). What init does not recognise as its own is left and named in its summary.",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
         "Task 100 (PLAN S8 binding audit, 2026-09-27) had removed `wrappers` from the statement — no test asserted their creation on a clean init. Task 169 (PLAN S11) restored the word with a test: `.claude/bin/tasks`, `monitor` and `sandbox` are created executable, and the tasks wrapper answers from the copy the manifest names. The project `.claude/settings.json` deny list is PB-INIT-DENY-LIST.",
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
@@ -9242,7 +8754,7 @@
     {
       "id": "PB-INSTALL-ROLLBACK",
       "category": "installation-and-upgrade",
-      "statement": "A failed initialization — the first one, or the re-initialization an upgrade runs once the plugin manager has installed the new copy — rolls back without losing user or project content or leaving a mixed-version enforcing installation: a failing write in the project, a failing write in the user's HOME and a SIGTERM each restore everything init touched, and a plain re-run then installs the one new version. The plugin manager's own copy step is not covered.",
+      "statement": "A failed initialization — the first one, or the re-initialization an upgrade runs once the plugin manager has installed the new copy — rolls back without losing user or project content or leaving a mixed-version enforcing installation: a failing write in the project (a hard abort), a step that fails softly and is reported at the summary, and a SIGTERM each restore everything init touched — the old shell logger it removes from the user's HOME included (task 221), and a plain re-run then installs the one new version. The plugin manager's own copy step is not covered.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/init",
@@ -9280,11 +8792,11 @@
         {
           "type": "executable integration",
           "path": "tests/test_init_rollback.py",
-          "reference": "InitRollback.test_permission_denied_soft_failed_rolls_back",
+          "reference": "InitRollback.test_soft_failed_summary_rolls_back_the_old_logger_removal_too",
           "boundary": "real-os",
           "negative_control": null,
           "limitations": [
-            "A read-only ~/.claude (permission denied) drives init to its soft FAILED summary; asserts byte-identical restore of the merged CLAUDE.md, .gitignore, rc file, and settings.json."
+            "Soft route: a malformed project settings.json fails its merge, init goes on to its summary and exits 1 — after it removed an old logger file, its BASH_ENV and its rc lines; all come back byte-identical. (Until task 221 this route was a read-only ~/.claude failing the logger's deploy, which no longer exists.)"
           ]
         },
         {
@@ -11845,7 +11357,8 @@
       "missing_evidence_or_limitation": [
         "Task 100 impl panel round 2 (2026-09-27) NARROWED the statement to the Python writers and NAMED the bash-side exceptions (codex-high: init:495 `cp` overwrites an existing monitor file on re-run; codex-medium: `cat >` config.json / `echo >` MIND_MAP.md; grok: gate-echo-lib.sh `reset_counters` truncates the session counters in place, init's bash-log deploy is `tr > tmp && mv` with no fsync). None of these goes through the primitive: bash has no fsync, and a rename-atomic `mv` is the most it can do. Their bounds: the init copies run inside init_txn's transaction (a failed run restores the pre-init copy; a SIGKILL mid-`cp` is the transaction's own disclosed bound, PB-INSTALL-ROLLBACK); the counters file is advisory hook state whose loss only perturbs the stop-hook's low-activity bypass counts; the logger deploy is rename-atomic. The sweep (tests/test_atomic_routing_sweep.py) now also matches `shutil.copy*` and `os.open(… O_TRUNC …)` and scans skills/ (opus: pi.py copied the installed models.json with a plain copyfile — routed through `atomic_write`); a `.sh` truncating redirect is NOT matched — the bash surface above is enumerated here by hand and is an S11 gauntlet item (any new bash writer in scripts/ must be added to this list by review).",
         "Task 100 (PLAN S8c, 2026-09-27; corrected after impl panel round 1): verified — the primitive's torn-read, concurrent-writer, interruption-cleanup and permission-preservation properties are proven on the current platform (Windows os.replace semantics via the CI windows lane), and routing completeness is an executable sweep (tests/test_atomic_routing_sweep.py: AST over every .py under tasks/, provider/, scripts/ recursively, plus the embedded python of the extensionless scripts in scripts/) instead of code review. The documented exceptions — append-only chat_log/bash_history/journal appends (never truncating, not matched), the chat-log-hook flock-protocol counter file, hook-time advisory counters/offsets (gate-batch marker, adapter chat_log_offset, the monitor sensor's temp+replace poll offset), the codex-*-hook runtime writers that cannot import tasks.* (experimental provider), and two ephemeral temp-dir writes — are listed in the sweep's APPROVED table with their reasons, and a stale approval fails the build. Bash-side creation writes in scripts/init (`cat >` for a `.agent/config.json` and `echo >` for a MIND_MAP.md stub that do NOT yet exist) are not matched by the sweep: they run only when the file is absent, so a crash leaves a new truncated file, which init's transaction (init_txn.py, PB-INSTALL-ROLLBACK) removes on the failed run. Remaining bound, disclosed: real power-loss durability is not exercised as a live matrix (flush+fsync is the mechanism; the kill-between-write-and-replace proof is the executable stand-in). [2026-10-08, Linux-only (task 153): the macOS and Windows CI lanes were removed; this coverage ran there up to 1.5.47, tag `last-multiplatform`.]",
-        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
+        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
+        "2026-10-16 (task 221): init's logger deploy (`tr > tmp && mv`) is gone; its removal of the old wiring writes settings.json and the rc files through the primitive (`atomic_write`), and deletes the old logger file."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],
@@ -12561,7 +12074,7 @@
     {
       "id": "PB-RUNTIME-STDLIB",
       "category": "compatibility-and-package",
-      "statement": "Shipped Playbook runtime requires no third-party Python packages and no build step: every shipped Python file imports only the standard library or the plugin's own modules, the CLI runs on an interpreter with no site-packages at all, and every shipped file is plain text — Bash, zsh, Python, Markdown, JSON, and the experimental pi adapter's TypeScript bridge — with nothing compiled or binary.",
+      "statement": "Shipped Playbook runtime requires no third-party Python packages and no build step: every shipped Python file imports only the standard library or the plugin's own modules, the CLI runs on an interpreter with no site-packages at all, and every shipped file is plain text — Bash, Python, Markdown, JSON, and the experimental pi adapter's TypeScript bridge — with nothing compiled or binary.",
       "owner": [
         {
           "path": "docs/architecture.md",
@@ -12639,7 +12152,8 @@
       "missing_evidence_or_limitation": [
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
-        "2026-10-12 (task 184, PLAN S11): NARROWED — `plain Bash/Python/Markdown files` left out the shipped zsh logger (scripts/bash-log.zsh) and the pi adapter's TypeScript bridge; the statement names them. Proven by three integration tests with negative controls and by the live run (scenario PB-RUNTIME-STDLIB)."
+        "2026-10-12 (task 184, PLAN S11): NARROWED — `plain Bash/Python/Markdown files` left out the shipped zsh logger (scripts/bash-log.zsh) and the pi adapter's TypeScript bridge; the statement names them. Proven by three integration tests with negative controls and by the live run (scenario PB-RUNTIME-STDLIB).",
+        "2026-10-16 (task 221): the zsh logger was retired; no zsh file ships, and the statement no longer names one."
       ],
       "follow_up_phases": [
         3,
@@ -13960,15 +13474,15 @@
     {
       "id": "PB-PERFORMANCE-HOOKS",
       "category": "performance",
-      "statement": "The bundled BASH_ENV hook fast path avoids the prior material logger penalty; Phase 0 measured the three-hook sequence at means 142.62 ms unset and 146.21 ms with the bundled logger under its stated local method. T4 (2026-08-23) closed the standing DEBUG-trap cost question with a checked-in reproducible driver: on the fused Bash-tool hook path (task-gate-hook + command-guard-hook, fresh process each) MEASURED ON LINUX (py3.10), having BASH_ENV=bash-log.sh set adds a MEDIAN total of +6.76 and +7.53 ms per tool call over two order-flipped N=150 runs (on a ~208 ms baseline) — well under the owner-ratified 15 ms threshold, so the trap is left unchanged. A 3-arm control (empty-file source_only) attributes essentially all of it to per-command DEBUG dispatch (source cost ~0 ms); because the empty-file control does not incur bash-log.sh's own one-time parse/trap-install, that ~6-7.5 ms is an UPPER BOUND on dispatch. The median is the reliable metric here; the p95 delta is within the wall-clock noise floor (it ranged -0.16 to +4.61 ms across runs).",
+      "statement": "No shell logger runs in the hooks' shells or anywhere else on the machine: task 221 retired the BASH_ENV logger, whose DEBUG trap T4 measured at a median +6.76 / +7.53 ms per Bash tool call on the fused hook path (Linux, 2026-08-23) and which cost every non-interactive bash started with its BASH_ENV time (2026-10-16: a small script 2.2 → 7.2 ms, 200 runs). The shell log's append in the PostToolUse hook adds a median +5.5 ms to a Bash call's state-echo hook (n=60) and +3.3 ms on its own (n=100), measured 2026-10-16 with `scripts/bench_shell_log.py` — dated observations, not a budget a test enforces.",
       "owner": [
         {
-          "path": "plugins/playbook/scripts/bash-log.sh",
-          "reference": "function:_cpb_log_cmd"
+          "path": "plugins/playbook/scripts/gate-echo-lib.sh",
+          "reference": "function:shell_log_append"
         },
         {
-          "path": "scripts/bench_bash_trap.py",
-          "reference": "symbol:main"
+          "path": "scripts/bench_shell_log.py",
+          "reference": "symbol:run"
         },
         {
           "path": "CHANGELOG.md",
@@ -13985,7 +13499,7 @@
           "boundary": "human-review",
           "negative_control": null,
           "limitations": [
-            "Phase-0 means only; the reproducible median/p95 driver for the BASH_ENV DEBUG-trap delta is scripts/bench_bash_trap.py (an owner here; T4). That driver prints median/p95 and a 15 ms verdict but is a wall-clock tool, not a CI-asserted budget (perf assertions flake on shared runners), and its absolute numbers are host-dependent."
+            "Phase-0 means and T4 (the BASH_ENV DEBUG-trap delta, its driver retired with the logger in task 221); the append's cost is printed by scripts/bench_shell_log.py — a wall-clock tool, not a CI-asserted budget."
           ]
         }
       ],
@@ -14000,7 +13514,7 @@
       "status": "partially_evidenced",
       "missing_evidence_or_limitation": [
         "WAIVER 2026-10-08 PB-PERFORMANCE-HOOKS: The owner accepts the recorded T4 measurement (Linux, 2026-08-23: +6.76/+7.53 ms median per Bash tool call from the BASH_ENV trap) as a dated observation, not a guarantee a test enforces; performance is measured properly in Phase B (B1), where any budget is the owner's to set (owner decision 2026-10-08, task 148 N3).",
-        "A reproducible median/p95 driver for the BASH_ENV DEBUG-trap delta now exists (scripts/bench_bash_trap.py; T4); still missing for the broader hook budget: named reference hosts, cold-cache measurements, CI-asserted frozen budgets, and macOS/Windows numbers.",
+        "Task 221: the trap the waiver above accepted is gone with the logger; the append that replaced it is measured (+5.5 ms median per Bash call). Still missing for the broader hook budget: named reference hosts, cold-cache measurements and CI-asserted frozen budgets (Phase B item 6 records the plugin's own numbers).",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
       ],
       "follow_up_phases": [
@@ -17261,7 +16775,7 @@
     {
       "id": "PB-CLI-TIMELINE-TAGGER",
       "category": "cli-contracts",
-      "statement": "tasks timeline and tasks tagger fail with an explicit exit-1 message naming the missing input file, and in a multi-user repo that message names the resolved lane path. Both, and `tasks tag`, read every `tasks work` / `tasks new` line of the shell history as an activation: a command run again is a new activation — also within the same second — and only the echo of an older logger is not: a `SCRIPT` line whose command and timestamp are those of an `AGENT` activation on the line directly above it in the file.",
+      "statement": "tasks timeline and tasks tagger fail with an explicit exit-1 message naming the missing input file, and in a multi-user repo that message names the resolved lane path. Both, and `tasks tag`, read the task transitions the `tasks` CLI records in the journal when they HAPPEN (task 221: `tasks work N` after its pointer is published, `tasks new` once the task exists, `tasks work done` after the close; a refused command records nothing), not lines of the shell log: every activation is shown — a task activated again, also within the same second, is a new one — and `tag` ends a task's span at its recorded close.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/history.py",
@@ -17291,7 +16805,7 @@
         {
           "type": "executable integration",
           "path": "tests/test_lane_aware_hints.py",
-          "reference": "MultiUserHintsNameTheLane.test_missing_bash_history_names_the_lane_path",
+          "reference": "MultiUserHintsNameTheLane.test_missing_transition_journal_names_the_lane_path",
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": []
@@ -17319,7 +16833,7 @@
           "boundary": "subprocess",
           "negative_control": {
             "path": "tests/test_history_activations.py",
-            "reference": "TimelineShowsEveryActivation.test_control_an_old_echo_pair_is_still_one_entry"
+            "reference": "TimelineShowsEveryActivation.test_a_creation_is_shown_and_noise_is_not"
           },
           "limitations": [
             "The real CLI on a written history: `work 7`, `work 8`, `work 7` prints three transitions. Red before task 171 (two — every second sight of a command was dropped)."
@@ -17328,7 +16842,7 @@
         {
           "type": "executable integration",
           "path": "tests/test_history_activations.py",
-          "reference": "TimelineShowsEveryActivation.test_the_same_activation_run_again_later_is_shown",
+          "reference": "TimelineShowsEveryActivation.test_the_same_activation_again_later_and_several_in_one_second_are_shown",
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": [
@@ -17340,10 +16854,7 @@
           "path": "tests/test_history_activations.py",
           "reference": "TaggerShowsEveryActivation.test_going_back_to_a_task_is_shown",
           "boundary": "subprocess",
-          "negative_control": {
-            "path": "tests/test_history_activations.py",
-            "reference": "TaggerShowsEveryActivation.test_control_an_old_echo_pair_is_still_one_entry"
-          },
+          "negative_control": null,
           "limitations": [
             "The same history through `tasks tagger`."
           ]
@@ -17364,20 +16875,7 @@
         {
           "type": "executable integration",
           "path": "tests/test_history_activations.py",
-          "reference": "TimelineShowsEveryActivation.test_commands_of_one_second_are_all_shown",
-          "boundary": "subprocess",
-          "negative_control": {
-            "path": "tests/test_history_activations.py",
-            "reference": "TimelineShowsEveryActivation.test_control_an_old_echo_pair_is_still_one_entry"
-          },
-          "limitations": [
-            "`work 7`, `work 8`, `work 7` written in ONE second print three transitions, and the same command twice in one second prints two. Red on this task's first rule, which called any same-second repeat within two lines an echo (impl panel round 1, three judges)."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_history_activations.py",
-          "reference": "TimelineShowsEveryActivation.test_only_a_script_line_right_under_its_agent_line_is_an_echo",
+          "reference": "TimelineShowsEveryActivation.test_a_shell_log_naming_an_activation_adds_nothing",
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": [
@@ -17387,12 +16885,36 @@
         {
           "type": "executable integration",
           "path": "tests/test_history_activations.py",
-          "reference": "TagAttributesEveryActivation.test_a_history_written_within_one_second_closes_its_tasks_too",
+          "reference": "TagAttributesEveryActivation.test_no_record_says_so",
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": [
             "`tasks tag` on work 7 / done / work 8 / done written in one second: no message is attributed to a task. Red on the first rule (all five messages attributed to 008)."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_history_activations.py",
+          "reference": "TheCliRecordsWhatHappened.test_new_work_and_done_are_recorded_and_a_refused_activation_is_not",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_history_activations.py",
+          "reference": "TheCliRecordsWhatHappened.test_two_activations_in_one_command_are_two_records_and_two_windows_in_order",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_history_activations.py",
+          "reference": "AJournalThatIsNotTheLanesOwn.test_a_linked_or_fifo_journal_reads_as_no_records",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
         }
       ],
       "applicable_platforms": [
@@ -17405,8 +16927,8 @@
       ],
       "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "Proved: the absent-input behaviour (single-user and multi-user, including tagger's second check — task 148, PLAN S12) and, since task 171 (PLAN S11; retro 107 R12), how the three commands read ACTIVATIONS from the shell history. Not proved, and not claimed: the rest of the reconstruction — how messages and transitions are merged and ordered, the text of a tag. Bound, measured in task 171 and older than it: today's logger also records the whole compound command line beside each of its commands, so one activation can appear as two lines with two different texts. Measured for the echo rule (task 171): this workspace's archived history of 2026-08-22 … 09-25 holds 542 activation lines, all of kind `AGENT`, no two alike in one second, and the shipped loggers write `AGENT` only — a `SCRIPT` echo is the trace of an older logger.",
-        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22)."
+        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
+        "Task 221: a project's activations from before this version are only in its shell log, which no reader parses any more — those tasks' windows start at their first gate entry (the owner's rule of 2026-10-16: the design is for a project started from zero). The journal is best-effort: a failed journal write loses that transition (the command itself is unaffected)."
       ],
       "follow_up_phases": [
         3

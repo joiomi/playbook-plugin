@@ -1,7 +1,7 @@
 """The shell log's one writer, `shell_log_append` in gate-echo-lib.sh (PHASE-B item 2, task 221).
 
 The owner, 2026-10-16: the shell log keeps only the agent's own commands ("Doar comenzile mele"), and the hook that
-receives the exact command writes it ("Hook-ul scrie"). Before, a logger sourced into every bash on the machine through
+receives the exact command writes it ("Hook-ul scrie"). Before, a logger sourced into every non-interactive bash through
 `BASH_ENV` wrote every simple command of every shell — on 2026-10-15, 45,083 lines for 1,666 commands of the agent's.
 
 What is held here, with the REAL function run by bash:

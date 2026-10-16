@@ -542,26 +542,33 @@ class GuaranteeLedgerValidation(_LedgerFixture):
         """PB-LANE-RESOLUTION: corrected in 1.5.34; verified since task 184, its open cells NAMED.
 
         The entry moved off `known_violation` because the candidate bundled
-        artifact no longer reproduces the defect. It stayed partial while live
-        provider evidence was absent; task 184 ran it (scenario PB-LANE-RESOLUTION
-        of tests/live/gauntlet.sh). What is still not executed is said IN THE
-        STATEMENT, not left to the status: the zsh logger is run with a real zsh
-        by CI only (this host has none) and held to the bash one by a
-        source-level test. The state echo's empty per-session directory at the
-        root of a fresh clone was a stated BOUND until task 192 removed the
-        directory (#41): the statement no longer carries it, and the closure is
-        recorded among the row's limitations.
+        artifact no longer reproduces the defect; task 184 ran it live (scenario
+        PB-LANE-RESOLUTION of tests/live/gauntlet.sh). The state echo's empty
+        per-session directory at the root of a fresh clone was a stated BOUND
+        until task 192 removed the directory (#41), recorded among the
+        limitations. Task 221 retired the BASH_ENV shell loggers, which held
+        their own copy of the lane policy (and the CI zsh step): the shell log
+        is written by the hooks, so the row names the hooks' writer and proves
+        its lane with the real hook (fixture S16) and the resolvers' parity.
         macOS/Windows are not claimed (Linux-only since 2026-10-08).
         """
         entry = next(e for e in self.ledger["guarantees"]
                      if e["id"] == "PB-LANE-RESOLUTION")
         self.assertEqual("verified_by_current_executable_evidence", entry["status"])
-        for named in ("zsh one is run with a real zsh", "by CI", "session state is written at the root"):
+        for named in ("the shell log's writer among them", "session state is written at the root"):
             self.assertIn(named, entry["statement"])
-        self.assertNotIn("BOUND", entry["statement"])
+        for gone in ("zsh", "logger", "BOUND"):
+            self.assertNotIn(gone, entry["statement"])
+        self.assertFalse([o for o in entry["owner"] if "bash-log" in o["path"]])
         self.assertTrue(any("task 192" in x and "#41" in x for x in entry["missing_evidence_or_limitation"]))
-        self.assertIn("EchoAtAFreshClone.test_no_session_directory_at_the_root",
-                      [p["reference"] for p in entry["proofs"]])
+        self.assertTrue(any("Task 221 retired the BASH_ENV shell loggers" in x
+                            for x in entry["missing_evidence_or_limitation"]))
+        refs = [p["reference"] for p in entry["proofs"]]
+        self.assertIn("EchoAtAFreshClone.test_no_session_directory_at_the_root", refs)
+        self.assertIn("TestResolverParity.test_no_marker_shapes_agree_across_all_three", refs)
+        s16 = next(p for p in entry["proofs"]
+                   if p["path"] == "tests/wrapper-multiuser-fixture.sh" and p["reference"] == "scenario:S16")
+        self.assertIn("state-echo-hook", " ".join(s16["limitations"]))
         live = [p for p in entry["proofs"] if p["path"] == "tests/live/gauntlet.sh"]
         self.assertEqual(["scenario:PB-LANE-RESOLUTION"], [p["reference"] for p in live])
         self.assertIsNone(entry["violation_reproduction"],
@@ -570,20 +577,6 @@ class GuaranteeLedgerValidation(_LedgerFixture):
                          "the Phase 2 runtime correction is done")
         self.assertIn(8, entry["follow_up_phases"],
                       "the row keeps its Phase 8 live evidence on the schedule")
-
-        proof = next(p for p in entry["proofs"]
-                     if p["reference"].startswith("MarkerAbsentWithLanes."))
-        self.assertEqual("tests/test_provider_multiuser.py", proof["path"])
-        self.assertEqual("executable integration", proof["type"])
-        control = proof["negative_control"]
-        self.assertIsNotNone(control, "the fix needs a distinct adverse control")
-        self.assertNotEqual(proof["reference"], control["reference"])
-        self.assertTrue(control["reference"].startswith("LegitimateRootLane."),
-                        "the adverse control must be the root-lane exemption")
-
-        limitations = " ".join(entry["missing_evidence_or_limitation"])
-        for expected in ("zsh", "~/.claude/bash-log.sh", "task 184"):
-            self.assertIn(expected, limitations)
 
     def test_the_real_ledger_has_no_open_known_violation(self):
         violations = [e for e in self.ledger["guarantees"]

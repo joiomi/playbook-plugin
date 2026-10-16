@@ -340,8 +340,8 @@ done
 # BEGIN:retire-shell-logger
 #
 # Up to 1.6.x init deployed a command logger — ~/.claude/bash-log.sh (and bash-log.zsh on a zsh host) — and wired
-# it through BASH_ENV in ~/.claude/settings.json and a two-line block in a shell rc file, so every bash on the machine
-# sourced it and wrote every simple command of every shell: on 2026-10-15, 45,083 lines for 1,666 commands of the
+# it through BASH_ENV in ~/.claude/settings.json and a two-line block in a shell rc file, so every non-interactive
+# bash started with that BASH_ENV sourced it and wrote every simple command of every shell: on 2026-10-15, 45,083 lines for 1,666 commands of the
 # agent's. The shell log is now written by the PostToolUse hook from the agent's exact command (the owner,
 # 2026-10-16: "Hook-ul scrie"), and init removes only what it once wrote ("Init îl scoate"):
 #   - ~/.claude/bash-log.sh / bash-log.zsh: a regular file whose FIRST line is the logger's own header;
@@ -351,7 +351,8 @@ done
 # Every one of these files is in the transaction's snapshot above (TXN_FILES): it is copied to the kept user backup
 # before anything changes, and a failure restores it. A rc file that is a symbolic link is edited at its target, the
 # link kept. Anything init cannot read or does not recognise is left as it is — never a failure.
-RETIRE_RESULT=$(PB_HOME="$HOME" PB_ATOMIC_PY="$ATOMIC_PY" python3 -I -c '
+retire_shell_logger() {   # echoes REMOVED/KEPT<TAB>item lines; never fails
+    PB_HOME="$HOME" PB_ATOMIC_PY="$ATOMIC_PY" python3 -I -c '
 import json, os
 import importlib.util as _ilu
 _s = _ilu.spec_from_file_location("_pb_atomic_write", os.environ["PB_ATOMIC_PY"])
@@ -422,7 +423,9 @@ for rc in (".bash_profile", ".profile", ".zshenv"):
     except (OSError, UnicodeDecodeError) as e:
         out.append("KEPT\t~/" + rc + " (could not be read: " + str(e) + ")")
 print("\n".join(out))
-' 2>&1) || RETIRE_RESULT="KEPT"$'\t'"the old shell logger (could not be looked at)"
+' 2>&1 || printf 'KEPT\tthe old shell logger (could not be looked at)\n'
+}
+RETIRE_RESULT=$(retire_shell_logger)
 while IFS=$'\t' read -r _what _item; do
     case "$_what" in
         REMOVED) REMOVED+=("$_item") ;;
