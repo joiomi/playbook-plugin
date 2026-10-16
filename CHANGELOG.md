@@ -107,14 +107,18 @@ were about 8 % of all the text held before a compaction.
   or inside it — are more (tasks 219-220: position rules missed a note written inside the text and took a checked
   gate moved onto the open one's place for its tick); while a copy of the same text is still open, the new match
   must sit above it, so a later copy ticked out of order is a skip. A gate added, moved or unticked above it is
-  logged "left open"; a reworded gate is the same gate. One limit stays: a tick that also changes the gate's own words
-  (beyond a note) is read as a reword and gets no `[x]` entry — the template's rule is to append, never replace. Until now any change of the gate's line logged the previous gate as done —
+  logged "left open"; a reworded gate is the same gate.
+- Known limits (task 220's last review; none lets a guard open or loses data): a tick that also changes the gate's
+  own words is read as a reword (no `[x]`); edits that tick a gate AND add, delete or check another gate with the same
+  or a span-matching text in the same save can be read wrongly (a "left open" entry, or an `[x]` for a gate still
+  open); a hook killed between storing the gate and appending its `[x]` entry loses that entry (the agent is still
+  told); in eval mode two overlapping calls can log one tick twice. Until now any change of the gate's line logged the previous gate as done —
   a false `[x]` the retros read — and printed "Gate at line N is still open above completed gate"; the skip warning
   now means a gate below the open one was checked.
 - A change is delivered once and not lost: the call that prints it claims it while it holds the counters lock (the
   claim names the hook's pid and its start time), and checks, prints and acknowledges it in a third short hold, inside
   the same one-wait limit; a side-by-side call stays quiet, a hook that lost its claim prints nothing, and a change
-  whose hook died — or whose print failed — is printed by the next call with its transition and warnings.
+  whose hook died — or whose print failed — is printed to the agent by the next call with its transition and warnings.
   The one-shot lines wait in a file written before the gate is stored; the `[x]` entry is appended only after the
   counters were written, under the chat log's lock taken before the decision. The echo's memory lives in the
   session's counters as `gate_*` fields, so a prompt's reset keeps it; no python runs while the counters lock is

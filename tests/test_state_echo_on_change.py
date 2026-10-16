@@ -117,6 +117,7 @@ class _Project(unittest.TestCase):
         for p in procs:
             assert p.stdout is not None
             o = p.stdout.read()
+            p.stdout.close()
             p.wait(timeout=60)
             outs.append((json.loads(o.strip() or "{}").get("hookSpecificOutput") or {}).get("additionalContext") or "")
         return outs
@@ -750,10 +751,11 @@ class Round3(_Project):
 
 
 class EchoFields(unittest.TestCase):
-    """`scripts/task-status.py --echo <task.md> [<P> <B> <OPENS> <CHECKS> <T>]` — twelve lines: total, checked, the first
-    open gate's line, its live position, the checked live gates below it, the transition, the checked line (done only),
-    the first open gate's full text, its first 200 and 60 characters, and that text's OPENS (open gates with exactly it)
-    and CHECKS (checked gates that are it with one span inserted) — what the next call passes back (task 220)."""
+    """`scripts/task-status.py --echo <task.md> [<P> <B> <OPENS> <CHECKS> <ABOVE> <T>]` — thirteen lines: total, checked,
+    the first open gate's line, its live position, the checked live gates below it, the transition, the checked line
+    (done only), the first open gate's full text, its first 200 and 60 characters, and that text's OPENS (open gates
+    with exactly it), CHECKS (checked gates that are it with one span inserted) and ABOVE (those above its first open
+    copy) — what the next call passes back (task 220)."""
 
     def run_echo(self, text, *prev):
         d = Path(tempfile.mkdtemp(prefix="pb219e-"))
