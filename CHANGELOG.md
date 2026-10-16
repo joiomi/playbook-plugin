@@ -108,7 +108,8 @@ were about 8 % of all the text held before a compaction.
   gate moved onto the open one's place for its tick); while a copy of the same text is still open, the new match
   must sit above it, so a later copy ticked out of order is a skip. A gate added, moved or unticked above it is
   logged "left open"; a reworded gate is the same gate.
-- Known limits (task 220's last review; none lets a guard open or loses data): a tick that also changes the gate's
+- Known limits (task 220's last review; none lets a guard open or touches a file of the user's — what they can cost is
+  the `chat_log.md` record of a tick, missing or wrong): a tick that also changes the gate's
   own words is read as a reword (no `[x]`); edits that tick a gate AND add, delete or check another gate with the same
   or a span-matching text in the same save can be read wrongly (a "left open" entry, or an `[x]` for a gate still
   open); a hook killed between storing the gate and appending its `[x]` entry loses that entry (the agent is still
