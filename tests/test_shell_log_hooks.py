@@ -102,6 +102,14 @@ class TheAgentsCommands(_Logged):
         self.hook({"tool_name": "run_terminal_command", "tool_input": {"command": "ls hybrid"}})
         self.assertEqual(self.logged(), ["ls grok", "ls hybrid"])
 
+    def test_the_session_prefix_the_task_gate_adds_is_left_out(self):
+        # task 118's injection, measured live in task 221 W5; only THIS session's
+        self.hook({"tool_name": "Bash", "tool_input": {"command": f"export PLAYBOOK_SESSION_ID={SID}; .claude/bin/tasks work 1"}})
+        self.hook({"tool_name": "Bash", "tool_input": {"command": "export PLAYBOOK_SESSION_ID=pid-other; ls"}})
+        self.hook({"tool_name": "Bash", "tool_input": {"command": f"echo export PLAYBOOK_SESSION_ID={SID}; ls"}})
+        self.assertEqual(self.logged(), [".claude/bin/tasks work 1", "export PLAYBOOK_SESSION_ID=pid-other; ls",
+                                         f"echo export PLAYBOOK_SESSION_ID={SID}; ls"])
+
     def test_a_command_is_cut_at_a_nul_as_the_normaliser_cuts_it(self):
         self.hook({"tool_name": "Bash", "tool_input": {"command": "echo a\u0000b"}})
         self.assertEqual(self.logged(), ["echo a"])

@@ -182,11 +182,18 @@ export PB_FUSED PB_PATH PB_CMD
 # of this lane's `bash_history`. From an EXIT trap, so it is written on every way out of this hook (a failed call, a
 # subagent's, an unresolved session, a linked session directory) and AFTER the count and the echo: a slow lock can cost
 # the line, never the count the stop hook reads (plan panel 2026-10-16). Only where this hook may write. The trap
-# keeps the hook's exit status (`|| true`; `shell_log_append` always returns 0).
+# keeps the hook's exit status (`|| true`; `shell_log_append` always returns 0). The prefix the task gate puts in
+# front of a `tasks` call (`export PLAYBOOK_SESSION_ID=<this session>; `, task 118 — the host runs and reports the
+# command with it) is the plugin's, not the agent's: it is left out, and only when it names THIS session (measured
+# live, task 221 W5: `export PLAYBOOK_SESSION_ID=pid-3703202; .claude/bin/tasks work 1 && echo activated`).
 _pb_shell_log_on_exit() {
-    if [ "$AGENT_WRITABLE" = true ] && [ -n "$PB_CMD" ]; then
+    local cmd="$PB_CMD"
+    if [ "$AGENT_WRITABLE" = true ] && [ -n "$cmd" ]; then
+        if [ -n "${SESSION_ID:-}" ]; then
+            cmd="${cmd#"export PLAYBOOK_SESSION_ID=$SESSION_ID; "}"
+        fi
         case "$TOOL_NAME" in
-            Bash|Monitor) shell_log_append "$AGENT_DIR" "$PB_CMD" ;;
+            Bash|Monitor) shell_log_append "$AGENT_DIR" "$cmd" ;;
         esac
     fi
     return 0
