@@ -960,9 +960,10 @@ _LINE_BREAK_CHARS_RE = re.compile("[\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029]")
 
 
 def _one_line(text: str) -> str:
-    """`text` as one physical line for every reader: a line-break character is written as `[U+XXXX]`, so no older
-    reader that splits with `splitlines()` (1.6.3's audit rewrote task.md that way — task 214, R7) breaks a receipt
-    line in two, and no value — a sweep's output, or a name / why from the project's config — mints a line."""
+    """`text` as one physical line for every reader: a line-break character is written as `[U+hhhh]` (its code
+    point in hex), so no older reader that splits with `splitlines()` (1.6.3's audit rewrote task.md that way — task
+    214, R7) breaks a receipt line in two, and no value — a sweep's output, or a name / why from the project's
+    config — mints a line."""
     return _LINE_BREAK_CHARS_RE.sub(lambda m: f"[U+{ord(m.group()):04X}]", text)
 
 

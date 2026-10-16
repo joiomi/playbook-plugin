@@ -55,8 +55,9 @@ the real records before: every `tasks audit` stacked one more receipt into task.
   source line — became a real line break when a receipt was written into an existing section, so a second audit or a
   second close receipt could turn `…\x85## Status\x85done` into a live `## Status` / `done` that the status reader
   then read. The audit and close receipt writers no longer turn such a character into a line break (an audit receipt
-  writes it as `[U+XXXX]` — in a finding's output and in a sweep's name or `why` from the project's config, which could
-  mint a gate — so each receipt line stays one line for every reader, an older one too). Task 214 (the owner's ruling of 2026-10-15: a separate task right after) moved the other task.md writers
+  writes it as `[U+hhhh]`, its code point in hex — in a finding's output and in a sweep's name or `why` from the
+  project's config, which could mint a gate — so each receipt line stays one line for every reader, an older one
+  too). Task 214 (the owner's ruling of 2026-10-15: a separate task right after) moved the other task.md writers
   and readers the same way: the handoff and handoff-and-block writers (the handoff minted a live `## Status` from such
   a quote, and handoff-and-block refused the task as `done`), the gate check-off, the `## Risk` readers and the close's
   re-read (two headings read as `unclassified` and refused a valid close), the parked items, the standing gates (a
