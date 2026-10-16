@@ -31,14 +31,17 @@ the real records before: every `tasks audit` stacked one more receipt into task.
   receipts in both files and the next audit writes them once; each receipt now ends with a `run` line, so two audits
   in the same second stay two receipts. The new receipt goes right under the heading; every other line of the section
   — and of the log — stays, in its order: a receipt is only a `### <time> · PASS|FAIL · commit …` heading with the
-  body lines of its own shape under it (result lines, finding lines eight spaces in, the `run` line) up to a fence,
-  so a heading or a gate an agent adds in that section never moves, and a finding shaped like a gate stays in its
-  receipt (task 214). An unclosed fence inside
+  body lines of its own shape under it (result lines, finding lines eight spaces in right under a result with
+  findings, the `run` line) up to a fence or a line shaped like a gate, so a heading, a gate or a note an agent adds
+  in that section never moves (task 214). A sweep's output line shaped like a gate is written escaped (`\- [x] …`),
+  so it stays in its receipt; an older receipt holding such a line unescaped ends there and the rest of it stays in
+  task.md — none of the 792 receipts in the two projects' records holds one. An unclosed fence inside
   the section that would hide a later section is refused with both files unchanged, and `tasks audit` then exits
   non-zero; a log that cannot be read (a link, a FIFO, not UTF-8) or written leaves the older receipts in task.md and
   the command says so. A new `audit-log.md` is the task's own record to the panel tamper guard. Measured on copies of the real records: the move
-  removes a median 9.6 % of a task.md here (newest 60; 5.4 % over all 204) and 15.6 % in a second project (p90
-  17.1 % / 32.3 %); on all 209 records with a receipt, task.md kept exactly one and the log every one.
+  removes a median 9.9 % of a task.md here (newest 60; 5.4 % over all 205) and 15.6 % in a second project (p90
+  17.1 % / 32.3 %); on all 210 records with a receipt, task.md kept exactly one and the log every one (re-measured
+  on the code after task 214's receipt rules).
 - A new task.md carries no instruction paragraphs: one line at the top points to `tasks guide <type>`, and `## Risk`
   holds its value and one line pointing to what each value means (the guide, and CLAUDE.md's Correctness Contract).
   The text moved verbatim into one copy — new command **`tasks guide [<type>]`** — which `tasks new` prints for the
@@ -78,6 +81,10 @@ the real records before: every `tasks audit` stacked one more receipt into task.
   with `--force` — a regression of this task, never released); a heading needs a space, a tab or the line end after
   its `#`s (the judges' trim took `##` + U+0085 for a section and dropped the Work Plan's gates after it); and an
   eight-space line belongs to an audit receipt only under a finding.
+  Its third round found one more of mine: the codex hooks, now reading through the CLI's own reader, let a blocked
+  task's code edit through when that reader could not be imported (a broken install) — the codex edit hook now
+  refuses then and says why, while its Stop and echo stay open and print the error, as they are built to; and the
+  retro's task reader still split with `splitlines()`.
 
 ## [1.6.3] — 2026-10-15
 

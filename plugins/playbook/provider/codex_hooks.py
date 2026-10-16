@@ -474,31 +474,28 @@ def current_state_file(project_root: Path, session_id: str) -> Path:
 def _core():
     """`tasks.core`, found from this file's place (`provider/` or its mirror `scripts/lib/provider/`): the ONE reader of
     a task.md (task 214, impl round 2, U2 — a parser of its own here disagreed with core: a backtick info string was a
-    fence for it, a padded `done` was done, and the codex Stop / edit decisions failed open). None when it cannot be
-    imported; the callers then read no status and no gates (fail closed: no `done`)."""
+    fence for it, a padded `done` was done, and the codex Stop / edit decisions failed open). When it cannot be imported
+    the ImportError reaches the hook script (impl round 3, V9: returning None made a blocked task's code edit pass,
+    silently): the apply_patch PreToolUse denies through its fail-closed path and says why; the Stop and PostToolUse
+    paths stay fail-open, and loud, by their design."""
     import importlib
     import sys
     try:
         return importlib.import_module("tasks.core")
-    except Exception:  # noqa: BLE001 — not on sys.path yet
-        pass
+    except ImportError:
+        pass                                    # not on sys.path yet: the plugin root is found below
     for parent in Path(__file__).resolve().parents:
         if (parent / "tasks" / "core.py").is_file():
             if str(parent) not in sys.path:
                 sys.path.insert(0, str(parent))
-            try:
-                return importlib.import_module("tasks.core")
-            except Exception:  # noqa: BLE001 — an unimportable core reads nothing
-                return None
-    return None
+            return importlib.import_module("tasks.core")
+    raise ImportError(f"tasks.core not found above {Path(__file__).resolve().parent}")
 
 
 def _task_status(task_file: Path) -> str:
     """The task.md's ## Status value as `tasks.core._extract_status` reads it (the last live, fence-aware, status-
-    shaped pair; `unknown` without one); "" when unreadable or core cannot be imported."""
+    shaped pair; `unknown` without one); "" when unreadable. An unimportable core raises (`_core`)."""
     core = _core()
-    if core is None:
-        return ""
     try:
         return str(core._status_from_lines(core._physical_lines(core.read_task_text(task_file))) or "")
     except OSError:
@@ -691,13 +688,12 @@ def _find_task_file(project_root: Path, task_num: str) -> Path | None:
 
 def _scan_gates(task_file: Path) -> tuple[int, int, str | None]:
     """Return (done_count, total_count, first_unchecked_text) as `tasks.core._live_gate_state` counts them (task 214,
-    U2: a `splitlines()` scan of its own counted gates the hooks do not); (0, 0, None) when unreadable.
+    U2: a `splitlines()` scan of its own counted gates the hooks do not); (0, 0, None) when unreadable. An
+    unimportable core raises (`_core`).
 
     first_unchecked_text is None if all gates are done.
     """
     core = _core()
-    if core is None:
-        return 0, 0, None
     try:
         unchecked, total, first = core._live_gate_state(core._physical_lines(core.read_task_text(task_file)))
     except OSError:

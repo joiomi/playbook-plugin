@@ -481,6 +481,36 @@ class TheCliReadsLikeItsWriters(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout[-600:] + r.stderr[-600:])
         self.assertIn("1 open parked item(s)", r.stdout)
 
+    def test_freehand_log_finds_the_gate_on_a_physical_line(self):                  # impl round 3, V14 (N15)
+        """`freehand log` checks for its `- [ ] Freehand log` gate before the locked insert: both read untranslated,
+        so a quote `x\r- [ ] Freehand log` is no gate to either — it neither receives the messages nor stands in for
+        a real gate that is gone."""
+        from datetime import datetime, timezone
+        tf = self.make_task("")
+        self.assertEqual(self.run_cli("work", "1").returncode, 0)
+        self.assertEqual(self.run_cli("freehand").returncode, 0)
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        (self.proj / ".agent" / "chat_log.md").write_text(
+            f"# Project Chat Log\n\n---\n\n**[M001]** [{now}] `HOST` (claude/pid-214-cli)\n\nthe owner's words\n",
+            encoding="utf-8")
+        quote = "> q: x\r- [ ] Freehand log (a quote)\n"
+        text = raw(tf)
+        self.assertEqual(text.count("\n- [ ] Freehand log"), 1, text[-800:])
+        text = text + "\n## Notes\n" + quote
+        no_gate = text.replace("\n- [ ] Freehand log", "\n- [x] Freehand log", 1)
+        tf.write_text(no_gate, encoding="utf-8", newline="")
+        r = self.run_cli("freehand", "log")
+        self.assertNotEqual(r.returncode, 0, r.stdout[-300:])
+        self.assertIn("no '- [ ] Freehand log' gate found", r.stderr)
+        self.assertEqual(raw(tf), no_gate)
+        tf.write_text(text, encoding="utf-8", newline="")
+        r = self.run_cli("freehand", "log")
+        self.assertEqual(r.returncode, 0, r.stdout[-300:] + r.stderr[-300:])
+        after = raw(tf)
+        self.assertIn(quote, after)
+        self.assertGreater(after.index("the owner's words"), after.index("\n- [ ] Freehand log"))
+        self.assertLess(after.index("the owner's words"), after.index(quote))
+
     def test_freehand_on_a_task_with_a_lone_cr(self):
         tf = self.make_task(self.QUOTE)
         self.assertEqual(self.run_cli("work", "1").returncode, 0)
@@ -516,6 +546,22 @@ class TheReviewWriteBackAndTheFenceScanner(_Dir):
             with self.subTest(blank=repr(blank)):
                 flags = core._iter_fenced_flags(["para", blank, "    - [x] indented"], unclosed_is_live=False)
                 self.assertEqual(flags[2], True)
+
+
+class TheRetroReadsPhysicalLines(unittest.TestCase):
+    """Impl round 3, V12 (opus): `retro._parse_task` split task.md with `splitlines()` — a quote made it list an
+    in-progress task as a done loose end, and a parked bullet holding a separator became two retro gates."""
+
+    def test_its_task_parser(self):
+        from tasks import retro
+        for sep in SEPARATORS:
+            with self.subTest(sep=repr(sep)):
+                content = task(f"## Parked\n- one item{sep}- inside the same line\n\n"
+                               f"## Notes\n> q: x{sep}## Status{sep}done{sep}- [x] fake\n{sep}- [ ] at the start\n")
+                r = retro._parse_task(1, "demo", content)
+                self.assertEqual(r["status"], "in_progress")
+                self.assertEqual(r["parked_items"], [f"one item{sep}- inside the same line"])
+                self.assertEqual((r["checked_count"], r["gate_count"]), core._gate_counts(content))
 
 
 class ReviewEvidenceIsAPhysicalGate(_Dir):
@@ -593,6 +639,68 @@ class TheCodexHookReadsTheLiveStatus(_Dir):
         r = subprocess.run([sys.executable, "-I", "-c", code, str(_PLAYBOOK / "scripts" / "lib"), str(self.tf)],
                            capture_output=True, text=True, timeout=60)
         self.assertEqual(r.stdout.strip(), core._extract_status(self.tf), r.stderr)
+
+    BROKEN_CORE = ("import importlib.abc, runpy, sys\n"
+                   "class Broken(importlib.abc.MetaPathFinder):\n"
+                   "    def find_spec(self, name, path=None, target=None):\n"
+                   "        if name == 'tasks.core':\n"
+                   "            raise ImportError('simulated broken install')\n"
+                   "sys.meta_path.insert(0, Broken())\n"
+                   "script = sys.argv[1]; sys.argv = [script]\n"
+                   "runpy.run_path(script, run_name='__main__')\n")
+
+    def _blocked_project(self):
+        sid = "sess-214-v9"
+        pointer = self.d / ".agent" / "sessions" / sid / "current_state"
+        pointer.parent.mkdir(parents=True)
+        pointer.write_text("001\n", encoding="utf-8")
+        self.tf.write_text(task(status="blocked"), encoding="utf-8")
+        return sid
+
+    PATCH = "*** Begin Patch\n*** Update File: src/main.py\n@@\n-a\n+b\n*** End Patch\n"
+
+    def test_an_unimportable_core_holds_a_blocked_tasks_edit(self):               # impl round 3, V9 (GRAVE)
+        """`_core()` returned None when `tasks.core` could not be imported; the readers then read `""` / (0, 0), a
+        blocked task looked active, and its code edit was ALLOWED, silently. The import error now reaches the caller."""
+        import importlib
+        from unittest import mock
+        from provider import codex_hooks
+        sid = self._blocked_project()
+        patch = {"tool_input": {"command": self.PATCH}}
+        self.assertEqual(codex_hooks.apply_patch_pre_decision(patch, self.d, sid)["decision"], "block")   # control
+        real = importlib.import_module
+
+        def broken(name, *a, **k):
+            if name == "tasks.core":
+                raise ImportError("simulated broken install")
+            return real(name, *a, **k)
+        with mock.patch("importlib.import_module", broken):
+            for call in (lambda: codex_hooks.apply_patch_pre_decision(patch, self.d, sid),
+                         lambda: codex_hooks._task_status(self.tf), lambda: codex_hooks._scan_gates(self.tf)):
+                with self.assertRaises(ImportError):
+                    call()
+            # no plugin root above the module either (a copy of the hook module alone): an ImportError, not None
+            with mock.patch.object(codex_hooks, "__file__", str(self.d / "alone" / "codex_hooks.py")):
+                with self.assertRaises(ImportError):
+                    codex_hooks._core()
+
+    def test_the_apply_patch_hook_denies_when_core_cannot_be_imported(self):     # impl round 3, V9 — end to end
+        import json
+        import os
+        import subprocess
+        sid = self._blocked_project()
+        payload = {"hook_event_name": "PreToolUse", "tool_name": "apply_patch", "tool_input": {"command": self.PATCH}}
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("PLAYBOOK_", "CLAUDE", "CODEX"))}
+        env.update({"PLAYBOOK_PROJECT_ROOT": str(self.d), "PLAYBOOK_SESSION_ID": sid, "PYTHONDONTWRITEBYTECODE": "1"})
+        hook = str(_PLAYBOOK / "scripts" / "codex-apply-patch-hook")
+        clean = subprocess.run([sys.executable, "-E", "-s", hook], input=json.dumps(payload), text=True,
+                               capture_output=True, env=env, cwd=self.d, timeout=60)
+        self.assertEqual(clean.returncode, 2, clean.stderr)                                    # control: blocked task
+        self.assertIn("is blocked", clean.stderr)
+        r = subprocess.run([sys.executable, "-E", "-s", "-c", self.BROKEN_CORE, hook], input=json.dumps(payload),
+                           text=True, capture_output=True, env=env, cwd=self.d, timeout=60)
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("simulated broken install", r.stderr)
 
     def test_crlf_status_still_read(self):
         from provider import codex_hooks

@@ -52,8 +52,10 @@ def extract_tasks(tasks_dir: Path, since: int = 0) -> list[dict]:
 
 
 def _parse_task(num: int, slug: str, content: str) -> dict:
-    """Parse a task.md file into structured data."""
-    lines = content.splitlines()
+    """Parse a task.md file into structured data — on physical lines, as every task.md reader (task 214, impl round 3,
+    V12: `splitlines()` broke a line at U+0085 / U+2028 / a lone CR, so a quote read as a live `## Status`)."""
+    from tasks.core import _physical_lines
+    lines = _physical_lines(content.replace("\r\n", "\n"))
 
     # Extract sections
     intent = _extract_section(lines, "Intent")
@@ -63,7 +65,7 @@ def _parse_task(num: int, slug: str, content: str) -> dict:
 
     # Gate analysis. Capture line index + indent so the bare-checkmark heuristic
     # can inspect continuation lines beneath a gate (task 018 / bug report #5a).
-    gate_pattern = re.compile(r'^(\s*)- \[( |x|X)\]\s*(.*)')
+    gate_pattern = re.compile(r'^([ \t]*)- \[( |x|X)\]\s*(.*)')      # core's gate: spaces / tabs before the box
     gates = []
     for idx, line in enumerate(lines):
         m = gate_pattern.match(line)
@@ -102,7 +104,7 @@ def _parse_task(num: int, slug: str, content: str) -> dict:
     # Parked items
     parked_items = []
     if parked and parked.strip() not in ("", "(Findings or ideas that emerged during work but are out of scope. Describe each with enough context for a future task to pick it up.)"):
-        for line in parked.splitlines():
+        for line in _physical_lines(parked):
             stripped = line.strip()
             if stripped.startswith("- "):
                 parked_items.append(stripped[2:])
