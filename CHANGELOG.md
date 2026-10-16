@@ -226,27 +226,33 @@ stop and every duration left none.
 ("Titlu de o propoziție"). Measured before: the feature template's longest gate title was 612 characters and 7 of its
 25 were over the 200 characters the gate echo shows, so the echo cut the gate in half (B1: in 52 % of gate echoes in
 this workspace, 77 % in a second project).
-- Every gate of every built-in template (the full types, light, quick), the retro scaffold's fixed gates and the
+- Every gate of every built-in template (the full types, light, quick), the retro scaffold's own gates and the
   `tasks freehand` gates is one sentence of at most 120 characters — the length a trimmed gate keeps for a judge
-  (`core.TRIM_TITLE_MAX`); the longest now 114. 27 template titles changed; a new feature task.md is 3,214 characters
-  (5,668 before), a bugfix one 2,085 (3,066).
+  (`core.TRIM_TITLE_MAX`); the longest is now 114 in a template render (112 in the feature one) and 118 among the
+  freehand gates. Outside the rule: the retro's data gates (a task's title and intent, a parked item's text) and a
+  project's own `standing_gates`. 27 template titles changed; a new feature task.md is 3,214 characters (5,668
+  before), a bugfix one 2,085 (3,066).
 - What a long title used to say is not lost: `tasks guide <type>` (printed by `tasks new`) has a section "Gates —
   what each short title asks" with each such title and, under it, its old text verbatim — 14 template entries (the
   plan and impl lenses, the single-judge fallbacks and the triage rules among them), 2 for the retro
   (`tasks guide retro`, which `tasks retro` now prints, as its record's pointer always said) and 2 for the freehand
-  gates (`tasks guide freehand`); 13 titles were only two short sentences made one and have none. The guide `tasks
+  gates (`tasks guide freehand`, which `tasks freehand` now prints — a freehand block has no pointer); 13 titles were only two short sentences made one and have none. The guide `tasks
   new feature` prints grew from 3,656 to 8,546 characters; it is printed once a task.
 - What a gate means to the CLI is unchanged: a checked plan or impl panel gate is review evidence exactly as before
   (both name `panel-review`, the impl one with `--mode impl`); the debrief still starts `Freehand —`, the freehand
   cleanup gate `Freehand log —` with its command; the rename gate keeps `tasks adopt`. The two panel gates now say to
   launch the panel in the background (only a dead copy of the template said it).
 - The judges' trim takes a gate for a template gate only when its text stops at the template's title or goes on with
-  a note (`— …`, `: …`, `(…)`): with short titles, an agent's own gate such as `Do the work in lifecycle.py …` used to
-  be cut to the template's `Do the work`.
+  a note — `: …`, or a dash, a bracket or a colon after a space; after a title that ends a sentence, any space: with
+  short titles, an agent's own gate such as `Do the work in lifecycle.py …`, `Do the work, then …` or `Do the
+  work-around …` used to be cut to the template's `Do the work`.
 - The two `base-template.md` copies (`scripts/`, `skills/tasks/`) — read by no code, already stale — are removed, and
   `docs/cli.md` / `docs/architecture.md` no longer say `tasks new` copies a template from `skills/tasks/`.
-- A task.md written before keeps its long titles; the trim now reads them like any long title an agent wrote (the
-  first 120 characters), where it used to keep a template title whole (the owner's rule: design for new projects).
+- A task.md written before keeps its long titles, and the trim now reads them like any long title an agent wrote:
+  their first 120 characters, then — where a note is cut — more of the old template text where the start of the
+  agent's note used to be shown (an old title was cut to its first 120 characters and the note read from its end).
+  The record itself is unchanged; this is what a judge reads of a trimmed older record (the owner's rule: design for
+  new projects).
 
 ## [1.6.3] — 2026-10-15
 

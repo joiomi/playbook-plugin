@@ -1085,7 +1085,8 @@ _TRIM_HEADING_RE = re.compile(r'^#{1,2}(?:[ \t]|\r?\n)')
 _TRIM_GATE_RE = re.compile(r'^([ \t]*)- \[[ xX]\] ?')
 # Shrinking the kept sections when they alone do not fit (impl round 1 of task 212, R3-R6), each step the LEAST
 # cut that fits (a search, not a fixed ladder — a ladder jumped from "uncut" to 2,000 characters a section and left
-# half the room empty): gate notes first, down to the gate's title alone; then the prose of the kept sections that
+# half the room empty): gate notes first, down to the gate's title alone (a template gate's title with its note — an
+# agent's own gate keeps its first 120 characters, task 223); then the prose of the kept sections that
 # are neither pinned nor the owner's rulings; then pinned sections; then the rulings (their newest kept); then every
 # line that is neither a heading nor a gate. A review section's prose keeps its newest end. Never a gate line dropped.
 _TRIM_REVIEW_HEADING = re.compile(r'^(plan review|implementation review|review)\b', re.IGNORECASE)
@@ -1115,15 +1116,24 @@ def _template_gate_titles() -> "tuple[str, ...]":
     return _TEMPLATE_GATE_TITLES
 
 
+# Where a gate's note starts after a template title (task 223, impl round 1): `: …`, or white space then a dash, a
+# bracket or a colon (`— 02:06 …`, `- …`, `(…)`, `[…]`); after a title that ends a sentence, any white space.
+_NOTE_START_RE = re.compile(r"(?::\s|\s+(?:[\u2014\u2013:(\[]|-\s))")
+_NOTE_AFTER_END_RE = re.compile(r"\s")
+
+
 def _template_title_of(body: str) -> "str | None":
-    """The template gate title `body` is, or begins with before its note: the body ends there, or goes on with
-    something that is not a letter or a digit (`— note`, `: note`, `(…)`). Task 223 (plan panel P7): with short
-    titles a bare `startswith` took an agent's own gate (`Do the work in lifecycle.py …`) for the template's
-    `Do the work`, and the trim kept only those words of it."""
+    """The template gate title `body` is, or begins with before its note: the body ends there, or goes on with a
+    note start (`_NOTE_START_RE`), or — the title ending with `.`, `?`, `!` or `)` — with white space. Task 223 (plan
+    panel P7): with short titles a bare `startswith` took an agent's own gate (`Do the work in lifecycle.py …`) for
+    the template's `Do the work`, and the trim kept only those words of it; impl round 1 (agy, opus): a comma or a
+    hyphen glued to the title (`Do the work, then …`, `Do the work-around …`) is the agent's own title too, and a
+    template question answered in plain words (`… for this task? None.`) is the template's."""
     for t in _template_gate_titles():
         if body.startswith(t):
-            rest = body[len(t):].lstrip()
-            if not rest or not rest[0].isalnum():
+            rest = body[len(t):]
+            if (not rest.strip() or _NOTE_START_RE.match(rest)
+                    or (t[-1:] in ".?!)" and _NOTE_AFTER_END_RE.match(rest))):
                 return t
     return None
 
@@ -1251,8 +1261,10 @@ def _trim_notes(lines: "list[tuple[int, str]]", keep_chars: int, cut: "set[int]"
         tlen = len(title) if title else min(len(body), TRIM_TITLE_MAX)
         if len(full) <= tlen + keep_chars + 40 and tlen <= TRIM_TITLE_MAX:
             continue
-        # the title is kept up to 120 characters — a template gate's too (impl round 2, S1: the template's longest
-        # titles run to 612 characters and crowded the agent's notes out: "șablonul pleacă") — then the note's start
+        # the title is kept up to 120 characters, then the note's start (task 212's impl round 2, S1: the template's
+        # titles ran to 612 characters and crowded the agent's notes out: "șablonul pleacă"). Since task 223 no built-in
+        # title is longer than TRIM_TITLE_MAX (a test holds them to it); the ellipsis arm stays as the guard for one
+        # that is
         shown = full[:tlen] if tlen <= TRIM_TITLE_MAX else full[:TRIM_TITLE_MAX].rstrip() + " …"
         cut.add(no)
         out[a:b] = [(no, f"{first[:m.end()]}{shown}{full[tlen:tlen + keep_chars].rstrip()}"

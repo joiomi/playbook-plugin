@@ -23,7 +23,10 @@ def header(num: int, title: str) -> str:
 def pointer(task_type: "str | None" = None) -> str:
     """The one line a task.md keeps of the instructions: where the single copy is (task 213, the owner's
     "Scris o dată, nu în fiecare fișă")."""
-    return (f"> How to fill this in — gate discipline, what each `## Risk` value means, what each gate asks: "
+    # task 223 (impl round 1, agy): "what each gate asks" only where the guide has a Gates section — quick has none
+    # (named, not computed: the notes are read off a render, which carries this pointer; a test ties the two)
+    asks = "" if task_type == "quick" else ", what each gate asks"
+    return (f"> How to fill this in — gate discipline, what each `## Risk` value means{asks}: "
             f"`.claude/bin/tasks guide {task_type or 'feature'}` (printed when the task was created).")
 
 

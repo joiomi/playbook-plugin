@@ -195,10 +195,14 @@ class TheFreehandGates(unittest.TestCase):
         return out
 
     def test_both_paths_write_short_gates_and_the_log_finds_its_gate(self):
-        self.cli("freehand")                                   # no active task: a freehand task of its own
+        made = self.cli("freehand")                            # no active task: a freehand task of its own
         self.cli("new", "light", "probe")
         self.cli("work", "2", "--force")                       # task 1 keeps its open freehand gates
-        self.cli("freehand")                                   # the block inserted into task 2
+        inserted = self.cli("freehand")                        # the block inserted into task 2
+        # a freehand block has no pointer: both paths print the guide its gates' explanations are in (impl round 1)
+        for r in (made, inserted):
+            self.assertIn("=== TASK GUIDE (again: tasks guide freehand) ===\n" + template.guide_text("freehand"),
+                          r.stdout)
         written = self.freehand_gates()
         self.assertEqual(len(written), 8, written)
         for title in written:
@@ -277,6 +281,13 @@ class TheGuideHoldsWhatTheTitlesSaid(unittest.TestCase):
         for ln in retro_text(parked=True).split("\n"):
             with self.subTest(line=ln[:60]):
                 self.assertFalse(ln.strip() and ln in guide and ln.startswith(">") and "tasks guide" not in ln, ln)
+
+    def test_the_pointer_promises_gate_notes_only_where_the_guide_has_them(self):
+        """Impl round 1 (agy): quick's guide has no Gates section, so its pointer does not name one."""
+        for ty in [*TYPES, "retro"]:
+            with self.subTest(type=ty):
+                self.assertEqual("what each gate asks" in template.pointer(ty),
+                                 bool(template.gate_notes_text(ty or "feature")))
 
     def test_each_note_belongs_to_a_rendered_gate(self):
         rendered = {t for ty in TYPES for t in gates(template.render_template(1, "X", ty))}
@@ -358,6 +369,27 @@ class TheTrimReadsTheNewTitles(unittest.TestCase):
         own = ("Do the work in lifecycle.py and prove the freehand log still inserts under the new gate, then "
                "measure it")
         self.assertIn(own[:TRIM_TITLE_MAX], self._trim(f"{own} — note " + "n" * 300))
+
+    def test_where_a_note_starts(self):
+        """Impl round 1 (agy, opus, sonnet): the rest is a note only at a note start — or after the title's own end
+        mark; a word glued to the title, a comma or a hyphenated continuation is the agent's own title."""
+        q = "What is OUT of scope for this task?"
+        cases = [
+            (f"{q} None, the map stays as it is.", q),               # a question answered in plain words
+            ("Do the work — 02:06: built it", "Do the work"),
+            ("Do the work: built it", "Do the work"),
+            ("Do the work - built it", "Do the work"),
+            ("Do the work (part 2)", "Do the work"),
+            ("Do the work [see W4]", "Do the work"),
+            ("Do the work", "Do the work"),
+            ("Do the work-around for issue 42 in lifecycle.py", None),
+            ("Do the work, then measure the echo in the second project", None),
+            ("Do the work in lifecycle.py and prove it", None),
+            ("Do the workflow review", None),
+        ]
+        for body, want in cases:
+            with self.subTest(body=body):
+                self.assertEqual(core._template_title_of(body), want)
 
     def test_a_template_title_with_its_note_keeps_the_title_whole(self):
         out = self._trim("Do the work — 02:06: " + "n" * 300)

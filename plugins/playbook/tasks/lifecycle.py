@@ -2358,4 +2358,7 @@ def cmd_freehand(cmd_args):
                   file=sys.stderr)
             sys.exit(1)
         print(f"Freehand block inserted in task {task_num}")
+    # task 223 (impl round 1): a freehand block carries no pointer, so the guide its gates' explanations live in is
+    # printed here, on both paths
+    _print_guide("freehand")
     print(f"Freehand mode active. Agent: wait for user instructions. Close only when user says done.")
