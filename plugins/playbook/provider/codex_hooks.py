@@ -471,39 +471,38 @@ def current_state_file(project_root: Path, session_id: str) -> Path:
     return resolve_agent_dir(project_root) / "sessions" / session_id / "current_state"
 
 
-_STATUS_HEAD_RE = re.compile(r"^ {0,3}##[ \t]+Status[ \t]*$")
-_FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+def _core():
+    """`tasks.core`, found from this file's place (`provider/` or its mirror `scripts/lib/provider/`): the ONE reader of
+    a task.md (task 214, impl round 2, U2 — a parser of its own here disagreed with core: a backtick info string was a
+    fence for it, a padded `done` was done, and the codex Stop / edit decisions failed open). None when it cannot be
+    imported; the callers then read no status and no gates (fail closed: no `done`)."""
+    import importlib
+    import sys
+    try:
+        return importlib.import_module("tasks.core")
+    except Exception:  # noqa: BLE001 — not on sys.path yet
+        pass
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "tasks" / "core.py").is_file():
+            if str(parent) not in sys.path:
+                sys.path.insert(0, str(parent))
+            try:
+                return importlib.import_module("tasks.core")
+            except Exception:  # noqa: BLE001 — an unimportable core reads nothing
+                return None
+    return None
 
 
 def _task_status(task_file: Path) -> str:
-    """The task.md's ## Status value (last one wins, matching tasks.core
-    `_extract_status`); "" when unreadable or absent.
-
-    Task 214 (impl round 1, T2): read as the hooks' grep and `core._physical_lines` read it — the file without
-    newline translation (a lone CR is not a line break), split on "\n" only (`splitlines()` broke at U+0085 too),
-    a heading indented at most 3 spaces (an 8-space audit finding is not one) and outside a code fence: a quote
-    `x\x85## Status\x85done`, an indented pair or a fenced example used to read as `done`, and the Stop decision
-    then skipped the gate check. An unclosed fence hides what follows (fail closed: no `done` read from it)."""
+    """The task.md's ## Status value as `tasks.core._extract_status` reads it (the last live, fence-aware, status-
+    shaped pair; `unknown` without one); "" when unreadable or core cannot be imported."""
+    core = _core()
+    if core is None:
+        return ""
     try:
-        with open(task_file, encoding="utf-8", errors="replace", newline="") as fh:
-            lines = fh.read().split("\n")
+        return str(core._status_from_lines(core._physical_lines(core.read_task_text(task_file))) or "")
     except OSError:
         return ""
-    status = ""
-    fence = ""
-    for i, raw in enumerate(lines):
-        line = raw.rstrip("\r")
-        m = _FENCE_RE.match(line)
-        if fence:
-            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and not line.strip(" \t").strip(fence[0]):
-                fence = ""
-            continue
-        if m:
-            fence = m.group(1)
-            continue
-        if _STATUS_HEAD_RE.match(line) and i + 1 < len(lines):
-            status = lines[i + 1].rstrip("\r").strip(" \t")
-    return status
 
 
 def _task_status_is_done(task_file: Path) -> bool:
@@ -653,7 +652,6 @@ def apply_patch_pre_decision(
     }
 
 
-_GATE_LINE_RE = re.compile(r"^[ \t]*- \[( |x|X)\]\s*(.*)$")
 
 # Freehand-mode trigger. Matches gate text starting with "Freehand" — covers
 # bare "Freehand", "Freehand — work is done", "Freehand debrief — ...", and
@@ -692,29 +690,19 @@ def _find_task_file(project_root: Path, task_num: str) -> Path | None:
 
 
 def _scan_gates(task_file: Path) -> tuple[int, int, str | None]:
-    """Return (done_count, total_count, first_unchecked_text).
+    """Return (done_count, total_count, first_unchecked_text) as `tasks.core._live_gate_state` counts them (task 214,
+    U2: a `splitlines()` scan of its own counted gates the hooks do not); (0, 0, None) when unreadable.
 
     first_unchecked_text is None if all gates are done.
     """
+    core = _core()
+    if core is None:
+        return 0, 0, None
     try:
-        lines = task_file.read_text(encoding="utf-8", errors="replace").splitlines()
+        unchecked, total, first = core._live_gate_state(core._physical_lines(core.read_task_text(task_file)))
     except OSError:
         return 0, 0, None
-
-    total = 0
-    done = 0
-    first_unchecked: str | None = None
-    for line in lines:
-        m = _GATE_LINE_RE.match(line)
-        if not m:
-            continue
-        total += 1
-        marker = m.group(1)
-        if marker.lower() == "x":
-            done += 1
-        elif first_unchecked is None:
-            first_unchecked = m.group(2).strip()
-    return done, total, first_unchecked
+    return total - unchecked, total, (first or None)
 
 
 def _format_gate_echo(task_num: str, done: int, total: int, gate_text: str | None) -> str:

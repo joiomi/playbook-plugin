@@ -67,6 +67,14 @@ A batch attests ALREADY-DONE work; two back-to-back batch writes look like
 end-of-task ticking. Do the next piece of work, then close its gates."""
 
 
+def _read_untranslated(path) -> str:
+    """The file as the gate counters read it (task 214, U4): no newline translation — a lone CR stays inside its line;
+    CRLF read as LF. `Path.read_text`'s translation made a CR-delimited quote's checked boxes look like existing gates,
+    so a Write of real ones passed as unchanged."""
+    with open(path, encoding="utf-8", errors="replace", newline="") as fh:
+        return fh.read().replace("\r\n", "\n")
+
+
 def open_gate_originals(old: str) -> "list[str]":
     """The open gates' texts in `old` — the born-checked hint's candidates — on physical lines (task 214)."""
     return [m.group(2).rstrip("\r") for line in old.split("\n")          # a CRLF line's `\r` is not text (T7)
@@ -190,7 +198,7 @@ def main() -> int:
         new = str(ti.get("content", ""))
         replace_all = False
         try:
-            old = Path(file_path).read_text(encoding="utf-8", errors="replace")
+            old = _read_untranslated(file_path)
         except OSError:
             old = ""
     elif tool == "MultiEdit":
@@ -203,7 +211,7 @@ def main() -> int:
         # errors never block an edit.
         replace_all = False
         try:
-            old = Path(file_path).read_text(encoding="utf-8", errors="replace")
+            old = _read_untranslated(file_path)
         except OSError:
             old = ""
         new = old
@@ -225,8 +233,7 @@ def main() -> int:
     occurrences = 1
     if replace_all and newly:
         try:
-            occurrences = max(Path(file_path).read_text(
-                encoding="utf-8", errors="replace").count(str(ti.get("old_string", ""))), 1)
+            occurrences = max(_read_untranslated(file_path).count(str(ti.get("old_string", ""))), 1)
         except OSError:
             occurrences = 1
 

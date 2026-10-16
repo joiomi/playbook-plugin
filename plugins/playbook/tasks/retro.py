@@ -294,7 +294,8 @@ def retro_start_time(task_file: Path, num: int, bash_history_path: Path | None) 
     is no boundary — it can come long after the retro's opening discussion — and the
     attribution windows' first start is year 0000 (post-D6 run 1)."""
     try:
-        m = _GENERATED_RE.search(task_file.read_text(encoding="utf-8", errors="replace"))
+        from tasks.core import read_task_text
+        m = _GENERATED_RE.search(read_task_text(task_file))
     except OSError:
         m = None
     if m:

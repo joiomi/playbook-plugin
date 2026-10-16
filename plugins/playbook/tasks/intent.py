@@ -144,7 +144,8 @@ def collect_taskmd(task_dir: Path) -> Slice:
     task_file = task_dir / "task.md"
     if not task_file.exists():
         return Slice("taskmd", "", False, f"no task.md in {task_dir.name}")
-    return Slice("taskmd", _trim(task_file.read_text(encoding="utf-8", errors="replace")),
+    from tasks.core import read_task_text
+    return Slice("taskmd", _trim(read_task_text(task_file)),
                  True, f"{task_dir.name}/task.md")
 
 

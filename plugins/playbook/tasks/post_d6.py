@@ -119,7 +119,8 @@ def extract_rejected_findings(task_dir: Path) -> "list[str]":
 def settled_block(task_file: Path, cap: int = SETTLED_CAP) -> str:
     """The `=== SETTLED ===` context part, or "" when nothing is settled."""
     try:
-        text = Path(task_file).read_text(encoding="utf-8", errors="replace")
+        from tasks.core import read_task_text
+        text = read_task_text(Path(task_file))       # task 214 (U5): a lone CR stays inside its line
     except OSError:
         text = ""
     rulings = extract_owner_rulings(text)

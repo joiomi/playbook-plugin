@@ -23,7 +23,7 @@ from pathlib import Path
 from tasks.atomic import atomic_write
 from tasks.core import (
     PLAYBOOKS, _atomic_write, _find_playbook_skill, _rewrite, create_task,
-    require_session_id, resolve_agent_dir,
+    read_task_text, require_session_id, resolve_agent_dir,
 )
 from tasks.shared import _merge_verify_module, find_project_root
 
@@ -269,7 +269,7 @@ def _gate_bounce(task_id: str, task_file, action: str) -> bool:
     # open gate: - **Ceva**, în scratch:"). Unreadable or unscannable → an unknown count, and refuse.
     try:
         open_count = _live_gate_scan(_physical_lines(
-            task_file.read_text(encoding="utf-8", errors="replace")))[0]
+            read_task_text(task_file)))[0]
     except Exception:
         open_count = None
     if open_count == 0:
@@ -491,7 +491,7 @@ def cmd_work(cmd_args):
                 # Physical `\n` lines — the SAME line model the writer (`_set_status`)
                 # uses, so the preflight cannot pass a `prose\x85## Status\x85pending`
                 # line the writer then refuses (task 055, round-3 panel).
-                _st_lines = _physical_lines(task_file.read_text(encoding="utf-8", errors="replace"))
+                _st_lines = _physical_lines(read_task_text(task_file))
             except OSError:
                 _st_lines = []
             # Task 058: remember the status this close was AUTHORISED on, so the
@@ -501,7 +501,7 @@ def cmd_work(cmd_args):
             from tasks.core import blocked_digest as _bd058
             from tasks.core import judge_digest as _jd058
             try:
-                _entry_text = task_file.read_text(encoding="utf-8", errors="replace")
+                _entry_text = read_task_text(task_file)
                 _status_at_entry = _es058(task_file)
                 _blocked_at_entry = _bd058(_entry_text)
                 _chk, _tot = _gc058(_entry_text)
@@ -536,7 +536,7 @@ def cmd_work(cmd_args):
                 if not force:
                     from tasks.core import _gate_counts
                     try:
-                        _chk, _tot = _gate_counts(task_file.read_text(encoding="utf-8", errors="replace"))
+                        _chk, _tot = _gate_counts(read_task_text(task_file))
                     except OSError:
                         _chk, _tot = 0, 0
                     if _tot and _chk < _tot:
@@ -1403,7 +1403,7 @@ def cmd_work(cmd_args):
             from tasks.core import existing_task_numbers, open_parked_items, retro_proposal
             try:
                 # dangling promotions count here too (PLAN S4, impl panel r1)
-                _still_open = open_parked_items(task_file.read_text(encoding="utf-8", errors="replace"),
+                _still_open = open_parked_items(read_task_text(task_file),
                                                 existing_task_numbers(Path(project_path)))
             except OSError:
                 _still_open = []
@@ -1623,7 +1623,7 @@ def cmd_work(cmd_args):
         # pointer and no status change behind, and the claim below moves the expanded
         # template's `pending` to `in_progress`.
         # Expand stubs on activation
-        task_content = task_file.read_text(encoding="utf-8", errors="replace")
+        task_content = read_task_text(task_file)
         import re as _stub_re
         # F7: custom playbook type names carry hyphens (`sp-eval`, the flagship
         # example in playbooks-README) — `\w+` can't match `stub:sp-eval` so the
@@ -1765,7 +1765,7 @@ def cmd_work(cmd_args):
         print(f"Captured {len(recent_chat)} recent chat message(s) into References.")
 
     # Print the full task file
-    print(task_file.read_text(encoding="utf-8", errors="replace").rstrip())
+    print(read_task_text(task_file).rstrip())
 
     # F21 (batch-6 finding): the parked lifecycle taught its markers only
     # at CLOSE (own-task items). The consumption moment — a new task picks
@@ -1780,7 +1780,7 @@ def cmd_work(cmd_args):
         for _tf in sorted((agent_dir / "tasks").glob("*/task.md")):
             if _tf == task_file:
                 continue
-            _parked_elsewhere += len(_opi(_tf.read_text(encoding="utf-8", errors="replace"), _existing))
+            _parked_elsewhere += len(_opi(read_task_text(_tf), _existing))
     except OSError:
         pass
     if _parked_elsewhere:
@@ -1988,7 +1988,7 @@ def cmd_handoff(cmd_args):
     # `## Handoff` write so a refusal leaves task.md byte-identical.
     try:
         from tasks.core import _physical_lines as _plines   # same line model as set_task_blocked
-        _hl = _plines(task_file.read_text(encoding="utf-8", errors="replace"))
+        _hl = _plines(read_task_text(task_file))
     except OSError:
         _hl = []
     if _live_status_index(_hl) is None:
@@ -2128,7 +2128,7 @@ def cmd_freehand(cmd_args):
             print(f"Error: task {task_num} not found", file=sys.stderr)
             sys.exit(1)
         task_file = matches[0]
-        task_text = task_file.read_text(encoding="utf-8", errors="replace")
+        task_text = read_task_text(task_file)
 
         # Find the freehand-start marker
         import re
@@ -2260,7 +2260,7 @@ def cmd_freehand(cmd_args):
         task_file = matches[0]
 
         from datetime import datetime, timezone
-        task_text = task_file.read_text(encoding="utf-8", errors="replace")
+        task_text = read_task_text(task_file)
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         freehand_block = (

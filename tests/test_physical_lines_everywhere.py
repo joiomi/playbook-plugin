@@ -185,12 +185,45 @@ class TheBatchGuardCountsPhysicalLines(unittest.TestCase):
                 self.assertEqual(self.gb.open_gate_originals(f"- [ ] real{sep}- [ ] decoy\n- [ ] two\n"),
                                  [f"real{sep}- [ ] decoy", "two"])
 
+    def test_a_write_cannot_launder_gates_through_a_lone_cr_quote(self):          # impl round 2, U4
+        import json
+        import subprocess
+        d = Path(tempfile.mkdtemp(prefix="pb214gb-"))
+        self.addCleanup(shutil.rmtree, d, True)
+        tf = d / ".agent" / "tasks" / "001-t" / "task.md"
+        tf.parent.mkdir(parents=True)
+        names = "ABCDEF"
+        quote = "> q: x" + "".join(f"\r- [x] {n} done" for n in names) + "\n"
+        tf.write_text(task("## Notes\n" + quote), encoding="utf-8", newline="")
+        new = task("## Notes\n" + quote + "".join(f"- [x] {n} done\n" for n in names))
+        payload = {"tool_name": "Write", "tool_input": {"file_path": str(tf), "content": new}}
+        r = subprocess.run([sys.executable, str(_PLAYBOOK / "scripts" / "gate-batch-check.py"), "--tool", "Write",
+                            "--file", str(tf), "--session-dir", str(d / "nope")],
+                           input=json.dumps(payload).encode(), capture_output=True, timeout=60)
+        self.assertEqual(r.returncode, 2, r.stdout.decode(errors="replace")[:400])
+
     def test_gate_bodies_split_on_newlines_only(self):
         for sep in SEPARATORS:
             with self.subTest(sep=repr(sep)):
                 checked, unchecked = self.gb.gate_bodies(f"- [ ] real{sep}- [x] fake\n- [x] done\n")
                 self.assertEqual(checked, ["done"])
                 self.assertEqual(len(unchecked), 1)
+
+
+class ASeparatorOnlyLineIsNotBlank(_Dir):
+    """Impl round 2, U1 (grok Critical): `str.strip()` made a separator-only line blank, so `## Status` / `\x85` /
+    `done` read as `done` in the core status reader — the stop hook then skipped the gate check."""
+
+    def test_the_status_reader(self):
+        for sep in SEPARATORS[:-1]:                      # not the lone CR: `\r\n` is a CRLF blank line
+            with self.subTest(sep=repr(sep)):
+                self.tf.write_text(f"# 001 - D\n\n## Status\n{sep}\ndone\n\n## Work Plan\n- [ ] W1\n",
+                                   encoding="utf-8", newline="")
+                self.assertNotEqual(core._extract_status(self.tf), "done")
+
+    def test_a_real_blank_line_is_still_skipped(self):
+        self.tf.write_text("# 001 - D\n\n## Status\n \t\nin_progress\n\n## Work Plan\n- [ ] W1\n", encoding="utf-8")
+        self.assertEqual(core._extract_status(self.tf), "in_progress")
 
 
 class CrlfFilesReadAndWriteAsBefore(_Dir):
@@ -267,6 +300,24 @@ class TheOtherReadersAndCompact(_Dir):
                 sections = core.split_md_sections(f"## Notes\nsee x{sep}## Fake\nmore\n")
                 self.assertEqual([h for h, _ in sections], ["Notes"])
 
+    def test_a_heading_needs_a_space_or_a_tab(self):
+        """Impl round 2, U6 (grok): `^#{1,2}\\s` took `##\\x85Phantom` at the start of a line for a section — `\\s` is
+        every Unicode space and the lone CR; an ATX heading's `#`s are followed by a space, a tab or the line end."""
+        for sep in SEPARATORS:
+            with self.subTest(sep=repr(sep)):
+                self.assertEqual([h for h, _ in core.split_md_sections(f"## Notes\nx\n##{sep}Fake\nmore\n")], ["Notes"])
+                gates = "".join(f"- [x] G{i} step {i} — {'n' * 1500}\n" + (f"##{sep}Phantom\n" if i == 3 else "")
+                                for i in range(1, 7))
+                text = (f"# 007 - T\n\n## Status\nin_progress\n\n## Risk\nreversible\n\n## Intent\ndo it\n\n"
+                        f"## Work Plan\n{gates}\n## Notes\n{'n' * 30_000}\n")
+                out, _receipt = core.select_task_context(text, 6_000)
+                for i in range(1, 7):
+                    self.assertIn(f"- [x] G{i} step {i}", out)
+        # the headings that are headings (pins): a space, a tab, an empty `##` before the line end, CRLF
+        for head in ("## Notes\n", "##\tNotes\n", "##\n", "## Notes\r\n", "##\r\n"):
+            with self.subTest(head=repr(head)):
+                self.assertEqual(len(core.split_md_sections(f"intro\n{head}")), 2)
+
     def test_the_drift_sweep_sees_every_recorded_command(self):
         from tasks import audit
         for sep in SEPARATORS:
@@ -336,6 +387,136 @@ class ALoneCarriageReturnIsNotALineBreak(_Dir):
             raw = fh.read()
         self.assertNotIn("\r", raw)
 
+    def test_the_merge_renumber_keeps_it_inside_its_line(self):
+        """L5: `prepare-merge` rewrites every task.md that names a renumbered task; it read through `read_text()`."""
+        from tasks import merge_prep
+        self.tf.write_text(task("## Notes\nsee task 133\n" + self.QUOTE), encoding="utf-8", newline="")
+        merge_prep._rewrite_task_refs(self.d, self.d / ".agent", {133: 135})
+        text = raw(self.tf)
+        self.assertIn("see task 135", text)
+        self.assertIn("> q: x\r## Status\rdone\r- [ ] fake gate", text)
+        self.assertEqual(core._extract_status(self.tf), "in_progress")
+
+
+class TheCliReadsLikeItsWriters(unittest.TestCase):
+    """Impl round 2, U5 (opus, sonnet, codex, grok): K4 left the close, the SETTLED block, the judges' payloads, the
+    review write-back, freehand and the stub expansion reading task.md WITH newline translation, against the
+    untranslated `atomic.rewrite` — a finished task with a lone CR in a quote could not close, even with `--force`."""
+
+    QUOTE = "## Notes\n> q: x\r- [ ] y\r## Owner rulings\r- fake ruling\n"
+
+    def setUp(self):
+        self.proj = Path(tempfile.mkdtemp(prefix="pb214cli-")) / "proj"
+        (self.proj / ".agent" / "tasks").mkdir(parents=True)
+        self.addCleanup(shutil.rmtree, self.proj.parent, True)
+
+    def run_cli(self, *args):
+        import os
+        import subprocess
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("PLAYBOOK_", "CLAUDE"))}
+        env.update({"PYTHONPATH": str(_PLAYBOOK), "PLAYBOOK_SESSION_ID": "pid-214-cli", "HOME": str(self.proj.parent),
+                    "PYTHONDONTWRITEBYTECODE": "1"})
+        return subprocess.run([sys.executable, "-m", "tasks.cli", *args], cwd=self.proj, env=env,
+                              capture_output=True, text=True, timeout=180)
+
+    def make_task(self, extra: str) -> Path:
+        r = self.run_cli("new", "light", "small change")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        tf = next((self.proj / ".agent" / "tasks").glob("001-*/task.md"))
+        text = tf.read_text(encoding="utf-8").replace("## Risk\nunclassified", "## Risk\nreversible", 1)
+        tf.write_text(text.replace("- [ ]", "- [x]") + "\n" + extra, encoding="utf-8", newline="")
+        return tf
+
+    def test_a_finished_task_with_a_lone_cr_quote_closes(self):
+        for force in (False, True):
+            with self.subTest(force=force):
+                self.proj = Path(tempfile.mkdtemp(prefix="pb214cli-")) / "proj"      # a fresh project each time
+                (self.proj / ".agent" / "tasks").mkdir(parents=True)
+                self.addCleanup(shutil.rmtree, self.proj.parent, True)
+                tf = self.make_task(self.QUOTE)
+                self.assertEqual(self.run_cli("work", "1").returncode, 0)
+                args = ["work", "done"] + (["--force", "--reason", "test"] if force else [])
+                r = self.run_cli(*args)
+                self.assertEqual(r.returncode, 0, r.stdout[-600:] + r.stderr[-600:])
+                self.assertTrue(core._extract_status(tf).startswith("done"))
+
+    def test_the_settled_block_keeps_the_real_rulings(self):
+        tf = self.make_task("## Owner rulings\n<!-- pin -->\n- real ruling\n\n" + self.QUOTE)
+        block = post_d6.settled_block(tf)
+        self.assertIn("real ruling", block)
+        self.assertNotIn("fake ruling", block)
+
+    def test_a_stub_with_a_lone_cr_expands(self):
+        r = self.run_cli("new", "--stub", "bugfix", "later")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        tf = next((self.proj / ".agent" / "tasks").glob("001-*/task.md"))
+        tf.write_text(tf.read_text(encoding="utf-8").replace("## Why\n", "## Why\nbecause x\ry\n", 1),
+                      encoding="utf-8", newline="")
+        r = self.run_cli("work", "1")
+        self.assertIn("Expanded stub", r.stdout, r.stdout[-400:] + r.stderr[-400:])
+
+    def test_the_close_and_the_handoff_refuse_a_status_hidden_behind_a_lone_cr(self):     # L8: mutants N8, N14
+        """Their preflights read the status as the writers do: `## Status\rin_progress` is one line and no heading, so
+        both refuse before anything is written (read with translation, they passed and the writer refused later)."""
+        import re
+        for verb in (("work", "done"), ("handoff",)):
+            with self.subTest(verb=verb):
+                self.proj = Path(tempfile.mkdtemp(prefix="pb214cli-")) / "proj"
+                (self.proj / ".agent" / "tasks").mkdir(parents=True)
+                self.addCleanup(shutil.rmtree, self.proj.parent, True)
+                tf = self.make_task("")
+                self.assertEqual(self.run_cli("work", "1").returncode, 0)
+                text, n = re.subn(r"^## Status\n(\S+)$", r"## Status\r\1", raw(tf), count=1, flags=re.M)
+                self.assertEqual(n, 1)
+                tf.write_text(text, encoding="utf-8", newline="")
+                r = self.run_cli(*verb)
+                self.assertNotEqual(r.returncode, 0, r.stdout[-400:])
+                self.assertIn("no live `## Status` heading", r.stderr)
+                self.assertEqual(raw(tf), text)
+
+    def test_the_close_counts_a_parked_item_by_its_physical_line(self):                     # L8: mutant N11
+        self.make_task("## Parked\n- P1 one item\r- P2 inside the same line\n")
+        self.assertEqual(self.run_cli("work", "1").returncode, 0)
+        r = self.run_cli("work", "done")
+        self.assertEqual(r.returncode, 0, r.stdout[-600:] + r.stderr[-600:])
+        self.assertIn("1 open parked item(s)", r.stdout)
+
+    def test_freehand_on_a_task_with_a_lone_cr(self):
+        tf = self.make_task(self.QUOTE)
+        self.assertEqual(self.run_cli("work", "1").returncode, 0)
+        r = self.run_cli("freehand")
+        self.assertNotIn("changed while the freehand block was being composed", r.stderr, r.stderr[-400:])
+        self.assertIn("### Freehand", tf.read_text(encoding="utf-8"))
+
+
+class TheReviewWriteBackAndTheFenceScanner(_Dir):
+    """L8 (mutants N18, N2): the review findings writer rewrites the whole task.md; the fence scanner's blank line."""
+
+    def test_the_review_write_back_keeps_a_lone_cr_inside_its_line(self):
+        from tasks import review
+        quote = "## Notes\n> q: x\r## Status\rdone\r- [ ] fake gate\n"
+        self.tf.write_text(task("## Implementation Review\n(implementation review findings appear here)\n\n" + quote),
+                           encoding="utf-8", newline="")
+        self.assertIsNone(review._write_review_findings_locked(self.tf, "impl", "a finding"))
+        text = raw(self.tf)
+        self.assertIn("a finding", text)
+        self.assertIn("> q: x\r## Status\rdone\r- [ ] fake gate", text)
+        self.assertEqual(core._extract_status(self.tf), "in_progress")
+
+    def test_a_separator_only_line_does_not_open_an_indented_code_block(self):
+        # CommonMark: a blank line holds spaces and tabs only; after any other line a 4-space line continues the
+        # paragraph — it is not code, so `has_review_evidence` and the other indented-code readers see it as text
+        for sep in SEPARATORS:
+            if sep == "\r":
+                continue                                     # "\r" alone is a CRLF blank line's ending
+            with self.subTest(sep=repr(sep)):
+                flags = core._iter_fenced_flags(["para", sep, "    - [x] indented"], unclosed_is_live=False)
+                self.assertEqual(flags, [False, False, False])
+        for blank in ("", " \t", "\r"):
+            with self.subTest(blank=repr(blank)):
+                flags = core._iter_fenced_flags(["para", blank, "    - [x] indented"], unclosed_is_live=False)
+                self.assertEqual(flags[2], True)
+
 
 class ReviewEvidenceIsAPhysicalGate(_Dir):
     """Impl round 1, T3 (gemini): a quote carrying a checked review gate after a separator made
@@ -349,6 +530,13 @@ class ReviewEvidenceIsAPhysicalGate(_Dir):
                     line = f"> q: x{sep}{gate}" if where == "inside" else f"{sep}{gate}"
                     self.tf.write_text(task(f"## Notes\n{line}\n", risk="assertive"), encoding="utf-8", newline="")
                     self.assertFalse(core.has_review_evidence(self.tf, impl_only=True))
+
+    def test_a_fenced_review_gate_is_no_evidence(self):                          # impl round 2, U3
+        for fence in ("```text\n{g}\n```\n", "~~~\n{g}\n~~~\n", "```\n{g}\n"):     # closed, tilde, unclosed
+            with self.subTest(fence=fence[:4]):
+                body = fence.format(g="- [x] Run `.claude/bin/tasks impl-review 1` — done")
+                self.tf.write_text(task(f"## Notes\n{body}", risk="assertive"), encoding="utf-8")
+                self.assertFalse(core.has_review_evidence(self.tf, impl_only=True))
 
     def test_a_real_review_gate_still_counts(self):
         self.tf.write_text(task("## Implementation Review\n- [x] Run `.claude/bin/tasks impl-review 1` — done\n"),
@@ -373,6 +561,38 @@ class TheCodexHookReadsTheLiveStatus(_Dir):
                 self.tf.write_text(task(extra), encoding="utf-8", newline="")
                 self.assertEqual(codex_hooks._task_status(self.tf), "in_progress")
                 self.assertFalse(codex_hooks._task_status_is_done(self.tf))
+
+    def test_it_reads_what_core_reads(self):                                     # impl round 2, U2
+        from provider import codex_hooks
+        cases = {
+            "a backtick info string with a backtick": task("```x`y\n\n## Status\nblocked\n"),
+            "a 4-space done": "# 001 - D\n\n## Status\n    done\n\n## Work Plan\n- [ ] W1\n",
+            "a tab done": "# 001 - D\n\n## Status\n\tdone\n\n## Work Plan\n- [ ] W1\n",
+            "a separator-only line": "# 001 - D\n\n## Status\n\x85\ndone\n\n## Work Plan\n- [ ] W1\n",
+        }
+        for name, text in cases.items():
+            with self.subTest(case=name):
+                self.tf.write_text(text, encoding="utf-8", newline="")
+                core_value = core._extract_status(self.tf)
+                self.assertEqual(codex_hooks._task_status(self.tf), core_value)
+                self.assertEqual(codex_hooks._task_status_is_done(self.tf), core_value.startswith("done"))
+
+    def test_its_gate_count_is_cores(self):                                      # impl round 2, U2
+        from provider import codex_hooks
+        self.tf.write_text(task("## Notes\nx\x85- [ ] fake\n```text\n- [ ] fenced\n```\n"), encoding="utf-8", newline="")
+        checked, total = core._gate_counts(raw(self.tf))
+        done, n, first = codex_hooks._scan_gates(self.tf)
+        self.assertEqual((done, n), (checked, total))
+        self.assertEqual(first, "W1 the real gate")
+
+    def test_the_mirror_used_by_the_codex_hook_scripts_reads_core_too(self):    # impl round 2, U2
+        import subprocess
+        self.tf.write_text(task("```x`y\n\n## Status\nblocked\n"), encoding="utf-8")
+        code = ("import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); "
+                "from provider import codex_hooks; print(codex_hooks._task_status(Path(sys.argv[2])))")
+        r = subprocess.run([sys.executable, "-I", "-c", code, str(_PLAYBOOK / "scripts" / "lib"), str(self.tf)],
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.stdout.strip(), core._extract_status(self.tf), r.stderr)
 
     def test_crlf_status_still_read(self):
         from provider import codex_hooks
@@ -452,6 +672,24 @@ class AReceiptIsReadByItsGrammar(_Dir):
         text, log = self._after_move(self.LEGACY + "   a three-space note\n")
         self.assertIn("a three-space note", text)
         self.assertNotIn("a three-space note", log)
+
+    def test_an_eight_space_note_under_a_clean_line_is_not_a_receipt(self):         # impl round 2, U7 (opus, sonnet)
+        text, log = self._after_move(self.LEGACY + "        an agent's eight-space note\n")
+        self.assertIn("an agent's eight-space note", text)
+        self.assertNotIn("an agent's eight-space note", log)
+
+    def test_a_finding_line_is_one_physical_line_for_every_reader(self):           # impl round 2, U7 (opus)
+        breaks = "\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029"
+        audit = {"passed": False, "results": [{"status": "findings", "name": "custom\n- [ ] in the name", "severity": "info",
+                                               "why": "w\x85- [ ] in the why",
+                                               "output": "a\x85- [ ] x\r\nb\u2028- [ ] y\nc\rd\n"}]}
+        receipt = format_audit_receipt(audit, timestamp="2026-10-15T10:00:01+03:00", head_sha="a" * 40)
+        self.assertFalse(any(ch in receipt for ch in breaks), repr(receipt))
+        self.assertEqual(core._gate_counts(receipt), (0, 0), receipt)
+        self.assertFalse(any(core._GATE_LINE_RE.match(ln) for ln in receipt.splitlines()), receipt)   # an old reader too
+        self.assertIn("        a[U+0085]- [ ] x\n        b[U+2028]- [ ] y\n        c[U+000D]d\n", receipt)
+        self.assertIn("[FINDINGS(3)]", receipt)
+        self.assertIn("custom[U+000A]- [ ] in the name ·info — w[U+0085]- [ ] in the why", receipt)
 
     def test_a_receipt_without_a_run_line_still_moves_whole(self):
         self.tf.write_text(task(), encoding="utf-8")

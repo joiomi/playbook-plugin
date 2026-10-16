@@ -1025,7 +1025,7 @@ def split_md_sections(text: str) -> "list[tuple[str | None, str]]":
     cur: list[str] = []
     started = False
     for ln in _physical_lines(text, keepends=True):        # task 214 (T5): physical lines
-        if re.match(r'^#{1,2}\s', ln):
+        if _TRIM_HEADING_RE.match(ln):                     # task 214 (U6): a space, a tab or the line end
             if started:
                 sections.append((cur_heading, "".join(cur)))
             cur_heading = ln.lstrip('#').strip()
@@ -1079,7 +1079,9 @@ _MUST_KEEP_HEADING = re.compile(
 _SENT_LAST_HEADING = re.compile(
     r'^(standing orders|pre-panel audit|verification receipt)\b', re.IGNORECASE)   # References (the user's words)
     # fill with the ordinary sections (impl round 2, S8)
-_TRIM_HEADING_RE = re.compile(r'^#{1,2}\s')
+# Task 214 (U6): the `#`s are followed by a space, a tab or the line end — `\s` also took U+0085, U+2028, the
+# lone CR (inside a physical line now) for the separator, so `##\x85Phantom` cut the Work Plan in two.
+_TRIM_HEADING_RE = re.compile(r'^#{1,2}(?:[ \t]|\r?\n)')
 _TRIM_GATE_RE = re.compile(r'^([ \t]*)- \[[ xX]\] ?')
 # Shrinking the kept sections when they alone do not fit (impl round 1 of task 212, R3-R6), each step the LEAST
 # cut that fits (a search, not a fixed ladder — a ladder jumped from "uncut" to 2,000 characters a section and left
@@ -1089,7 +1091,7 @@ _TRIM_GATE_RE = re.compile(r'^([ \t]*)- \[[ xX]\] ?')
 _TRIM_REVIEW_HEADING = re.compile(r'^(plan review|implementation review|review)\b', re.IGNORECASE)
 _TRIM_RULINGS_HEADING = re.compile(r'^owner rulings\b', re.IGNORECASE)
 _TRIM_FIELD_HEADING = re.compile(r'^(status|risk)\b', re.IGNORECASE)
-_TRIM_SUBHEADING_RE = re.compile(r'^#{3,}\s')
+_TRIM_SUBHEADING_RE = re.compile(r'^#{3,}(?:[ \t]|\r?\n)')
 _TEMPLATE_GATE_TITLES: "tuple[str, ...] | None" = None
 _STANDING_ORDER_LINES: "frozenset[str] | None" = None
 
@@ -1716,7 +1718,7 @@ def _iter_fenced_flags(lines: "list[str]", *, unclosed_is_live: bool,
             fence_len = len(fm.group(1))
             open_i = i
             continue
-        stripped = raw.strip()
+        stripped = raw.strip(" \t")              # blank = spaces and tabs only (task 214, U1)
         if stripped == "":                      # blank line: never a heading
             prev_blank = True                   # keeps an indented run alive
             continue
@@ -4000,7 +4002,11 @@ def has_review_evidence(task_file, impl_only: bool = False) -> bool:
             if heads and (not impl_only or any(h.startswith("## Single-judge impl review")
                                                for h in heads)):
                 return True
-        for ln in _physical_lines(read_task_text(p)):
+        _lines = _physical_lines(read_task_text(p))
+        _fenced = _iter_fenced_flags(_lines, unclosed_is_live=False)     # a fenced example is no evidence (U3)
+        for _i, ln in enumerate(_lines):
+            if _fenced[_i]:
+                continue
             # a CHECKED gate as the gate counters read one (task 214, T3): a physical line, the box after spaces or
             # tabs only — a quote with a separator, or one at the line's start, used to make this True
             m = _GATE_LINE_RE.match(ln)
@@ -4979,8 +4985,9 @@ def _live_status_pair(lines: "list[str]") -> "tuple[int, int] | None":
     if last is None:
         return None
     v = last + 1
-    while v < len(lines) and lines[v].strip() == "":
-        v += 1                                  # skip blank lines only
+    while v < len(lines) and lines[v].strip(" \t\r\n") == "":
+        v += 1                                  # skip blank lines only — spaces and tabs (task 214, U1: `str.strip()`
+        #                                         made a U+0085-only line blank, so `## Status`/`\x85`/`done` read done)
     if v >= len(lines) or flags[v]:
         return None                             # no value line / fenced value
     if not _STATUS_VALUE_RE.match(lines[v].rstrip("\r\n")):
@@ -5273,6 +5280,8 @@ _RECEIPT_HEAD_RE = re.compile(r"^### \S+ · (?:PASS|FAIL) · commit ")
 # real receipts match this).
 _RECEIPT_BODY_RE = re.compile(r"^(?:    - \[(?:CLEAN|FINDINGS(?:\(\d+\))?|ERROR)\] |        |    - run [0-9a-f]+\s*$)")
 _RECEIPT_RUN_RE = re.compile(r"^    - run [0-9a-f]+\s*$")       # a receipt's last line since task 213
+# the lines an 8-space finding line may follow (task 214, impl round 2, U7): the writer puts them only there
+_RECEIPT_FINDINGS_RE = re.compile(r"^    - \[(?:FINDINGS(?:\(\d+\))?|ERROR)\] ")
 
 
 def _receipt_entries(lines: "list[str]", start: int, end: int) -> "list[tuple[int, int]]":
@@ -5289,13 +5298,18 @@ def _receipt_entries(lines: "list[str]", start: int, end: int) -> "list[tuple[in
     while i < end:
         if _RECEIPT_HEAD_RE.match(lines[i]) and not flags[i]:
             j = i + 1
+            findings = False            # an 8-space line belongs to the receipt only right under a finding (U7)
             # never a gate-shaped line (impl round 1 of task 214, T1: an 8-space open gate under a receipt was taken as
             # its body and moved to the log, where the stop hook and the close no longer count it); a receipt with a
             # `run` line ends there
             while (j < end and not flags[j] and not _GATE_LINE_RE.match(lines[j])
                    and (not lines[j].strip() or _RECEIPT_BODY_RE.match(lines[j]))):
+                ln = lines[j]
+                if ln.startswith("        ") and ln.strip() and not findings:
+                    break
+                findings = bool(_RECEIPT_FINDINGS_RE.match(ln)) or (findings and ln.startswith("        "))
                 j += 1
-                if _RECEIPT_RUN_RE.match(lines[j - 1]):
+                if _RECEIPT_RUN_RE.match(ln):
                     break
             while j > i + 1 and not lines[j - 1].strip():
                 j -= 1
@@ -6141,11 +6155,11 @@ def task_done(project_path: Path, name_filter: str = "") -> dict:
 _GATE_LINE_RE = re.compile(r"^[ \t]*- \[([ xX])\]")
 
 
-def read_task_text(path) -> str:
+def read_task_text(path, errors: str = "replace") -> str:
     """A task file's text as the hooks' grep sees it (task 214, impl round 1, T4): UTF-8 with errors replaced, CRLF
     read as LF as before, and a lone CR LEFT inside its line — `Path.read_text` (its newline translation) turned a lone CR into a line break,
     so a quote `x\r## Status\rdone` was read as a live `done`."""
-    with open(path, encoding="utf-8", errors="replace", newline="") as fh:
+    with open(path, encoding="utf-8", errors=errors, newline="") as fh:
         return fh.read().replace("\r\n", "\n")
 
 

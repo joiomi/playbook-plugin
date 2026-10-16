@@ -2672,12 +2672,12 @@ def _active_task_is_irreversible(root):
         if plugin_dir not in sys.path:
             sys.path.insert(0, plugin_dir)
         from tasks.core import (extract_risk_from_text, _status_from_lines,   # fence-aware readers
-                                _physical_lines, stub_marker_type)
+                                _physical_lines, read_task_text, stub_marker_type)
         from pathlib import Path as _P
         # ONE read, both answers (task 058, plan panel P2): this used to read
         # task.md for the status and AGAIN inside `extract_risk`, so a write
         # landing between them could pair one task's status with another's risk.
-        _text = _P(task_md).read_text(encoding="utf-8", errors="replace")
+        _text = read_task_text(_P(task_md))      # task 214 (U5): no newline translation
         # A done/blocked task in a stale pointer never acknowledges (073 round 3:
         # a crash between the close and the pointer clear). Task 110 W9: `pending`
         # was the status of every task `tasks work N` activated — requiring

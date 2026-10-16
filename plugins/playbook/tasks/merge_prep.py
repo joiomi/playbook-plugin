@@ -16,7 +16,7 @@ import os
 import sys
 from pathlib import Path
 from tasks.atomic import atomic_write
-from tasks.core import resolve_agent_dir, run_merge_doctor
+from tasks.core import read_task_text, resolve_agent_dir, run_merge_doctor
 from tasks.mindmap import _parse_nodes
 from tasks.shared import find_project_root
 
@@ -224,7 +224,7 @@ def _rename_colliding_tasks_locked(project_path: Path, agent_dir: Path, current_
         # Rewrite H1 title: "# 133 - ..." → "# 135 - ..."
         task_md = tasks_dir / new_name / "task.md"
         if task_md.exists():
-            text = task_md.read_text(encoding="utf-8")
+            text = read_task_text(task_md, errors="strict")       # task 214 (U5): a lone CR stays in its line
             text = re.sub(
                 rf"^# {old_num}(?=[\s\-]|$)",
                 f"# {new_num}",
@@ -274,7 +274,7 @@ def _rewrite_task_refs(project_path: Path, agent_dir: Path, rename_map: dict[int
             if task_dir.is_dir():
                 task_md = task_dir / "task.md"
                 if task_md.exists():
-                    original = task_md.read_text(encoding="utf-8")
+                    original = read_task_text(task_md, errors="strict")
                     updated = _apply(original)
                     if updated != original:
                         atomic_write(task_md, updated)

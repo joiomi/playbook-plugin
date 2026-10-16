@@ -25,7 +25,7 @@ import sys
 import time
 from pathlib import Path
 from tasks.atomic import atomic_write
-from tasks.core import _safe_hash_regular, resolve_agent_dir
+from tasks.core import _safe_hash_regular, read_task_text, resolve_agent_dir
 from tasks.mindmap import _load_mind_map
 from tasks.shared import find_project_root
 
@@ -882,7 +882,7 @@ def _write_review_findings_locked(task_file: Path, review_mode: str, findings: s
     block = f"{open_m}\n{body}\n{close_m}"
 
     try:
-        text = task_file.read_text(encoding="utf-8")
+        text = read_task_text(task_file, errors="strict")     # task 214 (U5): a lone CR stays inside its line
     except OSError as e:
         return f"could not read {task_file.name}: {e}"
 
@@ -1586,7 +1586,7 @@ def _cmd_panel_review(cmd_args):
         except (OSError, subprocess.SubprocessError):
             _panel_head = ""
         _audit_note = audit_freshness_note(
-            task_file.read_text(encoding="utf-8"), _panel_head)
+            read_task_text(task_file, errors="strict"), _panel_head)
         if _audit_note:
             print(f"  note: {_audit_note}", file=sys.stderr, flush=True)
 
@@ -1616,7 +1616,7 @@ def _cmd_panel_review(cmd_args):
                 if mm_content:
                     parts.append(f"=== MIND_MAP.md ===\n{mm_content}")
             if task_file:
-                task_content = task_file.read_text(encoding="utf-8")
+                task_content = read_task_text(task_file, errors="strict")
                 # Task 108 r2: the task gets what is LEFT after the SETTLED block
                 # and the map, so the final head-clamp does not cut its tail.
                 _used = sum(len(x) for x in parts)
@@ -2922,7 +2922,7 @@ def _cmd_single_review(cmd, cmd_args):
                   file=sys.stderr, flush=True)
     mm_content = _load_mind_map(project_path)
     _mm_part = f"=== MIND_MAP.md ===\n{mm_content}" if mm_content else ""
-    task_content = task_file.read_text(encoding="utf-8")
+    task_content = read_task_text(task_file, errors="strict")
     # Task 108 r2: the task gets what is LEFT after SETTLED + DELTA + the map. Task 201
     # (#7, the owner's Q-K (a)): sized by that same rule — the delta held at min(its whole
     # length, a quarter) — and the delta then gets what the task leaves, a quarter at least.

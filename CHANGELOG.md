@@ -51,9 +51,9 @@ the real records before: every `tasks audit` stacked one more receipt into task.
   U+0085, U+2028, vertical tab or form feed inside a line written into task.md — a judge's quote, an audit finding's
   source line — became a real line break when a receipt was written into an existing section, so a second audit or a
   second close receipt could turn `…\x85## Status\x85done` into a live `## Status` / `done` that the status reader
-  then read. The audit and close receipt writers no longer turn such a character into a line break (an audit finding's
-  own output is still split at it before the receipt is written, each piece indented eight spaces, so none can read as
-  a heading). Task 214 (the owner's ruling of 2026-10-15: a separate task right after) moved the other task.md writers
+  then read. The audit and close receipt writers no longer turn such a character into a line break (an audit receipt
+  writes it as `[U+XXXX]` — in a finding's output and in a sweep's name or `why` from the project's config, which could
+  mint a gate — so each receipt line stays one line for every reader, an older one too). Task 214 (the owner's ruling of 2026-10-15: a separate task right after) moved the other task.md writers
   and readers the same way: the handoff and handoff-and-block writers (the handoff minted a live `## Status` from such
   a quote, and handoff-and-block refused the task as `done`), the gate check-off, the `## Risk` readers and the close's
   re-read (two headings read as `unclassified` and refused a valid close), the parked items, the standing gates (a
@@ -67,6 +67,17 @@ the real records before: every `tasks audit` stacked one more receipt into task.
   drift sweep and `tasks compact` split by `splitlines()` too; and a gate or heading after a separator AT THE START of
   a line was taken for one. A receipt's body never takes a gate-shaped line and ends at its `run` line, and a sweep's
   output line shaped like a gate is written escaped (`\- [x] …`), so no receipt line counts as a gate.
+  Its second round found more, all fixed: a line holding only such a character counted as blank between `## Status`
+  and its value (`## Status` / U+0085 / `done` read done) and in the code-block scanner; the codex hooks now read the
+  status and the gates through the CLI's own reader (theirs took a backtick info string for a fence and a padded `done`
+  for done); a checked review gate inside a fenced example is no review evidence; the batch-close guard read the old
+  file with newline translation, so a Write adding six real checked gates passed as unchanged next to a CR-delimited
+  quote of six; the close, the handoff, the SETTLED block, the judges' payloads, the review write-back, freehand, the
+  stub expansion, the command guard's acknowledgement of an irreversible task, the retro, the intent context and
+  `prepare-merge`'s renumbering still read with translation (the close then refused a finished task as a race, even
+  with `--force` — a regression of this task, never released); a heading needs a space, a tab or the line end after
+  its `#`s (the judges' trim took `##` + U+0085 for a section and dropped the Work Plan's gates after it); and an
+  eight-space line belongs to an audit receipt only under a finding.
 
 ## [1.6.3] — 2026-10-15
 

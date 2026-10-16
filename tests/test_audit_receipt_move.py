@@ -41,6 +41,11 @@ def receipt(stamp: str, commit: str = "a" * 40, body: str = "clean") -> str:
     return f"### 2026-10-15T{stamp}+03:00 · PASS · commit {commit}\n    - [CLEAN] conflict-markers — {body}\n"
 
 
+def finding_receipt(stamp: str) -> str:
+    """A receipt whose finding lines follow — an 8-space line belongs to a receipt only under a finding (task 214, U7)."""
+    return f"### 2026-10-15T{stamp}+03:00 · FAIL · commit {'a' * 40}\n    - [FINDINGS(1)] conflict-markers — why\n"
+
+
 class _Dir(unittest.TestCase):
     def setUp(self):
         self.d = Path(tempfile.mkdtemp(prefix="pb213-"))
@@ -259,8 +264,8 @@ class NoLineIsMinted(_Dir):
                 self.tf.write_text(TASK, encoding="utf-8")
                 if self.log.exists():
                     self.log.unlink()
-                core.record_audit_receipt(self.tf, receipt("10:00:01").rstrip("\n")
-                                          + f"\n        src.py:1: a{sep}## Status{sep}done\n")
+                core.record_audit_receipt(self.tf, finding_receipt("10:00:01")
+                                          + f"        src.py:1: a{sep}## Status{sep}done\n")
                 core.record_audit_receipt(self.tf, receipt("10:00:02"))
                 core.record_audit_receipt(self.tf, receipt("10:00:03"))
                 self.assertEqual(self.status_lines(), 1)
@@ -274,8 +279,8 @@ class NoLineIsMinted(_Dir):
                 if self.log.exists():
                     self.log.unlink()
                 core.record_audit_receipt(self.tf, receipt("10:00:01"))
-                core.record_audit_receipt(self.tf, receipt("10:00:02").rstrip("\n")
-                                          + f"\n        src.py:1: a{sep}## Status{sep}done\n")
+                core.record_audit_receipt(self.tf, finding_receipt("10:00:02")
+                                          + f"        src.py:1: a{sep}## Status{sep}done\n")
                 self.assertEqual(self.status_lines(), 1)
                 self.assertEqual(core._extract_status(self.tf), "in_progress")
                 self.assertIn(f"a{sep}## Status{sep}done", self.tf.read_text(encoding="utf-8"))

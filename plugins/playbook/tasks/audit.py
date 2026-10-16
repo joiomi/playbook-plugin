@@ -955,9 +955,22 @@ def run_audit(project_path) -> dict:
     return {"results": results, "passed": passed}
 
 
+# Every character `str.splitlines()` breaks a line on, "\n" aside (task 214, impl round 2, U7).
+_LINE_BREAK_CHARS_RE = re.compile("[\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029]")
+
+
+def _one_line(text: str) -> str:
+    """`text` as one physical line for every reader: a line-break character is written as `[U+XXXX]`, so no older
+    reader that splits with `splitlines()` (1.6.3's audit rewrote task.md that way — task 214, R7) breaks a receipt
+    line in two, and no value — a sweep's output, or a name / why from the project's config — mints a line."""
+    return _LINE_BREAK_CHARS_RE.sub(lambda m: f"[U+{ord(m.group()):04X}]", text)
+
+
 def _finding_lines(output: str, limit: int = 5) -> "list[str]":
-    lines = [ln for ln in output.splitlines() if ln.strip()]
-    return lines[:limit]
+    """The non-blank lines of a sweep's output, split on "\n" only (task 214, U7: physical lines, like every task.md
+    reader; a CRLF's CR is the line end), each made one line by `_one_line`."""
+    lines = [_one_line(ln[:-1] if ln.endswith("\r") else ln) for ln in output.split("\n")]
+    return [ln for ln in lines if ln.strip()][:limit]
 
 
 _GATE_SHAPED_RE = re.compile(r"^[ \t]*- \[[ xX]\]")
@@ -1000,7 +1013,7 @@ def format_audit_receipt(audit: dict, *, timestamp: str | None = None, head_sha:
         n = len(_finding_lines(r["output"], limit=10_000)) if r["status"] != "clean" else 0
         count = f"({n})" if r["status"] == "findings" else ""
         sev = {"error": "", "info": " ·info"}.get(r["severity"], " ·advisory")
-        out.append(f"    - [{tag}{count}] {r['name']}{sev} — {r['why']}")
+        out.append(f"    - [{tag}{count}] {_one_line(r['name'])}{sev} — {_one_line(r['why'])}")
         if r["status"] in ("findings", "error"):
             for ln in _finding_lines(r["output"], limit=5):
                 if _GATE_SHAPED_RE.match(ln):        # task 214 (T1): a sweep's `- [ ] x` must never read as a gate

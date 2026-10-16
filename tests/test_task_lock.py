@@ -683,19 +683,23 @@ class GuardReadsOnceAndRechecksThePointer(unittest.TestCase):
         d = self._project()
         g = self._guard()
         pointer = d / ".agent" / "sessions" / "pid-lock-test" / "current_state"
-        real_read = Path.read_text
+        # Task 214 (U5): the guard reads task.md through `core.read_task_text` (no
+        # newline translation), so the switch is injected there — the read it makes.
+        from tasks import core
+        real_read = core.read_task_text
         state = {"n": 0}
 
-        def _switch_once(self_path, *a, **k):
-            out = real_read(self_path, *a, **k)
-            if self_path.name == "task.md" and state["n"] == 0:
+        def _switch_once(path, *a, **k):
+            out = real_read(path, *a, **k)
+            if Path(path).name == "task.md" and state["n"] == 0:
                 state["n"] = 1
                 pointer.write_text("002", encoding="utf-8")   # another session switched
             return out
         with mock.patch.dict(os.environ, {"PLAYBOOK_SESSION_ID": "pid-lock-test"}), \
-             mock.patch.object(Path, "read_text", _switch_once):
+             mock.patch.object(core, "read_task_text", _switch_once):
             self.assertFalse(g._active_task_is_irreversible(str(d)),
                              "a stale pointer acknowledged after a task switch")
+        self.assertEqual(state["n"], 1, "the switch was never injected: the guard read task.md some other way")
 
     def test_every_error_keeps_the_command_blocked(self):
         g = self._guard()
