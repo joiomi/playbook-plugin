@@ -1,4 +1,5 @@
 #!/bin/bash
+_PB_HJ_T0=$EPOCHREALTIME     # the hook journal's start (task 222): first, before anything else runs
 # task-dir-watch-hook — the task-folder watch (task 196, PLAN S14 T5b, B31 = #12)
 #   PreToolUse, a shell call or a Write: hold a flagged session (exit 2), else snapshot the lane's tasks/
 #   PreToolUse, an edit: hold a flagged session
@@ -19,6 +20,7 @@ fi
 
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$HOOK_DIR/gate-echo-lib.sh"
+pb_hook_begin task-dir-watch # one line per run in journal/hooks.jsonl (task 222)
 
 PROJECT_DIR=$(find_project_root)
 if [ -z "$PROJECT_DIR" ]; then
@@ -42,7 +44,7 @@ INPUT=$(cat)
 PB_WALK_READ="$(resolve_session_id trace)"
 SESSION_ID="${PB_WALK_READ%%$'\t'*}"
 # No session (the background daemon): nothing to watch or hold (a bound, task 196 W5).
-[ -n "$SESSION_ID" ] || exit 0
+[ -n "$SESSION_ID" ] || { PB_HJ_DECISION=skip; PB_HJ_DETAIL="no session"; exit 0; }
 SESSION_DIR="$AGENT_DIR/sessions/$SESSION_ID"
 FLAG="$SESSION_DIR/task_dir_flag"
 
@@ -60,6 +62,7 @@ if [ "$PB_FLAGGED" != true ]; then
     PB_KEY='"tool_name"[[:space:]]*:[[:space:]]*"(Edit|MultiEdit)"'
     PB_CREATES='"old_string"[[:space:]]*:[[:space:]]*""'
     if [[ "$INPUT" =~ $PB_KEY ]] && ! [[ "$INPUT" =~ $PB_CREATES ]]; then
+        PB_HJ_DETAIL="an edit of an existing file, no flag"
         exit 0
     fi
     # every lane is watched, a registry or not (task 197, P1), `tasks/` or not: one call can make `tasks/` and a
@@ -75,8 +78,10 @@ BLOCKED: this session is held for a task folder the playbook CLI did not make, a
 ($SESSION_DIR) is now a link, so the hold cannot be checked. Put the real directory back in its place;
 a person can also remove the folder named in its task_dir_flag and that file.
 MSG
+        PB_HJ_DETAIL="held: the session directory is a link"
         exit 2
     fi
+    PB_HJ_DETAIL="the session directory is a link"
     exit 0
 fi
 
@@ -85,15 +90,20 @@ PB_OUT=$(printf '%s' "$INPUT" | python3 -E -s "$HOOK_DIR/task-dir-watch.py" "$PR
 PB_RC=$?
 [ -n "$PB_OUT" ] && printf '%s\n' "$PB_OUT"
 case "$PB_RC" in
-    0) exit 0 ;;
-    2) exit 2 ;;
+    0) if [ -n "$PB_OUT" ]; then PB_HJ_DECISION=context; PB_HJ_DETAIL="a task folder made by hand flagged"
+       else PB_HJ_DETAIL="watched"; fi
+       exit 0 ;;
+    2) PB_HJ_DETAIL="held: a task folder made by hand"; exit 2 ;;
 esac
+# the hook journal (task 222, plan panel opus I4): the helper's failure is an error, whatever this hook answers
+PB_HJ_ERROR="task-dir-watch.py ended with exit $PB_RC"
 # The watch did not run (no python3, a crash): a standing flag holds the call, as the gate holds on a status it
 # cannot read (task 055); nothing stands — nothing to hold.
 if [[ "$INPUT" =~ $PB_POST ]]; then
     # after a call: nothing to hold — said, so a folder this call made is known to wait for the close
     printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"⚠ playbook: the task-folder watch could not run after this call (task-dir-watch.py ended with exit %s); a task folder made by hand is still refused at `tasks work done`."}}\n' \
         "${BASH_REMATCH[2]}" "$PB_RC"
+    PB_HJ_DECISION=error; PB_HJ_DETAIL="the watch could not run after the call"
     exit 0
 fi
 if [ "$PB_FLAGGED" = true ]; then
@@ -103,6 +113,8 @@ release it could not run (the watch's helper, task-dir-watch.py, ended with exit
 Restore a python3 of 3.10 or newer and the Playbook plugin; a person can also remove the folder named
 in $FLAG and that file.
 MSG
+    PB_HJ_DETAIL="held: the watch could not run"
     exit 2
 fi
+PB_HJ_DECISION=error; PB_HJ_DETAIL="the watch could not run, no flag"
 exit 0

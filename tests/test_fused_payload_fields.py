@@ -41,8 +41,9 @@ _HERE = Path(__file__).resolve().parent
 SCRIPTS = _HERE.parent / "plugins/playbook/scripts"
 NORMALIZER = SCRIPTS / "hook-payload-normalize.py"
 
-SENTINEL = "pb-fields-v3"
-N_FIELDS = 8  # sentinel, tool_name, path, normpath, command, transcript, payload, resolved path (task 198)
+SENTINEL = "pb-fields-v4"
+N_FIELDS = 12  # sentinel, tool_name, path, normpath, command, transcript, payload, resolved path (task 198),
+               # then the hook journal's event, tool_use_id, agent_id, host session id (task 222)
 
 # Every payload shape the three hooks actually meet.
 PAYLOADS = {
@@ -186,6 +187,38 @@ def oracle(value: str) -> str:
                    for ch in value)
 
 
+class TheHookJournalsRecords(unittest.TestCase):
+    """v4 (task 222): records 9-12 are the payload's own top-level event, tool-call id, subagent id and host session
+    id, read by the JSON parser — a key of the same name nested in the tool's input or response cannot reach them (plan
+    panel 2026-10-16, codex I5)."""
+
+    def test_the_payloads_own_keys(self):
+        payload = {"session_id": "host-1", "agent_id": "a601", "agent_type": "general-purpose",
+                   "hook_event_name": "PostToolUse", "tool_name": "mcp__x__y",
+                   "tool_input": {"tool_use_id": "decoy-in", "session_id": "decoy-s", "agent_id": "decoy-a",
+                                  "hook_event_name": "decoy-e"},
+                   "tool_response": {"tool_use_id": "decoy-out"}, "tool_use_id": "toolu_REAL"}
+        fields = emit_fields(json.dumps(payload))
+        self.assertEqual(fields[8:], ["PostToolUse", "toolu_REAL", "a601", "host-1"])
+
+    def test_absent_keys_are_empty_and_the_frame_keeps_its_length(self):
+        for payload in ({}, {"tool_name": "Bash"}, {"tool_use_id": 7, "agent_id": None, "session_id": ["x"]}):
+            with self.subTest(payload=payload):
+                fields = emit_fields(json.dumps(payload))
+                self.assertEqual(len(fields), N_FIELDS)
+                self.assertEqual(fields[8:], ["", "", "", ""])
+
+    def test_a_grok_payload_after_normalizing(self):
+        fields = emit_fields(json.dumps({"hookEventName": "PreToolUse", "sessionId": "g-1", "toolName": "Shell",
+                                         "toolInput": {"command": "ls"}, "toolUseId": "call_9"}))
+        self.assertEqual(fields[8:], ["PreToolUse", "call_9", "", "g-1"])
+
+    def test_a_nul_in_an_id_cannot_shift_the_frame(self):
+        fields = emit_fields(json.dumps({"tool_use_id": "a\u0000b", "session_id": "s\u0000t"}))
+        self.assertEqual(len(fields), N_FIELDS)
+        self.assertEqual((fields[9], fields[11]), ("a", "s"))
+
+
 class WireFormat(unittest.TestCase):
     def test_the_last_record_is_the_path_with_its_links_followed(self):
         # task 198 (#26): the guards that decide on a task record match the resolved path too
@@ -212,13 +245,13 @@ class WireFormat(unittest.TestCase):
     def test_non_json_emits_an_error_sentinel_and_the_raw_payload(self):
         """Malformed JSON is not a successful enforcing-field read."""
         fields = emit_fields("this is not json")
-        self.assertEqual(fields[0], "pb-fields-error-v3")
+        self.assertEqual(fields[0], "pb-fields-error-v4")
         self.assertEqual(fields[1:6], ["", "", "", "", ""])
         self.assertEqual(fields[6], "this is not json")
 
     def test_empty_stdin(self):
         fields = emit_fields("")
-        self.assertEqual(fields[0], "pb-fields-error-v3")
+        self.assertEqual(fields[0], "pb-fields-error-v4")
         self.assertEqual(fields[6], "")
 
 
@@ -472,13 +505,23 @@ class EnforcingGateConsumesTheWholeFrame(unittest.TestCase):
 
     def test_sentinel_only_output_falls_back_and_blocks(self):
         scripts = self._scripts_with_emitter(
-            '        sys.stdout.write("pb-fields-v3\\0")\n')
+            '        sys.stdout.write("pb-fields-v4\\0")\n')
         self.assertEqual(self._gate(self._edit(), scripts).returncode, 2)
 
     def test_mid_record_truncation_falls_back_and_blocks(self):
         scripts = self._scripts_with_emitter(
-            '        sys.stdout.write("pb-fields-v3\\0Edit\\0src/a.py\\0")\n')
+            '        sys.stdout.write("pb-fields-v4\\0Edit\\0src/a.py\\0")\n')
         self.assertEqual(self._gate(self._edit(), scripts).returncode, 2)
+
+    def test_a_frame_without_the_journals_four_records_falls_back(self):
+        # v4 (task 222): eight records — v3's shape — under the v4 sentinel are an incomplete frame. The planted frame
+        # names an exempt `.agent/` path while the payload edits code: read as complete it would ALLOW (the control
+        # below, the same frame with its twelve records, does); falling back to the payload, it blocks.
+        rec = "Edit\\0/p/.agent/n.md\\0/p/.agent/n.md\\0\\0\\0{}\\0/p/.agent/n.md\\0"
+        eight = self._scripts_with_emitter(f'        sys.stdout.write("pb-fields-v4\\0{rec}")\n')
+        self.assertEqual(self._gate(self._edit(), eight).returncode, 2)
+        twelve = self._scripts_with_emitter(f'        sys.stdout.write("pb-fields-v4\\0{rec}PreToolUse\\0t\\0\\0s\\0")\n')
+        self.assertEqual(self._gate(self._edit(), twelve).returncode, 0)
 
     def test_missing_python_blocks_instead_of_becoming_empty_truth(self):
         bindir = self.tmp / "bin"

@@ -2552,9 +2552,24 @@ def _load_cfg(root):
         return {}
 
 
+_JOURNAL = []        # the loaded helper, once per run (every run writes its hook-journal line: task 222)
+
+
 def _load_journal():
     """Load the shared enforcement-journal helper (sibling file). Fail-open:
     None on any error so journalling can never wedge the guard."""
+    if _JOURNAL:
+        return _JOURNAL[0]
+    here = os.path.dirname(os.path.abspath(__file__))
+    try:
+        # A plain import first: sys.path[0] is this script's directory (`python3 -E -s`), and importlib.util would
+        # cost every guard run ~2.6 ms of imports (task 222, measured) — taken only if it is the sibling file.
+        import pb_journal as mod
+        if os.path.dirname(os.path.abspath(mod.__file__)) == here:
+            _JOURNAL.append(mod)
+            return mod
+    except Exception:
+        pass
     try:
         import importlib.util
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pb_journal.py")
@@ -2563,9 +2578,22 @@ def _load_journal():
             return None
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
+        _JOURNAL.append(mod)
         return mod
     except Exception:
         return None
+
+
+class _NoRun:
+    """The hook-journal record when pb_journal cannot be loaded: nothing happens (the guard never depends on it)."""
+    payload = root = None
+    session_id = ""
+
+    def note(self, *a, **k):
+        return None
+
+
+_RUN = _NoRun()       # main() notes into it; the entry point makes the real one (task 222)
 
 
 def _normalize_payload(payload):
@@ -2712,6 +2740,7 @@ def main() -> int:
         # a malformed, empty or mis-shaped payload allows the call, and says so.
         print("[command-guard] WARNING: %s — failing OPEN (guard disabled for "
               "this call)" % what, file=sys.stderr)
+        _RUN.note("allow", "fail open", what)
         return 0
 
     # Read BYTES: a payload that is not valid UTF-8 (a truncated multibyte
@@ -2734,9 +2763,11 @@ def main() -> int:
     if not isinstance(payload, dict):
         return _open_loudly("hook payload is not a JSON object (%s)" % type(payload).__name__)
     payload = _normalize_payload(payload)
+    _RUN.payload = payload
     # Bash/Shell/run_terminal_command = Claude + grok (post-normalize);
     # exec_command = Codex's shell tool.
     if payload.get("tool_name") not in ("Bash", "Shell", "run_terminal_command", "exec_command"):
+        _RUN.note(detail="not a shell call")
         return 0
     ti = payload.get("tool_input") or {}
     if not isinstance(ti, dict):
@@ -2746,8 +2777,10 @@ def main() -> int:
         return _open_loudly("tool_input.command is neither text nor argv (%s)" % type(command).__name__)
 
     root = _find_root()
+    _RUN.root = root
     cfg = _load_cfg(root)
     if cfg.get("command_guard") is False:
+        _RUN.note(detail="guard off (config)")
         return 0
     # Operator acknowledgement (round 2: `=0` is not an ack). Task 110 (109 G2-14):
     # it is decided AFTER classification, so the allow it grants to a command that
@@ -2765,6 +2798,7 @@ def main() -> int:
         # into an ALLOW with no trace (plan panel 077, sol:medium #4).
         print("playbook command-guard: classifier error, failing OPEN "
               "(%s: %s)" % (exc.__class__.__name__, exc), file=sys.stderr)
+        _RUN.note("allow", "fail open: classifier error", "%s: %s" % (exc.__class__.__name__, exc))
         return 0
     if verdict != "block":
         return 0
@@ -2772,12 +2806,14 @@ def main() -> int:
     shown = command if isinstance(command, str) else " ".join(str(p) for p in command)
 
     if env_ack:
+        _RUN.note("allow", f"ack-operator-env:{name or 'dangerous-command'}")
         try:
             j = _load_journal()
             if j is not None:
+                _RUN.session_id = _journal_session_id()
                 j.append(j.resolve_lane_dir(root), "command-guard", "allow",
                          f"ack-operator-env:{name or 'dangerous-command'}",
-                         session_id=_journal_session_id(),
+                         session_id=_RUN.session_id,
                          tool=payload.get("tool_name", ""), command=shown)
         except Exception:
             pass
@@ -2787,12 +2823,14 @@ def main() -> int:
         # The documented in-session acknowledgement (task 073, impl panel: it was
         # a claim without code until now): the ACTIVE task is classified
         # `## Risk: irreversible`, read fence-aware through tasks.core. Logged.
+        _RUN.note("allow", f"ack-irreversible-task:{name or 'dangerous-command'}")
         try:
             j = _load_journal()
             if j is not None:
+                _RUN.session_id = _journal_session_id()
                 j.append(j.resolve_lane_dir(root), "command-guard", "allow",
                          f"ack-irreversible-task:{name or 'dangerous-command'}",
-                         session_id=_journal_session_id(),
+                         session_id=_RUN.session_id,
                          tool=payload.get("tool_name", ""), command=shown)
         except Exception:
             pass
@@ -2800,12 +2838,14 @@ def main() -> int:
 
     # Enforcement-journal (log-only, best-effort): record the block. Wrapped AND
     # the helper itself swallows errors — journalling can never change the block.
+    _RUN.note("block", name or "dangerous-command")
     try:
         j = _load_journal()
         if j is not None:
+            _RUN.session_id = _journal_session_id()
             j.append(j.resolve_lane_dir(root), "command-guard", "block",
                      name or "dangerous-command",
-                     session_id=_journal_session_id(),
+                     session_id=_RUN.session_id,
                      tool=payload.get("tool_name", ""), command=shown)
     except Exception:
         pass
@@ -2831,5 +2871,28 @@ def block_message(shown, name, why):
         "  set it.\n")
 
 
+def _journal_main() -> int:
+    """main() with its hook-journal line (task 222): every run — Claude's and grok's through command-guard-hook's
+    `exec` (its start time exported as `_PB_HJ_T0`), codex's directly. The line can never change the decision: without
+    pb_journal, main() runs alone (plan panel 2026-10-16, sonnet I5)."""
+    global _RUN
+    try:
+        root = _find_root()
+    except Exception:
+        root = None
+    if root is None:
+        return main()       # no playbook project: no line to write, and no pb_journal to load (~4 ms a call)
+    j = _load_journal()
+    try:
+        run = j.HookRun("command-guard") if j is not None else None
+    except Exception:
+        run = None
+    if run is None:
+        return main()
+    run.root = root
+    _RUN = run
+    return j.run_hook(run, main)
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_journal_main())

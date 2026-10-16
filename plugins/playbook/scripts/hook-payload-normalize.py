@@ -150,10 +150,14 @@ def normalize(payload):
 # fused path ran" from "python is missing / the script died", and fall back to
 # the original per-field extraction in that case rather than treating an empty
 # tool_name as fact — a gate that cannot read its payload must not fail open.
-# v3 (task 198, #26): the path RESOLVED (links followed) comes last, after the
+# v3 (task 198, #26): the path RESOLVED (links followed) comes after the
 # payload, so every earlier record keeps its place; a reader of v2's seven
 # records leaves it unread.
-FIELDS_SENTINEL = "pb-fields-v3"
+# v4 (task 222): then the hook journal's four — the payload's own top-level
+# event, tool-call id, subagent id and host session id, read here by the JSON
+# parser so a key of the same name nested in a tool's input or response cannot
+# stand in for them (plan panel 2026-10-16, codex I5).
+FIELDS_SENTINEL = "pb-fields-v4"
 
 
 def _wire_safe(value: str) -> str:
@@ -248,8 +252,21 @@ def extract_fields(payload):
     )
 
 
+def journal_fields(payload):
+    """(event, tool_use_id, agent_id, host session id): the payload's own top-level strings, "" where absent or not a
+    string, each cut at a NUL. Read after normalizing (grok's camelCase event and session are mapped there); the
+    tool-call and subagent ids are read under either spelling."""
+    def top(*keys):
+        for k in keys:
+            v = payload.get(k) if isinstance(payload, dict) else None
+            if isinstance(v, str):
+                return _wire_safe(v)
+        return ""
+    return (top("hook_event_name"), top("tool_use_id", "toolUseId"), top("agent_id", "agentId"), top("session_id"))
+
+
 def emit_fields(raw):
-    """Write the sentinel, the five fields, the payload, then the resolved path — all NUL-delimited.
+    """Write the sentinel, the five fields, the payload, the resolved path, then the journal's four — all NUL-delimited.
 
     The payload record honours the same byte-identity contract as the plain
     mode: a native claude payload is echoed back exactly as received.
@@ -261,12 +278,12 @@ def emit_fields(raw):
         # sentinel so the enforcing hook takes its recovery path and blocks if
         # the raw payload still cannot be decoded.  State-echo is advisory and
         # simply retains its old best-effort behavior on the same path.
-        out = ["pb-fields-error-v3", "", "", "", "", "", raw, ""]
+        out = ["pb-fields-error-v4", "", "", "", "", "", raw, "", "", "", "", ""]
     else:
         fields = extract_fields(normalize(payload))
         body = raw if not needs_normalize(payload) else json.dumps(
             normalize(payload), separators=(",", ":"))
-        out = [FIELDS_SENTINEL, *fields, body, _wire_safe(resolved(fields[1]))]
+        out = [FIELDS_SENTINEL, *fields, body, _wire_safe(resolved(fields[1])), *journal_fields(normalize(payload))]
     sys.stdout.write("\0".join(out) + "\0")
 
 

@@ -1,0 +1,507 @@
+"""The hook journal's bash writer and exit runner, in gate-echo-lib.sh (PHASE-B item 2, task 222).
+
+The owner, 2026-10-16 10:25-10:26: "e important ca playbook sa isi salveze infomratiile legat de ce face, ca sa il putem
+analiza si imbunatati" — "Istoric curat + jurnal de hook-uri". Every run of a playbook hook appends one JSON line to
+`<lane>/journal/hooks.jsonl`; at 18:04, on the closed files: "Comprimate, toate" — compressed, every one kept.
+
+What is held here, with the REAL lib run by bash on a crafted hook body:
+  * the runner keeps the hook's exit status (0, 2, 1) whatever fails after it, and gives each exit action the hook's
+    status as `$?` — the stop hook's turn-end mark reads it (plan panel 2026-10-16: all five judges, grok Critical);
+  * one line per run with its fields; the decision by exit status unless the hook named it; the error from the
+    hook's own failing line; the duration; `null` without a start time;
+  * the lane: the hook's, resolved in a subshell where the hook found a project but set no lane, nothing where it
+    found none, in the fresh-clone shape, with an invalid marker, a read-only lane, a linked lane or `journal/`, or
+    a `hooks.jsonl` that is a link or not a regular file (a FIFO would hang the hook);
+  * strings: ids keep only id characters; text is escaped and cut on a whole character and a whole escape; the encoded
+    line stays within 1 KiB;
+  * the tool-call id read by pattern takes the payload's own key, not one nested before it or quoted in a string;
+  * writers side by side tear no line; past 20 MB the file is renamed and compressed exactly once, and kept.
+
+Run: python3 -m unittest tests.test_hook_journal_writer
+"""
+from __future__ import annotations
+
+import calendar
+import gzip
+import json
+import os
+import shutil
+import subprocess
+import tempfile
+import time
+import unittest
+from pathlib import Path
+
+from tests._bashcheck import bash_or_skip
+
+SCRIPTS = Path(__file__).resolve().parent.parent / "plugins" / "playbook" / "scripts"
+LIB = SCRIPTS / "gate-echo-lib.sh"
+LIMIT = 20971520
+FIELDS = ["ts", "hook", "event", "tool", "tool_use_id", "session_id", "host_session_id", "agent_id", "decision",
+          "detail", "ms", "exit", "error"]
+
+PRE = ('{"session_id":"host-sess-1","transcript_path":"/t","cwd":"/c","permission_mode":"default",'
+       '"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"echo hi"},'
+       '"tool_use_id":"toolu_01ABC"}')
+SUB = ('{"session_id":"host-sess-1","agent_id":"a601d5c3","agent_type":"general-purpose",'
+       '"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"x"},'
+       '"tool_response":{"stdout":""},"tool_use_id":"toolu_01SUB","duration_ms":3}')
+
+
+def _needs(tool):
+    return unittest.skipUnless(shutil.which(tool), f"no {tool} on this host")
+
+
+class _Project(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.proj = self.root / "proj"
+        self.lane = self.proj / ".agent"
+        (self.lane / "tasks").mkdir(parents=True)
+        self.journal = self.lane / "journal" / "hooks.jsonl"
+
+    def tearDown(self):
+        for p in self.root.rglob("*"):
+            try:
+                if p.is_dir() and not p.is_symlink():
+                    p.chmod(0o755)
+            except OSError:
+                pass
+        self._tmp.cleanup()
+
+    def env(self, **extra):
+        env = {k: v for k, v in os.environ.items()
+               if not k.startswith(("PLAYBOOK_", "_PB_", "PB_")) and k not in ("BASH_ENV", "ENV")}
+        env.update(extra)
+        return env
+
+    def run_hook(self, body, *, hook="t-hook", cwd=None, payload="", timeout=20, **extra):
+        """bash runs: the start time, the lib, `pb_hook_begin`, the payload read from stdin into $INPUT, then BODY."""
+        script = ('_PB_HJ_T0=$EPOCHREALTIME\nsource "$1"\npb_hook_begin "$2"\nINPUT=$(cat)\n' + body + "\n")
+        return subprocess.run([bash_or_skip(), "-c", script, "_", str(LIB), hook], input=payload,
+                              cwd=str(cwd or self.proj), env=self.env(**extra), capture_output=True, text=True,
+                              timeout=timeout)
+
+    def lines(self, path=None):
+        p = path or self.journal
+        if not p.exists():
+            return []
+        raw = p.read_bytes()
+        self.assertTrue(raw.endswith(b"\n") or not raw, raw[-80:])
+        return [json.loads(x) for x in raw.decode("utf-8").splitlines()]
+
+    def in_lane(self, rest="", project=None, lane=None):
+        p = project or self.proj
+        return (f'PROJECT_DIR="{p}"; AGENT_DIR="{lane or (p / ".agent")}"; SESSION_ID="pid-4242"\n' + rest)
+
+
+class TheRunner(_Project):
+    def test_the_exit_status_is_kept(self):
+        for code in (0, 2, 1, 7):
+            with self.subTest(code=code):
+                r = self.run_hook(self.in_lane(f"exit {code}"))
+                self.assertEqual(r.returncode, code, r.stderr)
+
+    def test_the_status_is_kept_when_the_write_fails_and_an_action_fails(self):
+        (self.lane / "journal").write_text("not a directory")          # mkdir fails, so does the append
+        for code in (0, 2, 1):
+            with self.subTest(code=code):
+                r = self.run_hook(self.in_lane(f"set -e\npb_on_exit 'false'\npb_on_exit 'return 9'\nexit {code}"))
+                self.assertEqual(r.returncode, code, r.stderr)
+
+    def test_set_e_in_the_hook_does_not_turn_a_block_into_an_error(self):
+        r = self.run_hook(self.in_lane("set -e\npb_on_exit 'false; echo after-false >&2'\nexit 2"))
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertEqual(self.lines()[-1]["decision"], "block")
+
+    def test_each_action_sees_the_hooks_status_and_all_run_in_order(self):
+        out = self.root / "seen"
+        for code in (0, 2, 1):
+            with self.subTest(code=code):
+                out.write_text("")
+                body = self.in_lane(
+                    f"a() {{ local rc=$?; echo \"a $rc\" >> '{out}'; false; }}\n"
+                    f"b() {{ local rc=$?; echo \"b $rc\" >> '{out}'; }}\n"
+                    "pb_on_exit 'a'\npb_on_exit 'b'\n"
+                    f"exit {code}")
+                r = self.run_hook(body)
+                self.assertEqual(r.returncode, code, r.stderr)
+                self.assertEqual(out.read_text().split("\n")[:-1], [f"a {code}", f"b {code}"])
+
+    def test_a_failing_command_under_set_e_is_the_error_with_its_line(self):
+        r = self.run_hook(self.in_lane("set -e\ntrue\ncat /nonexistent-pb-222 2>/dev/null\necho never"))
+        self.assertEqual(r.returncode, 1)
+        rec = self.lines()[-1]
+        self.assertEqual(rec["decision"], "error")
+        self.assertEqual(rec["exit"], 1)
+        self.assertRegex(rec["error"], r"^line \d+: cat /nonexistent-pb-222")
+
+    def test_a_failure_inside_a_function_names_its_command(self):
+        r = self.run_hook(self.in_lane("set -e\nf() { cat /nonexistent-pb-222b 2>/dev/null; echo never; }\nf"))
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("cat /nonexistent-pb-222b", self.lines()[-1]["error"])
+
+    def test_a_stale_failure_is_not_named_for_a_later_exit(self):
+        r = self.run_hook(self.in_lane("cat /nonexistent-pb-222c 2>/dev/null\nexit 3"))
+        self.assertEqual(r.returncode, 3)
+        self.assertEqual(self.lines()[-1]["error"], "exit 3")      # the exit as written, no line of the earlier failure
+
+    def test_without_pb_hook_begin_nothing_is_written(self):
+        script = 'source "$1"\nPROJECT_DIR="$2"; AGENT_DIR="$2/.agent"\nexit 0\n'
+        r = subprocess.run([bash_or_skip(), "-c", script, "_", str(LIB), str(self.proj)], cwd=str(self.proj),
+                           env=self.env(), capture_output=True, text=True, timeout=20)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(self.journal.exists())
+
+
+class TheLine(_Project):
+    def test_one_line_with_every_field(self):
+        r = self.run_hook(self.in_lane("exit 0"), hook="task-gate", payload=PRE)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        recs = self.lines()
+        self.assertEqual(len(recs), 1)
+        rec = recs[0]
+        self.assertEqual(list(rec), FIELDS)
+        self.assertRegex(rec["ts"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+        stamp = calendar.timegm(time.strptime(rec["ts"], "%Y-%m-%dT%H:%M:%SZ"))
+        self.assertLess(abs(stamp - time.time()), 120, rec["ts"])          # UTC, not local time
+        self.assertEqual(rec["hook"], "task-gate")
+        self.assertEqual((rec["event"], rec["tool"], rec["tool_use_id"]), ("PreToolUse", "Bash", "toolu_01ABC"))
+        self.assertEqual((rec["session_id"], rec["host_session_id"], rec["agent_id"]),
+                         ("pid-4242", "host-sess-1", ""))
+        self.assertEqual((rec["decision"], rec["detail"], rec["exit"], rec["error"]), ("allow", "", 0, ""))
+        self.assertIsInstance(rec["ms"], int)
+
+    def test_the_decision_by_exit_status(self):
+        cases = [(PRE, 0, "allow"), (PRE, 2, "block"), (SUB, 0, "ok"), (SUB, 2, "block"), ("", 0, "ok"),
+                 (PRE, 1, "error")]
+        for payload, code, decision in cases:
+            with self.subTest(payload=payload[:40], code=code):
+                self.journal.unlink(missing_ok=True)
+                self.run_hook(self.in_lane(f"exit {code}"), payload=payload)
+                self.assertEqual(self.lines()[-1]["decision"], decision)
+
+    def test_the_hooks_own_decision_detail_and_error_win(self):
+        self.run_hook(self.in_lane('PB_HJ_DECISION=context; PB_HJ_DETAIL="echo full"; PB_HJ_ERROR="the helper"\n'
+                                   "exit 0"), payload=SUB)
+        rec = self.lines()[-1]
+        self.assertEqual((rec["decision"], rec["detail"], rec["error"]), ("context", "echo full", "the helper"))
+
+    def test_a_subagents_call_carries_its_id(self):
+        self.run_hook(self.in_lane("exit 0"), payload=SUB)
+        rec = self.lines()[-1]
+        self.assertEqual((rec["agent_id"], rec["tool_use_id"], rec["event"]), ("a601d5c3", "toolu_01SUB",
+                                                                               "PostToolUse"))
+
+    def test_the_frame_fields_win_over_the_pattern(self):
+        self.run_hook(self.in_lane('TOOL_NAME=Write; PB_HJ_EVENT=PostToolUseFailure; PB_HJ_TOOL_USE_ID=toolu_F\n'
+                                   'PB_HJ_HOST_SESSION=frame-sess; PB_HJ_AGENT_ID=frame-agent\nexit 0'),
+                      payload=SUB)
+        rec = self.lines()[-1]
+        self.assertEqual((rec["tool"], rec["event"], rec["tool_use_id"], rec["host_session_id"], rec["agent_id"]),
+                         ("Write", "PostToolUseFailure", "toolu_F", "frame-sess", "frame-agent"))
+
+    def test_the_duration_and_its_absence(self):
+        for body, check in (("sleep 0.2", lambda ms: self.assertGreaterEqual(ms, 150)),
+                            ("_PB_HJ_T0=", self.assertIsNone), ("_PB_HJ_T0=garbage", self.assertIsNone),
+                            ("_PB_HJ_T0=99999999999999999999.000000", self.assertIsNone)):
+            with self.subTest(body=body):
+                before = len(self.lines())
+                self.run_hook(self.in_lane(body + "\nexit 0"))
+                recs = self.lines()
+                self.assertEqual(len(recs), before + 1)              # a new line each run, never a stale one read
+                check(recs[-1]["ms"])
+
+    def test_a_comma_as_the_decimal_mark_is_read(self):
+        self.run_hook(self.in_lane('_PB_HJ_T0="${EPOCHREALTIME/./,}"\nexit 0'))
+        self.assertIsInstance(self.lines()[-1]["ms"], int)
+
+
+class TheStrings(_Project):
+    def test_ids_keep_only_id_characters(self):
+        payload = PRE.replace("toolu_01ABC", 'toolu_\\u0007x y\\"z\\\\w$(id)')
+        self.run_hook(self.in_lane("exit 0"), payload=payload)
+        got = self.lines()[-1]["tool_use_id"]
+        self.assertTrue(got.startswith("toolu_"), got)
+        self.assertRegex(got, r"^[A-Za-z0-9._:@/+=-]*$")        # JSON escapes are not decoded; the rest is dropped
+
+    def test_text_is_escaped_and_control_characters_go(self):
+        detail = 'say "hi" \\ there\ttab\x01bell'
+        self.run_hook(self.in_lane('PB_HJ_DETAIL="$DETAIL"\nexit 0'), DETAIL=detail)
+        self.assertEqual(self.lines()[-1]["detail"], 'say "hi" \\ there tab bell')
+
+    def test_the_encoded_line_stays_within_one_kib(self):
+        big_id = "a" * 5000
+        payload = (f'{{"session_id":"{big_id}","agent_id":"{big_id}","hook_event_name":"{big_id}",'
+                   f'"tool_name":"{big_id}","tool_input":{{}},"tool_use_id":"{big_id}"}}')
+        body = self.in_lane('PB_HJ_DETAIL="$Q"; PB_HJ_ERROR="$Q"; PB_HJ_DECISION="$Q"; SESSION_ID="$Q"\nexit 0')
+        for q in ('"' * 3000, "\\" * 3000, '\\"' * 1500, "é" * 2000, "😀" * 1000):
+            with self.subTest(q=q[:4]):
+                self.journal.unlink(missing_ok=True)
+                self.run_hook(body, hook="h" * 300, payload=payload, Q=q)
+                raw = self.journal.read_bytes()
+                self.assertLessEqual(len(raw), 1024, raw[:200])
+                rec = json.loads(raw.decode("utf-8"))           # whole characters, whole escapes
+                self.assertEqual(list(rec), FIELDS)
+
+    def test_a_cut_ends_on_a_whole_character_and_a_whole_escape(self):
+        for q in ("é" * 400, "x" + "é" * 400, '\\' * 401, 'x"' * 300):
+            with self.subTest(q=q[:3]):
+                self.journal.unlink(missing_ok=True)
+                self.run_hook(self.in_lane('PB_HJ_DETAIL="$Q"\nexit 0'), Q=q)
+                detail = json.loads(self.journal.read_bytes().decode("utf-8"))["detail"]
+                self.assertTrue(q.startswith(detail), detail[-10:])
+                self.assertGreater(len(detail), 20)
+
+
+class TheToolCallId(_Project):
+    def test_a_nested_decoy_before_the_payloads_own_key_is_not_taken(self):
+        payload = ('{"session_id":"s","hook_event_name":"PostToolUse","tool_name":"mcp__x__y",'
+                   '"tool_input":{"tool_use_id":"decoy-in","a":{"tool_use_id":"decoy-deep"}},'
+                   '"tool_response":{"tool_use_id":"decoy-out"},"tool_use_id":"toolu_REAL","duration_ms":4}')
+        self.run_hook(self.in_lane("exit 0"), payload=payload)
+        self.assertEqual(self.lines()[-1]["tool_use_id"], "toolu_REAL")
+
+    def test_a_key_quoted_inside_a_string_is_not_taken(self):
+        payload = ('{"session_id":"s","hook_event_name":"PreToolUse","tool_name":"Bash",'
+                   '"tool_input":{"command":"echo \\"tool_use_id\\":\\"decoy\\""},"tool_use_id":"toolu_REAL"}')
+        self.run_hook(self.in_lane("exit 0"), payload=payload)
+        self.assertEqual(self.lines()[-1]["tool_use_id"], "toolu_REAL")
+
+    def test_a_long_error_after_the_id_still_finds_it(self):
+        payload = ('{"session_id":"s","hook_event_name":"PostToolUseFailure","tool_name":"Bash",'
+                   '"tool_input":{"command":"false"},"tool_use_id":"toolu_FAIL","error":"' + "e" * 20000 +
+                   '","is_interrupt":false,"duration_ms":9}')
+        self.run_hook(self.in_lane("exit 0"), payload=payload)
+        self.assertEqual(self.lines()[-1]["tool_use_id"], "toolu_FAIL")
+
+    def test_a_five_mb_payload_is_read_quickly(self):
+        payload = PRE.replace('"echo hi"', '"' + "a" * 5_000_000 + '"')
+        t0 = time.monotonic()
+        r = self.run_hook(self.in_lane("exit 0"), payload=payload, timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr[-300:])
+        self.assertLess(time.monotonic() - t0, 3.0)
+        self.assertEqual(self.lines()[-1]["tool_use_id"], "toolu_01ABC")
+
+
+class WhereItWrites(_Project):
+    def test_a_hook_that_found_no_project_writes_nothing_and_does_not_look_again(self):
+        r = self.run_hook('PROJECT_DIR=""\nexit 0')
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(self.journal.exists())
+
+    def test_a_hook_that_did_not_look_finds_the_project_from_its_directory(self):
+        sub = self.proj / "src" / "deep"
+        sub.mkdir(parents=True)
+        r = self.run_hook("exit 0", cwd=sub)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(len(self.lines()), 1)
+
+    def test_outside_any_project_nothing_is_written(self):
+        out = self.root / "elsewhere"
+        out.mkdir()
+        r = self.run_hook("exit 2", cwd=out)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertEqual(list(self.root.rglob("hooks.jsonl")), [])
+
+    def test_a_project_without_a_lane_resolves_it(self):
+        self.run_hook(f'PROJECT_DIR="{self.proj}"\nexit 0')
+        self.assertEqual(len(self.lines()), 1)
+
+    def test_a_malformed_marker_keeps_a_block_and_writes_nothing(self):
+        (self.lane / "current_user").write_text("alice\n../evil\n")
+        r = self.run_hook(f'PROJECT_DIR="{self.proj}"\nexit 2')
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertEqual(list(self.root.rglob("hooks.jsonl")), [])
+
+    def test_an_invalid_marker_flag_writes_nothing(self):
+        r = self.run_hook(self.in_lane("MARKER_INVALID=true\nexit 2"))
+        self.assertEqual(r.returncode, 2)
+        self.assertFalse(self.journal.exists())
+
+    def test_the_fresh_clone_shape_writes_nothing(self):
+        proj = self.root / "clone"
+        (proj / ".agent" / "alice" / "tasks").mkdir(parents=True)
+        for body in (self.in_lane("exit 0", project=proj), f'PROJECT_DIR="{proj}"\nexit 0', "exit 0"):
+            with self.subTest(body=body[:30]):
+                r = self.run_hook(body, cwd=proj)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertEqual(list(proj.rglob("hooks.jsonl")), [])
+                self.assertFalse((proj / ".agent" / "journal").exists())
+
+    def test_a_users_lane(self):
+        proj = self.root / "multi"
+        (proj / ".agent" / "alice" / "tasks").mkdir(parents=True)
+        (proj / ".agent" / "current_user").write_text("alice\n")
+        self.run_hook(f'PROJECT_DIR="{proj}"\nexit 0', cwd=proj)
+        self.assertEqual(len(self.lines(proj / ".agent" / "alice" / "journal" / "hooks.jsonl")), 1)
+        self.assertFalse((proj / ".agent" / "journal").exists())
+
+    def test_a_read_only_lane_writes_nothing_and_keeps_the_status(self):
+        if os.geteuid() == 0:
+            self.skipTest("root writes anywhere")
+        self.lane.chmod(0o555)
+        r = self.run_hook(self.in_lane("exit 2"))
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertFalse((self.lane / "journal").exists())
+
+    def test_a_linked_lane_or_journal_or_file_is_not_written_through(self):
+        target = self.root / "target"
+        target.mkdir()
+        cases = []
+        # a linked lane
+        p1 = self.root / "p1"
+        (p1).mkdir()
+        (target / "lane").mkdir()
+        (target / "lane" / "tasks").mkdir()
+        (p1 / ".agent").symlink_to(target / "lane")
+        cases.append((p1, target / "lane" / "journal"))
+        # a linked journal/
+        p2 = self.root / "p2"
+        (p2 / ".agent" / "tasks").mkdir(parents=True)
+        (target / "j2").mkdir()
+        (p2 / ".agent" / "journal").symlink_to(target / "j2")
+        cases.append((p2, target / "j2" / "hooks.jsonl"))
+        # a linked hooks.jsonl
+        p3 = self.root / "p3"
+        (p3 / ".agent" / "journal").mkdir(parents=True)
+        (p3 / ".agent" / "tasks").mkdir()
+        (target / "f3").write_text("keep\n")
+        (p3 / ".agent" / "journal" / "hooks.jsonl").symlink_to(target / "f3")
+        cases.append((p3, target / "f3"))
+        for proj, victim in cases:
+            with self.subTest(proj=proj.name):
+                before = victim.read_text() if victim.is_file() else None
+                r = self.run_hook(self.in_lane("exit 2", project=proj), cwd=proj)
+                self.assertEqual(r.returncode, 2, r.stderr)
+                after = victim.read_text() if victim.is_file() else None
+                self.assertEqual(before, after)
+                self.assertFalse(victim.is_dir() and any(victim.iterdir()))
+
+    def test_a_fifo_is_not_opened(self):
+        (self.lane / "journal").mkdir()
+        os.mkfifo(self.journal)
+        t0 = time.monotonic()
+        r = self.run_hook(self.in_lane("exit 2"), timeout=10)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        self.assertLess(time.monotonic() - t0, 5)
+
+
+class SideBySide(_Project):
+    def test_writers_side_by_side_tear_no_line(self):
+        # a subshell is not a run (it has no trap): the writer is called directly, many times per process
+        body = self.in_lane('for i in $(seq 1 150); do PB_HJ_DETAIL="w$W-$i"; hook_journal_append 0 ""; done\nexit 0')
+        procs = [subprocess.Popen([bash_or_skip(), "-c",
+                                   '_PB_HJ_T0=$EPOCHREALTIME\nsource "$1"\npb_hook_begin w\nINPUT=""\n' + body,
+                                   "_", str(LIB)], cwd=str(self.proj), env=self.env(W=str(w)),
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.PIPE) for w in range(8)]
+        for p in procs:
+            self.assertEqual(p.wait(timeout=120), 0)
+        recs = self.lines()
+        self.assertEqual(len(recs), 8 * 151)
+        self.assertEqual(len({r["detail"] for r in recs if r["detail"]}), 8 * 150)
+
+
+@_needs("flock")
+class Rotation(_Project):
+    def fill(self, size=LIMIT + 4096):
+        (self.lane / "journal").mkdir(exist_ok=True)
+        line = json.dumps({"ts": "2026-10-16T00:00:00Z", "hook": "old", "detail": "x" * 200}) + "\n"
+        n = size // len(line) + 1
+        with open(self.journal, "w") as f:
+            f.write(line * n)
+        return n
+
+    def archives(self):
+        return sorted((self.lane / "journal").glob("hooks.jsonl.archived-*"))
+
+    def test_past_the_limit_the_file_is_closed_compressed_and_kept(self):
+        n = self.fill()
+        r = self.run_hook(self.in_lane("exit 0"), PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        arch = self.archives()
+        self.assertEqual(len(arch), 1, arch)
+        self.assertTrue(arch[0].name.endswith(".gz"), arch[0].name)
+        with gzip.open(arch[0], "rt") as f:
+            old = f.read().splitlines()
+        self.assertEqual(len(old), n)
+        recs = self.lines()
+        self.assertEqual([r["hook"] for r in recs], ["t-hook"])
+
+    def test_under_the_limit_or_unsampled_nothing_rotates(self):
+        self.fill(size=1000)
+        self.run_hook(self.in_lane("exit 0"), PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1")
+        self.assertEqual(self.archives(), [])
+        self.fill()
+        self.run_hook(self.in_lane("RANDOM=1\nexit 0"), PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1000")
+        self.assertEqual(self.archives(), [])
+
+    def test_two_rotators_rotate_once(self):
+        self.fill()
+        procs = [subprocess.Popen([bash_or_skip(), "-c",
+                                   '_PB_HJ_T0=$EPOCHREALTIME\nsource "$1"\npb_hook_begin r\nINPUT=""\n'
+                                   + self.in_lane("exit 0"), "_", str(LIB)], cwd=str(self.proj),
+                                  env=self.env(PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1"),
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.PIPE) for _ in range(6)]
+        for p in procs:
+            self.assertEqual(p.wait(timeout=60), 0)
+        arch = self.archives()
+        self.assertEqual(len(arch), 1, arch)
+        with gzip.open(arch[0], "rt") as f:
+            closed = [json.loads(x)["hook"] for x in f.read().splitlines()]
+        new = [r["hook"] for r in self.lines()]
+        self.assertEqual(closed.count("r") + new.count("r"), 6)          # no line lost: before or after the rename
+
+    def test_a_writer_that_looked_before_another_rotated_does_not_rotate_again(self):
+        """The second look under the lock: B saw the file past the limit, then waited (a slow `flock` stand-in) while A
+        rotated it; once B holds the lock the file is the new small one, and B must leave it (else it archives it)."""
+        self.fill()
+        slow = self.root / "slow-flock"
+        slow.mkdir()
+        (slow / "flock").write_text(f'#!/bin/sh\nsleep 2\nexec {shutil.which("flock")} "$@"\n')
+        (slow / "flock").chmod(0o755)
+        body = '_PB_HJ_T0=$EPOCHREALTIME\nsource "$1"\npb_hook_begin r\nINPUT=""\n' + self.in_lane("exit 0")
+        b = subprocess.Popen([bash_or_skip(), "-c", body, "_", str(LIB)], cwd=str(self.proj),
+                             env=self.env(PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1", PATH=f"{slow}:{os.environ['PATH']}"),
+                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        time.sleep(0.5)                                     # B has looked and sits in its slow flock
+        a = subprocess.run([bash_or_skip(), "-c", body, "_", str(LIB)], cwd=str(self.proj),
+                           env=self.env(PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1"), capture_output=True, timeout=60)
+        self.assertEqual(a.returncode, 0)
+        self.assertEqual(b.wait(timeout=60), 0)
+        self.assertEqual(len(self.archives()), 1, self.archives())
+
+    def test_a_held_lock_means_no_rotation_and_the_line_is_written(self):
+        self.fill()
+        holder = subprocess.Popen(["flock", str(self.lane / "journal"), "sleep", "5"])
+        try:
+            time.sleep(0.3)
+            t0 = time.monotonic()
+            r = self.run_hook(self.in_lane("exit 0"), PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1")
+            self.assertLess(time.monotonic() - t0, 2.5)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(self.archives(), [])
+            self.assertGreater(self.journal.stat().st_size, LIMIT)
+        finally:
+            holder.kill()
+            holder.wait()
+
+    def test_a_failing_gzip_leaves_the_closed_file_uncompressed(self):
+        n = self.fill()
+        stub = self.root / "bin"
+        stub.mkdir()
+        (stub / "gzip").write_text("#!/bin/sh\nexit 1\n")
+        (stub / "gzip").chmod(0o755)
+        r = self.run_hook(self.in_lane("exit 0"), PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1",
+                          PATH=f"{stub}:{os.environ['PATH']}")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        arch = self.archives()
+        self.assertEqual(len(arch), 1, arch)
+        self.assertFalse(arch[0].name.endswith(".gz"))
+        self.assertEqual(len(arch[0].read_text().splitlines()), n)
+        self.assertEqual(list((self.lane / "journal").glob("*.tmp*")), [])
+
+
+if __name__ == "__main__":
+    unittest.main()

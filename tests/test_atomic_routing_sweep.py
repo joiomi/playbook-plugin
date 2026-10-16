@@ -58,6 +58,10 @@ APPROVED = {
     ("tasks/merge_prep.py", '(agent_dir / "chat_log_counter").write_text('):
         "the chat-log-hook flock-protocol DATA file: an os.replace would swap the inode "
         "out from under a concurrent locked incrementer (documented exception)",
+    ("scripts/pb_journal.py", 'with os.fdopen(fd, "wb") as raw, open(arch, "rb") as src'):
+        "the hook journal's archive compression (task 222): writes a NEW temporary opened "
+        "O_CREAT|O_EXCL|O_NOFOLLOW, then os.link()s it to its final name (no clobber) and only then "
+        "removes the uncompressed copy — a crash leaves the closed file intact, never a live file torn",
     ("scripts/gate-batch-check.py", "marker.write_text(str(tools_now)"):
         "hook-time advisory counter (the consecutive-batch marker); a torn value only "
         "loses one advisory, never a decision (documented exception: hook-time writers)",

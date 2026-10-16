@@ -1,4 +1,5 @@
 #!/bin/bash
+_PB_HJ_T0=$EPOCHREALTIME     # the hook journal's start (task 222): first, before anything else runs
 # monitor-nudge.sh — hook for injecting monitor nudges into agent context
 #
 # Registered as a NON-PLUGIN hook in .claude/settings.json.
@@ -69,6 +70,61 @@ if [ -f "$PROJECT_DIR/.agent/current_user" ]; then
     AGENT_DIR="$PROJECT_DIR/.agent/$CU"
 fi
 
+# The hook journal (task 222): one line per run in <lane>/journal/hooks.jsonl — an inline copy of gate-echo-lib.sh's
+# writer, which this file cannot source: the same fields, caps and sink rules (no line in the fresh-clone shape, for a
+# lane that is a link or not writable, through a linked journal/, into a hooks.jsonl that is a link or not a regular
+# file — a FIFO would hang the hook); no rotation of its own (the plugin's hooks rotate the file).
+# tests/test_hook_journal_parity.py holds the three writers to the same answers. Always keeps the exit status.
+PB_HJ_DECISION=""; PB_HJ_DETAIL=""
+_pb_nudge_journal() {
+    local rc=$? LC_ALL=C lane="$AGENT_DIR" p="$PROJECT_DIR" jdir hfile ts ms=null t0="${_PB_HJ_T0:-}" t1="${EPOCHREALTIME:-}"
+    local re v sub event tool tuid hsid agent decision error="" fresh=false
+    set +e
+    _pbn_id() { v="${1:0:$(( $2 * 2 ))}"; v="${v//[^A-Za-z0-9._:@\/+=-]/}"; v="${v:0:$2}"; }
+    _pbn_first() { re="\"($1)\"[[:space:]]*:[[:space:]]*\"([^\"]*)\""; v=""; [[ "$INPUT" =~ $re ]] && v="${BASH_REMATCH[2]}"; }
+    if [ ! -f "$p/.agent/current_user" ] && [ ! -d "$p/.agent/tasks" ]; then
+        for sub in "$p/.agent"/*/; do [ -d "${sub}tasks" ] && fresh=true && break; done
+    fi
+    if [ "$fresh" != true ] && [ -d "$lane" ] && [ ! -L "$lane" ] && [ -w "$lane" ]; then
+        jdir="$lane/journal"; hfile="$jdir/hooks.jsonl"
+        if [ ! -L "$jdir" ] && { [ -d "$jdir" ] || { [ ! -e "$jdir" ] && { mkdir "$jdir" 2>/dev/null || [ -d "$jdir" ]; }; }; } \
+           && [ ! -L "$jdir" ] && [ ! -L "$hfile" ] && { [ ! -e "$hfile" ] || [ -f "$hfile" ]; }; then
+            TZ=UTC0 printf -v ts '%(%Y-%m-%dT%H:%M:%SZ)T' -1 2>/dev/null
+            if [[ "$t0" =~ ^[0-9]{1,12}[.,][0-9]{6}$ ]] && [[ "$t1" =~ ^[0-9]{1,12}[.,][0-9]{6}$ ]]; then
+                ms=$(( (10#${t1/[.,]/} - 10#${t0/[.,]/}) / 1000 )); [ "$ms" -ge 0 ] || ms=null
+            fi
+            _pbn_first 'hook_event_name|hookEventName'; _pbn_id "$v" 32; event="$v"
+            _pbn_first 'tool_name|toolName'; _pbn_id "$v" 64; tool="$v"
+            tuid=""
+            if [[ "$event" == *Tool* ]]; then
+                v="$INPUT"; [ "${#v}" -le 4096 ] || v="${v:${#v}-4096}"
+                re='.*"(tool_use_id|toolUseId)"[[:space:]]*:[[:space:]]*"([^"]*)"'
+                if [[ "$v" =~ $re ]]; then v="${BASH_REMATCH[2]}"; else _pbn_first 'tool_use_id|toolUseId'; fi
+                _pbn_id "$v" 64; tuid="$v"
+            fi
+            _pbn_first 'session_id|sessionId'; _pbn_id "$v" 64; hsid="$v"
+            _pbn_first 'agent_id|agentId'; _pbn_id "$v" 64; agent="$v"
+            _pbn_id "${PLAYBOOK_SESSION_ID:-}" 64; sid="$v"
+            decision="$PB_HJ_DECISION"
+            if [ -z "$decision" ]; then
+                case "$rc" in 2) decision=block ;; 0) decision=ok ;; *) decision=error ;; esac
+            fi
+            case "$rc" in
+                0|2) ;;
+                *) v="${BASH_COMMAND:0:480}"; v="${v//[$'\001'-$'\037'$'\177']/ }"; v="${v//\\/\\\\}"; v="${v//\"/\\\"}"
+                   v="${v:0:240}"; if [[ "$v" =~ \\+$ ]] && (( ${#BASH_REMATCH[0]} % 2 )); then v="${v%\\}"; fi
+                   error="$v" ;;
+            esac
+            case "$rc" in ''|*[!0-9]*) rc=255 ;; esac
+            printf '{"ts":"%s","hook":"monitor-nudge","event":"%s","tool":"%s","tool_use_id":"%s","session_id":"%s","host_session_id":"%s","agent_id":"%s","decision":"%s","detail":"%s","ms":%s,"exit":%s,"error":"%s"}\n' \
+                "$ts" "$event" "$tool" "$tuid" "$sid" "$hsid" "$agent" "${decision:0:16}" "$PB_HJ_DETAIL" "$ms" "$rc" "$error" \
+                >> "$hfile" 2>/dev/null
+        fi
+    fi
+    exit "$rc"
+}
+trap '_pb_nudge_journal' EXIT
+
 # Read stdin to extract hook_event_name (PostToolUse or UserPromptSubmit)
 INPUT=$(cat)
 export EVENT_NAME=$(echo "$INPUT" | python3 -I -c "import sys,json; print(json.loads(sys.stdin.read() or '{}').get('hook_event_name','UserPromptSubmit'))" 2>/dev/null || echo "UserPromptSubmit")
@@ -112,6 +168,7 @@ for orphan in "$AGENT_DIR"/monitor/nudge.md.delivering.*; do
 done
 
 # No nudge file or empty — silent exit
+PB_HJ_DETAIL="no nudge"
 [ -f "$NUDGE_FILE" ] || exit 0
 [ -s "$NUDGE_FILE" ] || exit 0
 
@@ -125,7 +182,9 @@ done
 # process's pid) + `$RANDOM` are bash builtins (bash 3.2+); together
 # they're unique across concurrent firings and robust to pid reuse.
 DELIVERING="$NUDGE_FILE.delivering.$$.$RANDOM"
+PB_HJ_DETAIL="nudge taken by another run"
 mv "$NUDGE_FILE" "$DELIVERING" 2>/dev/null || exit 0
+PB_HJ_DETAIL="empty nudge"
 
 # Read content
 NUDGE_CONTENT=$(cat "$DELIVERING")
@@ -154,7 +213,9 @@ print(json.dumps(out))
 " <<< "$NUDGE_CONTENT" 2>/dev/null) && [ -n "$NUDGE_JSON" ]; then
     printf '%s\n' "$NUDGE_JSON"
     rm -f "$DELIVERING"
+    PB_HJ_DECISION=context; PB_HJ_DETAIL="nudge delivered"
 else
+    PB_HJ_DETAIL="nudge kept: it could not be built"
     # Emit failed (e.g. python3 missing): preserve at-least-once — re-land our
     # claim as nudge.md. But NEVER clobber a NEWER nudge the monitor may have
     # written after our claim. A `[ -e ] then mv` check is NOT atomic — the

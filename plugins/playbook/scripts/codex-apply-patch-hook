@@ -34,6 +34,28 @@ import sys
 from pathlib import Path
 
 
+def _journal_run(hook):
+    """The hook journal's record of this run (task 222): pb_journal beside this script (loaded by its path — the
+    script may run without its directory on sys.path), or a record that does nothing when it cannot be loaded."""
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("_pb_journal", Path(__file__).resolve().parent / "pb_journal.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod, mod.HookRun(hook)
+    except Exception:
+        class _NoRun:
+            payload = root = None
+            session_id = ""
+
+            def note(self, *a, **k):
+                return None
+        return None, _NoRun()
+
+
+_PBJ, _RUN = _journal_run("codex-apply-patch")
+
+
 def _floor_exit(version_info, event: str):
     """Python-floor gate, run BEFORE the provider import. provider.codex_hooks
     uses 3.10-only `match` syntax, so importing it under < 3.10 raises
@@ -151,17 +173,20 @@ def main() -> int:
     try:
         raw_payload = sys.stdin.read()
         payload = json.loads(raw_payload) if raw_payload else {}
+        _RUN.payload = payload
         event = payload.get("hook_event_name") or ""
-    except Exception:
+    except Exception as exc:
         # Couldn't read or parse stdin — we don't know the event. Fail-open
         # because we can't tell if blocking is appropriate, and bricking every
         # tool call on a parser glitch is worse than a silent allow.
+        _RUN.note("error", "payload unreadable", f"{type(exc).__name__}: {exc}")
         return 0
 
     _write_sentinel(event or "unknown")
 
     floor = _floor_exit(sys.version_info, event)
     if floor is not None:
+        _RUN.note(detail="python < 3.10")
         return floor
 
     try:
@@ -172,7 +197,9 @@ def main() -> int:
             resolve_session_id,
         )
         project_root = _find_project_root()
+        _RUN.root = project_root
         session_id = resolve_session_id()
+        _RUN.session_id = session_id or ""
 
         if event == "PreToolUse":
             decision = apply_patch_pre_decision(payload, project_root, session_id)
@@ -180,6 +207,7 @@ def main() -> int:
                 return 0  # allow
             # W0(e) decision: exit 2 + stderr is the model-visible channel.
             print(decision.get("reason", "blocked by Playbook"), file=sys.stderr)
+            _RUN.note("block", str(decision.get("reason", "blocked by Playbook")).split("\n", 1)[0])
             return 2
 
         if event == "PostToolUse":
@@ -187,6 +215,7 @@ def main() -> int:
                 result = apply_patch_post_context(payload, project_root, session_id)
                 sys.stdout.write(json.dumps(result))
                 sys.stdout.flush()
+                _RUN.note("context" if result else "ok", "echo" if result else "")
             finally:
                 _shell_log(project_root, payload)      # the command ran even if the echo failed (impl panel r2)
             return 0
@@ -200,6 +229,9 @@ def main() -> int:
         #   regression or import error must not silently let an edit through.
         # - PostToolUse + unknown: fail-open. A bad gate echo is harmless.
         msg = f"[codex-apply-patch-hook] internal error: {exc}"
+        # the hook journal (task 222, plan panel opus I4): an internal error, not a decision, whatever the exit says
+        _RUN.note("error", "internal error" + (" (PreToolUse fail-closed)" if event == "PreToolUse" else ""),
+                  f"{type(exc).__name__}: {exc}")
         if event == "PreToolUse":
             print(f"{msg} (PreToolUse fail-closed)", file=sys.stderr)
             return 2
@@ -208,4 +240,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(_PBJ.run_hook(_RUN, main) if _PBJ is not None else main())

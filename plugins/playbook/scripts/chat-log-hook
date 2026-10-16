@@ -1,4 +1,5 @@
 #!/bin/bash
+_PB_HJ_T0=$EPOCHREALTIME     # the hook journal's start (task 222): first, before anything else runs
 # chat-log-hook
 # Hook for logging all user messages with project context
 #
@@ -32,6 +33,7 @@ fi
 # Source shared lib (same directory)
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$HOOK_DIR/gate-echo-lib.sh"
+pb_hook_begin chat-log       # one line per run in journal/hooks.jsonl (task 222)
 
 # Find project root
 PROJECT_DIR=$(find_project_root)
@@ -84,6 +86,7 @@ pb_skip_prompt() {
         new_prompt_generation "$dir"
         rm -f "$dir/turn_end" "$dir/notif_start" 2>/dev/null || true
     fi
+    PB_HJ_DECISION=skip; PB_HJ_DETAIL="not logged: python < 3.10"
     exit 0
 }
 if [ "$PB_PY_FLOOR" = false ]; then
@@ -315,12 +318,14 @@ _lead="${USER_MESSAGE#"${USER_MESSAGE%%[![:space:]]*}"}"
 case "$_lead" in
     "<task-notification>"*|"[SYSTEM NOTIFICATION"*)
         note_notification
+        PB_HJ_DECISION=ok; PB_HJ_DETAIL="not logged: a notification"
         exit 0 ;;
     "<local-command-caveat>"*|"<command-name>"*)
         # The echo of a command the USER ran (a slash command, a `!` command):
         # skipped from the log like a notification, but it is their act and
         # starts a fresh count, as any prompt of theirs does.
         reset_session_counters
+        PB_HJ_DECISION=ok; PB_HJ_DETAIL="not logged: a command of the user's"
         exit 0 ;;
 esac
 
@@ -358,6 +363,7 @@ fi
 # before task 088) — but it is the user's prompt: what a notification began ends.
 if [ -z "$USER_MESSAGE" ]; then
     drop_notification_marks
+    PB_HJ_DECISION=ok; PB_HJ_DETAIL="not logged: empty"
     exit 0
 fi
 
@@ -377,6 +383,7 @@ LAST_TS=$(tail -10 "$LOCAL_LOG" 2>/dev/null | grep -o '\[[0-9-]* [0-9:]* UTC\]' 
 LAST_MSG=$(tail -3 "$LOCAL_LOG" 2>/dev/null | grep -v '^$' | grep -v '^\*\*\[' | grep -v '^---' | tail -1)
 if [ "[$TIMESTAMP]" = "$LAST_TS" ] && [ "$USER_MESSAGE" = "$LAST_MSG" ]; then
     drop_notification_marks     # the user's prompt all the same (task 173)
+    PB_HJ_DECISION=ok; PB_HJ_DETAIL="not logged: a duplicate"
     exit 0
 fi
 
@@ -416,3 +423,4 @@ fi
 
 # Reset tool/write counters for this session (new user prompt = fresh count)
 reset_session_counters
+PB_HJ_DECISION=ok; PB_HJ_DETAIL="logged ${MSG_ID}"     # the hook journal (task 222)

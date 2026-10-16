@@ -175,7 +175,40 @@ host the whole desktop session — and it cost each of them time (a small script
   `tasks work` of one session at the same moment can be recorded in the other order; settings.json is written back
   with 2-space indentation; a task's window still opens at its FIRST activation and ends at the next task's, so
   chat after returning to a task is read as the task in between's; a command the agent itself starts with
-  `export PLAYBOOK_SESSION_ID=<its own session>; ` loses that prefix in the log. The hook journal the owner asked for in the same answer is the next task.
+  `export PLAYBOOK_SESSION_ID=<its own session>; ` loses that prefix in the log. The hook journal the owner asked for in the same answer is the next entry (task 222).
+
+**Every hook run leaves one line in the hook journal** — PHASE-B.md item 2, task 222, the owner's answer of 2026-10-16
+("Istoric curat + jurnal de hook-uri": "daca nu avem date despre cum a lucrat si ce a facut, nu il vom putea
+imbunatati"). Until now a hook left a trace only for what `enforcement.jsonl` records (a block, an override, an
+allowed code edit) or when it printed (the host's transcript): a silent allow, an echo shown or skipped, a released
+stop and every duration left none.
+- Each run of a playbook hook in a playbook project appends ONE line to `.agent/<lane>/journal/hooks.jsonl` — a file
+  of its own beside `enforcement.jsonl`: Claude's and grok's eight bash hooks, the project's `monitor-nudge.sh`,
+  codex's three python hooks and `command_guard.py`. The line says which hook, when (UTC), the event, the tool and the
+  host's tool-call id (the transcript's `toolu_…`), playbook's session id and the host's, a subagent's id, what the
+  hook decided (`allow`, `block`, `context`, `ok`, `skip`, `error`) and a short why (`echo full`, `quiet`, `released:
+  no active task`, `held: 2 unchecked gate(s) in task 007`, `git-push-force`, `session id injected`, …), how long it
+  ran, its exit status and, on a failure, what failed. It holds no command, path or prompt. Fields and rules:
+  `docs/enforcement-journal.md`, "The hook journal"; ledger `PB-HOOK-JOURNAL`.
+- A live session (Claude Code 2.1.301, haiku): 30 lines for its 30 hook runs, each tool call's line carrying the
+  transcript's id, the subagent's lines its id, the guard's block naming its rule.
+- A journal failure never changes a decision: the bash hooks' new exit runner keeps the exit status exactly and gives
+  the hooks' own exit actions their status as `$?` — the stop hook's turn-end mark is still written only after an
+  allowed stop (plan panel: all five judges caught that a naive runner would have marked blocked stops too). The
+  guard's python writes its own line, with the rule that decided; without `pb_journal` it decides as before.
+- The hook-payload normalizer's frame is v4: the event, the tool-call id, the subagent id and the host session id,
+  read by the JSON parser, so a key of the same name nested in a tool's input cannot stand in for them.
+- What it costs (`scripts/bench_hook_journal.py`, CPU time per run, the hooks with and without the line): +0.4 to
+  +0.9 ms for a bash hook, +4.3 ms for the guard's python (it loads `pb_journal` and `pathlib` for the line).
+- Past 20 MB the file is closed: renamed to `hooks.jsonl.archived-<stamp>-<pid>` and compressed beside it (measured:
+  20 MB → 1.9 MB in 0.18 s), every archive kept — the owner's answer of 18:04, "Comprimate, toate"; about one run in
+  32 looks at the size (`PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK`).
+- Limits: a hook the host kills at its time limit writes nothing; the monitor's own session and a judge's write
+  nothing (their hooks exit first); the duration starts at the hook's first line (bash's start and a `BASH_ENV` file
+  are not in it) and includes the shell log's lock wait; where a `BASH_ENV` file sets a DEBUG trap, `error` names
+  that trap; the bash writers check then append, so a FIFO swapped in between can hang one run; task-dir-watch reads
+  the tool-call id by pattern; `.claude/hooks/monitor-nudge.sh` writes its line only after `/playbook:init` copies the
+  new script into the project.
 
 ## [1.6.3] — 2026-10-15
 

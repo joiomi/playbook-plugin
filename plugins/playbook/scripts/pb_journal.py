@@ -28,12 +28,12 @@ Stdlib only. Python 3.10+ floor (same as the rest of the plugin).
 
 from __future__ import annotations
 
-import datetime
 import json
 import os
 import re
 import stat
 import sys
+import time
 from pathlib import Path
 
 # Same username grammar as gate-echo-lib.sh::resolve_agent_dir and
@@ -212,6 +212,271 @@ def append_lifecycle(agent_dir, *, event, task, detail="", session_id="") -> Non
         _warn(exc)
 
 
+# --- The hook journal (task 222, PHASE-B item 2) ---------------------------------------------------------------------
+# The owner, 2026-10-16 10:26: "Istoric curat + jurnal de hook-uri". One line per run of a playbook hook, in
+# `<lane>/journal/hooks.jsonl` — the same fields, caps, line bound, lane and sink rules as the bash writer
+# (`gate-echo-lib.sh::hook_journal_append`; tests/test_hook_journal_parity.py holds the two, and monitor-nudge.sh's
+# inline copy, to the same answers). Python writes it for the hooks that are python: codex's three and
+# command_guard.py. Past 20 MB the file is closed — renamed, compressed, kept (the owner, 2026-10-16 18:04: "Comprimate,
+# toate") — so a project whose only hooks are python rotates too (plan panel 2026-10-16: codex, grok, opus).
+HOOK_FIELDS = ("ts", "hook", "event", "tool", "tool_use_id", "session_id", "host_session_id", "agent_id", "decision",
+               "detail", "ms", "exit", "error")
+_HJ_LIMIT = 20971520
+_HJ_LINE_MAX = 1024                     # bytes, the newline included (one append; Linux's PIPE_BUF is 4096)
+_HJ_ID_DROP = re.compile(r"[^A-Za-z0-9._:@/+=-]")
+
+
+def _hj_id(value, cap: int) -> str:
+    """Only the characters an id or a name is made of, at most `cap` bytes (nothing left to escape)."""
+    return _HJ_ID_DROP.sub("", str(value or "")[: cap * 2])[:cap]
+
+
+def _hj_text(value, cap: int) -> str:
+    """Control characters as spaces, cut so that the JSON-escaped text is at most `cap` bytes, on a whole character
+    (the bash writer's rule: `\\` and `"` take two bytes once escaped)."""
+    out, used = [], 0
+    for ch in str(value or "")[: cap * 2]:
+        if ch < " " or ch == "\x7f":
+            ch = " "
+        n = 2 if ch in '"\\' else len(ch.encode("utf-8", "surrogatepass"))
+        if used + n > cap:
+            break
+        out.append(ch)
+        used += n
+    return "".join(out).encode("utf-8", "replace").decode("utf-8")
+
+
+def resolve_hook_lane(project_root) -> "Path | None":
+    """The lane a hook-journal line may go to, or None — STRICTER than `resolve_lane_dir`, as the bash writer is: an
+    invalid marker is None (not the root lane), the fresh-clone shape is None, and so is a lane that is missing, a
+    symbolic link or not writable."""
+    try:
+        if not project_root:
+            return None
+        agent = Path(project_root) / ".agent"
+        marker = agent / "current_user"
+        lane = resolve_lane_dir(project_root)
+        if lane is None:
+            return None
+        if marker.exists() or marker.is_symlink():
+            if lane == agent:               # resolve_lane_dir's fallback on a marker it could not validate
+                return None
+        if lane.is_symlink() or not lane.is_dir() or not os.access(lane, os.W_OK):
+            return None
+        return lane
+    except Exception:
+        return None
+
+
+def append_hook_run(project_root, *, hook, event="", tool="", tool_use_id="", session_id="", host_session_id="",
+                    agent_id="", decision="", detail="", ms=None, exit_code=0, error="") -> None:
+    """Append one hook-journal line for a run of `hook` in the project at `project_root`. Never raises; a write that
+    cannot be made is skipped. `ms` is the run's duration (None when unknown)."""
+    try:
+        lane = resolve_hook_lane(project_root)
+        if lane is None:
+            return
+        if not (isinstance(ms, int) and not isinstance(ms, bool) and ms >= 0):
+            ms = None
+        code = exit_code if isinstance(exit_code, int) and not isinstance(exit_code, bool) else 255
+        rec = {"ts": _utcnow(), "hook": _hj_id(hook, 32), "event": _hj_id(event, 32), "tool": _hj_id(tool, 64),
+               "tool_use_id": _hj_id(tool_use_id, 64), "session_id": _hj_id(session_id, 64),
+               "host_session_id": _hj_id(host_session_id, 64), "agent_id": _hj_id(agent_id, 64),
+               "decision": _hj_id(decision, 16), "detail": _hj_text(detail, 128), "ms": _cap_int(ms) if ms is not None
+               else None, "exit": max(0, min(code, 255)), "error": _hj_text(error, 240)}
+        data = (json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+        if len(data) > _HJ_LINE_MAX:
+            rec["detail"] = rec["error"] = ""
+            data = (json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+            if len(data) > _HJ_LINE_MAX:
+                return
+        _hj_rotate(lane / "journal")
+        _write_record(lane, rec, name="hooks.jsonl", data=data)
+    except OSError:
+        return                              # a sink that cannot be written (a FIFO: ENXIO) is skipped quietly, as in bash
+    except Exception as exc:                # defence in depth: never propagate
+        _warn(exc)
+
+
+def hook_ms(start: str = "", fallback: float = 0.0):
+    """The run's duration in whole ms from a start stamp in bash's `EPOCHREALTIME` form (`<secs>.<micro>`, a comma
+    under some locales) — the wrapper's exported `_PB_HJ_T0` — else from `fallback` (a `time.time()`), else None."""
+    now = time.time()
+    m = re.fullmatch(r"(\d{1,12})[.,](\d{6})", (start or "").strip())
+    t0 = int(m.group(1)) + int(m.group(2)) / 1e6 if m else fallback
+    if not t0:
+        return None
+    ms = int((now - t0) * 1000)
+    return ms if ms >= 0 else None
+
+
+def _cwd_project_root():
+    """The project a hook runs in: PLAYBOOK_PROJECT_ROOT (codex's wrapper sets it), else the first directory up from the
+    working directory with `.agent/tasks` or `.agent/<lane>/tasks`; None outside one."""
+    env = os.environ.get("PLAYBOOK_PROJECT_ROOT", "")
+    if env:
+        return env
+    d = os.getcwd()
+    while True:
+        agent = os.path.join(d, ".agent")
+        if os.path.isdir(os.path.join(agent, "tasks")):
+            return d
+        if os.path.isdir(agent):
+            try:
+                if any(os.path.isdir(os.path.join(agent, s, "tasks")) for s in os.listdir(agent)):
+                    return d
+            except OSError:
+                pass
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        d = parent
+
+
+class HookRun:
+    """One run of a python hook, for the hook journal (task 222). The hook notes the payload it read, its project root,
+    playbook's session id where it resolved one, and what it decided (`note`); `finish(rc)` writes the line. The
+    decision defaults by exit status as the bash runner's does: 2 block; 0 allow on PreToolUse, ok elsewhere; else
+    error. Nothing here raises."""
+
+    def __init__(self, hook: str):
+        self.hook = hook
+        self.t0 = time.time()
+        self.start = os.environ.get("_PB_HJ_T0", "")     # command-guard-hook's start, exported before its `exec`
+        self.payload = {}
+        self.root = None
+        self.session_id = ""
+        self.decision = self.detail = self.error = ""
+        self.done = False
+
+    def note(self, decision: str = "", detail: str = "", error: str = "") -> None:
+        if decision:
+            self.decision = decision
+        if detail:
+            self.detail = detail
+        if error:
+            self.error = error
+
+    def finish(self, rc, error: str = "") -> None:
+        try:
+            if self.done:
+                return
+            self.done = True
+            p = self.payload if isinstance(self.payload, dict) else {}
+
+            def s(*keys):
+                for k in keys:
+                    v = p.get(k)
+                    if isinstance(v, str):
+                        return v
+                return ""
+
+            code = rc if isinstance(rc, int) and not isinstance(rc, bool) else 1
+            event = s("hook_event_name", "hookEventName")
+            decision = self.decision or ("block" if code == 2 else
+                                         ("allow" if event == "PreToolUse" else "ok") if code == 0 else "error")
+            append_hook_run(self.root or _cwd_project_root(), hook=self.hook, event=event,
+                            tool=s("tool_name", "toolName"), tool_use_id=s("tool_use_id", "toolUseId"),
+                            session_id=self.session_id, host_session_id=s("session_id", "sessionId"),
+                            agent_id=s("agent_id", "agentId"), decision=decision, detail=self.detail,
+                            ms=hook_ms(self.start, self.t0), exit_code=code, error=self.error or error)
+        except Exception as exc:
+            _warn(exc)
+
+
+def run_hook(run: "HookRun", main) -> int:
+    """Run a python hook's `main()` and write its journal line; its exit status and its exceptions are unchanged (an
+    exception is recorded as the error, then raised again)."""
+    try:
+        rc = main()
+    except SystemExit as e:
+        run.finish(e.code if isinstance(e.code, int) else (0 if e.code is None else 1))
+        raise
+    except BaseException as e:
+        run.finish(1, f"{type(e).__name__}: {e}")
+        raise
+    run.finish(rc)
+    return rc
+
+
+class NoRun:
+    """What a hook notes into when pb_journal could not be loaded: nothing happens."""
+    payload = root = None
+    session_id = ""
+
+    def note(self, *a, **k):
+        return None
+
+    def finish(self, *a, **k):
+        return None
+
+
+def _hj_rotate(jdir: Path) -> None:
+    """About one run in 32 (PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK, 1-1000) looks at the size; past the limit, under a lock
+    on the journal directory taken without waiting and after a second look, the file is renamed to an archive name that
+    does not exist yet and compressed beside it (stdlib gzip); the uncompressed copy is removed only once the compressed
+    one is in place. Every archive is kept. A busy lock: no rotation this run. Never raises."""
+    try:
+        every = os.environ.get("PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK", "32")
+        every = int(every) if every.isdigit() and len(every) <= 4 and 1 <= int(every) <= 1000 else 32
+        if int.from_bytes(os.urandom(2), "big") % every != 0:     # not `random`: its import costs the guard ~0.5 ms
+            return
+        jfile = jdir / "hooks.jsonl"
+        st = os.lstat(jfile)
+        if not stat.S_ISREG(st.st_mode) or st.st_size <= _HJ_LIMIT or jdir.is_symlink():
+            return
+        import fcntl
+        fd = os.open(str(jdir), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                return
+            st = os.lstat(jfile)
+            if not stat.S_ISREG(st.st_mode) or st.st_size <= _HJ_LIMIT:
+                return
+            arch = jdir / f"hooks.jsonl.archived-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
+            if os.path.lexists(arch):
+                return
+            os.link(jfile, arch)            # no clobber, as `mv -n`
+            os.unlink(jfile)
+            _hj_compress(arch)
+        finally:
+            os.close(fd)
+    except Exception:
+        return
+
+
+def _hj_compress(arch: Path) -> None:
+    import gzip
+    gz = Path(str(arch) + ".gz")
+    tmp = Path(f"{arch}.gz.tmp-{os.getpid()}")
+    if os.path.lexists(gz) or os.path.lexists(tmp):
+        return
+    made = False
+    try:
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
+        made = True
+        with os.fdopen(fd, "wb") as raw, open(arch, "rb") as src, gzip.GzipFile(fileobj=raw, mode="wb",
+                                                                               compresslevel=6) as out:
+            while True:
+                chunk = src.read(1 << 20)
+                if not chunk:
+                    break
+                out.write(chunk)
+        os.link(tmp, gz)
+        os.unlink(tmp)
+        made = False
+        os.unlink(arch)
+    except Exception:
+        if made:
+            try:
+                if not tmp.is_symlink():
+                    tmp.unlink()
+            except OSError:
+                pass
+
+
 # The atomic-append floor every journal line must stay under (PIPE_BUF's POSIX
 # minimum), newline included.
 _LINE_FLOOR = 512
@@ -284,10 +549,11 @@ def _is_int(v) -> bool:
         return False
 
 
-def _write_record(agent_dir, rec) -> None:
+def _write_record(agent_dir, rec, name="enforcement.jsonl", data=None) -> None:
     """Write ONE record dict as a single O_APPEND line into the lane's journal.
 
-    Shared by `append` and `append_review`. Skips silently unless the resolved
+    Shared by `append`, `append_review`, `append_lifecycle` and (`name="hooks.jsonl"`, `data` its encoded line)
+    `append_hook_run`. Skips silently unless the resolved
     lane dir already exists (playbook-managed project); the `journal/` subdir is
     created inside that existing lane, never `.agent` itself. One `os.write` of
     one line: POSIX makes an O_APPEND write of at most PIPE_BUF bytes atomic
@@ -315,7 +581,7 @@ def _write_record(agent_dir, rec) -> None:
     # a TOCTOU swap of the dir between this lstat and the open below is a tiny
     # window on a best-effort log with no reader waiting — far under this
     # feature's threat model; a dirfd/openat anchor would close it fully.)
-    jfile = jdir / "enforcement.jsonl"
+    jfile = jdir / name
     # Skip a symlinked `journal` DIRECTORY or a symlinked leaf FILE — either would
     # let the open below resolve OUTSIDE the lane. lstat both components: this is
     # the first guard (O_NOFOLLOW below may be absent — getattr → 0 — and then
@@ -337,7 +603,8 @@ def _write_record(agent_dir, rec) -> None:
             return
     except OSError:
         return
-    data = (json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+    if data is None:
+        data = (json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
     # O_NONBLOCK: a FIFO with no reader fails ENXIO here rather than blocking.
     # O_NOFOLLOW: a symlinked final component fails ELOOP (no lane escape).
     # Read with getattr(…, 0): a platform without them gets no-ops (the islink
@@ -358,7 +625,7 @@ def _write_record(agent_dir, rec) -> None:
 
 
 def _utcnow() -> str:
-    return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())     # not `datetime`: ~0.7 ms of import on every guard run
 
 
 def _head(command, limit: int = _HEAD_LIMIT) -> str:

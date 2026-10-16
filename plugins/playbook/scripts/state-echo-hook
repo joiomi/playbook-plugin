@@ -1,4 +1,5 @@
 #!/bin/bash
+_PB_HJ_T0=$EPOCHREALTIME     # the hook journal's start (task 222): first, before anything else runs
 # state-echo-hook
 # PostToolUse hook — shows the current gate from task.md, when it changed.
 #
@@ -86,6 +87,7 @@ classify_tool() {
 # Source shared lib (same directory)
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$HOOK_DIR/gate-echo-lib.sh"
+pb_hook_begin state-echo     # one line per run in journal/hooks.jsonl (task 222)
 
 # Find project root — only matches .agent/tasks/ (playbook projects)
 PROJECT_DIR=$(find_project_root)
@@ -153,13 +155,21 @@ if [ "$PB_PY_FLOOR" = true ]; then
     IFS= read -r -d '' PB_CMD        || PB_FRAME_COMPLETE=false
     IFS= read -r -d '' PB_TRANSCRIPT || PB_FRAME_COMPLETE=false
     IFS= read -r -d '' PB_PAYLOAD    || PB_FRAME_COMPLETE=false
+    IFS= read -r -d '' PB_REAL       || PB_FRAME_COMPLETE=false      # the resolved path: the gate's, unused here
+    # v4 (task 222): the hook journal's event, tool-call id, subagent id, host session id
+    IFS= read -r -d '' PB_HJ_EVENT        || PB_FRAME_COMPLETE=false
+    IFS= read -r -d '' PB_HJ_TOOL_USE_ID  || PB_FRAME_COMPLETE=false
+    IFS= read -r -d '' PB_HJ_AGENT_ID     || PB_FRAME_COMPLETE=false
+    IFS= read -r -d '' PB_HJ_HOST_SESSION || PB_FRAME_COMPLETE=false
 } < <(printf '%s' "$INPUT" | python3 -E -s "$HOOK_DIR/hook-payload-normalize.py" --emit-fields 2>/dev/null) || true
 
-if [ "$PB_SENTINEL" = "pb-fields-v3" ] && [ "$PB_FRAME_COMPLETE" = true ]; then     # its 8th record (the resolved path) is the gate's
+if [ "$PB_SENTINEL" = "pb-fields-v4" ] && [ "$PB_FRAME_COMPLETE" = true ]; then
     PB_FUSED=1
+    PB_HJ_FRAME=1      # the hook journal takes the frame's four as they are (task 222)
     INPUT="$PB_PAYLOAD"
 else
     TOOL_NAME=""; PB_PATH=""; PB_NORM=""; PB_CMD=""; PB_TRANSCRIPT=""
+    PB_HJ_EVENT=""; PB_HJ_TOOL_USE_ID=""; PB_HJ_AGENT_ID=""; PB_HJ_HOST_SESSION=""     # the journal reads $INPUT
     NORMALIZED=$(printf '%s' "$INPUT" | python3 -E -s "$HOOK_DIR/hook-payload-normalize.py" 2>/dev/null || true)
     if [ -n "$NORMALIZED" ]; then
         INPUT="$NORMALIZED"
@@ -200,7 +210,7 @@ _pb_shell_log_on_exit() {
     fi
     return 0
 }
-trap '_pb_shell_log_on_exit || true' EXIT
+pb_on_exit '_pb_shell_log_on_exit'      # the runner (gate-echo-lib.sh, task 222) runs it `|| true`, keeps the status
 
 # Task 192 (#48): the id and what the resolver's own walk read, from ONE call (a
 # second walk would not show a transient failure of the first).
@@ -217,6 +227,7 @@ fi
 # `sessions/` + "" (the sessions dir itself). One line, nothing else written.
 if [ -z "$SESSION_ID" ]; then
     session_unresolved_notice
+    PB_HJ_DECISION=skip; PB_HJ_DETAIL="no session"
     exit 0
 fi
 
@@ -227,6 +238,7 @@ if [ "$PB_PY_FLOOR" != true ]; then
         _counters_mark "$AGENT_DIR/sessions/$SESSION_ID/counters"
     fi
     echo "{\"hookSpecificOutput\":{\"hookEventName\":\"${PB_HOOK_EVENT}\",\"additionalContext\":\"# ⚠ playbook needs python3 >= 3.10 (found: ${PB_PY_FOUND:-no python3 on PATH}) — no gate echo, and this call was not counted: the stop hook holds this turn like one that wrote. Upgrade python3.\"}}"
+    PB_HJ_DECISION=context; PB_HJ_DETAIL="python < 3.10 (not counted)"
     exit 0
 fi
 
@@ -260,6 +272,7 @@ if ! _pb_session_dir_ok "$SESSION_DIR"; then     # it, or `.agent/sessions` itse
         case "$TOOL_NAME" in Edit|Write) write_log_append "$INPUT" "$PROJECT_DIR" ;; esac
     fi
     printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"# ⚠ this session'"'"'s directory under .agent/sessions/ (or .agent/sessions itself) is a link — not written, not counted (the stop hook holds this turn like one that wrote)."}}\n' "$PB_HOOK_EVENT"
+    PB_HJ_DECISION=context; PB_HJ_DETAIL="session directory is a link (not counted)"
     exit 0
 fi
 # Task 192 (#41): only where this hook may write. On a fresh multi-user clone
@@ -298,6 +311,9 @@ fi
 
 # Increment tool/write counters
 PB_NOT_COUNTED=false
+# the hook journal (task 222): a call whose count could not be made (the lock not given) says so in its line
+_pb_hj_count_note() { [ "$PB_NOT_COUNTED" != true ] || PB_HJ_DETAIL="${PB_HJ_DETAIL:+$PB_HJ_DETAIL; }not counted"; }
+pb_on_exit '_pb_hj_count_note'
 if [ "$AGENT_WRITABLE" = true ]; then
     # read_counter_int (not read_counter): the counter bytes are untrusted and
     # `$(( ))` executes command substitution embedded in an operand (C5).
@@ -334,6 +350,7 @@ if [ "$AGENT_WRITABLE" = true ]; then
 fi
 # A failed call: counted above, no gate echo (task 196).
 if [ "$PB_HOOK_EVENT" = PostToolUseFailure ]; then
+    PB_HJ_DECISION=ok; PB_HJ_DETAIL="failed call counted"
     exit 0
 fi
 
@@ -485,6 +502,12 @@ _pb_print() {
     if [ "$PB_MODE" != quiet ]; then
         out=$(_pb_json "$text") || out=""
     fi
+    # the hook journal (task 222): what this call showed
+    PB_HJ_DECISION=ok
+    case "$PB_MODE" in
+        quiet) PB_HJ_DETAIL="quiet" ;;
+        *) if [ -n "$out" ]; then PB_HJ_DECISION=context; PB_HJ_DETAIL="echo $PB_MODE"; else PB_HJ_DETAIL="echo $PB_MODE not built"; fi ;;
+    esac
     if [ "$PB_MODE" = full ] && [ "$PB_CLAIMED" = true ]; then
         # the claim is checked, the answer printed and acknowledged in ONE hold — printf only, no python (task 220,
         # C4: a hook that lost its claim while making its answer printed its older state)
@@ -501,6 +524,7 @@ _pb_print() {
             fi
         else
             echo '{}'                       # superseded: the hook that holds the claim prints the newer state
+            PB_HJ_DECISION=ok; PB_HJ_DETAIL="echo superseded"
         fi
         counters_unlock
         return 0
@@ -563,6 +587,7 @@ fi
 TASK_FILE=$(task_record_file "$AGENT_DIR" "$TASK")
 if [ -z "$TASK_FILE" ]; then
     _pb_json "# [${TASK}] — task file not found" || echo '{}'
+    PB_HJ_DECISION=context; PB_HJ_DETAIL="task file not found"
     exit 0
 fi
 
@@ -615,6 +640,7 @@ if [ "$PB_GATES_OK" != true ]; then
     # Nothing is decided on gates that could not be read: no entry, no memory, the warning at every call.
     _pb_json "$(_pb_warnings "# ⚠ [${TASK}] the task's gates could not be read (scripts/task-status.py --echo failed) — no gate echo this call.")" \
         || echo '{}'
+    PB_HJ_DECISION=context; PB_HJ_DETAIL="gates unreadable"
     exit 0
 fi
 TOTAL_GATES=$(_safe_int "$TOTAL_GATES"); DONE_GATES=$(_safe_int "$DONE_GATES"); GATE_BELOW=$(_safe_int "$GATE_BELOW")
@@ -667,6 +693,7 @@ fi
 # round 1, grok / opus): the change stays for the main agent's next call to see and log.
 if [ "$PB_SUBAGENT" = true ]; then
     _pb_json "$(_pb_warnings "$PB_CORE")" || echo '{}'
+    PB_HJ_DECISION=context; PB_HJ_DETAIL="subagent: gate shown"
     exit 0
 fi
 
@@ -735,8 +762,10 @@ if [ "$AGENT_WRITABLE" = true ]; then
         if [ "$PLAYBOOK_WRITE_FAILED" = true ] && [ "${PLAYBOOK_SANDBOXED:-}" != "1" ]; then
             # a write failed in this call (its count, or here): said, never a quiet call (task 220, sonnet, grok)
             _pb_json "$(_pb_warnings "$PB_CORE")" || echo '{}'
+            PB_HJ_DECISION=context; PB_HJ_DETAIL="stale read: a write failed"
         else
             echo '{}'
+            PB_HJ_DECISION=ok; PB_HJ_DETAIL="stale read (counted)"
         fi
         exit 0
     fi

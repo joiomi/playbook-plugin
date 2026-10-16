@@ -1,4 +1,5 @@
 #!/bin/bash
+_PB_HJ_T0=$EPOCHREALTIME     # the hook journal's start (task 222): first, before anything else runs
 # stop-hook
 # Stop hook — prevents agent from finishing when task gates are unchecked.
 #
@@ -32,6 +33,7 @@ fi
 # Source shared lib (same directory)
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$HOOK_DIR/gate-echo-lib.sh"
+pb_hook_begin stop           # one line per run in journal/hooks.jsonl (task 222)
 
 # Find project root
 PROJECT_DIR=$(find_project_root)
@@ -110,9 +112,12 @@ fi
 # already exists, for a resolved session and a readable lane — and never INTO the
 # counters file, which a tool call's hook may be updating (impl panel r1; see
 # write_session_mark). It never changes the exit
-# status: the trap calls it as `… || true`, because under `set -e` a command
-# that fails inside a plain EXIT trap replaces the shell's exit status with 1,
-# whatever it was (measured on bash 5.1, for 0 and for 2). The only write below
+# status: it is an exit action of the hook journal's runner (`pb_on_exit`, task
+# 222), which runs it `|| true`, gives it the hook's own status as `$?` (it reads
+# `$?` first: a status the runner left would mark a blocked stop — plan panel
+# 2026-10-16, all five judges) and ends with `exit` of that status — because
+# under `set -e` a command that fails inside a plain EXIT trap replaces the
+# shell's exit status with 1, whatever it was (measured on bash 5.1, for 0 and for 2). The only write below
 # runs for an exit 0, so today that could only turn an allowed stop into a hook
 # error; the guard is there so that no later line added to this function can
 # turn a BLOCK (2) into 1, which the host reads as a non-blocking error. A mark
@@ -146,7 +151,7 @@ pb_note_turn_end() {
     fi
     return 0
 }
-trap 'pb_note_turn_end || true' EXIT
+pb_on_exit 'pb_note_turn_end'     # the runner (gate-echo-lib.sh, task 222) gives it the hook's status as \$?, `|| true`
 
 # Enforcement-journal target (log-only, best-effort). The resolved lane, but
 # NEVER in the fresh-clone shape (lanes exist, no marker): a root journal there
@@ -156,6 +161,7 @@ PB_JOURNAL_DIR=""
 
 # Safety valve: if already blocked once, allow stopping to prevent loops
 if [ "$STOP_ACTIVE" = "True" ]; then
+    PB_HJ_DECISION=allow; PB_HJ_DETAIL="released: stop re-issued (valve)"
     exit 0
 fi
 
@@ -168,6 +174,7 @@ BLOCKED: .agent/current_user is malformed — cannot resolve your lane to check
 task gates. Fix it to a single username line (letters, digits, and ._- only),
 then finish.
 MSG
+    PB_HJ_DETAIL="held: marker invalid"
     exit 2
 fi
 
@@ -175,6 +182,7 @@ fi
 if [ -n "$PLAYBOOK_EVAL_CONFIG" ] && [ -f "$PLAYBOOK_EVAL_CONFIG" ]; then
     EVAL_STOP=$(python3 -I -c "import json; print(json.loads(open('$PLAYBOOK_EVAL_CONFIG').read()).get('stop_guard','on'))" 2>/dev/null || echo "on")
     if [ "$EVAL_STOP" = "off" ]; then
+        PB_HJ_DECISION=allow; PB_HJ_DETAIL="released: eval mode, stop guard off"
         exit 0
     fi
 fi
@@ -187,6 +195,7 @@ fi
 if [ -z "$SESSION_ID" ]; then
     session_unresolved_notice
     echo "BLOCKED: cannot check this session's task gates (see the line above). Stop again to end the turn." >&2
+    PB_HJ_DETAIL="held: no session"
     exit 2
 fi
 
@@ -195,6 +204,7 @@ STATE_FILE="$SESSION_DIR/current_state"
 
 # No active task — allow
 if [ ! -f "$STATE_FILE" ]; then
+    PB_HJ_DECISION=allow; PB_HJ_DETAIL="released: no active task"
     exit 0
 fi
 
@@ -204,6 +214,7 @@ TASK=$(head -1 "$STATE_FILE" | tr -d '[:space:]')
 # a valid pointer. Blank it so it reads as "no active task".
 case "$TASK" in *[!0-9]*) TASK="" ;; esac
 if [ -z "$TASK" ]; then
+    PB_HJ_DECISION=allow; PB_HJ_DETAIL="released: no active task"
     exit 0
 fi
 
@@ -219,6 +230,7 @@ TASK_FILE=$(task_record_file "$AGENT_DIR" "$TASK")
 # gates to finish?", and an absent task has none. The two should NOT be forced to
 # agree. (See docs/guarantee-ledger.json PB-COMMAND-FAILURE-POLICY.)
 if [ -z "$TASK_FILE" ]; then
+    PB_HJ_DECISION=allow; PB_HJ_DETAIL="released: task file not found"
     exit 0
 fi
 
@@ -320,10 +332,11 @@ if [ "$PB_STATE_READ" != true ]; then
     fi
 fi
 case "$STATUS_LINE" in
-    blocked) exit 0 ;;   # core._is_blocked: the EXACT token (the writer only ever writes the bare word)
+    blocked) PB_HJ_DECISION=allow; PB_HJ_DETAIL="released: task ${TASK} blocked"; exit 0 ;;   # core._is_blocked: the EXACT token (the writer only ever writes the bare word)
 esac
 
 if [ "$UNCHECKED" -eq 0 ]; then
+    PB_HJ_DECISION=allow; PB_HJ_DETAIL="released: all gates of task ${TASK} checked"
     exit 0
 fi
 
@@ -354,6 +367,7 @@ if [ -f "$COUNTER_FILE" ] && [ "${PB_GREP_RC:-0}" -le 1 ] && [ "$PB_COUNTS_SURE"
     WRITES=$(read_counter_int "$COUNTER_FILE" writes)
     TOOLS=$(read_counter_int "$COUNTER_FILE" tools)
     if [ "$WRITES" -eq 0 ] && [ "$TOOLS" -lt 5 ]; then
+        PB_HJ_DECISION=allow; PB_HJ_DETAIL="released: a chat reply (writes 0, tools ${TOOLS})"
         exit 0
     fi
     # Owner's Q1 (task 173): the counters above run from the last USER prompt — a
@@ -379,6 +393,7 @@ if [ -f "$COUNTER_FILE" ] && [ "${PB_GREP_RC:-0}" -le 1 ] && [ "$PB_COUNTS_SURE"
        && ! prompt_generation_unreadable "$SESSION_DIR" \
        && [ "${PB_TURN_NONCE%%-*}" = "$(read_prompt_generation "$SESSION_DIR")" ] \
        && [ "$WRITES" -eq "$((10#${PB_NOTIF_START%% *}))" ]; then
+        PB_HJ_DECISION=allow; PB_HJ_DETAIL="released: a notification's turn with no write"
         exit 0
     fi
 fi
@@ -396,6 +411,7 @@ fi
 # scripts/state-echo-hook and provider/codex_hooks.py keep their own (advisory /
 # experimental) Freehand pattern — disclosed in the ledger, not lockstep.
 if [ "$PB_STATE_READ" = true ] && [ "$PB_RELEASE" = release ]; then
+    PB_HJ_DECISION=allow; PB_HJ_DETAIL="released: freehand gate"
     exit 0
 fi
 
@@ -407,4 +423,5 @@ First unchecked: ${FIRST_GATE}
 
 Complete all gates before finishing.
 MSG
+PB_HJ_DETAIL="held: ${UNCHECKED} unchecked gate(s) in task ${TASK}"
 exit 2

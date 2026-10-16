@@ -1,4 +1,5 @@
 #!/bin/bash
+_PB_HJ_T0=$EPOCHREALTIME     # the hook journal's start (task 222): first, before anything else runs
 # session-start-hook
 # SessionStart hook — persists session_id as PLAYBOOK_SESSION_ID env var.
 #
@@ -57,12 +58,16 @@ if [ -n "$PB_HOST_MSG" ]; then
         "$PB_HOST_MSG" "$PB_HOST_MSG"
 fi
 if [ -n "$PB_FLOOR_MSG" ]; then
+    # recorded in the hook journal too (task 222, plan panel codex I4): its writer needs no python
+    { source "$(cd "$(dirname "$0")" && pwd)/gate-echo-lib.sh" && pb_hook_begin session-start; } 2>/dev/null || true
+    PB_HJ_DECISION=skip; PB_HJ_DETAIL="python < 3.10"
     exit 0
 fi
 
 # Source shared lib (same directory)
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$HOOK_DIR/gate-echo-lib.sh"
+pb_hook_begin session-start  # one line per run in journal/hooks.jsonl (task 222)
 
 # Use PID-based session ID via resolve_session_id (gate-echo-lib.sh).
 # Walks process tree, finds claude/codex/agy/pi ancestor, uses pid-<that>.
@@ -126,9 +131,11 @@ if [ -n "$PROJECT_DIR" ]; then
        && [ ! -L "$AGENT_DIR/task-registry" ]; then
         python3 -E -s "$HOOK_DIR/task-dir-watch.py" --enrol "$PROJECT_DIR" "$AGENT_DIR" > /dev/null 2>&1 || true
     fi
+    PB_HJ_DETAIL="session set up"
     if [ -z "$SESSION_ID" ]; then
-        :   # unresolved (task 105) — no session directory to provision
+        PB_HJ_DETAIL="no session"   # unresolved (task 105) — no session directory to provision
     elif [ -n "$LANES_NO_MARKER" ]; then
+        PB_HJ_DETAIL="lanes without a marker"
         {
             echo "[playbook] WARNING: per-user lanes exist but .agent/current_user is missing."
             echo "           Lane(s): ${LANES_NO_MARKER% }"
@@ -144,6 +151,7 @@ if [ -n "$PROJECT_DIR" ]; then
         if ! _pb_session_dir_ok "$SESSION_DIR"; then
             # nothing made through a link (task 194, impl panel r1)
             echo "[playbook] WARNING: $SESSION_DIR (or .agent/sessions itself) is a link — this session's state is not recorded there; remove the link if it is not yours." >&2
+            PB_HJ_DETAIL="session directory is a link"
         else
             mkdir -p "$SESSION_DIR"
             # F19: bind the session to its OWN transcript from the very first

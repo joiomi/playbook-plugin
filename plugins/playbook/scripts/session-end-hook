@@ -1,4 +1,5 @@
 #!/bin/bash
+_PB_HJ_T0=$EPOCHREALTIME     # the hook journal's start (task 222): first, before anything else runs
 # session-end-hook
 # SessionEnd hook — cleans up per-session state directory.
 #
@@ -19,12 +20,16 @@ fi
 if ! python3 -I -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null; then
     PB_PY_FOUND="$(python3 --version 2>/dev/null | head -1 | tr -cd 'A-Za-z0-9._ -')"
     echo "playbook: needs python3 >= 3.10 (found: ${PB_PY_FOUND:-no python3 on PATH}) — session cleanup skipped; upgrade python3" >&2
+    # recorded in the hook journal too (task 222, plan panel codex I4): its writer needs no python
+    { source "$(cd "$(dirname "$0")" && pwd)/gate-echo-lib.sh" && pb_hook_begin session-end; } 2>/dev/null || true
+    PB_HJ_DECISION=skip; PB_HJ_DETAIL="python < 3.10"
     exit 0
 fi
 
 # Source shared lib (same directory)
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$HOOK_DIR/gate-echo-lib.sh"
+pb_hook_begin session-end    # one line per run in journal/hooks.jsonl (task 222)
 
 # Find project root
 PROJECT_DIR=$(find_project_root)
@@ -77,6 +82,7 @@ case "$END_REASON" in
     logout|prompt_input_exit|other|exit)
         ;;                      # the process is going away — clean up
     *)
+        PB_HJ_DETAIL="kept: reason ${END_REASON:-unknown}"
         exit 0 ;;               # clear, resume, unknown, unparseable — KEEP
 esac
 
@@ -85,6 +91,7 @@ esac
 # below would delete every session's pointer. Nothing to clean: exit.
 if [ -z "$SESSION_ID" ]; then
     session_unresolved_notice
+    PB_HJ_DECISION=skip; PB_HJ_DETAIL="no session"
     exit 0
 fi
 
@@ -99,7 +106,7 @@ case "$SESSION_ID" in
     pid-*)
         _PB_LOWEST=$(_agent_walk all)
         _PB_LOWEST="${_PB_LOWEST%% *}"
-        [ -n "$_PB_LOWEST" ] && [ "pid-$_PB_LOWEST" = "$SESSION_ID" ] || exit 0
+        [ -n "$_PB_LOWEST" ] && [ "pid-$_PB_LOWEST" = "$SESSION_ID" ] || { PB_HJ_DETAIL="kept: not this process's session"; exit 0; }
         ;;
 esac
 
@@ -109,6 +116,7 @@ SESSION_DIR="$AGENT_DIR/sessions/$SESSION_ID"
 # with `.agent/sessions` a link, the directory of that name in the link's target was removed).
 if ! _pb_inside_project "$PROJECT_DIR" "$SESSION_DIR"; then
     echo "[playbook] $SESSION_DIR lies behind a link — not removed" >&2
+    PB_HJ_DETAIL="kept: behind a link"
     exit 0
 fi
 # ...and removed from INSIDE `sessions`, by its relative name (impl panel r2, codex: a swap between the
@@ -117,5 +125,6 @@ case "$SESSION_ID" in ''|.|..|*/*) exit 0 ;; esac
 ( cd "$AGENT_DIR/sessions" 2>/dev/null && _pb_cwd_is "$PROJECT_DIR" "$AGENT_DIR/sessions" || exit 0
   [ -L "./$SESSION_ID" ] && exit 0
   rm -rf -- "./$SESSION_ID" ) 2>/dev/null || true
+PB_HJ_DETAIL="session directory removed"
 
 exit 0

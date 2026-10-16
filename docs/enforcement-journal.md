@@ -22,7 +22,8 @@ link before, measured). The bash twin checks and then writes, so a process that 
 between the two can still hang it; the Python writer opens non-blocking and without following a link.
 
 Writers live in `scripts/pb_journal.py` (`append`, `append_review`, `append_lifecycle`) and its bash
-twin `scripts/gate-echo-lib.sh::journal_enforcement`. Guarantees:
+twin `scripts/gate-echo-lib.sh::journal_enforcement`. The hook journal — one line per run of a hook — is a file of
+its own beside this one, `journal/hooks.jsonl` ([below](#the-hook-journal--journalhooksjsonl-task-222)). Guarantees:
 `PB-ENFORCEMENT-JOURNAL` (enforcement decisions) and `PB-REVIEW-SPEND-JOURNAL`
 (review spend).
 
@@ -241,3 +242,73 @@ Example:
 ```json
 {"ts":"2026-10-16T12:18:43Z","session_id":"pid-123","hook":"tasks","decision":"record","reason":"new","task":"001","detail":"quick first"}
 ```
+
+## The hook journal — `journal/hooks.jsonl` (task 222)
+
+The owner, 2026-10-16: "e important ca playbook sa isi salveze infomratiile legat de ce face, ca sa il putem analiza
+si imbunatati" — and "Istoric curat + jurnal de hook-uri". Every run of a playbook hook appends ONE line to
+`.agent/<lane>/journal/hooks.jsonl` (root lane: `.agent/journal/hooks.jsonl`): Claude's and grok's eight bash hooks,
+the project's `monitor-nudge.sh`, codex's three python hooks and `command_guard.py`. A file of its own, not a fifth
+family of `enforcement.jsonl`: that file keeps the decisions and the CLI's task transitions the task windows read, and
+this one grows tens of times faster (measured on this repository, 2026-10-07 to 2026-10-16: 8,000-13,000 hook runs a
+day, implied by the transcripts' tool calls, against 80-500 enforcement records a day). The two files share no key
+beyond the session ids and the time.
+
+Every line has the same thirteen keys, in this order:
+
+| key | meaning |
+|---|---|
+| `ts` | UTC, `YYYY-MM-DDTHH:MM:SSZ`, when the hook EXITED |
+| `hook` | `session-start`, `chat-log`, `task-gate`, `command-guard`, `task-dir-watch`, `state-echo`, `stop`, `session-end`, `monitor-nudge`, `codex-apply-patch`, `codex-stop`, `codex-user-prompt` |
+| `event` | the host's event (`PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit`, `Stop`, `SessionStart`, `SessionEnd`) |
+| `tool` | the tool's name (`Bash`, `Edit`, an MCP tool's), "" for a prompt, a stop or a session |
+| `tool_use_id` | the host's id of the tool call — the transcript's (`toolu_…`), "" where there is none |
+| `session_id` | playbook's session id (`pid-N`, as `sessions/<id>` and `enforcement.jsonl` name it), "" where the hook resolved none |
+| `host_session_id` | the host's own session id, from the payload |
+| `agent_id` | a subagent's id when a subagent made the call, else "" |
+| `decision` | `allow` (a PreToolUse hook let the call through, or the stop hook released the turn), `block` (exit 2: the call or the stop held), `context` (the hook showed the agent something), `ok` (it ran and showed nothing), `skip` (it did nothing by design: no session, python below 3.10), `error` (it failed — whatever its exit status says) |
+| `detail` | the hook's short why, from a fixed vocabulary: `echo full`, `echo reminder`, `quiet`, `failed call counted`, `released: no active task`, `held: 2 unchecked gate(s) in task 007`, `active task 007`, `no active task`, `gate batch refused`, `git-push-force`, `session id injected`, `logged M042`, `nudge delivered`, … |
+| `ms` | how long the hook ran, whole milliseconds from its FIRST line to its exit; `null` when bash has no `EPOCHREALTIME` |
+| `exit` | the hook's exit status |
+| `error` | on a failure, what failed: the hook's own name for it, or its own failing source line (`line 214: cat "$f"`, as written in the hook — never a command of the agent's) |
+
+Example (a live session, task 222):
+
+```json
+{"ts":"2026-10-16T16:00:17Z","hook":"command-guard","event":"PreToolUse","tool":"Bash","tool_use_id":"toolu_01QQ4HUXVqTcKHE1zLD87eio","session_id":"pid-2025865","host_session_id":"f156c929-b7b5-4e71-bf48-878ac7c78aeb","agent_id":"","decision":"block","detail":"git-push-force","ms":64,"exit":2,"error":""}
+```
+
+**What it never holds:** no command, no path, no prompt, no file content — only the hooks' own words and ids. It is
+not a conversation record, so a judge's read-only sandbox does not hide it.
+
+**How it is written.** The bash hooks set `_PB_HJ_T0=$EPOCHREALTIME` on their first line and call `pb_hook_begin`
+once the library is sourced; their own exit actions (the shell log's line, the stop hook's turn-end mark) go through
+`pb_on_exit`. One EXIT trap runs those actions, each seeing the hook's own exit status as `$?`, then writes the line,
+and ends with that same status: a journal failure never changes a decision. The python hooks use
+`pb_journal.HookRun`/`run_hook`; `command-guard-hook` hands its start time to `command_guard.py` before its `exec`, and
+the python side writes the guard's line, with the rule that decided. The payload's ids come from the hook-payload
+normalizer's frame (v4) where the hook reads it (the task gate, the state echo), else by pattern: `tool_use_id` is
+the last match in the payload's last 4 KiB (Claude's comes after the tool's input and response), the event, the
+host session and the agent the first match (they come before any tool input — measured on a live session).
+
+Each line is one append of at most 1,024 bytes (Linux's `PIPE_BUF` is 4,096), so hooks side by side tear none. Ids
+keep only id characters; `detail` and `error` are escaped and cut on a whole character and a whole escape. Nothing is
+written outside a playbook project, in the fresh-clone shape (lanes, no marker), with an invalid `.agent/current_user`,
+into a lane that is a link or not writable, through a linked `journal/`, or into a `hooks.jsonl` that is a link or not
+a regular file. The bash writers check and then append, so a process that swaps the file for a FIFO between the two
+can still hang one hook run; the python writer opens non-blocking and without following a link.
+
+**Rotation (the owner, 2026-10-16 18:04: "Comprimate, toate").** About one run in 32 (`PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK`)
+looks at the file's size. Past 20 MB, under a lock on the journal directory taken without waiting and after a second
+look, the file is renamed to `hooks.jsonl.archived-<YYYYmmdd-HHMMSS>-<pid>` and compressed to `….gz` beside it
+(measured: 20 MB → 1.9 MB in 0.18 s); the uncompressed copy is removed only once the compressed one is in place, and
+every archive is kept — no hook deletes a journal file. A busy lock means no rotation on that run. Without `gzip`, on
+a failure, or if the hook is killed meanwhile, the closed file stays uncompressed. A line written while another hook
+renames the file lands in the closed file or the new one, never nowhere.
+
+**Not recorded:** a hook the host kills at its time limit (it runs no exit trap); the role skips — the monitor's own
+session (`PLAYBOOK_ROLE=monitor`) and a judge's (`judge`, `tail-cert`), whose hooks exit before anything; a hook that
+finds no playbook project. **Bounds:** the duration starts at the hook's first line — bash's own start and a
+`BASH_ENV` file are not in it — and includes the shell log's lock wait (up to 2 s); where a `BASH_ENV` file sets a
+DEBUG trap, `error` names that trap instead of the failing line; task-dir-watch's `tool_use_id` is read by pattern,
+so a host whose payload put a nested object carrying the same key AFTER the id could mislabel it.

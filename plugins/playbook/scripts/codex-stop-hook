@@ -19,6 +19,28 @@ import sys
 from pathlib import Path
 
 
+def _journal_run(hook):
+    """The hook journal's record of this run (task 222): pb_journal beside this script (loaded by its path — the
+    script may run without its directory on sys.path), or a record that does nothing when it cannot be loaded."""
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("_pb_journal", Path(__file__).resolve().parent / "pb_journal.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod, mod.HookRun(hook)
+    except Exception:
+        class _NoRun:
+            payload = root = None
+            session_id = ""
+
+            def note(self, *a, **k):
+                return None
+        return None, _NoRun()
+
+
+_PBJ, _RUN = _journal_run("codex-stop")
+
+
 def _floor_ok(version_info) -> bool:
     """Python-floor gate, run BEFORE the provider import. provider.codex_hooks
     uses 3.10-only `match` syntax, so importing it under < 3.10 raises
@@ -75,15 +97,19 @@ def main() -> int:
     # InvalidUserMarkerError from a malformed `.agent/current_user` escaped as a
     # traceback and exit 1 instead of the documented per-event policy.
     if not _floor_ok(sys.version_info):
+        _RUN.note("skip", "python < 3.10")
         return 0
     try:
         _bootstrap_imports()
         from provider.codex_hooks import stop_decision_for_no_task_code_changes
 
         payload = json.load(sys.stdin)
+        _RUN.payload = payload
         project_root = _find_project_root()
+        _RUN.root = project_root
         from provider.codex_hooks import resolve_session_id
         session_id = resolve_session_id()
+        _RUN.session_id = session_id or ""
         turn_id = payload.get("turn_id")
 
         decision = stop_decision_for_no_task_code_changes(
@@ -92,10 +118,16 @@ def main() -> int:
             turn_id=turn_id,
         )
         sys.stdout.write(json.dumps(decision))
+        # the hook journal (task 222, plan panel grok I3): a block is said in JSON with exit 0
+        if isinstance(decision, dict) and decision.get("decision") == "block":
+            _RUN.note("block", "held: code changed with no task")
+        else:
+            _RUN.note("allow", "released")
     except Exception as exc:
         print(f"[codex-stop-hook] skipped: {exc}", file=sys.stderr)
+        _RUN.note("error", "skipped", f"{type(exc).__name__}: {exc}")
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(_PBJ.run_hook(_RUN, main) if _PBJ is not None else main())

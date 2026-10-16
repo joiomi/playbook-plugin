@@ -1,4 +1,5 @@
 #!/bin/bash
+_PB_HJ_T0=$EPOCHREALTIME     # the hook journal's start (task 222): first, before anything else runs
 # task-gate-hook
 # PreToolUse hook — guards:
 #   0. Write — block creating new task.md files (only tasks new CLI does that)
@@ -20,6 +21,7 @@ fi
 # Source shared lib (same directory)
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$HOOK_DIR/gate-echo-lib.sh"
+pb_hook_begin task-gate      # one line per run in journal/hooks.jsonl (task 222)
 
 # is_code_file_path is defined in gate-echo-lib.sh (sourced above) so the codex
 # parity test can source it in isolation — see tests/test_gate_classifier_parity.py.
@@ -99,7 +101,7 @@ PB_RAW_INPUT="$INPUT"
 emit_session_injection() {
     local updated=""
     # below the floor the CLI refuses to run: nothing to inject, a plain allow (task 194)
-    [ "$PB_PY_FLOOR" = true ] || exit 0
+    [ "$PB_PY_FLOOR" = true ] || { PB_HJ_DETAIL="session id not injected (python < 3.10)"; exit 0; }
     updated=$(printf '%s' "$PB_RAW_INPUT" | python3 -I -c '
 import json, sys
 d = json.loads(sys.stdin.buffer.read().decode("utf-8"))
@@ -114,6 +116,9 @@ sys.stdout.write(json.dumps(ti))
 ' "$SESSION_ID" 2>/dev/null) || updated=""
     if [ -n "$updated" ]; then
         printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","updatedInput":%s}}\n' "$updated"
+        PB_HJ_DETAIL="session id injected"
+    else
+        PB_HJ_DETAIL="session id injection failed"
     fi
     exit 0
 }
@@ -125,6 +130,7 @@ BLOCKED: The enforcing task gate could not read a complete tool payload.
 No authorization decision can be made from missing or malformed fields.
 Retry the tool call after restoring python3/the Playbook hook scripts.
 MSG
+    PB_HJ_DETAIL="payload unreadable"
     exit 2
 }
 
@@ -159,12 +165,19 @@ PB_FRAME_COMPLETE=true
     IFS= read -r -d '' PB_TRANSCRIPT || PB_FRAME_COMPLETE=false
     IFS= read -r -d '' PB_PAYLOAD    || PB_FRAME_COMPLETE=false
     IFS= read -r -d '' REAL_PATH     || PB_FRAME_COMPLETE=false
+    # v4 (task 222): the hook journal's event, tool-call id, subagent id, host session id
+    IFS= read -r -d '' PB_HJ_EVENT        || PB_FRAME_COMPLETE=false
+    IFS= read -r -d '' PB_HJ_TOOL_USE_ID  || PB_FRAME_COMPLETE=false
+    IFS= read -r -d '' PB_HJ_AGENT_ID     || PB_FRAME_COMPLETE=false
+    IFS= read -r -d '' PB_HJ_HOST_SESSION || PB_FRAME_COMPLETE=false
 } < <(printf '%s' "$INPUT" | python3 -E -s "$HOOK_DIR/hook-payload-normalize.py" --emit-fields 2>/dev/null) || true
 
-if [ "$PB_SENTINEL" = "pb-fields-v3" ] && [ "$PB_FRAME_COMPLETE" = true ]; then
+if [ "$PB_SENTINEL" = "pb-fields-v4" ] && [ "$PB_FRAME_COMPLETE" = true ]; then
     PB_FUSED=1
+    PB_HJ_FRAME=1      # the hook journal takes the frame's four as they are (task 222)
     INPUT="$PB_PAYLOAD"
 else
+    PB_HJ_EVENT=""; PB_HJ_TOOL_USE_ID=""; PB_HJ_AGENT_ID=""; PB_HJ_HOST_SESSION=""     # the journal reads $INPUT
     # Recovery path: normalize, then extract every field independently.  A
     # producer that emitted only a sentinel/partial frame must never turn an
     # Edit into empty truth.  Any decode/extraction failure blocks: this is the
@@ -283,6 +296,7 @@ BLOCKED: playbook needs python3 >= 3.10 (found: ${PB_PY_FOUND:-no python3 on PAT
 The checks that authorize a file edit run on python3, so below 3.10 the task gate
 authorizes none (${TOOL_NAME}). Shell commands still run. Upgrade python3, then retry.
 MSG
+    PB_HJ_DETAIL="python < 3.10"
     exit 2
 fi
 
@@ -299,6 +313,7 @@ if [ -n "$PLAYBOOK_EVAL_CONFIG" ] && [ -f "$PLAYBOOK_EVAL_CONFIG" ]; then
                 emit_session_injection
             fi
         fi
+        PB_HJ_DETAIL="eval mode: guards off"
         echo '{}'; exit 0
     fi
 fi
@@ -412,6 +427,7 @@ Don't create task files manually. The CLI enforces templates and numbering.
 Use:  .claude/bin/tasks new <type> <name>
 Types: audit, bugfix, build, cleanup, eval, feature, light, ops, quick, refactor, research (run `tasks new` to see the current set)
 MSG
+            PB_HJ_DETAIL="task.md made by hand"
             exit 2
         fi
     fi
@@ -494,6 +510,7 @@ if [ "$TOOL_NAME" = "Edit" ] || [ "$TOOL_NAME" = "Write" ] || [ "$TOOL_NAME" = "
                     --session-dir "$SESSION_DIR" 2>/dev/null) || BATCH_RC=$?
                 if [ "$BATCH_RC" = "2" ]; then
                     echo "$BATCH_MSG" >&2
+                    PB_HJ_DETAIL="gate batch refused"
                     exit 2
                 fi
             fi
@@ -525,11 +542,12 @@ if [ "$TOOL_NAME" = "Edit" ] || [ "$TOOL_NAME" = "Write" ] \
 
     # Allow .agent/ and .claude/ edits (task management, hook config)
     case "$NORM_PATH" in
-        */.agent/*|*/.claude/*) exit 0 ;;
+        */.agent/*|*/.claude/*) PB_HJ_DETAIL="exempt path (.agent/.claude)"; exit 0 ;;
     esac
 
     # Only block code files
     if ! is_code_file_path "$NORM_PATH"; then
+        PB_HJ_DETAIL="not a code file"
         exit 0
     fi
 
@@ -549,6 +567,7 @@ Fix it to a single username line (letters, digits, and ._- only), e.g.:
   echo alice > .agent/current_user
 Code edits are blocked until the lane resolves.
 MSG
+        PB_HJ_DETAIL="marker invalid"
         exit 2
     fi
 
@@ -600,6 +619,7 @@ BLOCKED: could not read the active task's ## Status via python3 ($HOOK_DIR/task-
 The task gate cannot tell whether task ${TASK} is still open, so no code edit is
 authorized. Restore python3/the Playbook plugin (tasks.core must import), then retry.
 MSG
+                        PB_HJ_DETAIL="status unreadable"
                         exit 2
                     fi
                     STATUS=${STATUS%$'\r'}
@@ -620,11 +640,13 @@ BLOCKED: task ${TASK} is blocked — paused on a decision that is not the agent'
 Code edits wait until the task resumes. When the decision is made, resume with:
   .claude/bin/tasks work ${TASK}
 MSG
+                            PB_HJ_DETAIL="task ${TASK} blocked"
                             exit 2 ;;
                         done*) BLOCK_REASON="pointer to done task" ;;  # fall through to BLOCK
                         *)     # active (or unreadable) → authorize
                             journal_enforcement "$PB_JOURNAL_DIR" task-gate allow "active task" \
                                 "$SESSION_ID" "$TOOL_NAME" "$NORM_PATH"
+                            PB_HJ_DETAIL="active task ${TASK}"
                             exit 0 ;;
                     esac
                 fi
@@ -648,6 +670,7 @@ Workflow:
 
 To resume an existing task:  .claude/bin/tasks work <N>
 MSG
+    PB_HJ_DETAIL="$BLOCK_REASON"
     exit 2
 fi
 
@@ -668,6 +691,7 @@ BLOCKED: Judge session cannot create or activate tasks.
 
 The judge reviews plans — it doesn't manage tasks.
 MSG
+        PB_HJ_DETAIL="judge session: tasks new/work"
         exit 2
     fi
 

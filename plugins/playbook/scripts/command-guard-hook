@@ -1,4 +1,5 @@
 #!/bin/bash
+_PB_HJ_T0=$EPOCHREALTIME     # the hook journal's start (task 222): first, before anything else runs
 # command-guard-hook — PreToolUse on shell tools: block destructive/irreversible
 # commands (rm -rf /, git push --force, curl|sh, DB DROP, …) until acknowledged.
 # Thin wrapper; all logic + FAIL-OPEN live in command_guard.py, which also
@@ -7,7 +8,15 @@
 # interpreter start instead of two, on a hook bound to every shell call. Codex
 # registers command_guard.py directly (its exec_command shape is native).
 # `exec` hands stdin straight through: no cat, no second process.
+# The hook journal (task 222): command_guard.py writes this run's line itself — it knows which rule decided — from
+# the start time exported below (an `exec` runs no EXIT trap, so there is no second line). Each fail-open arm, which
+# never reaches python, writes its line through the lib's runner (`_pb_cg_journal`): it reads the payload itself.
 if [ "${PLAYBOOK_ROLE:-}" = "monitor" ]; then exit 0; fi
+_pb_cg_journal() {
+    { source "$(cd "$(dirname "$0")" && pwd)/gate-echo-lib.sh" && pb_hook_begin command-guard; } 2>/dev/null || return 0
+    INPUT=$(cat)
+    PB_HJ_DECISION=allow; PB_HJ_DETAIL="guard disabled: $1"
+}
 # No python3 at all → the guard cannot run → fail OPEN, loudly (the same uniform
 # policy as the < 3.10 and missing-helper arms below; task 100 found this arm
 # silent — a partial host was allowing every shell call with no trace).
@@ -15,6 +24,7 @@ command -v python3 >/dev/null 2>&1 || {
     echo "[command-guard-hook] WARNING: python3 not found on PATH — the" \
          "destructive-command guard is DISABLED for this call (failing open)." \
          "Install python3 >= 3.10 to restore it." >&2
+    _pb_cg_journal "no python3"
     exit 0
 }
 # python3 < 3.10 cannot even parse command_guard.py's dependencies (3.10-only
@@ -26,6 +36,7 @@ python3 -I -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/
     echo "[command-guard-hook] WARNING: python3 < 3.10 ($(python3 --version 2>&1)) —" \
          "Playbook needs python3 >= 3.10; the destructive-command guard is DISABLED" \
          "for this call (failing open). Upgrade python3 to restore it." >&2
+    _pb_cg_journal "python < 3.10"
     exit 0
 }
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -44,6 +55,8 @@ if [ ! -r "$GUARD" ]; then
     echo "[command-guard-hook] WARNING: helper not readable ($GUARD) — the" \
          "destructive-command guard is DISABLED for this call (failing open)." \
          "Reinstall/repair the Playbook plugin to restore it." >&2
+    _pb_cg_journal "helper not readable"
     exit 0
 fi
+export _PB_HJ_T0
 exec python3 -E -s "$GUARD"

@@ -1593,3 +1593,272 @@ _shell_log_spool() {
     mv -n -- "$tmp" "$lane/$name" 2>/dev/null || rm -f -- "$tmp" 2>/dev/null
     return 0
 }
+
+# ---------------------------------------------------------------------------------------------------------------------
+# The hook journal (task 222, PHASE-B item 2; the owner, 2026-10-16 10:26: "Istoric curat + jurnal de hook-uri"). Every
+# run of a playbook hook appends ONE JSON line to `<lane>/journal/hooks.jsonl`: which hook, when (UTC), the event, the
+# tool call (its name and the host's tool-call id), playbook's session id and the host's, a subagent's id, what the hook
+# decided and a short why, how long it ran, its exit status and, on an error, the hook's own failing line. A file of its
+# own: `enforcement.jsonl` keeps the decisions and the CLI's task transitions the task windows read (task 221).
+#
+# A hook's first line is `_PB_HJ_T0=$EPOCHREALTIME`; once the lib is sourced it calls `pb_hook_begin <name>`, and its
+# own exit actions go through `pb_on_exit` (a second `trap … EXIT` would replace the runner). The runner keeps the hook's
+# exit status exactly: it turns `set +e`, every step is `|| true`, each action sees the hook's status as `$?` (the stop
+# hook writes its turn-end mark only after an allowed stop — plan panel 2026-10-16, all five judges) and it ends with
+# `exit` of that status. A journal failure never changes a decision. A hook killed by the host writes nothing.
+_PB_HJ_LIMIT=20971520           # past 20 MB the file is closed: renamed, compressed, kept (the owner, 2026-10-16 18:04)
+_PB_HJ_LINE_MAX=1024            # one append of at most this many bytes, the newline included (PIPE_BUF is 4096)
+_PB_HJ_HOOK=""
+_PB_HJ_ACTIONS=()
+_PB_HJ_ERR_CMD=""
+_PB_HJ_ERR_LINE=""
+PB_HJ_DECISION=""          # these, and the frame's four below, start empty in every hook: never inherited
+PB_HJ_DETAIL=""
+PB_HJ_ERROR=""
+PB_HJ_FRAME=""
+PB_HJ_EVENT=""
+PB_HJ_TOOL_USE_ID=""
+PB_HJ_AGENT_ID=""
+PB_HJ_HOST_SESSION=""
+
+# pb_hook_begin NAME — from here on, this run writes its line when the hook exits.
+pb_hook_begin() {
+    _PB_HJ_HOOK="$1"
+    trap '_PB_HJ_ERR_CMD=$BASH_COMMAND; _PB_HJ_ERR_LINE=$LINENO' ERR
+    trap '_pb_hj_exit' EXIT
+}
+
+# pb_on_exit 'COMMAND' — run COMMAND when the hook exits, before its line is written, with `$?` the hook's status.
+pb_on_exit() {
+    _PB_HJ_ACTIONS+=("$1")
+}
+
+_pb_hj_status() { return "$1"; }
+
+_pb_hj_exit() {
+    _PB_HJ_RC=$?
+    local _pb_hj_failing="$BASH_COMMAND" _pb_hj_action
+    set +e
+    trap - ERR
+    for _pb_hj_action in "${_PB_HJ_ACTIONS[@]}"; do
+        _pb_hj_status "$_PB_HJ_RC"
+        eval "$_pb_hj_action" || true
+    done
+    hook_journal_append "$_PB_HJ_RC" "$_pb_hj_failing" 2>/dev/null || true
+    exit "$_PB_HJ_RC"
+}
+
+# hook_journal_append RC FAILING-COMMAND — the run's line, from the hook's variables: where the hook read the
+# normalizer's frame (PB_HJ_FRAME=1), its PB_HJ_EVENT, PB_HJ_TOOL_USE_ID, PB_HJ_HOST_SESSION, PB_HJ_AGENT_ID and
+# TOOL_NAME as they are, empty ones too (a key nested in the tool's input must not stand in for an absent one); else
+# by pattern from $INPUT. Always returns 0 and prints nothing.
+hook_journal_append() {
+    local LC_ALL=C      # lengths and cuts in bytes
+    local rc="$1" failing="${2:-}" lane="" jdir hfile line ts t0="${_PB_HJ_T0:-}" t1="${EPOCHREALTIME:-}" ms=null v
+    local hook event tool tuid sid hsid agent decision detail error
+    [ -n "$_PB_HJ_HOOK" ] || return 0
+    _pb_hj_lane
+    [ -n "$lane" ] || return 0
+    jdir="$lane/journal"
+    hfile="$jdir/hooks.jsonl"
+    [ -L "$jdir" ] && return 0
+    if [ ! -d "$jdir" ]; then
+        [ -e "$jdir" ] && return 0
+        mkdir "$jdir" 2>/dev/null || [ -d "$jdir" ] || return 0
+    fi
+    _pb_sink_ok "$jdir" "$hfile" || return 0
+    case "$rc" in ''|*[!0-9]*) rc=255 ;; esac
+    TZ=UTC0 printf -v ts '%(%Y-%m-%dT%H:%M:%SZ)T' -1 2>/dev/null || return 0
+    if [[ "$t0" =~ ^[0-9]{1,12}[.,][0-9]{6}$ ]] && [[ "$t1" =~ ^[0-9]{1,12}[.,][0-9]{6}$ ]]; then
+        ms=$(( (10#${t1/[.,]/} - 10#${t0/[.,]/}) / 1000 ))
+        [ "$ms" -ge 0 ] || ms=null
+    fi
+    _pb_hj_id "$_PB_HJ_HOOK" 32; hook="$v"
+    local frame="${PB_HJ_FRAME:-}"
+    if [ "$frame" = 1 ] || [ -n "${PB_HJ_EVENT:-}" ]; then v="${PB_HJ_EVENT:-}"; else _pb_hj_first 'hook_event_name|hookEventName'; fi
+    _pb_hj_id "$v" 32; event="$v"
+    if [ "$frame" = 1 ] || [ -n "${TOOL_NAME:-}" ]; then v="${TOOL_NAME:-}"; else _pb_hj_first 'tool_name|toolName'; fi
+    _pb_hj_id "$v" 64; tool="$v"
+    if [ "$frame" = 1 ] || [ -n "${PB_HJ_TOOL_USE_ID:-}" ]; then
+        v="${PB_HJ_TOOL_USE_ID:-}"
+    elif [[ "$event" == *Tool* ]]; then
+        _pb_hj_tool_use_id
+    else
+        v=""        # a prompt, a stop, a session's start or end carries no tool call (its search costs ~0.1 ms)
+    fi
+    _pb_hj_id "$v" 64; tuid="$v"
+    _pb_hj_id "${SESSION_ID:-}" 64; sid="$v"
+    if [ "$frame" = 1 ] || [ -n "${PB_HJ_HOST_SESSION:-}" ]; then v="${PB_HJ_HOST_SESSION:-}"; else _pb_hj_first 'session_id|sessionId'; fi
+    _pb_hj_id "$v" 64; hsid="$v"
+    if [ "$frame" = 1 ] || [ -n "${PB_HJ_AGENT_ID:-}" ]; then v="${PB_HJ_AGENT_ID:-}"; else _pb_hj_first 'agent_id|agentId'; fi
+    _pb_hj_id "$v" 64; agent="$v"
+    decision="${PB_HJ_DECISION:-}"
+    if [ -z "$decision" ]; then
+        case "$rc" in
+            2) decision=block ;;
+            0) if [ "$event" = PreToolUse ]; then decision=allow; else decision=ok; fi ;;
+            *) decision=error ;;
+        esac
+    fi
+    _pb_hj_id "$decision" 16; decision="$v"
+    _pb_hj_text "${PB_HJ_DETAIL:-}" 128; detail="$v"
+    v="${PB_HJ_ERROR:-}"
+    if [ -z "$v" ] && [ "$rc" != 0 ] && [ "$rc" != 2 ]; then
+        # the ERR trap's line, where it saw this very command (a failure in a function reaches the trap as the call)
+        if [ -n "$_PB_HJ_ERR_CMD" ] && [ "$_PB_HJ_ERR_CMD" = "$failing" ]; then
+            v="line $_PB_HJ_ERR_LINE: $failing"
+        else
+            v="$failing"
+        fi
+    fi
+    _pb_hj_text "$v" 240; error="$v"
+    line="{\"ts\":\"$ts\",\"hook\":\"$hook\",\"event\":\"$event\",\"tool\":\"$tool\",\"tool_use_id\":\"$tuid\""
+    line="$line,\"session_id\":\"$sid\",\"host_session_id\":\"$hsid\",\"agent_id\":\"$agent\""
+    line="$line,\"decision\":\"$decision\",\"detail\":\"$detail\",\"ms\":$ms,\"exit\":$rc,\"error\":\"$error\"}"
+    if [ "${#line}" -ge "$_PB_HJ_LINE_MAX" ]; then
+        line="${line%%,\"detail\":*},\"detail\":\"\",\"ms\":$ms,\"exit\":$rc,\"error\":\"\"}"
+        [ "${#line}" -lt "$_PB_HJ_LINE_MAX" ] || return 0
+    fi
+    _pb_hj_rotate "$jdir" "$hfile"
+    _pb_sink_ok "$jdir" "$hfile" || return 0
+    { printf '%s\n' "$line" >> "$hfile"; } 2>/dev/null || true
+    return 0
+}
+
+# Sets the caller's `lane`: the hook's own (AGENT_DIR); where the hook found a project but set no lane, resolved in a
+# subshell (resolve_agent_dir exits on a bad marker — from the trap that would replace the hook's status: plan panel,
+# sonnet); where the hook looked and found none (PROJECT_DIR set, empty), nothing — no second walk; where it never
+# looked, the project above the working directory. Nothing in the fresh-clone shape, with an invalid marker, or for a
+# lane that is missing, a link or not writable.
+_pb_hj_lane() {
+    local p=""
+    lane=""
+    if [ -n "${AGENT_DIR:-}" ]; then
+        lane="$AGENT_DIR"
+        p="${PROJECT_DIR:-}"
+        if [ -z "$p" ]; then
+            case "$lane" in */.agent) p="${lane%/.agent}" ;; */.agent/*) p="${lane%/.agent/*}" ;; esac
+        fi
+    elif [ "${PROJECT_DIR+set}" = set ]; then
+        [ -n "$PROJECT_DIR" ] || return 0
+        p="$PROJECT_DIR"
+        lane=$(resolve_agent_dir "$p" 2>/dev/null) || lane=""
+    else
+        p=$(find_project_root 2>/dev/null) || p=""
+        [ -n "$p" ] || return 0
+        lane=$(resolve_agent_dir "$p" 2>/dev/null) || lane=""
+    fi
+    if [ "${MARKER_INVALID:-false}" = true ] || { [ -n "$p" ] && _pb_hj_fresh_clone "$p"; }; then
+        lane=""
+        return 0
+    fi
+    [ -n "$lane" ] && [ -d "$lane" ] && [ ! -L "$lane" ] && [ -w "$lane" ] || lane=""
+    return 0
+}
+
+# True in the fresh-clone shape (lanes_without_marker's, without its fork): lanes, no marker, no root `tasks/`.
+_pb_hj_fresh_clone() {
+    local sub
+    [ -f "$1/.agent/current_user" ] && return 1
+    [ -d "$1/.agent/tasks" ] && return 1
+    [ -d "$1/.agent" ] || return 1
+    for sub in "$1/.agent"/*/; do
+        [ -d "${sub}tasks" ] && return 0
+    done
+    return 1
+}
+
+# Sets `v` to the value of the payload's first key named by the alternation $1 ($INPUT). Linear; read only for keys
+# that come before any tool input in the host's payload (measured, task 222: the event, the session, the agent).
+_pb_hj_first() {
+    local re="\"($1)\"[[:space:]]*:[[:space:]]*\"([^\"]*)\""
+    v=""
+    if [[ "${INPUT:-}" =~ $re ]]; then v="${BASH_REMATCH[2]}"; fi
+    return 0
+}
+
+# Sets `v` to the payload's tool-call id where no frame gave it. Claude's `tool_use_id` comes after `tool_input` and
+# `tool_response`, followed only by `error` (a string), `is_interrupt` and `duration_ms` (measured, task 222): the LAST
+# match in the payload's last 4 KiB is its own key, never one nested before it; past a long error, the first match.
+_pb_hj_tool_use_id() {
+    local re='.*"(tool_use_id|toolUseId)"[[:space:]]*:[[:space:]]*"([^"]*)"' t="${INPUT:-}"
+    v=""
+    [ "${#t}" -le 4096 ] || t="${t:${#t}-4096}"
+    if [[ "$t" =~ $re ]]; then
+        v="${BASH_REMATCH[2]}"
+    else
+        _pb_hj_first 'tool_use_id|toolUseId'
+    fi
+    return 0
+}
+
+# Sets `v` to $1 with only the characters an id or a name is made of, at most $2 bytes (nothing to escape).
+_pb_hj_id() {
+    v="${1:0:$(( $2 * 2 ))}"
+    v="${v//[^A-Za-z0-9._:@\/+=-]/}"
+    v="${v:0:$2}"
+    return 0
+}
+
+# Sets `v` to $1 JSON-escaped, control characters turned to spaces, at most $2 bytes — cut on a whole UTF-8 character
+# and a whole escape (the line's bound holds for the encoded text: plan panel, grok).
+_pb_hj_text() {
+    local keep k=0
+    v="${1:0:$(( $2 * 2 ))}"
+    v="${v//[$'\001'-$'\037'$'\177']/ }"
+    v="${v//\\/\\\\}"
+    v="${v//\"/\\\"}"
+    if [ "${#v}" -gt "$2" ]; then
+        keep="$2"
+        while [ "$k" -lt 3 ] && [ "$keep" -gt 0 ] && [[ "${v:keep:1}" == [$'\x80'-$'\xbf'] ]]; do
+            keep=$(( keep - 1 )); k=$(( k + 1 ))
+        done
+        v="${v:0:keep}"
+        if [[ "$v" =~ \\+$ ]] && (( ${#BASH_REMATCH[0]} % 2 )); then v="${v%\\}"; fi
+    fi
+    return 0
+}
+
+# About one run in 32 (PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK, 1-1000) looks at the size. Past the limit, under a lock on the
+# journal directory taken without waiting and after a second look, the file is renamed to an archive name that does not
+# exist yet, then compressed (`gzip`) to a temporary name renamed beside it; the uncompressed copy is removed only once
+# the compressed one is in place. Every archive is kept. No lock, no `flock`, a busy lock: no rotation this run; no
+# `gzip`, a failure, a kill: the closed file stays uncompressed.
+_pb_hj_rotate() {
+    local jdir="$1" hfile="$2" every="${PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK:-32}" size stamp arch
+    [[ "$every" =~ ^[0-9]{1,4}$ ]] && [ "$((10#$every))" -ge 1 ] && [ "$((10#$every))" -le 1000 ] || every=32
+    [ $(( RANDOM % 10#$every )) -eq 0 ] || return 0
+    [ -f "$hfile" ] && [ ! -L "$hfile" ] || return 0
+    size=$(stat -c %s -- "$hfile" 2>/dev/null) || return 0
+    case "$size" in ''|*[!0-9]*) return 0 ;; esac
+    [ "$size" -gt "$_PB_HJ_LIMIT" ] || return 0
+    command -v flock >/dev/null 2>&1 || return 0
+    { exec 207<"$jdir"; } 2>/dev/null || return 0
+    if flock -n 207 2>/dev/null; then
+        size=$(stat -c %s -- "$hfile" 2>/dev/null) || size=0
+        case "$size" in ''|*[!0-9]*) size=0 ;; esac
+        if [ "$size" -gt "$_PB_HJ_LIMIT" ] && [ -f "$hfile" ] && [ ! -L "$hfile" ] \
+           && printf -v stamp '%(%Y%m%d-%H%M%S)T' -1 2>/dev/null; then
+            arch="$jdir/hooks.jsonl.archived-$stamp-$$"
+            if [ ! -e "$arch" ] && [ ! -L "$arch" ] && mv -n -- "$hfile" "$arch" 2>/dev/null \
+               && [ -f "$arch" ] && [ ! -L "$arch" ]; then
+                _pb_hj_compress "$arch"
+            fi
+        fi
+    fi
+    { exec 207<&-; } 2>/dev/null || true
+    return 0
+}
+
+_pb_hj_compress() {
+    local arch="$1" tmp="$1.gz.tmp-$$"
+    command -v gzip >/dev/null 2>&1 || return 0
+    if [ -e "$arch.gz" ] || [ -L "$arch.gz" ] || [ -e "$tmp" ] || [ -L "$tmp" ]; then return 0; fi
+    if ( set -o noclobber; gzip -c -- "$arch" > "$tmp" ) 2>/dev/null \
+       && mv -n -- "$tmp" "$arch.gz" 2>/dev/null && [ -f "$arch.gz" ] && [ ! -e "$tmp" ]; then
+        rm -f -- "$arch" 2>/dev/null
+    elif [ -f "$tmp" ] && [ ! -L "$tmp" ]; then
+        rm -f -- "$tmp" 2>/dev/null
+    fi
+    return 0
+}
