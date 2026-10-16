@@ -728,8 +728,10 @@ class TagDoesNotLoseAnAppendedPrompt(unittest.TestCase):
         agent.mkdir()
         (agent / "chat_log.md").write_text(
             "**[M001]** [2026-09-22 08:00:00 UTC]\nfirst\n", encoding="utf-8")
-        (agent / "bash_history").write_text(
-            "2026-09-22 08:00:00 | claude | .claude/bin/tasks work 1\n", encoding="utf-8")
+        (agent / "journal").mkdir()      # task 221: the activation is the CLI's own journal record
+        (agent / "journal" / "enforcement.jsonl").write_text(
+            '{"ts":"2026-09-22T08:00:00Z","session_id":"","hook":"tasks","decision":"record","reason":"work",'
+            '"task":"001"}\n', encoding="utf-8")
         return d
 
     def test_an_undisturbed_tag_run_writes_its_tags(self):

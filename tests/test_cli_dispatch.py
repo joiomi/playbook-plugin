@@ -73,7 +73,7 @@ _BASELINE = {
     "judge": (1, "'judge' requires a task number"),
     "context": (1, "'context' requires a task number"),
     "intent": (1, "'intent' requires a task number"),
-    "timeline": (1, "No .agent/bash_history found."),
+    "timeline": (1, "No .agent/journal/enforcement.jsonl found."),   # task 221: the CLI's transition records
     "tagger": (1, "No .agent/chat_log.md found."),
     "tag": (1, "No .agent/chat_log.md found."),
     "retro": (1, "No tasks found in window."),
