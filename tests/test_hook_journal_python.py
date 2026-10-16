@@ -345,6 +345,27 @@ class ThePythonWriter(_Tmp):
         self.assertIn("orphan", [r["hook"] for r in self.lines()])
         self.assertTrue(alive.exists())
 
+    def test_a_short_write_keeps_the_spool_and_rolls_the_journal_back(self):
+        """Post-panel judge run 5 (codex — reproduced with RLIMIT_FSIZE): taking a spool ignored a short write, removed
+        the spool and left a torn line. Now a short write is rolled back and the spool kept for a later run."""
+        self.journal.parent.mkdir()
+        self.journal.write_text('{"hook":"before"}\n')
+        size = self.journal.stat().st_size
+        spool = self.journal.parent / "hooks.jsonl.spool-20261017-000000-1-1"
+        spool.write_text('{"hook":"spooled","detail":"' + "x" * 200 + '"}\n')
+        script = ("import resource, signal, sys\n"
+                  "signal.signal(signal.SIGXFSZ, signal.SIG_IGN)\n"
+                  f"resource.setrlimit(resource.RLIMIT_FSIZE, ({size + 5}, resource.RLIM_INFINITY))\n"
+                  "import importlib.util\n"
+                  f"s = importlib.util.spec_from_file_location('pbj', {str(SCRIPTS / 'pb_journal.py')!r})\n"
+                  "m = importlib.util.module_from_spec(s); s.loader.exec_module(m)\n"
+                  "from pathlib import Path\n"
+                  f"m._hj_take_spools(Path({str(self.journal.parent)!r}), Path({str(self.journal)!r}))\n")
+        subprocess.run([sys.executable, "-I", "-c", script], capture_output=True, text=True, timeout=30)
+        self.assertTrue(spool.exists())                           # kept for a later run
+        self.assertEqual(self.journal.stat().st_size, size)       # no torn line left
+        self.assertEqual([r["hook"] for r in self.lines()], ["before"])
+
     def test_a_held_lock_means_no_rotation(self):
         if not shutil.which("flock"):
             self.skipTest("no flock(1)")

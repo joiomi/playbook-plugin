@@ -19176,6 +19176,16 @@
           "limitations": [
             "Post-panel judge run 4 (reproduced): the nudge stripped `:` from the whole spool path."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_hook_journal_python.py",
+          "reference": "ThePythonWriter.test_a_short_write_keeps_the_spool_and_rolls_the_journal_back",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Post-panel judge run 5 (codex — reproduced with RLIMIT_FSIZE): a short write removed the spool and left a torn line; now rolled back, the spool kept."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -19190,7 +19200,8 @@
       "missing_evidence_or_limitation": [
         "A live headless claude session (task 222 W4: Claude Code 2.1.301, haiku, the tree plugin) wrote 30 lines for its 30 hook runs, each tool call's line carrying the transcript's tool_use_id and the subagent's lines its agent_id; it is in the task record, not a gauntlet scenario. Codex's and grok's payloads are crafted only.",
         "Not recorded: a hook the host kills at its time limit (no exit trap runs); the monitor's own session (its hooks exit first); a review's session and a nested run (by design); a hook that finds no playbook project.",
-        "The duration starts at the hook's first line (bash's start and a BASH_ENV file are not in it) and includes the shell log's lock wait; where a BASH_ENV file sets a DEBUG trap, `error` names that trap; the bash writers check and then append, so a FIFO swapped in between the two can hang one run; task-dir-watch's tool_use_id is read by pattern (a host whose payload put a nested object with the same key after the id could mislabel it); monitor-nudge.sh's line appears once `/playbook:init` copies the new script into the project, and it does not rotate the file itself."
+        "The duration starts at the hook's first line (bash's start and a BASH_ENV file are not in it) and includes the shell log's lock wait; where a BASH_ENV file sets a DEBUG trap, `error` names that trap; the bash writers check and then append, so a FIFO swapped in between the two can hang one run; task-dir-watch's tool_use_id is read by pattern (a host whose payload put a nested object with the same key after the id could mislabel it); monitor-nudge.sh's line appears once `/playbook:init` copies the new script into the project, and it does not rotate the file itself.",
+        "Post-panel judge run 5 (task 222), stated by the owner's 00:45 rule (only coincidences of the same kind left): on a host without flock(1) the bash writers append without the lock while codex's python hooks still rotate with fcntl, so a forward clock step while a bash append is paused can still lose that line; a crash between publishing a spool and removing its temporary records that line twice."
       ],
       "follow_up_phases": [
         8

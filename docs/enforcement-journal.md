@@ -333,5 +333,8 @@ codex's Stop runs the stop hook as a subprocess, and codex-stop's own line says 
 playbook project. **Bounds:** codex runs `command_guard.py` directly, so its duration starts when python has started
 and loaded the guard; every other hook's duration starts at its first line — bash's own start and a
 `BASH_ENV` file are not in it — and includes the shell log's lock wait (up to 2 s); where a `BASH_ENV` file sets a
-DEBUG trap, `error` names that trap instead of the failing line; task-dir-watch's `tool_use_id` is read by pattern,
+DEBUG trap, `error` names that trap instead of the failing line; on a host without `flock(1)` (util-linux) the bash
+writers append without the lock while codex's python hooks still rotate there with `fcntl`, so a line in flight there
+can still be lost to a compression after a forward clock step; a crash between publishing a spool and removing its
+temporary can record that one line twice (the post-panel judge's run 5, stated); task-dir-watch's `tool_use_id` is read by pattern,
 so a host whose payload put a nested object carrying the same key AFTER the id could mislabel it.

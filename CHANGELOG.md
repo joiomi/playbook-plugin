@@ -216,7 +216,9 @@ stop and every duration left none.
 - Limits: a hook the host kills at its time limit writes nothing; the monitor's own session writes nothing (its hooks
   exit first); the duration starts at the hook's first line (bash's start and a `BASH_ENV` file
   are not in it) and includes the shell log's lock wait; where a `BASH_ENV` file sets a DEBUG trap, `error` names
-  that trap; codex's direct guard times from python's start; the bash writers check then append, so a FIFO swapped in between can hang one run; task-dir-watch reads
+  that trap; codex's direct guard times from python's start; on a host without `flock(1)` the bash writers append
+  without the lock while codex's python hooks still rotate, so a clock step there can still lose a line in flight; a
+  crash between publishing a spool and removing its temporary can record that line twice; the bash writers check then append, so a FIFO swapped in between can hang one run; task-dir-watch reads
   the tool-call id by pattern; `.claude/hooks/monitor-nudge.sh` writes its line only after `/playbook:init` copies the
   new script into the project.
 
