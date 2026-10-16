@@ -1,9 +1,10 @@
 #!/bin/bash
 # state-echo-hook
-# PostToolUse hook — shows the current gate from task.md.
+# PostToolUse hook — shows the current gate from task.md, when it changed.
 #
-# Reads the active task's task.md, finds first unchecked gate (- [ ]),
-# echoes it with file:line so the agent can follow or edit.
+# Reads the active task's task.md, finds the first unchecked gate (- [ ]), and echoes it with file:line — in full
+# when the gate, the task or a warning changed (and after a session start), one line every 10 calls on the same
+# gate, nothing otherwise (task 219, below). Counts every call for the stop hook.
 
 set -e
 
@@ -303,56 +304,203 @@ if [ "$PB_HOOK_EVENT" = PostToolUseFailure ]; then
     exit 0
 fi
 
-# Read task number
-if [ ! -f "$STATE_FILE" ]; then
-    echo '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"# No active task (.claude/bin/tasks work <N> to activate)"}}'
-    exit 0
+# --- What the echo says, and when (task 219; PHASE-B item 2, the owner 2026-10-16 09:36: "La schimbare + amintire
+# (Recomandat)") -----------------------------------------------------------------------------------------------
+# The full echo is printed when something changed: the open gate — known by its place among the live gates and its
+# text, read fence-aware by `scripts/task-status.py --echo`, never by its line — or the task, or a warning is due; at
+# a session's first call; and after a SessionStart (a compaction), which leaves the `echo_reset` marker. On the same
+# gate one line every 10 calls; otherwise `{}`. Always in full: eval mode, a subagent's call (it has its own context;
+# the main agent's memory is left as it is), a lock not given, an `.agent` that cannot be written, gates that could
+# not be read. The memory — `gate_echo_key` / `gate_echo_quiet`, `gate_`-prefixed so a prompt's `reset_counters`
+# keeps them — is kept in the counters.
+#
+# No python3 runs while the counters lock is held (task 182: the other calls' hooks wait for its two short steps
+# only). So the gates are read BEFORE the hold, with the previous gate as the counters held it then; inside the hold
+# both are checked again — a hook that overtook this one, or an edit of task.md in between, makes this call's read
+# STALE: it is counted on the stored gate and says nothing, and the next call reads afresh. The answer's JSON is
+# made after the hold; one that cannot be made takes back the memory it was given, so the next call prints again.
+PB_SUBAGENT_RE='"agent_id"[[:space:]]*:[[:space:]]*"[^"]'
+PB_REMEMBER=true
+if [ "$AGENT_WRITABLE" != true ] || [[ "$INPUT" =~ $PB_SUBAGENT_RE ]] \
+   || { [ -n "$PLAYBOOK_EVAL_CONFIG" ] && [ -f "$PLAYBOOK_EVAL_CONFIG" ]; }; then
+    PB_REMEMBER=false
 fi
+ECHO_RESET_FILE="$SESSION_DIR/echo_reset"
+PB_GATE_PENDING=false
 
-TASK=$(head -1 "$STATE_FILE" | tr -d '[:space:]')
+# _pb_json TEXT — the hook's JSON line on stdout; non-zero and nothing printed when it cannot be built
+_pb_json() {
+    local j
+    j=$(printf '%s' "$1" | python3 -I -c "import sys,json; print(json.dumps(sys.stdin.buffer.read().decode('utf-8','replace').rstrip()))" 2>/dev/null) || j=""
+    [ -n "$j" ] || return 1
+    printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":%s}}\n' "$j"
+}
+
+# _pb_warned — 0 when this call has a warning to say (each forces the full echo)
+_pb_warned() {
+    [ "${PLAYBOOK_SANDBOXED:-}" != "1" ] || return 1
+    [ "$PLAYBOOK_WRITE_FAILED" = true ] || [ "$PB_GATE_PENDING" = true ] || [ "$PLAYBOOK_COUNTERS_UNLOCKED" = true ]
+}
+
+# _pb_warnings TEXT — TEXT with the warnings this call must say appended
+_pb_warnings() {
+    local c="$1"
+    # Loud gate-logging write-failure warning (bug report #4): a silent freeze of the gate state is how gate logging
+    # died undetected on one machine. Not inside a sandboxed judge, whose read-only project fails these writes by design.
+    if [ "$PLAYBOOK_WRITE_FAILED" = true ] && [ "${PLAYBOOK_SANDBOXED:-}" != "1" ]; then
+        c="${c}
+# ⚠ gate-logging write FAILED — session state / gate history not updated (retro attribution will degrade). Run \`tasks doctor\` and check .agent dir writability + AV locks."
+    fi
+    # A completed gate whose entry could not be written yet because the CHAT LOG's lock was held (ours was given):
+    # said at every call it stays so — "not yet" has no end of its own (post-panel run 2).
+    if [ "$PB_GATE_PENDING" = true ] && [ "$PLAYBOOK_COUNTERS_UNLOCKED" != true ] && [ "${PLAYBOOK_SANDBOXED:-}" != "1" ]; then
+        c="${c}
+# ⚠ the gate you completed is not logged yet — the chat log's lock is held by another process; the next tool call tries again."
+    fi
+    # There is a counters lock and it was not given (task 182) — say WHICH step went without: the count (the stop
+    # hook then holds the turn) or only the gate step after a count that was made.
+    if [ "$PLAYBOOK_COUNTERS_UNLOCKED" = true ] && [ "${PLAYBOOK_SANDBOXED:-}" != "1" ]; then
+        if [ "$PB_NOT_COUNTED" = true ]; then
+            c="${c}
+# ⚠ the session's counters lock could not be taken within ${PLAYBOOK_COUNTERS_WAITED}s — this call was NOT counted, and the stop hook holds this turn like one that wrote, until your next prompt."
+        else
+            c="${c}
+# ⚠ the session's counters lock could not be taken again within this call's ${PLAYBOOK_COUNTERS_WAITED}s — the call is counted; the gate was not looked at, the next call does that."
+        fi
+    fi
+    printf '%s' "$c"
+}
+
+# _pb_decide KEY FORCE — inside the counters hold: PB_MODE full / reminder / quiet, and the memory written for it
+# (`gate_echo_key` given now; taken back after the hold if the answer cannot be made)
+_pb_decide() {
+    local key="$1" force="$2" quiet
+    PB_MODE=full
+    if [ "$force" = true ] || [ "$PB_REMEMBER" != true ] || [ "$PLAYBOOK_COUNTERS_UNLOCKED" = true ] \
+       || [ -e "$ECHO_RESET_FILE" ] || [ -L "$ECHO_RESET_FILE" ] \
+       || [ "$(read_counter "$COUNTER_FILE" gate_echo_key)" != "$key" ]; then
+        PB_MODE=full
+    else
+        quiet=$(( $(read_counter_int "$COUNTER_FILE" gate_echo_quiet) + 1 ))
+        if [ "$quiet" -ge 10 ]; then
+            PB_MODE=reminder
+        else
+            PB_MODE=quiet
+            write_counters "$COUNTER_FILE" gate_echo_quiet "$quiet"
+            return 0
+        fi
+    fi
+    if [ "$PB_REMEMBER" = true ] && [ "$PLAYBOOK_COUNTERS_UNLOCKED" != true ]; then
+        write_counters "$COUNTER_FILE" gate_echo_key "$key" gate_echo_quiet 0
+    fi
+    return 0
+}
+
+# _pb_print KEY TEXT — after the hold: print TEXT for PB_MODE full / reminder (`{}` for quiet); an answer that cannot
+# be made takes back the memory `_pb_decide` gave it, so the next call prints again (plan panel, opus / sonnet)
+_pb_print() {
+    local key="$1" text="$2" out=""
+    if [ "$PB_MODE" != quiet ]; then
+        out=$(_pb_json "$text") || out=""
+    fi
+    if [ -n "$out" ]; then
+        printf '%s\n' "$out"
+        if [ "$PB_MODE" = full ] && [ "$PB_REMEMBER" = true ]; then
+            rm -f -- "$ECHO_RESET_FILE" 2>/dev/null || true
+        fi
+        return 0
+    fi
+    echo '{}'
+    if [ "$PB_MODE" != quiet ] && [ "$PB_REMEMBER" = true ] && [ "$PLAYBOOK_COUNTERS_UNLOCKED" != true ]; then
+        counters_lock "$COUNTER_FILE"
+        if [ "$PLAYBOOK_COUNTERS_UNLOCKED" != true ] && [ "$(read_counter "$COUNTER_FILE" gate_echo_key)" = "$key" ]; then
+            write_counters "$COUNTER_FILE" gate_echo_key ""
+        fi
+        counters_unlock
+    fi
+    return 0
+}
+
+# Read task number
+TASK=""
+if [ -f "$STATE_FILE" ]; then
+    TASK=$(head -1 "$STATE_FILE" | tr -d '[:space:]')
+fi
 # N2: a non-digit pointer (incl. a glob metachar) is not a valid task number;
 # blank it so it reads as "no active task" rather than glob-matching a real one.
 case "$TASK" in *[!0-9]*) TASK="" ;; esac
 
 if [ -z "$TASK" ]; then
-    echo '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"# No active task (.claude/bin/tasks work <N> to activate)"}}'
+    PB_CORE="# No active task (.claude/bin/tasks work <N> to activate)"
+    if [ "$AGENT_WRITABLE" = true ]; then
+        counters_lock "$COUNTER_FILE"
+    fi
+    PB_FORCE=false
+    if _pb_warned; then PB_FORCE=true; fi
+    _pb_decide "no-task" "$PB_FORCE"
+    counters_unlock
+    if [ "$PB_MODE" = full ]; then
+        _pb_print "no-task" "$(_pb_warnings "$PB_CORE")"
+    else
+        _pb_print "no-task" "$PB_CORE"
+    fi
     exit 0
 fi
 
-# Find task file matching the task number
+# Find task file matching the task number — a fault, said at every call
 TASK_FILE=$(task_record_file "$AGENT_DIR" "$TASK")
-
 if [ -z "$TASK_FILE" ]; then
-    CONTEXT="# [${TASK}] — task file not found"
-    JSON_CONTEXT=$(python3 -I -c "import json; print(json.dumps('$CONTEXT'))" 2>/dev/null || echo "\"$CONTEXT\"")
-    echo "{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":${JSON_CONTEXT}}}"
+    _pb_json "# [${TASK}] — task file not found" || echo '{}'
     exit 0
 fi
 
-# The counters lock is taken BEFORE the gate is read from task.md (task 182, impl
-# round 1): the step below compares the gate read here with the one the counters
-# hold, and a gate read before the lock could be older than what a hook that
-# overtook this one had written — it then logged the OPEN gate as done and put the
-# old one back. Held from here to the write of the new gate.
-if [ "$AGENT_WRITABLE" = true ]; then
-    counters_lock "$COUNTER_FILE"
+# _pb_prev — the gate the counters hold (the one the echo saw last), one line: task, position, below, line, count,
+# text — split by US (0x1f), never a tab: a tab is a whitespace IFS character, so `read` would drop an empty field
+# (an empty task read the next field, "0", as the task — measured)
+_pb_prev() {
+    local t
+    t=$(read_counter "$COUNTER_FILE" gate_task)
+    case "$t" in *[!0-9]*) t="" ;; esac
+    printf '%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s' "$t" "$(read_counter_int "$COUNTER_FILE" gate_pos)" \
+        "$(read_counter_int "$COUNTER_FILE" gate_below)" "$(read_counter_int "$COUNTER_FILE" gate_line)" \
+        "$(read_counter_int "$COUNTER_FILE" gate_count)" "$(read_counter "$COUNTER_FILE" gate_text)"
+}
+PB_PREV_SEEN=$(_pb_prev)
+IFS=$'\x1f' read -r PREV_TASK PREV_POS PREV_BELOW PREV_LINE PREV_COUNT PREV_TEXT <<< "$PB_PREV_SEEN" || true
+PB_ECHO_ARGS=()
+if [ -n "$PREV_TASK" ] && [ "$PREV_TASK" = "$TASK" ]; then
+    PB_ECHO_ARGS=("$PREV_POS" "$PREV_BELOW" "$PREV_TEXT")
 fi
 
-# Count total and done checkboxes (only [ ], [x], [X] — not [8] reference links)
-TOTAL_GATES=$(grep -cE '^[[:space:]]*- \[( |x|X)\]' "$TASK_FILE" 2>/dev/null) || TOTAL_GATES=0
-DONE_GATES=$(grep -cE '^[[:space:]]*- \[[xX]\]' "$TASK_FILE" 2>/dev/null) || DONE_GATES=0
-
-# Find first unchecked gate (only at line start)
-GATE_LINE=""
-GATE_TEXT=""
-
-while IFS= read -r line; do
-    LINENO_PART="${line%%:*}"
-    CONTENT="${line#*:}"
-    GATE_LINE="$LINENO_PART"
-    GATE_TEXT=$(echo "$CONTENT" | sed 's/^[[:space:]]*- \[ \] *//' | cut -c 1-200)
-    break
-done < <(grep -nE '^[[:space:]]*- \[ \]' "$TASK_FILE" 2>/dev/null)
+# The gates, read the way the CLI reads them (fence-aware, physical lines) — one spawn, before the hold. The file's
+# identity is taken first: if it is not the same inside the hold, this read is stale.
+PB_FILE_SEEN=$(stat -c '%i %s %y' -- "$TASK_FILE" 2>/dev/null || true)
+PB_GATES_OK=true
+PB_ECHO_OUT=$(python3 -E -s "$HOOK_DIR/task-status.py" --echo "$TASK_FILE" "${PB_ECHO_ARGS[@]}" 2>/dev/null) \
+    || PB_GATES_OK=false
+TOTAL_GATES=""; DONE_GATES=""; GATE_LINE=""; GATE_POS=""; GATE_BELOW=""; TRANS=""; TICKED_LINE=""; GATE_TEXT_FULL=""
+{
+    IFS= read -r TOTAL_GATES || true
+    IFS= read -r DONE_GATES || true
+    IFS= read -r GATE_LINE || true
+    IFS= read -r GATE_POS || true
+    IFS= read -r GATE_BELOW || true
+    IFS= read -r TRANS || true
+    IFS= read -r TICKED_LINE || true
+    IFS= read -r GATE_TEXT_FULL || true
+} <<< "$PB_ECHO_OUT"
+case "$TRANS" in none|same|skip|done|done-bare|moved|reworded) ;; *) PB_GATES_OK=false ;; esac
+if [ "$PB_GATES_OK" != true ]; then
+    # Nothing is decided on gates that could not be read: no entry, no memory, the warning at every call.
+    _pb_json "$(_pb_warnings "# ⚠ [${TASK}] the task's gates could not be read (scripts/task-status.py --echo failed) — no gate echo this call.")" \
+        || echo '{}'
+    exit 0
+fi
+TOTAL_GATES=$(_safe_int "$TOTAL_GATES"); DONE_GATES=$(_safe_int "$DONE_GATES"); GATE_BELOW=$(_safe_int "$GATE_BELOW")
+case "$GATE_LINE" in *[!0-9]*) GATE_LINE="" ;; esac
+case "$TICKED_LINE" in *[!0-9]*) TICKED_LINE="" ;; esac
+case "$GATE_POS" in ''|*[!0-9]*) GATE_POS=-1 ;; esac
+GATE_TEXT=$(printf '%s' "$GATE_TEXT_FULL" | cut -c 1-200)
 
 # Freehand mode: suppress drift counter and gate pressure when the gate text
 # starts with "Freehand" — covers "Freehand", "Freehand — work is done",
@@ -363,76 +511,110 @@ done < <(grep -nE '^[[:space:]]*- \[ \]' "$TASK_FILE" 2>/dev/null)
 # Pattern stays in lockstep with scripts/stop-hook and src/provider/codex_hooks.py.
 IS_FREEHAND=false
 # Match `Freehand log` followed by ANY non-word char (or end of string) — exact
-# Python regex `\b` semantics (impl-review F2/F5). Earlier 8-alternative list
-# enumerated only space/em-dash/en-dash/hyphen/colon/period/comma; `Freehand log!`
-# slipped past the bash exclusions but was caught by the Python `\b` matcher,
-# producing exact-divergence the lockstep was meant to prevent.
-case "$GATE_TEXT" in
-    "Freehand log"|"Freehand log"[!a-zA-Z0-9_]*)
-        : # cleanup gate — NOT freehand-mode
-        ;;
-    Freehand*)
-        IS_FREEHAND=true
-        ;;
-esac
+# Python regex `\b` semantics (impl-review F2/F5).
+if [ -n "$GATE_LINE" ]; then
+    case "$GATE_TEXT_FULL" in
+        "Freehand log"|"Freehand log"[!a-zA-Z0-9_]*)
+            : # cleanup gate — NOT freehand-mode
+            ;;
+        Freehand*)
+            IS_FREEHAND=true
+            ;;
+    esac
+fi
 
 # Make path relative to project
 REL_PATH="${TASK_FILE#$PROJECT_DIR/}"
 
-# Repetition detection + gate transition logging (using consolidated counter file)
+# What the echo would say, and its key (outside the hold: `format_context` and `cksum` are not python, but nothing
+# that can be done before the hold is done in it)
+PB_SUM=$(printf '%s' "$GATE_TEXT_FULL" | cksum | tr ' ' '.')
+if [ "$IS_FREEHAND" = true ]; then
+    PB_CORE="# [${TASK}] Freehand mode — wait for user instructions. Close only when user says done."
+    PB_KEY="freehand|${TASK}|${GATE_POS}|${PB_SUM}"
+    PB_REMINDER="$PB_CORE"
+elif [ -n "$GATE_LINE" ]; then
+    PB_CORE=$(format_context "$TASK" "$DONE_GATES" "$TOTAL_GATES" "${GATE_TEXT}" "$GATE_LINE" "$REL_PATH")
+    PB_KEY="gate|${TASK}|${GATE_POS}|${PB_SUM}"
+    PB_SHORT=$(printf '%s' "$GATE_TEXT_FULL" | cut -c 1-60)
+    if [ "$PB_SHORT" != "$GATE_TEXT_FULL" ]; then PB_SHORT="${PB_SHORT}…"; fi
+    PB_REMINDER="# [${TASK}] still at gate ${DONE_GATES}/${TOTAL_GATES}: ${PB_SHORT} — ${REL_PATH}:${GATE_LINE}"
+else
+    PB_CORE=$(format_context "$TASK" "$DONE_GATES" "$TOTAL_GATES" "" "" "$REL_PATH")
+    PB_KEY="done|${TASK}"
+    PB_REMINDER="$PB_CORE"
+fi
+
+# The transition from the gate the echo saw last. Only the previous gate's own line, now checked, is a completion
+# (`[x]` in chat_log); a gate added, moved or unticked above it is "left open"; a reworded gate is the same gate.
 GATE_LOG="$AGENT_DIR/chat_log.md"
 TRANSITION_MSG=""
 SKIP_MSG=""
-# The whole step — the gate read above, the previous one read from the counters,
-# the decision, the completed gate's entry, the new gate written — is one hold of
-# the counters lock (task 182). Side by side, six calls after a ticked gate each
-# read the OLD gate and each logged its completion (measured: six entries for one
-# gate), and the repeat count lost steps as the tool count did.
-#
-# The entry and the new gate go together or not at all (impl rounds 1-3, each of
-# which found the other order wanting): the entry is appended under the chat
-# log's lock — the one `tasks tag` and the chat-log hook use (task 058) — which
-# is TRIED, not waited for, under ours; where it is not given, or ours was not,
-# NOTHING is appended and the gate is not advanced: the next call finds the old
-# gate and tries again. Never appended without that lock where `flock` exists (a
-# `tasks tag` rewrite could drop it), never after the new gate (a hook that died
-# in the wait lost it for good), never waited for under ours (a second of it,
-# and the hooks of six calls side by side ran out of their own wait behind it —
-# post-panel run 1, measured).
+BARE_MSG=""
+ENTRY_KIND=""
+NEW_COUNT=1
+if [ "$IS_FREEHAND" = true ]; then
+    # Freehand mode: no counter increment, no repeat warning, no transition logging
+    NEW_COUNT=0
+elif [ -n "$PREV_TASK" ] && [ "$PREV_TASK" != "$TASK" ]; then
+    # task 073 (C10): a TASK SWITCH is not a completion — the entry says the gate was left open
+    ENTRY_KIND=switch
+    TRANSITION_MSG="# ↷ switched from task ${PREV_TASK} — its gate was left open (${PREV_COUNT} tool calls)"
+elif [ -n "$PREV_TASK" ]; then
+    case "$TRANS" in
+        same|reworded)
+            NEW_COUNT=$(( PREV_COUNT + 1 ))
+            ;;
+        skip)
+            NEW_COUNT=$(( PREV_COUNT + 1 ))
+            SKIP_MSG="
+# ⚠ A gate below the open one (line ${GATE_LINE}) was checked while it stays open — reorder the gates in task.md if you are working out of order."
+            ;;
+        done|done-bare)
+            ENTRY_KIND=done
+            TRANSITION_MSG="# ✓ previous gate done (${PREV_COUNT} tool calls)"
+            if [ "$TRANS" = done-bare ]; then
+                BARE_MSG="
+# ⚠ Gate closed with bare checkmark — append your outcome. (line ${TICKED_LINE})"
+            fi
+            ;;
+        moved)
+            ENTRY_KIND=moved
+            TRANSITION_MSG="# ↻ the open gate changed — no gate was ticked (${PREV_COUNT} tool calls on the one before)"
+            ;;
+    esac
+fi
+
+# The entry and the new gate go together or not at all (impl rounds 1-3 of task 182): the entry is appended under
+# the chat log's lock — the one `tasks tag` and the chat-log hook use (task 058) — which is TRIED, not waited for,
+# under ours; where it is not given, or ours was not, NOTHING is appended and the gate is not advanced: the next call
+# finds the old gate and tries again.
 _gate_append() {
     {
         echo "---"
         echo ""
         echo "**[G${PREV_TASK}:${PREV_LINE}]** [$(date -u '+%Y-%m-%d %H:%M:%S UTC')] \`HOST\` (${PREV_COUNT} tool calls)"
         echo ""
-        if [ -n "$TASK" ] && [ "${PREV_KEY%%:*}" != "$TASK" ]; then
-            # task 073 (C10): a gate-key change caused by a TASK SWITCH is not a
-            # completion — never log an open gate as [x]; keep the entry (it anchors
-            # the previous task's attribution window) but say what happened.
-            echo "- [ ] ${PREV_TEXT} (left open — switched to task ${TASK})"
-        else
-            echo "- [x] ${PREV_TEXT}"
-        fi
+        case "$ENTRY_KIND" in
+            switch) echo "- [ ] ${PREV_TEXT} (left open — switched to task ${TASK})" ;;
+            moved)  echo "- [ ] ${PREV_TEXT} (left open — the open gate changed)" ;;
+            *)      echo "- [x] ${PREV_TEXT}" ;;
+        esac
         echo ""
     } >> "$GATE_LOG" 2>/dev/null
 }
-# _log_gate_entry — 0: the entry is in the log, or it could not be WRITTEN (said by
-# PLAYBOOK_WRITE_FAILED — a log that cannot be written must not hold the gate for
-# ever; with `flock` on the host this failure used to stay in a subshell, unsaid).
-# 3: it could not be written YET — the caller leaves the gate as it is.
+# _log_gate_entry — 0: the entry is in the log, or it could not be WRITTEN (said by PLAYBOOK_WRITE_FAILED — a log
+# that cannot be written must not hold the gate for ever). 3: it could not be written YET — the gate stays as it is.
 _log_gate_entry() {
     local rc=0
     [ "$PLAYBOOK_COUNTERS_UNLOCKED" != true ] || return 3
-    # A chat log or its lock that is a link or not a regular file is not ours (task 194,
-    # measured: the gate entry was appended to a link's target, the lock's link TRUNCATED
-    # its target, a FIFO held the echo): the entry is not written — said as the write
-    # failure it is — and the gate moves on.
+    # A chat log or its lock that is a link or not a regular file is not ours (task 194): the entry is not written —
+    # said as the write failure it is — and the gate moves on.
     if ! _pb_sink_ok "" "$GATE_LOG" || ! _pb_sink_ok "" "$AGENT_DIR/chat_log_counter.lock"; then
         PLAYBOOK_WRITE_FAILED=true
         return 0
     fi
-    # (a host whose `flock` cannot wait with a limit has no lock to take: the entry
-    # is appended without one, as where there is no `flock` — post-panel run 2)
+    # (a host whose `flock` cannot wait with a limit has no lock to take: the entry is appended without one)
     if command -v flock &>/dev/null && [ "$_PB_COUNTERS_NOLOCK" != true ]; then
         ( flock -n 202 2>/dev/null || exit 3; _gate_append || exit 4 ) \
             202>"$AGENT_DIR/chat_log_counter.lock" || rc=$?
@@ -446,187 +628,85 @@ _log_gate_entry() {
            return 0 ;;
     esac
 }
-PB_GATE_PENDING=false
-if [ -n "$GATE_LINE" ] && [ "$IS_FREEHAND" = true ]; then
-    # Freehand mode: no counter increment, no repeat warning, no transition logging
-    NEW_COUNT=0
-    GATE_KEY="${TASK}:${GATE_LINE}"
-    if [ "$AGENT_WRITABLE" = true ]; then
-        write_counter "$COUNTER_FILE" gate_key "$GATE_KEY"
-        write_counter "$COUNTER_FILE" gate_count "0"
-        write_counter "$COUNTER_FILE" gate_text "$GATE_TEXT"
-    fi
-elif [ -n "$GATE_LINE" ]; then
-    GATE_KEY="${TASK}:${GATE_LINE}"
-    PREV_KEY=$(read_counter "$COUNTER_FILE" gate_key)
-    # gate_count feeds `$((PREV_COUNT + 1))` — coerce it (C5).
-    PREV_COUNT=$(read_counter_int "$COUNTER_FILE" gate_count)
-    PREV_TEXT=$(read_counter "$COUNTER_FILE" gate_text)
-    if [ -n "$PREV_KEY" ] && [ "$PREV_KEY" = "$GATE_KEY" ]; then
-        NEW_COUNT=$((PREV_COUNT + 1))
-    elif [ -n "$PREV_KEY" ]; then
-        # Gate changed — log the completed gate
-        PREV_TASK="${PREV_KEY%%:*}"
-        PREV_LINE="${PREV_KEY##*:}"
-        if [ "$AGENT_WRITABLE" = true ] && ! _log_gate_entry; then
-            # not yet: nothing is told, nothing is written — as if this call had
-            # not seen the change
-            PB_GATE_PENDING=true
-            NEW_COUNT=$PREV_COUNT
-        else
-            if [ -n "$TASK" ] && [ "$PREV_TASK" != "$TASK" ]; then
-                TRANSITION_MSG="# ↷ switched from task ${PREV_TASK} — its gate was left open (${PREV_COUNT} tool calls)"
-            else
-                TRANSITION_MSG="# ✓ previous gate done (${PREV_COUNT} tool calls)"
-            fi
-            # Gate-skip detection: new first-unchecked is above the just-completed gate
-            if [ "$PREV_TASK" = "$TASK" ] && [ "$GATE_LINE" -lt "$PREV_LINE" ] 2>/dev/null; then
-                SKIP_MSG="
-# ⚠ Gate at line ${GATE_LINE} is still open above completed gate at line ${PREV_LINE} — reorder gates in task.md if working out of order."
-            fi
-            # Bare-checkmark detection: compare completed gate text with original
-            BARE_MSG=""
-            if [ -n "$TASK_FILE" ] && [ -n "$PREV_LINE" ]; then
-                COMPLETED_LINE=$(sed -n "${PREV_LINE}p" "$TASK_FILE" 2>/dev/null)
-                COMPLETED_TEXT=$(echo "$COMPLETED_LINE" | sed 's/^[[:space:]]*- \[[xX]\] *//')
-                if [ "$COMPLETED_TEXT" = "$PREV_TEXT" ]; then
-                    BARE_MSG="
-# ⚠ Gate closed with bare checkmark — append your outcome. (line ${PREV_LINE})"
-                fi
-            fi
-            NEW_COUNT=1
+
+# --- The hold: the read checked again, the entry, the new gate, the decision ------------------------------------
+if [ "$AGENT_WRITABLE" = true ]; then
+    counters_lock "$COUNTER_FILE"
+    if [ "$PLAYBOOK_COUNTERS_UNLOCKED" != true ] \
+       && { [ "$(_pb_prev)" != "$PB_PREV_SEEN" ] \
+            || [ "$(stat -c '%i %s %y' -- "$TASK_FILE" 2>/dev/null || true)" != "$PB_FILE_SEEN" ]; }; then
+        # STALE: counted on the gate the counters hold now, nothing said, nothing logged
+        IFS=$'\x1f' read -r PB_NOW_TASK _ _ _ PB_NOW_COUNT _ <<< "$(_pb_prev)" || true
+        if [ -n "$PB_NOW_TASK" ]; then
+            write_counters "$COUNTER_FILE" gate_count "$(( $(_safe_int "$PB_NOW_COUNT") + 1 ))" \
+                gate_echo_quiet "$(( $(read_counter_int "$COUNTER_FILE" gate_echo_quiet) + 1 ))"
         fi
-    else
-        NEW_COUNT=1
-    fi
-    if [ "$AGENT_WRITABLE" = true ] && [ "$PB_GATE_PENDING" != true ]; then
-        write_counter "$COUNTER_FILE" gate_key "$GATE_KEY"
-        write_counter "$COUNTER_FILE" gate_count "$NEW_COUNT"
-        write_counter "$COUNTER_FILE" gate_text "$GATE_TEXT"
-    fi
-else
-    # All gates done — log final gate if exists, clean up gate_* counters
-    PREV_KEY=$(read_counter "$COUNTER_FILE" gate_key)
-    if [ -n "$PREV_KEY" ] && [ "$AGENT_WRITABLE" = true ]; then
-        PREV_COUNT=$(read_counter_int "$COUNTER_FILE" gate_count)
-        PREV_TEXT=$(read_counter "$COUNTER_FILE" gate_text)
-        PREV_TASK="${PREV_KEY%%:*}"
-        PREV_LINE="${PREV_KEY##*:}"
-        if _log_gate_entry; then
-            # Clear gate_* fields (task complete), keep tools/writes
-            write_counter "$COUNTER_FILE" gate_key ""
-            write_counter "$COUNTER_FILE" gate_count ""
-            write_counter "$COUNTER_FILE" gate_text ""
-        else
-            PB_GATE_PENDING=true
-        fi
+        counters_unlock
+        echo '{}'
+        exit 0
     fi
 fi
+if [ -n "$ENTRY_KIND" ] && [ "$AGENT_WRITABLE" = true ]; then
+    if ! _log_gate_entry; then
+        # not yet: nothing is told, nothing is written — as if this call had not seen the change
+        PB_GATE_PENDING=true
+        TRANSITION_MSG=""
+        SKIP_MSG=""
+        BARE_MSG=""
+        NEW_COUNT=$PREV_COUNT
+    fi
+fi
+if [ "$AGENT_WRITABLE" = true ] && [ "$PB_GATE_PENDING" != true ]; then
+    if [ -n "$GATE_LINE" ]; then
+        write_counters "$COUNTER_FILE" gate_task "$TASK" gate_pos "$GATE_POS" gate_below "$GATE_BELOW" \
+            gate_text "$GATE_TEXT_FULL" gate_line "$GATE_LINE" gate_count "$NEW_COUNT"
+    else
+        # All gates done — the final gate was logged above; clear the gate fields, keep tools/writes and the memory
+        write_counters "$COUNTER_FILE" gate_task "" gate_pos "" gate_below "" gate_text "" gate_line "" gate_count ""
+    fi
+fi
+PB_FORCE=false
+if [ -n "$TRANSITION_MSG" ] || [ -n "$SKIP_MSG" ] || [ -n "$BARE_MSG" ] || _pb_warned; then
+    PB_FORCE=true
+fi
+_pb_decide "$PB_KEY" "$PB_FORCE"
 counters_unlock
 
-# --- Build output (guarded by eval flags — state logic above always runs) ---
-# Eval verification marker — harness checks for this in claude-raw.jsonl
+# --- After the hold: the answer --------------------------------------------------------------------------------
 if [ -n "$PLAYBOOK_EVAL_CONFIG" ]; then
     EVAL_MARKER="# [eval:gate_echo=${EVAL_GATE_ECHO},nudges=${EVAL_NUDGES}]"
 fi
-if [ "$EVAL_GATE_ECHO" = "off" ]; then
-    CONTEXT="${EVAL_MARKER:-}"
-elif [ -n "$EVAL_MARKER" ]; then
-    # Eval mode with gate echo on — prepend marker to normal output
-    if [ "$IS_FREEHAND" = true ]; then
-        CONTEXT="${EVAL_MARKER}
-# [${TASK}] Freehand mode — wait for user instructions. Close only when user says done."
-    else
-        CONTEXT="${EVAL_MARKER}
-$(format_context "$TASK" "$DONE_GATES" "$TOTAL_GATES" "${GATE_TEXT}" "$GATE_LINE" "$REL_PATH")"
-    fi
-elif [ "$IS_FREEHAND" = true ]; then
-    CONTEXT="# [${TASK}] Freehand mode — wait for user instructions. Close only when user says done."
-else
-    CONTEXT=$(format_context "$TASK" "$DONE_GATES" "$TOTAL_GATES" "${GATE_TEXT}" "$GATE_LINE" "$REL_PATH")
-fi
-if [ -n "$TRANSITION_MSG" ]; then
-    CONTEXT="${TRANSITION_MSG}
-${CONTEXT}"
-fi
-if [ -n "$SKIP_MSG" ]; then
-    CONTEXT="${CONTEXT}${SKIP_MSG}"
-fi
-if [ -n "$BARE_MSG" ]; then
-    CONTEXT="${CONTEXT}${BARE_MSG}"
-fi
-# Tool-type-aware nudge — silent on first call, silent on operate, class-specific otherwise
+# Tool-type-aware nudge — on the reminder only (and in eval mode from the 2nd call on a gate, as before).
 # Eval flags: off=no nudge, flat=old 19-item rotation, typed=current (default)
-if [ "$EVAL_NUDGES" = "off" ] || [ "$EVAL_GATE_ECHO" = "off" ]; then
-    : # no nudge
-elif [ -n "$GATE_LINE" ] && [ "$IS_FREEHAND" != true ] && [ "$NEW_COUNT" -gt 1 ]; then
+PB_NUDGE=""
+if [ "$PB_MODE" != quiet ] && [ "$EVAL_NUDGES" != "off" ] && [ "$EVAL_GATE_ECHO" != "off" ] && [ -n "$GATE_LINE" ] \
+   && [ "$IS_FREEHAND" != true ] && [ "$NEW_COUNT" -gt 1 ]; then
     TOOL_CLASS=$(classify_tool "$TOOL_NAME" "$INPUT")
     case "$TOOL_CLASS" in
-        orient)
-            NUDGE_IDX=$(( (NEW_COUNT - 2) % ${#NUDGES_ORIENT[@]} ))
-            CONTEXT="${CONTEXT} — 💭 ${NUDGES_ORIENT[$NUDGE_IDX]}"
-            ;;
-        execute)
-            NUDGE_IDX=$(( (NEW_COUNT - 2) % ${#NUDGES_EXECUTE[@]} ))
-            CONTEXT="${CONTEXT} — 💭 ${NUDGES_EXECUTE[$NUDGE_IDX]}"
-            ;;
-        test)
-            NUDGE_IDX=$(( (NEW_COUNT - 2) % ${#NUDGES_TEST[@]} ))
-            CONTEXT="${CONTEXT} — 💭 ${NUDGES_TEST[$NUDGE_IDX]}"
-            ;;
-        reflect)
-            NUDGE_IDX=$(( (NEW_COUNT - 2) % ${#NUDGES_REFLECT[@]} ))
-            CONTEXT="${CONTEXT} — 💭 ${NUDGES_REFLECT[$NUDGE_IDX]}"
-            ;;
+        orient)  PB_NUDGE=" — 💭 ${NUDGES_ORIENT[$(( (NEW_COUNT - 2) % ${#NUDGES_ORIENT[@]} ))]}" ;;
+        execute) PB_NUDGE=" — 💭 ${NUDGES_EXECUTE[$(( (NEW_COUNT - 2) % ${#NUDGES_EXECUTE[@]} ))]}" ;;
+        test)    PB_NUDGE=" — 💭 ${NUDGES_TEST[$(( (NEW_COUNT - 2) % ${#NUDGES_TEST[@]} ))]}" ;;
+        reflect) PB_NUDGE=" — 💭 ${NUDGES_REFLECT[$(( (NEW_COUNT - 2) % ${#NUDGES_REFLECT[@]} ))]}" ;;
         # operate: silent — no nudge
     esac
 fi
-
-# Loud gate-logging write-failure warning (bug report #4): if any session-state
-# or gate-log write failed this call, surface it — a silent freeze of the
-# gate_key is exactly how gate logging died undetected on one machine. Suppressed
-# inside a sandboxed judge (PLAYBOOK_SANDBOXED=1), where W1's read-only project
-# makes .agent writes fail BY DESIGN and the warning would spam every verdict.
-if [ "$PLAYBOOK_WRITE_FAILED" = true ] && [ "${PLAYBOOK_SANDBOXED:-}" != "1" ]; then
-    CONTEXT="${CONTEXT}
-# ⚠ gate-logging write FAILED — session state / gate history not updated (retro attribution will degrade). Run \`tasks doctor\` and check .agent dir writability + AV locks."
+if [ "$PB_MODE" = reminder ]; then
+    _pb_print "$PB_KEY" "${PB_REMINDER}${PB_NUDGE}"
+    exit 0
 fi
-
-# A completed gate whose entry could not be written yet because the CHAT LOG's lock
-# was held (ours was given): said at every call it stays so — "not yet" has no end
-# of its own, and a holder that never lets go froze the gate unseen (post-panel
-# run 2). Where ours was not given, the lines below say that instead.
-if [ "$PB_GATE_PENDING" = true ] && [ "$PLAYBOOK_COUNTERS_UNLOCKED" != true ] && [ "${PLAYBOOK_SANDBOXED:-}" != "1" ]; then
-    CONTEXT="${CONTEXT}
-# ⚠ the gate you completed is not logged yet — the chat log's lock is held by another process; the next tool call tries again."
+PB_FULL="$PB_CORE"
+if [ -n "$TRANSITION_MSG" ]; then
+    PB_FULL="${TRANSITION_MSG}
+${PB_FULL}"
 fi
-
-# There is a counters lock and it was not given (task 182) — say so, a stuck
-# holder is otherwise invisible, and say WHICH step went without: the count
-# (then the stop hook holds the turn) or only the gate step after a count that
-# was made (then nothing is held; the next call looks at the gate).
-# Not inside a sandboxed judge, as for the warning above.
-if [ "$PLAYBOOK_COUNTERS_UNLOCKED" = true ] && [ "${PLAYBOOK_SANDBOXED:-}" != "1" ]; then
-    if [ "$PB_NOT_COUNTED" = true ]; then
-        CONTEXT="${CONTEXT}
-# ⚠ the session's counters lock could not be taken within ${PLAYBOOK_COUNTERS_WAITED}s — this call was NOT counted, and the stop hook holds this turn like one that wrote, until your next prompt."
+PB_FULL="${PB_FULL}${SKIP_MSG}${BARE_MSG}"
+if [ -n "$EVAL_MARKER" ]; then
+    # Eval mode: the echo as it was before task 219 — every call, the nudge from the 2nd call on a gate
+    if [ "$EVAL_GATE_ECHO" = "off" ]; then
+        PB_FULL="$EVAL_MARKER"
     else
-        CONTEXT="${CONTEXT}
-# ⚠ the session's counters lock could not be taken again within this call's ${PLAYBOOK_COUNTERS_WAITED}s — the call is counted; the gate was not looked at, the next call does that."
+        PB_FULL="${EVAL_MARKER}
+${PB_FULL}${PB_NUDGE}"
     fi
 fi
-
-# Format as hook JSON. The old fallback `|| echo "\"$CONTEXT\""` did NOT escape
-# newlines, so when python3 was unavailable it emitted an unescaped multi-line
-# string as additionalContext — invalid JSON the host silently discards. This
-# hook is advisory, so emit NOTHING (a valid empty `{}` response) rather than a
-# malformed envelope: no gate echo is strictly better than corrupt output. When
-# python3 is present the escaping is exact, exactly as before.
-JSON_CONTEXT=$(echo "$CONTEXT" | python3 -I -c "import sys,json; print(json.dumps(sys.stdin.read().rstrip()))" 2>/dev/null || true)
-if [ -n "$JSON_CONTEXT" ]; then
-    cat <<EOF
-{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":${JSON_CONTEXT}}}
-EOF
-else
-    echo '{}'
-fi
+_pb_print "$PB_KEY" "$(_pb_warnings "$PB_FULL")"

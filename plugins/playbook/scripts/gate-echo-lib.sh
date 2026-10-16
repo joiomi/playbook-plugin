@@ -947,6 +947,44 @@ write_counter() {
     return 0
 }
 
+# write_counters FILE KEY VALUE [KEY VALUE ...]
+# write_counter for several keys in ONE rewrite of the file (task 219: the state echo keeps its gate and its memory
+# in eight fields — one grep + mv each would be eight per tool call). The same guards and the same lock as
+# write_counter; a value is one line (it is cut at a newline). Keys are the hook's own names, never input.
+write_counters() {
+    local file="$1"; shift
+    local tmp="${file}.tmp.$$" pat="" i
+    local args=("$@")
+    if ! _pb_session_dir_ok "$(_counters_dir "$file")" || ! _pb_sink_ok "" "$file" \
+       || ! _pb_sink_ok "" "$tmp"; then
+        PLAYBOOK_WRITE_FAILED=true
+        return 0
+    fi
+    counters_lock "$file"
+    if [ "$PLAYBOOK_COUNTERS_UNLOCKED" = true ]; then
+        counters_unlock
+        return 0
+    fi
+    for ((i = 0; i < ${#args[@]}; i += 2)); do
+        pat="${pat:+$pat|}${args[i]}"
+    done
+    : > "$tmp" 2>/dev/null || true
+    if [ -f "$file" ]; then
+        grep -Ev "^(${pat})=" "$file" > "$tmp" 2>/dev/null || true
+    fi
+    local ok=true
+    for ((i = 0; i < ${#args[@]}; i += 2)); do
+        printf '%s=%s\n' "${args[i]}" "${args[i+1]%%$'\n'*}" >> "$tmp" 2>/dev/null || ok=false
+    done
+    # Fail-open and fail-loud, as write_counter: a half-written temp file is never moved into place.
+    if [ "$ok" != true ] || ! mv "$tmp" "$file" 2>/dev/null; then
+        rm -f "$tmp" 2>/dev/null || true
+        PLAYBOOK_WRITE_FAILED=true
+    fi
+    counters_unlock
+    return 0
+}
+
 # reset_counters FILE
 # Reset tools=0 and writes=0, preserving gate_* fields. Creates file if missing.
 # Under the counters lock (task 182): the gate's lines it keeps are the ones the

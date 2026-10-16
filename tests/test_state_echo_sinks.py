@@ -51,9 +51,10 @@ class TheEchosSinks(unittest.TestCase):
         sess = session_dir or (p / ".agent" / "sessions" / SID)
         sess.mkdir(parents=True, exist_ok=True)
         (sess / "current_state").write_text("001\n", encoding="utf-8")
-        # the previous gate is `a` (line 7): this call logs its completion into chat_log.md
-        (sess / "counters").write_text("tools=1\nwrites=1\ngate_key=001:7\ngate_count=3\ngate_text=a\n",
-                                       encoding="utf-8")
+        # the previous gate is `a` (the first live gate, line 7): this call logs its completion into chat_log.md
+        # (task 219: the gate is held as what it is — task, place among the live gates, text — and its line)
+        (sess / "counters").write_text("tools=1\nwrites=1\ngate_task=001\ngate_pos=0\ngate_below=0\ngate_line=7\n"
+                                       "gate_count=3\ngate_text=a\n", encoding="utf-8")
         return p
 
     def echo(self, project):
@@ -94,7 +95,7 @@ class TheEchosSinks(unittest.TestCase):
                         # the entry not written is said, and the gate moves on
                         out = json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
                         self.assertIn("gate-logging write FAILED", out)
-                        self.assertIn("gate_key=001:8", (p / ".agent" / "sessions" / SID / "counters").read_text(encoding="utf-8"))
+                        self.assertIn("gate_line=8", (p / ".agent" / "sessions" / SID / "counters").read_text(encoding="utf-8"))
 
     def test_a_linked_session_directory_is_not_written(self):
         elsewhere = self.tmp / "elsewhere"

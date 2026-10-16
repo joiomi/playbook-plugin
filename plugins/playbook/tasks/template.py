@@ -36,7 +36,7 @@ def sticker() -> str:
 > **Closing a gate:** check the box, append your outcome. Never replace the original text.
 > **Sanctioned compaction (the one exception):** when this file grows past the review context budget, old *Plan Review / Implementation Review triage narrative* may move VERBATIM to `task-archive.md` (same dir). Never gates, never Intent/Design/Parked/receipts \u2014 moving history is not deleting it. Do it mechanically: wrap each cold block in `<!-- archive:start -->` \u2026 `<!-- archive:end -->` then run `.claude/bin/tasks compact <N>` (it refuses to move a gate, a pin, or a protected heading, so a mismark fails loud).
 > Design Phase = orientation (one gate, brief answer). Work Plan = real work (one gate, full effort).
-> If you see the same gate 5+ times in the hook echo, you're drifting \u2014 STOP and update."""
+> If the hook's reminder (one line every 10 calls on the same gate) names the same gate a third time, you're drifting \u2014 STOP and update."""
 
 
 def status() -> str:

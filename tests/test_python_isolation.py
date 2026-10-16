@@ -695,7 +695,7 @@ class EveryShippedInlinePythonIsIsolated(unittest.TestCase):
         "scripts/sandbox": 2,
         "scripts/session-end-hook": 2,     # +1: the Python floor probe (task 192, #46)
         "scripts/session-start-hook": 2,   # +1: the Python floor probe (task 192, #46)
-        "scripts/state-echo-hook": 9,      # +1: the Python floor probe (task 194, #46)
+        "scripts/state-echo-hook": 8,      # +1: the Python floor probe (task 194, #46); -1: one JSON writer for every answer (task 219)
         "scripts/stop-hook": 4,            # +1: the Python floor probe (task 193, #46)
         "scripts/task-gate-hook": 14,      # +1: the Python floor probe (task 194, #46); +1: the recovery path's resolved path (task 198, #26)
         "scripts/tasks": 2,
@@ -706,7 +706,7 @@ class EveryShippedInlinePythonIsIsolated(unittest.TestCase):
         _, counts, inline, _ = sweep()
         self.assertEqual(inline, self.ISOLATED_INLINE_CALLS)
         self.assertEqual(counts.get("ok-inline"), sum(self.ISOLATED_INLINE_CALLS.values()))
-        self.assertEqual(sum(self.ISOLATED_INLINE_CALLS.values()), 62)   # 55 + the floor probes of tasks 192 (2), 193 (2) and 194 (2) + task 198's resolved path
+        self.assertEqual(sum(self.ISOLATED_INLINE_CALLS.values()), 61)   # 55 + the floor probes of tasks 192 (2), 193 (2) and 194 (2) + task 198's resolved path - task 219's one JSON writer
 
     # Every call that starts a FILE of the plugin's, file by file — 22 when task 180
     # isolated them (18 in the hooks and scripts, 4 that the merge skill gives the agent).
@@ -718,7 +718,7 @@ class EveryShippedInlinePythonIsIsolated(unittest.TestCase):
         "scripts/init": 3,
         "scripts/monitor-lib/bootstrap.sh": 2,
         "scripts/session-start-hook": 1,
-        "scripts/state-echo-hook": 2,
+        "scripts/state-echo-hook": 3,      # +1: `task-status.py --echo`, the gates read fence-aware (task 219)
         "scripts/stop-hook": 1,
         "scripts/task-dir-watch-hook": 1,
         "scripts/task-gate-hook": 6,
@@ -729,7 +729,7 @@ class EveryShippedInlinePythonIsIsolated(unittest.TestCase):
         _, counts, _, files = sweep()
         self.assertEqual(files, self.ISOLATED_FILE_CALLS)
         self.assertEqual(counts.get("ok-file"), sum(self.ISOLATED_FILE_CALLS.values()))
-        self.assertEqual(sum(self.ISOLATED_FILE_CALLS.values()), 23)
+        self.assertEqual(sum(self.ISOLATED_FILE_CALLS.values()), 24)   # + the state echo's task-status.py (task 219)
 
     def test_no_shipped_python_source_starts_a_file_through_an_argv_list(self):
         # the sweep reads an argv list only for its mode flag; a list that hands the

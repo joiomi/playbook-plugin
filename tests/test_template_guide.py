@@ -28,7 +28,17 @@ from tasks import template  # noqa: E402
 from tasks.core import PLAYBOOKS, extract_risk, extract_risk_from_text, has_risk_section  # noqa: E402
 
 BEFORE = _HERE / "fixtures" / "template_before_213"
-MOVED = [ln for ln in (BEFORE / "commentary.txt").read_text(encoding="utf-8").splitlines() if ln]
+# Lines of the old templates that a later task REWORDED in the guide, old -> new (the guide holds the new one; a
+# record written before keeps the old line — one stale line, not worth code that recognises it: the owner's rule of
+# 2026-10-16, "design for new projects, not legacy").
+REWORDED = {
+    # task 219: the echo no longer repeats after every call — the drift signal is the 10-call reminder
+    "> If you see the same gate 5+ times in the hook echo, you're drifting — STOP and update.":
+        "> If the hook's reminder (one line every 10 calls on the same gate) names the same gate a third time, "
+        "you're drifting — STOP and update.",
+}
+MOVED = [ln for ln in (BEFORE / "commentary.txt").read_text(encoding="utf-8").splitlines()
+         if ln and ln not in REWORDED]
 MOVED_ORDERS = [ln for ln in (BEFORE / "standing_orders.txt").read_text(encoding="utf-8").splitlines() if ln]
 TYPES = [None, "quick", "light", *PLAYBOOKS]
 OLD_RENDERS = {"default": None, "quick": "quick", "light": "light", "bugfix": "bugfix",
@@ -59,6 +69,10 @@ class TheGuideHoldsEveryMovedLine(unittest.TestCase):
         for ln in MOVED + MOVED_ORDERS:
             with self.subTest(line=ln[:60]):
                 self.assertIn(ln, guide)
+        for old, new in REWORDED.items():
+            with self.subTest(reworded=old[:60]):
+                self.assertNotIn(old, guide)
+                self.assertIn(new, guide)
 
     def test_a_type_guide_carries_its_own_shape(self):
         quick, light, feature = (template.guide_text(t) for t in ("quick", "light", "feature"))

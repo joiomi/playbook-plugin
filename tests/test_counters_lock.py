@@ -52,6 +52,12 @@ class _Counters(_Session):
         self.counters_file.write_text("tools=0\nwrites=0\n", encoding="utf-8")
         self._payloads = 0
 
+    def gate_key(self) -> str:
+        """The open gate the echo holds, as `<task>:<line>` ("" when none). Task 219 keeps the gate as what it is —
+        `gate_task`, `gate_pos`, `gate_text` — and its line in `gate_line` for the chat-log entry."""
+        c = self.counters()
+        return f"{c['gate_task']}:{c.get('gate_line', '')}" if c.get("gate_task") else ""
+
     def _env(self, **extra):
         env = dict(os.environ)
         env["PLAYBOOK_SESSION_ID"] = SID
@@ -190,7 +196,7 @@ class AGatesCompletionIsLoggedOnce(_Counters):
             encoding="utf-8")
         self.chat_log = self.project / ".agent" / "chat_log.md"
         self.tools("Read")                                   # the hook now knows gate 001:7
-        self.assertEqual(self.counters()["gate_key"], "001:7")
+        self.assertEqual(self.gate_key(), "001:7")
         self.task_file.write_text(
             self.task_file.read_text(encoding="utf-8").replace("- [ ] the first gate", "- [x] the first gate — done"),
             encoding="utf-8")
@@ -205,7 +211,7 @@ class AGatesCompletionIsLoggedOnce(_Counters):
         self.assertEqual(self._logged(), 1)
         said = [d[1] for d in done if "previous gate done" in d[1]]
         self.assertEqual(len(said), 1, "the completion is told to one call, the one that saw it")
-        self.assertEqual(self.counters()["gate_key"], "001:8")
+        self.assertEqual(self.gate_key(), "001:8")
         self.assertEqual(self.counters()["gate_count"], "6")
 
     def test_control_one_call_logs_it(self):
@@ -223,8 +229,8 @@ class AGatesCompletionIsLoggedOnce(_Counters):
         log = self.chat_log.read_text(encoding="utf-8")
         self.assertEqual(log.count("**[G001:8]**"), 1)
         self.assertIn("- [x] the second gate", log)
-        self.assertEqual({k: v for k, v in self.counters().items() if k.startswith("gate_")},
-                         {"gate_key": "", "gate_count": "", "gate_text": ""})
+        gate = ("gate_task", "gate_pos", "gate_below", "gate_text", "gate_line", "gate_count")
+        self.assertEqual({k: v for k, v in self.counters().items() if k in gate}, dict.fromkeys(gate, ""))
 
 
 @_needs_flock
@@ -575,7 +581,7 @@ class TheGateIsReadUnderTheLock(_Counters):
             encoding="utf-8")
         self.chat_log = self.project / ".agent" / "chat_log.md"
         self.tools("Read")
-        self.assertEqual(self.counters()["gate_key"], "001:7")
+        self.assertEqual(self.gate_key(), "001:7")
 
     def _tick_the_first_gate(self):
         self.task_file.write_text(
@@ -616,14 +622,14 @@ class TheGateIsReadUnderTheLock(_Counters):
         # the gate is ticked, and another call's hook — started after the tick — goes through
         self._tick_the_first_gate()
         self.tools("Read")
-        self.assertEqual(self.counters()["gate_key"], "001:8")
+        self.assertEqual(self.gate_key(), "001:8")
         self.assertEqual(self._log().count("**[G001:7]**"), 1)
         Path(str(mark) + ".go").write_text("", encoding="utf-8")
         rc, out, err = self.finish(slow)
         self.assertEqual(rc, 0, err)
         self.assertNotIn("**[G001:8]**", self._log(), "the open gate was logged as done")
         self.assertEqual(self._log().count("**[G001:7]**"), 1)
-        self.assertEqual(self.counters()["gate_key"], "001:8")
+        self.assertEqual(self.gate_key(), "001:8")
         self.assertEqual(self.counters()["gate_count"], "2")
         self.assertNotIn("previous gate done", out)
 
@@ -647,7 +653,7 @@ class TheGateIsReadUnderTheLock(_Counters):
                 ended = True
             except subprocess.TimeoutExpired:
                 ended = False
-            seen = (self.counters().get("gate_key"), self._log().count("**[G001:7]**"))
+            seen = (self.gate_key(), self._log().count("**[G001:7]**"))
         finally:
             os.close(fd)
             if proc.poll() is None:
@@ -661,7 +667,7 @@ class TheGateIsReadUnderTheLock(_Counters):
         done = self.overlapping(*["Read"] * 3)
         self.assertEqual(self._log().count("**[G001:7]**"), 1)
         self.assertEqual(len([d for d in done if "previous gate done" in d[1]]), 1)
-        self.assertEqual(self.counters()["gate_key"], "001:8")
+        self.assertEqual(self.gate_key(), "001:8")
 
     def test_six_calls_side_by_side_while_the_chat_logs_lock_is_held(self):
         # The single judge ran this (post-panel run 1): gate ticked, the chat log's lock held,
@@ -685,9 +691,9 @@ class TheGateIsReadUnderTheLock(_Counters):
             self.assertNotIn(NOTICE, out)
         self.assertEqual(self.counts(), (before[0] + 6, before[1] + 6))
         self.assertFalse((self.session_dir / "counts_unsure").exists())
-        self.assertEqual((self.counters()["gate_key"], self._log().count("**[G001:7]**")), ("001:7", 0))
+        self.assertEqual((self.gate_key(), self._log().count("**[G001:7]**")), ("001:7", 0))
         self.tools("Read")
-        self.assertEqual((self.counters()["gate_key"], self._log().count("**[G001:7]**")), ("001:8", 1))
+        self.assertEqual((self.gate_key(), self._log().count("**[G001:7]**")), ("001:8", 1))
 
     def test_a_call_that_was_counted_and_only_lost_the_gate_step_says_that(self):
         # our lock given for the count and not given again for the gate step: the count is
@@ -734,9 +740,9 @@ class TheGateIsReadUnderTheLock(_Counters):
             self.assertEqual(rc, 0, err)
             self.assertIn("is not logged yet", out)
             self.assertNotIn("previous gate done", out)
-        self.assertEqual((self.counters()["gate_key"], self._log().count("**[G001:7]**")), ("001:7", 0))
+        self.assertEqual((self.gate_key(), self._log().count("**[G001:7]**")), ("001:7", 0))
         self.tools("Read")                                               # the real flock again
-        self.assertEqual((self.counters()["gate_key"], self._log().count("**[G001:7]**")), ("001:8", 1))
+        self.assertEqual((self.gate_key(), self._log().count("**[G001:7]**")), ("001:8", 1))
 
     def test_where_there_is_no_lock_to_take_the_entry_is_appended_without_one(self):
         # a `flock` that refuses every request at once: a host with no lock to take — the
@@ -748,7 +754,7 @@ class TheGateIsReadUnderTheLock(_Counters):
         self.assertNotIn(NOTICE, out)
         self.assertNotIn("is not logged yet", out)
         self.assertIn("previous gate done", out)
-        self.assertEqual((self.counters()["gate_key"], self._log().count("**[G001:7]**")), ("001:8", 1))
+        self.assertEqual((self.gate_key(), self._log().count("**[G001:7]**")), ("001:8", 1))
 
     def test_the_last_gate_waits_for_its_entry_too(self):
         # no gate left open: the counters forget the gate only once its entry is written
@@ -766,9 +772,9 @@ class TheGateIsReadUnderTheLock(_Counters):
             os.close(fd)
         self.assertEqual(rc, 0, err)
         self.assertIn("is not logged yet", out)
-        self.assertEqual((self.counters()["gate_key"], self._log().count("**[G001:8]**")), ("001:8", 0))
+        self.assertEqual((self.gate_key(), self._log().count("**[G001:8]**")), ("001:8", 0))
         self.tools("Read")
-        self.assertEqual((self.counters()["gate_key"], self._log().count("**[G001:8]**")), ("", 1))
+        self.assertEqual((self.gate_key(), self._log().count("**[G001:8]**")), ("", 1))
 
     def test_a_call_that_was_not_given_the_counters_lock_logs_no_gate(self):
         # it cannot write the new gate, so it must not write the entry either
@@ -779,9 +785,9 @@ class TheGateIsReadUnderTheLock(_Counters):
         self.assertIn(NOTICE, out)
         self.assertNotIn("previous gate done", out)
         self.assertNotIn("is not logged yet", out)           # one reason is said, the true one
-        self.assertEqual((self.counters()["gate_key"], self._log().count("**[G001:7]**")), ("001:7", 0))
+        self.assertEqual((self.gate_key(), self._log().count("**[G001:7]**")), ("001:7", 0))
         self.overlapping("Read", "Read")
-        self.assertEqual((self.counters()["gate_key"], self._log().count("**[G001:7]**")), ("001:8", 1))
+        self.assertEqual((self.gate_key(), self._log().count("**[G001:7]**")), ("001:8", 1))
 
     def test_a_chat_log_that_cannot_be_appended_to_is_said(self):
         # Parked by this task's first build and closed here, on the same lines: with `flock`
@@ -795,7 +801,7 @@ class TheGateIsReadUnderTheLock(_Counters):
         rc, out, err = self.finish(self.start_tool("Read"))
         self.assertEqual(rc, 0, err)
         self.assertIn("write FAILED", out)
-        self.assertEqual(self.counters()["gate_key"], "001:8")
+        self.assertEqual(self.gate_key(), "001:8")
 
 
 @_needs_flock

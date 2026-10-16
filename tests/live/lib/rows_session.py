@@ -190,11 +190,16 @@ def state_echo(out: Path) -> int:
         "Then reply DONE.\n"))
     post = hook_responses(ev, "PostToolUse")
     ctx = [json.dumps(x) for x in post]
-    both, said = parallel_echoes(ev)
-    run.clause("after each real tool event the state echo reports the task and its current gate",
-               sum("Working on task [001]" in c for c in ctx) >= 2, f"{len(post)} PostToolUse responses, "
+    # Task 219 (PHASE-B item 2, the owner 2026-10-16: "La schimbare + amintire"): the echo is printed in full when the
+    # gate changes — after `tasks work`, after the tick — and the calls on the same gate in between answer `{}`.
+    both, said = parallel_echoes(ev, line="")
+    run.clause("after `tasks work` the state echo reports the task and its current gate",
+               sum("Working on task [001]" in c for c in ctx) >= 1, f"{len(post)} PostToolUse responses, "
                f"{sum('Working on task [001]' in c for c in ctx)} with the gate line")
-    run.clause("two tool calls issued in one message are both echoed, each by its own response", both, said)
+    run.clause("two tool calls issued in one message each get their own echo response", both, said)
+    quiet = [x for x in post if x.get("hook_name") == "PostToolUse:Read" and "additionalContext" not in json.dumps(x)]
+    run.clause("a call on a gate already echoed answers nothing (the echo only on a change)", bool(quiet),
+               f"Read responses with no context: {len(quiet)}")
     done = [c for c in ctx if "previous gate done" in c or "✓" in c]
     run.clause("ticking a gate is noticed by the echo (the completion line)", bool(done),
                f"echo lines with a completion: {len(done)}")

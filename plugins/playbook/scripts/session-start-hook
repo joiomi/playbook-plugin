@@ -157,6 +157,13 @@ print(t if isinstance(t, str) and t and '\n' not in t and '\r' not in t else '')
             if [ -n "$TRANSCRIPT_PATH" ] && _pb_sink_ok "" "$SESSION_DIR/transcript_path"; then
                 printf '%s\n' "$TRANSCRIPT_PATH" > "$SESSION_DIR/transcript_path" 2>/dev/null || true
             fi
+            # Task 219: a session start — startup, resume, clear or a compaction (SessionStart has no matcher) — makes
+            # the state echo's next call print in full: the agent may no longer hold the last echo. A marker FILE, made
+            # without the counters lock, so a held lock cannot lose it (plan panel, codex); the echo removes it once it
+            # has printed in full.
+            if _pb_sink_ok "" "$SESSION_DIR/echo_reset"; then
+                : > "$SESSION_DIR/echo_reset" 2>/dev/null || true
+            fi
         fi
     fi
 

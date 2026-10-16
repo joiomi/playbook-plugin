@@ -87,6 +87,31 @@ the real records before: every `tasks audit` stacked one more receipt into task.
   refuses then and says why, while its Stop and echo stay open and print the error, as they are built to; and the
   retro's task reader still split with `splitlines()`.
 
+**The gate echo only on a change** — PHASE-B.md item 2, task 219, the owner's answer of 2026-10-16 ("La schimbare +
+amintire"). Measured before on the transcripts since 2026-10-02: the hook answered after every tool call, 89 % of its
+gate echoes here and 94 % in a second project repeated the gate of the one before, and in a long session the echoes
+were about 8 % of all the text held before a compaction.
+- The full echo is printed when something changed — the open gate or the task, a warning — at a session's first
+  call, and after a session start (SessionStart also runs at a compaction; it leaves a marker the next call reads).
+  On the same gate one line every 10 calls names the task, the a/b count, the first 60 characters of the gate and
+  its `path:line`; the other calls answer `{}`. "No active task", Freehand and "all gates done" follow the same rule;
+  "task file not found" and gates that cannot be read are said at every call. Replayed on those transcripts, the
+  rule keeps 13 % and 10 % of the hook's text.
+- Always in full, as before: eval mode, a lock not given, an `.agent` that cannot be written, and a subagent's call
+  (a payload with `agent_id` — it has its own context; the main agent's memory is left as it is).
+- "The gate changed" now means the gate, not its line: the gate is known by its place among the live gates and its
+  text, read fence-aware through `scripts/task-status.py --echo` (the CLI's own reader). Lines added above the open
+  gate and a fenced checklist change nothing; only the previous gate's own line, now checked, is a completion logged
+  `[x]` in `chat_log.md`; a gate added, moved or unticked above it is logged "left open"; a reworded gate is the same
+  gate. Until now any change of the gate's line logged the previous gate as done — a false `[x]` the retros read —
+  and printed "Gate at line N is still open above completed gate"; the skip warning now means a gate below the open
+  one was checked. The echo's memory lives in the session's counters as `gate_*` fields, so a prompt's reset keeps it;
+  no python runs while the counters lock is held — a read that another call overtook is only counted.
+- Not verified live: that SessionStart runs at a compaction is Claude Code's documented behavior, and no record of
+  either answer exists in 77 compactions of the transcripts (a run is recorded only when the hook prints); the
+  release's live check is to compact an interactive session and see the next call print in full. Until then a missed
+  marker costs at most 10 calls.
+
 ## [1.6.3] — 2026-10-15
 
 **The review stop rule as the plugin's default** — PHASE-B.md item 1, task 209. Until now the round cap (the owner's
