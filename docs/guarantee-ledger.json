@@ -18616,7 +18616,7 @@
     {
       "id": "PB-HOOK-JOURNAL",
       "category": "providers-and-hooks",
-      "statement": "Every run of a playbook hook that finds a playbook project appends ONE line to the lane's `journal/hooks.jsonl` — Claude's and grok's eight bash hooks, the project's `monitor-nudge.sh`, codex's three python hooks and `command_guard.py` (Claude's and grok's through command-guard-hook's `exec`, codex's directly) — with the keys ts (UTC, at exit), hook, event, tool, tool_use_id (the host's id of the tool call), session_id (playbook's), host_session_id, agent_id (a subagent's), decision (allow/block/context/ok/skip/error), detail, ms (from the hook's first line), exit and error, and no command, path or prompt. The bash runner keeps the hook's exit status exactly and gives each exit action the hook's own status as `$?` (a blocked stop leaves no turn-end mark); a failing write or action changes nothing. The ids come from the normalizer's frame (v4) where the hook reads it, so a key nested in a tool's input or response cannot stand in for them; elsewhere `tool_use_id` is the last match in the payload's last 4 KiB. Each line is one append of at most 1,024 bytes, so writers side by side tear none, made under a shared lock on the journal directory that renaming and compressing take exclusively (the owner, 2026-10-16 22:21), so no line is in flight while a closed file is compressed; nothing is written in the fresh-clone shape, with an invalid marker, into a lane that is a link or not writable, through a linked `journal/`, or into a `hooks.jsonl` that is a link or not a regular file. About one run in 32 looks at the journal directory under a lock taken without waiting: past 20 MB, after a second look, the file is renamed to `hooks.jsonl.archived-<stamp>-<epoch>-<pid>` (the name records the rename time, written by the rename itself); a closed file is compressed beside it only 10 minutes after the rename its name records and after its last write, and never when its name records no rename time (a hook that opened it before the rename can still append), and every archive is kept (the owner, 2026-10-16 18:04); the python writer rotates the same way, and both take the duration after that work. No line is written for a review's session (judge, tail-cert) or a nested run (PLAYBOOK_HOOK_NESTED=1, codex's Stop calling the stop hook); the pattern reads the event, session and agent only in the payload's head (before its first tool input, within 4 KiB); a python error is named by its type.",
+      "statement": "Every run of a playbook hook that finds a playbook project appends ONE line to the lane's `journal/hooks.jsonl` — Claude's and grok's eight bash hooks, the project's `monitor-nudge.sh`, codex's three python hooks and `command_guard.py` (Claude's and grok's through command-guard-hook's `exec`, codex's directly) — with the keys ts (UTC, at exit), hook, event, tool, tool_use_id (the host's id of the tool call), session_id (playbook's), host_session_id, agent_id (a subagent's), decision (allow/block/context/ok/skip/error), detail, ms (from the hook's first line), exit and error, and no command, path or prompt. The bash runner keeps the hook's exit status exactly and gives each exit action the hook's own status as `$?` (a blocked stop leaves no turn-end mark); a failing write or action changes nothing. The ids come from the normalizer's frame (v4) where the hook reads it, so a key nested in a tool's input or response cannot stand in for them; elsewhere `tool_use_id` is the last match in the payload's last 4 KiB. Each line is one append of at most 1,024 bytes, so writers side by side tear none, made under a shared lock on the journal directory that renaming and compressing take exclusively (the owner, 2026-10-16 22:21), so no line is in flight while a closed file is compressed; the lock is taken before the duration, and past a 1 s wait the line goes to a spool file that the next exclusive holder moves into the journal — never an unlocked append (the owner, 2026-10-17 00:13); nothing is written in the fresh-clone shape, with an invalid marker, into a lane that is a link or not writable, through a linked `journal/`, or into a `hooks.jsonl` that is a link or not a regular file. About one run in 32 looks at the journal directory under a lock taken without waiting: past 20 MB, after a second look, the file is renamed to `hooks.jsonl.archived-<stamp>-<epoch>-<pid>` (the name records the rename time, written by the rename itself); a closed file is compressed beside it only 10 minutes after the rename its name records and after its last write, and never when its name records no rename time (a hook that opened it before the rename can still append), and every archive is kept (the owner, 2026-10-16 18:04); the python writer rotates the same way, and both take the duration after that work. No line is written for a review's session (judge, tail-cert) or a nested run (PLAYBOOK_HOOK_NESTED=1, codex's Stop calling the stop hook); the pattern reads the event, session and agent only in the payload's head (before its first tool input, within 4 KiB); a python error is named by its type.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/gate-echo-lib.sh",
@@ -19117,6 +19117,24 @@
           "type": "executable integration",
           "path": "tests/test_hook_journal_python.py",
           "reference": "ThreeWritersOneAnswer.test_the_nudge_waits_while_the_journal_is_held_exclusively",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_hook_journal_writer.py",
+          "reference": "Rotation.test_past_the_wait_the_line_goes_to_a_spool_and_is_never_appended_unlocked",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Post-panel judge run 3 (codex — reproduced: timeout, a paused writer, a rename, a clock step, a compression): the unlocked append after the wait lost a line; an exclusive holder for 1.8 s now leaves the journal empty and one spool, moved in by the next sampled run."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_hook_journal_python.py",
+          "reference": "ThePythonWriter.test_the_python_line_counts_the_wait_and_spools_past_it",
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": []

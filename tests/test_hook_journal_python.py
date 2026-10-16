@@ -267,6 +267,35 @@ class ThePythonWriter(_Tmp):
             holder.wait()
         self.assertGreaterEqual(waited, 0.45)
         self.assertEqual(len(self.lines()), 1)
+        self.pbj.append_hook_run(self.project, hook="y")       # (the ms of a timed run: below)
+
+    def test_the_python_line_counts_the_wait_and_spools_past_it(self):
+        """Post-panel run 3: the wait counts in `ms`; the owner 00:13: past the wait, a spool, never an unlocked append."""
+        if not shutil.which("flock"):
+            self.skipTest("no flock(1)")
+        self.journal.parent.mkdir()
+        holder = subprocess.Popen(["flock", "-x", str(self.journal.parent), "sleep", "0.8"])
+        try:
+            time.sleep(0.2)
+            self.pbj.append_hook_run(self.project, hook="x", timing=("", time.time()))
+        finally:
+            holder.wait()
+        self.assertGreaterEqual(self.lines()[-1]["ms"], 450)
+        holder = subprocess.Popen(["flock", "-x", str(self.journal.parent), "sleep", "1.8"])
+        try:
+            time.sleep(0.2)
+            self.pbj.append_hook_run(self.project, hook="spooled")
+            self.assertEqual([r["hook"] for r in self.lines()], ["x"])
+            self.assertEqual(len(list(self.journal.parent.glob("hooks.jsonl.spool-*"))), 1)
+        finally:
+            holder.wait()
+        os.environ["PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK"] = "1"
+        try:
+            self.pbj.append_hook_run(self.project, hook="next")
+        finally:
+            del os.environ["PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK"]
+        self.assertEqual(sorted(r["hook"] for r in self.lines()), ["next", "spooled", "x"])
+        self.assertEqual(list(self.journal.parent.glob("hooks.jsonl.spool*")), [])
 
     def test_a_held_lock_means_no_rotation(self):
         if not shutil.which("flock"):
@@ -546,7 +575,18 @@ class ThreeWritersOneAnswer(_Tmp):
         finally:
             holder.wait()
         self.assertGreaterEqual(waited, 0.45)
-        self.assertEqual(len(self.lines(p / ".agent" / "journal" / "hooks.jsonl")), 1)
+        recs = self.lines(p / ".agent" / "journal" / "hooks.jsonl")
+        self.assertEqual(len(recs), 1)
+        self.assertGreaterEqual(recs[0]["ms"], 450)              # post-panel run 3: the wait counts
+        holder = subprocess.Popen(["flock", "-x", str(p / ".agent" / "journal"), "sleep", "1.8"])
+        try:
+            time.sleep(0.2)
+            subprocess.run([bash_or_skip(), str(NUDGE)], input=self.PAYLOAD, cwd=str(p), env=self.env(),
+                           capture_output=True, text=True, timeout=20)
+            self.assertEqual(len(self.lines(p / ".agent" / "journal" / "hooks.jsonl")), 1)   # not appended unlocked
+            self.assertEqual(len(list((p / ".agent" / "journal").glob("hooks.jsonl.spool-*"))), 1)
+        finally:
+            holder.wait()
 
     def test_the_same_cut_of_a_text_full_of_quotes(self):
         """`detail` is cut where its ESCAPED form reaches the cap — the same place in bash and python (P04 of the

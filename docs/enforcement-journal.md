@@ -296,8 +296,11 @@ not stand in for the caller's).
 Each line is one append of at most 1,024 bytes (Linux's `PIPE_BUF` is 4,096), so hooks side by side tear none. Each
 append holds a SHARED lock on the journal directory (`flock`; renaming and compressing hold it exclusively), so no
 line is in flight while a closed file is compressed, whatever the clock — the owner, 2026-10-16 22:21: "Lacăt la
-fiecare rând" (a forward clock jump made the time rule below insufficient — the post-panel judge). A wait of 1 s that
-runs out, or a host without `flock`, appends anyway. Ids
+fiecare rând" (a forward clock jump made the time rule below insufficient — the post-panel judge). The lock is taken
+before the end time, so a wait counts in `ms`. No line is ever appended without it: past a 1 s wait the line goes to a
+spool file of its own (`hooks.jsonl.spool-…`, written whole under another name, then renamed in), which the next run
+that holds the lock exclusively moves into the journal — the owner, 2026-10-17 00:13: "Bilet în cutie". A host
+without `flock` appends directly (and never rotates). Ids
 keep only id characters; `detail` and `error` are escaped and cut on a whole character and a whole escape. Nothing is
 written outside a playbook project (no `.agent/tasks`, no lane with `tasks/`), in the fresh-clone shape (lanes, no
 marker), with an invalid `.agent/current_user`,

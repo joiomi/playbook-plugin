@@ -1673,6 +1673,16 @@ hook_journal_append() {
     fi
     _pb_sink_ok "$jdir" "$hfile" || return 0
     _pb_hj_rotate "$jdir" "$hfile"      # before the duration is taken: the journal's own work counts (impl panel r1, codex)
+    # The append holds a SHARED lock on the journal directory (the owner, 2026-10-16 22:21: "Lacăt la fiecare rând"):
+    # renaming and compressing hold it exclusively, so no line is in flight while a closed file is compressed, whatever
+    # the clock (the post-panel judge's run 2). Taken BEFORE the end time, so a wait counts in `ms` (run 3). Past a 1 s
+    # wait the line is never appended unlocked (run 3; the owner, 2026-10-17 00:13: "Bilet în cutie"): it goes to a
+    # spool file of its own, which the next writer holding the lock exclusively moves into the journal. No `flock` on
+    # the host: appended directly (nothing can take a spool there, nor rotate).
+    local locked=none
+    if command -v flock >/dev/null 2>&1 && { exec 208<"$jdir"; } 2>/dev/null; then
+        if flock -s -w 1 208 2>/dev/null; then locked=yes; else locked=no; fi
+    fi
     t1="${EPOCHREALTIME:-}"
     case "$rc" in ''|*[!0-9]*) rc=255 ;; esac
     TZ=UTC0 printf -v ts '%(%Y-%m-%dT%H:%M:%SZ)T' -1 2>/dev/null || return 0
@@ -1724,20 +1734,32 @@ hook_journal_append() {
     line="$line,\"decision\":\"$decision\",\"detail\":\"$detail\",\"ms\":$ms,\"exit\":$rc,\"error\":\"$error\"}"
     if [ "${#line}" -ge "$_PB_HJ_LINE_MAX" ]; then
         line="${line%%,\"detail\":*},\"detail\":\"\",\"ms\":$ms,\"exit\":$rc,\"error\":\"\"}"
-        [ "${#line}" -lt "$_PB_HJ_LINE_MAX" ] || return 0
+        if [ "${#line}" -ge "$_PB_HJ_LINE_MAX" ]; then
+            [ "$locked" = none ] || { exec 208<&-; } 2>/dev/null
+            return 0
+        fi
     fi
-    _pb_sink_ok "$jdir" "$hfile" || return 0
-    # The append holds a SHARED lock on the journal directory (the owner, 2026-10-16 22:21: "Lacăt la fiecare rând"):
-    # renaming and compressing hold it exclusively, so no line is in flight while a closed file is compressed, whatever
-    # the clock (the post-panel judge's run 2: a forward clock step made a held file look idle). A wait of 1 s that runs
-    # out, or no `flock`, appends anyway: a line is not dropped for the lock (~0.8 ms a run, measured).
-    if command -v flock >/dev/null 2>&1 && { exec 208<"$jdir"; } 2>/dev/null; then
-        flock -s -w 1 208 2>/dev/null || true
-        { printf '%s\n' "$line" >> "$hfile"; } 2>/dev/null || true
-        { exec 208<&-; } 2>/dev/null || true
-    else
-        { printf '%s\n' "$line" >> "$hfile"; } 2>/dev/null || true
+    case "$locked" in
+        no) _pb_hj_spool "$jdir" "$line" ;;
+        *) if _pb_sink_ok "$jdir" "$hfile"; then { printf '%s\n' "$line" >> "$hfile"; } 2>/dev/null || true; fi ;;
+    esac
+    [ "$locked" = none ] || { exec 208<&-; } 2>/dev/null || true
+    return 0
+}
+
+# A line that could not have the shared lock goes to a spool file of its own: written whole under a name no taker matches
+# (`hooks.jsonl.spooling-…`, noclobber), then renamed in (`hooks.jsonl.spool-…`). `_pb_hj_rotate` moves spools into the
+# journal under the exclusive lock.
+_pb_hj_spool() {
+    local jdir="$1" line="$2" stamp name tmp
+    printf -v stamp '%(%Y%m%d-%H%M%S)T' -1 2>/dev/null || return 0
+    name="hooks.jsonl.spool-$stamp-$$-$RANDOM$RANDOM"
+    tmp="$jdir/hooks.jsonl.spooling-${name#hooks.jsonl.spool-}"
+    if ! ( set -o noclobber; printf '%s\n' "$line" > "$tmp" ) 2>/dev/null; then
+        [ -L "$tmp" ] || [ ! -f "$tmp" ] || rm -f -- "$tmp" 2>/dev/null
+        return 0
     fi
+    mv -n -- "$tmp" "$jdir/$name" 2>/dev/null || rm -f -- "$tmp" 2>/dev/null
     return 0
 }
 
@@ -1850,6 +1872,7 @@ _pb_hj_text() {
 # No `flock`, no `gzip`, a failure, a kill: the closed file stays as it is.
 _pb_hj_rotate() {
     local jdir="$1" hfile="$2" every="${PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK:-32}" size stamp arch a now mt big=false idle=false
+    local spool=false sz
     [[ "$every" =~ ^[0-9]{1,4}$ ]] && [ "$((10#$every))" -ge 1 ] && [ "$((10#$every))" -le 1000 ] || every=32
     [ $(( RANDOM % 10#$every )) -eq 0 ] || return 0
     if [ -f "$hfile" ] && [ ! -L "$hfile" ]; then
@@ -1861,10 +1884,26 @@ _pb_hj_rotate() {
         case "$a" in *.gz|*.gz.tmp-*) continue ;; esac
         [ -f "$a" ] && [ ! -L "$a" ] && idle=true && break
     done
-    [ "$big" = true ] || [ "$idle" = true ] || return 0
+    for a in "$jdir"/hooks.jsonl.spool-* "$jdir"/hooks.jsonl.spooling-*; do
+        { [ -e "$a" ] || [ -L "$a" ]; } && spool=true && break
+    done
+    [ "$big" = true ] || [ "$idle" = true ] || [ "$spool" = true ] || return 0
     command -v flock >/dev/null 2>&1 || return 0
     { exec 207<"$jdir"; } 2>/dev/null || return 0
     if flock -n 207 2>/dev/null; then
+        if [ "$spool" = true ] && _pb_sink_ok "$jdir" "$hfile"; then
+            # the spools first, into the live file (no writer is in flight: this hold is exclusive); a link is removed
+            # unread, a spool past 4 KiB is not ours; a writer's temporary older than 10 minutes was left by a kill
+            for a in "$jdir"/hooks.jsonl.spool-*; do
+                if [ -L "$a" ]; then rm -f -- "$a" 2>/dev/null; continue; fi
+                [ -f "$a" ] || continue
+                sz=$(stat -c %s -- "$a" 2>/dev/null) || continue
+                case "$sz" in ''|*[!0-9]*) continue ;; esac
+                [ "$sz" -le 4096 ] || continue
+                { cat -- "$a" >> "$hfile"; } 2>/dev/null && rm -f -- "$a" 2>/dev/null
+            done
+            command find "$jdir" -maxdepth 1 -name 'hooks.jsonl.spooling-*' -mmin +10 -delete 2>/dev/null || true
+        fi
         if [ "$big" = true ]; then
             size=$(stat -c %s -- "$hfile" 2>/dev/null) || size=0
             case "$size" in ''|*[!0-9]*) size=0 ;; esac

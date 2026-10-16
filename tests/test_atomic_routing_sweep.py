@@ -62,6 +62,9 @@ APPROVED = {
         "the hook journal's archive compression (task 222): writes a NEW temporary opened "
         "O_CREAT|O_EXCL|O_NOFOLLOW, then os.link()s it to its final name (no clobber) and only then "
         "removes the uncompressed copy — a crash leaves the closed file intact, never a live file torn",
+    ("scripts/pb_journal.py", 'with os.fdopen(fd, "wb") as f:'):
+        "the hook journal's spool (task 222, the owner's 'Bilet în cutie'): one line written to a NEW temporary "
+        "opened O_CREAT|O_EXCL|O_NOFOLLOW, then os.link()ed to its spool name (no clobber) — never a live file",
     ("scripts/gate-batch-check.py", "marker.write_text(str(tools_now)"):
         "hook-time advisory counter (the consecutive-batch marker); a torn value only "
         "loses one advisory, never a decision (documented exception: hook-time writers)",

@@ -615,7 +615,28 @@ class Rotation(_Project):
             holder.wait()
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertGreaterEqual(waited, 0.45)                    # it waited for the exclusive holder
-        self.assertEqual(len(self.lines()), 1)
+        recs = self.lines()
+        self.assertEqual(len(recs), 1)
+        self.assertGreaterEqual(recs[0]["ms"], 450)              # and the line counts the wait (post-panel run 3)
+
+    def test_past_the_wait_the_line_goes_to_a_spool_and_is_never_appended_unlocked(self):
+        """The owner, 2026-10-17 00:13 ("Bilet în cutie"): post-panel run 3 found the unlocked append after the 1 s
+        wait; now the line goes to a spool file of its own, written whole, and the next writer holding the lock
+        exclusively moves it into the journal."""
+        (self.lane / "journal").mkdir(exist_ok=True)
+        holder = subprocess.Popen(["flock", "-x", str(self.lane / "journal"), "sleep", "1.8"])
+        try:
+            time.sleep(0.2)
+            r = self.run_hook(self.in_lane("exit 0"), hook="spooled")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(self.lines(), [])                   # nothing appended without the lock
+            spools = sorted((self.lane / "journal").glob("hooks.jsonl.spool-*"))
+            self.assertEqual(len(spools), 1, spools)
+        finally:
+            holder.wait()
+        self.run_hook(self.in_lane("exit 0"), hook="next", PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1")
+        self.assertEqual(sorted(r["hook"] for r in self.lines()), ["next", "spooled"])
+        self.assertEqual(list((self.lane / "journal").glob("hooks.jsonl.spool*")), [])
 
     def test_a_held_lock_means_no_rotation_and_the_line_is_written(self):
         self.fill()

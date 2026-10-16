@@ -78,7 +78,7 @@ fi
 # line for a review's session (judge, tail-cert).
 PB_HJ_DECISION=""; PB_HJ_DETAIL=""
 _pb_nudge_journal() {
-    local rc=$? LC_ALL=C lane="$AGENT_DIR" p="$PROJECT_DIR" jdir hfile ts ms=null t0="${_PB_HJ_T0:-}" t1="${EPOCHREALTIME:-}"
+    local rc=$? LC_ALL=C lane="$AGENT_DIR" p="$PROJECT_DIR" jdir hfile ts ms=null t0="${_PB_HJ_T0:-}" t1 locked=none
     local re v h k sub event tool tuid sid hsid agent decision detail line error="" fresh=false
     set +e
     case "${PLAYBOOK_SESSION_ID:-}" in judge|tail-cert) exit "$rc" ;; esac
@@ -106,6 +106,12 @@ _pb_nudge_journal() {
         jdir="$lane/journal"; hfile="$jdir/hooks.jsonl"
         if [ ! -L "$jdir" ] && { [ -d "$jdir" ] || { [ ! -e "$jdir" ] && { mkdir "$jdir" 2>/dev/null || [ -d "$jdir" ]; }; }; } \
            && [ ! -L "$jdir" ] && [ ! -L "$hfile" ] && { [ ! -e "$hfile" ] || [ -f "$hfile" ]; }; then
+            # the shared lock first (the plugin's writers' rule): a wait counts in `ms`; past 1 s, a spool, never an
+            # unlocked append (the owner, 2026-10-17 00:13: "Bilet în cutie"); no `flock`: appended directly
+            if command -v flock >/dev/null 2>&1 && { exec 208<"$jdir"; } 2>/dev/null; then
+                if flock -s -w 1 208 2>/dev/null; then locked=yes; else locked=no; fi
+            fi
+            t1="${EPOCHREALTIME:-}"
             TZ=UTC0 printf -v ts '%(%Y-%m-%dT%H:%M:%SZ)T' -1 2>/dev/null
             if [[ "$t0" =~ ^[0-9]{1,12}[.,][0-9]{6}$ ]] && [[ "$t1" =~ ^[0-9]{1,12}[.,][0-9]{6}$ ]]; then
                 ms=$(( (10#${t1/[.,]/} - 10#${t0/[.,]/}) / 1000 )); [ "$ms" -ge 0 ] || ms=null
@@ -136,16 +142,18 @@ _pb_nudge_journal() {
             case "$rc" in ''|*[!0-9]*) rc=255 ;; esac
             printf -v line '{"ts":"%s","hook":"monitor-nudge","event":"%s","tool":"%s","tool_use_id":"%s","session_id":"%s","host_session_id":"%s","agent_id":"%s","decision":"%s","detail":"%s","ms":%s,"exit":%s,"error":"%s"}' \
                 "$ts" "$event" "$tool" "$tuid" "$sid" "$hsid" "$agent" "$decision" "$detail" "$ms" "$rc" "$error"
-            # under a SHARED lock on the journal directory, as the plugin's writers (the owner 22:21; compression is exclusive)
             if [ "${#line}" -lt 1024 ]; then
-                if command -v flock >/dev/null 2>&1 && { exec 208<"$jdir"; } 2>/dev/null; then
-                    flock -s -w 1 208 2>/dev/null
-                    { printf '%s\n' "$line" >> "$hfile"; } 2>/dev/null
-                    { exec 208<&-; } 2>/dev/null
+                if [ "$locked" = no ]; then
+                    sub="$jdir/hooks.jsonl.spool-$ts-$$-$RANDOM$RANDOM"; sub="${sub//:/}"
+                    h="$jdir/hooks.jsonl.spooling-${sub##*/hooks.jsonl.spool-}"
+                    if ( set -o noclobber; printf '%s\n' "$line" > "$h" ) 2>/dev/null; then
+                        mv -n -- "$h" "$sub" 2>/dev/null || rm -f -- "$h" 2>/dev/null
+                    fi
                 else
                     { printf '%s\n' "$line" >> "$hfile"; } 2>/dev/null
                 fi
             fi
+            [ "$locked" = none ] || { exec 208<&-; } 2>/dev/null
         fi
     fi
     exit "$rc"

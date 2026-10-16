@@ -203,6 +203,9 @@ stop and every duration left none.
   append holds a shared lock on the journal directory, and renaming or compressing holds it exclusively, so no line
   can be in flight while a closed file is compressed, whatever the clock — the owner's answer of 22:21, "Lacăt la
   fiecare rând", after the post-panel judge found a forward clock jump defeating the time rule; ~0.8 ms of the cost.
+  The lock is taken before the duration, so a wait shows in `ms`; past a 1 s wait the line goes to a spool file that
+  the next run holding the lock exclusively moves into the journal — never an unlocked append (the owner, 00:13,
+  "Bilet în cutie").
 - Past 20 MB the file is closed: renamed to `hooks.jsonl.archived-<stamp>-<epoch>-<pid>` (the name records the rename
   time), then compressed beside it 10 minutes after that rename and after its last write (measured: 20 MB → 1.9 MB in 0.18 s) — a hook that opened it just before the
   rename can still append, and an immediate compression lost that line (impl panel round 1, reproduced); every
