@@ -86,7 +86,7 @@ pb_skip_prompt() {
         new_prompt_generation "$dir"
         rm -f "$dir/turn_end" "$dir/notif_start" 2>/dev/null || true
     fi
-    PB_HJ_DECISION=skip; PB_HJ_DETAIL="not logged: python < 3.10"
+    PB_HJ_DECISION=skip; PB_HJ_DETAIL="not logged: ${1:-python < 3.10}"
     exit 0
 }
 if [ "$PB_PY_FLOOR" = false ]; then
@@ -103,7 +103,7 @@ fi
 for _pb_f in "$LOCAL_LOG" "$COUNTER_FILE" "$COUNTER_FILE.lock" "$LOCAL_LOG.new" "$LOCAL_LOG.bak"; do
     if ! _pb_sink_ok "" "$_pb_f"; then
         echo "playbook: $_pb_f is a link or not a regular file — the chat log was not written (remove it if it is not yours)" >&2
-        pb_skip_prompt
+        pb_skip_prompt "a linked or non-regular sink"
     fi
 done
 

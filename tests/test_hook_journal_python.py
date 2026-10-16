@@ -189,6 +189,29 @@ class ThePythonWriter(_Tmp):
         self.assertGreaterEqual(self.lines()[-1]["ms"], 900)
         self.assertTrue(Path(str(arch) + ".gz").exists())
 
+    def test_an_idle_oversized_file_is_not_compressed_by_the_run_that_closes_it(self):
+        """Impl panel r2 (codex, grok — reproduced, grave): the python writer compressed an idle file in the same run."""
+        self.journal.parent.mkdir()
+        line = json.dumps({"hook": "old", "detail": "x" * 200}) + "\n"
+        self.journal.write_text(line * ((LIMIT + 4096) // len(line) + 1))
+        old = time.time() - 1200
+        os.utime(self.journal, (old, old))
+        os.environ["PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK"] = "1"
+        try:
+            held = open(self.journal, "a")
+            self.pbj.append_hook_run(self.project, hook="x")
+            held.write('{"hook":"held-late"}\n')
+            held.close()
+            arch = sorted(self.journal.parent.glob("hooks.jsonl.archived-*"))
+            self.assertEqual([a.name.endswith(".gz") for a in arch], [False], arch)
+            os.utime(arch[0], (old, old))
+            self.pbj.append_hook_run(self.project, hook="x")
+        finally:
+            del os.environ["PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK"]
+        gz = sorted(self.journal.parent.glob("hooks.jsonl.archived-*.gz"))
+        with gzip.open(gz[0], "rt") as f:
+            self.assertIn('"held-late"', f.read())
+
     def test_a_held_lock_means_no_rotation(self):
         if not shutil.which("flock"):
             self.skipTest("no flock(1)")
@@ -266,11 +289,11 @@ class TheGuard(_Tmp):
 
 
 class TheCodexHooks(_Tmp):
-    def codex(self, hook, payload, *, scripts=SCRIPTS, raw=None):
+    def codex(self, hook, payload, *, scripts=SCRIPTS, raw=None, **env):
         before = len(self.lines())
         r = subprocess.run([sys.executable, "-E", "-s", str(scripts / hook)],
                            input=raw if raw is not None else json.dumps(payload), cwd=str(self.project),
-                           env=self.env(PLAYBOOK_PROJECT_ROOT=str(self.project)), capture_output=True, text=True,
+                           env=self.env(PLAYBOOK_PROJECT_ROOT=str(self.project), **env), capture_output=True, text=True,
                            timeout=60)
         return r, self.lines()[before:]
 
@@ -325,11 +348,13 @@ class TheCodexHooks(_Tmp):
         (self.project / ".agent" / "tasks" / "001-x").mkdir()
         (self.project / ".agent" / "tasks" / "001-x" / "task.md").write_text(
             "# 001 - x\n\n## Status\nin_progress\n\n## Work Plan\n- [ ] open\n")
-        (self.project / ".agent" / "sessions" / "pid-1").mkdir(parents=True)
-        (self.project / ".agent" / "sessions" / "pid-1" / "current_state").write_text("001\n")
-        r, new = self.codex("codex-stop-hook", {"hook_event_name": "Stop", "turn_id": "t1"})
+        (self.project / ".agent" / "sessions" / "sess-c1").mkdir(parents=True)
+        (self.project / ".agent" / "sessions" / "sess-c1" / "current_state").write_text("001\n")
+        r, new = self.codex("codex-stop-hook", {"hook_event_name": "Stop", "turn_id": "t1"}, PLAYBOOK_SESSION_ID="sess-c1")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual([x["hook"] for x in new], ["codex-stop"], new)
+        # impl panel r2 (opus, codex, gemini): the line names the active task's open gates, not "no task"
+        self.assertEqual((new[0]["decision"], new[0]["detail"]), ("block", "held: 1 unchecked gate(s) in task 001"))
 
     def test_a_stop_with_no_decision_is_released(self):
         r, new = self.codex("codex-stop-hook", {"hook_event_name": "Stop", "turn_id": "t1"})

@@ -136,7 +136,7 @@ _pb_nudge_journal() {
             case "$rc" in ''|*[!0-9]*) rc=255 ;; esac
             printf -v line '{"ts":"%s","hook":"monitor-nudge","event":"%s","tool":"%s","tool_use_id":"%s","session_id":"%s","host_session_id":"%s","agent_id":"%s","decision":"%s","detail":"%s","ms":%s,"exit":%s,"error":"%s"}' \
                 "$ts" "$event" "$tool" "$tuid" "$sid" "$hsid" "$agent" "$decision" "$detail" "$ms" "$rc" "$error"
-            [ "${#line}" -lt 1024 ] && printf '%s\n' "$line" >> "$hfile" 2>/dev/null
+            [ "${#line}" -lt 1024 ] && { printf '%s\n' "$line" >> "$hfile"; } 2>/dev/null
         fi
     fi
     exit "$rc"

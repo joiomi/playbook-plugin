@@ -269,6 +269,12 @@ class TheOthers(_Project):
         self.one(H, dict(p, prompt="<task-notification>done</task-notification>"), 0, "ok",
                  "not logged: a notification")
         self.one(H, dict(p, prompt="<command-name>/clear</command-name>"), 0, "ok", "not logged: a command")
+        # gemini r2: a linked chat log is skipped for that reason, not "python < 3.10"
+        log = self.agent / "chat_log.md"
+        log.unlink()
+        (self.root / "other.md").write_text("")
+        log.symlink_to(self.root / "other.md")
+        self.one(H, dict(p, prompt="third"), 0, "skip", "not logged: a linked or non-regular sink")
 
     def test_session_start_and_end(self):
         start = {"session_id": "host-1", "hook_event_name": "SessionStart", "source": "startup"}
@@ -278,6 +284,8 @@ class TheOthers(_Project):
         end = {"session_id": "host-1", "hook_event_name": "SessionEnd", "reason": "clear"}
         self.one("session-end-hook", end, 0, "ok", "kept: reason clear")
         self.one("session-end-hook", dict(end, reason="logout"), 0, "ok", "kept: not this process's session")
+        self.one("session-end-hook", dict(end, reason="logout"), 0, "ok", "no session directory",
+                 PLAYBOOK_SESSION_ID="sess-none")                    # opus r2
         other = self.agent / "sessions" / "sess-x"
         other.mkdir()
         self.one("session-end-hook", dict(end, reason="logout"), 0, "ok", "session directory removed",

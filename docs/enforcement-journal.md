@@ -303,8 +303,10 @@ can still hang one hook run; the python writer opens non-blocking and without fo
 
 **Rotation (the owner, 2026-10-16 18:04: "Comprimate, toate").** About one run in 32 (`PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK`)
 looks at the journal directory, under a lock on it taken without waiting (a busy lock: nothing on that run). Past 20
-MB, after a second look, the file is renamed to `hooks.jsonl.archived-<YYYYmmdd-HHMMSS>-<pid>`. A closed file is
-compressed to `….gz` beside it only once it is idle — on a later such run, when its last write is over 10 minutes old
+MB, after a second look, the file is renamed to `hooks.jsonl.archived-<YYYYmmdd-HHMMSS>-<pid>` and its mtime set to
+the rename's (a rename keeps the old one: an idle 20 MB file was compressed by the run that closed it — impl panel
+round 2). A closed file is compressed to `….gz` beside it only once it is idle — on a later such run, 10 minutes after
+both its rename and its last write
 (measured: 20 MB → 1.9 MB in 0.18 s) — because a hook that opened the file just before the rename can still append to
 it, and a line written after `gzip` had read it would have gone with the uncompressed copy (impl panel round 1; the
 hosts stop a hook after at most a minute). The uncompressed copy is removed only once the compressed one is in place,
@@ -316,7 +318,8 @@ closed file or the new one. That work runs before the duration is taken, so a ru
 (`PLAYBOOK_ROLE=monitor`: its hooks exit before anything); a review's session (`PLAYBOOK_SESSION_ID` `judge` or
 `tail-cert`: no writer writes a line — a review must not write the project); a nested run (`PLAYBOOK_HOOK_NESTED=1`:
 codex's Stop runs the stop hook as a subprocess, and codex-stop's own line says the run); a hook that finds no
-playbook project. **Bounds:** the duration starts at the hook's first line — bash's own start and a
+playbook project. **Bounds:** codex runs `command_guard.py` directly, so its duration starts when python has started
+and loaded the guard; every other hook's duration starts at its first line — bash's own start and a
 `BASH_ENV` file are not in it — and includes the shell log's lock wait (up to 2 s); where a `BASH_ENV` file sets a
 DEBUG trap, `error` names that trap instead of the failing line; task-dir-watch's `tool_use_id` is read by pattern,
 so a host whose payload put a nested object carrying the same key AFTER the id could mislabel it.

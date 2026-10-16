@@ -1833,8 +1833,8 @@ _pb_hj_text() {
 
 # About one run in 32 (PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK, 1-1000) looks at the journal directory. Under a lock on it taken
 # without waiting (busy: nothing this run): past the limit, after a second look, the file is renamed to an archive name
-# that does not exist yet; and a closed file is compressed (`gzip`) only once it is idle — its mtime over 10 minutes
-# old — because a hook that opened the file before the rename can still append to it, and a line written after gzip
+# that does not exist yet (its mtime set to the rename's); and a closed file is compressed (`gzip`) only once it is
+# idle — its mtime over 10 minutes old, so 10 minutes after both its rename and its last write — because a hook that opened the file before the rename can still append to it, and a line written after gzip
 # read it would go with the uncompressed copy (impl panel r1, codex, grok, opus — reproduced). Every archive is kept.
 # No `flock`, no `gzip`, a failure, a kill: the closed file stays as it is.
 _pb_hj_rotate() {
@@ -1861,7 +1861,10 @@ _pb_hj_rotate() {
                && printf -v stamp '%(%Y%m%d-%H%M%S)T' -1 2>/dev/null; then
                 arch="$jdir/hooks.jsonl.archived-$stamp-$$"
                 if [ ! -e "$arch" ] && [ ! -L "$arch" ]; then
-                    mv -n -- "$hfile" "$arch" 2>/dev/null || true
+                    # its mtime becomes the rename's: a rename keeps the old one, and an idle 20 MB file was compressed
+                    # by the very run that closed it while a hook could still hold it open (impl panel r2, grave)
+                    mv -n -- "$hfile" "$arch" 2>/dev/null && [ -f "$arch" ] && [ ! -L "$arch" ] \
+                        && touch -c -- "$arch" 2>/dev/null
                 fi
             fi
         fi

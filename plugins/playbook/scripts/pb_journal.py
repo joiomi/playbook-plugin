@@ -464,6 +464,7 @@ def _hj_rotate(jdir: Path) -> None:
                     if not os.path.lexists(arch):
                         os.link(jfile, arch)            # no clobber, as `mv -n`
                         os.unlink(jfile)
+                        os.utime(arch, None)            # idle counts from the rename too (impl panel r2, grave)
             now = time.time()
             for arch in closed():
                 try:

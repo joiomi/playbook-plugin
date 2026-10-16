@@ -482,6 +482,31 @@ class Rotation(_Project):
         with gzip.open(gz, "rt") as f:
             self.assertIn('"held-late"', f.read())
 
+    def test_an_idle_oversized_file_is_not_compressed_by_the_run_that_closes_it(self):
+        """Impl panel r2 (codex, grok — reproduced, grave): a rename keeps the file's mtime, so a 20 MB journal idle
+        for over 10 minutes was compressed by the very run that closed it (here: an older closed file is waiting, so
+        the compression pass runs), and a descriptor held across that rename lost its line."""
+        older = self.lane / "journal" / "hooks.jsonl.archived-20261001-000000-1"
+        self.fill()
+        older.write_text('{"hook":"older"}\n')
+        self.age(older)
+        self.age(self.journal)
+        held = open(self.journal, "a")
+        try:
+            self.run_hook(self.in_lane("exit 0"), PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1")
+            held.write(json.dumps({"hook": "held-late"}) + "\n")
+            held.flush()
+        finally:
+            held.close()
+        names = sorted(a.name for a in self.archives())
+        self.assertIn(older.name + ".gz", names)                     # the old one, idle: compressed
+        fresh = [n for n in names if not n.endswith(".gz")]
+        self.assertEqual(len(fresh), 1, names)                       # the one just closed: not yet
+        self.age(self.lane / "journal" / fresh[0])
+        self.run_hook(self.in_lane("exit 0"), PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1")
+        with gzip.open(self.lane / "journal" / (fresh[0] + ".gz"), "rt") as f:
+            self.assertIn('"held-late"', f.read())
+
     def test_the_duration_counts_the_journals_own_work(self):
         """Impl panel r1 (codex I2): rotation and compression run before the duration is taken."""
         self.fill()

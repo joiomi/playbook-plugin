@@ -97,6 +97,7 @@ def main() -> int:
     # malformed `.agent/current_user` — without this handler that escaped as a
     # traceback and exit 1, contradicting the policy provider/paths.py
     # documents ("the Codex hooks catch Exception").
+    _RUN.payload = {"hook_event_name": "UserPromptSubmit"}     # read before the floor exit (impl panel r2, gemini)
     if not _floor_ok(sys.version_info):
         _RUN.note("skip", "python < 3.10")
         return 0

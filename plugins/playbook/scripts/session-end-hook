@@ -122,11 +122,14 @@ fi
 # ...and removed from INSIDE `sessions`, by its relative name (impl panel r2, codex: a swap between the
 # check and an `rm` by path redirected it). Never an empty or a path-like name: `./` would be them all.
 case "$SESSION_ID" in ''|.|..|*/*) exit 0 ;; esac
+PB_HJ_HAD=true; { [ -e "$SESSION_DIR" ] || [ -L "$SESSION_DIR" ]; } || PB_HJ_HAD=false
 ( cd "$AGENT_DIR/sessions" 2>/dev/null && _pb_cwd_is "$PROJECT_DIR" "$AGENT_DIR/sessions" || exit 0
   [ -L "./$SESSION_ID" ] && exit 0
   rm -rf -- "./$SESSION_ID" ) 2>/dev/null || true
 # the line says what is there now, not what was tried (impl panel r1, grok: a link or a failed rm read "removed")
-if [ -e "$SESSION_DIR" ] || [ -L "$SESSION_DIR" ]; then
+if [ "$PB_HJ_HAD" != true ]; then
+    PB_HJ_DETAIL="no session directory"          # impl panel r2, opus
+elif [ -e "$SESSION_DIR" ] || [ -L "$SESSION_DIR" ]; then
     PB_HJ_DETAIL="kept: not removed"
 else
     PB_HJ_DETAIL="session directory removed"

@@ -41,6 +41,23 @@ def _journal_run(hook):
 _PBJ, _RUN = _journal_run("codex-stop")
 
 
+def _held_detail(reason) -> str:
+    """The journal's detail for a held stop, a fixed form for each branch that decides (impl panel r2: every block read
+    "code changed with no task", an active task's open gates too): the bash stop hook's own wording for open gates."""
+    import re
+    text = str(reason or "")
+    m = re.search(r"BLOCKED: (\d+) unchecked gate\(s\) in task (\d+)", text)
+    if m:
+        return f"held: {m.group(1)} unchecked gate(s) in task {m.group(2)}"
+    if "cannot check this session's task gates" in text:
+        return "held: no session"
+    if text.startswith("Playbook stop guard failed to run"):
+        return "held: the stop guard could not run"
+    if text.startswith("You changed code without an active Playbook task"):
+        return "held: code changed with no task"
+    return "held: the stop guard"
+
+
 def _floor_ok(version_info) -> bool:
     """Python-floor gate, run BEFORE the provider import. provider.codex_hooks
     uses 3.10-only `match` syntax, so importing it under < 3.10 raises
@@ -96,6 +113,7 @@ def main() -> int:
     # failure means "no decision", not "stop the agent". Without this handler an
     # InvalidUserMarkerError from a malformed `.agent/current_user` escaped as a
     # traceback and exit 1 instead of the documented per-event policy.
+    _RUN.payload = {"hook_event_name": "Stop"}         # read before the floor exit (impl panel r2, gemini)
     if not _floor_ok(sys.version_info):
         _RUN.note("skip", "python < 3.10")
         return 0
@@ -120,7 +138,7 @@ def main() -> int:
         sys.stdout.write(json.dumps(decision))
         # the hook journal (task 222, plan panel grok I3): a block is said in JSON with exit 0
         if isinstance(decision, dict) and decision.get("decision") == "block":
-            _RUN.note("block", "held: code changed with no task")
+            _RUN.note("block", _held_detail(decision.get("reason", "")))
         else:
             _RUN.note("allow", "released")
     except Exception as exc:
