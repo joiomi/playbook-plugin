@@ -467,7 +467,7 @@ def generate_retro_task(
     lines.append("")
     # task 213 (impl round 2, S4): the pointer to the guide every render carries since the instructions moved there
     from tasks.template import pointer
-    lines.append(pointer())
+    lines.append(pointer("retro"))
     lines.append("")
     lines.append("> **Intent is satisfied top-down:** user words → Intent → gates → code → tests.")
     lines.append("> Does each level faithfully serve the one above?")
@@ -541,9 +541,12 @@ def generate_retro_task(
         # the window's own messages, by id (task 145: `tasks log` prints the whole log)
         lines.append(f"Window chat ({len(chatlog)} messages): {id_ranges([m['id'] for m in chatlog])}.")
         lines.append("")
-    lines.append("- [ ] Read chat_log.md messages for this window (use `.claude/bin/tasks log` for a compact one-line-per-message view, or filter by message IDs listed above). Summarize: what was the user's arc? What themes dominated? What frustrations surfaced?")
-    lines.append("- [ ] Identify steering moments — where did the user correct the agent? What was the nature of each correction (misframed intent / over-engineering / wrong abstraction / missing context / process friction)?")
-    lines.append("- [ ] What inefficiencies show up? How many messages did simple things take? Where did the conversation loop?")
+    # task 223 (the owner's "Titlu de o propoziție"): one sentence a gate; what a gate used to say beyond its title
+    # is in `tasks guide retro` (template.RETRO_GATE_NOTES), never in the scaffold — the trim keeps a phase whole
+    lines.append("- [ ] Read this window's chat messages and summarize the user's arc, its themes and its frustrations.")
+    lines.append("- [ ] Identify the steering moments: where the user corrected the agent, and what kind of correction "
+                 "each was.")
+    lines.append("- [ ] What inefficiencies show up: simple things that took many messages, loops in the conversation?")
     lines.append("")
 
     # Phase 2: Per-task review
@@ -579,8 +582,10 @@ def generate_retro_task(
     lines.append("> Did intent carry forward? Did investments pay off? What got abandoned?")
     lines.append("")
     lines.append("- [ ] Identify 3-5 facets (systems, themes, or components) that appear across multiple tasks in this window.")
-    lines.append("- [ ] For each facet: trace the chain. Did each task build on the previous? Did the work converge or scatter?")
-    lines.append("- [ ] Which investments paid off? Which were abandoned? Any patterns in what succeeds vs what stalls?")
+    lines.append("- [ ] For each facet, trace the chain: did each task build on the previous, did the work converge "
+                 "or scatter?")
+    lines.append("- [ ] Which investments paid off, which were abandoned, and what separates what succeeds from what "
+                 "stalls?")
     lines.append("")
 
     # Phase 4: Garbage collection
@@ -603,15 +608,17 @@ def generate_retro_task(
     lines.append("> Keep only what reduces future cost — reasoning, decisions, relationships.")
     lines.append("> Remove what's cheaply derivable from git log, grep, or reading code.")
     lines.append("")
-    lines.append("- [ ] For each mind map node: does it carry information that would cost an agent significant time to rediscover? If not, compress or remove.")
+    lines.append("- [ ] For each mind map node: would it cost an agent real time to rediscover, and if not, compress "
+                 "or remove it?")
     lines.append("- [ ] Are there new decisions, patterns, or relationships from this window that should be added?")
-    lines.append("- [ ] Apply edits. Keep MIND_MAP.md ≤25KB (the load budget); push full node text to MIND_MAP_OVERFLOW.md.")
+    lines.append("- [ ] Apply the edits, keeping MIND_MAP.md under its 25 KB load budget (full node text in "
+                 "MIND_MAP_OVERFLOW.md).")
     lines.append("")
 
     # Phase 6: Findings
     lines.append("## Findings")
     lines.append("")
-    lines.append("- [ ] Synthesize: what worked well in this window? What needs to change?")
+    lines.append("- [ ] Synthesize what worked well in this window and what needs to change.")
     lines.append("- [ ] Concrete proposals: tasks to file, process changes, template improvements.")
     lines.append("- [ ] What should the next retro investigate?")
     lines.append("")

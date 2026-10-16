@@ -120,10 +120,13 @@ class ANewTaskMdCarriesNoneOfIt(unittest.TestCase):
                     self.assertIn(word, rest[0])
 
     def test_every_gate_heading_and_placeholder_stays(self):
+        # Every heading and placeholder in its place, and a gate at every place a gate was; task 223 shortened the
+        # gates' titles (`tests/test_short_gate_titles.py` maps each old title to its new one).
         for name, ty in OLD_RENDERS.items():
             old = (BEFORE / f"render-{name}.md").read_text(encoding="utf-8").splitlines()
             new = template.render_template(1, "X", ty).splitlines()
-            kept = lambda ls: [ln for ln in ls if GATE_RE.match(ln) or PLACEHOLDER_RE.match(ln)
+            kept = lambda ls: ["- [ ] <gate>" if GATE_RE.match(ln) else ln for ln in ls
+                               if GATE_RE.match(ln) or PLACEHOLDER_RE.match(ln)
                                or (ln.startswith("#") and ln != "## Standing Orders")]
             with self.subTest(type=name):
                 self.assertEqual(kept(new), kept(old))

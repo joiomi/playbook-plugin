@@ -109,14 +109,16 @@ class RenderedShape(unittest.TestCase):
     def test_risk_block_and_routing_gate_first(self):
         self.assertIn("## Risk\nunclassified", self.text)
         gates = [l for l in self.text.splitlines() if l.startswith("- [ ]")]
-        self.assertTrue(gates[0].startswith("- [ ] `## Risk` above set"),
+        self.assertTrue(gates[0].startswith("- [ ] Set `## Risk` to one word before any work"),
                         gates[0])
         self.assertLessEqual(len(gates), 8, f"{len(gates)} gates is not light")
 
     def test_review_gate_present_and_routes_by_risk(self):
         self.assertIn("## Review", self.text)
         self.assertIn("implementation panel", self.text)
-        self.assertIn("light never waives review", self.text.lower())
+        # task 223: the gate is one sentence; the rest of what it said — "Light never waives review" — is the
+        # guide's, printed by `tasks new light`
+        self.assertIn("light never waives review", guide_text("light").lower())
 
     def test_fully_checked_template_cannot_mint_review_evidence(self):
         # Judge Finding 2: the first design's gate wording satisfied

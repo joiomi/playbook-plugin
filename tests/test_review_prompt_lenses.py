@@ -3,9 +3,8 @@
   * `tasks/template.py` is the single source for the judge/review prompts. (The
     old `scripts/lib/tasks/template.py` mirror was deleted in 1.5.17 — the Codex
     hooks never loaded it — so there is only one copy to check now.)
-  * `scripts/base-template.md` and `skills/tasks/base-template.md` are two
-    copies of one file; new tasks would otherwise differ depending on which
-    surface loaded the template.
+  * The two `base-template.md` copies this checked were read by no code; task
+    223 removed them — `tasks new` renders from `tasks/template.py` alone.
 
 The hostile-sequence lens arrived as a contributed patch (cristi / ai-ring-vet,
 2026-07-21) that had to be applied at four prompt sites per file. "Applied at
@@ -23,7 +22,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLAYBOOK = REPO_ROOT / "plugins" / "playbook"
 CANONICAL = PLAYBOOK / "tasks" / "template.py"
-TEMPLATE_COPIES = (
+REMOVED_COPIES = (
     PLAYBOOK / "scripts" / "base-template.md",
     PLAYBOOK / "skills" / "tasks" / "base-template.md",
 )
@@ -183,18 +182,6 @@ class TestPreReviewGateReachesRealTasks(unittest.TestCase):
         self.assertNotIn("## Pre-review", rendered)
         self.assertNotIn(self.OLD_GATE, rendered)
 
-    def test_docs_do_not_contradict_the_runtime_gate(self):
-        module = load_template_module(CANONICAL, "_tmpl_docs")
-        runtime_line = next(
-            line for line in module.pre_review().splitlines() if "MIND_MAP.md" in line
-        )
-        for path in TEMPLATE_COPIES:
-            with self.subTest(path=path.name):
-                self.assertIn(
-                    runtime_line, path.read_text(encoding="utf-8"),
-                    f"{path.name} documents a different gate than pre_review() emits",
-                )
-
     def test_gate_text_names_nothing_unrunnable(self):
         """A template ships to every project — it must not name a script that
         only exists inside the plugin's merge skill, with no PATH entry and no
@@ -205,24 +192,20 @@ class TestPreReviewGateReachesRealTasks(unittest.TestCase):
             self.assertNotIn(unrunnable, gate)
 
 
-class TestTaskTemplateCopiesAgree(unittest.TestCase):
-    def test_the_two_base_templates_are_identical(self):
-        a, b = (p.read_text(encoding="utf-8") for p in TEMPLATE_COPIES)
-        self.assertEqual(
-            a, b,
-            "scripts/base-template.md and skills/tasks/base-template.md have "
-            "diverged — new tasks would differ depending on which surface "
-            "loaded the template",
-        )
+class TestOneCopyOfTheTemplate(unittest.TestCase):
+    def test_the_dead_markdown_copies_stay_gone(self):
+        """They were read by no code and went stale (task 223): a second copy is what drifted."""
+        for path in REMOVED_COPIES:
+            with self.subTest(path=path.name):
+                self.assertFalse(path.exists(), f"{path} is back — the template is rendered, not copied")
 
     def test_mind_map_gate_names_the_owning_node_rule(self):
         """The vague version let every task append its own node to the map."""
-        for path in TEMPLATE_COPIES:
-            text = path.read_text(encoding="utf-8")
-            with self.subTest(path=path.name):
-                self.assertNotIn("MIND_MAP.md updated if new insights emerged", text)
-                self.assertIn("OWNING subsystem node", text)
-                self.assertIn("never one node per task", text)
+        module = load_template_module(CANONICAL, "_tmpl_owning")
+        text = module.pre_review()
+        self.assertNotIn("MIND_MAP.md updated if new insights emerged", text)
+        self.assertIn("OWNING subsystem node", text)
+        self.assertIn("never one node per task", text)
 
 
 if __name__ == "__main__":

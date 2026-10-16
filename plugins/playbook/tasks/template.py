@@ -23,7 +23,7 @@ def header(num: int, title: str) -> str:
 def pointer(task_type: "str | None" = None) -> str:
     """The one line a task.md keeps of the instructions: where the single copy is (task 213, the owner's
     "Scris o dată, nu în fiecare fișă")."""
-    return (f"> How to fill this in — gate discipline, what each `## Risk` value means: "
+    return (f"> How to fill this in — gate discipline, what each `## Risk` value means, what each gate asks: "
             f"`.claude/bin/tasks guide {task_type or 'feature'}` (printed when the task was created).")
 
 
@@ -81,7 +81,7 @@ def intent_why_refs(playbook: str) -> str:
 (why this matters now \u2014 urgency, context, what breaks if delayed)
 
 ## References
-- [ ] Context: `.claude/bin/tasks recall keyword1 keyword2` (locates matching nodes across MIND_MAP.md + overflow), then `tasks recall <N>` for each \u2192 paste relevant excerpts below
+- [ ] Context: run `.claude/bin/tasks recall <words>`, then paste the relevant excerpts of each node below.
 - Playbook: {playbook}
 - Note: Don't hardcode task numbers in plans \u2014 `.claude/bin/tasks new` auto-increments.
 
@@ -103,15 +103,15 @@ def design_phase_note() -> str:
 def chat_log_research() -> str:
     return """\
 ### Chat Log Research
-- [ ] Review the "Recent Chat" messages captured in References (auto-injected at `tasks work`). Remove unrelated ones. Pull key user quotes, constraints, and context into Intent/Why above. The user's actual words are the ground truth for Intent."""
+- [ ] Keep the Recent Chat messages that matter and carry the user's own words into Intent and Why."""
 
 
 def understand() -> str:
     return """\
 ### Understand
-- [ ] Restate the request in my own words. What does the user actually want?
+- [ ] Restate in your own words what the user actually wants.
 - [ ] Critique: Am I solving the stated problem or a different one I find more interesting?
-- [ ] What would "done" look like? How will we know the task succeeded?
+- [ ] What does "done" look like, and how will we know the task succeeded?
 - [ ] What are you assuming about the existing code/architecture that you haven't verified?
 - [ ] What is OUT of scope for this task?"""
 
@@ -119,15 +119,15 @@ def understand() -> str:
 def structure() -> str:
     return """\
 ### Structure
-- [ ] What kind of work is this? (build / investigate / evaluate / decide / combination?) If combination, what's the sequence? If >15 gates or uncertain approach, pick a checkpoint where you pause and reassess direction before continuing.
-- [ ] **Set `## Risk`** (reversible / irreversible / assertive). Ask: if this claim/change were WRONG, what would show it? An `assertive` task (changes a claim about the world — docs, a calibration, a measurement) must name the instrument that would reveal the claim false. An `irreversible` task must name its rollback plan. These cannot be light-closed for being small."""
+- [ ] Say what kind of work this is and, if it is long or uncertain, where you will stop to reassess.
+- [ ] Set `## Risk` and name what would show the change wrong (assertive: its instrument; irreversible: its rollback)."""
 
 
 def reflection_gates() -> str:
     return """\
 ### Reflection Gates
-- [ ] Wrote task-specific check questions (Bad: "is this working?" Good: "Does the output include the progress counter?" \u2014 the answer should require evidence, not just yes/no)
-- [ ] Test strategy: what are you testing and how? (point tests for specific behavior, property tests via `hypothesis` for invariants on transformations/parsers/arithmetic)
+- [ ] Write task-specific check questions whose answers need evidence, not a yes or no.
+- [ ] Test strategy: what you will test and how (point tests, property tests for invariants).
 - [ ] Before the riskiest step: what would make you stop and reconsider?
 - [ ] If judging quality before building: is the gap worth closing?"""
 
@@ -136,7 +136,7 @@ def reflection_gates() -> str:
 def verify() -> str:
     return """\
 ### Verify
-- [ ] Review the work plan. If a likely growth point exists, add it to the plan now.
+- [ ] Review the work plan and add any likely growth point now.
 - [ ] Does the work plan include moments where you stop and question your approach \u2014 not just execute?
 - [ ] Checkpoint: Would a fresh agent understand this task and execute it well?
 - [ ] The work plan below has the right granularity (not too coarse, not micro-steps)"""
@@ -158,8 +158,8 @@ def design_phase() -> str:
 def judge_section() -> str:
     return """\
 ## Plan Review
-- [ ] Run `.claude/bin/tasks panel-review <N>` — ALL available judges review the plan in parallel (blind: they see the repo, not your conversation). Wait for it to finish; findings land in `judge.md` (this dir), led by a PANEL VERDICT. Read judge.md, then address valid concerns by revising Work Plan gates yourself. **Justify lens:** does every work gate trace up to something in Intent/Design? Are there gates that justify nothing above them (scope creep)? Intent claims with no gate to satisfy them (gaps)? *(Fallback if no panel can run: `.claude/bin/tasks plan-review <N>` — single judge, writes into this file.)*
-- [ ] **Triage panel findings into this file: judges = opinion, not gospel.** For each finding, document accept (with rationale) / park (with rationale) / reject (with rationale) here under this gate. Push back where you have concrete evidence — you live with the outcomes, the reviewers don't. Verify file:line claims before applying. Where judges DISAGREE with each other, say which you believed and why — disagreement between models is signal, not noise.
+- [ ] Run the plan panel in the background — `.claude/bin/tasks panel-review <N>` — then read `judge.md`.
+- [ ] Triage the plan panel's findings here: accept, park or reject each one, with its reason.
 
 (plan review triage appears here)
 
@@ -178,8 +178,8 @@ def work_plan() -> str:
 def judge_impl_section() -> str:
     return """\
 ## Implementation Review
-- [ ] Run `.claude/bin/tasks panel-review <N> --mode impl` — ALL available judges review the implementation in parallel. Wait for it to finish; findings land in `judge.md`, led by a PANEL VERDICT (a quorum-PASS impl panel is what the close gate accepts as evidence when `panel_required_for` is set). Read judge.md. **Satisfy lens:** does every Intent claim trace down through code to tests? Where does the chain break? *(Fallback if no panel can run: `.claude/bin/tasks impl-review <N>` — single judge, writes into this file.)*
-- [ ] **Triage panel findings into this file: judges = opinion, not gospel.** For each finding, document accept (with rationale) / park (with rationale) / reject (with rationale) here under this gate. Push back where you have concrete evidence — you live with the outcomes, the reviewers don't. Verify file:line claims before applying. Where judges DISAGREE, say which you believed and why.
+- [ ] Run the impl panel in the background — `.claude/bin/tasks panel-review <N> --mode impl` — then read `judge.md`.
+- [ ] Triage the impl panel's findings here: accept, park or reject each one, with its reason.
 
 (implementation review triage appears here)
 
@@ -189,7 +189,7 @@ def judge_impl_section() -> str:
 def debrief() -> str:
     return """\
 ## Debrief
-- [ ] Freehand — work is done, stay for discussion with user. Remove this gate during Design Phase if running headless or task doesn't need debrief."""
+- [ ] Freehand — stay to discuss the work with the user; remove this gate at design time if headless or not needed."""
 
 
 def pre_review() -> str:
@@ -197,7 +197,7 @@ def pre_review() -> str:
 ## Pre-review
 - [ ] All tests pass
 - [ ] No debug artifacts
-- [ ] MIND_MAP.md: update the OWNING subsystem node **in place** — a NEW node only for a genuinely new subsystem, never one node per task"""
+- [ ] MIND_MAP.md: update the OWNING subsystem node in place, never one node per task."""
 
 
 def parked() -> str:
@@ -626,7 +626,7 @@ def design_phase_light() -> str:
     return "## Design Phase\n\n" + chat_log_research() + "\n\n" + """\
 ### Fix Orientation
 - [ ] What exactly is broken or needs cleaning up?
-- [ ] What does "fixed" look like? (specific grep, test, or behavior)
+- [ ] What does "fixed" look like (a specific grep, test or behavior)?
 - [ ] What adjacent code could this break?
 - [ ] Test strategy: point tests, or also property tests (`hypothesis`) if fixing a parser/formatter/transformation?"""
 
@@ -638,7 +638,7 @@ def work_plan_fix() -> str:
 
 - [ ] Fix: (what to change)
 - [ ] Verify: (grep/test that confirms the fix)
-- [ ] Side effects: anything else that changed? Adjacent code still works?
+- [ ] Side effects: did anything else change, and does adjacent code still work?
 
 ---"""
 
@@ -647,9 +647,9 @@ def design_phase_investigate() -> str:
     """Investigate-oriented design phase — hypothesis-first."""
     return "## Design Phase\n\n" + chat_log_research() + "\n\n" + """\
 ### Investigation Orientation
-- [ ] What's the question or hypothesis? State it before looking.
+- [ ] State the question or hypothesis before looking.
 - [ ] What evidence would change your mind?
-- [ ] When do you stop? (convergence criteria: N rounds with no new position, or specific answer found)
+- [ ] When do you stop (N rounds with no new position, or the specific answer found)?
 - [ ] Test strategy: if findings lead to code changes, point tests or also property tests (`hypothesis`) for invariants?"""
 
 
@@ -662,7 +662,7 @@ def work_plan_investigate() -> str:
 - **Hypothesis:** (before testing)
 - **Test:** (what to check)
 - **Result:** (what happened)
-- [ ] Checkpoint: converging or scattering? New hypothesis needed?
+- [ ] Checkpoint: converging or scattering, and is a new hypothesis needed?
 
 ### Round 2: [focus]
 - **Hypothesis:** (refined from Round 1)
@@ -671,8 +671,8 @@ def work_plan_investigate() -> str:
 - [ ] Checkpoint: converging or scattering?
 
 ### Synthesis
-- [ ] What did you learn? Key findings with evidence.
-- [ ] What remains unknown? What would a follow-up task investigate?
+- [ ] What did you learn: the key findings, each with its evidence?
+- [ ] What remains unknown, and what would a follow-up task investigate?
 
 ---"""
 
@@ -683,8 +683,8 @@ def design_phase_evaluate() -> str:
 ### Evaluation Orientation
 - [ ] What are you evaluating, and against what criteria?
 - [ ] Define lenses (2-4 dimensions to assess consistently across all items)
-- [ ] How many items? If >5, plan a midpoint checkpoint.
-- [ ] Are you assessing or fixing? Keep them separate — assess first.
+- [ ] How many items (more than 5: plan a midpoint checkpoint)?
+- [ ] Assess first and fix after: keep the two separate.
 - [ ] Test strategy: if evaluation leads to fixes, point tests or also property tests (`hypothesis`) for invariants?"""
 
 
@@ -702,7 +702,7 @@ def work_plan_evaluate() -> str:
 ### Assessment
 - [ ] Item 1: (apply all lenses)
 - [ ] Item 2: (apply all lenses)
-- [ ] Midpoint checkpoint: patterns emerging? Abort early or continue?
+- [ ] Midpoint checkpoint: are patterns emerging, and do you stop early or continue?
 
 ### Verdict
 - [ ] Overall assessment: PASS / PARTIAL / FAIL
@@ -734,6 +734,80 @@ WORK_PLAN_NOTES = {
 }
 
 
+# Task 223 (PHASE-B.md item 2; the owner, 2026-10-16 09:08: "Titlu de o propoziție"): a gate's title is one
+# sentence; what a long title used to say is here, verbatim, under its new title — printed by the guide. A title that
+# was only two short sentences made one has no entry.
+GATE_NOTES = (
+    ("Context: run `.claude/bin/tasks recall <words>`, then paste the relevant excerpts of each node below.",
+     "Context: `.claude/bin/tasks recall keyword1 keyword2` (locates matching nodes across MIND_MAP.md + overflow), then `tasks recall <N>` for each → paste relevant excerpts below"),
+    ("Keep the Recent Chat messages that matter and carry the user's own words into Intent and Why.",
+     "Review the \"Recent Chat\" messages captured in References (auto-injected at `tasks work`). Remove unrelated ones. Pull key user quotes, constraints, and context into Intent/Why above. The user's actual words are the ground truth for Intent."),
+    ("Say what kind of work this is and, if it is long or uncertain, where you will stop to reassess.",
+     "What kind of work is this? (build / investigate / evaluate / decide / combination?) If combination, what's the sequence? If >15 gates or uncertain approach, pick a checkpoint where you pause and reassess direction before continuing."),
+    ("Set `## Risk` and name what would show the change wrong (assertive: its instrument; irreversible: its rollback).",
+     "**Set `## Risk`** (reversible / irreversible / assertive). Ask: if this claim/change were WRONG, what would show it? An `assertive` task (changes a claim about the world — docs, a calibration, a measurement) must name the instrument that would reveal the claim false. An `irreversible` task must name its rollback plan. These cannot be light-closed for being small."),
+    ("Write task-specific check questions whose answers need evidence, not a yes or no.",
+     "Wrote task-specific check questions (Bad: \"is this working?\" Good: \"Does the output include the progress counter?\" — the answer should require evidence, not just yes/no)"),
+    ("Test strategy: what you will test and how (point tests, property tests for invariants).",
+     "Test strategy: what are you testing and how? (point tests for specific behavior, property tests via `hypothesis` for invariants on transformations/parsers/arithmetic)"),
+    ("Run the plan panel in the background — `.claude/bin/tasks panel-review <N>` — then read `judge.md`.",
+     "Run `.claude/bin/tasks panel-review <N>` — ALL available judges review the plan in parallel (blind: they see the repo, not your conversation). Wait for it to finish; findings land in `judge.md` (this dir), led by a PANEL VERDICT. Read judge.md, then address valid concerns by revising Work Plan gates yourself. **Justify lens:** does every work gate trace up to something in Intent/Design? Are there gates that justify nothing above them (scope creep)? Intent claims with no gate to satisfy them (gaps)? *(Fallback if no panel can run: `.claude/bin/tasks plan-review <N>` — single judge, writes into this file.)*"),
+    ("Triage the plan panel's findings here: accept, park or reject each one, with its reason.",
+     "**Triage panel findings into this file: judges = opinion, not gospel.** For each finding, document accept (with rationale) / park (with rationale) / reject (with rationale) here under this gate. Push back where you have concrete evidence — you live with the outcomes, the reviewers don't. Verify file:line claims before applying. Where judges DISAGREE with each other, say which you believed and why — disagreement between models is signal, not noise."),
+    ("Run the impl panel in the background — `.claude/bin/tasks panel-review <N> --mode impl` — then read `judge.md`.",
+     "Run `.claude/bin/tasks panel-review <N> --mode impl` — ALL available judges review the implementation in parallel. Wait for it to finish; findings land in `judge.md`, led by a PANEL VERDICT (a quorum-PASS impl panel is what the close gate accepts as evidence when `panel_required_for` is set). Read judge.md. **Satisfy lens:** does every Intent claim trace down through code to tests? Where does the chain break? *(Fallback if no panel can run: `.claude/bin/tasks impl-review <N>` — single judge, writes into this file.)*"),
+    ("Triage the impl panel's findings here: accept, park or reject each one, with its reason.",
+     "**Triage panel findings into this file: judges = opinion, not gospel.** For each finding, document accept (with rationale) / park (with rationale) / reject (with rationale) here under this gate. Push back where you have concrete evidence — you live with the outcomes, the reviewers don't. Verify file:line claims before applying. Where judges DISAGREE, say which you believed and why."),
+    ("Freehand — stay to discuss the work with the user; remove this gate at design time if headless or not needed.",
+     "Freehand — work is done, stay for discussion with user. Remove this gate during Design Phase if running headless or task doesn't need debrief."),
+    ("MIND_MAP.md: update the OWNING subsystem node in place, never one node per task.",
+     "MIND_MAP.md: update the OWNING subsystem node **in place** — a NEW node only for a genuinely new subsystem, never one node per task"),
+    ("Set `## Risk` to one word before any work, and say why in the note.",
+     "`## Risk` above set to exactly one word — reversible / irreversible / assertive — BEFORE any work, and this gate's outcome note states WHY in one line (what would `git revert` NOT undo? does this assert a claim about the world?). If assertive or irreversible: ceremony stays light but the FULL review bar applies — run the implementation panel once the work is built; the close gate enforces the evidence in judge.md. Light never waives review."),
+    ("Review routing honored: assertive or irreversible work had the implementation panel, triaged in judge.md.",
+     "Review routing honored — reversible: may proceed without review; assertive/irreversible: the implementation panel ran and its findings are triaged in judge.md (the close gate checks the evidence itself, not this box)"),
+)
+
+
+# The retro scaffold's (`retro.py`) and `tasks freehand`'s (`lifecycle.py`) gates that carried more than their new
+# title says; their sections are `tasks guide retro` / `tasks guide freehand` (task 223, plan panel P3/P4).
+RETRO_GATE_NOTES = (
+    ("Read this window's chat messages and summarize the user's arc, its themes and its frustrations.",
+     "Read chat_log.md messages for this window (use `.claude/bin/tasks log` for a compact one-line-per-message view, "
+     "or filter by message IDs listed above). Summarize: what was the user's arc? What themes dominated? What "
+     "frustrations surfaced?"),
+    ("Identify the steering moments: where the user corrected the agent, and what kind of correction each was.",
+     "Identify steering moments \u2014 where did the user correct the agent? What was the nature of each correction "
+     "(misframed intent / over-engineering / wrong abstraction / missing context / process friction)?"),
+)
+FREEHAND_GATE_NOTES = (
+    ("Freehand log \u2014 run `.claude/bin/tasks freehand log`, then add checked gates for the work done.",
+     "Freehand log \u2014 run `.claude/bin/tasks freehand log` to capture chat_log messages, then retro-add checked "
+     "gates for work done"),
+    ("Rename the task folder and header to what was done, run `.claude/bin/tasks adopt <new folder name>`, check "
+     "this last.",
+     "Rename this task folder and header to match what was actually done, then run `.claude/bin/tasks adopt <new "
+     "folder name>` (the task registry knows it by its name) and check this gate last"),
+)
+GATES_HEADING = "Gates \u2014 what each short title asks"
+
+
+def gate_notes_text(task_type: "str | None" = None) -> str:
+    """The gate notes for `task_type`: a template type's own gates (those its render writes), the retro's, the
+    freehand gates', or every entry for no type or one the CLI does not know — each short title, then what it used
+    to say."""
+    if task_type == "retro":
+        entries = RETRO_GATE_NOTES
+    elif task_type == "freehand":
+        entries = FREEHAND_GATE_NOTES
+    elif task_type in ("quick", "light") or PLAYBOOKS.get(task_type or ""):
+        rendered = set(render_template(1, "X", task_type).split("\n"))
+        entries = tuple(e for e in GATE_NOTES if f"- [ ] {e[0]}" in rendered)
+    else:
+        entries = GATE_NOTES + RETRO_GATE_NOTES + FREEHAND_GATE_NOTES
+    return "\n".join(f"> **{title}**\n> {old}" for title, old in entries)
+
+
 def _guide_sections(task_type: "str | None") -> "list[tuple[str, str]]":
     """(title, text) of the guide for one task type; every section for no type or one the CLI does not know."""
     full = [("Gate discipline (feature, build, refactor, ops, bugfix, cleanup, research, audit, eval)", sticker()),
@@ -741,16 +815,21 @@ def _guide_sections(task_type: "str | None") -> "list[tuple[str, str]]":
     common = [("Status", status_note()), ("Risk", risk_explanation())]
     notes = [(f"Work Plan ({pattern}: {', '.join(t for t, p in PLAYBOOKS.items() if p == pattern)})", text)
              for pattern, text in WORK_PLAN_NOTES.items()]
+    gates = [(GATES_HEADING, gate_notes_text(task_type))] if gate_notes_text(task_type) else []
     if task_type == "quick":
-        return [full[2]] + common
+        return [full[2]] + common + gates
     if task_type == "light":
-        return [full[1]] + common
+        return [full[1]] + common + gates
+    if task_type == "retro":
+        return [("Gate discipline", sticker())] + common + gates
+    if task_type == "freehand":
+        return gates
     pattern = PLAYBOOKS.get(task_type) if task_type else None
     if pattern is None:
-        return full + common + [("Design Phase", design_phase_note())] + notes + [
+        return full + common + [("Design Phase", design_phase_note())] + notes + gates + [
             ("Standing Orders", standing_orders().split("\n", 1)[1])]
     return ([("Gate discipline", sticker())] + common + [("Design Phase", design_phase_note())]
-            + [n for n in notes if n[0].startswith(f"Work Plan ({pattern}:")]
+            + [n for n in notes if n[0].startswith(f"Work Plan ({pattern}:")] + gates
             + [("Standing Orders", standing_orders().split("\n", 1)[1])])
 
 
@@ -1153,13 +1232,13 @@ def render_light_template(num: int, title: str) -> str:
         "## References\n(optional context; recent chat lands here at activation)",
         "---",
         """## Risk Routing
-- [ ] `## Risk` above set to exactly one word — reversible / irreversible / assertive — BEFORE any work, and this gate's outcome note states WHY in one line (what would `git revert` NOT undo? does this assert a claim about the world?). If assertive or irreversible: ceremony stays light but the FULL review bar applies — run the implementation panel once the work is built; the close gate enforces the evidence in judge.md. Light never waives review.""",
+- [ ] Set `## Risk` to one word before any work, and say why in the note.""",
         """## Work
 - [ ] Orient: name the files/claims this touches and what "verified" means (one paragraph)
 - [ ] Do the work
 - [ ] Verify: run the check that proves it — paste the result on this line""",
         """## Review
-- [ ] Review routing honored — reversible: may proceed without review; assertive/irreversible: the implementation panel ran and its findings are triaged in judge.md (the close gate checks the evidence itself, not this box)""",
+- [ ] Review routing honored: assertive or irreversible work had the implementation panel, triaged in judge.md.""",
         """## Pre-review
 - [ ] MIND_MAP.md: owning node updated in place (only if architecture or claims moved)""",
         parked(),

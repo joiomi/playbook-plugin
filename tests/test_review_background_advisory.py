@@ -77,9 +77,14 @@ class DocsInstructBackgroundRuns(unittest.TestCase):
                       self._read("skills/playbook/SKILL.md"))
 
     def test_task_template_review_gates_say_background(self):
-        t = self._read("skills/tasks/base-template.md")
-        # Both the plan-review and impl-review gate lines carry the instruction.
-        self.assertGreaterEqual(t.count("launch it in the background"), 2)
+        # Task 223: read from the render `tasks new` writes — the markdown copy this read before was read by no
+        # code and is gone. Both panel gates carry the instruction, on the gate line itself.
+        from tasks.template import render_template
+        gates = [ln for ln in render_template(1, "X", "feature").split("\n")
+                 if ln.startswith("- [ ] Run the ") and "panel-review" in ln]
+        self.assertEqual(len(gates), 2, gates)
+        for ln in gates:
+            self.assertIn("in the background", ln)
 
 
 if __name__ == "__main__":

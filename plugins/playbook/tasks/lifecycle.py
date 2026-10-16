@@ -1932,7 +1932,7 @@ def cmd_guide(cmd_args):
     """`tasks guide [<type>]` — prints the guide; writes nothing (task 213)."""
     from tasks.template import guide_text
     task_type = cmd_args[0] if cmd_args else None
-    if task_type and task_type not in PLAYBOOKS and task_type not in ("quick", "light"):
+    if task_type and task_type not in PLAYBOOKS and task_type not in ("quick", "light", "retro", "freehand"):
         print(f"(no built-in type {task_type!r} — the whole guide follows)", file=sys.stderr)
     print(guide_text(task_type))
 
@@ -2128,9 +2128,13 @@ def cmd_adopt(cmd_args):
 
 # The freehand rename gate (task 195, plan panel T8): a renamed task directory is one the task
 # registry no longer names — `tasks adopt <new name>` registers it again.
-_FREEHAND_RENAME_GATE = ("- [ ] Rename this task folder and header to match what was actually done, then run "
-                         "`.claude/bin/tasks adopt <new folder name>` (the task registry knows it by its name) "
-                         "and check this gate last\n")
+_FREEHAND_RENAME_GATE = ("- [ ] Rename the task folder and header to what was done, run "
+                         "`.claude/bin/tasks adopt <new folder name>`, check this last.\n")
+# Task 223 (the owner's "Titlu de o propoziție"): one sentence a gate, its command kept; what each gate used to say
+# beyond its title is `tasks guide freehand` (template.FREEHAND_GATE_NOTES). `cmd_freehand log` finds the log gate by
+# its `Freehand log` start.
+_FREEHAND_LOG_GATE = ("- [ ] Freehand log \u2014 run `.claude/bin/tasks freehand log`, then add checked gates for the "
+                      "work done.\n")
 
 
 def cmd_freehand(cmd_args):
@@ -2255,8 +2259,7 @@ def cmd_freehand(cmd_args):
                 f"### Freehand\n"
                 f"<!-- freehand-start: {now_iso} -->\n"
                 f"- [ ] Freehand\n"
-                f"- [ ] Freehand log — run `.claude/bin/tasks freehand log` to capture chat_log messages, "
-                f"then retro-add checked gates for work done\n"
+                f"{_FREEHAND_LOG_GATE}"
                 f"- [ ] Rewrite this freehand work into normal task gates inside this task so the final trace reads like ordinary tracked work\n"
                 f"{_FREEHAND_RENAME_GATE}")
         # made, numbered and registered under the lane lock (task 195 — `mkdir(exist_ok=True)` let two at
@@ -2293,8 +2296,7 @@ def cmd_freehand(cmd_args):
             f"\n### Freehand\n"
             f"<!-- freehand-start: {now_iso} -->\n"
             f"- [ ] Freehand\n"
-            f"- [ ] Freehand log — run `.claude/bin/tasks freehand log` to capture chat_log messages, "
-            f"then retro-add checked gates for work done\n"
+            f"{_FREEHAND_LOG_GATE}"
             f"- [ ] Rewrite this freehand work into normal task gates inside this task so the final trace reads like ordinary tracked work\n"
             f"{_FREEHAND_RENAME_GATE}"
         )

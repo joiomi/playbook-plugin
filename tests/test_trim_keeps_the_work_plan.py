@@ -310,8 +310,12 @@ class ImplRoundTwo(unittest.TestCase):
         return text.count(prefix)
 
     def test_a_long_template_title_does_not_crowd_out_the_notes(self):               # S1
+        # Task 223: no template title is over the 120 characters a trimmed gate keeps any more (S1 was about the
+        # 612-character ones); the longest of today's still leaves every note its start. A record written before
+        # keeps its old long titles, which are now read like any long title an agent wrote (its first 120).
         long_title = max(core._template_gate_titles(), key=len)
-        self.assertGreater(len(long_title), 300)
+        self.assertLessEqual(len(long_title), core.TRIM_TITLE_MAX)
+        self.assertGreater(len(long_title), 100)
         work = "".join(f"- [x] {long_title} — note-start-{i} " + "n" * 500 + "\n" for i in range(1, 21))
         text = _record(work=work)
         out, _ = core.select_task_context(text, 8_000)

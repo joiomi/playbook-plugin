@@ -693,6 +693,10 @@ def cmd_retro(cmd_args):
         print(window)
     print(f"Retro task T{task_num:03d} — {len(tasks)} tasks in window, "
           f"{len(chatlog)} chat messages, {len(mindmap)} mind map nodes")
+    # the guide its pointer names (task 223: what a retro gate used to say beyond its short title is there)
+    from tasks.template import guide_text
+    print("=== TASK GUIDE (again: tasks guide retro) ===")
+    print(guide_text("retro"))
     print(f"Next: tasks work {task_num}")
 
 def cmd_log(cmd_args):

@@ -119,7 +119,7 @@ Unknown options and extra words are refused before anything runs (exit 2, "Nothi
 
 ## Skills (agent-loaded)
 
-Six skill bundles are discovered by the agent harness's plugin skill mechanism (each carries a `SKILL.md`: playbook, judge, monitor, merge, stack, testing). A further directory, `skills/tasks/`, is not a harness-discoverable skill — it holds the canonical task template the `new` command copies. (None are printed by `tasks bootstrap`, which prints the mind map, pending tasks, and CLI reference.)
+Six skill bundles are discovered by the agent harness's plugin skill mechanism (each carries a `SKILL.md`: playbook, judge, monitor, merge, stack, testing). The task template is not a file: `new` renders it from `tasks/template.py`, and `tasks guide [<type>]` prints its instructions — among them what each gate's short title asks. (None are printed by `tasks bootstrap`, which prints the mind map, pending tasks, and CLI reference.)
 
 | Skill | What it does |
 |---|---|

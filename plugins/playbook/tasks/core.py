@@ -1094,6 +1094,9 @@ _TRIM_FIELD_HEADING = re.compile(r'^(status|risk)\b', re.IGNORECASE)
 _TRIM_SUBHEADING_RE = re.compile(r'^#{3,}(?:[ \t]|\r?\n)')
 _TEMPLATE_GATE_TITLES: "tuple[str, ...] | None" = None
 _STANDING_ORDER_LINES: "frozenset[str] | None" = None
+# How much of a gate's title a trimmed gate keeps — and, since task 223, the longest title a template gate may have
+# (the owner, 2026-10-16: "Titlu de o propoziție"; `tests/test_short_gate_titles.py` reads it).
+TRIM_TITLE_MAX = 120
 
 
 def _template_gate_titles() -> "tuple[str, ...]":
@@ -1110,6 +1113,19 @@ def _template_gate_titles() -> "tuple[str, ...]":
                     titles.add(ln[m.end():].rstrip())
         _TEMPLATE_GATE_TITLES = tuple(sorted(titles, key=len, reverse=True))
     return _TEMPLATE_GATE_TITLES
+
+
+def _template_title_of(body: str) -> "str | None":
+    """The template gate title `body` is, or begins with before its note: the body ends there, or goes on with
+    something that is not a letter or a digit (`— note`, `: note`, `(…)`). Task 223 (plan panel P7): with short
+    titles a bare `startswith` took an agent's own gate (`Do the work in lifecycle.py …`) for the template's
+    `Do the work`, and the trim kept only those words of it."""
+    for t in _template_gate_titles():
+        if body.startswith(t):
+            rest = body[len(t):].lstrip()
+            if not rest or not rest[0].isalnum():
+                return t
+    return None
 
 
 def _standing_order_lines() -> "frozenset[str]":
@@ -1231,13 +1247,13 @@ def _trim_notes(lines: "list[tuple[int, str]]", keep_chars: int, cut: "set[int]"
         body = first[m.end():].rstrip("\r\n")
         cont = " ".join(ln.strip() for _, ln in lines[a + 1:b] if ln.strip())
         full = (body + " " + cont).strip() if cont else body
-        title = next((t for t in _template_gate_titles() if body.startswith(t)), None)
-        tlen = len(title) if title else min(len(body), 120)
-        if len(full) <= tlen + keep_chars + 40 and tlen <= 120:
+        title = _template_title_of(body)
+        tlen = len(title) if title else min(len(body), TRIM_TITLE_MAX)
+        if len(full) <= tlen + keep_chars + 40 and tlen <= TRIM_TITLE_MAX:
             continue
         # the title is kept up to 120 characters — a template gate's too (impl round 2, S1: the template's longest
         # titles run to 612 characters and crowded the agent's notes out: "șablonul pleacă") — then the note's start
-        shown = full[:tlen] if tlen <= 120 else full[:120].rstrip() + " …"
+        shown = full[:tlen] if tlen <= TRIM_TITLE_MAX else full[:TRIM_TITLE_MAX].rstrip() + " …"
         cut.add(no)
         out[a:b] = [(no, f"{first[:m.end()]}{shown}{full[tlen:tlen + keep_chars].rstrip()}"
                          f" [… note cut — task.md line {no}]\n")]
