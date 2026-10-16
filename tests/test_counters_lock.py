@@ -286,12 +286,20 @@ class EveryWriterWaitsForTheLock(_Counters):
 
     def test_a_tool_call_asks_for_the_lock_twice(self):
         # once for the count, once for the gate — however many keys each of the two
-        # steps writes: a write inside a held lock does not let go of it and take it again
-        rc, out, err = self.finish(self.start_tool(PATH=self._flock_shim(refuse=False)))
+        # steps writes: a write inside a held lock does not let go of it and take it again.
+        # A call that prints the FULL echo asks a third time, after the print, to acknowledge
+        # it (task 219, impl round 1: a change is remembered only once it was delivered); that
+        # wait comes out of the same limit (OneWaitForAWholeCall). The session's first call
+        # prints in full; the next one, on the same gate, is quiet and asks twice.
+        path = self._flock_shim(refuse=False)
+        rc, out, err = self.finish(self.start_tool(PATH=path))
         self.assertEqual(rc, 0, err)
-        self.assertEqual(self._asked(), ["-w 2 204", "-w 2 204"])
-        self.assertEqual(self.counts(), (1, 1))
-        self.assertEqual(self.counters()["gate_count"], "1")
+        self.assertEqual(self._asked(), ["-w 2 204"] * 3)
+        rc, out, err = self.finish(self.start_tool(PATH=path))
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(self._asked(), ["-w 2 204"] * 5)
+        self.assertEqual(self.counts(), (2, 2))
+        self.assertEqual(self.counters()["gate_count"], "2")
         self.assertNotIn(NOTICE, out)
 
 
@@ -806,9 +814,9 @@ class TheGateIsReadUnderTheLock(_Counters):
 
 @_needs_flock
 class OneWaitForAWholeCall(_Counters):
-    """A hook takes the lock twice. Given late both times, it waited the limit twice — six
-    seconds at the setting 3, with the host killing a hook after five (impl round 2, opus).
-    The two holds share ONE wait."""
+    """A hook takes the lock twice (three times when it prints the full echo, task 219). Given
+    late both times, it waited the limit twice — six seconds at the setting 3, with the host
+    killing a hook after five (impl round 2, opus). The holds share ONE wait."""
 
     def test_what_the_first_hold_waited_is_taken_off_the_second(self):
         d = Path(self._tmp.name) / "slow-shim"
@@ -825,9 +833,12 @@ class OneWaitForAWholeCall(_Counters):
         rc, out, err = self.finish(self.start_tool(PATH=str(d) + os.pathsep + os.environ["PATH"]))
         self.assertEqual(rc, 0, err)
         asked = self._asked()
-        self.assertEqual(len(asked), 2, asked)
+        # the session's first call: the count, the gate, and the acknowledgement of its full echo (task 219) —
+        # every hold after the first gets only what is left of the one limit
+        self.assertEqual(len(asked), 3, asked)
         self.assertEqual(asked[0], "-w 2 204")
-        self.assertIn(asked[1], ("-w 1 204", "-n 204"), "the second hold was given the whole limit again")
+        for later in asked[1:]:
+            self.assertIn(later, ("-w 1 204", "-n 204"), "a later hold was given the whole limit again")
         self.assertEqual(self.counts(), (1, 1))
         self.assertNotIn(NOTICE, out)
 

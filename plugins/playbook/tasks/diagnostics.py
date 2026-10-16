@@ -595,6 +595,10 @@ def cmd_doctor(cmd_args):
         if echo_hook.exists():
             hook_content = echo_hook.read_text(encoding="utf-8")
             has_truncation = "cut -c" in hook_content or "GATE_TEXT_STORE" in hook_content
+            # task 219: the echo's texts are cut by `task-status.py --echo` (characters, not bytes)
+            status_py = hd / "task-status.py"
+            if not has_truncation and "task-status.py\" --echo" in hook_content and status_py.exists():
+                has_truncation = "text[:200]" in status_py.read_text(encoding="utf-8")
             break
     check("hooks: gate text truncation", has_truncation,
           "prevents recursive duplication" if has_truncation else "gate text may grow unbounded")

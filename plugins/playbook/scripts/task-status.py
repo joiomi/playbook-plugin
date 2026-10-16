@@ -21,13 +21,14 @@ uses, so Python and the enforcing hooks cannot disagree about the same file.
                                      ONE rule, decided here, never re-derived from
                                      the gate text in bash) — one spawn for
                                      everything the stop-hook needs
-  task-status.py --echo <task.md> [<P> <B> <T>]
-                                     eight lines for the state echo (task 219):
+  task-status.py --echo <task.md> [<P> <B> <N> <T> [<AFTER>]]
+                                     eleven lines for the state echo (task 219):
                                      total, checked, the first live open gate's
                                      line, its position among the live gates (-1
                                      none), the checked live gates below it, the
                                      transition from the gate the echo last saw
-                                     (position P, B checked below it, text T):
+                                     (position P, B checked below it, N live gates
+                                     then, text T, the gate after it AFTER):
                                      `none` (no previous), `same`, `skip` (the same
                                      open gate, a gate below it checked), `done` /
                                      `done-bare` (the previous gate's own line is
@@ -35,7 +36,9 @@ uses, so Python and the enforcing hooks cannot disagree about the same file.
                                      `moved` (it is still open elsewhere: a gate was
                                      added, moved or unticked above), `reworded`
                                      (it is gone); the checked line (done only);
-                                     and the first open gate's full text
+                                     the first open gate's full text, its first
+                                     200 and 60 characters, and the text of the
+                                     live gate after it
 
 Exits 0 on success. Any failure (missing file, import error) exits non-zero with a
 one-line diagnostic on stderr; the hooks treat that as UNREADABLE state and fail
@@ -49,52 +52,64 @@ import sys
 from pathlib import Path
 
 
-def _echo_fields(lines: "list[str]", prev: "tuple[int, int, str] | None") -> "list[str]":
-    """`--echo`'s eight fields (see the module docstring). A gate is a live (unfenced) `- [ ]` / `- [x]` line, read
-    the way `tasks.core._live_gate_scan` reads it; the previous gate is known by its place among the live gates and
-    its text, never by its line, so lines added above it or a fenced checklist change nothing."""
+def _echo_fields(lines: "list[str]", prev: "tuple[int, int, int, str, str | None] | None") -> "list[str]":
+    """`--echo`'s eleven fields (see the module docstring). A gate is a live (unfenced) `- [ ]` / `- [x]` line, read
+    the way `tasks.core._live_gate_scan` reads it; the previous gate is known by its place among the live gates, its
+    text and the gate after it — never by its line — so lines added above it or a fenced checklist change nothing.
+
+    The tick (impl round 1 of task 219, B1-B3): the gate now at the previous place P, checked, is the previous gate
+    ticked when its text is T (bare); when it is T + a space and a note, unless T is still open somewhere AND gates
+    were added or removed (a checked "T extra" put above the open T is not its tick); or when nothing was added or
+    removed and T is open nowhere (a note written INSIDE the text). Never when it is the gate that came after T before
+    (T deleted, its neighbour moved up). Elsewhere only a gate that is exactly T is its tick."""
     from tasks.core import _GATE_LINE_RE, _iter_fenced_flags
     fenced = _iter_fenced_flags(lines, unclosed_is_live=True, track_indented_code=False)
     gates: "list[tuple[int, bool, str]]" = []          # (line, checked, text)
     for i, line in enumerate(lines):
         if fenced[i]:
             continue
-        raw = line.lstrip("﻿").rstrip("\r\n")
+        raw = line.lstrip("\ufeff").rstrip("\r\n")
         m = _GATE_LINE_RE.match(raw)
         if m:
             gates.append((i + 1, m.group(1) != " ", raw[m.end():].strip()))
     first = next((k for k, g in enumerate(gates) if not g[1]), -1)
     below = sum(1 for g in gates[first + 1:] if g[1]) if first >= 0 else 0
     text = gates[first][2] if first >= 0 else ""
+    after = gates[first + 1][2] if 0 <= first < len(gates) - 1 else ""
     transition, ticked = "none", ""
     if prev is not None:
-        pos, prev_below, prev_text = prev
-
-        def ticks(g: "tuple[int, bool, str]") -> bool:      # the previous gate, checked, with or without a note
-            return g[1] and (g[2] == prev_text or g[2].startswith(prev_text + " "))
-
+        pos, prev_below, prev_total, prev_text, prev_after = prev
+        open_t = any(not g[1] and g[2] == prev_text for g in gates)
+        same_total = len(gates) == prev_total
+        at = gates[pos] if 0 <= pos < len(gates) else None
         hit = None
-        if first >= 0 and first == pos and text == prev_text:
-            transition = "skip" if below > prev_below else "same"
-        elif 0 <= pos < len(gates) and ticks(gates[pos]):
-            hit = gates[pos]
-        elif any(not g[1] and g[2] == prev_text for g in gates):
-            transition = "moved"
-        else:
-            near = sorted((abs(k - pos), g[0]) for k, g in enumerate(gates) if ticks(g))
-            if near:
-                hit = next(g for g in gates if g[0] == near[0][1])
+        if at is not None and at[1] and (prev_after is None or at[2] != prev_after or at[2] == prev_text):
+            noted = at[2].startswith(prev_text + " ")
+            if at[2] == prev_text or (noted and (not open_t or same_total)) or (same_total and not open_t):
+                hit = at
+        if hit is None:
+            if first >= 0 and text == prev_text:
+                # a skip: a gate BELOW the open one was checked — counted below it, so it holds at any position
+                transition = "skip" if below > prev_below else "same"
+            elif open_t:
+                transition = "moved"
             else:
-                transition = "reworded"
+                near = sorted((abs(k - pos), g[0]) for k, g in enumerate(gates) if g[1] and g[2] == prev_text)
+                if near:
+                    hit = next(g for g in gates if g[0] == near[0][1])
+                else:
+                    transition = "reworded"
         if hit is not None:
             transition, ticked = ("done-bare" if hit[2] == prev_text else "done"), str(hit[0])
+    # The display cuts count characters, not bytes (B10: bash `cut -c` split a multibyte character)
     return [str(len(gates)), str(sum(1 for g in gates if g[1])), str(gates[first][0]) if first >= 0 else "",
-            str(first), str(below), transition, ticked, text.replace("\r", "")]
+            str(first), str(below), transition, ticked, text.replace("\r", ""), text[:200].replace("\r", ""),
+            text[:60].replace("\r", ""), after.replace("\r", "")]
 
 
 def main(argv: "list[str]") -> int:
     fields = echo = False
-    prev: "tuple[int, int, str] | None" = None
+    prev: "tuple[int, int, int, str, str | None] | None" = None
     args = argv[1:]
     if args and args[0] == "--fields":
         fields = True
@@ -102,15 +117,15 @@ def main(argv: "list[str]") -> int:
     elif args and args[0] == "--echo":
         echo = True
         args = args[1:]
-        if len(args) == 4:
+        if len(args) in (5, 6):
             try:
-                prev = (int(args[1]), int(args[2]), args[3])
+                prev = (int(args[1]), int(args[2]), int(args[3]), args[4], args[5] if len(args) == 6 else None)
             except ValueError:
-                print("task-status: --echo's <P> and <B> must be integers", file=sys.stderr)
+                print("task-status: --echo's <P>, <B> and <N> must be integers", file=sys.stderr)
                 return 2
             args = args[:1]
     if len(args) != 1:
-        print("usage: task-status.py [--fields | --echo] <task.md> [<P> <B> <T>]", file=sys.stderr)
+        print("usage: task-status.py [--fields | --echo] <task.md> [<P> <B> <N> <T> [<AFTER>]]", file=sys.stderr)
         return 2
     task_file = Path(args[0])
     if not task_file.is_file():

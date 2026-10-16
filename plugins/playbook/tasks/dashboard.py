@@ -1166,7 +1166,10 @@ def hooks_health(project_path: Path) -> "dict":
         echo = next((d / "state-echo-hook" for d in hook_dirs if (d / "state-echo-hook").exists()), None)
         if echo is not None:
             body = _read_regular_text(echo, cap=1 << 20) or ""
-            if "cut -c" not in body and "GATE_TEXT_STORE" not in body:
+            # task 219: the echo's texts are cut by `task-status.py --echo` (characters, not bytes) — doctor §8 too
+            cut_in_status = ('task-status.py" --echo' in body
+                             and "text[:200]" in (_read_regular_text(echo.parent / "task-status.py", cap=1 << 20) or ""))
+            if "cut -c" not in body and "GATE_TEXT_STORE" not in body and not cut_in_status:
                 warnings.append(f"hooks: gate text truncation — {echo} has no truncation (gate text may grow unbounded)")
         # doctor §4b: stale hook entries in ~/.claude/settings.json
         for stale in _stale_settings_hook_paths():

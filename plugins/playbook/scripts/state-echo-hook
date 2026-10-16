@@ -306,27 +306,36 @@ fi
 
 # --- What the echo says, and when (task 219; PHASE-B item 2, the owner 2026-10-16 09:36: "La schimbare + amintire
 # (Recomandat)") -----------------------------------------------------------------------------------------------
-# The full echo is printed when something changed: the open gate — known by its place among the live gates and its
-# text, read fence-aware by `scripts/task-status.py --echo`, never by its line — or the task, or a warning is due; at
-# a session's first call; and after a SessionStart (a compaction), which leaves the `echo_reset` marker. On the same
-# gate one line every 10 calls; otherwise `{}`. Always in full: eval mode, a subagent's call (it has its own context;
-# the main agent's memory is left as it is), a lock not given, an `.agent` that cannot be written, gates that could
-# not be read. The memory — `gate_echo_key` / `gate_echo_quiet`, `gate_`-prefixed so a prompt's `reset_counters`
-# keeps them — is kept in the counters.
+# The full echo is printed when something changed: the open gate — known by its place among the live gates, its
+# text and the gate after it, read fence-aware by `scripts/task-status.py --echo`, never by its line — or the task,
+# or a warning is due; at a session's first call; and after a SessionStart (a compaction), which leaves the
+# `echo_reset` marker. On the same gate one line every 10 calls; otherwise `{}`. Always in full: eval mode, a lock not
+# given, an `.agent` that cannot be written, gates that could not be read, and a subagent's call (a payload with
+# `agent_id`: it has its own context — it is shown the gate and changes nothing, so the main agent's next call still
+# sees what changed). The memory — `gate_echo_key`, `gate_echo_claim`, `gate_echo_quiet`, `gate_`-prefixed so a
+# prompt's `reset_counters` keeps them — is kept in the counters.
 #
 # No python3 runs while the counters lock is held (task 182: the other calls' hooks wait for its two short steps
 # only). So the gates are read BEFORE the hold, with the previous gate as the counters held it then; inside the hold
 # both are checked again — a hook that overtook this one, or an edit of task.md in between, makes this call's read
-# STALE: it is counted on the stored gate and says nothing, and the next call reads afresh. The answer's JSON is
-# made after the hold; one that cannot be made takes back the memory it was given, so the next call prints again.
+# STALE: it is counted on the stored gate and says nothing, and the next call reads afresh.
+#
+# A change is delivered once and not lost (impl round 1, codex / grok): the call that will print it CLAIMS it in the
+# hold (`gate_echo_claim` = its key + this hook's pid; the side-by-side calls stay quiet), and the key is acknowledged
+# in a second short hold only after the print. A claim whose hook died is printed again by the next call, and the
+# one-shot lines (the transition, the skip and bare-tick warnings) wait in `echo_pending` until they are printed.
 PB_SUBAGENT_RE='"agent_id"[[:space:]]*:[[:space:]]*"[^"]'
+PB_SUBAGENT=false
+[[ "$INPUT" =~ $PB_SUBAGENT_RE ]] && PB_SUBAGENT=true
 PB_REMEMBER=true
-if [ "$AGENT_WRITABLE" != true ] || [[ "$INPUT" =~ $PB_SUBAGENT_RE ]] \
+if [ "$AGENT_WRITABLE" != true ] || [ "$PB_SUBAGENT" = true ] \
    || { [ -n "$PLAYBOOK_EVAL_CONFIG" ] && [ -f "$PLAYBOOK_EVAL_CONFIG" ]; }; then
     PB_REMEMBER=false
 fi
 ECHO_RESET_FILE="$SESSION_DIR/echo_reset"
+ECHO_PENDING_FILE="$SESSION_DIR/echo_pending"
 PB_GATE_PENDING=false
+PB_PENDING_TEXT=""
 
 # _pb_json TEXT — the hook's JSON line on stdout; non-zero and nothing printed when it cannot be built
 _pb_json() {
@@ -371,33 +380,48 @@ _pb_warnings() {
     printf '%s' "$c"
 }
 
-# _pb_decide KEY FORCE — inside the counters hold: PB_MODE full / reminder / quiet, and the memory written for it
-# (`gate_echo_key` given now; taken back after the hold if the answer cannot be made)
+# _pb_alive PID — 0 while that process exists (another user's process is alive too)
+_pb_alive() {
+    case "$1" in ''|*[!0-9]*) return 1 ;; esac
+    kill -0 "$1" 2>/dev/null && return 0
+    case "$(kill -0 "$1" 2>&1)" in *"ot permitted"*) return 0 ;; esac
+    return 1
+}
+
+# _pb_decide KEY FORCE — inside the counters hold: PB_MODE full / reminder / quiet, and PB_MEMORY the memory fields
+# to write with the gate (`write_counters` pairs). A full echo CLAIMS its key; the key itself is acknowledged after the
+# print (`_pb_print`).
 _pb_decide() {
-    local key="$1" force="$2" quiet
+    local key="$1" force="$2" quiet claim
     PB_MODE=full
-    if [ "$force" = true ] || [ "$PB_REMEMBER" != true ] || [ "$PLAYBOOK_COUNTERS_UNLOCKED" = true ] \
-       || [ -e "$ECHO_RESET_FILE" ] || [ -L "$ECHO_RESET_FILE" ] \
-       || [ "$(read_counter "$COUNTER_FILE" gate_echo_key)" != "$key" ]; then
-        PB_MODE=full
-    else
-        quiet=$(( $(read_counter_int "$COUNTER_FILE" gate_echo_quiet) + 1 ))
-        if [ "$quiet" -ge 10 ]; then
-            PB_MODE=reminder
-        else
-            PB_MODE=quiet
-            write_counters "$COUNTER_FILE" gate_echo_quiet "$quiet"
+    PB_MEMORY=()
+    if [ "$PB_REMEMBER" != true ] || [ "$PLAYBOOK_COUNTERS_UNLOCKED" = true ]; then
+        return 0
+    fi
+    claim=$(read_counter "$COUNTER_FILE" gate_echo_claim)
+    quiet=$(( $(read_counter_int "$COUNTER_FILE" gate_echo_quiet) + 1 ))
+    if [ "$force" != true ] && [ ! -e "$ECHO_RESET_FILE" ] && [ ! -L "$ECHO_RESET_FILE" ]; then
+        if [ "$(read_counter "$COUNTER_FILE" gate_echo_key)" = "$key" ] \
+           || { [ "${claim% *}" = "$key" ] && [ "${claim##* }" != "$$" ] && _pb_alive "${claim##* }"; }; then
+            # the same gate (or one a live side-by-side hook is printing): quiet, or the reminder at 10
+            if [ "$quiet" -ge 10 ]; then
+                PB_MODE=reminder
+                PB_MEMORY=(gate_echo_quiet 0)
+            else
+                PB_MODE=quiet
+                PB_MEMORY=(gate_echo_quiet "$quiet")
+            fi
             return 0
         fi
     fi
-    if [ "$PB_REMEMBER" = true ] && [ "$PLAYBOOK_COUNTERS_UNLOCKED" != true ]; then
-        write_counters "$COUNTER_FILE" gate_echo_key "$key" gate_echo_quiet 0
-    fi
+    PB_MEMORY=(gate_echo_claim "$key $$" gate_echo_quiet 0)
     return 0
 }
 
-# _pb_print KEY TEXT — after the hold: print TEXT for PB_MODE full / reminder (`{}` for quiet); an answer that cannot
-# be made takes back the memory `_pb_decide` gave it, so the next call prints again (plan panel, opus / sonnet)
+# _pb_print KEY TEXT — after the hold: print TEXT for PB_MODE full / reminder (`{}` for quiet); a full echo printed is
+# acknowledged (its key kept, its claim and the pending one-shot lines cleared) in a second short hold; one that could
+# not be made gives its claim back, so the next call prints it — with the pending lines (plan panel, opus / sonnet;
+# impl round 1, codex / grok)
 _pb_print() {
     local key="$1" text="$2" out=""
     if [ "$PB_MODE" != quiet ]; then
@@ -405,16 +429,19 @@ _pb_print() {
     fi
     if [ -n "$out" ]; then
         printf '%s\n' "$out"
-        if [ "$PB_MODE" = full ] && [ "$PB_REMEMBER" = true ]; then
-            rm -f -- "$ECHO_RESET_FILE" 2>/dev/null || true
-        fi
-        return 0
+    else
+        echo '{}'
     fi
-    echo '{}'
-    if [ "$PB_MODE" != quiet ] && [ "$PB_REMEMBER" = true ] && [ "$PLAYBOOK_COUNTERS_UNLOCKED" != true ]; then
+    if [ "$PB_MODE" = full ] && [ "$PB_REMEMBER" = true ] && [ "$PLAYBOOK_COUNTERS_UNLOCKED" != true ]; then
         counters_lock "$COUNTER_FILE"
-        if [ "$PLAYBOOK_COUNTERS_UNLOCKED" != true ] && [ "$(read_counter "$COUNTER_FILE" gate_echo_key)" = "$key" ]; then
-            write_counters "$COUNTER_FILE" gate_echo_key ""
+        if [ "$PLAYBOOK_COUNTERS_UNLOCKED" != true ] \
+           && [ "$(read_counter "$COUNTER_FILE" gate_echo_claim)" = "$key $$" ]; then
+            if [ -n "$out" ]; then
+                write_counters "$COUNTER_FILE" gate_echo_key "$key" gate_echo_claim ""
+                rm -f -- "$ECHO_PENDING_FILE" "$ECHO_RESET_FILE" 2>/dev/null || true
+            else
+                write_counters "$COUNTER_FILE" gate_echo_claim ""
+            fi
         fi
         counters_unlock
     fi
@@ -432,12 +459,16 @@ case "$TASK" in *[!0-9]*) TASK="" ;; esac
 
 if [ -z "$TASK" ]; then
     PB_CORE="# No active task (.claude/bin/tasks work <N> to activate)"
-    if [ "$AGENT_WRITABLE" = true ]; then
+    if [ "$AGENT_WRITABLE" = true ] && [ "$PB_SUBAGENT" != true ]; then
         counters_lock "$COUNTER_FILE"
     fi
     PB_FORCE=false
     if _pb_warned; then PB_FORCE=true; fi
     _pb_decide "no-task" "$PB_FORCE"
+    if [ "${#PB_MEMORY[@]}" -gt 0 ]; then
+        write_counters "$COUNTER_FILE" "${PB_MEMORY[@]}"
+        if [ "$PLAYBOOK_WRITE_FAILED" = true ] && [ "$PB_MODE" = quiet ]; then PB_MODE=full; fi
+    fi
     counters_unlock
     if [ "$PB_MODE" = full ]; then
         _pb_print "no-task" "$(_pb_warnings "$PB_CORE")"
@@ -454,22 +485,24 @@ if [ -z "$TASK_FILE" ]; then
     exit 0
 fi
 
-# _pb_prev — the gate the counters hold (the one the echo saw last), one line: task, position, below, line, count,
-# text — split by US (0x1f), never a tab: a tab is a whitespace IFS character, so `read` would drop an empty field
-# (an empty task read the next field, "0", as the task — measured)
+# _pb_prev — the gate the counters hold (the one the echo saw last), one line: task, position, below, total, line,
+# text, the gate after it — split by US (0x1f), never a tab: a tab is a whitespace IFS character, so `read` would drop
+# an empty field (an empty task read the next field, "0", as the task — measured). The count is not in it (impl round
+# 1, opus: a stale call counts on the stored gate, which would make every other call of the burst stale too).
 _pb_prev() {
     local t
     t=$(read_counter "$COUNTER_FILE" gate_task)
     case "$t" in *[!0-9]*) t="" ;; esac
-    printf '%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s' "$t" "$(read_counter_int "$COUNTER_FILE" gate_pos)" \
-        "$(read_counter_int "$COUNTER_FILE" gate_below)" "$(read_counter_int "$COUNTER_FILE" gate_line)" \
-        "$(read_counter_int "$COUNTER_FILE" gate_count)" "$(read_counter "$COUNTER_FILE" gate_text)"
+    printf '%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s' "$t" "$(read_counter_int "$COUNTER_FILE" gate_pos)" \
+        "$(read_counter_int "$COUNTER_FILE" gate_below)" "$(read_counter_int "$COUNTER_FILE" gate_total)" \
+        "$(read_counter_int "$COUNTER_FILE" gate_line)" "$(read_counter "$COUNTER_FILE" gate_text)" \
+        "$(read_counter "$COUNTER_FILE" gate_after)"
 }
 PB_PREV_SEEN=$(_pb_prev)
-IFS=$'\x1f' read -r PREV_TASK PREV_POS PREV_BELOW PREV_LINE PREV_COUNT PREV_TEXT <<< "$PB_PREV_SEEN" || true
+IFS=$'\x1f' read -r PREV_TASK PREV_POS PREV_BELOW PREV_TOTAL PREV_LINE PREV_TEXT PREV_AFTER <<< "$PB_PREV_SEEN" || true
 PB_ECHO_ARGS=()
 if [ -n "$PREV_TASK" ] && [ "$PREV_TASK" = "$TASK" ]; then
-    PB_ECHO_ARGS=("$PREV_POS" "$PREV_BELOW" "$PREV_TEXT")
+    PB_ECHO_ARGS=("$PREV_POS" "$PREV_BELOW" "$PREV_TOTAL" "$PREV_TEXT" "$PREV_AFTER")
 fi
 
 # The gates, read the way the CLI reads them (fence-aware, physical lines) — one spawn, before the hold. The file's
@@ -478,7 +511,8 @@ PB_FILE_SEEN=$(stat -c '%i %s %y' -- "$TASK_FILE" 2>/dev/null || true)
 PB_GATES_OK=true
 PB_ECHO_OUT=$(python3 -E -s "$HOOK_DIR/task-status.py" --echo "$TASK_FILE" "${PB_ECHO_ARGS[@]}" 2>/dev/null) \
     || PB_GATES_OK=false
-TOTAL_GATES=""; DONE_GATES=""; GATE_LINE=""; GATE_POS=""; GATE_BELOW=""; TRANS=""; TICKED_LINE=""; GATE_TEXT_FULL=""
+TOTAL_GATES=""; DONE_GATES=""; GATE_LINE=""; GATE_POS=""; GATE_BELOW=""; TRANS=""; TICKED_LINE=""
+GATE_TEXT_FULL=""; GATE_TEXT=""; PB_SHORT=""; GATE_AFTER=""
 {
     IFS= read -r TOTAL_GATES || true
     IFS= read -r DONE_GATES || true
@@ -488,6 +522,9 @@ TOTAL_GATES=""; DONE_GATES=""; GATE_LINE=""; GATE_POS=""; GATE_BELOW=""; TRANS="
     IFS= read -r TRANS || true
     IFS= read -r TICKED_LINE || true
     IFS= read -r GATE_TEXT_FULL || true
+    IFS= read -r GATE_TEXT || true
+    IFS= read -r PB_SHORT || true
+    IFS= read -r GATE_AFTER || true
 } <<< "$PB_ECHO_OUT"
 case "$TRANS" in none|same|skip|done|done-bare|moved|reworded) ;; *) PB_GATES_OK=false ;; esac
 if [ "$PB_GATES_OK" != true ]; then
@@ -500,7 +537,6 @@ TOTAL_GATES=$(_safe_int "$TOTAL_GATES"); DONE_GATES=$(_safe_int "$DONE_GATES"); 
 case "$GATE_LINE" in *[!0-9]*) GATE_LINE="" ;; esac
 case "$TICKED_LINE" in *[!0-9]*) TICKED_LINE="" ;; esac
 case "$GATE_POS" in ''|*[!0-9]*) GATE_POS=-1 ;; esac
-GATE_TEXT=$(printf '%s' "$GATE_TEXT_FULL" | cut -c 1-200)
 
 # Freehand mode: suppress drift counter and gate pressure when the gate text
 # starts with "Freehand" — covers "Freehand", "Freehand — work is done",
@@ -526,8 +562,7 @@ fi
 # Make path relative to project
 REL_PATH="${TASK_FILE#$PROJECT_DIR/}"
 
-# What the echo would say, and its key (outside the hold: `format_context` and `cksum` are not python, but nothing
-# that can be done before the hold is done in it)
+# What the echo would say, and its key (outside the hold: nothing that can be done before it is done in it)
 PB_SUM=$(printf '%s' "$GATE_TEXT_FULL" | cksum | tr ' ' '.')
 if [ "$IS_FREEHAND" = true ]; then
     PB_CORE="# [${TASK}] Freehand mode — wait for user instructions. Close only when user says done."
@@ -536,7 +571,6 @@ if [ "$IS_FREEHAND" = true ]; then
 elif [ -n "$GATE_LINE" ]; then
     PB_CORE=$(format_context "$TASK" "$DONE_GATES" "$TOTAL_GATES" "${GATE_TEXT}" "$GATE_LINE" "$REL_PATH")
     PB_KEY="gate|${TASK}|${GATE_POS}|${PB_SUM}"
-    PB_SHORT=$(printf '%s' "$GATE_TEXT_FULL" | cut -c 1-60)
     if [ "$PB_SHORT" != "$GATE_TEXT_FULL" ]; then PB_SHORT="${PB_SHORT}…"; fi
     PB_REMINDER="# [${TASK}] still at gate ${DONE_GATES}/${TOTAL_GATES}: ${PB_SHORT} — ${REL_PATH}:${GATE_LINE}"
 else
@@ -545,44 +579,11 @@ else
     PB_REMINDER="$PB_CORE"
 fi
 
-# The transition from the gate the echo saw last. Only the previous gate's own line, now checked, is a completion
-# (`[x]` in chat_log); a gate added, moved or unticked above it is "left open"; a reworded gate is the same gate.
-GATE_LOG="$AGENT_DIR/chat_log.md"
-TRANSITION_MSG=""
-SKIP_MSG=""
-BARE_MSG=""
-ENTRY_KIND=""
-NEW_COUNT=1
-if [ "$IS_FREEHAND" = true ]; then
-    # Freehand mode: no counter increment, no repeat warning, no transition logging
-    NEW_COUNT=0
-elif [ -n "$PREV_TASK" ] && [ "$PREV_TASK" != "$TASK" ]; then
-    # task 073 (C10): a TASK SWITCH is not a completion — the entry says the gate was left open
-    ENTRY_KIND=switch
-    TRANSITION_MSG="# ↷ switched from task ${PREV_TASK} — its gate was left open (${PREV_COUNT} tool calls)"
-elif [ -n "$PREV_TASK" ]; then
-    case "$TRANS" in
-        same|reworded)
-            NEW_COUNT=$(( PREV_COUNT + 1 ))
-            ;;
-        skip)
-            NEW_COUNT=$(( PREV_COUNT + 1 ))
-            SKIP_MSG="
-# ⚠ A gate below the open one (line ${GATE_LINE}) was checked while it stays open — reorder the gates in task.md if you are working out of order."
-            ;;
-        done|done-bare)
-            ENTRY_KIND=done
-            TRANSITION_MSG="# ✓ previous gate done (${PREV_COUNT} tool calls)"
-            if [ "$TRANS" = done-bare ]; then
-                BARE_MSG="
-# ⚠ Gate closed with bare checkmark — append your outcome. (line ${TICKED_LINE})"
-            fi
-            ;;
-        moved)
-            ENTRY_KIND=moved
-            TRANSITION_MSG="# ↻ the open gate changed — no gate was ticked (${PREV_COUNT} tool calls on the one before)"
-            ;;
-    esac
+# A subagent's call is shown the gate as it stands and changes nothing — no entry, no gate written, no memory (impl
+# round 1, grok / opus): the change stays for the main agent's next call to see and log.
+if [ "$PB_SUBAGENT" = true ]; then
+    _pb_json "$(_pb_warnings "$PB_CORE")" || echo '{}'
+    exit 0
 fi
 
 # The entry and the new gate go together or not at all (impl rounds 1-3 of task 182): the entry is appended under
@@ -629,23 +630,69 @@ _log_gate_entry() {
     esac
 }
 
-# --- The hold: the read checked again, the entry, the new gate, the decision ------------------------------------
+# --- The hold: the read checked again, the entry, the new gate and the memory in one write ----------------------
 if [ "$AGENT_WRITABLE" = true ]; then
     counters_lock "$COUNTER_FILE"
     if [ "$PLAYBOOK_COUNTERS_UNLOCKED" != true ] \
        && { [ "$(_pb_prev)" != "$PB_PREV_SEEN" ] \
             || [ "$(stat -c '%i %s %y' -- "$TASK_FILE" 2>/dev/null || true)" != "$PB_FILE_SEEN" ]; }; then
-        # STALE: counted on the gate the counters hold now, nothing said, nothing logged
-        IFS=$'\x1f' read -r PB_NOW_TASK _ _ _ PB_NOW_COUNT _ <<< "$(_pb_prev)" || true
+        # STALE: counted on the gate the counters hold now, nothing said, nothing logged. The quiet count stops at 9
+        # here (impl round 1, codex: a burst pushed it to 12 with no reminder) — the next fresh call gives the reminder.
+        PB_NOW_TASK=$(read_counter "$COUNTER_FILE" gate_task)
         if [ -n "$PB_NOW_TASK" ]; then
-            write_counters "$COUNTER_FILE" gate_count "$(( $(_safe_int "$PB_NOW_COUNT") + 1 ))" \
-                gate_echo_quiet "$(( $(read_counter_int "$COUNTER_FILE" gate_echo_quiet) + 1 ))"
+            PB_NOW_QUIET=$(( $(read_counter_int "$COUNTER_FILE" gate_echo_quiet) + 1 ))
+            if [ "$PB_NOW_QUIET" -gt 9 ]; then PB_NOW_QUIET=9; fi
+            write_counters "$COUNTER_FILE" gate_count "$(( $(read_counter_int "$COUNTER_FILE" gate_count) + 1 ))" \
+                gate_echo_quiet "$PB_NOW_QUIET"
         fi
         counters_unlock
         echo '{}'
         exit 0
     fi
 fi
+# The count of calls on the gate is read under the lock (a count read before it lost the side-by-side increments —
+# measured: 7 of 15)
+PREV_COUNT=$(read_counter_int "$COUNTER_FILE" gate_count)
+# The transition from the gate the echo saw last. Only the previous gate's own line, now checked, is a completion
+# (`[x]` in chat_log); a gate added, moved or unticked above it is "left open"; a reworded gate is the same gate.
+GATE_LOG="$AGENT_DIR/chat_log.md"
+TRANSITION_MSG=""
+SKIP_MSG=""
+BARE_MSG=""
+ENTRY_KIND=""
+NEW_COUNT=1
+if [ "$IS_FREEHAND" = true ]; then
+    # Freehand mode: no counter increment, no repeat warning, no transition logging
+    NEW_COUNT=0
+elif [ -n "$PREV_TASK" ] && [ "$PREV_TASK" != "$TASK" ]; then
+    # task 073 (C10): a TASK SWITCH is not a completion — the entry says the gate was left open
+    ENTRY_KIND=switch
+    TRANSITION_MSG="# ↷ switched from task ${PREV_TASK} — its gate was left open (${PREV_COUNT} tool calls)"
+elif [ -n "$PREV_TASK" ]; then
+    case "$TRANS" in
+        same|reworded)
+            NEW_COUNT=$(( PREV_COUNT + 1 ))
+            ;;
+        skip)
+            NEW_COUNT=$(( PREV_COUNT + 1 ))
+            SKIP_MSG="
+# ⚠ A gate below the open one (line ${GATE_LINE}) was checked while it stays open — reorder the gates in task.md if you are working out of order."
+            ;;
+        done|done-bare)
+            ENTRY_KIND=done
+            TRANSITION_MSG="# ✓ previous gate done (${PREV_COUNT} tool calls)"
+            if [ "$TRANS" = done-bare ]; then
+                BARE_MSG="
+# ⚠ Gate closed with bare checkmark — append your outcome. (line ${TICKED_LINE})"
+            fi
+            ;;
+        moved)
+            ENTRY_KIND=moved
+            TRANSITION_MSG="# ↻ the open gate changed — no gate was ticked (${PREV_COUNT} tool calls on the one before)"
+            ;;
+    esac
+fi
+
 if [ -n "$ENTRY_KIND" ] && [ "$AGENT_WRITABLE" = true ]; then
     if ! _log_gate_entry; then
         # not yet: nothing is told, nothing is written — as if this call had not seen the change
@@ -656,20 +703,45 @@ if [ -n "$ENTRY_KIND" ] && [ "$AGENT_WRITABLE" = true ]; then
         NEW_COUNT=$PREV_COUNT
     fi
 fi
-if [ "$AGENT_WRITABLE" = true ] && [ "$PB_GATE_PENDING" != true ]; then
-    if [ -n "$GATE_LINE" ]; then
-        write_counters "$COUNTER_FILE" gate_task "$TASK" gate_pos "$GATE_POS" gate_below "$GATE_BELOW" \
-            gate_text "$GATE_TEXT_FULL" gate_line "$GATE_LINE" gate_count "$NEW_COUNT"
-    else
-        # All gates done — the final gate was logged above; clear the gate fields, keep tools/writes and the memory
-        write_counters "$COUNTER_FILE" gate_task "" gate_pos "" gate_below "" gate_text "" gate_line "" gate_count ""
-    fi
-fi
 PB_FORCE=false
 if [ -n "$TRANSITION_MSG" ] || [ -n "$SKIP_MSG" ] || [ -n "$BARE_MSG" ] || _pb_warned; then
     PB_FORCE=true
 fi
 _pb_decide "$PB_KEY" "$PB_FORCE"
+if [ "$PB_MODE" = full ] && [ "$PB_REMEMBER" = true ] && [ "$PLAYBOOK_COUNTERS_UNLOCKED" != true ]; then
+    # one-shot lines not yet printed (a hook that claimed them died) come first; this call's own join them, and they
+    # wait in `echo_pending` until a print is acknowledged
+    if [ -f "$ECHO_PENDING_FILE" ] && [ ! -L "$ECHO_PENDING_FILE" ]; then
+        PB_PENDING_TEXT=$(cat -- "$ECHO_PENDING_FILE" 2>/dev/null || true)
+    fi
+    PB_ONE_SHOT="${TRANSITION_MSG}${SKIP_MSG}${BARE_MSG}"
+    if [ -n "$PB_ONE_SHOT" ] && _pb_sink_ok "" "$ECHO_PENDING_FILE"; then
+        printf '%s' "${PB_PENDING_TEXT:+${PB_PENDING_TEXT}
+}${PB_ONE_SHOT}" > "$ECHO_PENDING_FILE" 2>/dev/null || true
+    fi
+fi
+if [ "$AGENT_WRITABLE" = true ]; then
+    PB_GATE_FIELDS=()
+    if [ "$PB_GATE_PENDING" != true ]; then
+        if [ -n "$GATE_LINE" ]; then
+            PB_GATE_FIELDS=(gate_task "$TASK" gate_pos "$GATE_POS" gate_below "$GATE_BELOW" gate_total "$TOTAL_GATES"
+                            gate_text "$GATE_TEXT_FULL" gate_after "$GATE_AFTER" gate_line "$GATE_LINE"
+                            gate_count "$NEW_COUNT")
+        else
+            # All gates done — the final gate was logged above; clear the gate fields, keep tools/writes
+            PB_GATE_FIELDS=(gate_task "" gate_pos "" gate_below "" gate_total "" gate_text "" gate_after ""
+                            gate_line "" gate_count "")
+        fi
+    fi
+    # the gate and the memory in ONE rewrite (impl round 1, sonnet); a write that fails is said, never a quiet call
+    # (codex: a failing quiet-count write kept the warning hidden)
+    if [ "${#PB_GATE_FIELDS[@]}" -gt 0 ] || [ "${#PB_MEMORY[@]}" -gt 0 ]; then
+        write_counters "$COUNTER_FILE" "${PB_GATE_FIELDS[@]}" "${PB_MEMORY[@]}"
+    fi
+    if [ "$PLAYBOOK_WRITE_FAILED" = true ] && [ "$PB_MODE" != full ]; then
+        PB_MODE=full
+    fi
+fi
 counters_unlock
 
 # --- After the hold: the answer --------------------------------------------------------------------------------
@@ -694,9 +766,15 @@ if [ "$PB_MODE" = reminder ]; then
     _pb_print "$PB_KEY" "${PB_REMINDER}${PB_NUDGE}"
     exit 0
 fi
+# The full echo: the one-shot lines first — those a dead hook left (PB_PENDING_TEXT) and this call's transition —
+# then the gate, then this call's skip / bare-tick warnings.
 PB_FULL="$PB_CORE"
 if [ -n "$TRANSITION_MSG" ]; then
     PB_FULL="${TRANSITION_MSG}
+${PB_FULL}"
+fi
+if [ -n "$PB_PENDING_TEXT" ]; then
+    PB_FULL="${PB_PENDING_TEXT}
 ${PB_FULL}"
 fi
 PB_FULL="${PB_FULL}${SKIP_MSG}${BARE_MSG}"
