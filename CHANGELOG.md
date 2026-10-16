@@ -100,25 +100,21 @@ were about 8 % of all the text held before a compaction.
 - Always in full, as before: eval mode, a lock not given, an `.agent` that cannot be written. A subagent's call (a
   payload with `agent_id`) is shown the gate in full and changes nothing — no entry, no gate written, no memory — so
   the main agent's next call still sees and logs what changed.
-- "The gate changed" now means the gate, not its line: the gate is known by its place among the live gates, its text
-  and the gate after it, read fence-aware through `scripts/task-status.py --echo` (the CLI's own reader). Lines added
-  above the open gate and a fenced checklist change nothing. Only the previous gate's own place, now checked, is a
-  completion logged `[x]` in `chat_log.md` — bare, with a note after its text, or, when no gate was added or removed
-  and its text is open nowhere, with a note written inside it; a checked gate added above the still-open one, or its
-  former neighbour moved up into its place, is not its tick. A gate added, moved or unticked above it is logged "left
-  open"; a reworded gate is the same gate. Until now any change of the gate's line logged the previous gate as done —
+- "The gate changed" now means the gate, not its line: the gate is known by its text and how many copies of it are
+  open and checked, read fence-aware through `scripts/task-status.py --echo` (the CLI's own reader). Lines added above
+  the open gate and a fenced checklist change nothing. A completion is logged `[x]` in `chat_log.md` when the previous
+  gate's open copies are fewer AND the checked gates that are its text with one span inserted — a note after, before
+  or inside it — are more (tasks 219-220: position rules missed a note written inside the text and took a checked
+  gate moved onto the open one's place for its tick). A gate added, moved or unticked above it is logged "left open";
+  a reworded gate is the same gate. Until now any change of the gate's line logged the previous gate as done —
   a false `[x]` the retros read — and printed "Gate at line N is still open above completed gate"; the skip warning
   now means a gate below the open one was checked.
-- A change is delivered once and not lost: the call that prints it claims it while it holds the counters lock and
-  acknowledges it after the print (a third, short hold, inside the same one-wait limit); a side-by-side call stays
-  quiet, and a change whose hook died before printing is printed by the next call, with its transition and warnings.
+- A change is delivered once and not lost: the call that prints it claims it while it holds the counters lock (the
+  claim names the hook's pid and its start time), and checks, prints and acknowledges it in a third short hold, inside
+  the same one-wait limit; a side-by-side call stays quiet, a hook that lost its claim prints nothing, and a change
+  whose hook died — or whose print failed — is printed by the next call with its transition and warnings.
   The echo's memory lives in the session's counters as `gate_*` fields, so a prompt's reset keeps it; no python runs
   while the counters lock is held — a read that another call overtook is only counted; a write that fails is said.
-- Known limits, left by task 219's last review and taken up by the next task (none lets a guard open or loses data):
-  a tick with the note inside the text is missed when the same edit adds or removes a gate; a checked gate that
-  starts with the open gate's text, moved onto its place, or an identical checked gate elsewhere when the open one is
-  reworded, can be logged as its tick; a skip warning whose print failed waits for the next change; a hook that lost
-  its claim while preparing can still print its older state.
 - Not verified live: that SessionStart runs at a compaction is Claude Code's documented behavior, and no record of
   either answer exists in 77 compactions of the transcripts (a run is recorded only when the hook prints); the
   release's live check is to compact an interactive session and see the next call print in full. Until then a missed

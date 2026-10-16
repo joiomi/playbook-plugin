@@ -52,9 +52,10 @@ class TheEchosSinks(unittest.TestCase):
         sess.mkdir(parents=True, exist_ok=True)
         (sess / "current_state").write_text("001\n", encoding="utf-8")
         # the previous gate is `a` (the first live gate, line 7): this call logs its completion into chat_log.md
-        # (task 219: the gate is held as what it is — task, place among the live gates, text — and its line)
-        (sess / "counters").write_text("tools=1\nwrites=1\ngate_task=001\ngate_pos=0\ngate_below=0\ngate_line=7\n"
-                                       "gate_count=3\ngate_text=a\n", encoding="utf-8")
+        # (tasks 219-220: the gate is held as what it is — task, place, text, its one open copy and no checked match —
+        # and its line)
+        (sess / "counters").write_text("tools=1\nwrites=1\ngate_task=001\ngate_pos=0\ngate_below=0\ngate_opens=1\n"
+                                       "gate_checks=0\ngate_line=7\ngate_count=3\ngate_text=a\n", encoding="utf-8")
         return p
 
     def echo(self, project):

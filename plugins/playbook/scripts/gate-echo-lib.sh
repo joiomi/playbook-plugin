@@ -955,8 +955,9 @@ write_counters() {
     local file="$1"; shift
     local tmp="${file}.tmp.$$" pat="" i
     local args=("$@")
-    # no pair, nothing to write (impl round 1, agy: an empty pattern `^()=` stripped every line that starts with `=`)
-    [ "${#args[@]}" -ge 2 ] || return 0
+    # no pair, nothing to write (impl round 1, agy: an empty pattern `^()=` stripped every line that starts with `=`);
+    # an odd number of words is a caller's slip — nothing is written rather than a key with no value (task 220, agy)
+    [ "${#args[@]}" -ge 2 ] && [ $(( ${#args[@]} % 2 )) -eq 0 ] || return 0
     if ! _pb_session_dir_ok "$(_counters_dir "$file")" || ! _pb_sink_ok "" "$file" \
        || ! _pb_sink_ok "" "$tmp"; then
         PLAYBOOK_WRITE_FAILED=true
