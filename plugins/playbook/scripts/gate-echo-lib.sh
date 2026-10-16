@@ -1419,3 +1419,109 @@ journal_enforcement() {
     printf '%s\n' "$line" >> "$jdir/enforcement.jsonl" 2>/dev/null || return 0
     return 0
 }
+
+# --- The shell log (PHASE-B item 2, task 221) ------------------------------------------------------------------------
+# shell_log_append AGENT_DIR COMMAND — the agent's shell command as ONE line of AGENT_DIR/bash_history. The owner,
+# 2026-10-16: the log keeps only the agent's own commands ("Doar comenzile mele") and the hook that receives the exact
+# command writes it ("Hook-ul scrie"). Before, a logger sourced into every bash on the machine through BASH_ENV wrote
+# every simple command of every shell — the hooks', the `tasks` launcher's, Claude Code's snapshot: on 2026-10-15,
+# 45,083 lines for 1,666 commands of the agent's.
+#
+# The line: `YYYY-mm-dd HH:MM:SS | AGENT | <command>`, local time from bash itself (no program per line); `\` is written
+# `\\`, then a newline `\n` and a CR `\r`, so the line is one physical line and reads back exactly (trailing newlines
+# are dropped; a command of white space alone is no line). No reader of the plugin parses it: the activations come
+# from the CLI's own journal records.
+#
+# Written under `flock` on the lane directory (descriptor 206, opened read-only), waiting at most
+# PLAYBOOK_SHELL_LOG_LOCK_WAIT seconds (1 or 2; default 1) — the lock is held for one append or one rename. Holding
+# it, the writer first appends the spool files waiting in the lane (name order) and removes each, then renames a
+# history past 50 MB to `bash_history.archived-<YYYYmmdd-HHMMSS>-<pid>` (never over an existing name; nothing is
+# carried), then appends its line. Not holding it (no `flock`, or the wait ran out) it writes its line to a spool file
+# of its own — made whole under another name, then renamed in — and never rotates: no line is lost or torn by writers
+# side by side or a stuck holder (plan panel 2026-10-16: an unlocked append tore 64 KiB lines, measured).
+#
+# Refused: a lane that is a symbolic link; a history or spool that is a link or not a regular file (a FIFO would
+# hang the hook). Always returns 0 and prints nothing: callers run under `set -e`, and a log never changes a decision.
+_PB_SHELL_LOG_LIMIT=52428800
+_PB_SHELL_LOG_SPOOL_MAX=4194304     # a spool holds one command; a bigger file there is not one of ours
+
+shell_log_append() {
+    local lane="$1" cmd="$2" hist now line wait opened=false got=false
+    [ -n "$lane" ] && [ -d "$lane" ] && [ ! -L "$lane" ] || return 0
+    while [ "${cmd%$'\n'}" != "$cmd" ]; do cmd="${cmd%$'\n'}"; done
+    [[ "$cmd" =~ [^[:space:]] ]] || return 0
+    cmd="${cmd//\\/\\\\}"
+    cmd="${cmd//$'\n'/\\n}"
+    cmd="${cmd//$'\r'/\\r}"
+    printf -v now '%(%Y-%m-%d %H:%M:%S)T' -1 2>/dev/null || return 0
+    line="$now | AGENT | $cmd"
+    hist="$lane/bash_history"
+    wait="${PLAYBOOK_SHELL_LOG_LOCK_WAIT:-}"
+    case "$wait" in 1|2) ;; *) wait=1 ;; esac
+    if command -v flock >/dev/null 2>&1 && { exec 206<"$lane"; } 2>/dev/null; then
+        opened=true
+        flock -w "$wait" 206 2>/dev/null && got=true
+    fi
+    if [ "$got" = true ]; then
+        _shell_log_take_spools "$lane" "$hist"
+        _shell_log_rotate "$lane" "$hist"
+        if _pb_sink_ok "$lane" "$hist"; then
+            { printf '%s\n' "$line" >> "$hist"; } 2>/dev/null || true
+        fi
+    else
+        _shell_log_spool "$lane" "$line"
+    fi
+    if [ "$opened" = true ]; then
+        { exec 206<&-; } 2>/dev/null || true
+    fi
+    return 0
+}
+
+# Under the lock: every spool file of the lane, in name order, appended whole and removed. A link of that name is
+# removed unread (none is ours); anything else that is not a small regular file is left.
+_shell_log_take_spools() {
+    local lane="$1" hist="$2" f size
+    _pb_sink_ok "$lane" "$hist" || return 0
+    for f in "$lane"/bash_history.spool-*; do
+        if [ -L "$f" ]; then
+            rm -f -- "$f" 2>/dev/null || true
+            continue
+        fi
+        [ -f "$f" ] || continue
+        size=$(stat -c %s -- "$f" 2>/dev/null) || continue
+        case "$size" in ''|*[!0-9]*) continue ;; esac
+        [ "$size" -le "$_PB_SHELL_LOG_SPOOL_MAX" ] || continue
+        { cat -- "$f" >> "$hist"; } 2>/dev/null && rm -f -- "$f" 2>/dev/null
+    done
+    return 0
+}
+
+# Under the lock: a history past the limit is renamed to an archive name that does not exist yet (`mv -n`); a kill
+# leaves it under the old name or the new one. Nothing is carried into the new file.
+_shell_log_rotate() {
+    local lane="$1" hist="$2" size stamp arch
+    [ -f "$hist" ] && [ ! -L "$hist" ] || return 0
+    size=$(stat -c %s -- "$hist" 2>/dev/null) || return 0
+    case "$size" in ''|*[!0-9]*) return 0 ;; esac
+    [ "$size" -gt "$_PB_SHELL_LOG_LIMIT" ] || return 0
+    printf -v stamp '%(%Y%m%d-%H%M%S)T' -1 2>/dev/null || return 0
+    arch="$lane/bash_history.archived-$stamp-$$"
+    if [ -e "$arch" ] || [ -L "$arch" ]; then return 0; fi
+    mv -n -- "$hist" "$arch" 2>/dev/null || true
+    return 0
+}
+
+# Without the lock: the line goes to a spool file of this writer's own, written whole under a name the takers do not
+# match (`bash_history.spooling-…`, noclobber: never through anything already there), then renamed in.
+_shell_log_spool() {
+    local lane="$1" line="$2" stamp tmp name
+    printf -v stamp '%(%Y%m%d-%H%M%S)T' -1 2>/dev/null || return 0
+    name="bash_history.spool-$stamp-$$-$RANDOM$RANDOM"
+    tmp="$lane/bash_history.spooling-${name#bash_history.spool-}"
+    if ! ( set -o noclobber; printf '%s\n' "$line" > "$tmp" ) 2>/dev/null; then
+        [ -L "$tmp" ] || [ ! -f "$tmp" ] || rm -f -- "$tmp" 2>/dev/null
+        return 0
+    fi
+    mv -n -- "$tmp" "$lane/$name" 2>/dev/null || rm -f -- "$tmp" 2>/dev/null
+    return 0
+}

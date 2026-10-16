@@ -40,6 +40,27 @@ def _state_file(project_path: Path) -> Path:
     return state_dir / "current_state"
 
 
+def _record_transition(agent_dir: Path, event: str, task, detail: str = "") -> None:
+    """The CLI's own record of a transition that HAPPENED — `work` (task activated), `new` (task made), `done`
+    (task closed) — in the plugin's journal (`pb_journal.append_lifecycle`, task 221). The task windows of retro,
+    timeline, tagger, tag and intent are read from these records: the shell log, written by a hook, holds whole
+    command lines, and a line is not an event. Best-effort and fully wrapped, like the close's own journal line: a
+    journal failure never changes or breaks the command."""
+    try:
+        import importlib.util as _ilu
+        from tasks.core import resolve_session_id
+        path = Path(__file__).resolve().parent.parent / "scripts" / "pb_journal.py"
+        spec = _ilu.spec_from_file_location("_pb_journal_transition", path)
+        if spec is None or spec.loader is None:
+            return
+        mod = _ilu.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        mod.append_lifecycle(agent_dir, event=event, task=str(task), detail=detail,
+                             session_id=resolve_session_id(quiet=True))
+    except Exception:
+        pass
+
+
 # How much of one chat message `### Recent Chat` keeps. The judge prompt that
 # describes those excerpts (`template._intent_check`) reads this same number. The
 # chat log itself keeps up to 50,000 characters of a message, so "whole" is no
@@ -1394,6 +1415,7 @@ def cmd_work(cmd_args):
             # `glob` + `rmtree` here followed a linked `.agent/sessions` into its target).
             from tasks.shared import _remove_sessions_of_task
             _remove_sessions_of_task(Path(project_path), agent_dir, prev_task)  # agent_dir already resolved above
+            _record_transition(agent_dir, "done", prev_task)
             print(f"Task {prev_task} done.")
 
             # P9: surface this task's OPEN parked items at close so they are
@@ -1734,6 +1756,7 @@ def cmd_work(cmd_args):
             _print_guide(stub_type)
         _activate_status_then_publish(task_file, task_num, _resume_target, _reopen_target,
                                       _pointer_tmp, session_state)
+        _record_transition(agent_dir, "work", task_num)
     finally:
         try:
             _pointer_tmp.unlink()
@@ -1860,6 +1883,7 @@ def cmd_new(cmd_args):
     task_num_match = re.match(r'^(\d+)-', task_file.parent.name)
     task_num = task_num_match.group(1) if task_num_match else "?"
 
+    _record_transition(resolve_agent_dir(project_path), "new", task_num, f"{task_type} {task_name}")
     print(f"Created: {task_file.relative_to(project_path)}")
     if is_stub:
         print(f"Stub ({pattern_name}) — expand with: tasks work {task_num}")
@@ -2249,6 +2273,8 @@ def cmd_freehand(cmd_args):
         session_dir = agent_dir / "sessions" / session_id
         session_dir.mkdir(parents=True, exist_ok=True)
         atomic_write(session_dir / "current_state", f"{task_num}\n")
+        _record_transition(agent_dir, "new", task_num, "freehand freehand")
+        _record_transition(agent_dir, "work", task_num)
         print(f"Created and activated task {task_num}")
     else:
         # Work mode: insert freehand block into current task

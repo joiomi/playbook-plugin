@@ -214,6 +214,10 @@ def extract_fields(payload):
     normpath is applied unconditionally, so an absent path yields "." exactly as
     `os.path.normpath('')` did at the original call site.
 
+    `command` is `tool_input.command` of any tool that has one: Bash (grok's
+    Shell / run_terminal_command once renamed) and Monitor — the state-echo
+    hook writes it to the shell log (task 221).
+
     transcript_path carries the state-echo hook's sanitization with it: a value
     containing a newline is dropped rather than passed on, because that file is
     written as the monitor's one-line pointer and a second line there is a

@@ -5,6 +5,7 @@ for project-level retrospective analysis.
 """
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -265,36 +266,65 @@ def _attribute_to_task(timestamp: str, task_windows: dict[int, tuple[str, str]])
     return None
 
 
-def bash_history_ts_to_utc(ts: str) -> str:
-    """`.agent/bash_history` is stamped in LOCAL time by bash-log.sh
-    (`date '+%Y-%m-%d %H:%M:%S'`), while chat_log.md messages and G-entries are
-    stamped UTC. Every consumer that compares the two must convert first (task
-    073, live gauntlet finding C12: on a UTC+3 machine an activation read 3 h
-    AFTER the messages typed right after it, so they attributed to the PREVIOUS
-    task). Returns the bare `YYYY-MM-DD HH:MM:SS` UTC form (no suffix, so it
-    compares cleanly with the digits a message header carries — impl panel:
-    `…SS UTC` sorted after `…SS` at an exact-second tie); an unparseable stamp
-    is returned unchanged."""
-    from datetime import datetime, timezone
+def transition_journal(agent_dir: Path) -> Path:
+    """Where the CLI records task transitions: the lane's plugin journal (task 221)."""
+    return agent_dir / "journal" / "enforcement.jsonl"
+
+
+def lifecycle_records(journal_path: "Path | None") -> "list[tuple[str, str, str, str]]":
+    """(stamp, event, task, detail) of every task transition the CLI recorded — `work` (activated), `new` (made),
+    `done` (closed) — in file order (task 221; `pb_journal.append_lifecycle`). `stamp` is the bare UTC
+    `YYYY-MM-DD HH:MM:SS` a chat-log stamp compares with. The shell log is not read: it holds whole command lines,
+    and a line is not an event (a skipped `&&` branch, a heredoc or a grep naming `tasks work 5` ran nothing).
+
+    A journal that is missing, a link or not a regular file reads as no records (opened without following a link,
+    non-blocking: a FIFO there must not hang a reader); a line that is not such a record is skipped."""
+    import json as _json
+    import stat as _stat
+    if journal_path is None:
+        return []
     try:
-        naive = datetime.strptime(ts.strip(), "%Y-%m-%d %H:%M:%S")
-    except ValueError:
-        return ts
+        fd = os.open(journal_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return []
     try:
-        return naive.astimezone().astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    except (OverflowError, OSError, ValueError):
-        return ts
+        if not _stat.S_ISREG(os.fstat(fd).st_mode):
+            return []
+        with os.fdopen(fd, "rb", closefd=False) as fh:
+            data = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return []
+    finally:
+        os.close(fd)
+    out = []
+    for line in data.split("\n"):
+        if '"hook":"tasks"' not in line:
+            continue
+        try:
+            rec = _json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(rec, dict) or rec.get("hook") != "tasks" or rec.get("decision") != "record":
+            continue
+        ts, event, task = rec.get("ts"), rec.get("reason"), rec.get("task")
+        if not (isinstance(ts, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", ts)):
+            continue
+        if event not in ("work", "new", "done") or not (isinstance(task, str) and task.isdigit()):
+            continue
+        detail = rec.get("detail")
+        out.append((ts[:10] + " " + ts[11:19], event, task, detail if isinstance(detail, str) else ""))
+    return out
 
 
 _GENERATED_RE = re.compile(r"^<!-- retro-generated: (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?: UTC)?) -->$", re.M)
 
 
-def retro_start_time(task_file: Path, num: int, bash_history_path: Path | None) -> "str | None":
+def retro_start_time(task_file: Path, num: int, journal_path: Path | None) -> "str | None":
     """When retro `num` was made — the boundary of the next retro's chat (task 145):
     its `<!-- retro-generated: … -->` stamp (written since 145), else its first
-    `tasks work <num>` in the shell history (an older retro), else None. A gate entry
-    is no boundary — it can come long after the retro's opening discussion — and the
-    attribution windows' first start is year 0000 (post-D6 run 1)."""
+    activation the CLI recorded (task 221), else None. A gate entry is no boundary —
+    it can come long after the retro's opening discussion — and the attribution
+    windows' first start is year 0000 (post-D6 run 1)."""
     try:
         from tasks.core import read_task_text
         m = _GENERATED_RE.search(read_task_text(task_file))
@@ -302,18 +332,9 @@ def retro_start_time(task_file: Path, num: int, bash_history_path: Path | None) 
         m = None
     if m:
         return m.group(1)
-    if bash_history_path and bash_history_path.exists():
-        # an INVOCATION of the CLI (`tasks work N`, `.claude/bin/tasks work N`, after a
-        # `cd …&&`), never a command that merely mentions it (`rg "tasks work 2"`, post-D6
-        # run 2): the CLI word starts the command or follows `&&`, `;`, `|`
-        work = re.compile(r'(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+\|\s+\w+\s+\|\s+'
-                          r'(?:(?:.*?(?:&&|;|\|\|)\s*))?(?:\S*/)?tasks\s+work\s+0*'
-                          + str(num) + r'(?=\s|$|;|&)', re.M)
-        seen = [bash_history_ts_to_utc(x.group(1).strip()) for x in
-                work.finditer(bash_history_path.read_text(encoding="utf-8", errors="replace"))]
-        if seen:
-            return min(seen)
-    return None
+    seen = [stamp for stamp, event, task, _ in lifecycle_records(journal_path)
+            if event == "work" and int(task) == num]
+    return min(seen) if seen else None
 
 
 def id_ranges(ids: "list[int]") -> str:
@@ -332,11 +353,12 @@ def id_ranges(ids: "list[int]") -> str:
     return ", ".join(out)
 
 
-def build_task_windows(chatlog_path: Path, bash_history_path: Path | None = None) -> dict[int, tuple[str, str]]:
+def build_task_windows(chatlog_path: Path, journal_path: Path | None = None) -> dict[int, tuple[str, str]]:
     """Build task number → (start_timestamp, end_timestamp) mapping.
 
-    Scans chat_log.md gate entries and bash_history for 'tasks work <N>' activations.
-    Each task's window extends from its activation to the next task's activation.
+    Scans chat_log.md gate entries and the activations the CLI recorded in the
+    plugin's journal (`lifecycle_records`, task 221). Each task's window extends
+    from its activation to the next task's activation.
     """
     windows: dict[int, str] = {}  # task_num → activation timestamp
 
@@ -352,17 +374,13 @@ def build_task_windows(chatlog_path: Path, bash_history_path: Path | None = None
             if task_num not in windows or ts < windows[task_num]:
                 windows[task_num] = ts
 
-    # Scan bash_history for 'tasks work <N>' entries
-    if bash_history_path and bash_history_path.exists():
-        content = bash_history_path.read_text(encoding="utf-8", errors="replace")
-        work_pattern = re.compile(
-            r'(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+\|\s+\w+\s+\|\s+.*tasks\s+work\s+(\d+)'
-        )
-        for m in work_pattern.finditer(content):
-            ts = bash_history_ts_to_utc(m.group(1).strip())   # local → UTC (C12)
-            task_num = int(m.group(2))
-            if task_num not in windows or ts < windows[task_num]:
-                windows[task_num] = ts
+    # The activations the CLI recorded (task 221): only a `tasks work N` that happened, stamped when it did
+    for stamp, event, task, _ in lifecycle_records(journal_path):
+        if event != "work":
+            continue
+        task_num = int(task)
+        if task_num not in windows or stamp < _normalize_ts(windows[task_num]):
+            windows[task_num] = stamp
 
     if not windows:
         return {}

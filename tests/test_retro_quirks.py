@@ -232,23 +232,32 @@ class DefaultWindow(unittest.TestCase):
         r, _ = self._retro(proj, "--since", "0")
         self.assertIn("3 chat messages", r.stdout)
 
-    def test_an_older_retro_is_bounded_by_its_activation_in_the_shell_history(self):
+    def _journal(self, proj, *lines):
+        (proj / ".agent" / "journal").mkdir(exist_ok=True)
+        (proj / ".agent" / "journal" / "enforcement.jsonl").write_text("".join(lines), encoding="utf-8")
+
+    def test_an_older_retro_is_bounded_by_its_recorded_activation(self):
+        # task 221: the CLI's own record of `tasks work 2` (UTC), not a shell-log line
         proj = self._project([(1, "a"), (2, "retro-001-001"), (3, "c")])
         (proj / ".agent" / "chat_log.md").write_text(self.CHAT, encoding="utf-8")
-        (proj / ".agent" / "bash_history").write_text(
-            "2026-10-01 12:00:00 | HOST | .claude/bin/tasks work 2\n", encoding="utf-8")
-        r, _ = self._retro(proj, env={"TZ": "UTC"})
+        self._journal(proj, '{"ts":"2026-10-01T12:00:00Z","session_id":"","hook":"tasks","decision":"record",'
+                            '"reason":"work","task":"002"}\n')
+        r, _ = self._retro(proj)
         self.assertIn("2 chat messages", r.stdout)
 
-    def test_a_search_for_the_command_is_not_an_activation(self):
-        # post-D6 run 2 (codex): `rg "tasks work 2"` matched the fallback and moved the boundary back
+    def test_a_command_naming_the_activation_is_not_one(self):
+        # post-D6 run 2 (codex): `rg "tasks work 2"` in the shell log moved the boundary back; since task 221 the
+        # shell log is not read at all, and only a `work` record of the CLI is an activation
         proj = self._project([(1, "a"), (2, "retro-001-001"), (3, "c")])
         (proj / ".agent" / "chat_log.md").write_text(self.CHAT, encoding="utf-8")
         (proj / ".agent" / "bash_history").write_text(
-            '2026-10-01 09:00:00 | HOST | rg "tasks work 2" .agent/bash_history\n'
-            "2026-10-01 09:30:00 | HOST | echo remember: tasks work 2 later\n"
-            "2026-10-01 12:00:00 | HOST | .claude/bin/tasks work 2\n", encoding="utf-8")
-        r, _ = self._retro(proj, env={"TZ": "UTC"})
+            '2026-10-01 09:00:00 | AGENT | rg "tasks work 2" .agent/bash_history\n'
+            "2026-10-01 09:30:00 | AGENT | .claude/bin/tasks work 2\n", encoding="utf-8")
+        self._journal(proj,
+                      '{"ts":"2026-10-01T09:00:00Z","session_id":"","hook":"close","decision":"record","reason":"work"}\n',
+                      '{"ts":"2026-10-01T12:00:00Z","session_id":"","hook":"tasks","decision":"record",'
+                      '"reason":"work","task":"2"}\n')
+        r, _ = self._retro(proj)
         self.assertIn("2 chat messages", r.stdout)
 
     def test_the_stamp_is_taken_before_the_chat_is_read(self):

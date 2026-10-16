@@ -116,10 +116,9 @@ def collect_chat(agent_dir: Path, task_num: str, chat_file: Path | None = None) 
                      f"{len(spans)} tagged span(s) in chat_log.md")
 
     # Fallback: timestamp-window attribution (untagged tasks). Build windows from
-    # gate entries + bash_history `tasks work <N>`, then pull this task's messages.
-    from tasks.retro import build_task_windows, extract_chatlog
-    bash_history = agent_dir / "bash_history"
-    windows = build_task_windows(chat_log, bash_history if bash_history.exists() else None)
+    # gate entries + the activations the CLI recorded (task 221), then pull this task's messages.
+    from tasks.retro import build_task_windows, extract_chatlog, transition_journal
+    windows = build_task_windows(chat_log, transition_journal(agent_dir))
     try:
         n = int(task_num)
     except ValueError:

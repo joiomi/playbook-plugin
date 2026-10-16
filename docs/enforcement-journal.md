@@ -21,7 +21,7 @@ directory, a linked `enforcement.jsonl`, or one that is not a regular file (a FI
 link before, measured). The bash twin checks and then writes, so a process that swaps the file for a FIFO
 between the two can still hang it; the Python writer opens non-blocking and without following a link.
 
-Writers live in `scripts/pb_journal.py` (`append`, `append_review`) and its bash
+Writers live in `scripts/pb_journal.py` (`append`, `append_review`, `append_lifecycle`) and its bash
 twin `scripts/gate-echo-lib.sh::journal_enforcement`. Guarantees:
 `PB-ENFORCEMENT-JOURNAL` (enforcement decisions) and `PB-REVIEW-SPEND-JOURNAL`
 (review spend).
@@ -221,3 +221,23 @@ honoured `PLAYBOOK_SESSION_ID` the read says so instead of a walk. An unresolved
 <N> records of this kind is reached: no more today`. Unresolved records are capped per day: 20 for a walk that
 stopped at the daemon, 100 for the rest, counted in `journal/session-walk.count` (`<day> <others> <daemon>`; no
 lock — the caps bound growth, not an exact count); trace-mode records are not capped.
+
+## Family 4 — task transitions (`hook` = `tasks`, `decision` = `record`, task 221)
+
+Emitted by the `tasks` CLI (`pb_journal.append_lifecycle`) when a transition HAPPENED: `tasks work N` activated a
+task (`reason` = `work`, written after the session pointer is published), `tasks new` made one (`new`), `tasks work
+done` closed one (`done`, after the close). A refused command writes none. Additional fields: `task` (the task
+number, as the CLI names it — `"007"` or `"7"`) and, on `new`, `detail` (`"<type> <name>"`).
+
+These records are what `tasks timeline`, `tasks tagger`, `tasks tag`, retro and `tasks intent` build their task
+windows from (`tasks/retro.py::lifecycle_records`). Until task 221 those readers parsed `tasks work`/`tasks new`
+out of `.agent/bash_history` — which, written by the PostToolUse hook since then, holds each command whole: a
+skipped `&&` branch, a heredoc or a grep that names `tasks work 5` ran nothing, so a command line is not an event.
+A project's activations from before this version are only in its shell log: those tasks' windows start at their
+first gate entry.
+
+Example:
+
+```json
+{"ts":"2026-10-16T12:18:43Z","session_id":"pid-123","hook":"tasks","decision":"record","reason":"new","task":"001","detail":"quick first"}
+```

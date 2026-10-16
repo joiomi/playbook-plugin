@@ -101,6 +101,46 @@ def _write_sentinel(event: str) -> None:
         pass
 
 
+_SHELLS = {"bash", "sh", "zsh", "dash"}
+
+
+def _shell_command(payload) -> str:
+    """The command of a codex `exec_command` call as one text: `command` (or `cmd`), a string as it is, an argv list
+    `[shell, -c|-lc, script]` as its script, any other list joined as a shell would read it."""
+    ti = payload.get("tool_input") if isinstance(payload, dict) else None
+    ti = ti if isinstance(ti, dict) else {}
+    c = ti.get("command", ti.get("cmd", ""))
+    if isinstance(c, str):
+        return c.split("\0", 1)[0]
+    if isinstance(c, list) and all(isinstance(x, str) for x in c):
+        if len(c) == 3 and os.path.basename(c[0]) in _SHELLS and c[1] in ("-c", "-lc"):
+            return c[2].split("\0", 1)[0]
+        import shlex
+        return shlex.join(c).split("\0", 1)[0]
+    return ""
+
+
+def _shell_log(project_root, payload) -> None:
+    """The shell log (task 221; the owner 2026-10-16, "Hook-ul scrie"): codex's shell command as one line of the
+    lane's `bash_history`, by the ONE writer, `shell_log_append` in gate-echo-lib.sh, the command on stdin. Where the
+    hooks may write (`agent_dir_writable`); never raises, never prints, never changes this hook's answer."""
+    try:
+        if payload.get("tool_name") != "exec_command" or project_root is None:
+            return
+        command = _shell_command(payload)
+        if not command.strip():
+            return
+        import subprocess
+        lib = Path(__file__).resolve().parent / "gate-echo-lib.sh"
+        script = ('source "$1" || exit 0; agent_dir_writable "$2" || exit 0; d=$(resolve_agent_dir "$2") || exit 0; '
+                  'c=$(cat; printf x); shell_log_append "$d" "${c%x}"')
+        env = {k: v for k, v in os.environ.items() if k not in ("BASH_ENV", "ENV")}
+        subprocess.run(["bash", "-c", script, "_", str(lib), str(project_root)], input=command.encode("utf-8", "replace"),
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3, env=env, check=False)
+    except Exception:
+        pass
+
+
 def main() -> int:
     # Read stdin first so we know which event we're handling — that decides
     # whether an exception below should fail-closed (PreToolUse) or fail-open.
@@ -143,6 +183,8 @@ def main() -> int:
         if event == "PostToolUse":
             result = apply_patch_post_context(payload, project_root, session_id)
             sys.stdout.write(json.dumps(result))
+            sys.stdout.flush()
+            _shell_log(project_root, payload)
             return 0
 
         # Unknown event — fail-open.

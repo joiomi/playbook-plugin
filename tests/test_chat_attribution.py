@@ -11,9 +11,11 @@ Field evidence (StrataDB batches 1 and 4):
   * On task 010 the judges' intent-check ran blind for a second reason:
     `tasks context` reads only `<!-- TNNN -->` spans, the spans are written
     only by `tasks tag`, and nothing ever runs `tasks tag` — so context was
-    blind for EVERY task even though gate entries + bash_history contained
-    everything needed to attribute messages (verified against the real
-    project: the window fallback returns 3 messages for task 10).
+    blind for EVERY task even though gate entries + the recorded activations
+    contained everything needed to attribute messages (verified against the
+    real project: the window fallback returns 3 messages for task 10). Since
+    task 221 the activations are the CLI's own records in the journal (UTC),
+    not lines of the shell log.
 
 The class fix, at the chokepoints:
 
@@ -77,30 +79,27 @@ message during task two
 ---
 """
 
-BASH_HISTORY = """2026-08-12 06:46:00 | bash | .claude/bin/tasks work 1
-2026-08-12 07:25:25 | bash | .claude/bin/tasks work 2
-"""
+ACTIVATIONS = (("2026-08-12 06:46:00", 1), ("2026-08-12 07:25:25", 2))
 
 
-def make_project(chat_log: str = CHAT_LOG, bash_history: str | None = BASH_HISTORY) -> Path:
+def journal_text(activations) -> str:
+    """The records `tasks work N` writes (task 221; `pb_journal.append_lifecycle`), stamps in UTC."""
+    import json as _json
+    return "".join(_json.dumps({"ts": s.replace(" ", "T") + "Z", "session_id": "", "hook": "tasks",
+                                "decision": "record", "reason": "work", "task": str(n)},
+                               separators=(",", ":")) + "\n" for s, n in activations)
+
+
+def make_project(chat_log: str = CHAT_LOG, activations=ACTIVATIONS) -> Path:
     proj = Path(tempfile.mkdtemp())
     agent = proj / ".agent"
     (agent / "tasks" / "001-first").mkdir(parents=True)
     (agent / "tasks" / "001-first" / "task.md").write_text(
         "# 001 - First\n\n## Status\npending\n", encoding="utf-8")
     (agent / "chat_log.md").write_text(chat_log, encoding="utf-8")
-    if bash_history is not None:
-        # The fixture names instants in UTC (same clock as the chat log) — but
-        # bash-log.sh writes LOCAL time, and build_task_windows now converts
-        # (task 073, C12). Write what the real logger would have written.
-        import re as _re
-        from datetime import datetime as _dt, timezone as _tz
-        def _to_local(m):
-            utc = _dt.strptime(m.group(1), "%Y-%m-%d %H:%M:%S").replace(tzinfo=_tz.utc)
-            return utc.astimezone().strftime("%Y-%m-%d %H:%M:%S") + m.group(2)
-        bash_history = _re.sub(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})( \| )", _to_local,
-                               bash_history, flags=_re.M)
-        (agent / "bash_history").write_text(bash_history, encoding="utf-8")
+    if activations is not None:
+        (agent / "journal").mkdir()
+        (agent / "journal" / "enforcement.jsonl").write_text(journal_text(activations), encoding="utf-8")
     return proj
 
 
@@ -117,8 +116,7 @@ class WindowsIncludeTheSeed(unittest.TestCase):
 
     def _windows(self, proj: Path):
         agent = proj / ".agent"
-        bh = agent / "bash_history"
-        return build_task_windows(agent / "chat_log.md", bh if bh.exists() else None)
+        return build_task_windows(agent / "chat_log.md", agent / "journal" / "enforcement.jsonl")
 
     def test_mandate_before_first_activation_attributes_to_first_task(self):
         proj = make_project()
@@ -139,15 +137,13 @@ class WindowsIncludeTheSeed(unittest.TestCase):
         # invented — an empty dict, not a fabricated window.
         proj = make_project(
             chat_log="# Project Chat Log\n\n---\n\n**[M001]** [2026-08-12 06:44:12 UTC] `HOST`\n\nhello\n\n---\n",
-            bash_history=None)
+            activations=None)
         self.assertEqual(self._windows(proj), {})
 
     def test_earliest_activated_wins_even_when_numbering_disagrees(self):
         # Task 5 activated before task 2: pre-history belongs to 5 (activation
         # order), not to the lowest number.
-        proj = make_project(bash_history=(
-            "2026-08-12 06:46:00 | bash | .claude/bin/tasks work 5\n"
-            "2026-08-12 07:25:25 | bash | .claude/bin/tasks work 2\n"))
+        proj = make_project(activations=(("2026-08-12 06:46:00", 5), ("2026-08-12 07:25:25", 2)))
         windows = self._windows(proj)
         self.assertEqual(_attribute_to_task("2026-08-12 06:00:00 UTC", windows), 5)
 
@@ -163,7 +159,7 @@ class ExtractChatlogHeaderSuffix(unittest.TestCase):
     def test_legacy_unsuffixed_entries_still_parse(self):
         legacy = ("# Project Chat Log\n\n---\n\n"
                   "**[M001]** [2026-08-12 06:44:12 UTC] `HOST`\n\nplain entry\n\n---\n")
-        proj = make_project(chat_log=legacy, bash_history=None)
+        proj = make_project(chat_log=legacy, activations=None)
         msgs = extract_chatlog(proj / ".agent" / "chat_log.md")
         self.assertEqual(len(msgs), 1)
         self.assertEqual(msgs[0]["text"], "plain entry")
@@ -217,11 +213,11 @@ class ContextFallsBackToWindows(unittest.TestCase):
         self.assertNotIn("timestamp window", r.stdout.lower())
 
     def test_truly_unattributable_still_fails_loud(self):
-        # Negative control: no gate entries, no bash_history → the old loud
+        # Negative control: no gate entries, no recorded activation → the old loud
         # failure survives (the fallback must not fabricate attribution).
         proj = make_project(
             chat_log="# Project Chat Log\n\n---\n\n**[M001]** [2026-08-12 06:44:12 UTC] `HOST`\n\nhello\n\n---\n",
-            bash_history=None)
+            activations=None)
         r = run_cli(proj, "context", "1")
         self.assertEqual(r.returncode, 1)
         self.assertIn("No attributed messages", r.stderr)
@@ -231,19 +227,13 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class GauntletTimezone(unittest.TestCase):
-    """Task 073 (live gauntlet 1.5.44, finding C12): bash_history is stamped in
-    LOCAL time by bash-log.sh (`date '+%Y-%m-%d %H:%M:%S'`) while chat_log.md
-    messages and G-entries are stamped UTC. build_task_windows and `tasks tag`
-    compared the two as strings, so on a UTC+3 machine a task's activation
-    appeared 3 h AFTER the messages typed right after it and they attributed to
-    the PREVIOUS task. Reproduced live: window for task 7 = 23:43:27 (local),
-    message at 20:43:28 UTC (one second later in reality) → task 4."""
+class JournalStampsAreUtc(unittest.TestCase):
+    """Task 073 (live gauntlet 1.5.44, C12) found the shell log stamped in LOCAL time while chat_log.md is UTC: on a
+    UTC+3 machine a message typed 1 s after `tasks work 7` attributed to the previous task. Since task 221 the
+    activations are the CLI's journal records, stamped UTC like the chat log — no conversion, in any zone."""
 
     def _with_tz(self, tz, fn):
         import time
-        if not hasattr(time, "tzset"):
-            self.skipTest("time.tzset is POSIX-only")
         old = os.environ.get("TZ")
         os.environ["TZ"] = tz
         time.tzset()
@@ -256,45 +246,37 @@ class GauntletTimezone(unittest.TestCase):
                 os.environ["TZ"] = old
             time.tzset()
 
-    def test_local_activation_and_utc_message_attribute_to_the_same_task(self):
-        from datetime import datetime, timezone, timedelta
+    def test_a_message_one_second_after_the_activation_belongs_to_it_in_any_zone(self):
         from tasks.retro import build_task_windows, extract_chatlog
 
         def run():
             d = Path(tempfile.mkdtemp())
-            t1_utc = datetime(2026, 9, 20, 10, 0, 0, tzinfo=timezone.utc)
-            t2_utc = datetime(2026, 9, 20, 20, 43, 27, tzinfo=timezone.utc)
-            msg_utc = t2_utc + timedelta(seconds=1)
-            loc = lambda dt: dt.astimezone().strftime("%Y-%m-%d %H:%M:%S")   # what bash-log writes
-            (d / "bash_history").write_text(
-                f"{loc(t1_utc)} | AGENT | .claude/bin/tasks work 4\n"
-                f"{loc(t2_utc)} | AGENT | .claude/bin/tasks work 7 --force > /dev/null\n",
-                encoding="utf-8")
+            (d / "enforcement.jsonl").write_text(
+                journal_text((("2026-09-20 10:00:00", 4), ("2026-09-20 20:43:27", 7))), encoding="utf-8")
             (d / "chat_log.md").write_text(
                 "# Project Chat Log\n\n---\n\n"
-                f"**[M001]** [{msg_utc.strftime('%Y-%m-%d %H:%M:%S')} UTC] `HOST` (claude/pid-x)\n\n"
+                "**[M001]** [2026-09-20 20:43:28 UTC] `HOST` (claude/pid-x)\n\n"
                 "message during task seven\n\n---\n", encoding="utf-8")
-            w = build_task_windows(d / "chat_log.md", d / "bash_history")
+            w = build_task_windows(d / "chat_log.md", d / "enforcement.jsonl")
             msgs = extract_chatlog(d / "chat_log.md", w)
-            self.assertEqual(len(msgs), 1)
-            self.assertEqual(msgs[0].get("task"), 7,
-                             f"message typed 1 s after `tasks work 7` attributed to {msgs[0].get('task')} "
-                             f"(windows={w}) — local/UTC stamps compared as strings")
-        self._with_tz("Europe/Bucharest", run)   # UTC+3 in September (EEST)
+            self.assertEqual([m.get("task") for m in msgs], [7], w)
+        for tz in ("Europe/Bucharest", "America/Los_Angeles", "UTC"):
+            with self.subTest(tz=tz):
+                self._with_tz(tz, run)
 
 
 class GauntletTaggerAndTies(unittest.TestCase):
-    """Impl-panel round 1 (task 073): the C12 conversion missed `tasks tagger`
-    (sonnet #2 / codex-medium #5) and left an exact-second tie in `tasks tag`
-    comparing `…SS UTC` against `…SS` (sonnet #3)."""
+    """Impl-panel round 1 (task 073): `tasks tagger` must order an activation among the chat's messages, and an
+    exact-second tie in `tasks tag` (`…SS UTC` against `…SS`, sonnet #3) belongs to the new task. The activation
+    is the CLI's journal record since task 221."""
 
     def _proj(self):
         from datetime import datetime, timezone
         d = Path(tempfile.mkdtemp())
         agent = d / ".agent"; (agent / "tasks").mkdir(parents=True)
-        t_act = datetime(2026, 9, 20, 20, 43, 27, tzinfo=timezone.utc)
-        loc = t_act.astimezone().strftime("%Y-%m-%d %H:%M:%S")
-        (agent / "bash_history").write_text(f"{loc} | AGENT | .claude/bin/tasks work 7\n", encoding="utf-8")
+        (agent / "journal").mkdir()
+        (agent / "journal" / "enforcement.jsonl").write_text(journal_text((("2026-09-20 20:43:27", 7),)),
+                                                             encoding="utf-8")
         (agent / "chat_log.md").write_text(
             "# Project Chat Log\n\n---\n\n"
             "**[M001]** [2026-09-20 20:43:00 UTC] `HOST` (claude/pid-x)\n\nbefore activation\n\n---\n\n"
@@ -308,7 +290,7 @@ class GauntletTaggerAndTies(unittest.TestCase):
         return subprocess.run([sys.executable, "-m", "tasks.cli", *args], cwd=d, env=env,
                               capture_output=True, text=True, timeout=60)
 
-    def test_tagger_orders_a_local_activation_among_utc_messages(self):
+    def test_tagger_orders_an_activation_among_the_messages(self):
         out = self._run(self._proj(), "tagger").stdout.splitlines()
         i_act = next(i for i, l in enumerate(out) if "tasks work 7" in l)
         i_before = next(i for i, l in enumerate(out) if "before activation" in l)

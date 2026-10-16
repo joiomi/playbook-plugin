@@ -2,7 +2,7 @@
 `tagger`, `tag`, `retro`, and `log` arms.
 
 Boundary: every command that READS the per-lane conversation record
-(chat_log.md + bash_history) to attribute, tag, extract, or summarize it —
+(chat_log.md + the task transitions the CLI records in the journal) to attribute, tag, extract, or summarize it —
 span-based context with the F2 timestamp-window fallback, the vertical-retro
 intent extractions (delegating to tasks.intent), task-transition timelines,
 span tagging, retro-task generation (delegating to tasks.retro), and the
@@ -77,8 +77,8 @@ def cmd_context(cmd_args):
     if not spans:
         # F2 (untagged projects): `<!-- TNNN -->` spans are written only by
         # `tasks tag`, which nothing runs automatically — so this path was
-        # blind for EVERY task on most projects while gate entries +
-        # bash_history held everything needed to attribute messages. Fall
+        # blind for EVERY task on most projects while gate entries + the
+        # recorded activations held everything needed to attribute messages. Fall
         # back to timestamp-window attribution (the same fallback `tasks
         # intent`'s chat layer uses); still fail loudly when nothing is
         # attributable. stdout stays pure messages — the provenance note
@@ -89,10 +89,8 @@ def cmd_context(cmd_args):
         except ValueError:
             _n = None
         if _n is not None:
-            from tasks.retro import build_task_windows, extract_chatlog
-            _bash_history = resolve_agent_dir(project_path) / "bash_history"
-            _windows = build_task_windows(
-                chat_log, _bash_history if _bash_history.exists() else None)
+            from tasks.retro import build_task_windows, extract_chatlog, transition_journal
+            _windows = build_task_windows(chat_log, transition_journal(resolve_agent_dir(project_path)))
             if _n in _windows:
                 fallback_msgs = [m for m in extract_chatlog(chat_log, _windows)
                                  if m.get("task") == _n]
@@ -100,7 +98,7 @@ def cmd_context(cmd_args):
             print(f"No attributed messages for task {task_num}.", file=sys.stderr)
             sys.exit(1)
         print(f"note: no <!-- T{task_num} --> tags in chat_log.md; messages "
-              "attributed via timestamp window (gate entries + bash_history). "
+              "attributed via timestamp window (gate entries + the CLI's recorded activations). "
               "Run `tasks tag` to persist attribution.", file=sys.stderr)
         _max_line = 200
         for m in fallback_msgs:
@@ -302,68 +300,39 @@ def cmd_intent(cmd_args):
     print("\nNext: read review.md with the user, grade the seams, then append "
           "vetted intent to INTENT.md (the /intent command drives this).")
 
-# timestamp | AGENT/SCRIPT | [path/]tasks work|new …
-_ACTIVATION_RE = re.compile(
-    r'^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \| (\w+) \| '
-    r'(?:.*/)?(tasks (?:work|new) .+)$'
-)
-
-
-def activations(history_text: str):
-    """(timestamp, command) for each `tasks work` / `tasks new` line of a bash_history,
-    in file order — the one reader `tasks timeline` and `tasks tagger` share.
-
-    An older logger wrote a command twice: the agent's line (`AGENT`) and, right under
-    it, the script's echo (`SCRIPT`), in the same second. The readers hid that by
-    dropping every SECOND sight of a command — which, with a logger that writes a
-    command once, hid every second genuine activation: `work 7`, `work 8`, `work 7`
-    showed two entries (retro 107 R12; fixed in task 171). An echo is recognised as
-    exactly what it was: a `SCRIPT` line whose command and timestamp are those of the
-    `AGENT` activation on the line directly above it IN THE FILE (any line in between
-    ends the pairing — impl panel round 2). Nothing else is dropped — the same
-    command twice in one second, by the agent, is two activations (the first version
-    of this rule looked only at the text and the second, and lost them: impl panel
-    round 1). The shipped loggers write `AGENT` lines only; measured on this
-    workspace's archived history (2026-08-22 … 09-25): 542 activation lines, all
-    `AGENT`, no two alike in one second."""
-    previous = None                      # (timestamp, kind, command) when the line above was an activation
-    for line in history_text.splitlines():
-        m = _ACTIVATION_RE.match(line)
-        if not m:
-            previous = None
-            continue
-        stamp, kind, cmd = m.group(1), m.group(2), m.group(3)
-        echo = kind == "SCRIPT" and previous == (stamp, "AGENT", cmd)
-        previous = (stamp, kind, cmd)
-        if not echo:
-            yield stamp, cmd
+def activations(agent_dir: Path):
+    """(stamp, text) for each task transition the CLI recorded (task 221), in file order — the one reader
+    `tasks timeline`, `tasks tagger` and `tasks tag` share. `stamp` is UTC (`YYYY-MM-DD HH:MM:SS`); `text` reads
+    as the command that made it: `tasks work 7`, `tasks new feature foo`, `tasks work done` (task 7). Only what
+    happened is a transition: the shell log's command lines are not read (a skipped `&&` branch, a heredoc or a
+    grep naming `tasks work 5` ran nothing)."""
+    from tasks.retro import lifecycle_records, transition_journal
+    for stamp, event, task, detail in lifecycle_records(transition_journal(agent_dir)):
+        if event == "work":
+            yield stamp, f"tasks work {task}"
+        elif event == "new":
+            yield stamp, f"tasks new {detail}".rstrip() + f" (task {task})"
+        else:
+            yield stamp, f"tasks work done (task {task})"
 
 
 def cmd_timeline(cmd_args):
     """The `tasks timeline` arm — body moved verbatim from cli.py (1.5.9 split)."""
     project_path = find_project_root()
-    bash_history = resolve_agent_dir(project_path) / "bash_history"
-    if not bash_history.exists():
-        print(f"No {bash_history.relative_to(project_path).as_posix()} found.", file=sys.stderr)
-        sys.exit(1)
-
     printed = 0
-    for stamp, cmd in activations(bash_history.read_text(encoding="utf-8", errors="replace")):
-        print(f"{stamp}  {cmd}")
+    for stamp, cmd in activations(resolve_agent_dir(project_path)):
+        print(f"{stamp} UTC  {cmd}")
         printed += 1
     if not printed:   # task 073 (C2): silence looked like a crash
-        print("(no `tasks work`/`tasks new` activations recorded in bash_history yet)", file=sys.stderr)
+        print("(no task transition recorded in the journal yet — `tasks work`, `tasks new` and `tasks work done` "
+              "record theirs)", file=sys.stderr)
 
 def cmd_tagger(cmd_args):
     """The `tasks tagger` arm — body moved verbatim from cli.py (1.5.9 split)."""
     project_path = find_project_root()
     chat_log = resolve_agent_dir(project_path) / "chat_log.md"
-    bash_history = resolve_agent_dir(project_path) / "bash_history"
     if not chat_log.exists():
         print(f"No {chat_log.relative_to(project_path).as_posix()} found.", file=sys.stderr)
-        sys.exit(1)
-    if not bash_history.exists():
-        print(f"No {bash_history.relative_to(project_path).as_posix()} found.", file=sys.stderr)
         sys.exit(1)
 
     import re
@@ -413,10 +382,9 @@ def cmd_tagger(cmd_args):
 
     flush_msg()
 
-    # 2. Parse task transitions from bash_history
-    from tasks.retro import bash_history_ts_to_utc
-    for stamp, task_cmd in activations(bash_history.read_text(encoding="utf-8", errors="replace")):
-        entries.append((bash_history_ts_to_utc(stamp), 1, f"--- {task_cmd} ---"))   # local → UTC (073)
+    # 2. The task transitions the CLI recorded (task 221), UTC like the chat log
+    for stamp, task_cmd in activations(resolve_agent_dir(project_path)):
+        entries.append((stamp, 1, f"--- {task_cmd} ---"))
 
     # 3. Sort by timestamp, then task transitions before messages (sort_key: 1 before 0)
     #    Actually: task transitions AFTER messages at same timestamp makes more sense
@@ -434,32 +402,26 @@ def cmd_tag(cmd_args):
     dry_run = "--dry-run" in cmd_args
     project_path = find_project_root()
     chat_log = resolve_agent_dir(project_path) / "chat_log.md"
-    bash_history = resolve_agent_dir(project_path) / "bash_history"
     if not chat_log.exists():
         print(f"No {chat_log.relative_to(project_path).as_posix()} found.", file=sys.stderr)
-        sys.exit(1)
-    if not bash_history.exists():
-        print(f"No {bash_history.relative_to(project_path).as_posix()} found.", file=sys.stderr)
         sys.exit(1)
 
     import re
     from bisect import bisect_right
 
-    # 1. Build sorted task transition list from bash_history
+    # 1. Build sorted task transition list from the CLI's records (task 221), UTC
     #    Each entry: (timestamp, active_task_or_None)
-    work_re = re.compile(r'tasks work (\d+)')
+    from tasks.retro import lifecycle_records, transition_journal
     transitions = []  # [(timestamp, task_num_or_None)]
-    from tasks.retro import bash_history_ts_to_utc
-    # the shared reader (task 171): the toggle that stood here dropped the SECOND
-    # `tasks work done` of a history, so its task never closed in the spans
-    for stamp, task_cmd in activations(bash_history.read_text(encoding="utf-8", errors="replace")):
-        ts = bash_history_ts_to_utc(stamp)   # local → UTC (task 073, C12)
-        if "work done" in task_cmd:
+    for ts, event, task, _ in lifecycle_records(transition_journal(resolve_agent_dir(project_path))):
+        if event == "done":
             transitions.append((ts, None))
-        else:
-            wm = work_re.search(task_cmd)
-            if wm:
-                transitions.append((ts, wm.group(1).zfill(3)))
+        elif event == "work":
+            transitions.append((ts, task.zfill(3)))
+    if not transitions:
+        print("No task activation recorded in the journal yet (`tasks work N` records its own) — nothing to tag.",
+              file=sys.stderr)
+        sys.exit(1)
     transitions.sort(key=lambda t: t[0])
     trans_times = [t[0] for t in transitions]
 
@@ -602,7 +564,8 @@ def cmd_retro(cmd_args):
 
     tasks_dir = resolve_agent_dir(project_path) / "tasks"
     chatlog_path = resolve_agent_dir(project_path) / "chat_log.md"
-    bash_history_path = resolve_agent_dir(project_path) / "bash_history"
+    from tasks.retro import transition_journal
+    journal_path = transition_journal(resolve_agent_dir(project_path))
     mindmap_path = project_path / "MIND_MAP.md"
 
     # Extract data
@@ -649,7 +612,7 @@ def cmd_retro(cmd_args):
     # this retro's own "made at" — taken BEFORE the chat is read, so a message that
     # lands while it is generated is in the next retro's window (post-D6 run 2)
     _stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    task_windows = build_task_windows(chatlog_path, bash_history_path)
+    task_windows = build_task_windows(chatlog_path, journal_path)
     chatlog = extract_chatlog(chatlog_path, task_windows)
     mindmap = extract_mindmap(mindmap_path)
 
@@ -662,7 +625,7 @@ def cmd_retro(cmd_args):
     if last_retro is not None and chatlog:
         from tasks.retro import retro_start_time
         _rf = sorted(tasks_dir.glob(f"{last_retro:03d}-*/task.md"))
-        start = retro_start_time(_rf[0], last_retro, bash_history_path) if _rf else None
+        start = retro_start_time(_rf[0], last_retro, journal_path) if _rf else None
         if start:
             chatlog = _messages_since(chatlog, start)
             window += f" Chat: from {start} on (when retro T{last_retro:03d} was made)."

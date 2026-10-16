@@ -695,7 +695,7 @@ class EveryShippedInlinePythonIsIsolated(unittest.TestCase):
         "scripts/sandbox": 2,
         "scripts/session-end-hook": 2,     # +1: the Python floor probe (task 192, #46)
         "scripts/session-start-hook": 2,   # +1: the Python floor probe (task 192, #46)
-        "scripts/state-echo-hook": 8,      # +1: the Python floor probe (task 194, #46); -1: one JSON writer for every answer (task 219)
+        "scripts/state-echo-hook": 9,      # +1: the Python floor probe (task 194, #46); -1: one JSON writer for every answer (task 219); +1: the fallback path's shell-log command (task 221)
         "scripts/stop-hook": 4,            # +1: the Python floor probe (task 193, #46)
         "scripts/task-gate-hook": 14,      # +1: the Python floor probe (task 194, #46); +1: the recovery path's resolved path (task 198, #26)
         "scripts/tasks": 2,
@@ -706,7 +706,7 @@ class EveryShippedInlinePythonIsIsolated(unittest.TestCase):
         _, counts, inline, _ = sweep()
         self.assertEqual(inline, self.ISOLATED_INLINE_CALLS)
         self.assertEqual(counts.get("ok-inline"), sum(self.ISOLATED_INLINE_CALLS.values()))
-        self.assertEqual(sum(self.ISOLATED_INLINE_CALLS.values()), 61)   # 55 + the floor probes of tasks 192 (2), 193 (2) and 194 (2) + task 198's resolved path - task 219's one JSON writer
+        self.assertEqual(sum(self.ISOLATED_INLINE_CALLS.values()), 62)   # 55 + the floor probes of tasks 192 (2), 193 (2) and 194 (2) + task 198's resolved path - task 219's one JSON writer + task 221's fallback command
 
     # Every call that starts a FILE of the plugin's, file by file — 22 when task 180
     # isolated them (18 in the hooks and scripts, 4 that the merge skill gives the agent).

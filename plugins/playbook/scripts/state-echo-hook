@@ -165,9 +165,33 @@ else
         INPUT="$NORMALIZED"
     fi
     TOOL_NAME=$(echo "$INPUT" | python3 -I -c "import sys,json; print(json.loads(sys.stdin.read()).get('tool_name',''))" 2>/dev/null || echo "")
+    # the shell log's command (task 221), cut at a NUL as the fused read cuts it
+    case "$TOOL_NAME" in
+        Bash|Monitor)
+            PB_CMD=$(printf '%s' "$INPUT" | python3 -I -c \
+                "import sys,json; ti=json.load(sys.stdin).get('tool_input',{}); v=ti.get('command','') if isinstance(ti,dict) else ''; sys.stdout.write(v.split(chr(0),1)[0] if isinstance(v,str) else '')" \
+                2>/dev/null) || PB_CMD=""
+            ;;
+    esac
 fi
 fi    # (below the floor no payload is read)
 export PB_FUSED PB_PATH PB_CMD
+
+# The shell log (PHASE-B item 2, task 221; the owner 2026-10-16: "Doar comenzile mele", "Hook-ul scrie"): the agent's
+# command — a Bash or Monitor call, as normalised (grok's Shell / run_terminal_command are Bash by now) — is one line
+# of this lane's `bash_history`. From an EXIT trap, so it is written on every way out of this hook (a failed call, a
+# subagent's, an unresolved session, a linked session directory) and AFTER the count and the echo: a slow lock can cost
+# the line, never the count the stop hook reads (plan panel 2026-10-16). Only where this hook may write. The trap
+# keeps the hook's exit status (`|| true`; `shell_log_append` always returns 0).
+_pb_shell_log_on_exit() {
+    if [ "$AGENT_WRITABLE" = true ] && [ -n "$PB_CMD" ]; then
+        case "$TOOL_NAME" in
+            Bash|Monitor) shell_log_append "$AGENT_DIR" "$PB_CMD" ;;
+        esac
+    fi
+    return 0
+}
+trap '_pb_shell_log_on_exit || true' EXIT
 
 # Task 192 (#48): the id and what the resolver's own walk read, from ONE call (a
 # second walk would not show a transient failure of the first).

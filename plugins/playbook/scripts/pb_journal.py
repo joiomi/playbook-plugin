@@ -179,6 +179,39 @@ def append_review(agent_dir, *, session_id="", seat="", task="", round_no=0,
         _warn(exc)
 
 
+LIFECYCLE_EVENTS = ("work", "new", "done")
+
+
+def append_lifecycle(agent_dir, *, event, task, detail="", session_id="") -> None:
+    """Append one TASK-TRANSITION record and return None. Never raises (task 221).
+
+    The CLI writes one when a transition HAPPENED: `tasks work N` activated task N
+    (`work`), `tasks new` made it (`new`, `detail` = "<type> <name>"), `tasks work
+    done` closed it (`done`). The readers that build task windows — retro,
+    timeline, tagger, tag, intent — read these instead of parsing the shell log:
+    a command line is not an event (a skipped `&&` branch, a heredoc or a grep
+    naming `tasks work 5` ran nothing), and the shell log is written by a hook,
+    which a host may not run. Same HARD CONTRACT as `append`; same envelope
+    (`hook="tasks"`, `decision="record"`, `reason` = the event) plus `task` and
+    an optional `detail`, each byte-capped."""
+    try:
+        if event not in LIFECYCLE_EVENTS:
+            return
+        rec = {
+            "ts": _utcnow(),
+            "session_id": _head(session_id or "", 80),
+            "hook": "tasks",
+            "decision": "record",
+            "reason": event,
+            "task": _head(str(task), 16),
+        }
+        if detail:
+            rec["detail"] = _head(detail, 120)
+        _write_record(agent_dir, rec)
+    except Exception as exc:                # defence in depth: never propagate
+        _warn(exc)
+
+
 # The atomic-append floor every journal line must stay under (PIPE_BUF's POSIX
 # minimum), newline included.
 _LINE_FLOOR = 512
