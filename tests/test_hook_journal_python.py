@@ -17,6 +17,7 @@ import gzip
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -77,6 +78,46 @@ class _Tmp(unittest.TestCase):
 
 
 class ThePythonWriter(_Tmp):
+    def age_closed(self, path, seconds=1200):
+        """A closed file as it is `seconds` after its rename: the rename time its name records, and its mtime."""
+        m = re.fullmatch(r"(hooks\.jsonl\.archived-\d{8}-\d{6})-(?:(\d+)-)?(\d+)", path.name)
+        assert m, path.name
+        new = path.with_name(f"{m.group(1)}-{int(time.time()) - seconds}-{m.group(3)}")
+        path.rename(new)
+        old = time.time() - seconds
+        os.utime(new, (old, old))
+        return new
+
+    def test_a_closed_file_waits_for_the_rename_time_its_name_records(self):
+        """Post-panel judge run 1 (codex, grave): the python writer too — an old mtime alone never compresses."""
+        self.journal.parent.mkdir()
+        self.journal.write_text("{}\n")
+        killed = self.journal.parent / f"hooks.jsonl.archived-20261016-120000-{int(time.time())}-99"
+        killed.write_text("{}\n")
+        nameless = self.journal.parent / "hooks.jsonl.archived-foreign"
+        nameless.write_text("{}\n")
+        old = time.time() - 1200
+        for f in (killed, nameless):
+            os.utime(f, (old, old))
+        os.environ["PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK"] = "1"
+        try:
+            self.pbj.append_hook_run(self.project, hook="x")
+            self.assertTrue(killed.exists() and nameless.exists())
+            aged = self.age_closed(killed)
+            self.pbj.append_hook_run(self.project, hook="x")
+        finally:
+            del os.environ["PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK"]
+        self.assertTrue(aged.with_name(aged.name + ".gz").exists())
+        self.assertTrue(nameless.exists())
+        written = self.journal.parent / f"hooks.jsonl.archived-20261016-110000-{int(time.time()) - 1200}-98"
+        written.write_text("{}\n")                             # renamed long ago, written a moment ago: waits
+        os.environ["PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK"] = "1"
+        try:
+            self.pbj.append_hook_run(self.project, hook="x")
+        finally:
+            del os.environ["PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK"]
+        self.assertTrue(written.exists())
+
     def test_one_line_with_the_bash_writers_fields(self):
         self.pbj.append_hook_run(self.project, hook="codex-stop", event="Stop", session_id="pid-1",
                                  host_session_id="h-1", decision="allow", detail='released "x" \\ y', ms=12,
@@ -156,8 +197,7 @@ class ThePythonWriter(_Tmp):
             arch = sorted(self.journal.parent.glob("hooks.jsonl.archived-*"))
             self.assertEqual(len(arch), 1, arch)
             self.assertFalse(arch[0].name.endswith(".gz"))      # just closed: compressed only once idle
-            old = time.time() - 1200
-            os.utime(arch[0], (old, old))
+            self.age_closed(arch[0])
             self.pbj.append_hook_run(self.project, hook="codex-stop")
         finally:
             del os.environ["PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK"]
@@ -174,7 +214,7 @@ class ThePythonWriter(_Tmp):
         """Impl panel r1 (codex I2): the python writer takes the duration after its rotation and compression."""
         self.journal.parent.mkdir()
         self.journal.write_text("{}\n")
-        arch = self.journal.parent / "hooks.jsonl.archived-20261016-000000-1"
+        arch = self.journal.parent / f"hooks.jsonl.archived-20261016-000000-{int(time.time()) - 1200}-1"
         arch.write_text("{}\n")
         old = time.time() - 1200
         os.utime(arch, (old, old))
@@ -204,7 +244,7 @@ class ThePythonWriter(_Tmp):
             held.close()
             arch = sorted(self.journal.parent.glob("hooks.jsonl.archived-*"))
             self.assertEqual([a.name.endswith(".gz") for a in arch], [False], arch)
-            os.utime(arch[0], (old, old))
+            self.age_closed(arch[0])
             self.pbj.append_hook_run(self.project, hook="x")
         finally:
             del os.environ["PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK"]

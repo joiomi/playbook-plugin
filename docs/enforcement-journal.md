@@ -303,10 +303,12 @@ can still hang one hook run; the python writer opens non-blocking and without fo
 
 **Rotation (the owner, 2026-10-16 18:04: "Comprimate, toate").** About one run in 32 (`PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK`)
 looks at the journal directory, under a lock on it taken without waiting (a busy lock: nothing on that run). Past 20
-MB, after a second look, the file is renamed to `hooks.jsonl.archived-<YYYYmmdd-HHMMSS>-<pid>` and its mtime set to
-the rename's (a rename keeps the old one: an idle 20 MB file was compressed by the run that closed it — impl panel
-round 2). A closed file is compressed to `….gz` beside it only once it is idle — on a later such run, 10 minutes after
-both its rename and its last write
+MB, after a second look, the file is renamed to `hooks.jsonl.archived-<YYYYmmdd-HHMMSS>-<epoch>-<pid>`: its name
+records the rename time, written by the rename itself (a rename keeps the old mtime, so an idle 20 MB file was
+compressed by the run that closed it — impl panel round 2 — and a rotator killed before resetting the mtime left the
+same trap — the post-panel judge). A closed file is compressed to `….gz` beside it only once it is idle — on a later
+such run, 10 minutes after the rename its name records AND after its last write; a closed file whose name records no
+rename time is never compressed
 (measured: 20 MB → 1.9 MB in 0.18 s) — because a hook that opened the file just before the rename can still append to
 it, and a line written after `gzip` had read it would have gone with the uncompressed copy (impl panel round 1; the
 hosts stop a hook after at most a minute). The uncompressed copy is removed only once the compressed one is in place,

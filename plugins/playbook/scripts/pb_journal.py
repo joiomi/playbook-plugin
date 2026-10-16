@@ -224,6 +224,7 @@ HOOK_FIELDS = ("ts", "hook", "event", "tool", "tool_use_id", "session_id", "host
 _HJ_LIMIT = 20971520
 _HJ_LINE_MAX = 1024                     # bytes, the newline included (one append; Linux's PIPE_BUF is 4096)
 _HJ_ID_DROP = re.compile(r"[^A-Za-z0-9._:@/+=-]")
+_HJ_ARCHIVE = re.compile(r"hooks\.jsonl\.archived-\d{8}-\d{6}-(\d{1,12})-\d+")
 
 
 def _hj_id(value, cap: int) -> str:
@@ -460,13 +461,17 @@ def _hj_rotate(jdir: Path) -> None:
             if big:
                 st = os.lstat(jfile)
                 if stat.S_ISREG(st.st_mode) and st.st_size > _HJ_LIMIT:
-                    arch = jdir / f"hooks.jsonl.archived-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}"
+                    # the name records the rename time, written by the rename itself (post-panel judge run 1, grave)
+                    arch = jdir / f"hooks.jsonl.archived-{time.strftime('%Y%m%d-%H%M%S')}-{int(time.time())}-{os.getpid()}"
                     if not os.path.lexists(arch):
                         os.link(jfile, arch)            # no clobber, as `mv -n`
                         os.unlink(jfile)
                         os.utime(arch, None)            # idle counts from the rename too (impl panel r2, grave)
             now = time.time()
             for arch in closed():
+                m = _HJ_ARCHIVE.fullmatch(arch.name)     # 10 minutes after the rename its name records; none: never
+                if not m or now - int(m.group(1)) <= 600:
+                    continue
                 try:
                     st = os.lstat(arch)
                 except OSError:

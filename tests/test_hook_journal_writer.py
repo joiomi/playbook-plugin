@@ -25,6 +25,7 @@ import calendar
 import gzip
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -442,6 +443,15 @@ class Rotation(_Project):
         old = time.time() - seconds
         os.utime(path, (old, old))
 
+    def age_closed(self, path, seconds=1200):
+        """A closed file as it is `seconds` after its rename: the rename time its name records, and its mtime."""
+        m = re.fullmatch(r"(hooks\.jsonl\.archived-\d{8}-\d{6})-(?:(\d+)-)?(\d+)", path.name)
+        assert m, path.name
+        new = path.with_name(f"{m.group(1)}-{int(time.time()) - seconds}-{m.group(3)}")
+        path.rename(new)
+        self.age(new, seconds)
+        return new
+
     def test_past_the_limit_the_file_is_closed_then_compressed_once_idle_and_kept(self):
         """Impl panel r1 (codex, grok, opus — G1, grave): a closed file is compressed only once no hook can still be
         writing to it — its mtime over 10 minutes old, on a later sampled run."""
@@ -454,7 +464,7 @@ class Rotation(_Project):
         self.assertEqual([r["hook"] for r in self.lines()], ["t-hook"])
         self.run_hook(self.in_lane("exit 0"), PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1")
         self.assertFalse(self.archives()[0].name.endswith(".gz"))            # still fresh
-        self.age(arch[0])
+        self.age_closed(arch[0])
         self.run_hook(self.in_lane("exit 0"), PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1")
         arch = self.archives()
         self.assertEqual(len(arch), 1, arch)
@@ -475,7 +485,7 @@ class Rotation(_Project):
             held.close()
         arch = self.archives()
         self.assertEqual(len(arch), 1, arch)
-        self.age(arch[0])
+        self.age_closed(arch[0])
         self.run_hook(self.in_lane("exit 0"), PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1")
         gz = self.archives()[0]
         self.assertTrue(gz.name.endswith(".gz"), gz.name)
@@ -486,7 +496,7 @@ class Rotation(_Project):
         """Impl panel r2 (codex, grok — reproduced, grave): a rename keeps the file's mtime, so a 20 MB journal idle
         for over 10 minutes was compressed by the very run that closed it (here: an older closed file is waiting, so
         the compression pass runs), and a descriptor held across that rename lost its line."""
-        older = self.lane / "journal" / "hooks.jsonl.archived-20261001-000000-1"
+        older = self.lane / "journal" / f"hooks.jsonl.archived-20261001-000000-{int(time.time()) - 1200}-1"
         self.fill()
         older.write_text('{"hook":"older"}\n')
         self.age(older)
@@ -502,16 +512,45 @@ class Rotation(_Project):
         self.assertIn(older.name + ".gz", names)                     # the old one, idle: compressed
         fresh = [n for n in names if not n.endswith(".gz")]
         self.assertEqual(len(fresh), 1, names)                       # the one just closed: not yet
-        self.age(self.lane / "journal" / fresh[0])
+        aged = self.age_closed(self.lane / "journal" / fresh[0])
         self.run_hook(self.in_lane("exit 0"), PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1")
-        with gzip.open(self.lane / "journal" / (fresh[0] + ".gz"), "rt") as f:
+        with gzip.open(aged.with_name(aged.name + ".gz"), "rt") as f:
             self.assertIn('"held-late"', f.read())
+
+    def test_a_closed_file_waits_for_the_rename_time_its_name_records(self):
+        """Post-panel judge run 1 (codex — reproduced, grave): a rotator killed between the rename and the mtime reset
+        left an old mtime; the next sampled run compressed the file at once. The rename time is in the NAME, written by
+        the rename itself: such a file waits, and a closed file whose name records no rename time is never compressed."""
+        (self.lane / "journal").mkdir(exist_ok=True)
+        self.journal.write_text("{}\n")
+        killed = self.lane / "journal" / f"hooks.jsonl.archived-20261016-120000-{int(time.time())}-99"
+        killed.write_text('{"hook":"before"}\n')
+        self.age(killed)                                       # the mtime reset never happened
+        nameless = self.lane / "journal" / "hooks.jsonl.archived-foreign"
+        nameless.write_text("{}\n")
+        self.age(nameless)
+        held = open(killed, "a")
+        try:
+            self.run_hook(self.in_lane("exit 0"), PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1")
+            held.write(json.dumps({"hook": "held-late"}) + "\n")
+        finally:
+            held.close()
+        self.assertTrue(killed.exists(), self.archives())       # not compressed: its rename is a moment ago
+        aged = self.age_closed(killed)
+        self.run_hook(self.in_lane("exit 0"), PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1")
+        with gzip.open(aged.with_name(aged.name + ".gz"), "rt") as f:
+            self.assertIn('"held-late"', f.read())
+        self.assertTrue(nameless.exists())                      # no rename time in its name: never compressed
+        written = self.lane / "journal" / f"hooks.jsonl.archived-20261016-110000-{int(time.time()) - 1200}-98"
+        written.write_text("{}\n")                             # renamed long ago, written a moment ago: waits
+        self.run_hook(self.in_lane("exit 0"), PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1")
+        self.assertTrue(written.exists(), self.archives())
 
     def test_the_duration_counts_the_journals_own_work(self):
         """Impl panel r1 (codex I2): rotation and compression run before the duration is taken."""
         self.fill()
         self.run_hook(self.in_lane("exit 0"), PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1")
-        self.age(self.archives()[0])
+        self.age_closed(self.archives()[0])
         slow = self.root / "slow-gzip"
         slow.mkdir()
         (slow / "gzip").write_text(f'#!/bin/sh\nsleep 1\nexec {shutil.which("gzip")} "$@"\n')
@@ -583,7 +622,7 @@ class Rotation(_Project):
         (stub / "gzip").write_text("#!/bin/sh\nexit 1\n")
         (stub / "gzip").chmod(0o755)
         self.run_hook(self.in_lane("exit 0"), PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1")
-        self.age(self.archives()[0])
+        self.age_closed(self.archives()[0])
         r = self.run_hook(self.in_lane("exit 0"), PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1",
                           PATH=f"{stub}:{os.environ['PATH']}")
         self.assertEqual(r.returncode, 0, r.stderr)

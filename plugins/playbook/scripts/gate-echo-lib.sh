@@ -1833,8 +1833,9 @@ _pb_hj_text() {
 
 # About one run in 32 (PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK, 1-1000) looks at the journal directory. Under a lock on it taken
 # without waiting (busy: nothing this run): past the limit, after a second look, the file is renamed to an archive name
-# that does not exist yet (its mtime set to the rename's); and a closed file is compressed (`gzip`) only once it is
-# idle — its mtime over 10 minutes old, so 10 minutes after both its rename and its last write — because a hook that opened the file before the rename can still append to it, and a line written after gzip
+# that does not exist yet and records the rename time (`…-<YYYYmmdd-HHMMSS>-<epoch>-<pid>`; its mtime set to the rename's
+# too); and a closed file is compressed (`gzip`) only once it is idle — 10 minutes after the rename its name records
+# AND after its last write (a name with no rename time: never) — because a hook that opened the file before the rename can still append to it, and a line written after gzip
 # read it would go with the uncompressed copy (impl panel r1, codex, grok, opus — reproduced). Every archive is kept.
 # No `flock`, no `gzip`, a failure, a kill: the closed file stays as it is.
 _pb_hj_rotate() {
@@ -1858,8 +1859,10 @@ _pb_hj_rotate() {
             size=$(stat -c %s -- "$hfile" 2>/dev/null) || size=0
             case "$size" in ''|*[!0-9]*) size=0 ;; esac
             if [ "$size" -gt "$_PB_HJ_LIMIT" ] && [ -f "$hfile" ] && [ ! -L "$hfile" ] \
-               && printf -v stamp '%(%Y%m%d-%H%M%S)T' -1 2>/dev/null; then
-                arch="$jdir/hooks.jsonl.archived-$stamp-$$"
+               && printf -v stamp '%(%Y%m%d-%H%M%S)T' -1 2>/dev/null && printf -v now '%(%s)T' -1 2>/dev/null; then
+                # the name records the rename time (epoch seconds), written by the rename itself: a rotator killed before
+                # the mtime reset below leaves no file that looks idle (post-panel judge run 1, codex — grave)
+                arch="$jdir/hooks.jsonl.archived-$stamp-$now-$$"
                 if [ ! -e "$arch" ] && [ ! -L "$arch" ]; then
                     # its mtime becomes the rename's: a rename keeps the old one, and an idle 20 MB file was compressed
                     # by the very run that closed it while a hook could still hold it open (impl panel r2, grave)
@@ -1872,6 +1875,10 @@ _pb_hj_rotate() {
             for a in "$jdir"/hooks.jsonl.archived-*; do
                 case "$a" in *.gz|*.gz.tmp-*) continue ;; esac
                 [ -f "$a" ] && [ ! -L "$a" ] || continue
+                # 10 minutes after the rename its name records (a name with none is never compressed) …
+                [[ "${a##*/}" =~ ^hooks\.jsonl\.archived-[0-9]{8}-[0-9]{6}-([0-9]{1,12})-[0-9]+$ ]] || continue
+                [ $(( now - 10#${BASH_REMATCH[1]} )) -gt 600 ] || continue
+                # … and after its last write
                 mt=$(stat -c %Y -- "$a" 2>/dev/null) || continue
                 case "$mt" in ''|*[!0-9]*) continue ;; esac
                 [ $(( now - mt )) -gt 600 ] || continue
