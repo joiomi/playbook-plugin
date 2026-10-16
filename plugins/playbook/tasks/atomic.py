@@ -157,7 +157,10 @@ def rewrite(
     # PLAYBOOK_LOCK_TIMEOUT_SECS override); passing the constant here bypassed it.
     with task_lock(p, timeout=timeout):
         try:
-            text = p.read_text(encoding=encoding, errors="replace")
+            # no newline translation (task 214, T4): a lone CR inside a line stays there — `Path.read_text`'s newline translation made it a
+            # line break that every transform then wrote back as one; CRLF still becomes LF, as before
+            with open(p, encoding=encoding, errors="replace", newline="") as fh:
+                text = fh.read().replace("\r\n", "\n")
         except FileNotFoundError:
             text = ""
         new = transform(text)

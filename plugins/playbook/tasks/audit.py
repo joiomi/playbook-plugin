@@ -681,7 +681,8 @@ def _recorded_verify_commands(project_path) -> "tuple[dict, str | None]":
             receipts += sorted(agent.glob(pat))
     for tf in receipts:
         try:
-            lines = tf.read_text(encoding="utf-8", errors="replace").splitlines()
+            from tasks.core import _physical_lines, read_task_text
+            lines = _physical_lines(read_task_text(tf))      # task 214 (T5): no boundary inside a line
         except OSError:
             continue
         # Skip only lines inside a properly CLOSED fence (a decoy example);
@@ -959,6 +960,8 @@ def _finding_lines(output: str, limit: int = 5) -> "list[str]":
     return lines[:limit]
 
 
+_GATE_SHAPED_RE = re.compile(r"^[ \t]*- \[[ xX]\]")
+
 # First `###` entry after the heading is the NEWEST (upsert inserts newest-first).
 _AUDIT_ENTRY_SHA_RE = re.compile(r"^### .*·\s*commit\s+([0-9a-fA-F]{7,40})", re.MULTILINE)
 
@@ -1000,6 +1003,8 @@ def format_audit_receipt(audit: dict, *, timestamp: str | None = None, head_sha:
         out.append(f"    - [{tag}{count}] {r['name']}{sev} — {r['why']}")
         if r["status"] in ("findings", "error"):
             for ln in _finding_lines(r["output"], limit=5):
+                if _GATE_SHAPED_RE.match(ln):        # task 214 (T1): a sweep's `- [ ] x` must never read as a gate
+                    ln = "\\" + ln.lstrip(" \t")
                 out.append(f"        {ln[:200]}")
     out.append(f"    - run {secrets.token_hex(6)}")
     out.append("")

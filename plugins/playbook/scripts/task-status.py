@@ -50,7 +50,7 @@ def main(argv: "list[str]") -> int:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     try:
         from tasks.core import (_freehand_release_allowed, _live_gate_state,
-                                _physical_lines, _status_from_lines)
+                                _physical_lines, _status_from_lines, read_task_text)
     except Exception as exc:  # noqa: BLE001 — any import failure is "unreadable"
         print(f"task-status: cannot import tasks.core: {exc}", file=sys.stderr)
         return 1
@@ -60,7 +60,7 @@ def main(argv: "list[str]") -> int:
     # U+0085/U+2028 must not mint a line the hook's grep fallback cannot see, nor
     # a fake `## Status` pair).
     try:
-        lines = _physical_lines(task_file.read_text(encoding="utf-8", errors="replace"))
+        lines = _physical_lines(read_task_text(task_file))      # a lone CR is not a line break (task 214, T4)
     except Exception as exc:  # noqa: BLE001 — unreadable file → non-zero, hook fails closed
         print(f"task-status: could not read the task file: {exc}", file=sys.stderr)
         return 1

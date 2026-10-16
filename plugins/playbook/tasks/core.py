@@ -1024,7 +1024,7 @@ def split_md_sections(text: str) -> "list[tuple[str | None, str]]":
     cur_heading: "str | None" = None
     cur: list[str] = []
     started = False
-    for ln in text.splitlines(keepends=True):
+    for ln in _physical_lines(text, keepends=True):        # task 214 (T5): physical lines
         if re.match(r'^#{1,2}\s', ln):
             if started:
                 sections.append((cur_heading, "".join(cur)))
@@ -1135,7 +1135,7 @@ def _trim_split(text: str) -> "list[dict]":
     """The level-1/2 sections of task.md, each line with its line number in the ORIGINAL text (a cut note
     points back to it — plan panel T5). A heading inside a code fence is content, not a boundary (T6):
     a fenced `## Example` in the Work Plan must not carry the gates after it out of the Work Plan."""
-    raw = text.splitlines(keepends=True)
+    raw = _physical_lines(text, keepends=True)      # task 214 (T5): a U+0085 / lone CR inside a line is no boundary
     fenced = _iter_fenced_flags([ln.rstrip("\r\n") for ln in raw], unclosed_is_live=True)
     secs: "list[dict]" = []
     for i, ln in enumerate(raw):
@@ -1528,8 +1528,8 @@ def append_standing_gates(content: str, cfg: dict, task_num: int) -> "tuple[str,
             f"got {type(raw).__name__} — ignored"]
     issues: "list[str]" = []
     nnn = f"{int(task_num):03d}"
-    existing = {ln.strip()[3:].strip().lower()       # physical lines (task 214): a heading inside a line is none
-                for ln in _physical_lines(content) if ln.strip().startswith("## ")}
+    existing = {h[3:].strip().lower()       # physical lines and the strict heading matcher (task 214, T5-T6)
+                for ln in _physical_lines(content) if (h := _atx_h2_text(ln)) is not None}
     blocks: "list[str]" = []
     seen: "set[str]" = set()
     for i, entry in enumerate(raw):
@@ -1902,7 +1902,7 @@ def extract_risk(task_file) -> str:
     after the heading. Returns one of RISK_CLASSES, or 'unclassified' if the
     section is absent, blank, or holds an unrecognized value."""
     try:
-        lines = _physical_lines(Path(task_file).read_text(encoding="utf-8", errors="replace"))
+        lines = _physical_lines(read_task_text(Path(task_file)))
     except OSError:
         return DEFAULT_RISK
     return _risk_from_lines(lines)
@@ -1960,7 +1960,7 @@ def has_risk_section(task_file) -> bool:
     documented legacy behavior, never toward inventing a block from an I/O error.
     """
     try:
-        lines = _physical_lines(Path(task_file).read_text(encoding="utf-8", errors="replace"))
+        lines = _physical_lines(read_task_text(Path(task_file)))
     except OSError:
         return False
     # V2 + V8 (task 039, impl panel): fail toward STRICT on an uncertain parse.
@@ -3995,15 +3995,18 @@ def has_review_evidence(task_file, impl_only: bool = False) -> bool:
         # text under them is quoted judge prose and could say anything.
         js = p.parent / "judge-single.md"
         if js.exists():
-            heads = [ln for ln in js.read_text(encoding="utf-8", errors="replace").splitlines()
+            heads = [ln for ln in _physical_lines(read_task_text(js))      # task 214 (T3): physical lines
                      if ln.startswith("## Single-judge ")]
             if heads and (not impl_only or any(h.startswith("## Single-judge impl review")
                                                for h in heads)):
                 return True
-        for ln in p.read_text(encoding="utf-8", errors="replace").splitlines():
-            s = ln.strip().lower()
-            if not s.startswith("- [x]"):
+        for ln in _physical_lines(read_task_text(p)):
+            # a CHECKED gate as the gate counters read one (task 214, T3): a physical line, the box after spaces or
+            # tabs only — a quote with a separator, or one at the line's start, used to make this True
+            m = _GATE_LINE_RE.match(ln)
+            if not m or m.group(1) not in "xX":
                 continue
+            s = ln.strip(" \t\r").lower()
             if "impl-review" in s:
                 return True
             if impl_only:
@@ -4573,7 +4576,7 @@ def scan_parked(project_path: Path, open_only: bool = True) -> "list[dict]":
     existing = {num for num, _slug, _tf in dirs}
     for num, slug, tf in dirs:
         try:
-            text = tf.read_text(encoding="utf-8", errors="replace")
+            text = read_task_text(tf)
         except OSError:
             continue
         for item in extract_parked_items(text):
@@ -4621,7 +4624,7 @@ def retro_carried_state(project_path: Path, last_retro: "int | None") -> "dict[i
     for num, slug, tf in _iter_task_dirs(project_path):
         if num == last_retro and _is_retro_slug(slug):
             try:
-                text = tf.read_text(encoding="utf-8", errors="replace")
+                text = read_task_text(tf)
             except OSError:
                 return {}
             return {int(n): (st.strip().lower(), gates) for n, st, gates in _RETRO_ROW_RE.findall(text)
@@ -4662,7 +4665,7 @@ def retro_carried_digests(project_path: Path, last_retro: "int | None") -> "dict
     for num, slug, tf in _iter_task_dirs(project_path):
         if num == last_retro and _is_retro_slug(slug):
             try:
-                text = tf.read_text(encoding="utf-8", errors="replace")
+                text = read_task_text(tf)
             except OSError:
                 return {}
             m = _RETRO_CARRIED_RE.search(text)
@@ -5033,7 +5036,7 @@ def _extract_status(task_file: Path) -> str:
     fence-aware, fail closed; `_status_from_lines`). Physical `\\n` lines — the
     same line model as the gate reader (task 055, round-2 panel)."""
     try:
-        lines = _physical_lines(task_file.read_text(encoding="utf-8", errors="replace"))
+        lines = _physical_lines(read_task_text(task_file))
         return _status_from_lines(lines)
     except Exception:
         return "error"
@@ -5042,7 +5045,7 @@ def _extract_status(task_file: Path) -> str:
 def _extract_problem(task_file: Path) -> str:
     """Extract first line of Problem/Intent section from task file."""
     try:
-        lines = _physical_lines(task_file.read_text(encoding="utf-8", errors="replace"))
+        lines = _physical_lines(read_task_text(task_file))
         # Fence-aware (task 039): a fenced `## Intent`/`## Problem` example must
         # not be read as the live summary. Pure reader → fail OPEN.
         in_section = False
@@ -5076,7 +5079,7 @@ def _extract_head_position(task_file: Path) -> str:
     (`- **Ceva**, în scratch:`): with every gate checked it refused the close with
     "0 open gate(s)", and with gates open it named the prose as the next gate."""
     try:
-        lines = _physical_lines(task_file.read_text(encoding="utf-8", errors="replace"))
+        lines = _physical_lines(read_task_text(task_file))
         _unchecked, _total, first, first_index = _live_gate_scan(lines)
         return first if first_index >= 0 else "(all gates checked)"
     except Exception:
@@ -5112,7 +5115,7 @@ def _is_stub_file(task_file: Path) -> bool:
     """A `tasks new --stub` task not yet expanded — the same marker test
     `tasks work` uses to expand it on activation (`stub_marker_type`)."""
     try:
-        return stub_marker_type(task_file.read_text(encoding="utf-8", errors="replace")) is not None
+        return stub_marker_type(read_task_text(task_file)) is not None
     except OSError:
         return False
 
@@ -5269,6 +5272,7 @@ _RECEIPT_HEAD_RE = re.compile(r"^### \S+ · (?:PASS|FAIL) · commit ")
 # the `run` line. "Up to a gate" cut a receipt whose sweep printed `- [x]` lines (all 13,387 body lines of the 788
 # real receipts match this).
 _RECEIPT_BODY_RE = re.compile(r"^(?:    - \[(?:CLEAN|FINDINGS(?:\(\d+\))?|ERROR)\] |        |    - run [0-9a-f]+\s*$)")
+_RECEIPT_RUN_RE = re.compile(r"^    - run [0-9a-f]+\s*$")       # a receipt's last line since task 213
 
 
 def _receipt_entries(lines: "list[str]", start: int, end: int) -> "list[tuple[int, int]]":
@@ -5285,8 +5289,14 @@ def _receipt_entries(lines: "list[str]", start: int, end: int) -> "list[tuple[in
     while i < end:
         if _RECEIPT_HEAD_RE.match(lines[i]) and not flags[i]:
             j = i + 1
-            while j < end and not flags[j] and (not lines[j].strip() or _RECEIPT_BODY_RE.match(lines[j])):
+            # never a gate-shaped line (impl round 1 of task 214, T1: an 8-space open gate under a receipt was taken as
+            # its body and moved to the log, where the stop hook and the close no longer count it); a receipt with a
+            # `run` line ends there
+            while (j < end and not flags[j] and not _GATE_LINE_RE.match(lines[j])
+                   and (not lines[j].strip() or _RECEIPT_BODY_RE.match(lines[j]))):
                 j += 1
+                if _RECEIPT_RUN_RE.match(lines[j - 1]):
+                    break
             while j > i + 1 and not lines[j - 1].strip():
                 j -= 1
             out.append((i, j))
@@ -5342,7 +5352,7 @@ def record_audit_receipt(task_file: Path, entry: str) -> "str | None":
     marker = "## Pre-Panel Audit"
     with task_lock(p):
         try:
-            text = p.read_text(encoding="utf-8", errors="replace")
+            text = read_task_text(p)
         except FileNotFoundError:
             text = ""
         lines = _physical_lines(text)                         # never splitlines(): see _compose_upsert (R2)
@@ -5716,7 +5726,7 @@ def _latest_receipt_line(task_file: Path) -> "str | None":
     """The newest `### ...` entry heading under `## Verification Receipt`, or None
     when the task has no receipts yet (a handoff still works without one)."""
     try:
-        lines = _physical_lines(task_file.read_text(encoding="utf-8", errors="replace"))
+        lines = _physical_lines(read_task_text(task_file))
     except OSError:
         return None
     in_receipt = False
@@ -5780,7 +5790,7 @@ def build_handoff_section(project_path: Path, task_file: Path) -> str:
         out.append(_repo_state_bullet(f"Code root `{rel}`", summary))
     try:
         checked, total = _gate_counts(
-            task_file.read_text(encoding="utf-8", errors="replace"))
+            read_task_text(task_file))
     except Exception:
         checked, total = 0, 0
     out.append(f"- **Gates:** {checked}/{total} checked — next unchecked: "
@@ -5881,7 +5891,7 @@ def _extract_block_reason(task_file: Path) -> "str | None":
     if not _is_blocked(task_file):     # a resumed task keeps its ## Blocked as history (task 189, Gemini #15)
         return None
     try:
-        lines = _physical_lines(task_file.read_text(encoding="utf-8", errors="replace"))
+        lines = _physical_lines(read_task_text(task_file))
     except OSError:
         return None
     return _block_reason_from_lines(lines)
@@ -5914,7 +5924,7 @@ def _block_reasons(task_file: Path) -> "list[str]":
     """EVERY reason in the live `## Blocked` section, oldest first (task 140: a task
     blocked twice records both; `Resumed …` stamps are not reasons)."""
     try:
-        lines = _physical_lines(task_file.read_text(encoding="utf-8", errors="replace"))
+        lines = _physical_lines(read_task_text(task_file))
     except OSError:
         return []
     out: "list[str]" = []
@@ -6058,8 +6068,10 @@ def task_done(project_path: Path, name_filter: str = "") -> dict:
         lines = _physical_lines(text)       # task 214: a gate inside a line is not a gate to flip
         # Find and check off the first unchecked gate
         for i, line in enumerate(lines):
-            stripped = line.strip()
-            if stripped.startswith("- [ ]"):
+            # a gate as the counters see one (task 214, T6): `str.strip()` also removed a leading U+0085 / VT / FF
+            m = _GATE_LINE_RE.match(line)
+            if m and m.group(1) == " ":
+                stripped = line.strip(" \t\r")
                 state["text"] = stripped[6:].strip()
                 # Preserve original indentation, just flip the checkbox
                 lines[i] = line.replace("- [ ]", "- [x]", 1)
@@ -6127,6 +6139,14 @@ def task_done(project_path: Path, name_filter: str = "") -> dict:
 # `    - [ ] nested`, must never vanish from the count — that would RELEASE the
 # stop). The bash hooks never re-implement this: they call task-status.py.
 _GATE_LINE_RE = re.compile(r"^[ \t]*- \[([ xX])\]")
+
+
+def read_task_text(path) -> str:
+    """A task file's text as the hooks' grep sees it (task 214, impl round 1, T4): UTF-8 with errors replaced, CRLF
+    read as LF as before, and a lone CR LEFT inside its line — `Path.read_text` (its newline translation) turned a lone CR into a line break,
+    so a quote `x\r## Status\rdone` was read as a live `done`."""
+    with open(path, encoding="utf-8", errors="replace", newline="") as fh:
+        return fh.read().replace("\r\n", "\n")
 
 
 def _physical_lines(text: str, *, keepends: bool = False) -> "list[str]":
@@ -6229,7 +6249,7 @@ def _gate_counts(content: str) -> "tuple[int, int]":
 def _extract_progress(task_file: Path) -> str:
     """Count checked/total gates in a task file (line-anchored, prose-safe)."""
     try:
-        checked, total = _gate_counts(task_file.read_text(encoding="utf-8", errors="replace"))
+        checked, total = _gate_counts(read_task_text(task_file))
         return f"{checked}/{total}" if total > 0 else "-"
     except Exception:
         return "-"

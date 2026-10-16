@@ -75,14 +75,14 @@ def extract_owner_rulings(task_text: str) -> "list[str]":
     fenced = _iter_fenced_flags(lines, unclosed_is_live=False)
     start = None
     for i, ln in enumerate(lines):
-        if not fenced[i] and _OWNER_HEAD_RE.match(ln):
+        if not fenced[i] and _OWNER_HEAD_RE.match(ln.rstrip("\r")):       # a CRLF heading too (task 214, T7)
             start = i
     if start is None:
         return []
     out: "list[str]" = []
     for i in range(start + 1, len(lines)):
         ln = lines[i]
-        if not fenced[i] and _H2_RE.match(ln):
+        if not fenced[i] and _H2_RE.match(ln.rstrip("\r")):
             break
         s = ln.rstrip()
         if not s.strip() or s.strip() == "<!-- pin -->" or s.lstrip().startswith(">"):

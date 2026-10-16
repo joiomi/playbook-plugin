@@ -471,17 +471,38 @@ def current_state_file(project_root: Path, session_id: str) -> Path:
     return resolve_agent_dir(project_root) / "sessions" / session_id / "current_state"
 
 
+_STATUS_HEAD_RE = re.compile(r"^ {0,3}##[ \t]+Status[ \t]*$")
+_FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+
+
 def _task_status(task_file: Path) -> str:
     """The task.md's ## Status value (last one wins, matching tasks.core
-    `_extract_status`); "" when unreadable or absent."""
+    `_extract_status`); "" when unreadable or absent.
+
+    Task 214 (impl round 1, T2): read as the hooks' grep and `core._physical_lines` read it — the file without
+    newline translation (a lone CR is not a line break), split on "\n" only (`splitlines()` broke at U+0085 too),
+    a heading indented at most 3 spaces (an 8-space audit finding is not one) and outside a code fence: a quote
+    `x\x85## Status\x85done`, an indented pair or a fenced example used to read as `done`, and the Stop decision
+    then skipped the gate check. An unclosed fence hides what follows (fail closed: no `done` read from it)."""
     try:
-        lines = task_file.read_text(encoding="utf-8", errors="replace").splitlines()
+        with open(task_file, encoding="utf-8", errors="replace", newline="") as fh:
+            lines = fh.read().split("\n")
     except OSError:
         return ""
     status = ""
-    for i, line in enumerate(lines):
-        if line.strip() == "## Status" and i + 1 < len(lines):
-            status = lines[i + 1].strip()
+    fence = ""
+    for i, raw in enumerate(lines):
+        line = raw.rstrip("\r")
+        m = _FENCE_RE.match(line)
+        if fence:
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and not line.strip(" \t").strip(fence[0]):
+                fence = ""
+            continue
+        if m:
+            fence = m.group(1)
+            continue
+        if _STATUS_HEAD_RE.match(line) and i + 1 < len(lines):
+            status = lines[i + 1].rstrip("\r").strip(" \t")
     return status
 
 

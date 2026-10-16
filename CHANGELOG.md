@@ -59,7 +59,14 @@ the real records before: every `tasks audit` stacked one more receipt into task.
   re-read (two headings read as `unclassified` and refused a valid close), the parked items, the standing gates (a
   heading inside a line made a required standing gate be skipped), the block reasons, the problem and latest-receipt
   lines, the owner rulings of the SETTLED block (a decoy section inside a line replaced the real rulings), and the
-  batch-close guard's gate count.
+  batch-close guard's gate count. Its panel found more of the same, all fixed: `has_review_evidence` took a checked
+  review gate inside a quote as evidence (the close's review bar); the codex hooks' status reader read `done` from a
+  quote, an indented pair or a fenced example (the codex Stop decision then skipped the gate check); task files were
+  read with Python's newline translation, so a lone CR inside a line was a line break too — they are now read with
+  only CRLF mapped to LF, by the status hook and every task.md writer as well; the judges' trim, the verify-contract
+  drift sweep and `tasks compact` split by `splitlines()` too; and a gate or heading after a separator AT THE START of
+  a line was taken for one. A receipt's body never takes a gate-shaped line and ends at its `run` line, and a sweep's
+  output line shaped like a gate is written escaped (`\- [x] …`), so no receipt line counts as a gate.
 
 ## [1.6.3] — 2026-10-15
 

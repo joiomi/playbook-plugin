@@ -1054,7 +1054,8 @@ class BlockedEndToEnd(unittest.TestCase):
         import re
         src = (SCRIPTS / "task-status.py").read_text(encoding="utf-8")
         body = src[src.index("def main"):]
-        self.assertEqual(len(re.findall(r"read_text\(", body)), 1,
+        # task 214 (T4): the one read is `read_task_text(` — no newline translation
+        self.assertEqual(len(re.findall(r"read_(?:task_)?text\(", body)), 1,
                          "task-status.py must read the task file exactly once")
         self.assertNotIn("_extract_status(task_file)", body,
                          "status must come from the same lines as the gates")

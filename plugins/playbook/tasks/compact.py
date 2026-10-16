@@ -189,7 +189,8 @@ def cmd_compact(cmd_args) -> None:
     with task_md.open(encoding="utf-8", errors="replace", newline="") as _fh:
         text = _fh.read()
     nl = "\r\n" if "\r\n" in text else "\n"
-    lines = text.splitlines(keepends=True)
+    from tasks.core import _physical_lines
+    lines = _physical_lines(text, keepends=True)      # task 214 (T5): never cut a physical line in two
     spans, err = _blocks(lines)
     if err:
         print(f"Error: archive markers do not nest cleanly — {err}. "

@@ -34,7 +34,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-GATE_RE = re.compile(r"^\s*- \[([ xX])\]\s*(.*)$")
+GATE_RE = re.compile(r"^[ \t]*- \[([ xX])\]\s*(.*)$")       # spaces or tabs only, as the gate counters (task 214, T6)
 ANNOTATION_FLOOR = 8   # unicode non-whitespace chars (never bash bytes)
 BATCH_CEILING = 5
 
@@ -69,7 +69,7 @@ end-of-task ticking. Do the next piece of work, then close its gates."""
 
 def open_gate_originals(old: str) -> "list[str]":
     """The open gates' texts in `old` — the born-checked hint's candidates — on physical lines (task 214)."""
-    return [m.group(2) for line in old.split("\n")
+    return [m.group(2).rstrip("\r") for line in old.split("\n")          # a CRLF line's `\r` is not text (T7)
             if (m := GATE_RE.match(line)) and m.group(1) == " " and m.group(2).strip()]
 
 
