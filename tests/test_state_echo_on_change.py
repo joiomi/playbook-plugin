@@ -614,6 +614,99 @@ class Round3(_Project):
         self.assertFalse((self.session_dir() / "echo_pending").exists())
         self.assertIn("previous gate done", self.echo())
 
+    def _kill_after_mv_shim(self, at: int) -> str:
+        """an `mv` that does its rename and then, at the hook's at-th rename, kills the hook (its own subshell chain)"""
+        shim = self.d / ("killmv-" + str(len(list(self.d.glob("killmv-*")))))
+        shim.mkdir()
+        seen = shim / "seen"
+        (shim / "mv").write_text(
+            "#!/bin/bash\n"
+            f'"{shutil.which("mv")}" "$@"; rc=$?\n'
+            f'echo "$PPID" >> "{seen}"\n'
+            f'if [ "$(grep -c "^$PPID$" "{seen}")" -eq {at} ]; then\n'
+            '  p=$PPID; top=""\n'
+            '  while [ "$p" -gt 1 ] && tr "\\0" " " < /proc/$p/cmdline 2>/dev/null | grep -qE "^[^ ]*bash [^ ]*/state-echo-hook( |$)"; do\n'
+            "    top=$p; p=$(awk '{print $4}' /proc/$p/stat 2>/dev/null || echo 1)\n"
+            "  done\n"
+            '  [ -n "$top" ] && kill -9 "$top"\n'
+            "fi\n"
+            "exit $rc\n", encoding="utf-8")
+        (shim / "mv").chmod(0o755)
+        return str(shim)
+
+    def test_a_hook_killed_right_after_storing_a_skip_leaves_it_to_the_next_call(self):
+        # codex: the gate stored, then the pending line — a kill between lost the skip; now the line is written first
+        self.work()
+        self.echo()
+        self.edit("- [ ] Beta step", "- [x] Beta step — early")
+        read = '{"tool_name":"Read","tool_input":{"file_path":"x"},"tool_response":{}}'
+        env = dict(self.env, PATH=f"{self._kill_after_mv_shim(2)}:{self.env['PATH']}")
+        r = subprocess.run([BASH, str(SCRIPTS / "state-echo-hook")], input=read, cwd=self.d, env=env,
+                           capture_output=True, text=True, timeout=60)
+        self.assertNotEqual(r.returncode, 0, "the hook was not killed")
+        self.assertIn("# ⚠ A gate below the open one", self.echo())
+
+    def _kill_before_mv_shim(self, at: int) -> str:
+        """an `mv` that, at the hook's at-th rename, kills the hook BEFORE renaming (nothing of that write lands)"""
+        shim = self.d / ("killbmv-" + str(len(list(self.d.glob("killbmv-*")))))
+        shim.mkdir()
+        seen = shim / "seen"
+        (shim / "mv").write_text(
+            "#!/bin/bash\n"
+            f'echo "$PPID" >> "{seen}"\n'
+            f'if [ "$(grep -c "^$PPID$" "{seen}")" -eq {at} ]; then\n'
+            '  p=$PPID; top=""\n'
+            '  while [ "$p" -gt 1 ] && tr "\\0" " " < /proc/$p/cmdline 2>/dev/null | grep -qE "^[^ ]*bash [^ ]*/state-echo-hook( |$)"; do\n'
+            "    top=$p; p=$(awk '{print $4}' /proc/$p/stat 2>/dev/null || echo 1)\n"
+            "  done\n"
+            '  [ -n "$top" ] && kill -9 "$top"; exit 1\n'
+            "fi\n"
+            f'exec "{shutil.which("mv")}" "$@"\n', encoding="utf-8")
+        (shim / "mv").chmod(0o755)
+        return str(shim)
+
+    def test_a_line_written_then_seen_again_is_said_once(self):
+        # killed after the pending line was written and before the gate was stored: the next call sees the skip again
+        self.work()
+        self.echo()
+        self.edit("- [ ] Beta step", "- [x] Beta step — early")
+        read = '{"tool_name":"Read","tool_input":{"file_path":"x"},"tool_response":{}}'
+        env = dict(self.env, PATH=f"{self._kill_before_mv_shim(2)}:{self.env['PATH']}")
+        r = subprocess.run([BASH, str(SCRIPTS / "state-echo-hook")], input=read, cwd=self.d, env=env,
+                           capture_output=True, text=True, timeout=60)
+        self.assertNotEqual(r.returncode, 0, "the hook was not killed")
+        out = self.echo()
+        self.assertEqual(out.count("# ⚠ A gate below the open one"), 1, out)
+
+    def test_the_no_task_path_prints_waiting_lines(self):
+        self.echo()                                     # no task: the session directory exists now
+        (self.session_dir() / "echo_pending").write_text("# ⚠ A gate below the open one (line 9) was checked",
+                                                         encoding="utf-8")
+        out = self.echo()
+        self.assertIn("No active task", out)
+        self.assertIn("A gate below the open one (line 9)", out)    # grok
+        self.assertFalse((self.session_dir() / "echo_pending").exists())
+
+    def test_a_tick_whose_counters_write_fails_is_logged_once(self):
+        # grok: the `[x]` entry was appended before the counters write; when it failed, the retry appended it again
+        self.work()
+        self.echo()
+        self.edit("- [ ] Alpha step", "- [x] Alpha step — done")
+        read = '{"tool_name":"Read","tool_input":{"file_path":"x"},"tool_response":{}}'
+        mv = self._mv_shim(2)
+        self.echo(payload=read, env=dict(self.env, PATH=f"{mv['PATH']}:{self.env['PATH']}"))
+        self.assertEqual(self.chat_log().count("- [x] Alpha step"), 0, self.chat_log())
+        self.echo()
+        self.assertEqual(self.chat_log().count("- [x] Alpha step"), 1, self.chat_log())
+
+    def test_an_odd_write_counters_says_it(self):
+        f = self.d / "counters"
+        f.write_text("a=0\n", encoding="utf-8")
+        r = subprocess.run([BASH, "-c", f'source "{SCRIPTS / "gate-echo-lib.sh"}"; PLAYBOOK_WRITE_FAILED=false; '
+                            f'write_counters "$1" a 1 b; echo "$PLAYBOOK_WRITE_FAILED"', "x", str(f)],
+                           capture_output=True, text=True, timeout=60, env=self.env)
+        self.assertEqual(r.stdout.strip(), "true", r.stderr)          # agy
+
     def test_write_counters_refuses_an_odd_number_of_words(self):
         f = self.d / "counters"
         f.write_text("a=0\n", encoding="utf-8")
@@ -671,10 +764,10 @@ class EchoFields(unittest.TestCase):
                             *map(str, prev)], capture_output=True, text=True, timeout=60)
         self.assertEqual(r.returncode, 0, r.stderr)
         lines = r.stdout.split("\n")
-        self.assertEqual(len(lines), 13, r.stdout)         # twelve fields and the final newline
+        self.assertEqual(len(lines), 14, r.stdout)         # thirteen fields and the final newline
         keys = ("total", "checked", "line", "pos", "below", "transition", "ticked", "text", "text200", "text60",
-                "opens", "checks")
-        return dict(zip(keys, lines[:12]))
+                "opens", "checks", "above")
+        return dict(zip(keys, lines[:13]))
 
     def test_no_previous(self):
         f = self.run_echo("## Work\n- [x] A — ok\n- [ ] B\n- [ ] C\n")
@@ -682,91 +775,103 @@ class EchoFields(unittest.TestCase):
                          ("3", "1", "3", "1", "0", "none", "B"))
 
     def test_same_and_skip(self):
-        self.assertEqual(self.run_echo("## Work\n- [ ] A\n- [ ] B\n", 0, 0, 1, 0, "A")["transition"], "same")
-        self.assertEqual(self.run_echo("## Work\n- [ ] A\n- [x] B — early\n", 0, 0, 1, 0, "A")["transition"], "skip")
+        self.assertEqual(self.run_echo("## Work\n- [ ] A\n- [ ] B\n", 0, 0, 1, 0, 0, "A")["transition"], "same")
+        self.assertEqual(self.run_echo("## Work\n- [ ] A\n- [x] B — early\n", 0, 0, 1, 0, 0, "A")["transition"], "skip")
 
     def test_done_and_done_bare(self):
-        f = self.run_echo("## Work\nnew line\n- [x] A — ok\n- [ ] B\n", 0, 0, 1, 0, "A")
+        f = self.run_echo("## Work\nnew line\n- [x] A — ok\n- [ ] B\n", 0, 0, 1, 0, 0, "A")
         self.assertEqual((f["transition"], f["ticked"], f["text"]), ("done", "3", "B"))
-        f = self.run_echo("## Work\n- [x] A\n- [ ] B\n", 0, 0, 1, 0, "A")
+        f = self.run_echo("## Work\n- [x] A\n- [ ] B\n", 0, 0, 1, 0, 0, "A")
         self.assertEqual((f["transition"], f["ticked"]), ("done-bare", "2"))
 
     def test_moved_and_reworded(self):
-        self.assertEqual(self.run_echo("## Work\n- [ ] Z\n- [ ] A\n", 0, 0, 1, 0, "A")["transition"], "moved")
-        self.assertEqual(self.run_echo("## Work\n- [ ] A, reworded\n- [ ] B\n", 0, 0, 1, 0, "A")["transition"], "reworded")
+        self.assertEqual(self.run_echo("## Work\n- [ ] Z\n- [ ] A\n", 0, 0, 1, 0, 0, "A")["transition"], "moved")
+        self.assertEqual(self.run_echo("## Work\n- [ ] A, reworded\n- [ ] B\n", 0, 0, 1, 0, 0, "A")["transition"], "reworded")
 
     def test_fenced_gates_are_not_gates(self):
-        f = self.run_echo("## Work\n```text\n- [x] fake\n- [ ] fake\n```\n- [ ] A\n", 0, 0, 1, 0, "A")
+        f = self.run_echo("## Work\n```text\n- [x] fake\n- [ ] fake\n```\n- [ ] A\n", 0, 0, 1, 0, 0, "A")
         self.assertEqual((f["total"], f["checked"], f["pos"], f["transition"]), ("1", "0", "0", "same"))
 
     def test_all_done(self):
-        f = self.run_echo("## Work\n- [x] A — ok\n", 0, 0, 1, 0, "A")
+        f = self.run_echo("## Work\n- [x] A — ok\n", 0, 0, 1, 0, 0, "A")
         self.assertEqual((f["line"], f["pos"], f["transition"], f["ticked"], f["text"]), ("", "-1", "done", "2", ""))
 
     def test_a_prefix_is_not_a_tick(self):
         # the previous gate "A" is still open further down; "A step" above it, checked, is another gate
-        f = self.run_echo("## Work\n- [x] A step — other\n- [ ] Z\n- [ ] A\n", 1, 0, 1, 1, "A")
+        f = self.run_echo("## Work\n- [x] A step — other\n- [ ] Z\n- [ ] A\n", 1, 0, 1, 1, 1, "A")
         self.assertEqual(f["transition"], "moved")
         # a checked gate whose text only STARTS with the previous one's ("Apple" for "A") is not its tick
-        f = self.run_echo("## Work\n- [x] Apple — other\n- [ ] B\n", 1, 0, 1, 1, "A")
+        f = self.run_echo("## Work\n- [x] Apple — other\n- [ ] B\n", 1, 0, 1, 1, 1, "A")
         self.assertEqual(f["transition"], "reworded")
 
 
     # -- impl round 1's findings on the tick rule (B1-B3) and the cut texts (B10) --
     def test_a_note_inside_the_text_is_a_tick(self):
         # this task's own W-gate style: the note between the label and the rest of the title (opus, sonnet)
-        f = self.run_echo("## Work\n- [x] W3 — 10:57 (`date`): built — do the thing\n- [ ] W4 next\n", 0, 0, 1, 0,
+        f = self.run_echo("## Work\n- [x] W3 — 10:57 (`date`): built — do the thing\n- [ ] W4 next\n", 0, 0, 1, 0, 0,
                           "W3 do the thing")
         self.assertEqual((f["transition"], f["ticked"]), ("done", "2"))
-        f = self.run_echo("## Work\n- [x] Alpha: done it\n- [ ] B\n", 0, 0, 1, 0, "Alpha")
+        f = self.run_echo("## Work\n- [x] Alpha: done it\n- [ ] B\n", 0, 0, 1, 0, 0, "Alpha")
         self.assertEqual(f["transition"], "done")
 
     def test_a_checked_gate_removed_or_added_above_is_the_same_gate(self):
-        self.assertEqual(self.run_echo("## Work\n- [ ] A\n", 1, 0, 1, 0, "A")["transition"], "same")
-        self.assertEqual(self.run_echo("## Work\n- [x] X — ok\n- [x] Y — ok\n- [ ] A\n", 1, 0, 1, 0, "A")["transition"],
+        self.assertEqual(self.run_echo("## Work\n- [ ] A\n", 1, 0, 1, 0, 0, "A")["transition"], "same")
+        self.assertEqual(self.run_echo("## Work\n- [x] X — ok\n- [x] Y — ok\n- [ ] A\n", 1, 0, 1, 0, 0, "A")["transition"],
                          "same")
 
     def test_a_skip_is_judged_below_the_open_gate_at_any_position(self):
         # a checked gate above removed AND a gate below checked in one edit: still a skip (the count is BELOW it)
-        self.assertEqual(self.run_echo("## Work\n- [ ] A\n- [x] B — early\n", 1, 0, 1, 0, "A")["transition"], "skip")
+        self.assertEqual(self.run_echo("## Work\n- [ ] A\n- [x] B — early\n", 1, 0, 1, 0, 0, "A")["transition"], "skip")
 
     def test_a_checked_prefix_gate_added_above_the_open_one_is_no_tick(self):
-        f = self.run_echo("## Work\n- [x] Alpha step extra — other\n- [ ] Alpha step\n", 0, 0, 1, 0, "Alpha step")
+        f = self.run_echo("## Work\n- [x] Alpha step extra — other\n- [ ] Alpha step\n", 0, 0, 1, 0, 0, "Alpha step")
         self.assertEqual(f["transition"], "same")       # codex
 
     def test_a_checked_sibling_is_not_the_tick_of_a_reworded_or_deleted_gate(self):
         sib = "- [x] Write tests for the parser — done\n"
-        self.assertEqual(self.run_echo("## Work\n- [ ] Write tests now\n" + sib, 0, 1, 1, 1, "Write tests")["transition"],
+        self.assertEqual(self.run_echo("## Work\n- [ ] Write tests now\n" + sib, 0, 1, 1, 1, 0, "Write tests")["transition"],
                          "reworded")                    # grok
         # deleted: the checked sibling moved up into its place — it was already a checked match (CHECKS = 1)
-        self.assertEqual(self.run_echo("## Work\n" + sib, 0, 1, 1, 1, "Write tests")["transition"], "reworded")
+        self.assertEqual(self.run_echo("## Work\n" + sib, 0, 1, 1, 1, 0, "Write tests")["transition"], "reworded")
 
     # -- task 220: the tick decided by counts (task 219's round 2, C2 / C3 and the parked duplicate case) --
     def test_a_note_inside_the_text_with_a_gate_added_is_a_tick(self):
-        f = self.run_echo("## Work\n- [x] W3 — 10:57: built — do the thing\n- [ ] W3b\n- [ ] W4 next\n", 0, 0, 1, 0,
+        f = self.run_echo("## Work\n- [x] W3 — 10:57: built — do the thing\n- [ ] W3b\n- [ ] W4 next\n", 0, 0, 1, 0, 0,
                           "W3 do the thing")
         self.assertEqual((f["transition"], f["ticked"]), ("done", "2"))
 
     def test_a_checked_prefix_gate_moved_onto_the_open_gates_place_is_no_tick(self):
-        f = self.run_echo("## Work\n- [x] Write tests for the parser\n- [ ] Write tests\n- [ ] Middle\n", 0, 1, 1, 1,
+        f = self.run_echo("## Work\n- [x] Write tests for the parser\n- [ ] Write tests\n- [ ] Middle\n", 0, 1, 1, 1, 0,
                           "Write tests")
         self.assertEqual(f["transition"], "same")     # grok
 
     def test_an_identical_checked_gate_is_no_tick_of_a_reworded_one(self):
-        f = self.run_echo("## Work\n- [ ] Alpha, reworded\n- [x] Alpha\n", 0, 1, 1, 1, "Alpha")
+        f = self.run_echo("## Work\n- [ ] Alpha, reworded\n- [x] Alpha\n", 0, 1, 1, 1, 0, "Alpha")
         self.assertEqual(f["transition"], "reworded")  # grok
 
     def test_a_duplicate_ticked_in_the_edit_that_adds_a_gate_above(self):
-        f = self.run_echo("## Work\n- [ ] New\n- [x] Same — one\n- [ ] Same\n- [ ] G\n", 0, 0, 2, 0, "Same")
+        f = self.run_echo("## Work\n- [ ] New\n- [x] Same — one\n- [ ] Same\n- [ ] G\n", 0, 0, 2, 0, 0, "Same")
         self.assertEqual((f["transition"], f["ticked"]), ("done", "3"))   # agy, parked by task 219
 
     def test_the_tick_named_is_the_match_at_the_previous_place(self):
-        f = self.run_echo("## Work\n- [x] Same — new\n- [x] Same — older\n", 0, 0, 1, 1, "Same")
+        f = self.run_echo("## Work\n- [x] Same — new\n- [x] Same — older\n", 0, 0, 1, 1, 0, "Same")
         self.assertEqual((f["transition"], f["ticked"]), ("done", "2"))
 
     def test_the_counts_the_next_call_passes_back(self):
-        f = self.run_echo("## Work\n- [ ] Same\n- [ ] Same\n- [x] Same — old\n- [x] Other\n")
-        self.assertEqual((f["text"], f["opens"], f["checks"]), ("Same", "2", "1"))
+        f = self.run_echo("## Work\n- [x] Same — first\n- [ ] Same\n- [ ] Same\n- [x] Same — old\n- [x] Other\n")
+        self.assertEqual((f["text"], f["opens"], f["checks"], f["above"]), ("Same", "2", "2", "1"))
+
+    # -- task 220, impl round 1 --
+    def test_a_later_duplicate_ticked_out_of_order_is_a_skip(self):
+        prev = (1, 0, 2, 0, 0, "Verify")              # Verify open twice, the first one shown (opus, codex)
+        f = self.run_echo("## Work\n- [x] Fix A\n- [ ] Verify\n- [ ] Fix B\n- [x] Verify — early\n", *prev)
+        self.assertEqual(f["transition"], "skip")
+        f = self.run_echo("## Work\n- [x] Fix A\n- [x] Verify — ok\n- [ ] Fix B\n- [ ] Verify\n", *prev)
+        self.assertEqual((f["transition"], f["ticked"]), ("done", "3"))
+
+    def test_a_lone_cr_inside_a_gates_text_still_matches_its_stored_copy(self):
+        f = self.run_echo("## Work\n- [ ] Alpha\rstep\n- [ ] B\n", 0, 0, 1, 0, 0, "Alphastep")
+        self.assertEqual(f["transition"], "same")      # sonnet
 
     def test_the_cut_texts_count_characters(self):
         f = self.run_echo("## Work\n- [ ] " + "ș" * 250 + "\n")

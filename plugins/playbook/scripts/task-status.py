@@ -21,24 +21,26 @@ uses, so Python and the enforcing hooks cannot disagree about the same file.
                                      ONE rule, decided here, never re-derived from
                                      the gate text in bash) — one spawn for
                                      everything the stop-hook needs
-  task-status.py --echo <task.md> [<P> <B> <OPENS> <CHECKS> <T>]
-                                     twelve lines for the state echo (tasks 219,
+  task-status.py --echo <task.md> [<P> <B> <OPENS> <CHECKS> <ABOVE> <T>]
+                                     thirteen lines for the state echo (tasks 219,
                                      220): total, checked, the first live open
                                      gate's line, its position among the live gates
                                      (-1 none), the checked live gates below it, the
                                      transition from the gate the echo last saw
                                      (position P, B checked below it, OPENS open
                                      copies of its text T, CHECKS checked gates that
-                                     are T with one span inserted): `none` (no
+                                     are T with one span inserted, ABOVE of them
+                                     above T's first open copy): `none` (no
                                      previous), `same`, `skip` (the same open gate,
                                      a gate below it checked), `done` / `done-bare`
                                      (T's open copies fewer AND its checked matches
-                                     more — with a note / exactly T), `moved` (T is
+                                     more, above a copy still open — with a note /
+                                     exactly T), `moved` (T is
                                      still open: a gate added, moved or unticked
                                      above), `reworded` (T is gone); the checked
                                      line (done only); the first open gate's full
                                      text, its first 200 and 60 characters, and that
-                                     text's OPENS and CHECKS for the next call
+                                     text's OPENS, CHECKS and ABOVE for the next call
 
 Exits 0 on success. Any failure (missing file, import error) exits non-zero with a
 one-line diagnostic on stderr; the hooks treat that as UNREADABLE state and fail
@@ -66,15 +68,16 @@ def _span_match(t: str, s: str) -> bool:
     return p + q >= len(t)
 
 
-def _echo_fields(lines: "list[str]", prev: "tuple[int, int, int, int, str] | None") -> "list[str]":
-    """`--echo`'s twelve fields (see the module docstring). A gate is a live (unfenced) `- [ ]` / `- [x]` line, read
+def _echo_fields(lines: "list[str]", prev: "tuple[int, int, int, int, int, str] | None") -> "list[str]":
+    """`--echo`'s thirteen fields (see the module docstring). A gate is a live (unfenced) `- [ ]` / `- [x]` line, read
     the way `tasks.core._live_gate_scan` reads it; the previous gate is known by its text and how many copies of it
     were open and checked — never by its line — so lines added above it or a fenced checklist change nothing.
 
     The tick (task 220, after task 219's two reviews found position rules both missing and inventing ticks): the
     previous gate T was ticked when its open copies are FEWER than before AND the checked gates that are T with one
-    span inserted (a note after, before or inside it) are MORE than before. The tick named is that match at the
-    previous place P, else the one nearest to it; bare when it is exactly T."""
+    span inserted (a note after, before or inside it) are MORE than before — and, while a copy of T is still open,
+    more of them ABOVE that first open copy. The tick named is that match at the previous place P, else the one
+    nearest to it; bare when it is exactly T."""
     from tasks.core import _GATE_LINE_RE, _iter_fenced_flags
     fenced = _iter_fenced_flags(lines, unclosed_is_live=True, track_indented_code=False)
     gates: "list[tuple[int, bool, str]]" = []          # (line, checked, text)
@@ -84,7 +87,9 @@ def _echo_fields(lines: "list[str]", prev: "tuple[int, int, int, int, str] | Non
         raw = line.lstrip("\ufeff").rstrip("\r\n")
         m = _GATE_LINE_RE.match(raw)
         if m:
-            gates.append((i + 1, m.group(1) != " ", raw[m.end():].strip()))
+            # a lone CR inside the text (not a line break, task 214) is dropped here, where the gates are read,
+            # not only where they are printed (task 220, sonnet: the stored copy never matched)
+            gates.append((i + 1, m.group(1) != " ", raw[m.end():].strip().replace("\r", "")))
     first = next((k for k, g in enumerate(gates) if not g[1]), -1)
     below = sum(1 for g in gates[first + 1:] if g[1]) if first >= 0 else 0
     text = gates[first][2] if first >= 0 else ""
@@ -95,11 +100,20 @@ def _echo_fields(lines: "list[str]", prev: "tuple[int, int, int, int, str] | Non
     def matches_of(t: str) -> "list[int]":
         return [k for k, g in enumerate(gates) if g[1] and _span_match(t, g[2])]
 
+    def above_of(t: str) -> int:
+        """the checked matches of t above its first open copy (all of them when it has none)"""
+        fo = next((k for k, g in enumerate(gates) if not g[1] and g[2] == t), None)
+        return sum(1 for k in matches_of(t) if fo is None or k < fo)
+
     transition, ticked = "none", ""
     if prev is not None:
-        pos, prev_below, prev_opens, prev_checks, prev_text = prev
+        pos, prev_below, prev_opens, prev_checks, prev_above, prev_text = prev
         matches = matches_of(prev_text)
-        if opens_of(prev_text) < prev_opens and len(matches) > prev_checks:
+        # when a copy of T is still open, the new match must sit ABOVE it — a later copy ticked out of order is a skip
+        # (task 220, impl round 1: opus, codex)
+        still_open = opens_of(prev_text) > 0
+        if (opens_of(prev_text) < prev_opens and len(matches) > prev_checks
+                and (not still_open or above_of(prev_text) > prev_above)):
             k = pos if pos in matches else min(matches, key=lambda m: (abs(m - pos), m))
             transition = "done-bare" if gates[k][2] == prev_text else "done"
             ticked = str(gates[k][0])
@@ -114,12 +128,12 @@ def _echo_fields(lines: "list[str]", prev: "tuple[int, int, int, int, str] | Non
     return [str(len(gates)), str(sum(1 for g in gates if g[1])), str(gates[first][0]) if first >= 0 else "",
             str(first), str(below), transition, ticked, text.replace("\r", ""), text[:200].replace("\r", ""),
             text[:60].replace("\r", ""), str(opens_of(text) if first >= 0 else 0),
-            str(len(matches_of(text)) if first >= 0 else 0)]
+            str(len(matches_of(text)) if first >= 0 else 0), str(above_of(text) if first >= 0 else 0)]
 
 
 def main(argv: "list[str]") -> int:
     fields = echo = False
-    prev: "tuple[int, int, int, int, str] | None" = None
+    prev: "tuple[int, int, int, int, int, str] | None" = None
     args = argv[1:]
     if args and args[0] == "--fields":
         fields = True
@@ -127,15 +141,15 @@ def main(argv: "list[str]") -> int:
     elif args and args[0] == "--echo":
         echo = True
         args = args[1:]
-        if len(args) == 6:
+        if len(args) == 7:
             try:
-                prev = (int(args[1]), int(args[2]), int(args[3]), int(args[4]), args[5])
+                prev = (int(args[1]), int(args[2]), int(args[3]), int(args[4]), int(args[5]), args[6])
             except ValueError:
-                print("task-status: --echo's <P>, <B>, <OPENS> and <CHECKS> must be integers", file=sys.stderr)
+                print("task-status: --echo's <P>, <B>, <OPENS>, <CHECKS> and <ABOVE> must be integers", file=sys.stderr)
                 return 2
             args = args[:1]
     if len(args) != 1:
-        print("usage: task-status.py [--fields | --echo] <task.md> [<P> <B> <OPENS> <CHECKS> <T>]", file=sys.stderr)
+        print("usage: task-status.py [--fields | --echo] <task.md> [<P> <B> <OPENS> <CHECKS> <ABOVE> <T>]", file=sys.stderr)
         return 2
     task_file = Path(args[0])
     if not task_file.is_file():

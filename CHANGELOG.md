@@ -105,16 +105,20 @@ were about 8 % of all the text held before a compaction.
   the open gate and a fenced checklist change nothing. A completion is logged `[x]` in `chat_log.md` when the previous
   gate's open copies are fewer AND the checked gates that are its text with one span inserted — a note after, before
   or inside it — are more (tasks 219-220: position rules missed a note written inside the text and took a checked
-  gate moved onto the open one's place for its tick). A gate added, moved or unticked above it is logged "left open";
-  a reworded gate is the same gate. Until now any change of the gate's line logged the previous gate as done —
+  gate moved onto the open one's place for its tick); while a copy of the same text is still open, the new match
+  must sit above it, so a later copy ticked out of order is a skip. A gate added, moved or unticked above it is
+  logged "left open"; a reworded gate is the same gate. One limit stays: a tick that also changes the gate's own words
+  (beyond a note) is read as a reword and gets no `[x]` entry — the template's rule is to append, never replace. Until now any change of the gate's line logged the previous gate as done —
   a false `[x]` the retros read — and printed "Gate at line N is still open above completed gate"; the skip warning
   now means a gate below the open one was checked.
 - A change is delivered once and not lost: the call that prints it claims it while it holds the counters lock (the
   claim names the hook's pid and its start time), and checks, prints and acknowledges it in a third short hold, inside
   the same one-wait limit; a side-by-side call stays quiet, a hook that lost its claim prints nothing, and a change
   whose hook died — or whose print failed — is printed by the next call with its transition and warnings.
-  The echo's memory lives in the session's counters as `gate_*` fields, so a prompt's reset keeps it; no python runs
-  while the counters lock is held — a read that another call overtook is only counted; a write that fails is said.
+  The one-shot lines wait in a file written before the gate is stored; the `[x]` entry is appended only after the
+  counters were written, under the chat log's lock taken before the decision. The echo's memory lives in the
+  session's counters as `gate_*` fields, so a prompt's reset keeps it; no python runs while the counters lock is
+  held — a read that another call overtook is only counted; a write that fails is said.
 - Not verified live: that SessionStart runs at a compaction is Claude Code's documented behavior, and no record of
   either answer exists in 77 compactions of the transcripts (a run is recorded only when the hook prints); the
   release's live check is to compact an interactive session and see the next call print in full. Until then a missed

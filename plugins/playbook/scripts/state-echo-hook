@@ -508,6 +508,15 @@ if [ -z "$TASK" ]; then
         if [ "$PLAYBOOK_WRITE_FAILED" = true ] && [ "$PB_MODE" != full ]; then PB_MODE=full; fi
         if [ "$PLAYBOOK_WRITE_FAILED" != true ] && [ "${PB_MEMORY[0]}" = gate_echo_claim ]; then PB_CLAIMED=true; fi
     fi
+    if [ "$PB_MODE" = full ] && [ "$PB_REMEMBER" = true ] && [ -f "$ECHO_PENDING_FILE" ] && [ ! -L "$ECHO_PENDING_FILE" ]; then
+        # one-shot lines a dead or failed hook left are said here too before the acknowledgement clears them
+        # (task 220, impl round 1, grok)
+        PB_PENDING_TEXT=$(cat -- "$ECHO_PENDING_FILE" 2>/dev/null || true)
+        if [ -n "$PB_PENDING_TEXT" ]; then
+            PB_CORE="${PB_PENDING_TEXT}
+${PB_CORE}"
+        fi
+    fi
     counters_unlock
     if [ "$PB_MODE" = full ]; then
         _pb_print "no-task" "$(_pb_warnings "$PB_CORE")"
@@ -525,23 +534,24 @@ if [ -z "$TASK_FILE" ]; then
 fi
 
 # _pb_prev — the gate the counters hold (the one the echo saw last), one line: task, position, below, the open copies
-# of its text and its checked matches (task 220), line, text — split by US (0x1f), never a tab: a tab is a whitespace
+# of its text, its checked matches and those above its first open copy (task 220), line, text — split by US (0x1f), never a tab: a tab is a whitespace
 # IFS character, so `read` would drop an empty field (an empty task read the next field, "0", as the task — measured). The count is not in it (impl round
 # 1, opus: a stale call counts on the stored gate, which would make every other call of the burst stale too).
 _pb_prev() {
     local t
     t=$(read_counter "$COUNTER_FILE" gate_task)
     case "$t" in *[!0-9]*) t="" ;; esac
-    printf '%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s' "$t" "$(read_counter_int "$COUNTER_FILE" gate_pos)" \
+    printf '%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s' "$t" "$(read_counter_int "$COUNTER_FILE" gate_pos)" \
         "$(read_counter_int "$COUNTER_FILE" gate_below)" "$(read_counter_int "$COUNTER_FILE" gate_opens)" \
-        "$(read_counter_int "$COUNTER_FILE" gate_checks)" \
+        "$(read_counter_int "$COUNTER_FILE" gate_checks)" "$(read_counter_int "$COUNTER_FILE" gate_above)" \
         "$(read_counter_int "$COUNTER_FILE" gate_line)" "$(read_counter "$COUNTER_FILE" gate_text)"
 }
 PB_PREV_SEEN=$(_pb_prev)
-IFS=$'\x1f' read -r PREV_TASK PREV_POS PREV_BELOW PREV_OPENS PREV_CHECKS PREV_LINE PREV_TEXT <<< "$PB_PREV_SEEN" || true
+IFS=$'\x1f' read -r PREV_TASK PREV_POS PREV_BELOW PREV_OPENS PREV_CHECKS PREV_ABOVE PREV_LINE PREV_TEXT <<< "$PB_PREV_SEEN" \
+    || true
 PB_ECHO_ARGS=()
 if [ -n "$PREV_TASK" ] && [ "$PREV_TASK" = "$TASK" ]; then
-    PB_ECHO_ARGS=("$PREV_POS" "$PREV_BELOW" "$PREV_OPENS" "$PREV_CHECKS" "$PREV_TEXT")
+    PB_ECHO_ARGS=("$PREV_POS" "$PREV_BELOW" "$PREV_OPENS" "$PREV_CHECKS" "$PREV_ABOVE" "$PREV_TEXT")
 fi
 
 # The gates, read the way the CLI reads them (fence-aware, physical lines) — one spawn, before the hold. The file's
@@ -551,7 +561,7 @@ PB_GATES_OK=true
 PB_ECHO_OUT=$(python3 -E -s "$HOOK_DIR/task-status.py" --echo "$TASK_FILE" "${PB_ECHO_ARGS[@]}" 2>/dev/null) \
     || PB_GATES_OK=false
 TOTAL_GATES=""; DONE_GATES=""; GATE_LINE=""; GATE_POS=""; GATE_BELOW=""; TRANS=""; TICKED_LINE=""
-GATE_TEXT_FULL=""; GATE_TEXT=""; PB_SHORT=""; GATE_OPENS=""; GATE_CHECKS=""
+GATE_TEXT_FULL=""; GATE_TEXT=""; PB_SHORT=""; GATE_OPENS=""; GATE_CHECKS=""; GATE_ABOVE=""
 {
     IFS= read -r TOTAL_GATES || true
     IFS= read -r DONE_GATES || true
@@ -565,6 +575,7 @@ GATE_TEXT_FULL=""; GATE_TEXT=""; PB_SHORT=""; GATE_OPENS=""; GATE_CHECKS=""
     IFS= read -r PB_SHORT || true
     IFS= read -r GATE_OPENS || true
     IFS= read -r GATE_CHECKS || true
+    IFS= read -r GATE_ABOVE || true
 } <<< "$PB_ECHO_OUT"
 case "$TRANS" in none|same|skip|done|done-bare|moved|reworded) ;; *) PB_GATES_OK=false ;; esac
 if [ "$PB_GATES_OK" != true ]; then
@@ -626,10 +637,12 @@ if [ "$PB_SUBAGENT" = true ]; then
     exit 0
 fi
 
-# The entry and the new gate go together or not at all (impl rounds 1-3 of task 182): the entry is appended under
-# the chat log's lock — the one `tasks tag` and the chat-log hook use (task 058) — which is TRIED, not waited for,
-# under ours; where it is not given, or ours was not, NOTHING is appended and the gate is not advanced: the next call
-# finds the old gate and tries again.
+# The entry and the new gate go together or not at all (task 182): the entry is appended under the chat log's lock —
+# the one `tasks tag` and the chat-log hook use (task 058) — which is TRIED, not waited for, under ours; where it is
+# not given, or ours was not, NOTHING is written and the gate is not advanced: the next call finds the old gate and
+# tries again. Since task 220 that lock is taken BEFORE the decision, held over the counters write, and the entry is
+# appended only once the counters were written (impl round 1, grok: an entry appended before a counters write that
+# failed was appended again by the retry).
 _gate_append() {
     {
         echo "---"
@@ -644,30 +657,29 @@ _gate_append() {
         echo ""
     } >> "$GATE_LOG" 2>/dev/null
 }
-# _log_gate_entry — 0: the entry is in the log, or it could not be WRITTEN (said by PLAYBOOK_WRITE_FAILED — a log
-# that cannot be written must not hold the gate for ever). 3: it could not be written YET — the gate stays as it is.
-_log_gate_entry() {
-    local rc=0
+PB_CHATLOG_HELD=false
+# _pb_chatlog_take — 0: the entry may be written (the lock is held, or this host has no lock to take); 3: not yet
+# (the lock is held by another process, or ours was not given); 4: the lock file cannot be opened (said as a write
+# failure; the gate moves on without its entry, as before)
+_pb_chatlog_take() {
     [ "$PLAYBOOK_COUNTERS_UNLOCKED" != true ] || return 3
-    # A chat log or its lock that is a link or not a regular file is not ours (task 194): the entry is not written —
-    # said as the write failure it is — and the gate moves on.
-    if ! _pb_sink_ok "" "$GATE_LOG" || ! _pb_sink_ok "" "$AGENT_DIR/chat_log_counter.lock"; then
-        PLAYBOOK_WRITE_FAILED=true
-        return 0
-    fi
     # (a host whose `flock` cannot wait with a limit has no lock to take: the entry is appended without one)
     if command -v flock &>/dev/null && [ "$_PB_COUNTERS_NOLOCK" != true ]; then
-        ( flock -n 202 2>/dev/null || exit 3; _gate_append || exit 4 ) \
-            202>"$AGENT_DIR/chat_log_counter.lock" || rc=$?
-    else
-        _gate_append || rc=4
+        { exec 202>"$AGENT_DIR/chat_log_counter.lock"; } 2>/dev/null || return 4
+        if ! flock -n 202 2>/dev/null; then
+            { exec 202>&-; } 2>/dev/null || true
+            return 3
+        fi
+        PB_CHATLOG_HELD=true
     fi
-    case "$rc" in
-        0) return 0 ;;
-        3) return 3 ;;
-        *) PLAYBOOK_WRITE_FAILED=true
-           return 0 ;;
-    esac
+    return 0
+}
+_pb_chatlog_give() {
+    if [ "$PB_CHATLOG_HELD" = true ]; then
+        { exec 202>&-; } 2>/dev/null || true
+        PB_CHATLOG_HELD=false
+    fi
+    return 0
 }
 
 # --- The hold: the read checked again, the entry, the new gate and the memory in one write ----------------------
@@ -739,14 +751,25 @@ elif [ -n "$PREV_TASK" ]; then
     esac
 fi
 
+PB_ENTRY_WRITE=false
 if [ -n "$ENTRY_KIND" ] && [ "$AGENT_WRITABLE" = true ]; then
-    if ! _log_gate_entry; then
-        # not yet: nothing is told, nothing is written — as if this call had not seen the change
-        PB_GATE_PENDING=true
-        TRANSITION_MSG=""
-        SKIP_MSG=""
-        BARE_MSG=""
-        NEW_COUNT=$PREV_COUNT
+    if ! _pb_sink_ok "" "$GATE_LOG" || ! _pb_sink_ok "" "$AGENT_DIR/chat_log_counter.lock"; then
+        # a chat log or its lock that is a link or not a regular file is not ours (task 194): the entry is not
+        # written — said as the write failure it is — and the gate moves on
+        PLAYBOOK_WRITE_FAILED=true
+    else
+        PB_TAKE_RC=0
+        _pb_chatlog_take || PB_TAKE_RC=$?
+        case "$PB_TAKE_RC" in
+            0) PB_ENTRY_WRITE=true ;;
+            3) # not yet: nothing is told, nothing is written — as if this call had not seen the change
+               PB_GATE_PENDING=true
+               TRANSITION_MSG=""
+               SKIP_MSG=""
+               BARE_MSG=""
+               NEW_COUNT=$PREV_COUNT ;;
+            *) PLAYBOOK_WRITE_FAILED=true ;;
+        esac
     fi
 fi
 PB_FORCE=false
@@ -755,45 +778,65 @@ if [ -n "$TRANSITION_MSG" ] || [ -n "$SKIP_MSG" ] || [ -n "$BARE_MSG" ] || _pb_w
 fi
 _pb_decide "$PB_KEY" "$PB_FORCE"
 if [ "$PB_MODE" = full ] && [ "$PB_REMEMBER" = true ] && [ "$PLAYBOOK_COUNTERS_UNLOCKED" != true ]; then
-    # one-shot lines not yet printed (a hook that claimed them died) come first; this call's own join them, and they
-    # wait in `echo_pending` until a print is acknowledged
+    # one-shot lines not yet printed (a hook that claimed them died, or its print failed) come first
     if [ -f "$ECHO_PENDING_FILE" ] && [ ! -L "$ECHO_PENDING_FILE" ]; then
         PB_PENDING_TEXT=$(cat -- "$ECHO_PENDING_FILE" 2>/dev/null || true)
     fi
 fi
 PB_ONE_SHOT="${TRANSITION_MSG}${SKIP_MSG}${BARE_MSG}"
 if [ "$AGENT_WRITABLE" = true ]; then
+    # the one-shot lines are written to `echo_pending` FIRST, in this hold, so a hook killed right after storing the
+    # gate cannot lose them (task 220, impl round 1, codex); they are put back as they were if the counters write fails
+    # (sonnet: they piled up while writes failed)
+    PB_PENDING_WRITTEN=false
+    if [ "$PB_MODE" = full ] && [ "$PB_REMEMBER" = true ] && [ "$PLAYBOOK_COUNTERS_UNLOCKED" != true ] \
+       && [ -n "$PB_ONE_SHOT" ] && [ "$PB_GATE_PENDING" != true ] && _pb_sink_ok "" "$ECHO_PENDING_FILE"; then
+        if printf '%s' "${PB_PENDING_TEXT:+${PB_PENDING_TEXT}
+}${PB_ONE_SHOT}" > "$ECHO_PENDING_FILE" 2>/dev/null; then
+            PB_PENDING_WRITTEN=true
+        fi
+    fi
     PB_GATE_FIELDS=()
     if [ "$PB_GATE_PENDING" != true ]; then
         if [ -n "$GATE_LINE" ]; then
             PB_GATE_FIELDS=(gate_task "$TASK" gate_pos "$GATE_POS" gate_below "$GATE_BELOW"
                             gate_opens "$(_safe_int "$GATE_OPENS")" gate_checks "$(_safe_int "$GATE_CHECKS")"
-                            gate_text "$GATE_TEXT_FULL" gate_line "$GATE_LINE"
-                            gate_count "$NEW_COUNT")
+                            gate_above "$(_safe_int "$GATE_ABOVE")" gate_text "$GATE_TEXT_FULL"
+                            gate_line "$GATE_LINE" gate_count "$NEW_COUNT")
         else
-            # All gates done — the final gate was logged above; clear the gate fields, keep tools/writes
-            PB_GATE_FIELDS=(gate_task "" gate_pos "" gate_below "" gate_opens "" gate_checks "" gate_text ""
-                            gate_line "" gate_count "")
+            # All gates done — the final gate is logged below; clear the gate fields, keep tools/writes
+            PB_GATE_FIELDS=(gate_task "" gate_pos "" gate_below "" gate_opens "" gate_checks "" gate_above ""
+                            gate_text "" gate_line "" gate_count "")
         fi
     fi
-    # the gate and the memory in ONE rewrite (impl round 1, sonnet); a write that fails is said, never a quiet call
-    # (codex: a failing quiet-count write kept the warning hidden)
+    # the gate and the memory in ONE rewrite (impl round 1 of task 219, sonnet); whether THIS write failed is kept apart
+    # from an earlier failure of the call, because only a stored gate may get its entry
+    PB_FAILED_BEFORE=$PLAYBOOK_WRITE_FAILED
+    PLAYBOOK_WRITE_FAILED=false
     if [ "${#PB_GATE_FIELDS[@]}" -gt 0 ] || [ "${#PB_MEMORY[@]}" -gt 0 ]; then
         write_counters "$COUNTER_FILE" "${PB_GATE_FIELDS[@]}" "${PB_MEMORY[@]}"
     fi
+    PB_THIS_FAILED=$PLAYBOOK_WRITE_FAILED
+    if [ "$PB_FAILED_BEFORE" = true ]; then PLAYBOOK_WRITE_FAILED=true; fi
+    if [ "$PB_THIS_FAILED" = true ] && [ "$PB_PENDING_WRITTEN" = true ]; then
+        if [ -n "$PB_PENDING_TEXT" ]; then
+            printf '%s' "$PB_PENDING_TEXT" > "$ECHO_PENDING_FILE" 2>/dev/null || true
+        else
+            rm -f -- "$ECHO_PENDING_FILE" 2>/dev/null || true
+        fi
+    fi
+    # a write that fails is said, never a quiet call (codex: a failing quiet-count write kept the warning hidden)
     if [ "$PLAYBOOK_WRITE_FAILED" = true ] && [ "$PB_MODE" != full ]; then
         PB_MODE=full
     fi
-    if [ "$PLAYBOOK_WRITE_FAILED" != true ] && [ "${PB_MEMORY[0]:-}" = gate_echo_claim ]; then
+    if [ "$PB_THIS_FAILED" != true ] && [ "${PB_MEMORY[0]:-}" = gate_echo_claim ]; then
         PB_CLAIMED=true
     fi
-    # the one-shot lines wait in `echo_pending` until a print is acknowledged — written only once the gate they belong
-    # to was stored (task 220, sonnet: while writes failed the same lines piled up there call after call)
-    if [ "$PB_MODE" = full ] && [ "$PB_REMEMBER" = true ] && [ "$PLAYBOOK_COUNTERS_UNLOCKED" != true ] \
-       && [ "$PLAYBOOK_WRITE_FAILED" != true ] && [ -n "$PB_ONE_SHOT" ] && _pb_sink_ok "" "$ECHO_PENDING_FILE"; then
-        printf '%s' "${PB_PENDING_TEXT:+${PB_PENDING_TEXT}
-}${PB_ONE_SHOT}" > "$ECHO_PENDING_FILE" 2>/dev/null || true
+    # the entry, only once the counters were written (task 220, grok)
+    if [ "$PB_ENTRY_WRITE" = true ] && [ "$PB_THIS_FAILED" != true ]; then
+        _gate_append || PLAYBOOK_WRITE_FAILED=true
     fi
+    _pb_chatlog_give
 fi
 counters_unlock
 
@@ -827,8 +870,18 @@ if [ -n "$TRANSITION_MSG" ]; then
 ${PB_FULL}"
 fi
 if [ -n "$PB_PENDING_TEXT" ]; then
-    PB_FULL="${PB_PENDING_TEXT}
+    # a line this call says itself is said once (a hook killed after writing it, the change seen again — task 220)
+    PB_PENDING_KEPT=""
+    while IFS= read -r PB_LN; do
+        [ -n "$PB_LN" ] || continue
+        case "$TRANSITION_MSG$SKIP_MSG$BARE_MSG" in *"$PB_LN"*) continue ;; esac
+        PB_PENDING_KEPT="${PB_PENDING_KEPT:+${PB_PENDING_KEPT}
+}${PB_LN}"
+    done <<< "$PB_PENDING_TEXT"
+    if [ -n "$PB_PENDING_KEPT" ]; then
+        PB_FULL="${PB_PENDING_KEPT}
 ${PB_FULL}"
+    fi
 fi
 PB_FULL="${PB_FULL}${SKIP_MSG}${BARE_MSG}"
 if [ -n "$EVAL_MARKER" ]; then
