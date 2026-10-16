@@ -89,8 +89,9 @@ def _restore_linked(e: dict, restored: "list[str]", removed: "list[str]", errors
     (`atomic_write` on CLAUDE.md, .gitignore, the project's settings.json — `os.replace` puts the file where the link
     was). So: where the link is gone it is put back — a dangling one too — and its target gets back the bytes it had
     (impl panels r1 and r2: restoring at the link's path broke the link; restoring only at its target left init's
-    file where the link was). No writer of init writes THROUGH a link that dangles, so nothing is made at a missing
-    target to remove."""
+    file where the link was). A target that did not exist before init and is a file now — init wrote THROUGH a link
+    that dangled, as its shell redirection into `.agent/config.json` does — is removed (the post-panel judge, run 1:
+    the branch I had dropped as unreachable was reached)."""
     path, link, target = e["path"], e["link"], e["target"]
     try:
         if not (os.path.islink(path) and os.readlink(path) == link):
@@ -111,6 +112,9 @@ def _restore_linked(e: dict, restored: "list[str]", removed: "list[str]", errors
                 atomic_write(target, data)
                 if e.get("mode") is not None:
                     os.chmod(target, e["mode"])
+        elif e.get("target_existed") is False and os.path.isfile(target) and not os.path.islink(target):
+            os.unlink(target)
+            removed.append(target)
         restored.append(path)
     except OSError as exc:
         errors.append(f"could not restore the link {path}: {exc}")
@@ -143,6 +147,7 @@ def begin() -> int:
             # task 221: a file that is a symbolic link — its link text and its target (see `_restore_linked`)
             "link": _link_text(f),
             "target": os.path.realpath(f) if os.path.islink(f) else None,
+            "target_existed": os.path.lexists(os.path.realpath(f)) if os.path.islink(f) else None,
         }
         for f in files
     ]

@@ -5990,10 +5990,12 @@
         {
           "type": "executable integration",
           "path": "tests/test_shell_log_writer.py",
-          "reference": "OneCallOneLine.test_thirty_thousand_trailing_newlines_are_dropped_quickly",
+          "reference": "OneCallOneLine.test_two_hundred_thousand_trailing_newlines_are_dropped_quickly",
           "boundary": "subprocess",
           "negative_control": null,
-          "limitations": []
+          "limitations": [
+            "200,000 trailing newlines (+100 CRLF) dropped in under 3 s: one regex match and one cut — a per-byte scan was quadratic (the post-panel judge: 60,000 took 6.1 s)."
+          ]
         },
         {
           "type": "executable integration",
@@ -8943,6 +8945,16 @@
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_init_rollback.py",
+          "reference": "InitRollback.test_what_init_writes_through_a_dangling_link_is_removed",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The post-panel judge of task 221 (run 1, reproduced): init writes `.agent/config.json` through a dangling link; the target it made is removed, the link kept."
+          ]
         }
       ],
       "applicable_platforms": [

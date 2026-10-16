@@ -168,9 +168,10 @@ class OneCallOneLine(_Lane):
         self.assertEqual(r.stderr, "")
         return time.time() - t0
 
-    def test_thirty_thousand_trailing_newlines_are_dropped_quickly(self):
-        # impl panel r2 (codex): dropping them one at a time was quadratic — 7.8 s through the hook
-        took = self._from_file("echo hi" + "\n" * 30000 + "\r\n" * 100)
+    def test_two_hundred_thousand_trailing_newlines_are_dropped_quickly(self):
+        # impl panel r2 (codex): dropping them one at a time was quadratic — 30,000 took 7.8 s through the hook; the
+        # post-panel judge (run 1): a per-byte scan from the end was quadratic too (60,000: 6.1 s) — 200,000 here
+        took = self._from_file("echo hi" + "\n" * 200000 + "\r\n" * 100)
         self.assertLess(took, 3.0)
         self.assertEqual(self.commands(), ["echo hi"])
 

@@ -287,6 +287,19 @@ class InitRollback(unittest.TestCase):
         self.assertEqual(os.readlink(self.project / "CLAUDE.md"), "NOWHERE.md")
         self.assertFalse((self.project / "NOWHERE.md").exists())
 
+    def test_what_init_writes_through_a_dangling_link_is_removed(self):
+        """The post-panel judge (run 1, codex — reproduced): init writes `.agent/config.json` THROUGH a link, so a
+        dangling one got a target made at rollback-time and kept — my claim that no writer reaches it was wrong."""
+        settings = self.project / ".claude" / "settings.json"
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        settings.write_text("{ this is not json\n", encoding="utf-8")
+        (self.project / ".agent").mkdir()
+        (self.project / ".agent" / "config.json").symlink_to("missing-config")
+        r = self._run()
+        self.assertNotEqual(r.returncode, 0)
+        self.assertTrue((self.project / ".agent" / "config.json").is_symlink(), "the link is kept")
+        self.assertFalse((self.project / ".agent" / "missing-config").exists(), "init's file at the target stayed")
+
     def test_interrupt_signal_rolls_back(self):
         """A SIGTERM mid-run (Ctrl-C class) is trapped → init exits non-zero →
         rollback. Every earlier stage's modifications come back byte-identical."""
