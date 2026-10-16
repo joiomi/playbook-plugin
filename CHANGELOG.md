@@ -114,10 +114,15 @@ were about 8 % of all the text held before a compaction.
   quiet, and a change whose hook died before printing is printed by the next call, with its transition and warnings.
   The echo's memory lives in the session's counters as `gate_*` fields, so a prompt's reset keeps it; no python runs
   while the counters lock is held — a read that another call overtook is only counted; a write that fails is said.
+- Known limits, left by task 219's last review and taken up by the next task (none lets a guard open or loses data):
+  a tick with the note inside the text is missed when the same edit adds or removes a gate; a checked gate that
+  starts with the open gate's text, moved onto its place, or an identical checked gate elsewhere when the open one is
+  reworded, can be logged as its tick; a skip warning whose print failed waits for the next change; a hook that lost
+  its claim while preparing can still print its older state.
 - Not verified live: that SessionStart runs at a compaction is Claude Code's documented behavior, and no record of
   either answer exists in 77 compactions of the transcripts (a run is recorded only when the hook prints); the
   release's live check is to compact an interactive session and see the next call print in full. Until then a missed
-  marker costs at most 10 calls.
+  marker costs at most 10 calls. Likewise not verified live: that a subagent's payload carries `agent_id`.
 
 ## [1.6.3] — 2026-10-15
 
