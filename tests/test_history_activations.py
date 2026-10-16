@@ -198,6 +198,39 @@ class TheCliRecordsWhatHappened(_Project):
         self.assertEqual(w[1][1], w[2][0], "task 1's window ends where task 2's begins")
 
 
+class TiesAndSpacing(_Project):
+    def test_a_record_with_spaces_in_its_json_is_read(self):
+        # found re-checking impl panel r1: a pre-filter on the compact `"hook":"tasks"` skipped any other spelling
+        self.journal.write_text('{"ts": "2026-10-01T10:00:00Z", "hook": "tasks", "decision": "record", '
+                                '"reason": "work", "task": "7"}\n', encoding="utf-8")
+        self.assertEqual(self.records(), [("work", "7", "")])
+
+    def test_activations_in_the_same_second_keep_their_order_against_a_gate_entry(self):
+        # impl panel r1 (codex): a gate entry's `… UTC` stamp sorted after the journal's bare one at a tie, so the
+        # chat after `work 1 && work 2` (task 1 with a gate entry that second) went to task 1
+        sys.path.insert(0, str(PLUGIN))
+        try:
+            from tasks.retro import build_task_windows, extract_chatlog
+        finally:
+            sys.path.remove(str(PLUGIN))
+        chat = self.project / ".agent" / "chat_log.md"
+        chat.write_text("**[G001:5]** [2026-10-01 10:00:00 UTC] `HOST` (1 tool calls)\n\n- [x] a gate\n\n---\n\n"
+                        "**[M001]** [2026-10-01 10:00:30 UTC] `HOST` (claude/pid-1)\n\nafter both\n\n---\n",
+                        encoding="utf-8")
+        self.journal.write_text(rec("2026-10-01 10:00:00", "work", "001") + rec("2026-10-01 10:00:00", "work", "002"),
+                                encoding="utf-8")
+        w = build_task_windows(chat, self.journal)
+        self.assertEqual([m.get("task") for m in extract_chatlog(chat, w)], [2], w)
+        self.assertEqual(w[1][1], w[2][0])
+        # the other way round (mutation run, task 221): task 2's gate entry first in the chat log, the journal saying
+        # task 2 was activated AFTER task 1 in that second — the journal's order decides, not the chat log's
+        chat.write_text("**[G002:5]** [2026-10-01 10:00:00 UTC] `HOST` (1 tool calls)\n\n- [x] a gate\n\n---\n\n"
+                        "**[M001]** [2026-10-01 10:00:30 UTC] `HOST` (claude/pid-1)\n\nafter both\n\n---\n",
+                        encoding="utf-8")
+        w = build_task_windows(chat, self.journal)
+        self.assertEqual([m.get("task") for m in extract_chatlog(chat, w)], [2], w)
+
+
 class AJournalThatIsNotTheLanesOwn(_Project):
     def test_a_linked_or_fifo_journal_reads_as_no_records(self):
         outside = Path(self._tmp.name) / "outside.jsonl"

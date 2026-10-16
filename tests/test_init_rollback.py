@@ -234,6 +234,25 @@ class InitRollback(unittest.TestCase):
         self.assertIn("settings.json", r.stdout + r.stderr)
         self._assert_restored_and_clean(r, originals, expect_modified=str(rc))
 
+    def test_a_linked_rc_is_restored_at_its_target_and_stays_a_link(self):
+        """impl panel r1 (opus, codex, grok — reproduced): init edits a linked `~/.profile` at its target; a failed
+        run restored over the LINK, putting a regular file in its place and leaving the target edited."""
+        settings = self.project / ".claude" / "settings.json"
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        settings.write_text("{ this is not json\n", encoding="utf-8")
+        dotfiles = self.home / "dotfiles"
+        dotfiles.mkdir()
+        target = dotfiles / "profile"
+        original = SEED_RC + "\n# claude-playbook: command logging\nexport BASH_ENV=~/.claude/bash-log.sh\n"
+        target.write_text(original, encoding="utf-8")
+        (self.home / ".profile").symlink_to(target)
+        r = self._run()
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("ROLLBACK:", r.stderr)
+        self.assertTrue((self.home / ".profile").is_symlink(), "the dotfiles link was replaced by a regular file")
+        self.assertEqual(os.readlink(self.home / ".profile"), str(target))
+        self.assertEqual(target.read_text(encoding="utf-8"), original, "the target kept init's edit")
+
     def test_interrupt_signal_rolls_back(self):
         """A SIGTERM mid-run (Ctrl-C class) is trapped → init exits non-zero →
         rollback. Every earlier stage's modifications come back byte-identical."""

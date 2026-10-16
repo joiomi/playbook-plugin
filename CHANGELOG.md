@@ -143,21 +143,24 @@ host the whole desktop session — and it cost each of them time (a small script
   none twice.
 - One writer, `gate-echo-lib.sh::shell_log_append`, under `flock` on the lane directory; a writer that gets no lock
   within `PLAYBOOK_SHELL_LOG_LOCK_WAIT` (1 s by default) writes a spool file of its own, which the next writer holding
-  the lock appends — no line is appended unlocked; past 50 MB the file is renamed to `bash_history.archived-…` under
-  the lock, nothing carried. Not through a link, not into a FIFO, not where the hook may not write; written from an
+  the lock appends; a host whose `flock` cannot wait (busybox) or that has none appends directly and never rotates;
+  past 50 MB the file is renamed to `bash_history.archived-…` under the lock, nothing carried. A command over 4 MiB
+  is cut there and the line says so; past 64 KiB the escape is one `sed -z` pass (bash's own substitution is
+  quadratic: a 5 MB command took 4.6 s per pass, measured). Not through a link, not into a FIFO, not where the hook may not write; written from an
   EXIT trap after the hook's count and answer. It adds a median +5.5 ms to a Bash call's hook
   (`scripts/bench_shell_log.py`).
 - The task windows of retro, `tasks timeline`, `tagger`, `tag` and `intent` come from the transitions the `tasks` CLI
   records in the journal when they happen (`tasks work N`, `tasks new`, `tasks work done`; `docs/enforcement-journal.md`,
   family 4), not from command lines: a skipped `&&` branch, a heredoc or a grep naming `tasks work 5` ran nothing.
-  Timeline stamps now say UTC; timeline, tagger and tag name a missing journal the way they named a missing history.
+  Timeline stamps now say UTC; timeline, tagger and tag name a missing journal the way they named a missing history;
+  activations in one second keep the journal's order.
 - The BASH_ENV logger is retired: `scripts/bash-log.sh`/`.zsh` are gone, init installs no logger, `tasks doctor` and
   `tasks environment` no longer report one, CI no longer runs the zsh step, `PLAYBOOK_NO_BASHLOG` is gone. `/playbook:init`
   removes what an earlier version installed — `~/.claude/bash-log.sh`/`.zsh` when their first line is the logger's
   header, a `BASH_ENV` naming `~/.claude/bash-log.sh` in `~/.claude/settings.json`, the exact two-line block in
   `~/.bash_profile`, `~/.profile` or `~/.zshenv` — each file first copied to its kept user backup (a failed run
-  restores them); anything it does not recognise is left and named under "Skipped". Its summary lists them under
-  "Removed".
+  restores them — a linked rc file or settings.json is edited and restored at its target, the link kept); anything
+  it does not recognise is left and named under "Skipped". Its summary lists them under "Removed".
 - Known limits: the stamp is when the tool call returned — a background command's launch; a command run after a `cd`
   into another project is logged in the session's project; no line where the hook does not run or read the payload
   (killed at its 5 s limit, python3 below 3.10, an Esc-interrupted call — not measured, a release manual check), nor
@@ -165,7 +168,9 @@ host the whole desktop session — and it cost each of them time (a small script
   activations from before this version are only in its shell log, so those tasks' windows start at their first gate
   entry; until `/playbook:init` is re-run after the update, the old logger keeps writing beside the hook (measured:
   27 snapshot lines per session), and a desktop session keeps an exported `BASH_ENV` until the next login (bash
-  ignores it once the file is gone). The hook journal the owner asked for in the same answer is the next task.
+  ignores it once the file is gone); a crash between appending a spool and removing it appends that line twice; two
+  `tasks work` of one session at the same moment can be recorded in the other order; settings.json is written back
+  with 2-space indentation. The hook journal the owner asked for in the same answer is the next task.
 
 ## [1.6.3] — 2026-10-15
 

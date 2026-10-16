@@ -1443,16 +1443,37 @@ journal_enforcement() {
 # Refused: a lane that is a symbolic link; a history or spool that is a link or not a regular file (a FIFO would
 # hang the hook). Always returns 0 and prints nothing: callers run under `set -e`, and a log never changes a decision.
 _PB_SHELL_LOG_LIMIT=52428800
-_PB_SHELL_LOG_SPOOL_MAX=4194304     # a spool holds one command; a bigger file there is not one of ours
+_PB_SHELL_LOG_LINE_MAX=4194304      # a command longer than this many bytes is cut there, and the line says so
+_PB_SHELL_LOG_SPOOL_MAX=4198400     # a spool holds one line (the bound + its stamp and cut note): bigger is not ours
 
 shell_log_append() {
-    local lane="$1" cmd="$2" hist now line wait opened=false got=false
+    local LC_ALL=C      # lengths and cuts in bytes (impl panel r1: a spool past the takers' bound was never merged)
+    local lane="$1" cmd="$2" hist now line wait opened=false got=false nolock=false t0="" t1="" rest
     [ -n "$lane" ] && [ -d "$lane" ] && [ ! -L "$lane" ] || return 0
-    while [ "${cmd%$'\n'}" != "$cmd" ]; do cmd="${cmd%$'\n'}"; done
+    while :; do      # trailing newlines and CRs (a CRLF ending, impl panel r1) are dropped
+        case "$cmd" in
+            *$'\n') cmd="${cmd%$'\n'}" ;;
+            *$'\r') cmd="${cmd%$'\r'}" ;;
+            *) break ;;
+        esac
+    done
     [[ "$cmd" =~ [^[:space:]] ]] || return 0
-    cmd="${cmd//\\/\\\\}"
-    cmd="${cmd//$'\n'/\\n}"
-    cmd="${cmd//$'\r'/\\r}"
+    if [ "${#cmd}" -le 65536 ]; then
+        cmd="${cmd//\\/\\\\}"
+        cmd="${cmd//$'\n'/\\n}"
+        cmd="${cmd//$'\r'/\\r}"
+    else
+        # bash's `${x//a/b}` is quadratic in the length of x (measured, task 221: 1 MB 0.18 s, 5 MB 4.6 s, three of
+        # them per line — past the hook's 5 s), so a long command is escaped by sed, in one linear pass
+        # (`-z`: the whole command is one record — no NUL can be in it — so each substitution sees all of it)
+        cmd=$(printf '%s' "$cmd" | command sed -z -e 's/\\/\\\\/g' -e 's/\r/\\r/g' -e 's/\n/\\n/g' \
+              2>/dev/null) || return 0
+        [ -n "$cmd" ] || return 0
+    fi
+    if [ "${#cmd}" -gt "$_PB_SHELL_LOG_LINE_MAX" ]; then
+        rest=$(( ${#cmd} - _PB_SHELL_LOG_LINE_MAX ))
+        cmd="${cmd:0:$_PB_SHELL_LOG_LINE_MAX} …[cut: $rest more bytes]"
+    fi
     printf -v now '%(%Y-%m-%d %H:%M:%S)T' -1 2>/dev/null || return 0
     line="$now | AGENT | $cmd"
     hist="$lane/bash_history"
@@ -1460,11 +1481,31 @@ shell_log_append() {
     case "$wait" in 1|2) ;; *) wait=1 ;; esac
     if command -v flock >/dev/null 2>&1 && { exec 206<"$lane"; } 2>/dev/null; then
         opened=true
-        flock -w "$wait" 206 2>/dev/null && got=true
+        t0="${EPOCHREALTIME:-}"
+        if flock -w "$wait" 206 2>/dev/null; then
+            got=true
+        else
+            t1="${EPOCHREALTIME:-}"
+            # refused long before the limit: this `flock` cannot wait with a limit (busybox has no -w) — no lock to
+            # take, as `counters_lock` reads it; a wait that ran out is a held lock, and the line is spooled
+            if [ -n "$t0" ] && [ -n "$t1" ] \
+               && [ $(( (10#${t1/[.,]/} - 10#${t0/[.,]/}) / 1000 )) -lt $(( wait * 1000 - 500 )) ]; then
+                nolock=true
+            fi
+        fi
+    else
+        nolock=true
     fi
     if [ "$got" = true ]; then
         _shell_log_take_spools "$lane" "$hist"
         _shell_log_rotate "$lane" "$hist"
+        if _pb_sink_ok "$lane" "$hist"; then
+            { printf '%s\n' "$line" >> "$hist"; } 2>/dev/null || true
+        fi
+    elif [ "$nolock" = true ]; then
+        # no lock on this host at all (impl panel r1: every line became a spool nothing merged): appended directly,
+        # never rotated — two long lines written side by side can tear here, the bound of a host without a working
+        # `flock`
         if _pb_sink_ok "$lane" "$hist"; then
             { printf '%s\n' "$line" >> "$hist"; } 2>/dev/null || true
         fi
@@ -1478,10 +1519,17 @@ shell_log_append() {
 }
 
 # Under the lock: every spool file of the lane, in name order, appended whole and removed. A link of that name is
-# removed unread (none is ours); anything else that is not a small regular file is left.
+# removed unread (none is ours); anything else that is not a small regular file is left. A writer's temporary
+# (`bash_history.spooling-…`) older than ten minutes was left by a writer killed while writing it, and is removed
+# (impl panel r1). A crash between appending a spool and removing it appends that line twice on the next take.
 _shell_log_take_spools() {
     local lane="$1" hist="$2" f size
     _pb_sink_ok "$lane" "$hist" || return 0
+    for f in "$lane"/bash_history.spooling-*; do
+        [ -e "$f" ] || [ -L "$f" ] || continue
+        command find "$lane" -maxdepth 1 -name 'bash_history.spooling-*' -mmin +10 -delete 2>/dev/null || true
+        break
+    done
     for f in "$lane"/bash_history.spool-*; do
         if [ -L "$f" ]; then
             rm -f -- "$f" 2>/dev/null || true

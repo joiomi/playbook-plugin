@@ -100,6 +100,9 @@ def begin() -> int:
             "existed": os.path.isfile(f),
             "backup": None,
             "mode": None,
+            # task 221 (impl panel r1, reproduced): init edits a linked rc file at its TARGET; restoring over the link
+            # put a regular file in its place and left the target edited — a linked file is restored at its target
+            "target": os.path.realpath(f) if os.path.islink(f) else None,
         }
         for f in files
     ]
@@ -169,7 +172,7 @@ def restore() -> int:
     errors: "list[str]" = []
 
     for e in manifest.get("files", []):
-        path = e["path"]
+        path = e.get("target") or e["path"]      # a linked file: its target, the link left as it is (task 221)
         if e["existed"]:
             backup = e.get("backup")
             if not backup or not os.path.isfile(backup):

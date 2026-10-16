@@ -287,19 +287,17 @@ def lifecycle_records(journal_path: "Path | None") -> "list[tuple[str, str, str,
         fd = os.open(journal_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError:
         return []
+    out = []
     try:
         if not _stat.S_ISREG(os.fstat(fd).st_mode):
             return []
         with os.fdopen(fd, "rb", closefd=False) as fh:
-            data = fh.read().decode("utf-8", "replace")
+            lines = [raw.decode("utf-8", "replace") for raw in fh if b'"tasks"' in raw]   # line by line (r1)
     except OSError:
         return []
     finally:
         os.close(fd)
-    out = []
-    for line in data.split("\n"):
-        if '"hook":"tasks"' not in line:
-            continue
+    for line in lines:
         try:
             rec = _json.loads(line)
         except ValueError:
@@ -360,7 +358,8 @@ def build_task_windows(chatlog_path: Path, journal_path: Path | None = None) -> 
     plugin's journal (`lifecycle_records`, task 221). Each task's window extends
     from its activation to the next task's activation.
     """
-    windows: dict[int, str] = {}  # task_num → activation timestamp
+    windows: dict[int, str] = {}  # task_num → activation timestamp (bare `YYYY-MM-DD HH:MM:SS`, UTC)
+    order: dict[int, int] = {}    # task_num → place of its start at a tie: a record's index in the journal, else -1
 
     # Scan chat_log for gate entries: **[G083:42]** [timestamp]
     if chatlog_path.exists():
@@ -370,23 +369,29 @@ def build_task_windows(chatlog_path: Path, journal_path: Path | None = None) -> 
         )
         for m in gate_pattern.finditer(content):
             task_num = int(m.group(1))
-            ts = m.group(2).strip()
+            ts = _normalize_ts(m.group(2))
             if task_num not in windows or ts < windows[task_num]:
                 windows[task_num] = ts
+                order[task_num] = -1
 
     # The activations the CLI recorded (task 221): only a `tasks work N` that happened, stamped when it did
-    for stamp, event, task, _ in lifecycle_records(journal_path):
+    for index, (stamp, event, task, _) in enumerate(lifecycle_records(journal_path)):
         if event != "work":
             continue
         task_num = int(task)
-        if task_num not in windows or stamp < _normalize_ts(windows[task_num]):
+        if task_num not in windows or stamp < windows[task_num]:
             windows[task_num] = stamp
+            order[task_num] = index
+        elif stamp == windows[task_num] and order[task_num] < 0:
+            order[task_num] = index       # the same second as a gate entry: the record's place in the journal decides
 
     if not windows:
         return {}
 
     # Convert to (start, end) ranges: each task ends when the next one starts
-    sorted_tasks = sorted(windows.items(), key=lambda x: x[1])
+    # at an equal second the journal's order decides — `tasks work 1 && tasks work 2` ends in task 2 (impl panel r1,
+    # codex: a gate entry's `… UTC` stamp sorted after the journal's bare one)
+    sorted_tasks = sorted(windows.items(), key=lambda x: (x[1], order.get(x[0], 0)))
     result = {}
     for i, (task_num, start_ts) in enumerate(sorted_tasks):
         if i == 0:

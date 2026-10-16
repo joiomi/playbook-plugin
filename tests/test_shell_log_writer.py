@@ -138,6 +138,38 @@ class OneCallOneLine(_Lane):
         self.assertEqual(self.commands(), cases)
         self.assertEqual(len(self.lines()), len(cases), "one physical line per command")
 
+    def test_a_trailing_crlf_is_dropped_too(self):
+        # impl panel r1 (gemini): a command ending in CRLF kept its CR as a visible `\r`
+        self.append("ls -la\r\n")
+        self.append("echo a\r\nb\r\n\r\n")
+        self.assertEqual(self.commands(), ["ls -la", "echo a\r\nb"])
+
+    def test_a_long_command_is_escaped_exactly_and_quickly(self):
+        # past 64 KiB the escape is sed's (bash's pattern substitution is quadratic: a 5 MB command took seconds)
+        unit = "cat <<'EOF'\nline with a \\ backslash, a typed \\n and a CR\r\nEOF\n"
+        cmd = unit * 4000                       # ~200 KB, many lines
+        src = self.root / "long.txt"
+        src.write_text(cmd, encoding="utf-8")
+        t0 = time.time()
+        r = subprocess.run([bash_or_skip(), "-c", 'source "$1"; c=$(cat "$3"; printf x); shell_log_append "$2" "${c%x}"',
+                            "_", str(LIB), str(self.lane), str(src)], env=self.env(), capture_output=True, text=True,
+                           timeout=60)
+        self.assertEqual(r.stderr, "")
+        self.assertLess(time.time() - t0, 3.0)
+        self.assertEqual(self.commands(), [cmd.rstrip("\n")])
+
+    def test_a_command_over_4_mib_is_cut_and_says_so(self):
+        # impl panel r1 (grok, sonnet): a spool bigger than the takers' bound was never merged — no line is that big now
+        big = self.root / "big.txt"
+        big.write_text("echo " + "y" * (5 * 1024 * 1024), encoding="utf-8")
+        r = subprocess.run([bash_or_skip(), "-c", 'source "$1"; shell_log_append "$2" "$(cat "$3")"; echo "rc=$?"',
+                            "_", str(LIB), str(self.lane), str(big)], env=self.env(), capture_output=True, text=True,
+                           timeout=60)
+        self.assertEqual(r.stdout.strip(), "rc=0")
+        [line] = self.lines()
+        self.assertLess(len(line.encode("utf-8")), 4 * 1024 * 1024 + 200)
+        self.assertRegex(line, r" …\[cut: \d+ more bytes\]$")
+
     def test_trailing_newlines_are_dropped_and_an_empty_or_blank_command_writes_nothing(self):
         self.append("echo hi\n\n")
         self.append("")
@@ -294,17 +326,43 @@ class Rotation(_Lane):
             fcntl.flock(fd, fcntl.LOCK_UN)
             os.close(fd)
 
-    def test_a_writer_without_flock_spools_and_never_rotates(self):
-        self._big()
+    def _tools_without_flock(self, flock_body=None):
         bindir = self.root / "bin"
-        bindir.mkdir()
-        for tool in ("cat", "mv", "rm", "stat", "date"):
+        bindir.mkdir(exist_ok=True)
+        for tool in ("cat", "mv", "rm", "stat", "date", "find"):
             real = shutil.which(tool)
-            if real:
+            if real and not (bindir / tool).exists():
                 (bindir / tool).symlink_to(real)
-        self.append("no flock", PATH=str(bindir))
+        if flock_body is not None:
+            (bindir / "flock").write_text("#!/bin/sh\n" + flock_body + "\n", encoding="utf-8")
+            (bindir / "flock").chmod(0o755)
+        return str(bindir)
+
+    def test_a_host_without_flock_appends_directly_and_never_rotates(self):
+        # impl panel r1 (sonnet, opus): with no lock to take, every line became a spool nothing ever merged
+        self._big()
+        self.append("no flock", PATH=self._tools_without_flock())
         self.assertEqual(self.archives(), [])
-        self.assertEqual(len(self.spools()), 1)
+        self.assertEqual(self.spools(), [])
+        self.assertTrue(self.hist.read_bytes().endswith(b" | AGENT | no flock\n"), "appended to the live file")
+
+    def test_a_flock_that_cannot_wait_is_no_lock_to_take(self):
+        # busybox's flock has no -w: it refuses at once — not a wait that ran out, so no spool
+        self.append("refused at once", PATH=self._tools_without_flock("exit 1"))
+        self.assertEqual(self.spools(), [])
+        self.assertEqual(self.commands(), ["refused at once"])
+
+    def test_a_stale_spooling_file_is_swept_and_a_fresh_one_kept(self):
+        # impl panel r1 (opus): the temp of a writer killed mid-write was never cleaned up
+        old = self.lane / "bash_history.spooling-20260101-000000-1-1"
+        old.write_text("2026-01-01 00:00:00 | AGENT | half\n", encoding="utf-8")
+        os.utime(old, (time.time() - 3600, time.time() - 3600))
+        fresh = self.lane / "bash_history.spooling-20260101-000000-2-2"
+        fresh.write_text("2026-01-01 00:00:00 | AGENT | being written\n", encoding="utf-8")
+        self.append("ls")
+        self.assertFalse(old.exists())
+        self.assertTrue(fresh.exists())
+        self.assertEqual(self.commands(), ["ls"])
 
     def test_a_writer_killed_around_the_rename_leaves_the_history_under_one_name(self):
         self._big()

@@ -345,12 +345,13 @@ done
 # agent's. The shell log is now written by the PostToolUse hook from the agent's exact command (the owner,
 # 2026-10-16: "Hook-ul scrie"), and init removes only what it once wrote ("Init îl scoate"):
 #   - ~/.claude/bash-log.sh / bash-log.zsh: a regular file whose FIRST line is the logger's own header;
-#   - "BASH_ENV" in ~/.claude/settings.json "env", when it names ~/.claude/bash-log.sh (an "env" left empty goes too);
+#   - "BASH_ENV" in ~/.claude/settings.json "env", when it names ~/.claude/bash-log.sh (an "env" left empty goes too;
+#     the file is written back as 2-space JSON, UTF-8);
 #   - in ~/.bash_profile, ~/.profile, ~/.zshenv: the line "# claude-playbook: command logging" followed by the exact
 #     line init wrote under it (and the blank line init put before it) — a block a person changed is left, said so.
 # Every one of these files is in the transaction's snapshot above (TXN_FILES): it is copied to the kept user backup
-# before anything changes, and a failure restores it. A rc file that is a symbolic link is edited at its target, the
-# link kept. Anything init cannot read or does not recognise is left as it is — never a failure.
+# before anything changes, and a failure restores it. An rc file or settings.json that is a symbolic link is edited
+# at its target, the link kept — and restored there (init_txn.py). Anything init cannot read or does not recognise is left as it is — never a failure.
 retire_shell_logger() {   # echoes REMOVED/KEPT<TAB>item lines; never fails
     PB_HOME="$HOME" PB_ATOMIC_PY="$ATOMIC_PY" python3 -I -c '
 import json, os
@@ -377,9 +378,9 @@ for name, head in HEADERS.items():
             out.append("KEPT\t~/.claude/" + name + " (not the playbook logger: left as it is)")
     except OSError as e:
         out.append("KEPT\t~/.claude/" + name + " (could not be read: " + str(e) + ")")
-p = os.path.join(home, ".claude", "settings.json")
+p = os.path.realpath(os.path.join(home, ".claude", "settings.json"))   # a linked one is edited at its target
 try:
-    if os.path.isfile(p) and not os.path.islink(p):
+    if os.path.isfile(p):
         with open(p, encoding="utf-8") as fh:
             data = json.loads(fh.read())
         env = data.get("env") if isinstance(data, dict) else None
@@ -388,7 +389,7 @@ try:
             del env["BASH_ENV"]
             if not env:
                 del data["env"]
-            atomic_write(p, json.dumps(data, indent=2) + "\n")
+            atomic_write(p, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
             out.append("REMOVED\t~/.claude/settings.json (BASH_ENV of the old shell logger)")
 except (OSError, ValueError) as e:
     out.append("KEPT\t~/.claude/settings.json (could not be read: " + (str(e).splitlines() or [""])[0] + ")")

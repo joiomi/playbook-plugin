@@ -125,6 +125,19 @@ class TheOldWiringGoes(_Init):
         self.assertFalse((claude / "bash-log.zsh").exists())
         self.assertEqual(zshenv.read_text(encoding="utf-8"), "export ZDOTDIR=$HOME/.zsh\n")
 
+    def test_a_settings_file_that_is_a_link_is_edited_at_its_target(self):
+        # impl panel r1 (gemini): a linked settings.json kept the old BASH_ENV, silently
+        dotfiles = self.home / "dotfiles"
+        dotfiles.mkdir()
+        target = dotfiles / "claude-settings.json"
+        target.write_text(json.dumps({"env": {"BASH_ENV": "~/.claude/bash-log.sh"}, "note": "été"}, ensure_ascii=False),
+                          encoding="utf-8")
+        (self.home / ".claude" / "settings.json").symlink_to(target)
+        self.init()
+        self.assertTrue((self.home / ".claude" / "settings.json").is_symlink())
+        self.assertEqual(json.loads(target.read_text(encoding="utf-8")), {"note": "été"})
+        self.assertIn("été", target.read_text(encoding="utf-8"), "non-ASCII is written as UTF-8, not \\u escapes")
+
     def test_an_rc_file_that_is_a_link_is_edited_at_its_target(self):
         dotfiles = self.home / "dotfiles"
         dotfiles.mkdir()

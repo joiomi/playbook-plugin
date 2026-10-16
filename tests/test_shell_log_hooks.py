@@ -197,6 +197,11 @@ class Codex(_Logged):
         self.codex(["git", "log", "--format=%h %s"])
         self.assertEqual(self.logged(), ["ls codex", "echo one && echo two", "pwd", "git log '--format=%h %s'"])
 
+    def test_a_codex_lone_surrogate_becomes_what_the_normaliser_gives(self):
+        # impl panel r1 (opus): "replace" made it `?`; the Claude path's normaliser gives U+FFFD
+        self.codex("echo a\ud800b")
+        self.assertEqual(self.logged(), ["echo a\ufffdb"])
+
     def test_a_codex_apply_patch_is_not_a_line(self):
         payload = {"hook_event_name": "PostToolUse", "tool_name": "apply_patch", "tool_input": {"command": "x"}}
         subprocess.run(["python3", "-E", "-s", str(SCRIPTS / "codex-apply-patch-hook")], cwd=self.project,
