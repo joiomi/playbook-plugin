@@ -43,7 +43,7 @@ class _Logged(_Session):
         env["HOME"] = self._tmp.name
         env["PLAYBOOK_PROC_ROOT"] = str(self.proc_root)
         for k in ("BASH_ENV", "ENV", "PLAYBOOK_ROLE", "PLAYBOOK_EVAL_CONFIG", "PLAYBOOK_SHELL_LOG_LOCK_WAIT",
-                  "PLAYBOOK_PROJECT_ROOT"):
+                  "PLAYBOOK_PROJECT_ROOT", "PLAYBOOK_SANDBOXED"):
             env.pop(k, None)
         env.update(extra)
         return env

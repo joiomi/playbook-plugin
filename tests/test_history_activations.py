@@ -65,7 +65,7 @@ class _Project(unittest.TestCase):
     def env(self):
         env = {k: v for k, v in os.environ.items()
                if k not in ("PLAYBOOK_SESSION_ID", "PLAYBOOK_PROJECT_DIR", "CLAUDE_PROJECT_DIR", "PLAYBOOK_SANDBOXED",
-                            "BASH_ENV")}
+                            "BASH_ENV", "PLAYBOOK_ROLE")}
         env["PYTHONPATH"] = str(PLUGIN)
         env["PLAYBOOK_SESSION_ID"] = "pid-act221"
         env["HOME"] = self._tmp.name

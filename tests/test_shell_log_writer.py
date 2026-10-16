@@ -68,7 +68,7 @@ class _Lane(unittest.TestCase):
 
     def env(self, **extra):
         env = dict(os.environ)
-        for k in ("BASH_ENV", "ENV", "PLAYBOOK_SHELL_LOG_LOCK_WAIT"):
+        for k in ("BASH_ENV", "ENV", "PLAYBOOK_SHELL_LOG_LOCK_WAIT", "PLAYBOOK_SANDBOXED", "PLAYBOOK_ROLE"):
             env.pop(k, None)
         env.update(extra)
         return env
@@ -159,6 +159,25 @@ class NeverThroughALink(_Lane):
         linked.parent.mkdir()
         linked.symlink_to(outside, target_is_directory=True)
         r = self.append("ls", lane=linked)
+        self.assertEqual(r.stdout.strip(), "rc=0")
+        self.assertEqual(list(outside.iterdir()), [])
+
+    @_needs_flock
+    def test_a_linked_lane_gets_no_spool_either(self):
+        # mutation run (task 221 W9): with the lock held, the writer takes the spool path, which looks at no sink —
+        # only the lane check at the top keeps a linked lane's target free of a spool file
+        outside = self.root / "outside"
+        outside.mkdir()
+        linked = self.root / "proj3" / ".agent"
+        linked.parent.mkdir()
+        linked.symlink_to(outside, target_is_directory=True)
+        fd = os.open(outside, os.O_RDONLY)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            r = self.append("ls", lane=linked, PLAYBOOK_SHELL_LOG_LOCK_WAIT="1")
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
         self.assertEqual(r.stdout.strip(), "rc=0")
         self.assertEqual(list(outside.iterdir()), [])
 
