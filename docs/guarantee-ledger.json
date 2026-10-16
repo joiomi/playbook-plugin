@@ -5706,7 +5706,7 @@
     {
       "id": "PB-SHELL-ATTRIBUTION",
       "category": "sessions-and-attribution",
-      "statement": "The shell log (`.agent/<lane>/bash_history`) holds the agent's own shell commands and nothing else: the PostToolUse hook (`state-echo-hook`; codex's `exec_command` hook) appends one line per Bash or Monitor tool call — a succeeded or a failed one, the main agent's or a subagent's, Claude's or grok's — `YYYY-mm-dd HH:MM:SS | AGENT | <command>` in local time, the command as the hook payload normaliser delivers it (cut at a NUL) with `\\` written `\\\\`, a newline `\\n` and a CR `\\r`, so the line is one physical line and reads back exactly, and with the task gate's own `export PLAYBOOK_SESSION_ID=<this session>; ` prefix left out; hooks, the `tasks` launcher and Claude Code's shell snapshot write no line. Its one writer, `gate-echo-lib.sh::shell_log_append`, appends under `flock` on the lane directory; a writer that gets no lock within PLAYBOOK_SHELL_LOG_LOCK_WAIT seconds writes its line to a spool file of its own, which the next writer holding the lock appends, so writers side by side lose and tear no line (a host whose `flock` cannot wait, or has none, appends directly and never rotates); past 50 MB the file is renamed under the lock to `bash_history.archived-<stamp>-<pid>` (nothing carried; no lock, no rotation); a command over 4 MiB is cut there and the line says so; nothing is written through a linked lane or a history or spool that is a link or not a regular file, nor where the hook may not write, and the line is written after the hook's count and answer, from an EXIT trap that keeps its exit status.",
+      "statement": "The shell log (`.agent/<lane>/bash_history`) holds the agent's own shell commands and nothing else: the PostToolUse hook (`state-echo-hook`; codex's `exec_command` hook) appends one line per Bash or Monitor tool call — a succeeded or a failed one, the main agent's or a subagent's, Claude's or grok's — `YYYY-mm-dd HH:MM:SS | AGENT | <command>` in local time, the command as the hook payload normaliser delivers it (cut at a NUL) with `\\` written `\\\\`, a newline `\\n` and a CR `\\r`, so the line is one physical line and reads back exactly, and with the task gate's own `export PLAYBOOK_SESSION_ID=<this session>; ` prefix left out; hooks, the `tasks` launcher and Claude Code's shell snapshot write no line. Its one writer, `gate-echo-lib.sh::shell_log_append`, appends under `flock` on the lane directory; a writer that gets no lock within PLAYBOOK_SHELL_LOG_LOCK_WAIT seconds writes its line to a spool file of its own, which the next writer holding the lock appends, so writers side by side lose and tear no line (a host whose `flock` cannot wait, or has none, appends directly and never rotates); past 50 MB the file is renamed under the lock to `bash_history.archived-<stamp>-<pid>` (nothing carried; no lock, no rotation); a command over 2 MiB is cut there, on a whole character, before it is escaped, and the line says how much was cut; nothing is written through a linked lane or a history or spool that is a link or not a regular file, nor where the hook may not write, and the line is written after the hook's count and answer, from an EXIT trap that keeps its exit status.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/gate-echo-lib.sh",
@@ -5955,7 +5955,9 @@
           "reference": "OneCallOneLine.test_a_command_over_4_mib_is_cut_and_says_so",
           "boundary": "subprocess",
           "negative_control": null,
-          "limitations": []
+          "limitations": [
+            "A 5 MiB command: one line under the bound, ending ` …[cut: N more bytes]`."
+          ]
         },
         {
           "type": "executable integration",
@@ -5974,6 +5976,42 @@
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_shell_log_writer.py",
+          "reference": "OneCallOneLine.test_the_cut_ends_on_a_whole_character_and_outside_an_escape",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "5 MiB of `é`, of backslashes, of newline+x: the line decodes as UTF-8 and keeps whole escapes."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_shell_log_writer.py",
+          "reference": "OneCallOneLine.test_thirty_thousand_trailing_newlines_are_dropped_quickly",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_shell_log_writer.py",
+          "reference": "OneCallOneLine.test_a_long_command_without_sed_is_still_a_line",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_shell_log_hooks.py",
+          "reference": "TheAgentsCommands.test_a_command_over_128_kib_is_a_line_and_the_call_is_counted",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Impl panel round 2 (codex, reproduced): the hook exported the command; past 128 KiB every program it started failed with E2BIG."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -5989,6 +6027,7 @@
         "The stamp is when the tool call RETURNED: a foreground command's end, a background command's launch (no hook runs when a background command ends — measured, task 221 W1). Local wall-clock time with no zone offset (owner decision D4, 2026-09-24, kept); no reader compares it with UTC any more — the task windows come from the CLI's journal records (PB-CLI-TIMELINE-TAGGER).",
         "No line where the hook does not run or cannot read the payload: a hook killed at its 5 s limit, python3 below 3.10 (no payload is read), an interrupted call (not measured: an Esc needs a person — a release manual check). A call a PreToolUse hook blocked ran nothing and has no line (0 of 185 blocked calls in this project's transcripts had a Post event). A failing grok or codex command has a line only if that host sends PostToolUse for it (grok registers no PostToolUseFailure, codex only PostToolUse; not measured — no grok/codex agent session is run here). The user's own `!` commands are not the agent's and have no line.",
         "Impl panel round 1 (task 221), stated not fixed: a crash between appending a spool and removing it appends that line twice on the next take; on a host without a working `flock` two long lines written side by side can tear (they are appended directly).",
+        "Impl panel round 2 (task 221), stated not fixed: a command the agent itself starts with `export PLAYBOOK_SESSION_ID=<its own session>; ` loses that prefix (the task gate's injection looks the same); the no-`flock` reading is by time (a refusal much sooner than the wait), as `counters_lock`'s.",
         "A command the agent runs after a `cd` into another project is logged in the SESSION's project (the hook's lane), not the other one's.",
         "Cost: the append adds a median +5.5 ms to a Bash call's state-echo hook (n=60, 2026-10-16, `scripts/bench_shell_log.py`) — see PB-PERFORMANCE-HOOKS.",
         "Owner decision 2026-08-21: agent-mode (hook enforcement) is a supported capability on Claude ONLY, so applicable_providers is narrowed to claude here; the grok and codex paths are tested with crafted payloads only.",
@@ -8886,6 +8925,24 @@
           "limitations": [
             "A disposable HOME with the real plugin manager, 1.6.0 upgraded to the candidate as 1.6.1: three induced failures in the re-init (a read-only project file the upgrade must change, a read-only ~/.claude, a SIGTERM) each left the project and the user's files byte-identical; the control without the transaction left a file changed; a plain re-run recovered."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_init_rollback.py",
+          "reference": "InitRollback.test_linked_project_files_init_replaces_get_their_link_and_content_back",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Impl panel round 2 of task 221 (opus, codex — reproduced): a linked CLAUDE.md and .gitignore that init replaces (atomic_write) get their links and their targets' bytes back."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_init_rollback.py",
+          "reference": "InitRollback.test_a_dangling_link_init_wrote_over_is_put_back",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
         }
       ],
       "applicable_platforms": [
@@ -17013,7 +17070,8 @@
       "missing_evidence_or_limitation": [
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
         "Task 221: a project's activations from before this version are only in its shell log, which no reader parses any more — those tasks' windows start at their first gate entry (the owner's rule of 2026-10-16: the design is for a project started from zero). The journal is best-effort: a failed journal write loses that transition (the command itself is unaffected).",
-        "Impl panel round 1 (task 221), stated not fixed: two `tasks work` of ONE session at the same moment can be recorded in the other order than the session's pointer ends in."
+        "Impl panel round 1 (task 221), stated not fixed: two `tasks work` of ONE session at the same moment can be recorded in the other order than the session's pointer ends in.",
+        "Impl panel round 2 (task 221): a task's window opens at its FIRST activation and ends at the next task's (owner flag C11, kept): chat after returning to a task (`work 5`, `work 6`, `work 5`) is read as task 6's."
       ],
       "follow_up_phases": [
         3

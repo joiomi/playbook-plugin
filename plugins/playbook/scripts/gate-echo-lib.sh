@@ -1446,34 +1446,58 @@ _PB_SHELL_LOG_LIMIT=52428800
 _PB_SHELL_LOG_LINE_MAX=4194304      # a command longer than this many bytes is cut there, and the line says so
 _PB_SHELL_LOG_SPOOL_MAX=4198400     # a spool holds one line (the bound + its stamp and cut note): bigger is not ours
 
+# shell_log_append's own steps, on its variables `cmd` and `cut` (bash's dynamic scope; LC_ALL=C from it).
+_shell_log_cut() {      # keep the first $1 bytes of cmd, on a whole character; add what goes to `cut`
+    local keep="$1" k=0 total="${#cmd}"
+    while [ "$k" -lt 3 ] && [ "$keep" -gt 0 ] && [[ "${cmd:keep:1}" == [$'\x80'-$'\xbf'] ]]; do
+        keep=$(( keep - 1 )); k=$(( k + 1 ))
+    done
+    cut=$(( ${cut:-0} + total - keep ))
+    cmd="${cmd:0:keep}"
+}
+_shell_log_escape_short() {     # `\` first, then a newline and a CR: an exact round trip (bash, ≤ 64 KiB here)
+    cmd="${cmd//\\/\\\\}"
+    cmd="${cmd//$'\n'/\\n}"
+    cmd="${cmd//$'\r'/\\r}"
+}
+
 shell_log_append() {
     local LC_ALL=C      # lengths and cuts in bytes (impl panel r1: a spool past the takers' bound was never merged)
-    local lane="$1" cmd="$2" hist now line wait opened=false got=false nolock=false t0="" t1="" rest
+    local lane="$1" cmd="$2" hist now line wait opened=false got=false nolock=false t0="" t1="" rest i cut=""
     [ -n "$lane" ] && [ -d "$lane" ] && [ ! -L "$lane" ] || return 0
-    while :; do      # trailing newlines and CRs (a CRLF ending, impl panel r1) are dropped
-        case "$cmd" in
-            *$'\n') cmd="${cmd%$'\n'}" ;;
-            *$'\r') cmd="${cmd%$'\r'}" ;;
+    # trailing newlines and CRs (a CRLF ending, impl panel r1) are dropped — found from the end, one look per byte,
+    # then cut once (impl panel r2: one `${cmd%…}` per newline was quadratic, 30,000 of them took 7.8 s)
+    i=${#cmd}
+    while [ "$i" -gt 0 ]; do
+        case "${cmd:i-1:1}" in
+            $'\n'|$'\r') i=$(( i - 1 )) ;;
             *) break ;;
         esac
     done
+    cmd="${cmd:0:i}"
     [[ "$cmd" =~ [^[:space:]] ]] || return 0
-    if [ "${#cmd}" -le 65536 ]; then
-        cmd="${cmd//\\/\\\\}"
-        cmd="${cmd//$'\n'/\\n}"
-        cmd="${cmd//$'\r'/\\r}"
-    else
+    # A command past half the line bound is cut BEFORE it is escaped (escaped it is at most twice as long, so the
+    # cut never splits an escape), on a whole character: the cut backs over at most 3 UTF-8 continuation bytes
+    # (impl panel r2: the 4 MiB cut of the escaped text could split either). The line says how much was cut.
+    if [ "${#cmd}" -gt $(( _PB_SHELL_LOG_LINE_MAX / 2 )) ]; then
+        _shell_log_cut $(( _PB_SHELL_LOG_LINE_MAX / 2 ))
+    fi
+    if [ "${#cmd}" -gt 65536 ]; then
         # bash's `${x//a/b}` is quadratic in the length of x (measured, task 221: 1 MB 0.18 s, 5 MB 4.6 s, three of
-        # them per line — past the hook's 5 s), so a long command is escaped by sed, in one linear pass
-        # (`-z`: the whole command is one record — no NUL can be in it — so each substitution sees all of it)
-        cmd=$(printf '%s' "$cmd" | command sed -z -e 's/\\/\\\\/g' -e 's/\r/\\r/g' -e 's/\n/\\n/g' \
-              2>/dev/null) || return 0
-        [ -n "$cmd" ] || return 0
+        # them per line — past the hook's 5 s), so a long command is escaped by sed, in one linear pass (`-z`: the
+        # whole command is one record — no NUL can be in it — so each substitution sees all of it). Where sed cannot
+        # (impl panel r2: a sed without -z), the first 64 KiB are escaped here and the line says the rest was cut.
+        if rest=$(printf '%s' "$cmd" | command sed -z -e 's/\\/\\\\/g' -e 's/\r/\\r/g' -e 's/\n/\\n/g' \
+                  2>/dev/null) && [ -n "$rest" ]; then
+            cmd="$rest"
+        else
+            _shell_log_cut 65536
+            _shell_log_escape_short
+        fi
+    else
+        _shell_log_escape_short
     fi
-    if [ "${#cmd}" -gt "$_PB_SHELL_LOG_LINE_MAX" ]; then
-        rest=$(( ${#cmd} - _PB_SHELL_LOG_LINE_MAX ))
-        cmd="${cmd:0:$_PB_SHELL_LOG_LINE_MAX} …[cut: $rest more bytes]"
-    fi
+    [ -z "$cut" ] || cmd="$cmd …[cut: $cut more bytes]"
     printf -v now '%(%Y-%m-%d %H:%M:%S)T' -1 2>/dev/null || return 0
     line="$now | AGENT | $cmd"
     hist="$lane/bash_history"

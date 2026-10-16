@@ -76,6 +76,46 @@ def _rel_within(path: str, base: str) -> str:
     return rel
 
 
+def _link_text(path: str) -> "str | None":
+    try:
+        return os.readlink(path) if os.path.islink(path) else None
+    except OSError:
+        return None
+
+
+def _restore_linked(e: dict, restored: "list[str]", removed: "list[str]", errors: "list[str]") -> None:
+    """A file that was a symbolic link before init (task 221). Init edits some at their target (the rc files and
+    ~/.claude/settings.json, where it removes the old shell logger) and replaces others with a regular file
+    (`atomic_write` on CLAUDE.md, .gitignore, the project's settings.json — `os.replace` puts the file where the link
+    was). So: where the link is gone it is put back — a dangling one too — and its target gets back the bytes it had
+    (impl panels r1 and r2: restoring at the link's path broke the link; restoring only at its target left init's
+    file where the link was). No writer of init writes THROUGH a link that dangles, so nothing is made at a missing
+    target to remove."""
+    path, link, target = e["path"], e["link"], e["target"]
+    try:
+        if not (os.path.islink(path) and os.readlink(path) == link):
+            if os.path.islink(path) or os.path.isfile(path):
+                os.unlink(path)
+            elif os.path.lexists(path):
+                errors.append(f"could not restore the link {path}: something else is there now")
+                return
+            os.symlink(link, path)
+        if e["existed"]:
+            backup = e.get("backup")
+            if not backup or not os.path.isfile(backup):
+                errors.append(f"backup missing for {path}")
+                return
+            data = Path(backup).read_bytes()
+            if not (os.path.isfile(target) and Path(target).read_bytes() == data):
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                atomic_write(target, data)
+                if e.get("mode") is not None:
+                    os.chmod(target, e["mode"])
+        restored.append(path)
+    except OSError as exc:
+        errors.append(f"could not restore the link {path}: {exc}")
+
+
 def begin() -> int:
     project_root = os.path.abspath(os.environ["PB_TXN_PROJECT_ROOT"])
     home = os.path.abspath(os.environ["PB_TXN_HOME"])
@@ -100,8 +140,8 @@ def begin() -> int:
             "existed": os.path.isfile(f),
             "backup": None,
             "mode": None,
-            # task 221 (impl panel r1, reproduced): init edits a linked rc file at its TARGET; restoring over the link
-            # put a regular file in its place and left the target edited — a linked file is restored at its target
+            # task 221: a file that is a symbolic link — its link text and its target (see `_restore_linked`)
+            "link": _link_text(f),
             "target": os.path.realpath(f) if os.path.islink(f) else None,
         }
         for f in files
@@ -172,7 +212,10 @@ def restore() -> int:
     errors: "list[str]" = []
 
     for e in manifest.get("files", []):
-        path = e.get("target") or e["path"]      # a linked file: its target, the link left as it is (task 221)
+        if e.get("link") is not None:
+            _restore_linked(e, restored, removed, errors)
+            continue
+        path = e["path"]
         if e["existed"]:
             backup = e.get("backup")
             if not backup or not os.path.isfile(backup):

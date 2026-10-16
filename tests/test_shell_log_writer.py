@@ -158,6 +158,50 @@ class OneCallOneLine(_Lane):
         self.assertLess(time.time() - t0, 3.0)
         self.assertEqual(self.commands(), [cmd.rstrip("\n")])
 
+    def _from_file(self, text, **extra):
+        src = self.root / "cmd.txt"
+        src.write_bytes(text.encode("utf-8"))
+        t0 = time.time()
+        r = subprocess.run([bash_or_skip(), "-c", 'source "$1"; c=$(cat "$3"; printf x); shell_log_append "$2" "${c%x}"',
+                            "_", str(LIB), str(self.lane), str(src)], env=self.env(**extra), capture_output=True,
+                           text=True, timeout=60)
+        self.assertEqual(r.stderr, "")
+        return time.time() - t0
+
+    def test_thirty_thousand_trailing_newlines_are_dropped_quickly(self):
+        # impl panel r2 (codex): dropping them one at a time was quadratic — 7.8 s through the hook
+        took = self._from_file("echo hi" + "\n" * 30000 + "\r\n" * 100)
+        self.assertLess(took, 3.0)
+        self.assertEqual(self.commands(), ["echo hi"])
+
+    def test_the_cut_ends_on_a_whole_character_and_outside_an_escape(self):
+        # impl panel r2 (gemini, sonnet): the 4 MiB cut could split a UTF-8 character or an escape pair
+        for filler in ("é", "\\", "\nx"):
+            with self.subTest(filler=repr(filler)):
+                if self.hist.exists():
+                    self.hist.unlink()
+                self._from_file("echo " + filler * (5 * 1024 * 1024 // len(filler.encode("utf-8"))))
+                raw = self.hist.read_bytes()
+                raw.decode("utf-8")                         # whole characters: strict decode passes
+                body = raw.decode("utf-8").split(" | AGENT | ", 1)[1].rsplit(" …[cut: ", 1)[0]
+                trailing = len(body) - len(body.rstrip("\\"))
+                self.assertEqual(trailing % 2, 0, "the cut left half an escape")
+
+    def test_a_long_command_without_sed_is_still_a_line(self):
+        # impl panel r2 (gemini): where `sed -z` fails the long command was dropped
+        bindir = self.root / "nosed"
+        bindir.mkdir()
+        for tool in ("cat", "mv", "rm", "stat", "find", "flock"):
+            real = shutil.which(tool)
+            if real:
+                (bindir / tool).symlink_to(real)
+        (bindir / "sed").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        (bindir / "sed").chmod(0o755)
+        self._from_file("printf 'a'\n" * 20000, PATH=str(bindir))
+        [line] = self.lines()
+        self.assertIn("printf 'a'\\nprintf", line)
+        self.assertRegex(line, r" …\[cut: \d+ more bytes\]$")
+
     def test_a_command_over_4_mib_is_cut_and_says_so(self):
         # impl panel r1 (grok, sonnet): a spool bigger than the takers' bound was never merged — no line is that big now
         big = self.root / "big.txt"

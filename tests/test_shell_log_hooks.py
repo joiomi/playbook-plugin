@@ -110,6 +110,16 @@ class TheAgentsCommands(_Logged):
         self.assertEqual(self.logged(), [".claude/bin/tasks work 1", "export PLAYBOOK_SESSION_ID=pid-other; ls",
                                          f"echo export PLAYBOOK_SESSION_ID={SID}; ls"])
 
+    def test_a_command_over_128_kib_is_a_line_and_the_call_is_counted(self):
+        # impl panel r2 (codex — reproduced, sonnet): the hook exported the command, and past Linux's 128 KiB per
+        # environment string every program it started failed with E2BIG — exit 126, no line
+        before = self.counts()[0] if self.counters_file.exists() else 0
+        cmd = "cat <<'EOF'\n" + ("x" * 99 + "\n") * 2000 + "EOF"
+        r = self.hook({"tool_name": "Bash", "tool_input": {"command": cmd}})
+        self.assertEqual(r.returncode, 0, r.stderr[-500:])
+        self.assertEqual(self.logged(), [cmd])
+        self.assertEqual(self.counts()[0], before + 1)
+
     def test_a_command_is_cut_at_a_nul_as_the_normaliser_cuts_it(self):
         self.hook({"tool_name": "Bash", "tool_input": {"command": "echo a\u0000b"}})
         self.assertEqual(self.logged(), ["echo a"])

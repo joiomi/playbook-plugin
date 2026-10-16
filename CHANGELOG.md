@@ -144,9 +144,10 @@ host the whole desktop session — and it cost each of them time (a small script
 - One writer, `gate-echo-lib.sh::shell_log_append`, under `flock` on the lane directory; a writer that gets no lock
   within `PLAYBOOK_SHELL_LOG_LOCK_WAIT` (1 s by default) writes a spool file of its own, which the next writer holding
   the lock appends; a host whose `flock` cannot wait (busybox) or that has none appends directly and never rotates;
-  past 50 MB the file is renamed to `bash_history.archived-…` under the lock, nothing carried. A command over 4 MiB
-  is cut there and the line says so; past 64 KiB the escape is one `sed -z` pass (bash's own substitution is
-  quadratic: a 5 MB command took 4.6 s per pass, measured). Not through a link, not into a FIFO, not where the hook may not write; written from an
+  past 50 MB the file is renamed to `bash_history.archived-…` under the lock, nothing carried. A command over 2 MiB
+  is cut there, on a whole character, before it is escaped, and the line says how much was cut; past 64 KiB the
+  escape is one `sed -z` pass (bash's own substitution is quadratic: a 5 MB command took 4.6 s per pass,
+  measured; where `sed -z` fails, the first 64 KiB are kept). Not through a link, not into a FIFO, not where the hook may not write; written from an
   EXIT trap after the hook's count and answer. It adds a median +5.5 ms to a Bash call's hook
   (`scripts/bench_shell_log.py`).
 - The task windows of retro, `tasks timeline`, `tagger`, `tag` and `intent` come from the transitions the `tasks` CLI
@@ -159,7 +160,9 @@ host the whole desktop session — and it cost each of them time (a small script
   removes what an earlier version installed — `~/.claude/bash-log.sh`/`.zsh` when their first line is the logger's
   header, a `BASH_ENV` naming `~/.claude/bash-log.sh` in `~/.claude/settings.json`, the exact two-line block in
   `~/.bash_profile`, `~/.profile` or `~/.zshenv` — each file first copied to its kept user backup (a failed run
-  restores them — a linked rc file or settings.json is edited and restored at its target, the link kept); anything
+  restores them — a linked rc file or settings.json is edited and restored at its target, the link kept; a linked
+  CLAUDE.md, .gitignore or project settings.json that init replaced gets its link and its target's bytes back);
+  anything
   it does not recognise is left and named under "Skipped". Its summary lists them under "Removed".
 - Known limits: the stamp is when the tool call returned — a background command's launch; a command run after a `cd`
   into another project is logged in the session's project; no line where the hook does not run or read the payload
@@ -170,7 +173,9 @@ host the whole desktop session — and it cost each of them time (a small script
   27 snapshot lines per session), and a desktop session keeps an exported `BASH_ENV` until the next login (bash
   ignores it once the file is gone); a crash between appending a spool and removing it appends that line twice; two
   `tasks work` of one session at the same moment can be recorded in the other order; settings.json is written back
-  with 2-space indentation. The hook journal the owner asked for in the same answer is the next task.
+  with 2-space indentation; a task's window still opens at its FIRST activation and ends at the next task's, so
+  chat after returning to a task is read as the task in between's; a command the agent itself starts with
+  `export PLAYBOOK_SESSION_ID=<its own session>; ` loses that prefix in the log. The hook journal the owner asked for in the same answer is the next task.
 
 ## [1.6.3] — 2026-10-15
 

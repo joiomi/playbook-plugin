@@ -175,7 +175,9 @@ else
     esac
 fi
 fi    # (below the floor no payload is read)
-export PB_FUSED PB_PATH PB_CMD
+# PB_CMD stays unexported: past Linux's 128 KiB per environment string every program the hook starts failed with
+# E2BIG (task 221, impl panel r2 — measured: exit 126, no line); nothing outside this shell reads it.
+export PB_FUSED PB_PATH
 
 # The shell log (PHASE-B item 2, task 221; the owner 2026-10-16: "Doar comenzile mele", "Hook-ul scrie"): the agent's
 # command — a Bash or Monitor call, as normalised (grok's Shell / run_terminal_command are Bash by now) — is one line

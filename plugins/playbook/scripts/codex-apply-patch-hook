@@ -183,10 +183,12 @@ def main() -> int:
             return 2
 
         if event == "PostToolUse":
-            result = apply_patch_post_context(payload, project_root, session_id)
-            sys.stdout.write(json.dumps(result))
-            sys.stdout.flush()
-            _shell_log(project_root, payload)
+            try:
+                result = apply_patch_post_context(payload, project_root, session_id)
+                sys.stdout.write(json.dumps(result))
+                sys.stdout.flush()
+            finally:
+                _shell_log(project_root, payload)      # the command ran even if the echo failed (impl panel r2)
             return 0
 
         # Unknown event — fail-open.

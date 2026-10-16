@@ -253,6 +253,40 @@ class InitRollback(unittest.TestCase):
         self.assertEqual(os.readlink(self.home / ".profile"), str(target))
         self.assertEqual(target.read_text(encoding="utf-8"), original, "the target kept init's edit")
 
+    def test_linked_project_files_init_replaces_get_their_link_and_content_back(self):
+        """impl panel r2 (opus, codex — reproduced): R1's fix restored EVERY linked file at its target, but init
+        writes CLAUDE.md and .gitignore through `atomic_write`, which replaces the link with a regular file — the
+        rollback then left that file, holding init's merged text, where the link was."""
+        settings = self.project / ".claude" / "settings.json"
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        settings.write_text("{ this is not json\n", encoding="utf-8")
+        agents = self.project / "AGENTS.md"
+        agents.write_text(SEED_CLAUDE, encoding="utf-8")
+        (self.project / "CLAUDE.md").symlink_to("AGENTS.md")
+        ignore = self.project / "ignore.real"
+        ignore.write_text(SEED_GITIGNORE, encoding="utf-8")
+        (self.project / ".gitignore").symlink_to(ignore)
+        r = self._run()
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("ROLLBACK:", r.stderr)
+        for link, target, text in ((self.project / "CLAUDE.md", "AGENTS.md", SEED_CLAUDE),
+                                   (self.project / ".gitignore", str(ignore), SEED_GITIGNORE)):
+            self.assertTrue(link.is_symlink(), f"{link.name}: the link was not put back")
+            self.assertEqual(os.readlink(link), target)
+            self.assertEqual(link.read_text(encoding="utf-8"), text, f"{link.name}: init's text stayed")
+
+    def test_a_dangling_link_init_wrote_over_is_put_back(self):
+        """impl panel r2 (opus): a dangling link (its target missing) was not restored at all."""
+        settings = self.project / ".claude" / "settings.json"
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        settings.write_text("{ this is not json\n", encoding="utf-8")
+        (self.project / "CLAUDE.md").symlink_to("NOWHERE.md")
+        r = self._run()
+        self.assertNotEqual(r.returncode, 0)
+        self.assertTrue((self.project / "CLAUDE.md").is_symlink())
+        self.assertEqual(os.readlink(self.project / "CLAUDE.md"), "NOWHERE.md")
+        self.assertFalse((self.project / "NOWHERE.md").exists())
+
     def test_interrupt_signal_rolls_back(self):
         """A SIGTERM mid-run (Ctrl-C class) is trapped → init exits non-zero →
         rollback. Every earlier stage's modifications come back byte-identical."""
