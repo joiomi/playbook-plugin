@@ -1884,7 +1884,7 @@ _pb_hj_rotate() {
         case "$a" in *.gz|*.gz.tmp-*) continue ;; esac
         [ -f "$a" ] && [ ! -L "$a" ] && idle=true && break
     done
-    for a in "$jdir"/hooks.jsonl.spool-* "$jdir"/hooks.jsonl.spooling-*; do
+    for a in "$jdir"/hooks.jsonl.spool-* "$jdir"/hooks.jsonl.spooling-*; do     # spools, and writers' temporaries
         { [ -e "$a" ] || [ -L "$a" ]; } && spool=true && break
     done
     [ "$big" = true ] || [ "$idle" = true ] || [ "$spool" = true ] || return 0
@@ -1902,7 +1902,21 @@ _pb_hj_rotate() {
                 [ "$sz" -le 4096 ] || continue
                 { cat -- "$a" >> "$hfile"; } 2>/dev/null && rm -f -- "$a" 2>/dev/null
             done
-            command find "$jdir" -maxdepth 1 -name 'hooks.jsonl.spooling-*' -mmin +10 -delete 2>/dev/null || true
+            # a writer's temporary is never removed for its age (a clock step made a live one look old — post-panel
+            # judge run 4): one whose writer, the pid in its name, is gone is taken as a spool — its one write is the
+            # whole line or nothing; a living writer's is left as it is
+            for a in "$jdir"/hooks.jsonl.spooling-*; do
+                [ -f "$a" ] && [ ! -L "$a" ] || continue
+                [[ "${a##*/}" =~ -([0-9]{1,10})-[0-9]+$ ]] || continue
+                [ -d "/proc/${BASH_REMATCH[1]}" ] && continue
+                sz=$(stat -c %s -- "$a" 2>/dev/null) || continue
+                case "$sz" in ''|*[!0-9]*) continue ;; esac
+                if [ "$sz" -gt 0 ] && [ "$sz" -le 4096 ] && [ "$(tail -c 1 -- "$a" 2>/dev/null | od -An -c | tr -d ' ')" = '\n' ]; then
+                    { cat -- "$a" >> "$hfile"; } 2>/dev/null && rm -f -- "$a" 2>/dev/null
+                elif [ "$sz" -eq 0 ]; then
+                    rm -f -- "$a" 2>/dev/null
+                fi
+            done
         fi
         if [ "$big" = true ]; then
             size=$(stat -c %s -- "$hfile" 2>/dev/null) || size=0

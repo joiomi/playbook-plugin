@@ -299,8 +299,11 @@ line is in flight while a closed file is compressed, whatever the clock — the 
 fiecare rând" (a forward clock jump made the time rule below insufficient — the post-panel judge). The lock is taken
 before the end time, so a wait counts in `ms`. No line is ever appended without it: past a 1 s wait the line goes to a
 spool file of its own (`hooks.jsonl.spool-…`, written whole under another name, then renamed in), which the next run
-that holds the lock exclusively moves into the journal — the owner, 2026-10-17 00:13: "Bilet în cutie". A host
-without `flock` appends directly (and never rotates). Ids
+that holds the lock exclusively moves into the journal — the owner, 2026-10-17 00:13: "Bilet în cutie". A writer's
+temporary is never removed for its age: one whose writer (the pid in its name) is gone is taken the same way — its
+one write is the whole line or nothing — and a living writer's is left (the post-panel judge's run 4: a clock step
+made a live one look old). The journal directory is made before the lock is taken, so a project's first line holds it
+too. A host without `flock` appends directly (and never rotates). Ids
 keep only id characters; `detail` and `error` are escaped and cut on a whole character and a whole escape. Nothing is
 written outside a playbook project (no `.agent/tasks`, no lane with `tasks/`), in the fresh-clone shape (lanes, no
 marker), with an invalid `.agent/current_user`,

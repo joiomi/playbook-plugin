@@ -285,9 +285,17 @@ def append_hook_run(project_root, *, hook, event="", tool="", tool_use_id="", se
         lane = resolve_hook_lane(project_root)
         if lane is None:
             return
-        if not (lane / "journal").is_symlink():
-            _hj_rotate(lane / "journal")
-        fd, got = _hj_share(lane / "journal")     # before the end time: a wait for the lock counts (post-panel run 3)
+        jdir = lane / "journal"
+        if jdir.is_symlink():
+            return
+        try:
+            jdir.mkdir(exist_ok=True)           # the directory first: a first append holds the lock too (post-panel run 4)
+        except OSError:
+            return
+        _hj_rotate(jdir)
+        fd, got = _hj_share(jdir)               # before the end time: a wait for the lock counts (post-panel run 3)
+        if fd is None:
+            return                              # never an unlocked append (the owner, 2026-10-16 22:21)
         try:
             if timing is not None:
                 ms = hook_ms(*timing)
@@ -306,13 +314,12 @@ def append_hook_run(project_root, *, hook, event="", tool="", tool_use_id="", se
                 data = (json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
                 if len(data) > _HJ_LINE_MAX:
                     return
-            if fd is not None and not got:
-                _hj_spool(lane / "journal", data)       # never appended without the lock (the owner, 00:13)
+            if not got:
+                _hj_spool(jdir, data)                   # never appended without the lock (the owner, 00:13)
             else:
                 _write_record(lane, rec, name="hooks.jsonl", data=data)
         finally:
-            if fd is not None:
-                os.close(fd)
+            os.close(fd)
     except OSError:
         return                              # a sink that cannot be written (a FIFO: ENXIO) is skipped quietly, as in bash
     except Exception as exc:                # defence in depth: never propagate
@@ -322,8 +329,7 @@ def append_hook_run(project_root, *, hook, event="", tool="", tool_use_id="", se
 def _hj_share(jdir: Path):
     """(fd, got): a SHARED lock on the journal directory, waited for up to 1 s (the owner, 2026-10-16 22:21: "Lacăt la
     fiecare rând" — renaming and compressing hold it exclusively, so no line is in flight while a closed file is
-    compressed, whatever the clock). fd is None when the directory does not exist yet: nothing can be compressing
-    there, and `_write_record` makes it."""
+    compressed, whatever the clock). fd is None when the directory cannot be opened: then nothing is written."""
     import fcntl
     try:
         fd = os.open(str(jdir), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
@@ -547,12 +553,11 @@ def _hj_rotate(jdir: Path) -> None:
 
 def _hj_take_spools(jdir: Path, jfile: Path) -> None:
     """Under the exclusive lock: every spool, in name order, appended whole to the journal and removed (a link removed
-    unread, one past 4 KiB not ours); a writer's temporary older than 10 minutes, left by a kill, is removed."""
+    unread, one past 4 KiB not ours); a writer's temporary whose writer is gone is taken the same way."""
     try:
         names = sorted(os.listdir(jdir))
     except OSError:
         return
-    now = time.time()
     for n in names:
         f = jdir / n
         try:
@@ -560,17 +565,26 @@ def _hj_take_spools(jdir: Path, jfile: Path) -> None:
         except OSError:
             continue
         if n.startswith("hooks.jsonl.spooling-"):
-            if stat.S_ISREG(st.st_mode) and now - st.st_mtime > 600:
+            # never removed for its age (post-panel judge run 4: a clock step made a live writer's look old); one whose
+            # writer, the pid in its name, is gone is taken as a spool: its one write is the whole line or nothing
+            m = re.search(r"-(\d{1,10})-\d+$", n)
+            if not m or os.path.isdir(f"/proc/{m.group(1)}") or not stat.S_ISREG(st.st_mode) or st.st_size > 4096:
+                continue
+            if st.st_size == 0:
                 f.unlink()
+                continue
+            data = f.read_bytes()
+            if not data.endswith(b"\n"):
+                continue
+        elif n.startswith("hooks.jsonl.spool-"):
+            if stat.S_ISLNK(st.st_mode):
+                f.unlink()
+                continue
+            if not stat.S_ISREG(st.st_mode) or st.st_size > 4096:
+                continue
+            data = f.read_bytes()
+        else:
             continue
-        if not n.startswith("hooks.jsonl.spool-"):
-            continue
-        if stat.S_ISLNK(st.st_mode):
-            f.unlink()
-            continue
-        if not stat.S_ISREG(st.st_mode) or st.st_size > 4096:
-            continue
-        data = f.read_bytes()
         out = os.open(str(jfile), os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NONBLOCK", 0)
                       | getattr(os, "O_NOFOLLOW", 0), 0o644)
         try:

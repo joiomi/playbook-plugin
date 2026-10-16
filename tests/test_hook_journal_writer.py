@@ -638,6 +638,25 @@ class Rotation(_Project):
         self.assertEqual(sorted(r["hook"] for r in self.lines()), ["next", "spooled"])
         self.assertEqual(list((self.lane / "journal").glob("hooks.jsonl.spool*")), [])
 
+    def test_a_writers_temporary_is_taken_only_when_its_writer_is_gone(self):
+        """Post-panel judge run 4 (codex — reproduced, grave): the sweep removed a temporary for its AGE, so a live
+        writer paused past a clock step lost its line. Now: a temporary whose writer (the pid in its name) is gone is
+        taken as a spool (its one write is the whole line or nothing); a living writer's is left, however old."""
+        (self.lane / "journal").mkdir(exist_ok=True)
+        self.journal.write_text("")
+        dead = subprocess.Popen(["true"])
+        dead.wait()
+        gone = self.lane / "journal" / f"hooks.jsonl.spooling-20261017-000000-{dead.pid}-1"
+        gone.write_text('{"hook":"orphan"}\n')
+        alive = self.lane / "journal" / f"hooks.jsonl.spooling-20261017-000000-{os.getpid()}-2"
+        alive.write_text('{"hook":"in-flight"}\n')
+        for f in (gone, alive):
+            self.age(f)
+        self.run_hook(self.in_lane("exit 0"), PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1")
+        self.assertFalse(gone.exists())
+        self.assertIn("orphan", [r["hook"] for r in self.lines()])
+        self.assertTrue(alive.exists())                          # a living writer's temporary is never removed
+
     def test_a_held_lock_means_no_rotation_and_the_line_is_written(self):
         self.fill()
         holder = subprocess.Popen(["flock", str(self.lane / "journal"), "sleep", "5"])

@@ -297,6 +297,54 @@ class ThePythonWriter(_Tmp):
         self.assertEqual(sorted(r["hook"] for r in self.lines()), ["next", "spooled", "x"])
         self.assertEqual(list(self.journal.parent.glob("hooks.jsonl.spool*")), [])
 
+    def test_the_first_append_of_a_project_holds_the_lock_too(self):
+        """Post-panel judge run 4 (codex, grave): with no journal directory yet, the python writer appended unlocked.
+        It now makes the directory first; while it writes, an exclusive lock on it cannot be had."""
+        import fcntl
+        seen = []
+        real = self.pbj._write_record
+
+        def probe(*a, **k):
+            fd = os.open(str(self.journal.parent), os.O_RDONLY)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                seen.append("unlocked")
+            except OSError:
+                seen.append("locked")
+            finally:
+                os.close(fd)
+            return real(*a, **k)
+        setattr(self.pbj, "_write_record", probe)
+        try:
+            self.assertFalse(self.journal.parent.exists())
+            self.pbj.append_hook_run(self.project, hook="first")
+        finally:
+            setattr(self.pbj, "_write_record", real)
+        self.assertEqual(seen, ["locked"])
+        self.assertEqual([r["hook"] for r in self.lines()], ["first"])
+
+    def test_the_python_sweep_takes_a_dead_writers_temporary_and_leaves_a_live_ones(self):
+        """Post-panel judge run 4 (codex, grave): the python sweep removed temporaries for their age."""
+        self.journal.parent.mkdir()
+        self.journal.write_text("")
+        dead = subprocess.Popen(["true"])
+        dead.wait()
+        gone = self.journal.parent / f"hooks.jsonl.spooling-20261017-000000-{dead.pid}-1"
+        gone.write_text('{"hook":"orphan"}\n')
+        alive = self.journal.parent / f"hooks.jsonl.spooling-20261017-000000-{os.getpid()}-2"
+        alive.write_text('{"hook":"in-flight"}\n')
+        old = time.time() - 1200
+        for f in (gone, alive):
+            os.utime(f, (old, old))
+        os.environ["PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK"] = "1"
+        try:
+            self.pbj.append_hook_run(self.project, hook="x")
+        finally:
+            del os.environ["PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK"]
+        self.assertFalse(gone.exists())
+        self.assertIn("orphan", [r["hook"] for r in self.lines()])
+        self.assertTrue(alive.exists())
+
     def test_a_held_lock_means_no_rotation(self):
         if not shutil.which("flock"):
             self.skipTest("no flock(1)")
@@ -584,6 +632,22 @@ class ThreeWritersOneAnswer(_Tmp):
             subprocess.run([bash_or_skip(), str(NUDGE)], input=self.PAYLOAD, cwd=str(p), env=self.env(),
                            capture_output=True, text=True, timeout=20)
             self.assertEqual(len(self.lines(p / ".agent" / "journal" / "hooks.jsonl")), 1)   # not appended unlocked
+            self.assertEqual(len(list((p / ".agent" / "journal").glob("hooks.jsonl.spool-*"))), 1)
+        finally:
+            holder.wait()
+
+    def test_the_nudge_spools_into_its_own_journal_under_a_path_with_a_colon(self):
+        """Post-panel judge run 4 (codex — reproduced): the nudge stripped `:` from the whole spool path."""
+        if not shutil.which("flock"):
+            self.skipTest("no flock(1)")
+        p = self.root / "proj:with:colons"
+        (p / ".agent" / "journal").mkdir(parents=True)
+        (p / ".agent" / "tasks").mkdir()
+        holder = subprocess.Popen(["flock", "-x", str(p / ".agent" / "journal"), "sleep", "1.8"])
+        try:
+            time.sleep(0.2)
+            subprocess.run([bash_or_skip(), str(NUDGE)], input=self.PAYLOAD, cwd=str(p), env=self.env(),
+                           capture_output=True, text=True, timeout=20)
             self.assertEqual(len(list((p / ".agent" / "journal").glob("hooks.jsonl.spool-*"))), 1)
         finally:
             holder.wait()

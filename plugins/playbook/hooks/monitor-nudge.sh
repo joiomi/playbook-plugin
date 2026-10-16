@@ -144,8 +144,8 @@ _pb_nudge_journal() {
                 "$ts" "$event" "$tool" "$tuid" "$sid" "$hsid" "$agent" "$decision" "$detail" "$ms" "$rc" "$error"
             if [ "${#line}" -lt 1024 ]; then
                 if [ "$locked" = no ]; then
-                    sub="$jdir/hooks.jsonl.spool-$ts-$$-$RANDOM$RANDOM"; sub="${sub//:/}"
-                    h="$jdir/hooks.jsonl.spooling-${sub##*/hooks.jsonl.spool-}"
+                    v="hooks.jsonl.spool-${ts//:/}-$$-$RANDOM$RANDOM"     # the NAME sanitized, never the path (run 4)
+                    sub="$jdir/$v"; h="$jdir/hooks.jsonl.spooling-${v#hooks.jsonl.spool-}"
                     if ( set -o noclobber; printf '%s\n' "$line" > "$h" ) 2>/dev/null; then
                         mv -n -- "$h" "$sub" 2>/dev/null || rm -f -- "$h" 2>/dev/null
                     fi
