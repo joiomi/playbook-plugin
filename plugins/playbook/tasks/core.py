@@ -2555,7 +2555,8 @@ def owner_exclude_covers_behavioral(project_path: Path,
     return (bool(hits), sorted(hits))
 
 
-def tree_state_fingerprint(project_path: Path, *, outer_head_override: "str | None" = None) -> str:
+def tree_state_fingerprint(project_path: Path, *, outer_head_override: "str | None" = None,
+                           cfg: "dict | None" = None) -> str:
     """Content fingerprint of the CODE STATE: sha256 over HEAD + porcelain status
     + working diff, 12 hex chars. Names *what state* a panel reviewed or a close
     certified — deterministic, unlike mtimes, and sensitive to uncommitted work
@@ -2566,7 +2567,11 @@ def tree_state_fingerprint(project_path: Path, *, outer_head_override: "str | No
     HowFar-v2 keep their real code in a gitignored nested checkout, invisible to
     the outer `git status`), each root's material is folded in too, so a code-only
     edit there moves the fingerprint. With `code_roots` unset the fingerprint is
-    byte-identical to before the key existed."""
+    byte-identical to before the key existed.
+
+    `cfg` (task 231): the config to read the exclusions and `code_roots` from instead of the tree's own — a review's
+    copy is fingerprinted with the LIVE project's config, so a config git ignores (bound live, not copied) or one
+    edited after the copy cannot make the copy's value differ from the live one by itself."""
     import hashlib
     # `.agent/` is EXCLUDED: triaging findings edits task.md between the panel
     # and the close by design — the fingerprint must answer "did the CODE
@@ -2576,10 +2581,13 @@ def tree_state_fingerprint(project_path: Path, *, outer_head_override: "str | No
     # .agent/config.json, git pathspec strings — e.g. "journal/"): a standing
     # journal gate writes project-side files after the last panel by
     # construction, and F18's irreversible gate must not tax that.
-    try:
-        _cfg = load_config(Path(project_path))
-    except Exception:
-        _cfg = {}
+    if cfg is not None:
+        _cfg = cfg
+    else:
+        try:
+            _cfg = load_config(Path(project_path))
+        except Exception:
+            _cfg = {}
     # Single source of truth for the exclusion pathspecs (impl-panel r5 sonnet#1):
     # the fingerprint and the tail-cert delta enumeration MUST use the identical
     # list, so they share this helper rather than hand-rebuilding it (the R4-3

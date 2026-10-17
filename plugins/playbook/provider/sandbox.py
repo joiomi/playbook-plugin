@@ -360,6 +360,25 @@ def is_sandboxed() -> bool:
     return os.environ.get("PLAYBOOK_SANDBOXED") == "1"
 
 
+@dataclass(frozen=True)
+class ProjectView:
+    """A review's fixed copy of the tree (task 231, PHASE-B item 7; `tasks/review_view.py`): `root` is mounted
+    read-only AT the project's path in place of the project, and each path in `live` (an entry git ignores, bound
+    from the live tree as the judges always saw it) is bound read-only at its own path after it."""
+    root: str
+    live: "tuple[str, ...]" = ()
+
+
+def view_mount_available() -> "tuple[bool, str]":
+    """Can a review's copy be mounted here? (True, '') or (False, why). Inside a sandbox no new mount can be made;
+    without bubblewrap there is no mount at all — the review then reads the live tree (task 231)."""
+    if is_sandboxed():
+        return False, "already inside a sandbox — a copy cannot be mounted from here"
+    if not _bwrap_exe():
+        return False, "bubblewrap (bwrap) is not available"
+    return True, ""
+
+
 def bypass_args(agent: str) -> list[str]:
     """Per-agent bypass-flag injection (copy — callers may mutate)."""
     if agent not in _BYPASS_FLAGS:
@@ -464,7 +483,8 @@ def _record_link_targets(agent: Path, linked: "dict[str, Path]") -> "tuple[list[
     return files, dirs
 
 
-def _bwrap_record_masks(project_dir: Path | str, hidden: "list[str] | None" = None) -> list[str]:
+def _bwrap_record_masks(project_dir: Path | str, hidden: "list[str] | None" = None,
+                        source_root: "Path | str | None" = None) -> list[str]:
     """bwrap args that hide the conversation records from a read-only judge (task
     125; task 138 G3-2..G3-4). `.agent`, each directory in it, and the real
     directory behind each symlinked lane become an empty tmpfs LAYER onto which
@@ -482,7 +502,14 @@ def _bwrap_record_masks(project_dir: Path | str, hidden: "list[str] | None" = No
     record directory present now, the real target of a record that is a symlink, and
     a layer that could not be listed. `<project>/.agent` is reported even when it does
     not exist (or is not a directory) and nothing can be masked: a bind laid there
-    would CREATE the place the records are then written to."""
+    would CREATE the place the records are then written to.
+
+    `source_root` (task 231): a review's copy mounted at the project path. The records and their real targets are
+    still taken from the LIVE `.agent` (an ignored record link is not in the copy, and its target must stay hidden
+    — plan panel P2); every other entry is bound back FROM THE COPY when the copy has it, and from the live tree
+    only when it does not (an entry git ignores: the journal, models.json, current_user). An entry only the copy has
+    is bound from the copy too. Bound onto itself, the live entry would lay the live `.agent` back over the copy
+    (plan panel P1)."""
     def hide(path) -> None:
         if hidden is not None and str(path) not in hidden:
             hidden.append(str(path))
@@ -501,6 +528,17 @@ def _bwrap_record_masks(project_dir: Path | str, hidden: "list[str] | None" = No
     hide(agent)
     done: set[Path] = set()
     linked = _symlinked_lanes(agent)
+    try:
+        proj_real = Path(project_dir).resolve()
+    except OSError:
+        proj_real = Path(project_dir)
+
+    def from_copy(path: str) -> "str | None":
+        """The copy's counterpart of a live path inside the project, if the copy has it."""
+        if source_root is None or not _covers(proj_real, Path(path)):
+            return None
+        alt = os.path.join(str(source_root), os.path.relpath(path, proj_real))
+        return alt if os.path.lexists(alt) else None
 
     def layer(real: Path, lanes: bool) -> list[Path]:
         """Mount the layer for `real`; return its sub-directories that need their own."""
@@ -513,6 +551,15 @@ def _bwrap_record_masks(project_dir: Path | str, hidden: "list[str] | None" = No
         except OSError:
             hide(real)
             return []
+        copy_dir = from_copy(str(real))
+        if copy_dir is not None and os.path.isdir(copy_dir) and not os.path.islink(copy_dir):
+            # an entry only the copy holds (removed live after the copy was sealed) is the copy's
+            names = {e.name for e in entries}
+            try:
+                entries = sorted(entries + [e for e in os.scandir(copy_dir) if e.name not in names],
+                                 key=lambda e: e.name)
+            except OSError:
+                pass
         subs: list[Path] = []
         for e in entries:
             path = str(real / e.name)
@@ -528,11 +575,11 @@ def _bwrap_record_masks(project_dir: Path | str, hidden: "list[str] | None" = No
                 elif link and lanes and e.name in linked:
                     args.extend(["--symlink", str(linked[e.name]), path])   # the masked dir
                 elif link:
-                    args.extend(["--symlink", os.readlink(e.path), path])
+                    args.extend(["--symlink", os.readlink(from_copy(path) or e.path), path])
                 elif is_dir and lanes:
                     subs.append(real / e.name)
                 else:
-                    args.extend(["--ro-bind", path, path])
+                    args.extend(["--ro-bind", from_copy(path) or path, path])
             except OSError:
                 continue
         return subs
@@ -578,6 +625,7 @@ def build_bwrap_argv(
     git_source_links: Iterable[str] | None = None,
     git_sources_writable: bool = False,
     bwrap_exe: str | None = None,
+    project_view: "ProjectView | None" = None,
 ) -> list[str]:
     """Generate the bwrap argv: read-only root, bind project + tmp + per-agent
     home subpaths read-write, bind git_dir — and every other path of git metadata
@@ -621,6 +669,33 @@ def build_bwrap_argv(
     project = str(Path(project_dir).resolve())
     home = Path.home()
     rw_paths = _normalize_rw(extra_rw)
+
+    # Task 231 (PHASE-B item 7): a review's fixed copy, mounted read-only AT the project path. Everything git keeps
+    # under the project or the copy is then read-only by that mount (the copy's own git directory is inside it), so
+    # only the git places outside both are kept below; a writable path inside the project would lay the live tree
+    # over the copy.
+    view_root = None
+    if project_view is not None:
+        if project_writable:
+            raise ValueError("a review's copy is mounted read-only — project_writable must be False")
+        view_root = str(Path(project_view.root).resolve())
+
+        def _under(p) -> bool:
+            try:
+                rp = Path(p).resolve()
+            except (OSError, RuntimeError):
+                return False
+            return _covers(project, rp) or _covers(view_root, rp)
+
+        for rw in rw_paths:
+            if _covers(project, Path(rw)) or _covers(view_root, Path(rw)):
+                raise ValueError(f"`--rw {rw}` lies in the project, which a review's copy covers read-only")
+        if git_dir is not None and _under(git_dir):
+            git_dir = None
+        git_readonly = [g for g in (git_readonly or []) if not _under(g)]
+        git_sources = [g for g in (git_sources or []) if not _under(g)]
+        git_sources_missing = [g for g in (git_sources_missing or []) if not _under(g)]
+        git_source_links = [g for g in (git_source_links or []) if not _under(g)]
 
     argv = ["bwrap", "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev"]
     if no_network:
@@ -681,8 +756,19 @@ def build_bwrap_argv(
         layers.append((g, False))
 
     project_bind = "--bind" if project_writable else "--ro-bind"
-    argv += [project_bind, project, project]
-    layers.append((project, project_writable))
+    if view_root is not None:
+        argv += ["--ro-bind", view_root, project]
+        layers.append((project, False))
+        # what git ignores is shown live, as the judges always saw it — bound from the host path after the copy
+        for live in project_view.live:
+            live_p = str(Path(live))
+            if not _covers(project, Path(live_p)) or not os.path.lexists(live_p) or os.path.islink(live_p):
+                continue
+            argv += ["--ro-bind", live_p, live_p]
+            layers.append((live_p, False))
+    else:
+        argv += [project_bind, project, project]
+        layers.append((project, project_writable))
 
     # Task 125: a read-only judge cannot read the conversation records — layers
     # after the project bind so they win the overlap (`_bwrap_record_masks`). A
@@ -690,7 +776,7 @@ def build_bwrap_argv(
     # mask_records=False (the monitor, task 138 G3-1).
     hidden: list[str] = []
     if (not project_writable) if mask_records is None else mask_records:
-        argv += _bwrap_record_masks(project, hidden)
+        argv += _bwrap_record_masks(project, hidden, source_root=view_root)
         layers += [(h, False) for h in hidden]
 
     # What the masks hide must stay hidden, and a bind laid after them replaces
@@ -1415,6 +1501,7 @@ def _launch_plan(
     mask_records: bool | None = None,
     require_containment: bool = False,
     git_sources_writable: bool = False,
+    project_view: "ProjectView | None" = None,
 ) -> "tuple[list[str], bool]":
     """Compose bypass-flag injection + bwrap wrapping into the final argv, and say
     whether the child will be in a cage (wrapped here, or we are nested). Shared
@@ -1436,22 +1523,33 @@ def _launch_plan(
     inner_argv = _compose_agent_argv(agent, agent_args)
     if no_network and not network_isolation_available():
         raise RuntimeError(_NO_NETWORK_UNSUPPORTED)
+    if project_view is not None:
+        # task 231: a review that asked for its copy never runs on the live tree in its place — the caller decides
+        # BEFORE making a copy whether one can be mounted (`view_mount_available`) and reads the live tree openly
+        if project_writable:
+            raise ValueError("a review's copy is mounted read-only — project_writable must be False")
+        ok, why = view_mount_available()
+        if not ok:
+            raise RuntimeError(f"the review's copy cannot be mounted: {why}. Nothing was launched.")
     if is_sandboxed():
         return inner_argv, True
     exe = _bwrap_exe()
     if exe:
-        git_dir = _git_dir_of(project)
+        # the git places are asked of the tree the judge will see: the copy, when there is one
+        seen = Path(project_view.root) if project_view is not None else project
+        git_dir = _git_dir_of(seen)
         # what git runs by itself — its hooks, its settings — is asked of git, and kept
         # read-only too (task 181); not asked at all with the owner's permission
         sources, absent, links, unanswered = (([], [], [], []) if git_sources_writable
-                                              else _git_sources(project))
+                                              else _git_sources(seen))
         argv = build_bwrap_argv(project, git_dir, inner_argv, extra_rw,
                                 project_writable=project_writable, no_network=no_network,
                                 mask_records=mask_records,
-                                git_readonly=_git_paths_to_protect(project),
+                                git_readonly=_git_paths_to_protect(seen),
                                 git_sources=sources, git_sources_missing=absent,
                                 git_source_links=links, git_sources_unanswered=unanswered,
-                                git_sources_writable=git_sources_writable, bwrap_exe=exe)
+                                git_sources_writable=git_sources_writable, bwrap_exe=exe,
+                                project_view=project_view)
         return [exe, *argv[1:]], True     # by absolute path: the launch runs in the project
     if require_containment:
         raise RuntimeError(launch_refusal() or (
@@ -1667,6 +1765,7 @@ def run(
     mask_records: bool | None = None,
     require_containment: bool = False,
     git_sources_writable: bool = False,
+    project_view: "ProjectView | None" = None,
     **kwargs,
 ) -> subprocess.CompletedProcess:
     """Run an agent under sandbox containment. Composes bypass-flag injection
@@ -1681,7 +1780,7 @@ def run(
     project = Path(project_root).resolve()
     wrapped, contained = _launch_plan(agent, agent_args, project, extra_rw, project_writable,
                                       no_network, mask_records, require_containment,
-                                      git_sources_writable)
+                                      git_sources_writable, project_view=project_view)
     child_env = _child_env(env, contained)
 
     if kwargs.get("text") or isinstance(kwargs.get("input"), str):
@@ -1779,6 +1878,7 @@ def popen(
     mask_records: bool | None = None,
     require_containment: bool = False,
     git_sources_writable: bool = False,
+    project_view: "ProjectView | None" = None,
     **kwargs,
 ) -> subprocess.Popen:
     """Non-blocking variant of run() — returns a live Popen for streaming.
@@ -1794,7 +1894,7 @@ def popen(
     project = Path(project_root).resolve()
     wrapped, contained = _launch_plan(agent, agent_args, project, extra_rw, project_writable,
                                       no_network, mask_records, require_containment,
-                                      git_sources_writable)
+                                      git_sources_writable, project_view=project_view)
     child_env = _child_env(env, contained)
 
     kwargs.setdefault("stdout", subprocess.PIPE)

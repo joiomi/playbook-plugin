@@ -86,7 +86,6 @@ def _project(case: unittest.TestCase) -> Path:
     (d / ".venv" / "bin").mkdir(parents=True)
     (d / ".venv" / "bin" / "python").write_text("LIVE-INTERPRETER\n", encoding="utf-8")
     (d / ".agent" / "models.json").write_text('{"panel": ["claude:opus"]}', encoding="utf-8")
-    (d / ".agent" / "current_user").write_text("alice\n", encoding="utf-8")
     (d / ".agent" / "chat_log.md").write_text("SECRET CHAT\n", encoding="utf-8")
     (d / ".agent" / "journal").mkdir()
     (d / ".agent" / "journal" / "hooks.jsonl").write_text("{}\n", encoding="utf-8")
@@ -179,15 +178,15 @@ class CopyAndSeal(unittest.TestCase):
         n = []
 
         def racing(*a, **kw):
-            out = real(*a, **kw)
+            # the agent writes between the stamp and the copy, at every attempt
             n.append(1)
             (d / "src" / "a.py").write_text(f"a = {10 + len(n)}  # the agent wrote at once\n", encoding="utf-8")
-            return out
+            return real(*a, **kw)
 
         with mock.patch.object(rv, "_copy_listed_files", racing):
             with self.assertRaises(rv.Moved):
                 rv.make(d, _cfg(d), run_id="t4", fingerprint=fp, trees=trees, heads=heads)
-        self.assertEqual(len(n), rv.COPY_ATTEMPTS)
+        self.assertEqual(len(n), rv.COPY_ATTEMPTS * 2, "each attempt copies both scopes")
         self.assertEqual(list(rv.views_dir(d).glob("t4*")), [])
 
     def test_ignored_entries_are_bound_live_and_their_mountpoints_exist(self):
@@ -333,12 +332,14 @@ class SandboxArgv(unittest.TestCase):
         argv = self._argv(d, view)
         binds = self._pairs(argv, "--ro-bind")
         p = str(d.resolve())
-        self.assertIn((str(view.root / ".agent" / "tasks"), p + "/.agent/tasks"), binds)
+        # `.agent`'s top-level folders are layers of their own (task 138): their entries are bound one by one
+        self.assertIn((str(view.root / ".agent" / "tasks" / "042-demo"), p + "/.agent/tasks/042-demo"), binds)
         self.assertIn((str(view.root / ".agent" / "config.json"), p + "/.agent/config.json"), binds)
-        self.assertIn((p + "/.agent/journal", p + "/.agent/journal"), binds)
+        self.assertIn((p + "/.agent/journal/hooks.jsonl", p + "/.agent/journal/hooks.jsonl"), binds)
         self.assertIn((p + "/.agent/models.json", p + "/.agent/models.json"), binds)
         self.assertIn(("/dev/null", p + "/.agent/chat_log.md"), binds, "a record is masked as before")
-        self.assertNotIn((p + "/.agent/tasks", p + "/.agent/tasks"), binds, "the live task records came back")
+        self.assertNotIn((p + "/.agent/tasks/042-demo", p + "/.agent/tasks/042-demo"), binds,
+                         "the live task records came back")
 
     def test_ignored_entries_are_bound_live_after_the_copy(self):
         d = _project(self)
@@ -361,7 +362,7 @@ class SandboxArgv(unittest.TestCase):
         view, _fp = _make(self, d)
         with mock.patch.object(S, "is_sandboxed", return_value=True):
             with self.assertRaises(RuntimeError):
-                S._launch_plan("bash", ["-c", "true"], d.resolve(), None, False,
+                S._launch_plan("claude", ["-p"], d.resolve(), None, False,
                                project_view=view.sandbox_view())
 
     def test_run_hands_the_copy_to_the_launch_plan(self):
@@ -411,8 +412,9 @@ class RealBubblewrap(unittest.TestCase):
         cmd = ("cat src/a.py; cat .agent/tasks/042-demo/task.md | head -1; cat .venv/bin/python; "
                "cat .agent/models.json; echo; cat .agent/chat_log.md 2>&1 | head -1; "
                "echo x > src/new.py 2>&1 || echo WRITE-REFUSED; git -C . rev-parse --abbrev-ref HEAD")
-        argv, contained = S._launch_plan("bash", ["-c", cmd], d.resolve(), None, False,
-                                         project_view=view.sandbox_view())
+        with mock.patch.object(S, "_compose_agent_argv", lambda agent, args: [agent, *args]):
+            argv, contained = S._launch_plan("bash", ["-c", cmd], d.resolve(), None, False,
+                                             project_view=view.sandbox_view())
         self.assertTrue(contained)
         out = subprocess.run(argv, cwd=str(d), capture_output=True, text=True, timeout=60)
         text = out.stdout + out.stderr
