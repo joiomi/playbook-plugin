@@ -93,6 +93,24 @@ Blind by construction: a judge gets the repo but not your conversation, so it ca
 
 Since v1.4.3 the judge runs write-denied: the project is mounted no-write, so a judge physically cannot edit the repo or task.md. It is not otherwise isolated — it can still read the filesystem and reach the network (which it needs, to call model APIs); "read-only" here means writes are denied, nothing more. Because that OS containment is not always available (`bwrap` not on PATH, or a nested sandbox), a working-tree tamper guard backs it up — the review paths snapshot git status + the task.md hash before and after, and if a judge changed anything the review is saved with a loud TAMPER banner, ingestion is refused, and the run exits non-zero.
 
+**Judges read a fixed copy of the tree (task 231, PHASE-B item 7).** Before the judges of a panel or a single
+review start, the CLI copies what git lists — the outer repository and each `code_roots` repository, each a
+`git clone --local --mirror` with the live config, index and listed files (`tasks/review_view.py`) — into
+`<lane>/journal/review-views/`, and keeps the copy only when it is sealed by content: its fingerprint equals the
+stamp taken from the live tree, each scope's working-tree object equals the snapshot's base (for the post-panel
+judge, its delta's tree) and HEAD is the same. bubblewrap then mounts the copy read-only AT the project path
+(`sandbox.ProjectView`), so the judges see the same paths as task.md while the agent writes the live tree; what git
+ignores is bound from the live tree at its own path, as the judges always saw it, and `.agent`'s record masks are
+built from the live `.agent`, its other entries bound back from the copy (tracked) or the live tree (ignored). The
+tamper guard then watches the copy; the stamp is the sealed fingerprint and the snapshot is the one taken before
+the spawn, so a live tree that moves on purpose is not "moved". No copy is possible inside a sandbox, without
+bubblewrap, for a project in a subdirectory of its repository, a linked worktree, a linked `.agent` or lane, a
+linked code root, a submodule or untracked nested repository, a `fingerprint_exclude` that hides code, an unignored
+journal, or more than 50,000 listed files / 1 GiB / 2,000 ignored entries — the review then says so first and reads
+the live tree under the guard below. A tree that keeps changing while its copy is made (three times) refuses the
+review before anything is spent. Tail certification still reads the live tree: the close certifies the current
+tree and discards a PASS if it moved.
+
 **What the guard sees, and what a degraded guard means (v1.5.45).** Its scope is
 the outer tree's porcelain state, the content hash of every dirty/untracked file,
 `task.md`'s own hash, the task directory's git-independent identity (realpath +

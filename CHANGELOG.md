@@ -4,6 +4,32 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+**Judges read a fixed copy of the tree, so the agent works while they run** — PHASE-B.md item 7, task 231, the
+owner's answer of 2026-10-17 ("Copie pe aceeași cale"). Measured before: in the 31 hours before the decision, 32
+panels held the agent idle for 368.6 minutes and 11 single-judge runs for 30.9 — the tamper guard voided a round on
+any repo write while the judges read the live tree.
+- A panel and a single review (`plan-review`, `impl-review`, the post-panel judge) first say how the judges read the
+  tree. With a copy: the CLI copies what git lists — the outer repository and each `code_roots` repository, each a
+  `git clone --local --mirror` with the live config, index and listed files — into `<lane>/journal/review-views/`,
+  seals it by content (its fingerprint equals the stamp, each scope's working-tree object the snapshot's base — for
+  the post-panel judge its delta's tree — and HEAD the same), and prints `ready: you may write the live tree now`.
+  bubblewrap mounts the copy read-only at the project path; what git ignores is shown live; `.agent`'s records stay
+  masked from the live inventory and its other entries come from the copy (tracked) or the live tree (ignored).
+- The guard watches the copy, the stamp is the sealed fingerprint and the snapshot the pre-spawn one — a live write
+  during the review no longer voids it; what changed is after the panel (STALE at the close: tail certification
+  takes records, tests and docs). The post-panel judge's `[file:]` checks resolve in the copy. The copy is removed
+  on every exit; one whose owner died is swept by the next review (each holds an `flock`).
+- No copy is possible inside a sandbox, without bubblewrap, for a project in a subdirectory of its repository, a
+  linked worktree, a linked `.agent`/lane/code root, a submodule or untracked nested repository, a
+  `fingerprint_exclude` that hides code, an unignored journal, or over 50,000 listed files / 1 GiB / 2,000 ignored
+  entries: the review says `Judges read the LIVE tree — <why>` first and runs as before. A tree that keeps changing
+  while its copy is made (three times) is refused before anything is spent.
+- The CLAUDE.md template and the playbook skill say when the agent may write (after the ready line, never the
+  reviewed task's task.md/judge.md) and what a code change during an impl review costs. Tail certification still
+  reads the live tree (the close certifies the current tree).
+- `core.tree_state_fingerprint(cfg=)`; `sandbox.ProjectView`, `view_mount_available`, `run(project_view=)`; every
+  adapter's `run_headless_judge(project_view=)`. Ledger row `PB-REVIEW-COPY`.
+
 ## [1.6.4] — 2026-10-17
 
 **Phase B, items 2 and 3: how the plugin writes, and a verify the close remembers** — tasks 212-228. Item 2 (the owner's

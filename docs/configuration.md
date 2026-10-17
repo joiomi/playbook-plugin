@@ -367,7 +367,11 @@ run (you commit or edit during the review), the round keeps the pre-review
 stamp, prints a warning, records `**Tree moved during review:** yes` and carries
 no tail-certification descriptor — so the close reads STALE instead of
 certifying code no judge was shown. The round's `**Commit:**` is read at the
-same moment. If git cannot fingerprint the tree before the review, the round
+same moment. Since task 231 a review whose judges read a fixed copy of the tree
+(docs/architecture.md) stamps the copy's sealed fingerprint and records the
+snapshot taken before the spawn: the live tree may change while the judges run —
+what changed is simply after the panel, and the close reads it as STALE — and
+"moved" means the copy itself changed. If git cannot fingerprint the tree before the review, the round
 carries no stamp (`**Tree-state unavailable:**`) and a high-consequence close
 reads NO-STAMP; it never falls back to the post-review tree.
 

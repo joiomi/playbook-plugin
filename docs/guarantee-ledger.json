@@ -23800,6 +23800,148 @@
       "required_live_evidence": [],
       "semantic_protocol": null,
       "violation_reproduction": null
+    },
+    {
+      "id": "PB-REVIEW-COPY",
+      "category": "judges-and-reviews",
+      "statement": "A panel and a single review (task 231, PHASE-B item 7) either say first that the judges read the LIVE tree and why, or read a fixed copy of what git lists — the outer repository and each `code_roots` repository, cloned with every ref, the live config, index and listed files — that is kept only when sealed by content: its fingerprint (with the live config) equals the stamp taken from the live tree, each scope's working-tree object equals the recorded tree (a panel's snapshot base, the post-panel judge's delta tree) and HEAD is the recorded commit; a tree that changed while the copy was made is tried three times, then the review is refused before any judge is spent. bubblewrap mounts the copy read-only at the project path in place of the project; entries git ignores are bound from the live tree; `.agent`'s records and their targets are masked from the live inventory and its other entries bound from the copy (tracked) or the live tree (ignored). Every seat of a panel and the single judge receive the copy (a copy that cannot be mounted raises — never a silent live read), the payload is read from the copy, the tamper guard watches the copy, the round's stamp is the sealed fingerprint with the pre-spawn snapshot, the post-panel judge's `[file:]` checks resolve in the copy, and the copy is removed on every exit; a sweep removes only copies whose `flock` nobody holds.",
+      "owner": [
+        {
+          "path": "plugins/playbook/tasks/review_view.py",
+          "reference": "symbol:make"
+        },
+        {
+          "path": "plugins/playbook/tasks/review_view.py",
+          "reference": "symbol:availability"
+        },
+        {
+          "path": "plugins/playbook/tasks/review_view.py",
+          "reference": "symbol:sweep"
+        },
+        {
+          "path": "plugins/playbook/tasks/review.py",
+          "reference": "symbol:_open_review_view"
+        },
+        {
+          "path": "plugins/playbook/provider/sandbox.py",
+          "reference": "symbol:build_bwrap_argv"
+        },
+        {
+          "path": "plugins/playbook/provider/sandbox.py",
+          "reference": "symbol:_bwrap_record_masks"
+        }
+      ],
+      "failure_consequence": "Critical",
+      "claim_kind": "mechanical",
+      "proofs": [
+        {
+          "type": "executable unit",
+          "path": "tests/test_review_view.py",
+          "reference": "CopyAndSeal.test_the_copys_fingerprint_equals_the_live_one",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_review_view.py",
+            "reference": "CopyAndSeal.test_a_base_from_another_state_is_refused_although_the_fingerprints_agree"
+          },
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_review_view.py",
+          "reference": "CopyAndSeal.test_a_write_during_every_copy_attempt_is_refused_and_leaves_nothing",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_review_view.py",
+          "reference": "SandboxArgv.test_agent_entries_come_from_the_copy_when_tracked_and_live_when_ignored",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_review_view.py",
+            "reference": "SandboxArgv.test_a_copy_inside_a_sandbox_is_refused_not_read_live"
+          },
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_review_view.py",
+          "reference": "RealBubblewrap.test_the_judge_reads_the_copy_live_ignored_files_and_writes_nothing",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Skipped where no copy can be mounted (no usable bubblewrap, or already inside a sandbox)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_review_view.py",
+          "reference": "PanelReadsACopy.test_live_writes_during_the_panel_keep_the_seal",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_review_view.py",
+            "reference": "PanelWithoutACopy.test_its_seats_get_no_copy"
+          },
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_review_view.py",
+          "reference": "SingleJudgeReadsACopy.test_the_post_panel_judge_reads_the_deltas_tree_while_the_agent_writes",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_review_view.py",
+          "reference": "SingleJudgeReadsACopy.test_a_file_field_resolves_in_the_copy_not_the_live_tree",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_review_view.py",
+          "reference": "ATreeThatKeepsMoving.test_the_panel_is_refused_before_anything_is_spent",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_review_view.py",
+          "reference": "Lifetime.test_a_held_copy_survives_a_sweep_and_goes_once_released",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_review_view.py",
+            "reference": "Lifetime.test_a_copy_whose_owner_died_is_swept"
+          },
+          "limitations": []
+        }
+      ],
+      "applicable_platforms": [
+        "linux"
+      ],
+      "applicable_providers": [
+        "claude",
+        "codex",
+        "grok"
+      ],
+      "status": "verified_by_current_executable_evidence",
+      "missing_evidence_or_limitation": [
+        "What git ignores is shown live, not frozen — as before the copy, the seal does not cover ignored files.",
+        "Tail certification still reads the live tree: the close certifies the current tree and discards a PASS if it moved.",
+        "No copy (the review reads the live tree, said first): inside a sandbox, without bubblewrap, a project in a subdirectory of its repository, a linked worktree, a linked `.agent`/lane/code root, a submodule or untracked nested repository, a special file, a `fingerprint_exclude` hiding code, an unignored journal, over 50,000 listed files / 1 GiB / 2,000 ignored entries.",
+        "That the agent does not edit the reviewed task's task.md/judge.md during its review is stated (the ready line, the template, the skill), not enforced (PLAN.md Phase B inputs, task 231 P10).",
+        "Two reviews at once are allowed; nothing limits the memory or the seats' credit they use together.",
+        "The real-bubblewrap and end-to-end proofs skip where no copy can be mounted."
+      ],
+      "follow_up_phases": [],
+      "required_live_evidence": [],
+      "semantic_protocol": null,
+      "violation_reproduction": null
     }
   ]
 }

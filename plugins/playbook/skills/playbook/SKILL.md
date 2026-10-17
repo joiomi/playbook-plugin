@@ -322,6 +322,13 @@ After all work patterns complete, before code becomes permanent:
 
 `tasks panel-review` / `impl-review` / `plan-review` routinely take longer than the 600 s foreground tool-call cap (a full panel is minutes per seat). Launched in the foreground they get **killed mid-run** and you lose the work. Always launch them **detached** (`… &`) and poll for completion, then read `judge.md`. The CLI prints a one-line advisory at start whenever a run's hard timeout can exceed the cap.
 
+While it runs you can work, once it says so. The judges read a fixed copy of the tree, mounted read-only at the project path (what git lists is copied and sealed to the stamp; what git ignores — `.venv`, `node_modules`, the journal — is shown live, as before). Watch the review's log for its first line about the tree:
+- `Judges read a fixed copy of the tree (…) — ready: you may write the live tree now …` — write anything except the reviewed task's task.md and judge.md;
+- `Judges read the LIVE tree — <why>` — no copy is possible here (no bubblewrap, already in a sandbox, a linked worktree, …): write nothing until the review ends, or its tamper guard voids the round;
+- `Refused: the tree changed while its copy was made …` — something wrote the tree before the ready line; nothing was spent: run it again and wait for the line.
+
+What you write counts after that review. During an impl review or a post-panel judge, records, notes, tests and docs keep the close cheap (an `.agent/` record is outside the fingerprint; tests and docs go to tail certification), but code makes the reviewed task's close STALE — start another task's code after the reviewed task closes. During a plan review anything goes. Two reviews at once are allowed, but each panel needs several GB of memory and spends every seat's credit.
+
 ## Verify once per code state
 
 Run the project's verify contract with `tasks verify` (or `tasks verify <N>`), not the raw command: it always runs the contract as the close does and remembers a green run for exactly that code — every file git lists (tracked or not, its staged blob, its bytes and mode) except the task records and untracked `.agent` files; a tracked `.agent/config.json` counts. A close of the same code then does not run it again; its receipt says "reused: the green run of <time> on the same code (key …)". Any code edit makes the close run it; ticking gates and writing task records do not. Git-ignored files, the environment and the clock are outside the key: after changing one of them, run `tasks verify` again before the close.
