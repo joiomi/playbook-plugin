@@ -19664,6 +19664,137 @@
       "violation_reproduction": null
     },
     {
+      "id": "PB-TASK-NUMBERS",
+      "category": "risk-and-close",
+      "statement": "At every successful close, after its `done` record, the close composes the task's numbers for that closure from the plugin's own records only (the enforcement journal, the hook journal with its archives and spools, the run ledger, chat_log.md and the receipt) and keeps them in `<task>/numbers.json` (`closures[]`, keyed by the receipt's stamp; a re-close adds one), under the task lock and only while that receipt is still the task's newest; a fault or a composition past 5 s prints one line and changes nothing of the close. The task's time is split per host session: a gap counts only when both its lines are the task's; slept (the `susp` difference between two samples of one boot, longest gaps first, capped), unknown across a boot change, away (over 2 h awake), outside a turn owner-idle or background, inside a turn owner-question or agent, with Bash and background time inside the task's review spans carved as judges and inside its recorded verify spans as verify; per session the parts add up to the task's time and, with the time not the task's, to the session's span. `tasks numbers [N]` reads them and writes nothing. The close's `hook=close` records name their task.",
+      "owner": [
+        {
+          "path": "plugins/playbook/tasks/numbers.py",
+          "reference": "symbol:compose"
+        },
+        {
+          "path": "plugins/playbook/tasks/numbers.py",
+          "reference": "symbol:session_partition"
+        },
+        {
+          "path": "plugins/playbook/tasks/numbers.py",
+          "reference": "symbol:write_closure"
+        },
+        {
+          "path": "plugins/playbook/tasks/numbers.py",
+          "reference": "symbol:cmd_numbers"
+        },
+        {
+          "path": "plugins/playbook/tasks/lifecycle.py",
+          "reference": "symbol:cmd_work"
+        }
+      ],
+      "failure_consequence": "Medium",
+      "claim_kind": "mechanical",
+      "proofs": [
+        {
+          "type": "executable unit",
+          "path": "tests/test_task_numbers.py",
+          "reference": "ThePartition.test_the_parts_always_add_up",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "400 seeded timelines of every line kind, with fractional review and verify spans: the parts add up exactly and none is negative."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_task_numbers.py",
+          "reference": "ThePartition.test_away_is_judged_on_the_awake_time",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "A 9 h gap with 8 h slept is 1 h owner-idle; a 4 h gap with 1 h slept is 3 h away (plan panel: opus, sonnet, agy)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_task_numbers.py",
+          "reference": "ThePartition.test_another_tasks_time_and_the_switching_call_are_not_this_tasks",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "The both-ends rule (plan panel: opus, codex, agy)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_task_numbers.py",
+          "reference": "ThePartition.test_a_polled_panel_is_judges_and_the_agents_own_work_is_not",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Bash time inside a review span is judges; a Read's time stays agent."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_numbers.py",
+          "reference": "TheClose.test_a_close_writes_its_numbers_and_names_the_file",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "A real close in a temp project (forced): numbers.json written, its close facts from the receipt, the close records naming the task."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_numbers.py",
+          "reference": "TheClose.test_a_composer_that_fails_leaves_the_close_as_it_was",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "RuntimeError, SystemExit and OutOfTime injected into the composer: the close reports done, status done, no file, one line on stderr."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_numbers.py",
+          "reference": "TheClose.test_an_older_writer_never_replaces_a_newer_closure",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "A composition for an older receipt writes nothing (plan panel: codex)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_numbers.py",
+          "reference": "TheNumbersCommand.test_it_prints_the_closures_writes_nothing_and_sweeps_no_session",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The project's file listing is unchanged, a dead session directory kept (plan panel: agy, codex)."
+          ]
+        }
+      ],
+      "applicable_platforms": [
+        "linux"
+      ],
+      "applicable_providers": [
+        "claude",
+        "codex",
+        "grok"
+      ],
+      "status": "verified_by_current_executable_evidence",
+      "missing_evidence_or_limitation": [
+        "Tool and model time are one kind (PreToolUse runs only for Bash, the edit tools and AskUserQuestion); Bash is not split by command (the hook journal keeps none), so the agent's own test runs count as agent and verify holds only recorded runs.",
+        "Whole-second stamps: each gap is exact to a second either way; on three live sessions against their transcripts counted B1's way, agent came within 2.5 s and owner-idle within 2 s (task 235 W2). Sleep is measured only between two samples of one boot.",
+        "Two sessions working on one task at once each count their own time; a task closed before this existed has no numbers.json."
+      ],
+      "follow_up_phases": [
+        8
+      ],
+      "required_live_evidence": [],
+      "semantic_protocol": null,
+      "violation_reproduction": null
+    },
+    {
       "id": "PB-REVIEW-SPEND-JOURNAL",
       "category": "judges-and-reviews",
       "statement": "Every judge invocation the review runner makes — each panel seat, the single judge, and the tail-cert judge (one that could not be started — its adapter could not be built, or its program is not installed, so nothing was launched — is no invocation and leaves no record: task 178) — and each blind extraction `tasks intent` runs (task 120) appends, on its completion or timeout, one best-effort, log-only spend record to the lane-resolved .agent/<lane>/journal/enforcement.jsonl via pb_journal.append_review, sharing the enforcement envelope (hook=\"review\", decision=\"record\", reason=\"review spend\") plus the fields kind (panel|single|tail-cert|intent), seat as model:effort, task, round, duration_ms, status (ok|fail|timeout|dnf), and usage, plus — on a fail/dnf/timeout record only (task 096) — an error reason (timed out after <limit>, a specific model-availability verdict, or `exit N: <first failure line>`), sanitized, token-redacted and cut to the byte budget the rest of the line leaves under the 512-byte floor. The one exception is a tamper hard-stop, which records nothing so the journal write can never precede and suppress the tamper banner. Token usage is recorded only WHERE the CLI reports it as a structured envelope — the codex judge path runs `exec --json` (last `turn.completed` usage) the grok judge path `--output-format json` (`usage` object), the claude judge path `-p --output-format json` (task 232: its one result object's `modelUsage` entry when it names one model, else its top-level `usage` — both cumulative over the run; `in` is claude's input_tokens as reported, cache excluded, with `cache_read` and `cache_write` copied beside it; a failure keeps plain mode's `(FAILED — exit N)` + `[stdout tail]` shape with claude's own words, so the outage and model-availability rules read what they read before), and the experimental agy judge path `--output-format stream-json` (the terminal `result` event's `usage`, the turn's totals; an all-zero usage object is recorded as unknown, task 111), the adapters returning the review prose as a str that CARRIES the parsed usage (provider.usage.JudgeOutput) so every journal site (panel seat, single, tail-cert) records the CLI's own input_tokens/output_tokens as reported; every spawn-error/unrecognized-stdout case (and a claude call that counted nothing) records the explicit marker {\"status\":\"unknown\"}, as does a timeout when no complete usage frame was emitted before the kill (a frame the CLI had already written is parsed strictly from the partial stdout and carried — proof test_timeout_paths_record_a_usage_frame_the_cli_already_wrote); append_review normalizes usage to the fixed {status[,in,out[,cache_read,cache_write]]} schema (the two cache counts only when each is a non-negative int) — numbers are never fabricated (non-int/bool/negative counts are unknown) and free-form judge prose can never poison the field. A journal write failure never changes or breaks a review or any decision, every field is bounded (strings byte-capped with control chars stripped, numerics magnitude-capped) so REAL records are a single O_APPEND line well under PIPE_BUF — a best-effort bound, not absolute (a pathologically escape-heavy field could exceed it, accepted and harmless since the write affects no decision), and the journal is not written through a symlinked/FIFO path (skipped, not followed).",

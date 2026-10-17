@@ -56,7 +56,8 @@ folder it flags after a call (also `"task registry unreadable"` and `"task regis
 `block`, and `allow` for an acknowledged dangerous command with
 `reason="ack-irreversible-task:<rule>"` or `"ack-operator-env:<rule>"` (task 110);
 `stop`/`gate-batch-check` write `block`; the **close** path writes a `record` (`hook="close"`,
-`reason="verify contract"`) logging the verify bar a close ran. Optional fields:
+`reason="verify contract"`) logging the verify bar a close ran, and since task 235 each of its records names its
+`task`. Optional fields:
 `tool`, `path`, `command` (the command head, capped). See
 `PB-ENFORCEMENT-JOURNAL`.
 
@@ -396,3 +397,73 @@ writers append without the lock while codex's python hooks still rotate there wi
 can still be lost to a compression after a forward clock step; a crash between publishing a spool and removing its
 temporary can record that one line twice (the post-panel judge's run 5, stated); task-dir-watch's `tool_use_id` is read by pattern,
 so a host whose payload put a nested object carrying the same key AFTER the id could mislabel it.
+
+## A task's numbers — `<task>/numbers.json` (task 235)
+
+The owner, 2026-10-13 18:44, on PLAN.md's Phase B item 6: "În Faza B (Recomandat)". At every successful close, after
+its `done` record, the close composes the task's numbers for that closure from the plugin's own records only — this
+journal, the hook journal (with its archives and spools), the run ledger, `chat_log.md` and the receipt — and keeps
+them in `numbers.json` in the task folder, one entry per close (`closures[]`, keyed by the receipt's stamp; a re-close
+adds one). It writes under the task lock and only while that receipt is still the task's newest, so a close that paused
+before writing never replaces a later close's numbers. The close prints `numbers: <path>` (commit it with the task); a
+fault, or a composition past 5 s, prints `numbers: not written (<type>)` and changes nothing else. `tasks numbers [N]`
+shows them and writes nothing; for a task not yet closed it composes a snapshot up to now, marked as one.
+
+| key | meaning |
+|---|---|
+| `closed_at` | the receipt's stamp (the close's moment; it keys the closure) |
+| `window` | UTC `start` (the first `tasks work N` after the last `done` that a later `work` follows, else the first) and `end` (the receipt's stamp) |
+| `snapshot` | true for an open task's composition (never written) |
+| `time` | the task's share of time, wall seconds summed over host sessions: `sessions`, `total`, `by_kind`, `by_section` (the state echo's `##` sections; `?` before the first), `slept`, `away`, `unknown`, `sleep_unmeasured`; null when the journal holds no activation record for the task |
+| `judges_wall` | the union of the task's review spans, wall seconds |
+| `seats` | per judge seat: runs, ok, failed, seconds — summed over that seat's runs, not wall time — tokens in / out / cache_read / cache_write from the runs whose usage is known, how many were unknown, the runs by kind |
+| `verify` | the recorded verify runs (the close's, `tasks verify`): runs, ran, reused, failed, seconds |
+| `rounds` | panels (mode, outcome, critical, important — the run ledger's), post-panel runs (verdict, critical, important), single-judge and tail-certification runs |
+| `owner` | his prompts, the background notifications, his options dialogs answered and cancelled, their questions and answers (counted from the DIALOG entries, matched by their `<!-- dialog:<id> -->` marker), the time he took to answer, the entries' ids |
+| `close` | `freshness` (FRESH / STALE / TAIL-CERTIFIED / NO-STAMP / …), `accepted_reason`, `forced_reason`, `owner_ok`, `bound`, `stop_rule`, the commands' pass / fail counts, `risk` — from the receipt and the task's `hook=close` records |
+| `late_records` | the task's review / verify records written after the close (`tasks numbers` recounts them) |
+
+Example — the live check of task 235 (a scratch session: prompts, a Read, an options dialog answered after 8 s, a failed
+call, a background `sleep 12`, a switch to task 002 and back, then a forced close); its transcript, counted B1's way,
+gave agent 32.9 s, owner-question 8.5 s, background 10.7 s for the whole session, and task 001 plus task 002 here give
+32, 8 and 11 (the closure below without its keys that were empty in that session — `seats`, `verify`, `rounds`,
+`late_records` — and the schema / task fields of the file around it):
+
+```json
+{"closed_at":"2026-10-18T01:22:06+03:00","window":{"start":"2026-10-17T22:17:33Z","end":"2026-10-17T22:22:06Z"},"time":{"sessions":1,"total":222,"by_kind":{"agent":25,"owner-idle":178,"owner-question":8,"background":11},"by_section":{"Debrief":{"agent":25,"owner-idle":178,"owner-question":8,"background":11}},"slept":0,"away":0,"unknown":0,"sleep_unmeasured":1},"judges_wall":0,"owner":{"prompts":6,"notifications":1,"dialogs":1,"cancelled":0,"questions":1,"answers":1,"wait":8,"ids":["M002","M003","M004","M005","M006","M007","M010"]},"close":{"stamp":"2026-10-18T01:22:06+03:00","risk":"reversible","freshness":null,"accepted_reason":null,"forced_reason":"live","commands":{"pass":0,"fail":0}}}
+```
+
+**How the time is split**, per host session, over the gaps between its consecutive hook-journal lines (each gap once):
+
+1. A gap is the task's only when both its lines are the task's (their `task`, or a command guard's line joined to its
+   call by `tool_use_id`). The time spent on another task in between, and the call that switches tasks, is in no closure.
+2. *Slept:* between two suspend samples of one `boot`, the `susp` difference goes to the gaps between them, longest
+   first, each capped at its length. Across a `boot` change those gaps are `unknown`. A gap no two samples of one boot
+   bracket counts in `sleep_unmeasured` as well (its sleep, if any, stays in its kind).
+3. *Away:* a gap whose awake time is over 2 h (B1's rule, judged after the sleep is taken out).
+4. *Outside a turn* — from a RELEASED stop or a session's start to the next prompt or the session's end:
+   `owner-idle`, or `background` when the prompt ending it is a background task's notification. A held stop does not
+   end a turn.
+5. *Inside a turn:* `owner-question` while an options dialog is open, else `agent` — the model's time and every
+   tool's together.
+6. The part of a gap with a Bash call open, or of a background gap, that overlaps the task's review spans (each review
+   record's end minus its duration) is `judges`; overlapping its recorded verify spans, `verify`.
+7. A call still open at the close — the close's own — ends at the receipt's stamp.
+
+Per session, `by_kind` + `slept` + `away` + `unknown` equals the task's time, and with the time that is not the task's
+it equals the session's span (a test holds this over 400 built timelines).
+
+**Limits:**
+- Tool and model time are one kind. PreToolUse runs only for Bash, the edit tools and AskUserQuestion, so a Read, an
+  MCP call or an Agent call has no start.
+- Bash is not split by command; the hook journal keeps no command. The agent's own test runs count as `agent`, and
+  `verify` holds only the recorded runs.
+- The agent's own work during a panel stays `agent`; only Bash and background time inside a review span counts as
+  `judges` (a polled panel).
+- The stamps are whole seconds: each gap is exact to a second either way, and sums are unbiased. On three live
+  sessions, against their transcripts counted B1's way, `agent` came within 2.5 s and `owner-idle` within 2 s (task
+  235, W2).
+- Sleep is measured only between two samples of one boot. `susp` itself undercounts the kernel's suspend spans by
+  the device suspend / resume time (task 234, W7).
+- Two sessions working on one task at once each count their own time.
+- A task closed before this existed has no `numbers.json`; `tasks numbers` composes what the records hold.

@@ -61,6 +61,7 @@ _TOKEN_RE = re.compile(r'"([a-z-]+)"')
 # it — that distinctness is what makes miswiring detectable.
 _BASELINE = {
     "work": (1, "'work' requires a task number"),
+    "numbers": (2, "no task (none active)"),                  # task 235: bare, in an empty project
     "new": (1, "'new' requires a type and a name"),
     "init": (0, "Initializing project:"),
     "bootstrap": (0, "=== CLI REFERENCE ==="),

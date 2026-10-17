@@ -4,6 +4,19 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+**Each close keeps the task's own numbers** — PHASE-B.md item 6, last part, task 235 (the owner, 2026-10-13 18:44: "În
+Faza B (Recomandat)"). Every number Phase B's exit needs came from the host's session transcripts, which it deletes
+after about 30 days; tasks 232-234 made the plugin record the facts, and now the close composes them.
+- At every successful close, after its `done` record, `<task>/numbers.json` gets one entry for that closure, composed
+  only from the plugin's records: the time of the task by kind (agent, judges, verify, owner-idle, owner-question,
+  background) and by `##` section, without the laptop's sleep, away gaps over 2 h apart; the review rounds and what each
+  found; each judge seat's runs, seconds and tokens; the recorded verify runs; the owner's prompts and options dialogs
+  with the time he took to answer; how the task closed and each flag's reason. A gap is the task's only when both its
+  lines are, so another task's time in between is never counted; a re-close adds an entry; an older close never
+  replaces a newer one. A fault or a composition past 5 s prints one line and changes nothing of the close.
+- `tasks numbers [N]` shows them (read-only; an open task as a snapshot).
+- The close's `hook=close` journal records now name their `task`.
+
 **Every hook-journal line names its task; the state echo's names the open gate's section; python's carry a suspend
 sample** — PHASE-B.md item 6, third part, task 234. With these the close can split a task's time by phase and drop the
 time the laptop slept (the owner, 2026-10-15: suspends are not work time) from the plugin's own journal, not the

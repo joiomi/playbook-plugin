@@ -31,7 +31,7 @@ COMMANDS = (
     "models", "plan-review", "impl-review", "judge", "context", "intent",
     "timeline", "tagger", "tag", "retro", "status", "audit", "blocked",
     "handoff", "parked", "freehand", "adopt", "doctor", "environment", "detect-verify", "merge-doctor",
-    "mindmap-sync", "log", "prepare-merge", "compact", "recall", "dashboard", "guide", "ruling", "verify",
+    "mindmap-sync", "log", "prepare-merge", "compact", "recall", "dashboard", "guide", "ruling", "verify", "numbers",
 )
 
 
@@ -283,6 +283,11 @@ def _main():
         from tasks.verify_memory import cmd_verify
         cmd_verify(cmd_args)
 
+    elif cmd == "numbers":
+        # A task's own numbers, written at each close (task 235); read-only here.
+        from tasks.numbers import cmd_numbers
+        cmd_numbers(cmd_args)
+
     else:
         print(f"Unknown command: {cmd}", file=sys.stderr)
         print_usage()
@@ -305,6 +310,7 @@ _ARGS = {
     "retro": ((), ("--since",), 0),
     "freehand": ((), (), ("log",)),   # task 138 G1-3: any other word was ignored and made a freehand task
     "audit": ((), (), "taskno"),
+    "numbers": ((), (), "taskno"),
     "guide": ((), (), 1),
 }
 def _ARGS_TASK_EXISTS(num: str) -> bool:
@@ -322,6 +328,7 @@ _USAGE = {
     "list": "tasks list [--pending]", "ls": "tasks ls [--pending]", "parked": "tasks parked [--all]",
     "dashboard": "tasks dashboard [--no-detect]", "mindmap-sync": "tasks mindmap-sync [--fix]",
     "retro": "tasks retro [--since N]", "freehand": "tasks freehand [log]", "audit": "tasks audit [<N>]",
+    "numbers": "tasks numbers [N]",
     "new": "tasks new <type> <name> [intent words …]  (intent words starting with `--` go after a `--`)",
     "adopt": "tasks adopt <task folder name>",
     "guide": "tasks guide [<type>]",
@@ -362,7 +369,7 @@ def _ARGS_TASK_IS_DONE(num: str) -> bool:
 
 def _writes_nothing(cmd: str, cmd_args: list) -> bool:
     """An invocation documented to write nothing, so it skips the session GC."""
-    if cmd in ("merge-doctor", "guide"):
+    if cmd in ("merge-doctor", "guide", "numbers"):
         return True
     return cmd in ("compact", "prepare-merge", "tag") and "--dry-run" in cmd_args
 

@@ -85,7 +85,7 @@ def resolve_lane_dir(project_root) -> "Path | None":
 
 
 def append(agent_dir, hook, decision, reason, session_id="",
-           tool="", path="", command="") -> None:
+           tool="", path="", command="", task="") -> None:
     """Append one enforcement-journal record. Never raises; returns None.
 
     `agent_dir` is the ALREADY-RESOLVED lane dir. The write is skipped silently
@@ -106,6 +106,8 @@ def append(agent_dir, hook, decision, reason, session_id="",
             rec["path"] = path
         if command:
             rec["command"] = _head(command)
+        if task:
+            rec["task"] = _head(str(task), 16)      # task 235: a close's records name their task
         _write_record(agent_dir, rec)
     except Exception as exc:                # defence in depth: never propagate
         _warn(exc)

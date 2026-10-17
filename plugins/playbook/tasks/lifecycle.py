@@ -1380,17 +1380,17 @@ def cmd_work(cmd_args):
                         # unexpected-decision checks.
                         _pbj.append(agent_dir, "close", "record",
                                     "verify contract",
-                                    session_id=session_id, command=_vcmds)
+                                    session_id=session_id, command=_vcmds, task=prev_task)
                         if _freshness and _freshness.get("bound"):
                             _pbj.append(agent_dir, "close", "record",
                                         "stale close owner-ok" if owner_ok else "stale close bound",
                                         session_id=session_id,
-                                        command=_flat(str(_freshness["bound"])))
+                                        command=_flat(str(_freshness["bound"])), task=prev_task)
                         if _freshness and _freshness.get("stop_rule"):
                             # task 209: a close after the last round D6 allows that no judge read
                             _pbj.append(agent_dir, "close", "record", "stale close no judge (stop rule)",
                                         session_id=session_id,
-                                        command=_flat(str(_freshness["stop_rule"])))
+                                        command=_flat(str(_freshness["stop_rule"])), task=prev_task)
                 except Exception:
                     pass
                 if _dirty:
@@ -1429,6 +1429,20 @@ def cmd_work(cmd_args):
             _remove_sessions_of_task(Path(project_path), agent_dir, prev_task)  # agent_dir already resolved above
             _record_transition(agent_dir, "done", prev_task)
             print(f"Task {prev_task} done.")
+            # Task 235 (PHASE-B item 6): the task's own numbers for this closure, from the plugin's records only. After
+            # the transaction and its `done` record; imported here, in a `try` that also catches SystemExit, inside a
+            # time budget: a fault says one line and changes nothing of the close (plan panel: sonnet, codex).
+            try:
+                from tasks.numbers import write_closure as _write_numbers
+                _np = _write_numbers(agent_dir, task_file.parent, prev_task)
+                if _np is not None:
+                    try:
+                        _shown = _np.relative_to(Path(project_path))
+                    except ValueError:
+                        _shown = _np
+                    print(f"numbers: {_shown} (this closure's numbers — commit it with the task)")
+            except (Exception, SystemExit) as _nexc:  # noqa: BLE001 — never changes the close
+                print(f"numbers: not written ({type(_nexc).__name__})", file=sys.stderr)
 
             # P9: surface this task's OPEN parked items at close so they are
             # not swallowed. Advisory (does not block) — resolve each by
