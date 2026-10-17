@@ -170,6 +170,20 @@ class CopyAndSeal(unittest.TestCase):
             rv.make(d, _cfg(d), run_id="t3", fingerprint=fp_a, trees=trees_b)
         self.assertEqual(list(rv.views_dir(d).glob("t3*")), [], "a refused copy was left behind")
 
+    def test_each_part_of_the_seal_refuses_on_its_own(self):
+        """The fingerprint, the trees and HEAD each refuse a copy alone (mutants of each survived the end-to-end
+        tests, where the parts agree)."""
+        d = _project(self)
+        rv = _rv()
+        fp, trees, heads = _snapshot_trees(d)
+        view = rv.make(d, _cfg(d), run_id="parts", fingerprint=fp, trees=trees, heads=heads)
+        self.addCleanup(view.remove)
+        ex = [":(exclude).agent"]
+        self.assertTrue(view.sealed(fp, _cfg(d), trees, heads, ex))
+        self.assertFalse(view.sealed("000000000000", _cfg(d), trees, heads, ex), "a wrong fingerprint passed")
+        self.assertFalse(view.sealed(fp, _cfg(d), dict(trees, sub="0" * 40), heads, ex), "a wrong tree passed")
+        self.assertFalse(view.sealed(fp, _cfg(d), trees, dict(heads, **{"": "0" * 40}), ex), "a wrong HEAD passed")
+
     def test_a_write_during_every_copy_attempt_is_refused_and_leaves_nothing(self):
         d = _project(self)
         rv = _rv()
@@ -264,6 +278,13 @@ class Refusals(unittest.TestCase):
         with mock.patch.object(S, "view_mount_available", return_value=(True, "")), \
              mock.patch.object(rv, "MAX_FILES", 3):
             self.assertIn("files", rv.availability(d, _cfg(d)))
+
+    def test_an_exclude_that_hides_code(self):
+        d = _project(self)
+        (d / ".agent" / "config.json").write_text(
+            json.dumps({"code_roots": ["sub"], "fingerprint_exclude": ["src/"]}), encoding="utf-8")
+        with mock.patch.object(S, "view_mount_available", return_value=(True, "")):
+            self.assertIn("fingerprint_exclude", self._reason(d))
 
     def test_no_mount_possible(self):
         d = _project(self)
@@ -523,6 +544,7 @@ class PanelReadsACopy(unittest.TestCase, _PanelHarness):
         can, beh, non, _why = C.tail_cert_delta_why(d, snap, rounds[0]["tree_state"])
         self.assertTrue(can)
         self.assertEqual(beh, [])
+        self.assertIn("docs/x.md", " ".join(non), "the snapshot was taken after the edit, not before the spawn")
         (d / "src" / "a.py").write_text("a = 8  # code\n", encoding="utf-8")
         can, beh, non, _why = C.tail_cert_delta_why(d, snap, rounds[0]["tree_state"])
         self.assertTrue(beh)
@@ -584,6 +606,21 @@ class SingleJudgeReadsACopy(unittest.TestCase, _PanelHarness):
         self.assertIn("Its PASS binds the tree it reads", log)
         self.assertNotIn("TAMPER", log.upper().replace("TAMPER GUARD: CLEAN", ""))
         self.assertEqual([p for p in _rv().views_dir(d).iterdir() if p.is_dir()], [], "the copy was left behind")
+
+    def test_a_write_between_the_delta_and_the_copy_refuses_the_run(self):
+        from tasks import post_d6
+        d = self.d
+        real = post_d6.delta_parts
+
+        def then_write(*a, **kw):
+            out = real(*a, **kw)
+            (d / "src" / "a.py").write_text("a = 9  # after the delta was built\n", encoding="utf-8")
+            return out
+
+        with mock.patch.object(post_d6, "delta_parts", then_write):
+            seen, log = self._single("1. **Note** — fine.\n\nCAP: 0/5 reported, exhausted\n", lambda: None)
+        self.assertEqual(seen, [], "a judge ran on a copy that is not the delta's tree")
+        self.assertIn("Refused", log)
 
     def test_a_file_field_resolves_in_the_copy_not_the_live_tree(self):
         d = self.d
