@@ -173,6 +173,23 @@ class EveryReaderReadsBothForms(Project):
         out = self.cli(self.project(dup, overflow=multi_line()), "mindmap-sync").stdout
         self.assertIn("[4]", out.split("Content drift", 1)[-1] if "Content drift" in out else "")
 
+    def test_mindmap_sync_fix_never_writes_a_node_that_holds_the_marker(self):
+        """Impl round 1 (opus, GRAVE — the owner's data): a summary whose marker sits on a fact line, not the title
+        line, reads as full and its shorter text as drift; `--fix` must not copy it over the fuller overflow. It
+        writes only a node with no marker anywhere — the nodes it wrote before task 226 — and names the one it held."""
+        main = multi_line(NODES).replace("- It writes through one atomic helper.", f"- Full detail in the overflow {ARROW}")
+        main = main.replace(f"[2] **Storage** {ARROW}", "[2] **Storage**")
+        main = main.replace("- Retries three times.", "- Retries three times.\n- A newer fact.")   # one node --fix may sync
+        d = self.project(main, overflow=multi_line(NODES))
+        r = self.cli(d, "mindmap-sync", "--fix")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        over = (d / "MIND_MAP_OVERFLOW.md").read_text(encoding="utf-8")
+        self.assertIn("- It writes through one atomic helper.", over)
+        self.assertIn("- A newer fact.", over)                                   # the fix ran — for node 4 only
+        self.assertIn("synced 1 node(s)", r.stdout)
+        self.assertIn("[2]", r.stdout.split("Content drift", 1)[-1])
+        self.assertIn("not synced by --fix", r.stdout)
+
     def test_mindmap_sync_fix_keeps_a_summary_nodes_fuller_overflow(self):
         """The owner's data: a summary node (the marker on its title line) is shorter in MIND_MAP.md by design;
         `--fix` must leave its fuller overflow text alone, while a full node's drift is synced."""

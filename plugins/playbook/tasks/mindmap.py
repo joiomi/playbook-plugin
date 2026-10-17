@@ -71,7 +71,8 @@ def _trim_mind_map_by_node(content: str, max_chars: int) -> str | None:
     Why not the line-based trim: a mind-map node is a span of lines — its
     `[N] **Title**` line and one fact per line under it, or (a map written before
     task 226) one long line — so cutting on a line boundary at 60%/40% either cuts a
-    node mid-way or sheds entire subsystem chapters, and says only "N lines omitted". A 120 KB / 19-node map delivered nodes [0], [17], [18] and
+    node mid-way or sheds entire subsystem chapters, and says only "N lines
+    omitted". A 120 KB / 19-node map delivered nodes [0], [17], [18] and
     nothing else. Whole nodes in, named ids for the rest, is strictly more useful
     at the same byte cost.
 
@@ -648,24 +649,35 @@ def cmd_mindmap_sync(cmd_args):
     # this comparison — so mindmap-sync structurally CANNOT catch a stale ref
     # buried in the OVERFLOW body of a ↗-summary node (the §4.3 case). That is
     # ref-integrity.py's job (whole-file ref scan) + the skill's manual grep.
+    # Task 226 (impl round 1, opus — the owner's data): a full node by the title-line
+    # rule that still holds `↗` on another line may be a summary whose marker was put
+    # on a fact line; its shorter text would read as drift. Its drift is SHOWN, but
+    # `--fix` never copies it (`held`): --fix writes only a node with no `↗`
+    # anywhere — exactly the nodes it wrote before task 226.
     drifted: list[tuple[int, int]] = []   # (nid, signed diff = len(main)-len(overflow))
+    held: set[int] = set()
     for nid in sorted(set(main_nodes) & set(overflow_nodes)):
         main_text = main_nodes[nid]
         overflow_text = overflow_nodes[nid]
         if not _is_summary_node(main_text) and main_text != overflow_text:
             drifted.append((nid, len(main_text) - len(overflow_text)))
+            if "↗" in main_text:
+                held.add(nid)
 
     if drifted:
         print("Content drift (full nodes only):")
         for nid, diff in drifted:
+            note = (" — not synced by --fix: `↗` off its title line (a summary's marker "
+                    "belongs on its title line); sync it by hand") if nid in held else ""
             if diff > 0:
-                print(f"  [{nid}] main AHEAD by {diff} chars")
+                print(f"  [{nid}] main AHEAD by {diff} chars{note}")
             elif diff < 0:
-                print(f"  [{nid}] overflow AHEAD by {-diff} chars")
+                print(f"  [{nid}] overflow AHEAD by {-diff} chars{note}")
             else:
-                print(f"  [{nid}] differs (same length — e.g. ref remap)")
+                print(f"  [{nid}] differs (same length — e.g. ref remap){note}")
     else:
         print("No content drift.")
+    fixable_drift = [(nid, diff) for nid, diff in drifted if nid not in held]
 
     # Cross-reference health
     all_main_text = main_file.read_text(encoding="utf-8")
@@ -718,8 +730,8 @@ def cmd_mindmap_sync(cmd_args):
     # appended at the boundary, each emitting its OWN `sep` (NOT relying on the
     # trailing sort, which returns bytes unchanged when ids are already
     # ascending); interior separators of existing nodes are left untouched.
-    if fix_mode and (drifted or main_only or sort_needed):
-        if drifted or main_only:
+    if fix_mode and (fixable_drift or main_only or sort_needed):
+        if fixable_drift or main_only:
             # (MIND_MAP.md's fence integrity was already verified up front,
             # before any diagnostic or write — see the guard after extraction.)
             parsed = _partition_overflow(overflow_raw)
@@ -737,7 +749,7 @@ def cmd_mindmap_sync(cmd_args):
             preamble, spans, tail = parsed
             nl = "\r\n" if "\r\n" in overflow_raw else "\n"
             sep = nl + nl
-            drift_ids = {nid for nid, _ in drifted}
+            drift_ids = {nid for nid, _ in fixable_drift}
             # Drift: swap ONLY the drifted node's body inside its own span,
             # preserving every other byte (untouched spans + drifted remainder).
             # The old/new text is converted to the SPAN's own newline style
@@ -774,7 +786,7 @@ def cmd_mindmap_sync(cmd_args):
                 overflow_content += "\r\n"
             elif overflow_raw.endswith("\n") and not overflow_content.endswith("\n"):
                 overflow_content += "\n"
-            fixed = len(drifted) + len(main_only)
+            fixed = len(fixable_drift) + len(main_only)
         else:
             overflow_content = overflow_raw   # sort-only: preserve newlines
             fixed = 0
@@ -788,8 +800,8 @@ def cmd_mindmap_sync(cmd_args):
         if sort_changed:
             done.append(sort_msg)   # "reordered N node(s)"
         print(f"\nFixed: {', '.join(done) if done else 'no change needed'}")
-    elif drifted or main_only:
-        fixable = len(drifted) + len(main_only)
+    elif fixable_drift or main_only:
+        fixable = len(fixable_drift) + len(main_only)
         print(f"\n{fixable} node(s) can be auto-synced main→overflow. Run: tasks mindmap-sync --fix")
 
 
@@ -836,10 +848,10 @@ def _is_summary_node(text: str) -> bool:
     """True when a node is a `↗` summary (its full text lives in
     MIND_MAP_OVERFLOW.md): the marker is on its title line. A node is its title
     line and one fact per line under it (task 226), so a fact that mentions `↗`
-    does not make a full node a summary — its drift stays seen, and `--fix` still
-    syncs it. A node written as one line is all title line, so such a map reads
-    exactly as before (measured on every MIND_MAP.md on the build machine: 764
-    nodes, the same verdict)."""
+    does not make a full node a summary — its drift stays seen (though `--fix`
+    holds back any node with `↗` on a line, see `held`). A node written as one
+    line is all title line, so such a map reads exactly as before (measured on
+    every MIND_MAP.md on the build machine: 764 nodes, the same verdict)."""
     return "↗" in text.split("\n", 1)[0]
 
 

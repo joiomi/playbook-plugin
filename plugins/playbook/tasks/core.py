@@ -1049,8 +1049,10 @@ def template_commentary_lines() -> "frozenset[str]":
     a field value (`pending`, `unclassified`), a separator, a placeholder, a heading or a
     gate is never template text to drop, even when it reads the same (plan panel T1).
     Since task 213 a render keeps only its pointers; the text it used to carry is the guide's
-    (`template.guide_text`), verbatim — so the guide's `>` lines are members too, and a task.md
-    written before the move still loses that text when trimmed (Q8). Built once per process."""
+    (`template.guide_text`) — so the guide's `>` lines are members too, and a task.md written
+    before the move still loses the lines the guide holds verbatim when trimmed (Q8); a line a
+    later task reworded (`tests/test_template_guide.py` REWORDED: 24 of the 27 since task 226)
+    stays in an old record. Built once per process."""
     global _TEMPLATE_COMMENTARY
     if _TEMPLATE_COMMENTARY is None:
         from tasks import template as _t

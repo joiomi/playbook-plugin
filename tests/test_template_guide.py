@@ -179,7 +179,7 @@ class TheGuideHoldsEveryMovedLine(unittest.TestCase):
         # tables (what a long gate title used to say, quoted verbatim under its short title) are the exception
         tables = {f"> {said}" for notes in (template.GATE_NOTES, template.RETRO_GATE_NOTES,
                                             template.FREEHAND_GATE_NOTES) for _title, said in notes}
-        for ty in (None, "quick", "light", "retro", "freehand"):
+        for ty in (None, "quick", "light", "retro", "freehand", *PLAYBOOKS):
             for ln in template.guide_text(ty).splitlines():
                 if ln in tables:
                     continue
@@ -294,7 +294,8 @@ class TheRiskValueIsStillRead(unittest.TestCase):
 
 
 class OldRecordsAreStillTrimmed(unittest.TestCase):
-    """Q8 (P11): 212's trim still drops the template text a task.md written BEFORE the move carries."""
+    """Q8 (P11): 212's trim still drops the template text a task.md written BEFORE the move carries — the lines the
+    guide still holds verbatim (`MOVED`, `MOVED_ORDERS`); a line a later task REWORDED stays in an old record."""
 
     def _over_budget(self, text: str) -> "tuple[str, str]":
         from tasks.core import select_task_context

@@ -21,12 +21,17 @@ The map answers **"how does this work, and where is it?"** — never **"what hap
 
 The rules every reader (`tasks recall`, the bootstrap, the audit, `tasks mindmap-sync`, the merge checks) relies on:
 - A node starts at its title line: `[N]`, a space, then the bold `**Title**`.
-- It runs to the next title line; leave one blank line between two nodes.
-- Its facts are `- ` lines right under the title, one fact each, with no blank line among them.
+- It runs to the next title line.
 - Never begin a fact with `[`: a line that begins with `[5]` starts node 5.
 - No `#` heading or code fence among the facts: readers disagree on where a node with a heading ends, and an unclosed fence stops `tasks mindmap-sync --fix`.
+- A summary node (its full text in `MIND_MAP_OVERFLOW.md`) carries `↗` on its title line, right after the bold title.
+- Any `↗` on a title line marks a summary, so a full node keeps `↗` off its title line.
+- `tasks mindmap-sync --fix` never syncs a node that holds `↗` on any line; it names such a node for a sync by hand.
+
+How to write them:
+- The facts are `- ` lines right under the title, one fact each, with no blank line among them.
+- One blank line between two nodes.
 - Dense but readable: 150-400 words per node, every line adds information.
-- A summary node (full text in `MIND_MAP_OVERFLOW.md`) carries `↗` right after its bold title, or at the end of its title line; only the title line marks a summary, so a fact may mention `↗`.
 
 Every `MIND_MAP.md` starts with this header:
 

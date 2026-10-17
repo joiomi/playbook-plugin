@@ -315,8 +315,9 @@ words that changed (its nodes were one line each — a median 762 / 1,862 charac
   used to say `grep '^\[N\]' MIND_MAP.md`, which on a node of several lines returns its title alone.
 - `tasks mindmap-sync` takes a node for a summary when `↗` is on its title line (it used to be anywhere in the node),
   so a fact that mentions `↗` no longer hides a full node's drift. A map of one-line nodes reads exactly as before:
-  measured on every MIND_MAP.md on the build machine (764 nodes), the same verdict; `--fix` leaves a summary node's
-  fuller overflow text alone (tested). The merge skill's `ref-integrity.py` keeps its narrower rule (`**Title** ↗` or
+  measured on every MIND_MAP.md on the build machine (764 nodes), the same verdict. `--fix` copies only a node with no
+  `↗` on any line — the nodes it copied before — and names a drifted node it holds back, so a summary whose marker
+  was put on a fact line keeps its fuller overflow text (tested, red first: the panel found that loss). The merge skill's `ref-integrity.py` keeps its narrower rule (`**Title** ↗` or
   the line's end), which reads this repository's own `[N] **Title** - ↗ …` nodes as full — loud, not a write; a Phase
   B input.
 - The retro's map size counts every line of a node, to the next node or the first heading (it counted the first line).
