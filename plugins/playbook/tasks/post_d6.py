@@ -278,22 +278,49 @@ def real_path(project_path, rel: str, alias: "tuple[str, str] | None" = None) ->
     read it, instead of out of the copy."""
     try:
         root = os.path.realpath(str(project_path))
-        full = os.path.realpath(os.path.join(root, rel))
         if alias is not None:
-            live, copy = os.path.realpath(alias[0]), os.path.realpath(alias[1])
-            for _ in range(16):
-                if full == live or full.startswith(live + os.sep):
-                    if full.startswith(copy + os.sep) or full == copy:
-                        break
-                    full = os.path.realpath(copy + full[len(live):])
-                else:
-                    break
+            full = _resolve_in_copy(root, os.path.realpath(alias[0]), rel)
+            if not full:
+                return ""
+        else:
+            full = os.path.realpath(os.path.join(root, rel))
         if not os.path.isfile(full):
             return ""
         out = os.path.relpath(full, root)
     except (OSError, ValueError):
         return ""
     return "" if out == ".." or out.startswith("../") or os.path.isabs(out) else out
+
+
+def _resolve_in_copy(copy: str, live: str, rel: str) -> str:
+    """`rel` resolved inside a review's copy link by link, as the judge's mount shows it: an absolute target in the
+    live project is taken into the copy BEFORE the next link is followed (impl round 3, codex: realpath followed the
+    whole live chain first — a link retargeted live decided the verdict). '' past 40 links."""
+    parts = [x for x in rel.split("/") if x not in ("", ".")]
+    cur = copy
+    hops = 0
+    while parts:
+        part = parts.pop(0)
+        if part == "..":
+            cur = os.path.dirname(cur)
+            continue
+        nxt = os.path.join(cur, part)
+        if os.path.islink(nxt):
+            hops += 1
+            if hops > 40:
+                return ""
+            target = os.readlink(nxt)
+            if os.path.isabs(target):
+                t = os.path.normpath(target)
+                if t == live or t.startswith(live + os.sep):
+                    t = copy + t[len(live):]
+                cur = os.sep
+                parts = [x for x in t.split(os.sep) if x not in ("", ".")] + parts
+            else:
+                parts = [x for x in target.split("/") if x not in ("", ".")] + parts
+            continue
+        cur = nxt
+    return cur
 
 
 def _as_real(path: str, exists) -> str:

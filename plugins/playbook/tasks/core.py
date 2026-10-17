@@ -2909,7 +2909,7 @@ def _tail_cert_scopes(project_path: Path, cfg: dict) -> "dict[str, Path]":
     return scopes
 
 
-def build_panel_snapshot(project_path: Path, tree_fp: str) -> "dict | None":
+def build_panel_snapshot(project_path: Path, tree_fp: str, *, cfg: "dict | None" = None) -> "dict | None":
     """The F0 DESCRIPTOR recorded with a panel round (plan-panel finding F: it
     rides INSIDE the round next to `**Tree-state:**`, authenticated by the same
     stamp — not a mutable sidecar). Records, per fingerprint scope, the HEAD commit
@@ -2922,11 +2922,15 @@ def build_panel_snapshot(project_path: Path, tree_fp: str) -> "dict | None":
     scope cannot be captured cleanly: an empty HEAD (unborn/absent git), or a
     dirty-map git error (impl-panel opus#2/grok#3 — storing `dirty:{}` on a git
     error is indistinguishable from a genuinely clean F0, which would let a
-    dirty-then-reverted behavioral file escape the delta)."""
-    try:
-        cfg = load_config(Path(project_path))
-    except Exception:
-        cfg = {}
+    dirty-then-reverted behavioral file escape the delta).
+
+    `cfg` (task 231): the config to read the scopes and exclusions from instead of the tree's own — a review's copy
+    is described with the live config, which git may ignore and so not copy."""
+    if cfg is None:
+        try:
+            cfg = load_config(Path(project_path))
+        except Exception:
+            cfg = {}
     exclude = _fingerprint_exclude_pathspecs(cfg)
     scopes_out: "dict[str, dict]" = {}
     for name, repo in _tail_cert_scopes(Path(project_path), cfg).items():

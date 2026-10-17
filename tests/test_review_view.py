@@ -737,6 +737,85 @@ class ImplRoundTwoRealBubblewrap(unittest.TestCase):
         self.assertIn("REFUSED", out.stdout + out.stderr)
 
 
+class ImplRoundThree(unittest.TestCase):
+    """Task 231's impl panel round 3 (the last), red first."""
+
+    def test_r3_a_link_chain_is_followed_in_the_copy_link_by_link(self):
+        from tasks import post_d6
+        root = Path(tempfile.mkdtemp(prefix="rv-chain-"))
+        self.addCleanup(shutil.rmtree, root, True)
+        live, copy = root / "live", root / "copy"
+        for d in (live, copy):
+            d.mkdir()
+            (d / "changed.py").write_text("c\n", encoding="utf-8")
+            (d / "old.py").write_text("o\n", encoding="utf-8")
+        os.symlink("changed.py", copy / "middle")            # the copy's chain: alias → /live/middle → changed.py
+        os.symlink(str(live / "middle"), copy / "alias")
+        os.symlink("old.py", live / "middle")                # retargeted live during the review
+        self.assertEqual(post_d6.real_path(copy, "alias", alias=(str(live), str(copy))), "changed.py")
+
+    def test_r3_the_sweep_unlinks_a_lock_while_it_holds_it(self):
+        d = _project(self)
+        rv = _rv()
+        fp, trees, heads = _snapshot_trees(d)
+        view = rv.make(d, _cfg(d), run_id="r3s", fingerprint=fp, trees=trees, heads=heads)
+        lock = view.lock_path
+        os.close(view.lock_fd)
+        view.lock_fd = -1                                     # the owner died
+        seen = []
+        real_close = os.close
+
+        def close(fd):
+            try:
+                target = os.readlink(f"/proc/self/fd/{fd}")
+            except OSError:
+                target = ""
+            if ".lock" in os.path.basename(target):
+                seen.append(target)          # ".lock (deleted)" once its file was unlinked before the close
+            return real_close(fd)
+
+        with mock.patch.object(rv.os, "close", close):
+            self.assertEqual(rv.sweep(d), 1)
+        self.assertTrue(seen, "the sweep closed no lock")
+        self.assertTrue(all(t.endswith(" (deleted)") for t in seen), f"a lock closed before its file went: {seen}")
+
+    def test_r3_an_unreadable_folder_in_a_copy_is_removed_without_error(self):
+        d = _project(self)
+        rv = _rv()
+        fp, trees, heads = _snapshot_trees(d)
+        view = rv.make(d, _cfg(d), run_id="r3u", fingerprint=fp, trees=trees, heads=heads)
+        os.chmod(view.root / "docs", 0o000)
+        view.remove()
+        self.assertFalse(view.root.exists())
+
+    def test_r3_freezing_the_copy_leaves_the_live_objects_modes(self):
+        d = _project(self)
+        packd = d / ".git" / "objects" / "pack"
+        packd.mkdir(parents=True, exist_ok=True)
+        keep = packd / "pack-test.keep"
+        keep.write_text("", encoding="utf-8")
+        os.chmod(keep, 0o644)
+        objs = [x for x in (d / ".git" / "objects").rglob("*") if x.is_file()]
+        before = {x: os.stat(x).st_mode for x in objs}
+        view, _fp = _make(self, d)
+        after = {x: os.stat(x).st_mode for x in objs}
+        self.assertEqual(before, after, "freezing the copy changed the live repository's objects")
+
+    def test_r3_an_ignored_config_still_seals(self):
+        d = _project(self)
+        with open(d / ".gitignore", "a", encoding="utf-8") as f:
+            f.write(".agent/config.json\n")
+        _git("rm", "-q", "--cached", ".agent/config.json", cwd=d)
+        _git("commit", "-qm", "config is machine-local", cwd=d)
+        rv = _rv()
+        fp = C.tree_state_fingerprint(d)
+        snap = C.build_panel_snapshot(d, fp)
+        trees = {k: v["base"] for k, v in snap["scopes"].items()}
+        view = rv.make(d, _cfg(d), run_id="r3c", fingerprint=fp, trees=trees, snapshot=snap)
+        self.addCleanup(view.remove)
+        self.assertTrue(view.root.is_dir())
+
+
 class _PanelHarness:
     def _models(self, d):
         (d / ".agent" / "models.json").write_text(

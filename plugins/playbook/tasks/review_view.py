@@ -370,7 +370,7 @@ class View:
                exclude: "list[str]", snapshot: "dict | None" = None) -> bool:
         if not self.matches(fingerprint, cfg):
             return False
-        if snapshot is not None and not self._snapshot_is_mine(snapshot, fingerprint):
+        if snapshot is not None and not self._snapshot_is_mine(snapshot, fingerprint, cfg):
             return False
         from tasks.post_d6 import worktree_tree
         if trees and {_norm(n) for n in trees} != {_norm(n) for n in self.scope_names}:
@@ -384,12 +384,12 @@ class View:
                 return False
         return True
 
-    def _snapshot_is_mine(self, snapshot: dict, fingerprint: str) -> bool:
+    def _snapshot_is_mine(self, snapshot: dict, fingerprint: str, cfg: "dict | None" = None) -> bool:
         """Does the recorded snapshot describe THIS copy — each scope's commit, base and dirty map? (impl round 2,
         codex: an A→B→A while the snapshot was taken left a dirty map of B under a copy of A, and tail certification
         later let B's code through)."""
         from tasks.core import build_panel_snapshot
-        mine = build_panel_snapshot(self.root, fingerprint)
+        mine = build_panel_snapshot(self.root, fingerprint, cfg=cfg)     # the live config (impl round 3, agy)
         if mine is None:
             return False
 
@@ -401,19 +401,21 @@ class View:
     def freeze(self) -> None:
         """Make the sealed copy read-only on disk (impl round 2, grok/opus: it lives inside the tree the agent is told
         it may write; a write there would be what the judges read). `remove` makes it writable again to delete it."""
-        for dirpath, dirnames, filenames in os.walk(self.root, topdown=False):
-            for name in filenames + dirnames:
-                full = os.path.join(dirpath, name)
-                try:
-                    st = os.lstat(full)
-                    if not stat.S_ISLNK(st.st_mode):
-                        os.chmod(full, stat.S_IMODE(st.st_mode) & ~0o222)
-                except OSError:
-                    pass
-        try:
-            os.chmod(self.root, stat.S_IMODE(os.lstat(self.root).st_mode) & ~0o222)
-        except OSError:
-            pass
+        # `.git/objects` is skipped: `git clone --local` hardlinks it to the live repository's own files, whose modes
+        # a chmod here would change too (impl round 3, opus); the read-only mount keeps the judges off it.
+        files, dirs = [], [str(self.root)]
+        for dirpath, dirnames, filenames in os.walk(self.root, topdown=True):
+            if os.path.basename(dirpath) == ".git" and "objects" in dirnames:
+                dirnames.remove("objects")
+            dirs.extend(os.path.join(dirpath, n) for n in dirnames)
+            files.extend(os.path.join(dirpath, n) for n in filenames)
+        for full in files + sorted(dirs, key=lambda x: -x.count(os.sep)):
+            try:
+                st = os.lstat(full)
+                if not stat.S_ISLNK(st.st_mode):
+                    os.chmod(full, stat.S_IMODE(st.st_mode) & ~0o222)
+            except OSError:
+                pass
 
     def sandbox_view(self):
         from provider import sandbox as _sb
@@ -456,14 +458,20 @@ def _remove_tree(base: "Path | str", target: "Path | str", task_file: "Path | st
     if t.resolve().parent != vd.resolve() or vd.is_symlink():
         raise ValueError(f"{t} is not inside {vd}")
 
-    def _writable_then_retry(func, path, _exc):
-        # a read-only folder in the copy (a copied 0555 `info/`, a listed file's mode) — ours to delete
-        parent = os.path.dirname(path)
+    def _writable_then_retry(_func, path, _exc):
+        # a read-only or unreadable folder in the copy (frozen, a copied 0555 `info/`) — ours to delete. The failing
+        # call is never re-invoked as such: `os.open`/`os.scandir` take other arguments (impl round 3, agy).
+        for x in (os.path.dirname(path), path):
+            try:
+                if not os.path.islink(x):
+                    os.chmod(x, 0o700)
+            except OSError:
+                pass
         try:
-            os.chmod(parent, 0o700)
             if os.path.isdir(path) and not os.path.islink(path):
-                os.chmod(path, 0o700)
-            func(path)
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                os.unlink(path)
         except OSError:
             pass
 
@@ -511,22 +519,24 @@ def sweep(project: "Path | str", task_file: "Path | str | None" = None) -> int:
         except (OSError, ValueError):
             pass
         finally:
-            os.close(fd)
+            # the lock file goes while this sweep still holds it (impl round 3, codex: released first, a creator could
+            # take and validate that inode, and the unlink then cut its live lock)
             try:
                 lock.unlink()
             except OSError:
                 pass
+            os.close(fd)
     for entry in os.scandir(vd):
         if entry.name.endswith(".lock") and not (vd / entry.name[:-5]).exists():
             try:
                 fd = _lock(vd / entry.name)
             except OSError:
                 continue
-            os.close(fd)
             try:
                 (vd / entry.name).unlink()
             except OSError:
                 pass
+            os.close(fd)
     return removed
 
 
