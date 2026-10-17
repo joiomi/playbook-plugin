@@ -1125,10 +1125,15 @@ def reserve_panel(task_file, stale_after: float = 7200, *, mode: "str | None" = 
     return True, rid
 
 
-def finish_panel(task_dir: Path, rid: str) -> None:
+def finish_panel(task_dir: Path, rid: str, ended: "dict | None" = None) -> None:
+    """The panel's `done` record. Task 232 (PHASE-B item 6): `ended` says how the panel ended — `outcome` and, for a
+    completed round, its `measures` (written by `review.cmd_panel_review`); no other key is taken from it, and the
+    keys the ledger's readers use (`status`, `kind`, `panel`, `mode`, `risk`, …) are never among them."""
     from tasks.filelock import task_lock
+    rec = {"id": rid, "kind": "panel", "status": "done"}
+    rec.update({k: v for k, v in (ended or {}).items() if k in ("outcome", "measures")})
     with task_lock(Path(task_dir) / "task.md"):
-        append_run(task_dir, {"id": rid, "kind": "panel", "status": "done"})
+        append_run(task_dir, rec)
 
 
 def panel_refusal(task_file) -> str:

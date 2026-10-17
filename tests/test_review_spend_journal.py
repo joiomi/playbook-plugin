@@ -623,8 +623,10 @@ class TamperRecordsNothing(_E2EBase):
 
 
 class StructuredUsageE2E(_E2EBase):
-    """Task 056: codex/grok seats carry REAL usage into the journal; claude stays
-    unknown; a timed-out codex judge's partial JSONL is salvaged as prose."""
+    """Task 056: codex/grok seats carry REAL usage into the journal; a seat whose
+    adapter returns plain text (the claude double below) stays unknown — claude's
+    real JSON path is tests/test_claude_judge_usage.py (task 232); a timed-out codex
+    judge's partial JSONL is salvaged as prose."""
     CODEX_USAGE = {"status": "known", "in": 13080, "out": 5}
     GROK_USAGE = {"status": "known", "in": 13443, "out": 26}
 

@@ -179,6 +179,35 @@ def append_review(agent_dir, *, session_id="", seat="", task="", round_no=0,
         _warn(exc)
 
 
+def append_verify(agent_dir, *, task="", command="", rc=0, how="", seconds=0.0, session_id="") -> None:
+    """Append one VERIFY-RUN record and return None. Never raises (task 232, PHASE-B item 6).
+
+    One per command the verify contract ran or reused — at the close and in `tasks verify` alike
+    (`tasks.verify_memory.run_contract`): `task` ("-" when none), the command's first line (capped), its exit `rc`,
+    `how` ("ran" or "reused") and `seconds` — the monotonic time the run took, 0 for a reused one (that time was spent
+    once, by the run it reuses). Same HARD CONTRACT and envelope as `append` (`hook="verify"`, `decision="record"`,
+    `reason="verify run"`); every field bounded."""
+    try:
+        rec = {
+            "ts": _utcnow(),
+            "session_id": _head(session_id or "", 80),
+            "hook": "verify",
+            "decision": "record",
+            "reason": "verify run",
+            "task": _head(str(task or "-"), 16),
+            "command": _head(command, 160),
+            # signed: a command killed by a signal exits negative, and `_cap_int` would turn that into a green 0
+            "rc": max(-_INT_CAP, min(int(rc), _INT_CAP)) if _is_int(rc) else -1,
+            "how": "reused" if how == "reused" else "ran",
+            "seconds": (round(min(float(seconds), 10 ** 9), 3)
+                        if isinstance(seconds, (int, float)) and not isinstance(seconds, bool) and seconds >= 0
+                        else 0),
+        }
+        _write_record(agent_dir, rec)
+    except Exception as exc:                # defence in depth: never propagate
+        _warn(exc)
+
+
 LIFECYCLE_EVENTS = ("work", "new", "done")
 
 
@@ -685,14 +714,21 @@ def _normalize_usage(usage) -> dict:
     doc pins — never a verbatim copy of an arbitrary dict (which could blow the
     PIPE_BUF bound). Returns `{"status":"known","in":<int>,"out":<int>}` only
     when both token counts are real ints; otherwise `{"status":"unknown"}`.
-    Numbers are never fabricated — a non-int in/out degrades to unknown."""
+    Numbers are never fabricated — a non-int in/out degrades to unknown. Task 232:
+    claude's cache counts (`cache_read`, `cache_write`) ride beside them when each is
+    a non-negative int; anything else in them is dropped, never copied."""
     if isinstance(usage, dict) and usage.get("status") == "known":
         _in, _out = usage.get("in"), usage.get("out")
         if isinstance(_in, int) and not isinstance(_in, bool) \
                 and isinstance(_out, int) and not isinstance(_out, bool):
             # Magnitude-capped like every other numeric so a pathological token
             # count cannot blow the PIPE_BUF line bound (impl-panel round 2).
-            return {"status": "known", "in": _cap_int(_in), "out": _cap_int(_out)}
+            got = {"status": "known", "in": _cap_int(_in), "out": _cap_int(_out)}
+            for k in ("cache_read", "cache_write"):
+                v = usage.get(k)
+                if isinstance(v, int) and not isinstance(v, bool) and v >= 0:
+                    got[k] = _cap_int(v)
+            return got
     return {"status": "unknown"}
 
 

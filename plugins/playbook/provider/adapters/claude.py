@@ -128,6 +128,10 @@ class ClaudeAdapter(ProviderAdapter):
         inv = self.headless_argv(prompt, model, context=system_context)
         # Judge-only extras layered on the core invocation.
         agent_args = inv.argv + [
+            # Task 232 (PHASE-B item 6): the judge call alone asks for claude's JSON result, whose counts become the
+            # seat's spend record (`provider.usage.claude_judge_output`); `headless_argv` stays plain text for
+            # subagents, which return stdout as their answer.
+            "--output-format", "json",
             # A judge's whole job is the quality of its reasoning, so it gets
             # more of it than a default session would. 'high', NOT 'max':
             # claude judges bill against the owner's own Claude subscription
@@ -152,7 +156,8 @@ class ClaudeAdapter(ProviderAdapter):
             input=inv.stdin,
             capture_output=True, text=True, timeout=timeout_secs, encoding="utf-8",
         )
-        return _sandbox.format_judge_output(result)
+        from provider.usage import claude_judge_output
+        return claude_judge_output(result, _sandbox.format_judge_output)
 
     # ── Identity ─────────────────────────────────────────────────────────────
 

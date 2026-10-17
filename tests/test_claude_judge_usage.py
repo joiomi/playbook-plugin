@@ -1,0 +1,328 @@
+"""The claude judge seats' token usage, from claude's JSON output (task 232, PHASE-B item 6).
+
+Until task 232 every claude judge ran in plain-text mode and its spend record said `usage: unknown` (747 of 747 in
+this workspace's journal). The judge call now asks for `--output-format json`; one reader in `provider/usage.py`
+takes the review text out of the envelope and COPIES the counts as claude reports them. The fixtures are verbatim
+captures of claude 2.1.302 (`tests/fixtures/claude-2.1.302/README.md`): a one-turn success, a three-turn run with
+tools, a budget stop and a bad model, plus the plain-mode output of the same two failures. Stdlib unittest.
+"""
+import contextlib
+import io
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import types
+import unittest
+from pathlib import Path
+from unittest import mock
+
+_HERE = Path(__file__).resolve().parent
+PLUGIN = _HERE.parent / "plugins" / "playbook"
+sys.path.insert(0, str(PLUGIN))
+
+from provider import sandbox  # noqa: E402
+from provider.adapters.claude import ClaudeAdapter  # noqa: E402
+from provider.usage import (  # noqa: E402
+    claude_judge_output, extract_claude, parse_usage, salvage_text,
+)
+from tasks import review  # noqa: E402
+from tasks.models_check import MODEL_UNAVAILABLE, classify_failure, judge_failed  # noqa: E402
+from tasks.seat_outage import classify_outage  # noqa: E402
+
+FIX = _HERE / "fixtures" / "claude-2.1.302"
+
+
+def _fx(name: str) -> str:
+    return (FIX / name).read_text(encoding="utf-8")
+
+
+def _cp(stdout, rc=0, stderr=""):
+    return subprocess.CompletedProcess(args=["claude"], returncode=rc, stdout=stdout, stderr=stderr)
+
+
+SUCCESS = {"status": "known", "in": 2, "out": 4, "cache_read": 3974, "cache_write": 3847}
+MULTI = {"status": "known", "in": 6, "out": 263, "cache_read": 19884, "cache_write": 4271}
+BUDGET = {"status": "known", "in": 2, "out": 38, "cache_read": 3974, "cache_write": 3855}
+# task 156's capture of claude's account limit, as plain mode prints it (exit 1, one stdout line)
+LIMIT_LINE = "You've hit your weekly limit · resets Oct 20, 3pm (Europe/Bucharest)"
+
+
+def _limit_envelope(subtype="success") -> str:
+    """claude's JSON-mode shape for an account limit cannot be provoked: built like the captured bad-model
+    envelope (`subtype` success, `is_error` true, the message in `result`, nothing spent)."""
+    obj = json.loads(_fx("bad-model.stdout"))
+    obj.update({"subtype": subtype, "result": LIMIT_LINE, "api_error_status": 429})
+    return json.dumps(obj)
+
+
+class ExtractClaude(unittest.TestCase):
+    def test_success_copies_the_counts_as_reported(self):
+        text, usage, errors = extract_claude(_fx("success.stdout"))
+        self.assertEqual(text, "OK")
+        self.assertEqual(usage, SUCCESS)
+        self.assertEqual(errors, [])
+
+    def test_multi_turn_takes_the_cumulative_counts_not_the_last_call(self):
+        # `usage.iterations` holds the last call only (2 / 13): never the source
+        text, usage, errors = extract_claude(_fx("multiturn.stdout"))
+        self.assertEqual(text, "alpha-123 bravo-456")
+        self.assertEqual(usage, MULTI)
+        self.assertEqual(errors, [])
+
+    def test_budget_stop_keeps_the_spend_the_top_level_usage_zeroed(self):
+        text, usage, errors = extract_claude(_fx("budget-stop.stdout"))
+        self.assertEqual(text, "")
+        self.assertEqual(usage, BUDGET)
+        self.assertEqual(errors, ["Reached maximum budget ($0.00001)"])
+
+    def test_bad_model_is_an_error_with_nothing_spent(self):
+        _text, usage, errors = extract_claude(_fx("bad-model.stdout"))
+        self.assertIsNone(usage, "modelUsage {} and an all-zero usage: unknown, never 0/0")
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(errors[0].startswith("There's an issue with the selected model"), errors)
+
+    def test_several_models_take_the_top_level_usage(self):
+        obj = json.loads(_fx("multiturn.stdout"))
+        obj["modelUsage"]["claude-sonnet-5-5"] = dict(obj["modelUsage"]["claude-haiku-5-5"], inputTokens=99)
+        _t, usage, _e = extract_claude(json.dumps(obj))
+        self.assertEqual(usage, MULTI)            # the top-level usage, as reported — no sum across models
+
+    def test_not_claudes_envelope_is_none(self):
+        grok_like = '{"text": "OK", "stopReason": "end_turn", "usage": {"input_tokens": 1, "output_tokens": 2}}'
+        for raw in ("", "plain prose review\n", grok_like, '{"type":"error","message":"x"}', "[1, 2]",
+                    '{"type": "result"', _fx("success.stdout") + "\ntrailing"):
+            self.assertIsNone(extract_claude(raw), repr(raw[:60]))
+
+    def test_bad_counts_are_unknown(self):
+        obj = json.loads(_fx("success.stdout"))
+        for bad in ("13", True, -1, 1.5, None):
+            o = json.loads(json.dumps(obj))
+            o["modelUsage"]["claude-haiku-5-5"]["inputTokens"] = bad
+            o["usage"]["input_tokens"] = bad
+            self.assertIsNone(extract_claude(json.dumps(o))[1], repr(bad))
+
+    def test_parse_usage_reads_a_claude_envelope_through_the_same_reader(self):
+        # the timeout paths' `parse_usage` must not take `usage.input_tokens` alone (0 on a budget stop)
+        self.assertEqual(parse_usage(_fx("success.stdout")), SUCCESS)
+        self.assertEqual(parse_usage(_fx("budget-stop.stdout")), BUDGET)
+
+    def test_salvage_never_hands_the_envelope_over(self):
+        self.assertEqual(salvage_text("claude", _fx("success.stdout")), "OK")
+        self.assertEqual(salvage_text("claude", _fx("budget-stop.stdout")), "")
+        self.assertEqual(salvage_text("claude", "partial prose"), "partial prose")
+
+
+class ClaudeJudgeOutput(unittest.TestCase):
+    def test_success_is_the_prose_carrying_usage(self):
+        out = claude_judge_output(_cp(_fx("success.stdout")), sandbox.format_judge_output)
+        self.assertEqual(out, "OK")
+        self.assertEqual(out.usage, SUCCESS)
+        self.assertFalse(judge_failed(out))
+
+    def test_budget_stop_is_the_plain_failure_shape_with_the_envelopes_words(self):
+        out = claude_judge_output(_cp(_fx("budget-stop.stdout"), rc=1), sandbox.format_judge_output)
+        self.assertTrue(out.startswith("(FAILED — exit 1)\n[stdout tail]\nReached maximum budget ($0.00001)"), out)
+        self.assertNotIn('"modelUsage"', out, "the envelope is not the failure text")
+        self.assertEqual(out.usage, BUDGET, "tokens were spent")
+        self.assertEqual(review._judge_status(out), "fail")
+
+    def test_bad_model_reads_as_today_for_the_availability_rules(self):
+        out = claude_judge_output(_cp(_fx("bad-model.stdout"), rc=1, stderr=_fx("bad-model.stderr")),
+                                  sandbox.format_judge_output)
+        plain = sandbox.format_judge_output(_cp(_fx("plain-bad-model.stdout"), rc=1,
+                                                stderr=_fx("plain-bad-model.stderr")))
+        self.assertTrue(out.startswith("(FAILED — exit 1)\n[stdout tail]\nThere's an issue with the selected model"))
+        self.assertEqual(classify_failure(out), MODEL_UNAVAILABLE)
+        self.assertEqual(classify_failure(out), classify_failure(plain))
+        self.assertIsNone(out.usage)
+
+    def test_account_limit_is_still_recorded_as_an_outage(self):
+        for rc in (1, 0):
+            for subtype in ("success", "error_during_execution"):
+                out = claude_judge_output(_cp(_limit_envelope(subtype), rc=rc), sandbox.format_judge_output)
+                self.assertTrue(judge_failed(out), (rc, subtype, out))
+                got = classify_outage(out, provider="claude")
+                self.assertIsNotNone(got, (rc, subtype, out))
+                self.assertTrue(got["reason"].startswith("claude: weekly limit reached"), got)
+
+    def test_an_error_on_exit_0_says_exit_0(self):
+        out = claude_judge_output(_cp(_limit_envelope(), rc=0), sandbox.format_judge_output)
+        self.assertTrue(out.startswith("(FAILED — exit 0, claude reported an error)\n[stdout tail]\n"), out)
+
+    def test_an_error_envelope_with_no_words_keeps_the_raw_envelope(self):
+        obj = json.loads(_fx("budget-stop.stdout"))
+        obj.pop("errors")
+        obj["subtype"] = "error_never_seen"
+        raw = json.dumps(obj)
+        out = claude_judge_output(_cp(raw, rc=1), sandbox.format_judge_output)
+        self.assertTrue(judge_failed(out))
+        self.assertIn("error_never_seen", out, "the first real shape of a new kind becomes a fixture")
+
+    def test_success_without_text_is_a_failure(self):
+        obj = json.loads(_fx("success.stdout"))
+        obj["result"] = "   "
+        out = claude_judge_output(_cp(json.dumps(obj)), sandbox.format_judge_output)
+        self.assertTrue(out.startswith("(FAILED — "), out)
+        self.assertEqual(out.usage, SUCCESS)
+
+    def test_prose_stays_verbatim_and_json_garbage_fails(self):
+        out = claude_judge_output(_cp("1. **Finding** — prose, the flag ignored.\n"), sandbox.format_judge_output)
+        self.assertEqual(out, "1. **Finding** — prose, the flag ignored.\n")
+        self.assertIsNone(getattr(out, "usage", None))
+        out = claude_judge_output(_cp('{"type": "result", "cut'), sandbox.format_judge_output)
+        self.assertTrue(out.startswith("(FAILED — "), out)
+        self.assertEqual(claude_judge_output(_cp(""), sandbox.format_judge_output), "(no output)")
+
+
+class AdapterJudge(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.adapter = ClaudeAdapter(session_id="judge", project_root=Path(self._tmp.name))
+        p = mock.patch("shutil.which", lambda name: f"/usr/bin/{name}")
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _run(self, result):
+        calls = []
+
+        def fake_run(binary, args, **kw):
+            calls.append((binary, list(args)))
+            return result
+        with mock.patch.object(sandbox, "run", fake_run):
+            out = self.adapter.run_headless_judge(prompt="Review this.", model="opus", system_context="ctx",
+                                                  web_search=False, timeout_secs=30, budget_usd="1")
+        return out, calls
+
+    def test_the_judge_call_asks_for_json_and_the_subagent_argv_does_not(self):
+        _out, calls = self._run(_cp(_fx("success.stdout")))
+        argv = calls[0][1]
+        i = argv.index("--output-format")
+        self.assertEqual(argv[i:i + 2], ["--output-format", "json"])
+        for inv in (self.adapter.headless_argv("p", None, context="c"),
+                    self.adapter.headless_argv("p", None, context="c", stream=True)):
+            self.assertNotIn("json", inv.argv, inv.argv)
+
+    def test_success_carries_usage_into_the_spend_parser(self):
+        out, _ = self._run(_cp(_fx("multiturn.stdout")))
+        self.assertEqual(out, "alpha-123 bravo-456")
+        self.assertEqual(review._parse_judge_usage(out), MULTI)
+
+    def test_budget_stop_fails_the_seat_with_its_spend(self):
+        out, _ = self._run(_cp(_fx("budget-stop.stdout"), rc=1))
+        self.assertTrue(judge_failed(out))
+        self.assertEqual(review._parse_judge_usage(out), BUDGET)
+
+
+class JournalKeepsTheCacheCounts(unittest.TestCase):
+    def test_append_review_writes_the_copied_counts(self):
+        with tempfile.TemporaryDirectory() as d:
+            agent = Path(d) / ".agent"
+            agent.mkdir()
+            pbj = review._load_pb_journal()
+            pbj.append_review(agent, seat="claude:opus:high", task="1", round_no=1, kind="panel",
+                              duration_ms=5, status="ok", usage=MULTI)
+            pbj.append_review(agent, seat="codex:x", task="1", round_no=1, kind="panel",
+                              duration_ms=5, status="ok", usage={"status": "known", "in": 1, "out": 2})
+            pbj.append_review(agent, seat="claude:opus:high", task="1", round_no=1, kind="panel",
+                              duration_ms=5, status="ok", usage=dict(MULTI, cache_read="9", cache_write=-1))
+            recs = [json.loads(ln) for ln in (agent / "journal" / "enforcement.jsonl").read_text().splitlines()]
+        self.assertEqual(recs[0]["usage"], MULTI)
+        self.assertEqual(recs[1]["usage"], {"status": "known", "in": 1, "out": 2})
+        self.assertEqual(recs[2]["usage"], {"status": "known", "in": 6, "out": 263},
+                         "a bad cache count is dropped, never copied")
+
+
+class _Project(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.project = Path(self._tmp.name)
+        self.agent = self.project / ".agent"
+        tdir = self.agent / "tasks" / "042-demo"
+        tdir.mkdir(parents=True)
+        (tdir / "task.md").write_text("# 042 - demo\n## Status\npending\n## Intent\nx\n"
+                                      "## Work Plan\n- [ ] a gate\n", encoding="utf-8")
+        (self.agent / "models.json").write_text(json.dumps({"panel": ["claude:opus", "claude:sonnet"],
+                                                            "default_judge": "claude:opus"}), encoding="utf-8")
+        review._PB_JOURNAL_MOD = None
+        review._PB_JOURNAL_LOADED = False
+
+    def _journal(self):
+        p = self.agent / "journal" / "enforcement.jsonl"
+        return [json.loads(ln) for ln in p.read_text(encoding="utf-8").splitlines()] if p.exists() else []
+
+
+@contextlib.contextmanager
+def _chdir(p):
+    old = os.getcwd()
+    os.chdir(p)
+    try:
+        yield
+    finally:
+        os.chdir(old)
+
+
+class SinglePathReadsTheEnvelope(_Project):
+    """`tasks plan-review --backend claude` builds its own argv (review.py) — the path tail certification and the
+    post-D6 judge share."""
+
+    def _single(self, stdout, rc=0, stderr=""):
+        calls = []
+
+        def _run(agent, args, **kw):
+            calls.append(list(args))
+            return types.SimpleNamespace(returncode=rc, stdout=stdout, stderr=stderr, args=list(args))
+        buf = io.StringIO()
+        with mock.patch.object(sandbox, "run", _run), mock.patch.object(shutil, "which", lambda n: "/usr/bin/" + n):
+            with _chdir(self.project), contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
+                with contextlib.suppress(SystemExit):
+                    review.cmd_single_review("plan-review", ["042", "--backend", "claude", "--model", "opus"])
+        return calls, [r for r in self._journal() if r.get("hook") == "review"], buf.getvalue()
+
+    def test_single_records_usage_and_saves_the_prose(self):
+        calls, recs, printed = self._single(_fx("multiturn.stdout"))
+        argv = calls[0]
+        i = argv.index("--output-format")
+        self.assertEqual(argv[i:i + 2], ["--output-format", "json"])
+        self.assertEqual(len(recs), 1, recs)
+        self.assertEqual(recs[0]["usage"], MULTI)
+        self.assertEqual(recs[0]["status"], "ok")
+        log = self.agent / "tasks" / "042-demo" / "judge.log"
+        body = log.read_text(encoding="utf-8")
+        self.assertIn("alpha-123 bravo-456", body)
+        self.assertNotIn('"modelUsage"', body)
+        self.assertNotIn('"modelUsage"', printed)
+
+    def test_single_budget_stop_records_fail_with_spend_and_saves_nothing(self):
+        _calls, recs, _printed = self._single(_fx("budget-stop.stdout"), rc=1)
+        self.assertEqual(recs[0]["status"], "fail")
+        self.assertEqual(recs[0]["usage"], BUDGET)
+        self.assertFalse((self.agent / "tasks" / "042-demo" / "judge.log").exists())
+
+
+class PanelSeatRecordsUsage(_Project):
+    def test_a_claude_panel_seat_journals_its_counts(self):
+        def _run(binary, args, **kw):
+            return _cp(_fx("multiturn.stdout"))
+        with mock.patch.object(ClaudeAdapter, "is_available", classmethod(lambda cls: True)), \
+                mock.patch.object(sandbox, "run", _run), \
+                mock.patch("shutil.which", lambda n: "/usr/bin/" + n):
+            with _chdir(self.project), contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                with contextlib.suppress(SystemExit):
+                    review.cmd_panel_review(["042", "--models", "claude:opus,claude:sonnet"])
+        recs = [r for r in self._journal() if r.get("hook") == "review"]
+        self.assertEqual(len(recs), 2, recs)
+        for r in recs:
+            self.assertEqual(r["usage"], MULTI, r)
+        jm = (self.agent / "tasks" / "042-demo" / "judge.md").read_text(encoding="utf-8")
+        self.assertIn("alpha-123 bravo-456", jm)
+        self.assertNotIn('"modelUsage"', jm)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -34,6 +34,15 @@ A = marker_cmd("a")
 B = marker_cmd("b")
 
 
+def verify_records(d):
+    """The journal's verify-run records (task 232)."""
+    p = Path(d) / ".agent" / "journal" / "enforcement.jsonl"
+    if not p.exists():
+        return []
+    return [r for r in (json.loads(ln) for ln in p.read_text(encoding="utf-8").splitlines())
+            if r.get("hook") == "verify"]
+
+
 class Project(unittest.TestCase):
     def setUp(self):
         self.d = Path(tempfile.mkdtemp(prefix="pb228-"))
@@ -550,6 +559,68 @@ class TheClose(Project):
                       encoding="utf-8")
         self.cli("work", "done")                                   # blocked later (no review) — the verify ran first
         self.assertEqual((self.runs("a"), self.runs("b")), (1, 1))
+
+
+    def test_the_close_records_its_run_with_its_task(self):
+        """Task 232: the close's verify run is journaled with the task it closes."""
+        self.task()
+        r = self.cli("work", "done")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual([(x["task"], x["how"], x["rc"]) for x in verify_records(self.d)], [("001", "ran", 0)])
+
+
+class TheRunRecords(Project):
+    """Task 232 (PHASE-B item 6): every verify run of the close and of `tasks verify` leaves one record in the
+    journal — the task, the command, its exit, ran or reused, and the seconds `run_contract` measured (0 for a reused
+    run: the time was spent once, by the run it reuses)."""
+
+    def records(self):
+        return verify_records(self.d)
+
+    def test_a_run_and_a_reuse(self):
+        import time as _t
+
+        def slow(cmd):
+            _t.sleep(0.2)
+            return 0, "ok"
+        verify_memory.run_contract(self.d, [("v", A)], 1200, slow, task="042")
+        verify_memory.run_contract(self.d, [("v", A)], 1200, slow, task="042")
+        recs = self.records()
+        self.assertEqual(len(recs), 2, recs)
+        first, second = recs
+        self.assertEqual((first["decision"], first["reason"], first["task"], first["rc"], first["how"]),
+                         ("record", "verify run", "042", 0, "ran"))
+        self.assertGreaterEqual(first["seconds"], 0.2)
+        self.assertEqual((second["how"], second["seconds"], second["rc"]), ("reused", 0, 0))
+        self.assertEqual(sum(r["seconds"] for r in recs), first["seconds"], "a reuse adds no time")
+        self.assertIn("ran-a.log", first["command"])
+
+    def test_a_red_run(self):
+        verify_memory.run_contract(self.d, [("v", A)], 1200, lambda c: (3, "boom"), task="7")
+        (rec,) = self.records()
+        self.assertEqual((rec["rc"], rec["how"], rec["task"]), (3, "ran", "7"))
+
+    def test_a_signal_kill_stays_negative(self):
+        """A command killed by a signal exits negative: never recorded as a green 0."""
+        verify_memory.run_contract(self.d, [("v", A)], 1200, lambda c: (-9, "killed"), task="7")
+        (rec,) = self.records()
+        self.assertEqual(rec["rc"], -9)
+
+    def test_no_task_is_a_dash(self):
+        verify_memory.run_contract(self.d, [("v", A)], 1200, lambda c: (0, ""))
+        (rec,) = self.records()
+        self.assertEqual(rec["task"], "-")
+
+    def test_tasks_verify_names_its_task(self):
+        self.assertEqual(self.cli("new", "light", "probe", "probe").returncode, 0)
+        self.assertEqual(self.cli("verify", "1").returncode, 0)
+        self.assertEqual(self.cli("verify").returncode, 0)          # no session task: the newest open one
+        self.assertEqual([r["task"] for r in self.records()], ["001", "001"])
+
+    def test_a_journal_failure_never_changes_the_result(self):
+        with mock.patch.object(verify_memory, "_journal_run", side_effect=RuntimeError("disk full")):
+            out = verify_memory.run_contract(self.d, [("v", A)], 1200, lambda c: (0, "ok"), task="1")
+        self.assertEqual([r[2] for r in out], [0])
 
 
 if __name__ == "__main__":

@@ -153,27 +153,31 @@ _BAR = re.compile(r"(?m)^═{6,}")
 _QUOTE = re.compile(r"^>[ \t]?")
 
 
-def round_criticals(rnd: dict) -> int:
-    """The Critical findings the judges of one panel round wrote (not `[SETTLED]`)."""
+def round_findings(rnd: dict) -> "dict[str, int]":
+    """The Critical and Important findings the judges of one panel round wrote (not `[SETTLED]`), each judge's line
+    counted as written — the stop rule's count (`round_criticals`) and the run ledger's (task 232) from one reading."""
     from tasks.post_d6 import _FINDING_RE, _TAG_AFTER_RE
+    counts = {"critical": 0, "important": 0}
     body = rnd.get("body") or ""
     bar = _BAR.search(body)
     if not bar:
-        return 0
-    n = 0
+        return counts
     for ln in body[bar.start():].splitlines():
         quoted = ln.startswith(">")
         if rnd.get("format") == 2 and not quoted:
             continue                      # 1.6.2 quotes every line a judge wrote: the rest is the writer's
         s = _QUOTE.sub("", ln)
         for m in _FINDING_RE.finditer(s):
-            if m.group(1).lower() != "critical":
-                continue
             tag = _TAG_AFTER_RE.match(s, m.end())
             if tag and tag.group(1).upper() == "SETTLED":
                 continue
-            n += 1
-    return n
+            counts[m.group(1).lower()] += 1
+    return counts
+
+
+def round_criticals(rnd: dict) -> int:
+    """The Critical findings the judges of one panel round wrote (not `[SETTLED]`)."""
+    return round_findings(rnd)["critical"]
 
 
 def allowed_rounds(risk: str, rounds: "list[dict]", caps: "dict[str, int]") -> "tuple[int, int, bool]":

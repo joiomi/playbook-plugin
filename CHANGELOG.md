@@ -4,6 +4,30 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+**The plugin records what a task's close will need to count — first part** — PHASE-B.md item 6, task 232 (the
+owner, 2026-10-13: "În Faza B (Recomandat)"). Until now every number about a task's time, reviews and owner answers came
+from the host's session transcripts, which it deletes after about 30 days. This part records three of them in the
+plugin's own journal and run ledger; the hook side (the owner's dialog answers, the task and phase at each tool call)
+and the numbers composed at the close follow.
+- **The claude judge seats' usage.** The claude judge call asks for `claude -p --output-format json` (the panel seat
+  and the single-judge path, tail certification and the post-panel judge included; subagents stay plain text). The
+  review comes out of claude's one result object; its counts are copied into the spend record as claude reports them
+  — `in` (`input_tokens`, cache excluded), `out`, and beside them `cache_read` and `cache_write` — from `modelUsage`
+  when it names one model (a budget stop zeroes the top-level `usage` but keeps them there), else the top-level
+  `usage`. Measured before: 747 of 747 claude review records in this workspace said `usage: unknown`. A claude
+  failure reads as plain mode's did (`(FAILED — exit N)` + claude's own words as the stdout tail), so an account limit
+  is still recorded as a seat outage and a bad model still reads `MODEL_UNAVAILABLE`. Fixtures: claude 2.1.302,
+  captured verbatim (`tests/fixtures/claude-2.1.302/`).
+- **How each panel ended and what it found.** A panel's `done` record in `post-panel-reviews.jsonl` now carries
+  `outcome` (`completed` / `void` / `unsaved` / `incomplete`) and, for a completed round, `measures` — the round id,
+  the verdict, the judges that succeeded of those seated, the quorum and the Critical / Important findings the judges
+  wrote, counted by the stop rule's own reading (`stop_rule.round_findings`; `round_criticals` delegates to it). It was
+  written the same on every exit before, a tamper void and a crash included.
+- **Every verify run.** The close and `tasks verify` journal one `hook=verify` record per command — the task, the
+  command, its exit (signed), ran or reused, and the seconds it ran (0 when reused, so a sum counts it once).
+- Measured besides, not changed (PLAN.md): `models_check.budget_exceeded` never fires for claude — claude exits 1 on a
+  budget stop, so the text starts `(FAILED — exit 1)` and the "raise judge_budget_usd" hint is not printed.
+
 **Judges read a fixed copy of the tree, so the agent works while they run** — PHASE-B.md item 7, task 231, the
 owner's answer of 2026-10-17 ("Copie pe aceeași cale"). Measured before: in the 31 hours before the decision, 32
 panels held the agent idle for 368.6 minutes and 11 single-judge runs for 30.9 — the tamper guard voided a round on

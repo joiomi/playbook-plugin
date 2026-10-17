@@ -1,23 +1,26 @@
 """Judge token usage from a CLI's STRUCTURED output (task 056). Stdlib only.
 
-Three judge CLIs report per-call token counts when asked for structured output:
+Four judge CLIs report per-call token counts when asked for structured output:
 
   codex exec --json            JSONL events; the LAST ``turn.completed`` line carries
                                ``usage.input_tokens`` / ``usage.output_tokens``; the
                                review text is the LAST completed ``agent_message`` item
                                (codex's own ``-o`` semantics: the final message).
   grok --output-format json    ONE JSON object: ``text`` + ``usage.input_tokens`` /
-                               ``usage.output_tokens`` (claude's ``--output-format json``
-                               uses this same ``usage`` shape — enabling it for claude is
-                               a deliberate future decision: it would flip ``known`` on).
+                               ``usage.output_tokens``.
+  claude -p --output-format json   ONE JSON object, ``type: result``: the review in
+                               ``result``; the counts for the whole run in ``modelUsage``
+                               (per model) and the top-level ``usage`` (task 232 — the
+                               claude section below).
   agy --output-format stream-json   NDJSON events; the terminal ``result`` event carries
                                ``response`` (the review) and ``usage.input_tokens`` /
                                ``usage.output_tokens`` for the whole turn (task 111 — the
                                agy section below; an EXPERIMENTAL judge seat).
 
 Shapes were captured from live probes (codex-cli 0.153.4, grok 1.0.13, 2026-09-09;
-agy 1.2.17, 2026-10-05) and are pinned VERBATIM in tests/test_judge_usage.py and
-tests/fixtures/agy-1.2.17/ (tests/test_agy_judge.py). Numbers are COPIED from the
+agy 1.2.17, 2026-10-05; claude 2.1.302, 2026-10-17) and are pinned VERBATIM in
+tests/test_judge_usage.py, tests/fixtures/agy-1.2.17/ (tests/test_agy_judge.py) and
+tests/fixtures/claude-2.1.302/ (tests/test_claude_judge_usage.py). Numbers are COPIED from the
 CLI's JSON — never derived, estimated or clamped here: a non-int, bool or negative
 count is ``None`` (the journal writes ``{"status":"unknown"}``). Free-form review
 prose never parses as one of these envelopes, so a judge that quotes a usage-shaped
@@ -25,7 +28,9 @@ string cannot poison the field (task 042's anchored-envelope rule, kept).
 
 ``in`` is the vendor's reported ``input_tokens`` AS REPORTED (codex's includes
 cached input; grok's is the billed input; agy's excludes ``cache_read_tokens`` and its
-``output_tokens`` includes ``thinking_tokens``) — recorded, not normalized across vendors.
+``output_tokens`` includes ``thinking_tokens``; claude's excludes the cache, whose two
+counts are copied beside it as ``cache_read`` and ``cache_write``) — recorded, not
+normalized across vendors.
 """
 from __future__ import annotations
 
@@ -185,6 +190,97 @@ def extract_grok(raw: str) -> "Optional[tuple[str, Optional[dict], list[str]]]":
         # dropping the field cannot fail every seat (round 2 + 3, disclosed).
         errors.append(f"grok stopped: {obj.get('stopReason')!r}")
     return text, _usage_from_obj(obj.get("usage")), errors
+
+
+# ── claude `-p --output-format json` (task 232, PHASE-B item 6) ──────────────
+#
+# Measured on claude 2.1.302 (2026-10-17; fixtures in tests/fixtures/claude-2.1.302/): stdout is ONE object,
+# `type: "result"`. The review is `result`. The counts for the whole run are in `modelUsage` (one entry per model:
+# `inputTokens`, `outputTokens`, `cacheReadInputTokens`, `cacheCreationInputTokens`) and in the top-level `usage`
+# (`input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`), which a three-turn run
+# showed cumulative and equal to the one `modelUsage` entry; `usage.iterations` is the LAST call only and is never
+# read. A budget stop zeroes the top-level `usage` while `modelUsage` keeps what was spent, so `modelUsage` is read
+# first when it names exactly one model; with several, the top-level `usage` as reported (a sum would be derived).
+# A failure is `is_error: true` or a `subtype` other than `success`: a bad model says so in `result` (subtype
+# `success`), a budget stop in `errors` (subtype `error_max_budget_usd`, no `result`).
+
+_CLAUDE_MODEL_KEYS = ("inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens")
+_CLAUDE_USAGE_KEYS = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+
+
+def _claude_counts(obj, keys) -> Optional[dict]:
+    """One counts object → known usage with the cache counts beside it; None unless `in` and `out` are counts and
+    something was counted (claude writes zeros where nothing ran: zero is not a measurement here)."""
+    if not isinstance(obj, dict):
+        return None
+    _in, _out, _read, _write = (obj.get(k) for k in keys)
+    if not (_is_count(_in) and _is_count(_out)):
+        return None
+    usage = {"status": "known", "in": _in, "out": _out}
+    if _is_count(_read):
+        usage["cache_read"] = _read
+    if _is_count(_write):
+        usage["cache_write"] = _write
+    if not any(usage[k] for k in ("in", "out", "cache_read", "cache_write") if k in usage):
+        return None
+    return usage
+
+
+def _claude_usage(obj: dict) -> Optional[dict]:
+    models = obj.get("modelUsage")
+    if isinstance(models, dict) and len(models) == 1:
+        got = _claude_counts(next(iter(models.values())), _CLAUDE_MODEL_KEYS)
+        if got is not None:
+            return got
+    return _claude_counts(obj.get("usage"), _CLAUDE_USAGE_KEYS)
+
+
+def extract_claude(raw: str) -> "Optional[tuple[str, Optional[dict], list[str]]]":
+    """claude ``-p --output-format json`` stdout → ``(review_text, usage, error_messages)``; None when the stdout is
+    not one claude result object. A failure (``is_error``, or a ``subtype`` other than ``success``) yields its own
+    words — ``errors`` joined, else ``result`` — as the error, and ``""`` as the text."""
+    obj = _json_object(raw or "")
+    if obj is None or obj.get("type") != "result" or not ("subtype" in obj or "modelUsage" in obj):
+        return None
+    usage = _claude_usage(obj)
+    said_result = obj.get("result")
+    result: str = said_result if isinstance(said_result, str) else ""
+    if obj.get("is_error") is True or obj.get("subtype") != "success":
+        listed = obj.get("errors")
+        said: "list[str]" = [e for e in listed if isinstance(e, str) and e.strip()] if isinstance(listed, list) else []
+        if not said and result.strip():
+            said = [result.strip()]
+        if not said:
+            said = [f"claude reported an error: {json.dumps(obj, ensure_ascii=False)[:1500]}"]
+        return "", usage, said
+    return result, usage, []
+
+
+def claude_judge_output(result, format_judge_output) -> JudgeOutput:
+    """A claude judge's subprocess result → the review text the callers expect, carrying the usage — the shared rule
+    of ``judge_output_from_result`` with one difference for a FAILURE: it reads exactly as plain mode's did, ``(FAILED —
+    exit N)`` + ``[stdout tail]`` holding claude's own words (the envelope's ``errors`` or ``result``) + the stderr
+    tail, so the outage rule (which reads a claude limit line only when it is the whole stdout tail) and the
+    model-availability anchors see what they saw before JSON mode. An error on exit 0 says ``exit 0``."""
+    import subprocess
+    raw = result.stdout or ""
+    got = extract_claude(raw) if raw.strip() else None
+    if got is None:
+        return judge_output_from_result(result, extract_claude, format_judge_output)
+    text, usage, errors = got
+    if errors:
+        rc = result.returncode
+        shaped = subprocess.CompletedProcess(args=getattr(result, "args", ["claude"]), returncode=rc or 1,
+                                             stdout="\n".join(errors), stderr=result.stderr or "")
+        out = format_judge_output(shaped)
+        if not rc:
+            out = out.replace("(FAILED — exit 1)", "(FAILED — exit 0, claude reported an error)", 1)
+        return JudgeOutput(out, usage=usage)
+    if result.returncode != 0:
+        return JudgeOutput(format_judge_output(result), usage=usage)
+    if text.strip():
+        return JudgeOutput(text.strip(), usage=usage)
+    return JudgeOutput("(FAILED — structured judge output carried no review text)", usage=usage)
 
 
 # ── agy (Antigravity) `--output-format stream-json` (task 111) ───────────────
@@ -642,12 +738,16 @@ def agy_judge_output(result, format_judge_output, *, expected_model: Optional[st
 def parse_usage(raw) -> Optional[dict]:
     """Best-effort token usage from a CLI's structured stdout — the ONE parser.
     Recognizes (a) a single JSON object carrying ``usage.input_tokens`` /
-    ``usage.output_tokens`` (grok json; claude's shape), (b) codex JSONL whose
-    LAST ``turn.completed`` carries them and (c) the agy stream, whose terminal
-    ``result`` event carries them. Anything else → None. Never fabricates."""
+    ``usage.output_tokens`` (grok json), (b) codex JSONL whose
+    LAST ``turn.completed`` carries them, (c) the agy stream, whose terminal
+    ``result`` event carries them and (d) claude's result object (``extract_claude``,
+    task 232). Anything else → None. Never fabricates."""
     if not isinstance(raw, str) or not raw.strip():
         return None
     got = extract_agy(raw)            # before (a): a one-line agy stream is also one JSON object
+    if got is not None:
+        return got[1]
+    got = extract_claude(raw)         # before (a) too: its top-level `usage` is zero on a budget stop (task 232)
     if got is not None:
         return got[1]
     obj = _json_object(raw)
@@ -727,12 +827,18 @@ def salvage_text(provider: str, raw: str) -> str:
     emits NDJSON: the `result` event's `response` when there is one (agy's own
     timeout returns the partial text there), else the text deltas of the last
     answer it was writing; a stream with no text at all yields "" — the protocol
-    frames are never handed over as findings. Other providers pass through."""
+    frames are never handed over as findings. claude prints its one result object at
+    the end: when it is there, its review (or nothing); otherwise the raw text (task 232).
+    Other providers pass through."""
     text = (raw or "").strip()
     if provider == "codex" and text:
         got = extract_codex(text, lenient_tail=True)   # a kill leaves one cut frame
         if got is not None and got[0].strip():
             return got[0].strip()
+    if provider == "claude" and text:
+        got = extract_claude(text)                     # its one object comes at the end (task 232)
+        if got is not None:
+            return got[0].strip()                      # the review, or nothing — never the envelope
     if provider in ("agy", "antigravity") and text:
         events = _agy_events(text, lenient_tail=True)
         if events is not None:

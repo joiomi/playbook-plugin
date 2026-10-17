@@ -205,13 +205,18 @@ def _parse_judge_usage(output_text):
     entire output happens to be a JSON usage envelope (a claude seat, or any seat
     quoting one) stays `unknown`. Text is never parsed for usage: the review is
     prose, prose can never poison the field (task 042's rule, now absolute).
-    Enabling structured output for claude is a one-line adapter change that would
-    attach the carrier — a deliberate decision, not an accident."""
+    Since task 232 claude's judge calls ask for its JSON result too, and its
+    carrier also holds the cache counts claude reports beside `in` (`cache_read`,
+    `cache_write`), copied when they are counts."""
     carried = getattr(output_text, "usage", None)
     if isinstance(carried, dict):
-        from provider.usage import _valid_known
+        from provider.usage import _is_count, _valid_known
         if _valid_known(carried):
-            return {"status": "known", "in": carried["in"], "out": carried["out"]}
+            usage = {"status": "known", "in": carried["in"], "out": carried["out"]}
+            for k in ("cache_read", "cache_write"):
+                if _is_count(carried.get(k)):
+                    usage[k] = carried[k]
+            return usage
     return None
 
 
@@ -1548,10 +1553,15 @@ def _tamper_banner(changes: list[str]) -> str:
 
 
 _PD6_PANEL_PENDING: "list[tuple]" = []
+# Task 232 (PHASE-B item 6): how each reserved panel ended, by reservation id — `void` (the tamper guard voided it),
+# `unsaved` (judge.md could not be written), `completed` with its measures; a panel that ends before any of these
+# (a crash, an interrupt, any other exit) is `incomplete`.
+_PD6_PANEL_ENDED: "dict[str, dict]" = {}
 
 
 def cmd_panel_review(cmd_args):
-    """Task 108 r2: releases the panel's post-D6 reservation on EVERY exit; task 231: and removes its copy."""
+    """Task 108 r2: releases the panel's post-D6 reservation on EVERY exit; task 231: and removes its copy; task 232:
+    the release says how the panel ended."""
     try:
         return _cmd_panel_review(cmd_args)
     finally:
@@ -1560,9 +1570,10 @@ def cmd_panel_review(cmd_args):
             _td, _rid = _PD6_PANEL_PENDING.pop()
             try:
                 from tasks.post_d6 import finish_panel
-                finish_panel(_td, _rid)
+                finish_panel(_td, _rid, _PD6_PANEL_ENDED.pop(_rid, {"outcome": "incomplete"}))
             except Exception:
                 pass
+        _PD6_PANEL_ENDED.clear()
 
 
 def _cmd_panel_review(cmd_args):
@@ -2083,6 +2094,8 @@ def _cmd_panel_review(cmd_args):
     # high-consequence close treats like a stale round (lifecycle, W3b).
     if _tamper_full["mutations"]:
         print("\n" + _tamper_banner(_tamper_full["mutations"]), file=sys.stderr, flush=True)
+        if _prid:
+            _PD6_PANEL_ENDED[_prid] = {"outcome": "void"}       # task 232: the run ledger says why it ended
         sys.exit(1)
     _tamper_cautions = list(_tamper_full["cautions"])
     if _tamper_cautions:
@@ -2283,6 +2296,20 @@ def _cmd_panel_review(cmd_args):
     except OSError as _e:
         _panel_save_failed = True
         _saved_note = f"\n(could not write {judge_md.name}: {_e})"
+    if _prid:
+        # Task 232 (PHASE-B item 6): the run ledger keeps what this round found — only once judge.md holds it. The
+        # findings are counted on the round as written, by the stop rule's own reading (format 2: judges' lines quoted).
+        if _panel_save_failed:
+            _PD6_PANEL_ENDED[_prid] = {"outcome": "unsaved"}
+        else:
+            try:
+                from tasks.stop_rule import round_findings
+                _found = round_findings({"body": "\n".join(lines), "format": 2})
+                _PD6_PANEL_ENDED[_prid] = {"outcome": "completed", "measures": {
+                    "round_id": _prid, "verdict": "PASS" if panel_passed else "FAIL", "succeeded": succeeded,
+                    "seated": len(results), "quorum": panel_quorum, **_found}}
+            except Exception:
+                _PD6_PANEL_ENDED[_prid] = {"outcome": "completed"}
     summary = (f"\nPANEL {'PASS' if panel_passed else 'FAIL'}: {verdict_reason}"
                + _saved_note)
     if failed:
@@ -3374,7 +3401,9 @@ def _cmd_single_review(cmd, cmd_args):
         # claude panel seat review at the same depth.
         # Task 200 (#43): the same tool limit as the panel's claude seat, from the adapter's one constant.
         from provider.adapters.claude import ClaudeAdapter as _CA
-        claude_args = ["-p", "--effort", "high", "--max-budget-usd", review_budget,
+        # Task 232: claude's JSON result, as the adapter asks for it — the review text and the counts are read out of
+        # it below (`claude_judge_output`), so the spend record carries what this call cost.
+        claude_args = ["-p", "--output-format", "json", "--effort", "high", "--max-budget-usd", review_budget,
                        "--tools", _CA.JUDGE_TOOLS, "--allowedTools", _CA.JUDGE_TOOLS]
         if model:
             from provider.adapters.claude import ClaudeAdapter
@@ -3676,14 +3705,17 @@ def _cmd_single_review(cmd, cmd_args):
     # recognized envelope with no review text becomes a FAILED result (never a
     # saved review, never a clean seat); unrecognized stdout stays verbatim.
     _spend_usage = None
-    if backend in ("codex", "grok", "antigravity"):
+    if backend in ("codex", "grok", "antigravity", "claude"):
         from provider.usage import (
-            agy_judge_output, extract_codex, extract_grok, judge_output_from_result)
+            agy_judge_output, claude_judge_output, extract_codex, extract_grok, judge_output_from_result)
         if backend == "antigravity":
             # agy's rules on top of the shared one: a mid-turn error, a web tool
             # call, a model other than the pin → FAILED; a named cause first.
             _jo = agy_judge_output(result, _sandbox.format_judge_output,
                                    expected_model=_agy_expected, web_search=False)
+        elif backend == "claude":
+            # task 232: claude's failure keeps plain mode's shape (its words as the stdout tail)
+            _jo = claude_judge_output(result, _sandbox.format_judge_output)
         else:
             _jo = judge_output_from_result(
                 result, extract_codex if backend == "codex" else extract_grok,

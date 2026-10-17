@@ -602,7 +602,8 @@ def cmd_work(cmd_args):
                     for label, cmd, rc, output, how in _vm.run_contract(
                             project_path, commands, _vt,
                             lambda _c: mv.run_command_capture(_c, str(project_path), timeout_secs=_vt),
-                            on_result=lambda _r: _vm.print_line(_r[0], _r[1], _r[2], _r[4])):
+                            on_result=lambda _r: _vm.print_line(_r[0], _r[1], _r[2], _r[4]),
+                            task=str(prev_task)):           # task 232: each run journaled for this task
                         entries.append((label, cmd, rc, output))
                         if rc != 0:
                             verify_failed = True

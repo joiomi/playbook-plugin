@@ -21,7 +21,7 @@ directory, a linked `enforcement.jsonl`, or one that is not a regular file (a FI
 link before, measured). The bash twin checks and then writes, so a process that swaps the file for a FIFO
 between the two can still hang it; the Python writer opens non-blocking and without following a link.
 
-Writers live in `scripts/pb_journal.py` (`append`, `append_review`, `append_lifecycle`) and its bash
+Writers live in `scripts/pb_journal.py` (`append`, `append_review`, `append_lifecycle`, `append_verify`) and its bash
 twin `scripts/gate-echo-lib.sh::journal_enforcement`. The hook journal — one line per run of a hook — is a file of
 its own beside this one, `journal/hooks.jsonl` ([below](#the-hook-journal--journalhooksjsonl-task-222)). Guarantees:
 `PB-ENFORCEMENT-JOURNAL` (enforcement decisions) and `PB-REVIEW-SPEND-JOURNAL`
@@ -142,7 +142,9 @@ line past the floor.
 ### The `usage` field — honest bounds
 
 `usage` is always present and always exactly one of two shapes: the explicit
-marker `{"status":"unknown"}`, or `{"status":"known","in":<int>,"out":<int>}`.
+marker `{"status":"unknown"}`, or `{"status":"known","in":<int>,"out":<int>}` — the
+second with `cache_read` and `cache_write` beside them for a claude seat (task 232),
+each written only when it is a non-negative int.
 `append_review` **normalizes** it to that fixed schema — an arbitrary caller dict
 is never copied verbatim (that would blow the PIPE_BUF bound), and a non-int
 token count degrades to `unknown`. **Numbers are never fabricated.**
@@ -165,20 +167,36 @@ it is `unknown` on a timeout with no complete frame, on spawn errors,
 and whenever the stdout is not the expected envelope — a non-int, bool or negative
 count is `unknown`, never clamped into a number.
 
-The **claude** judge still runs in plain-text mode, so its seats are `unknown` by
-design. **Usage comes ONLY from the adapter-carried value** (`JudgeOutput.usage`,
+The **claude** judge asks for `claude -p --output-format json` since task 232 (PHASE-B
+item 6; until then it ran in plain text and all its seats were `unknown` — 747 of 747
+records in this workspace). The judge call alone asks for it, on the panel seat and on
+the single-judge path (tail certification and the post-panel judge included); a
+subagent's call stays plain text. claude prints ONE object, `type: result`, at the end:
+the review is `result`; the counts are copied from `modelUsage` when it names exactly one
+model (a budget stop zeroes the top-level `usage` but keeps them there), else from the
+top-level `usage` — both cumulative over the run's turns, measured; `usage.iterations`
+is the last call only and is never read. `in` is claude's `input_tokens` **as reported**:
+it excludes the cache, whose two counts are `cache_read` (claude's
+`cacheReadInputTokens`) and `cache_write` (`cacheCreationInputTokens`) — not summed into
+`in`, since a sum would be derived. All four zero (nothing ran, as for a model that does
+not exist) is `unknown`. A failure — `is_error`, or a `subtype` other than `success` —
+reads exactly as plain mode's did: `(FAILED — exit N)` with claude's own words (the
+object's `errors`, else its `result`, else the raw object) as the `[stdout tail]`, so the
+seat-outage rule (a claude account limit is read when its line is the whole stdout tail)
+and the model-availability anchors see what they saw before; an error on exit 0 says
+`exit 0, claude reported an error`. A claude judge killed at its timeout has printed
+nothing yet (the object comes at the end), as in plain mode. Fixtures: verbatim
+captures of claude 2.1.302, `tests/fixtures/claude-2.1.302/`.
+**Usage comes ONLY from the adapter-carried value** (`JudgeOutput.usage`,
 attached by an adapter that itself requested structured output). Judge TEXT is
 never parsed for usage: a review is prose, and prose — even a seat whose entire
-output happens to be a JSON usage envelope — can never poison the field. Enabling
-structured output for claude would be a deliberate adapter change that attaches
-the carrier (the shared parser already knows claude's `usage` shape), not an
-accident. Failure shapes fail closed: JSON-looking stdout that is not the
+output happens to be a JSON usage envelope — can never poison the field. Failure shapes fail closed: JSON-looking stdout that is not the
 recognized envelope, a codex event stream with a stray line or without a terminal
 `turn.completed`, a codex `error`/`turn.failed` event, or a grok `stopReason`
 other than `end_turn` all produce a `(FAILED — …)` result (partial text kept as a
 diagnostic, usage still recorded when a frame exists) — never a clean seat.
-A reader should still treat `unknown` as an ordinary value (claude seats,
-failures), never assume tokens are present.
+A reader should still treat `unknown` as an ordinary value (failures, a seat whose
+CLI printed no counts, a claude record from before task 232), never assume tokens are present.
 
 The **agy** judge (an experimental seat, task 111; agy 1.2.17) also reports usage:
 its judge path asks for `--output-format stream-json`, and the terminal `result`
@@ -241,6 +259,21 @@ Example:
 
 ```json
 {"ts":"2026-10-16T12:18:43Z","session_id":"pid-123","hook":"tasks","decision":"record","reason":"new","task":"001","detail":"quick first"}
+```
+
+## Family 5 — verify runs (`hook` = `verify`, `decision` = `record`, task 232)
+
+One per command of the verify contract, at the close and in `tasks verify` alike (`tasks/verify_memory.py`
+`run_contract`, via `pb_journal.append_verify`), right after the command ran or was reused; `reason` is
+`"verify run"`. Fields: `task` (the task number, or `"-"` when `tasks verify` resolved none), `command` (its first
+line, capped at 160 bytes), `rc` (its exit, signed — a command killed by a signal exits negative), `how` (`ran` or
+`reused`) and `seconds` — the monotonic time the run took (it stops while the machine sleeps), `0` for a reused
+command: that time was spent once, by the run it reuses, so a sum over the records counts it once. A run that ended
+"not remembered" (the code moved while it ran, no code key) is `ran`. Like every family, a write failure never
+changes the verify's result.
+
+```json
+{"ts":"2026-10-17T17:02:11Z","session_id":"pid-1952820","hook":"verify","decision":"record","reason":"verify run","task":"232","command":"cd playbook-plugin && python3 scripts/verify","rc":0,"how":"ran","seconds":81.337}
 ```
 
 ## The hook journal — `journal/hooks.jsonl` (task 222)

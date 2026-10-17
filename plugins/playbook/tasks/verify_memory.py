@@ -307,16 +307,37 @@ NO_KEY = "not remembered: no code key (a nested repository, a hidden index bit, 
 UNWRITABLE = "not remembered: the journal cannot be written"
 
 
+def _journal_run(project: "Path | str", task: "str | None", cmd: str, rc: int, how: str, seconds: float) -> None:
+    """One verify-run record in the plugin's journal (task 232, PHASE-B item 6) — best-effort, never raises."""
+    try:
+        import importlib.util as _ilu
+        from tasks.core import resolve_agent_dir, resolve_session_id
+        spec = _ilu.spec_from_file_location("_pb_journal_verify",
+                                            Path(__file__).resolve().parent.parent / "scripts" / "pb_journal.py")
+        if spec is None or spec.loader is None:
+            return
+        mod = _ilu.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        first = cmd.strip().splitlines()[0] if cmd.strip() else cmd
+        mod.append_verify(resolve_agent_dir(Path(project)), task=task or "-", command=first, rc=rc,
+                          how="reused" if how == "reused" else "ran", seconds=seconds,
+                          session_id=resolve_session_id(quiet=True) or "")
+    except Exception:
+        pass
+
+
 def run_contract(project: "Path | str", commands: "list[tuple[str, str]]", timeout, run, on_result=None,
-                 reuse: bool = True) -> "list[tuple]":
+                 reuse: bool = True, task: "str | None" = None) -> "list[tuple]":
     """Run each `(label, command)` as the close runs it — `run(command) -> (rc, output)` — reusing a green run of the
     same code. Before a command runs its start is written as a red mark; right after, its result. Returns `(label,
     command, rc, output, how)` per command — `how` "reused", "ran", or a "not remembered: …" note; `on_result` gets each
-    as soon as it is known."""
+    as soon as it is known. Task 232: each one is also journaled for `task` (its number, or None) with the seconds it
+    ran — 0 when reused."""
     out = []
     for label, cmd in commands:
         before = code_key(project)
         rec = reusable(project, before, cmd, timeout) if reuse else None
+        seconds = 0.0
         if rec is not None:
             res = (label, cmd, 0, reused_note(rec), "reused")
         else:
@@ -336,6 +357,10 @@ def run_contract(project: "Path | str", commands: "list[tuple[str, str]]", timeo
                 elif "unwritable" in (marked, what):
                     how = UNWRITABLE
             res = (label, cmd, rc, output, how)
+        try:
+            _journal_run(project, task, cmd, res[2], res[4], seconds)
+        except Exception:
+            pass
         out.append(res)
         if on_result is not None:
             on_result(res)
@@ -403,7 +428,8 @@ def cmd_verify(cmd_args: "list[str]") -> None:
         print_line(label, cmd, rc, how)
         if rc != 0:
             print((output or "").rstrip(), flush=True)
+    task_num = task_file.parent.name.split("-", 1)[0] if task_file is not None else None    # task 232: the record's task
     results = run_contract(project, commands, timeout,                 # always run: the agent asked (round 2)
                            lambda c: mv.run_command_capture(c, str(project), timeout_secs=timeout), on_result=show,
-                           reuse=False)
+                           reuse=False, task=task_num)
     raise SystemExit(1 if any(r[2] != 0 for r in results) else 0)
