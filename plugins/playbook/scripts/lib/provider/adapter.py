@@ -130,6 +130,7 @@ class ProviderAdapter(ABC):
         web_search: bool,
         timeout_secs: "int | None",
         budget_usd: str,
+        project_view=None,
     ) -> str:
         """Single non-interactive judge invocation; returns stdout text.
 

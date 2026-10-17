@@ -467,6 +467,71 @@ def _taskdir_identity(task_file: Path) -> dict:
     return out
 
 
+# Task 231 (PHASE-B item 7): the review copies this process holds — removed on every exit of a review command.
+_REVIEW_VIEWS: list = []
+
+
+def _drop_review_views() -> None:
+    while _REVIEW_VIEWS:
+        _v = _REVIEW_VIEWS.pop()
+        try:
+            _v.remove()
+        except Exception:   # noqa: BLE001 — a copy left behind is swept by the next review
+            pass
+
+
+def _live_review_line(why: str) -> None:
+    print(f"  Judges read the LIVE tree — {why}. Write nothing in the project until this review ends.", flush=True)
+
+
+def _open_review_view(project_path, task_file, *, run_id: str, task_num: str = "", expected=None):
+    """Task 231 (PHASE-B item 7; the owner 2026-10-17: "Copie pe aceeași cale (Recomandat)"): decide FIRST whether
+    the judges can read a fixed copy of the tree, and if so make and seal it (`tasks/review_view.py`). Returns
+    `(view, fingerprint, snapshot, cfg)`; `view` is None when no copy is possible — then the reason is printed and
+    the review reads the live tree as before. A copy that cannot be sealed because the tree keeps changing exits 2
+    before anything is spent (plan panel P8).
+
+    `expected`: None for a panel and a whole-task single judge — the stamp and the snapshot are taken here from the
+    live tree and the copy must equal the snapshot's base trees; for the post-panel judge, a callable returning
+    `(fingerprint, trees, heads, snapshot)` — its delta's `cur` trees (plan panel P3)."""
+    from tasks import review_view as _rv
+    from tasks.core import build_panel_snapshot, load_config, tree_state_fingerprint
+    cfg = load_config(Path(project_path))
+    why = _rv.availability(project_path, cfg, task_file)
+    if why:
+        _live_review_line(why)
+        return None, "", None, cfg
+    last = None
+    for _attempt in range(_rv.COPY_ATTEMPTS):
+        if expected is not None:
+            fp, trees, heads, snap = expected()
+        else:
+            fp = tree_state_fingerprint(project_path)
+            snap = build_panel_snapshot(project_path, fp) if fp else None
+            scopes = (snap or {}).get("scopes") or {}
+            trees = {k: (v or {}).get("base") for k, v in scopes.items()}
+            heads = {k: (v or {}).get("commit") for k, v in scopes.items()}
+        if not fp or snap is None or not trees or not all(trees.values()):
+            _live_review_line("the tree could not be fingerprinted for a copy")
+            return None, "", None, cfg
+        try:
+            view = _rv.make(project_path, cfg, run_id=run_id, fingerprint=fp, trees=trees, heads=heads,
+                            task_file=task_file, exclude=snap.get("exclude"), attempts=1)
+        except _rv.Moved as e:
+            last = e
+            continue
+        except _rv.Unavailable as e:
+            _live_review_line(str(e))
+            return None, "", None, cfg
+        _REVIEW_VIEWS.append(view)
+        own = f" except task {task_num}'s task.md and judge.md" if task_num else ""
+        print(f"  Judges read a fixed copy of the tree ({view.root}) — ready: you may write the live tree "
+              f"now{own}; what you change from here on is after this review.", flush=True)
+        return view, fp, snap, cfg
+    print(f"  Refused: {last} Nothing was spent.", file=sys.stderr, flush=True)
+    sys.exit(2)
+
+
 def _round_tree_stamp(project_path: Path, fp_before: str) -> "tuple[str, str]":
     """(stamp, note) for a panel round (task 085 R2 + round 2 T5). The stamp is
     ALWAYS the tree the judges were SPAWNED on — never the post-review one:
@@ -1460,10 +1525,11 @@ _PD6_PANEL_PENDING: "list[tuple]" = []
 
 
 def cmd_panel_review(cmd_args):
-    """Task 108 r2: releases the panel's post-D6 reservation on EVERY exit."""
+    """Task 108 r2: releases the panel's post-D6 reservation on EVERY exit; task 231: and removes its copy."""
     try:
         return _cmd_panel_review(cmd_args)
     finally:
+        _drop_review_views()
         while _PD6_PANEL_PENDING:
             _td, _rid = _PD6_PANEL_PENDING.pop()
             try:
@@ -1592,6 +1658,15 @@ def _cmd_panel_review(cmd_args):
 
     from tasks.template import panel_plan_review_prompt, panel_impl_review_prompt
 
+    # Task 231 (PHASE-B item 7): the judges read a fixed copy of the tree mounted at the project path — decided and
+    # printed first, made and sealed before the payload, which is then read from the copy (plan panel P15).
+    _view, _view_fp, _view_snap, _view_cfg = _open_review_view(
+        project_path, task_file, run_id=f"panel-{task_num or 'x'}-{os.getpid()}-{int(time.time())}",
+        task_num=task_num)
+    _ctx_root = _view.root if _view is not None else project_path
+    _ctx_task = (_view.root / task_file.relative_to(project_path)) if (_view is not None and task_file) else task_file
+    _pview = _view.sandbox_view() if _view is not None else None
+
     # Build context PER TRANSPORT (1.5.3). stdin seats (claude/codex) have no
     # OS argv limit, so they get the high budget — an argv seat's ceiling
     # must not dictate what a stdin seat is allowed to read. Every truncation
@@ -1604,7 +1679,7 @@ def _cmd_panel_review(cmd_args):
     # triage lines ride FIRST in the payload so a head-clamp never drops them.
     # Task 227: the project's rulings in force too — a taskless panel gets them; `--bare` gets no context at all.
     from tasks.post_d6 import settled_block as _settled_block
-    _settled_part = _settled_block(task_file, project_path=project_path) if not bare else ""
+    _settled_part = _settled_block(_ctx_task, project_path=_ctx_root) if not bare else ""
 
     def _build_payload(budget: int) -> dict:
         parts, receipts = [], []
@@ -1613,11 +1688,11 @@ def _cmd_panel_review(cmd_args):
             parts.append(_settled_part)
         if not bare:
             if not no_mind_map:
-                mm_content = _load_mind_map(project_path)
+                mm_content = _load_mind_map(_ctx_root)
                 if mm_content:
                     parts.append(f"=== MIND_MAP.md ===\n{mm_content}")
             if task_file:
-                task_content = read_task_text(task_file, errors="strict")
+                task_content = read_task_text(_ctx_task, errors="strict")
                 # Task 108 r2: the task gets what is LEFT after the SETTLED block
                 # and the map, so the final head-clamp does not cut its tail.
                 _used = sum(len(x) for x in parts)
@@ -1834,6 +1909,7 @@ def _cmd_panel_review(cmd_args):
                 web_search=web_search,
                 timeout_secs=timeout_secs,
                 budget_usd=panel_budget,
+                project_view=_pview,
             )
             return label, output, int((time.monotonic() - _t0) * 1000), False
         except subprocess.TimeoutExpired as expired:
@@ -1920,15 +1996,17 @@ def _cmd_panel_review(cmd_args):
             print(_pd6p.panel_refusal(task_file), file=sys.stderr, flush=True)
             sys.exit(2)
         _PD6_PANEL_PENDING.append((task_file.parent, _prid))
-    _tamper_before = _snapshot_repo_state(project_path, task_file)
+    # Task 231: with a copy, the guard watches the copy (the live tree may change on purpose) and the stamp is the
+    # sealed fingerprint — the copy's content by construction.
+    _tamper_before = _snapshot_repo_state(_ctx_root, _ctx_task)
     # Task 085 R2: the tree the judges are about to see — the stamp's reference.
     from tasks.core import tree_state_fingerprint
-    _fp_before = tree_state_fingerprint(project_path)
+    _fp_before = _view_fp if _view is not None else tree_state_fingerprint(project_path)
     # T4 (task 085 round 2): the commit the judges were given, read with the
     # fingerprint — reading HEAD after the review recorded a concurrent commit.
     try:
         _head_before = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=project_path,
+            ["git", "rev-parse", "HEAD"], cwd=_ctx_root,
             capture_output=True, text=True).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         _head_before = ""
@@ -1961,7 +2039,7 @@ def _cmd_panel_review(cmd_args):
                                    _parse_judge_usage(output),
                                    _judge_error(output, _st_now)))
 
-    _tamper_full = _detect_tamper_full(project_path, task_file, _tamper_before)
+    _tamper_full = _detect_tamper_full(_ctx_root, _ctx_task, _tamper_before)
     # On a MUTATION the panel, like the single-judge path, does NOTHING but emit
     # the banner and exit — before the tree fingerprint and judge.md assembly/
     # write below, any of which could hang (an unbounded/FIFO read) or write
@@ -2074,7 +2152,11 @@ def _cmd_panel_review(cmd_args):
     # concurrent commit during the review (a caution on a contained host) used to
     # be fingerprinted here and stamped as reviewed; now the pre-spawn value is
     # stamped (the close reads STALE) and no tail-cert descriptor is emitted.
-    _fp, _stamp_note = _round_tree_stamp(project_path, _fp_before)
+    if _view is not None:
+        # the copy is what the judges read: unchanged → the sealed stamp; the live tree moving is not "moved"
+        _fp, _stamp_note = _fp_before, ("" if _view.matches(_fp_before, _view_cfg) else "moved")
+    else:
+        _fp, _stamp_note = _round_tree_stamp(project_path, _fp_before)
     _tree_moved = bool(_stamp_note)                   # any note → no descriptor
     if _stamp_note == "moved":
         print("  ⚠ the tree changed while the judges ran — this round is stamped with "
@@ -2125,6 +2207,8 @@ def _cmd_panel_review(cmd_args):
                       "will block EXCLUDE-COVERS-CODE until the exclude is fixed",
                       file=sys.stderr, flush=True)
                 _snap = None
+            elif _view is not None:
+                _snap = _view_snap        # taken from the live tree before the spawn; the copy was sealed to it
             else:
                 _snap = build_panel_snapshot(project_path, _fp)
             # Panel-time TOCTOU compare-and-swap (impl-panel sonnet#1 / codex#2 /
@@ -2135,7 +2219,8 @@ def _cmd_panel_review(cmd_args):
             # omit it (a missing descriptor makes the close fail closed to a fresh
             # panel — never a silent stale baseline). None (a scope that could not
             # be captured cleanly, impl-panel opus#2/grok#3) is likewise omitted.
-            if _snap is not None and not _tree_moved and _tsf(project_path) == _fp:
+            if _snap is not None and not _tree_moved and (
+                    _view.matches(_fp, _view_cfg) if _view is not None else _tsf(project_path) == _fp):
                 lines.append(format_panel_snapshot_line(_snap) + "\n")
         except Exception:
             pass

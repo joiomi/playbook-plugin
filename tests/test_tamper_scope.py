@@ -1067,10 +1067,13 @@ class RoundStampPreSpawn(unittest.TestCase):
         import inspect
         # task 108: cmd_panel_review is a thin wrapper (reservation release); the body is _cmd_panel_review
         src = inspect.getsource(R._cmd_panel_review)
-        self.assertIn("_fp_before = tree_state_fingerprint(project_path)", src)
-        self.assertLess(src.index("_fp_before = tree_state_fingerprint(project_path)"),
-                        src.index("executor.submit(run_judge"),
+        # task 231: with a review copy the stamp is the copy's sealed fingerprint, taken before the spawn as well
+        line = "_fp_before = _view_fp if _view is not None else tree_state_fingerprint(project_path)"
+        self.assertIn(line, src)
+        self.assertLess(src.index(line), src.index("executor.submit(run_judge"),
                         "the pre-spawn fingerprint must be taken before the judges run")
+        self.assertLess(src.index("_open_review_view("), src.index("executor.submit(run_judge"),
+                        "the copy must be sealed before the judges run")
         self.assertIn("_round_tree_stamp(project_path, _fp_before)", src)
 
 

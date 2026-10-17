@@ -246,6 +246,7 @@ class AntigravityAdapter(ProviderAdapter):
         web_search: bool,
         timeout_secs: "int | None",
         budget_usd: str,
+        project_view=None,
     ) -> str:
         import shutil
         if not shutil.which(self.binary_name()):
@@ -265,6 +266,7 @@ class AntigravityAdapter(ProviderAdapter):
             "agy", inv.argv,
             project_root=self._project_root,
             project_writable=False,   # judge is read-only — cannot mutate repo/task.md
+            project_view=project_view,   # task 231: the review's fixed copy, mounted at the project path
             env=env,
             input=inv.stdin,
             capture_output=True, text=True, timeout=run_timeout, encoding="utf-8",

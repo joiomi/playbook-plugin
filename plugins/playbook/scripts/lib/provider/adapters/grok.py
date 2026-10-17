@@ -241,6 +241,7 @@ class GrokAdapter(ProviderAdapter):
         web_search: bool,
         timeout_secs: "int | None",
         budget_usd: str,
+        project_view=None,
     ) -> str:
         import shutil
         if not shutil.which(self.binary_name()):
@@ -273,6 +274,7 @@ class GrokAdapter(ProviderAdapter):
             "grok", agent_args,
             project_root=self._project_root,
             project_writable=False,   # judge is read-only — cannot mutate repo/task.md
+            project_view=project_view,   # task 231: the review's fixed copy, mounted at the project path
             env=env,
             input=None,
             capture_output=True, text=True, timeout=timeout_secs, encoding="utf-8",

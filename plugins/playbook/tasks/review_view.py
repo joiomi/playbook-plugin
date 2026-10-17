@@ -146,7 +146,11 @@ def availability(project: "Path | str", cfg: dict, task_file: "Path | str | None
         if not (project / ".git").is_dir():
             return "the project is a linked worktree (its .git is a file)"
         scopes = _scopes(project, cfg)
-        from tasks.core import _code_roots
+        from tasks.core import _code_roots, owner_exclude_covers_behavioral
+        covers, hits = owner_exclude_covers_behavioral(project, cfg)
+        if covers:
+            return ("fingerprint_exclude hides code (" + ", ".join(hits[:3]) + ") — a copy could not be sealed "
+                    "over what the fingerprint does not see")
         for rel in _code_roots(cfg):
             if rel not in scopes:
                 return f"code root {rel} resolves outside the project"
@@ -392,7 +396,7 @@ def sweep(project: "Path | str", task_file: "Path | str | None" = None) -> int:
 
 def make(project: "Path | str", cfg: dict, *, run_id: str, fingerprint: str, trees: "dict[str, str]",
          heads: "dict[str, str] | None" = None, task_file: "Path | str | None" = None,
-         exclude: "list[str] | None" = None) -> View:
+         exclude: "list[str] | None" = None, attempts: int = 0) -> View:
     """Make, seal and lock a copy (see the module docstring). `Unavailable` when it cannot be made, `Moved` when the
     tree kept changing. Nothing is left behind on either."""
     from tasks.core import _fingerprint_exclude_pathspecs
@@ -409,7 +413,7 @@ def make(project: "Path | str", cfg: dict, *, run_id: str, fingerprint: str, tre
     safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in (run_id or "run"))[:64]
     scopes = _scopes(project, cfg)
     names = sorted(scopes)
-    for attempt in range(COPY_ATTEMPTS):
+    for attempt in range(attempts or COPY_ATTEMPTS):
         base = f"{safe_id}-{attempt}"
         root = vd / base
         lock_path = vd / (base + ".lock")
@@ -439,8 +443,8 @@ def make(project: "Path | str", cfg: dict, *, run_id: str, fingerprint: str, tre
             _discard(view, root, fd, lock_path, vd)
             raise Unavailable(f"the copy could not be made ({e})") from None
         _discard(view, root, fd, lock_path, vd)
-    raise Moved(f"the tree changed while its copy was made, {COPY_ATTEMPTS} times — let nothing write it until the "
-                "review prints that its copy is ready, then run the review again")
+    raise Moved(f"the tree changed while its copy was made, {attempts or COPY_ATTEMPTS} times — let nothing write "
+                "it until the review prints that its copy is ready, then run the review again")
 
 
 def _discard(view: "View | None", root: Path, fd: int, lock_path: Path, vd: Path) -> None:

@@ -391,10 +391,11 @@ class SandboxArgv(unittest.TestCase):
                 seen.update(kw)
                 return subprocess.CompletedProcess(a, 0, stdout="ok", stderr="")
 
-            with mock.patch.object(S, "run", fake_run):
+            with mock.patch.object(S, "run", fake_run), \
+                 mock.patch("shutil.which", return_value="/usr/bin/true"):
                 try:
                     cls(session_id="judge", project_root=tempfile.gettempdir()).run_headless_judge(
-                        "p", timeout_secs=5, project_view=pv)
+                        "p", None, "", web_search=False, timeout_secs=5, budget_usd="1", project_view=pv)
                 except TypeError as e:
                     self.fail(f"{cls.__name__}.run_headless_judge does not take project_view: {e}")
                 except Exception:
