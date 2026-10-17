@@ -458,9 +458,16 @@ def _remove_tree(base: "Path | str", target: "Path | str", task_file: "Path | st
     if t.resolve().parent != vd.resolve() or vd.is_symlink():
         raise ValueError(f"{t} is not inside {vd}")
 
+    tried: "set[str]" = set()
+
     def _writable_then_retry(_func, path, _exc):
         # a read-only or unreadable folder in the copy (frozen, a copied 0555 `info/`) — ours to delete. The failing
-        # call is never re-invoked as such: `os.open`/`os.scandir` take other arguments (impl round 3, agy).
+        # call is never re-invoked as such: `os.open`/`os.scandir` take other arguments (impl round 3, agy); a folder
+        # is removed with the same repair all the way down (the post-panel judge's run 1: nested frozen folders
+        # survived `ignore_errors`); each path is repaired once.
+        if path in tried:
+            return
+        tried.add(path)
         for x in (os.path.dirname(path), path):
             try:
                 if not os.path.islink(x):
@@ -469,13 +476,15 @@ def _remove_tree(base: "Path | str", target: "Path | str", task_file: "Path | st
                 pass
         try:
             if os.path.isdir(path) and not os.path.islink(path):
-                shutil.rmtree(path, ignore_errors=True)
+                shutil.rmtree(path, onerror=_writable_then_retry)
             else:
                 os.unlink(path)
         except OSError:
             pass
 
     shutil.rmtree(t, onerror=_writable_then_retry)
+    if os.path.lexists(t):
+        raise OSError(f"{t} could not be removed whole")
 
 
 def _lock(path: Path) -> int:

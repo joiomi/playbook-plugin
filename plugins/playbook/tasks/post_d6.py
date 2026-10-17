@@ -293,34 +293,34 @@ def real_path(project_path, rel: str, alias: "tuple[str, str] | None" = None) ->
 
 
 def _resolve_in_copy(copy: str, live: str, rel: str) -> str:
-    """`rel` resolved inside a review's copy link by link, as the judge's mount shows it: an absolute target in the
-    live project is taken into the copy BEFORE the next link is followed (impl round 3, codex: realpath followed the
-    whole live chain first — a link retargeted live decided the verdict). '' past 40 links."""
+    """`rel` resolved as the judge's mount shows it — the copy at the live path — link by link (impl round 3, codex:
+    realpath followed the whole live chain first). The walk is in the judge's coordinates: each step is a live path,
+    and only the file it shows is read from the copy; nothing is normalized lexically, so a `..` after a linked
+    folder is that link TARGET's parent (the post-panel judge's run 1, codex), and a `..` from the project root
+    leaves it. The copy's own path for the end, or '' past 40 links."""
+    def shown(p: str) -> str:
+        return copy + p[len(live):] if (p == live or p.startswith(live + os.sep)) else p
+
     parts = [x for x in rel.split("/") if x not in ("", ".")]
-    cur = copy
+    cur = live
     hops = 0
     while parts:
         part = parts.pop(0)
         if part == "..":
-            cur = os.path.dirname(cur)
+            cur = os.path.dirname(cur) or os.sep
             continue
         nxt = os.path.join(cur, part)
-        if os.path.islink(nxt):
+        if os.path.islink(shown(nxt)):
             hops += 1
             if hops > 40:
                 return ""
-            target = os.readlink(nxt)
-            if os.path.isabs(target):
-                t = os.path.normpath(target)
-                if t == live or t.startswith(live + os.sep):
-                    t = copy + t[len(live):]
+            target = os.readlink(shown(nxt))
+            if target.startswith("/"):
                 cur = os.sep
-                parts = [x for x in t.split(os.sep) if x not in ("", ".")] + parts
-            else:
-                parts = [x for x in target.split("/") if x not in ("", ".")] + parts
+            parts = [x for x in target.split("/") if x not in ("", ".")] + parts
             continue
         cur = nxt
-    return cur
+    return shown(cur)
 
 
 def _as_real(path: str, exists) -> str:

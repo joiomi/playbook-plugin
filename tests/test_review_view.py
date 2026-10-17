@@ -754,6 +754,36 @@ class ImplRoundThree(unittest.TestCase):
         os.symlink("old.py", live / "middle")                # retargeted live during the review
         self.assertEqual(post_d6.real_path(copy, "alias", alias=(str(live), str(copy))), "changed.py")
 
+    def test_pd6_dotdot_after_a_linked_folder_follows_the_link(self):
+        """The post-panel judge's run 1: `..` after a linked component is the TARGET's parent, as the judge reads it."""
+        from tasks import post_d6
+        root = Path(tempfile.mkdtemp(prefix="rv-dotdot-"))
+        self.addCleanup(shutil.rmtree, root, True)
+        live, copy = root / "live", root / "copy"
+        for d in (live, copy):
+            (d / "sub" / "inner").mkdir(parents=True)
+            (d / "other").mkdir()
+            (d / "sub" / "changed.py").write_text("s\n", encoding="utf-8")
+            (d / "other" / "changed.py").write_text("o\n", encoding="utf-8")
+            os.symlink("../sub/inner", d / "other" / "dir")
+        os.symlink(str(live) + "/other/dir/../changed.py", copy / "alias")
+        self.assertEqual(post_d6.real_path(copy, "alias", alias=(str(live), str(copy))), "sub/changed.py")
+        self.assertEqual(post_d6.real_path(copy, "../outside.py", alias=(str(live), str(copy))), "")
+
+    def test_pd6_nested_unreadable_folders_are_removed(self):
+        d = _project(self)
+        rv = _rv()
+        fp, trees, heads = _snapshot_trees(d)
+        view = rv.make(d, _cfg(d), run_id="nest", fingerprint=fp, trees=trees, heads=heads)
+        inner = view.root / "docs" / "inner"
+        os.chmod(view.root / "docs", 0o700)
+        inner.mkdir()
+        (inner / "x.txt").write_text("x\n", encoding="utf-8")
+        os.chmod(inner, 0o000)
+        os.chmod(view.root / "docs", 0o000)
+        view.remove()
+        self.assertFalse(view.root.exists(), "a frozen descendant survived the removal")
+
     def test_r3_the_sweep_unlinks_a_lock_while_it_holds_it(self):
         d = _project(self)
         rv = _rv()
