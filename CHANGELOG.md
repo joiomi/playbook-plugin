@@ -15,20 +15,20 @@ guide and the mind map write one fact per line; a ruling for more than one task 
 list (`tasks ruling`). Item 3: `tasks verify` remembers a green run, and the close does not run the same code's verify
 again. The suite has 5,255 tests (4,827 at 1.6.3); CI is the same two Linux lanes.
 
-**Upgrading:** `/playbook:upgrade`, restart every Claude Code session, then re-run `/playbook:init` in each project
-that uses the plugin. Init brings the CLAUDE.md block's new bullets (a gate's note under its title, the project rulings
-list, `tasks verify`), adds `.agent/rulings.lock` to the `.gitignore` block, and removes the shell logger 1.6.3
-installed — `~/.claude/bash-log.sh` and `bash-log.zsh`, the `BASH_ENV` line in `~/.claude/settings.json` and its lines
-in `~/.bash_profile`, `~/.profile` and `~/.zshenv`, each saved to init's user backup first (the hook writes the shell log
+**Upgrading:** `/playbook:upgrade`, restart every Claude Code session, then re-run `/playbook:init` in each project that
+uses the plugin. Init brings the CLAUDE.md block's new bullets (a gate's note under its title, the project rulings list,
+`tasks verify`), adds `.agent/rulings.lock` to the `.gitignore` block, and removes the shell logger 1.6.3 installed —
+`~/.claude/bash-log.sh` and `bash-log.zsh`, the `BASH_ENV` line in `~/.claude/settings.json` and its lines in
+`~/.bash_profile`, `~/.profile` and `~/.zshenv`, each saved to init's user backup first (the hook writes the shell log
 now). Before init, 1.6.4 runs on a project 1.6.3 initialised: measured on a fresh copy, `doctor`, `bootstrap`, `new`,
 `work`, `verify`, `ruling list` and `audit` ran clean, and each of the eight hooks ran (the stop hook blocking an open
-task, as it should) and wrote its journal line. **This release moves data:** at the next `tasks audit` of a task, the older audit receipts in its task.md
-move to `audit-log.md` beside it — nothing is deleted. **A task already in flight** keeps the instruction text its
-template wrote (a new task.md has none — `tasks guide <type>`); a gate's note may stay on its own line — the guard and
-the echo read both; its `## Risk` value is read with spaces and tabs only. **Going back to 1.6.3** after init: install
-1.6.3, then re-run its `/playbook:init` (it puts the shell logger back); 1.6.3's writers split a task.md line at any
-line separator other than LF (U+0085, U+2028, U+2029, VT, FF, U+001C-U+001E), and its batch-tick guard does not see a
-note written under a gate.
+task, as it should) and wrote its journal line. **This release moves data:** at the next `tasks audit` of a task, the
+older audit receipts in its task.md move to `audit-log.md` beside it — nothing is deleted. **A task already in flight**
+keeps the instruction text its template wrote (a new task.md has none — `tasks guide <type>`); a gate's note may stay on
+its own line — the guard and the echo read both; its `## Risk` value is read with spaces and tabs only. **Going back to
+1.6.3** after init: install 1.6.3, then re-run its `/playbook:init` (it puts the shell logger back); 1.6.3's writers
+split a task.md line at any line separator other than LF (U+0085, U+2028, U+2029, VT, FF, U+001C-U+001E), and its
+batch-tick guard does not see a note written under a gate.
 
 **The judges' trim keeps the Work Plan** — PHASE-B.md item 2 (first part), task 212. A task.md longer than a judge's
 window used to be cut by keeping Intent/Design and filling from the end of the file, where the template's standing
