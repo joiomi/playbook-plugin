@@ -1958,8 +1958,12 @@ def _risk_from_lines(lines: "list[str]") -> str:
     # is not the field shape, so it stays unclassified and strict at close.
     if not _RISK_FIELD_RE.match(heading) or i + 1 >= len(lines):
         return DEFAULT_RISK
-    raw = lines[i + 1].strip().strip("`*_").lower()
-    token = raw.split()[0] if raw else ""
+    # Task 224 (task 214's V2; the owner 2026-10-16 09:48: "Riscul … se citesc strict"): only spaces and tabs separate
+    # — `str.strip` / `str.split` took U+0085, U+2028, U+00A0, VT, FF… for white space, so `\x85irreversible` read
+    # `irreversible`. Such a character before, in or after the token leaves it unrecognised (`unclassified`, the strict
+    # bar). A CR at the line's very end is that line's end (a CRLF text read raw).
+    raw = lines[i + 1].rstrip("\r").strip(" \t").strip("`*_").lower()
+    token = re.split(r"[ \t]", raw, maxsplit=1)[0]
     if token in RISK_CLASSES:
         return token
     return DEFAULT_RISK
@@ -6239,7 +6243,9 @@ def _live_gate_scan(lines: "list[str]") -> "tuple[int, int, str, int]":
             unchecked += 1
             if first_index < 0:
                 first_index = i
-                first = raw[m.end():].strip()
+                # spaces and tabs only (task 224, task 214's V3: `.strip()` dropped a U+0085 before `Freehand`, and the
+                # stop hook released)
+                first = raw[m.end():].strip(" \t")
     return unchecked, total, first, first_index
 
 

@@ -254,6 +254,20 @@ this workspace, 77 % in a second project).
   The record itself is unchanged; this is what a judge reads of a trimmed older record (the owner's rule: design for
   new projects).
 
+**The `## Risk` value and a gate's `Freehand` start are read with spaces and tabs only** — task 224, the owner's ruling
+of 2026-10-16 on task 214's V2 and V3 ("Riscul și „Freehand" se citesc strict în Faza B"). Both readings took every
+character `str.isspace()` accepts for white space: `## Risk` + `\x85irreversible` read `irreversible` (the close's bar
+and the command guard's acknowledgement follow that value), and `- [ ] \x85Freehand now` released the stop hook.
+- The `## Risk` value: only spaces and tabs around the word, and the word ends at the first space or tab; any other
+  such character (U+0085, U+2028, U+2029, U+00A0, VT, FF, U+3000 and the rest — 26 besides space, tab and the line
+  feed) before, in or after it leaves the value `unclassified`, which the close holds to the strict bar. A CR at the
+  line's very end is still that line's end.
+- A gate's text after its box is trimmed of spaces and tabs only, so such a character before `Freehand` keeps the
+  gate an ordinary one: the stop hook's release (`task-status.py --fields`), codex's echo and the state echo's
+  Freehand mode all read it so. The echo's gate text keeps such a character where it used to drop it at the ends.
+- A record whose value or gate has such a character next to it now reads stricter (the owner's rule: design for new
+  projects).
+
 ## [1.6.3] — 2026-10-15
 
 **The review stop rule as the plugin's default** — PHASE-B.md item 1, task 209. Until now the round cap (the owner's

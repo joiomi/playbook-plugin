@@ -89,7 +89,8 @@ def _echo_fields(lines: "list[str]", prev: "tuple[int, int, int, int, int, str] 
         if m:
             # a lone CR inside the text (not a line break, task 214) is dropped here, where the gates are read,
             # not only where they are printed (task 220, sonnet: the stored copy never matched)
-            gates.append((i + 1, m.group(1) != " ", raw[m.end():].strip().replace("\r", "")))
+            # spaces and tabs only (task 224): the text the state-echo hook's Freehand `case` reads, as core reads it
+            gates.append((i + 1, m.group(1) != " ", raw[m.end():].strip(" \t").replace("\r", "")))
     first = next((k for k, g in enumerate(gates) if not g[1]), -1)
     below = sum(1 for g in gates[first + 1:] if g[1]) if first >= 0 else 0
     text = gates[first][2] if first >= 0 else ""

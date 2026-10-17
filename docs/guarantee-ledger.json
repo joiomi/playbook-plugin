@@ -817,7 +817,7 @@
     {
       "id": "PB-TASK-FREEHAND",
       "category": "task-lifecycle",
-      "statement": "The freehand transition is recorded in an auditable timestamped freehand log entry that the log reader parses. The stop-hook's Freehand release is DECIDED in Python (core._freehand_release_allowed, shipped as the 4th `--fields` line): the first LIVE unchecked gate — read by the CLI's own fence-aware gate reader (core._live_gate_scan, physical `\\n` lines only) — starts with `Freehand` (not the `Freehand log` cleanup gate), sits at indent < 4 columns, and the file has no unclosed code fence; so a `- [ ] Freehand…` line quoted inside a closed or UNCLOSED fence, an indented example, or a later Freehand gate behind a blank-text first gate can never be the gate that releases the stop; when the reader cannot run the release is disabled (fail closed). The hooks find the active task's record by the task directory's own name (task 192; the `find -path` BOUND this row carried — PLAN §S11 item (23) — is closed, see PB-TASK-ACTIVATE).",
+      "statement": "The freehand transition is recorded in an auditable timestamped freehand log entry that the log reader parses. The stop-hook's Freehand release is DECIDED in Python (core._freehand_release_allowed, shipped as the 4th `--fields` line): the first LIVE unchecked gate — read by the CLI's own fence-aware gate reader (core._live_gate_scan, physical `\\n` lines only) — starts with `Freehand` after the box and spaces or tabs only (task 224: a U+0085, U+2028 or any other str.isspace() separator before it releases nothing), not the `Freehand log` cleanup gate, sits at indent < 4 columns, and the file has no unclosed code fence; so a `- [ ] Freehand…` line quoted inside a closed or UNCLOSED fence, an indented example, or a later Freehand gate behind a blank-text first gate can never be the gate that releases the stop; when the reader cannot run the release is disabled (fail closed). The hooks find the active task's record by the task directory's own name (task 192; the `find -path` BOUND this row carried — PLAN §S11 item (23) — is closed, see PB-TASK-ACTIVATE).",
       "owner": [
         {
           "path": "plugins/playbook/tasks/lifecycle.py",
@@ -847,6 +847,17 @@
       "failure_consequence": "High",
       "claim_kind": "mechanical",
       "proofs": [
+        {
+          "type": "executable integration",
+          "path": "tests/test_strict_risk_and_freehand.py",
+          "reference": "TheFreehandStart.test_the_stop_hooks_fields_and_the_echo",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_strict_risk_and_freehand.py",
+            "reference": "TheFreehandStart.test_the_plain_forms_still_release"
+          },
+          "limitations": []
+        },
         {
           "type": "executable unit",
           "path": "tests/test_freehand_log.py",
@@ -1303,7 +1314,7 @@
     {
       "id": "PB-RISK-CLASSIFY",
       "category": "risk-and-close",
-      "statement": "Risk metadata recognizes the configured reversible/irreversible/assertive values; an offered-but-unset or duplicated Risk field degrades to unclassified and blocks the close, while a legacy task with no Risk heading keeps the warning-only path.",
+      "statement": "Risk metadata recognizes the configured reversible/irreversible/assertive values; an offered-but-unset or duplicated Risk field degrades to unclassified and blocks the close, while a legacy task with no Risk heading keeps the warning-only path. The value is read with spaces and tabs as its only separators (task 224, the owner's 2026-10-16 ruling on task 214's V2): any other character str.isspace() accepts — U+0085, U+2028, U+00A0, VT, FF and the rest — before, in or after the word leaves it unclassified, so it can raise neither the close's bar nor the command guard's irreversible acknowledgement; a CR at the line's very end is its line end.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/core.py",
@@ -1345,6 +1356,25 @@
       "failure_consequence": "High",
       "claim_kind": "mechanical",
       "proofs": [
+        {
+          "type": "executable unit",
+          "path": "tests/test_strict_risk_and_freehand.py",
+          "reference": "TheRiskValue.test_the_command_guard_does_not_take_such_a_value_as_irreversible",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_strict_risk_and_freehand.py",
+          "reference": "TheRiskValue.test_a_separator_before_the_value_leaves_it_unclassified",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_strict_risk_and_freehand.py",
+            "reference": "TheRiskValue.test_the_plain_forms_still_read"
+          },
+          "limitations": []
+        },
         {
           "type": "executable integration",
           "path": "tests/test_unclassified_fails_closed.py",
