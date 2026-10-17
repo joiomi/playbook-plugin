@@ -40,7 +40,7 @@ REWORDED = {
     "> **Write a 1-sentence answer for each gate.** A bare checkmark means you skipped it.":
         "> **Answer each gate on the lines under it** (indented two spaces deeper, one fact per line). A bare checkmark means you skipped it.",
     "> Never backfill. The document IS the execution trace. Batch-closing ALREADY-DONE gates needs an outcome note per line (hook-enforced; where no hook runs, one gate at a time).":
-        "> Never backfill. The document IS the execution trace. Batch-closing ALREADY-DONE gates needs an outcome note per gate (hook-enforced; where no hook runs, one gate at a time).",
+        "> Never backfill. The document IS the execution trace. A gate's outcome goes on the lines under it, indented two spaces deeper, one fact per line. Batch-closing ALREADY-DONE gates needs an outcome note per gate (hook-enforced; where no hook runs, one gate at a time).",
     "> Gate discipline unchanged: one gate → do work → check box with its outcome. Never backfill. Batch-closing ALREADY-DONE gates needs an outcome note per line (hook-enforced; where no hook runs, one at a time).":
         "> Gate discipline unchanged: one gate → do work → check box, its outcome on the lines under it (indented two spaces deeper, one fact per line). Never backfill. Batch-closing ALREADY-DONE gates needs an outcome note per gate (hook-enforced; where no hook runs, one at a time).",
     # task 219: the echo no longer repeats after every call — the drift signal is the 10-call reminder

@@ -83,7 +83,9 @@ class BareCheckmarkTest(unittest.TestCase):
 def _cont(lines):
     """`_gate_has_continuation` for the gate on line 0, every gate line known (as `_parse_task` passes them)."""
     import re as _re
-    return _gate_has_continuation(lines, 0, {i for i, ln in enumerate(lines) if _re.match(r"^[ \t]*- \[[ xX]\]", ln)})
+    from tasks.core import gate_note_ends
+    gates = {i for i, ln in enumerate(lines) if _re.match(r"^[ \t]*- \[[ xX]\]", ln)}
+    return _gate_has_continuation(lines, 0, gate_note_ends(lines, gates))
 
 
 class TasksLogTest(unittest.TestCase):

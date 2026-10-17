@@ -1177,7 +1177,7 @@ Examples:
 def sticker_quick() -> str:
     return """\
 > **Gate discipline:** One gate \u2192 do work \u2192 check box \u2192 next gate.
-> Never backfill. The document IS the execution trace. Batch-closing ALREADY-DONE gates needs an outcome note per gate (hook-enforced; where no hook runs, one gate at a time).
+> Never backfill. The document IS the execution trace. A gate's outcome goes on the lines under it, indented two spaces deeper, one fact per line. Batch-closing ALREADY-DONE gates needs an outcome note per gate (hook-enforced; where no hook runs, one gate at a time).
 > **Never born checked:** write the gate BEFORE you do its step, then check it \u2014 a gate may never be born checked. To record work you already finished, add it unchecked, then check it in a SEPARATE edit with its outcome.
 > **Selection rule:** quick is for declared-reversible trivia only \u2014 anything touching docs, claims, data, or publishing belongs in `light` or heavier (risk decides review; smallness never does)."""
 

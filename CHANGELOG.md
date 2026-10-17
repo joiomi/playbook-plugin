@@ -284,9 +284,10 @@ the lines under its title — this is the note half). Measured before (task 218)
   lines the old text already had — the note being the non-gate lines indented deeper than the gate, a blank line kept
   when the next line is deeper (`core.gate_note_ends`, the judges' trim's rule, copied into the guard so it imports
   nothing it could fail on, held equal by a test). A note written while the gate was still open, or moved from another
-  gate, adds nothing; a line that only goes on from one adds what follows it; the 8-character floor is over the sum. A
-  checkbox inside a closed code fence is now an example, not a gate (a note may hold one); an unclosed fence hides
-  nothing.
+  gate, adds nothing; a line that only goes on from one adds what follows it; the 8-character floor is over the sum. The
+  guard reads no code fences — every checkbox line is a gate to it — so a fenced `- [x]` example inside a note reads as
+  born-checked and blocks (it over-blocks; a fence rule tried in this task let a 4-space or tab-indented fence pair,
+  or an Edit fragment starting at a closing fence, hide bare ticks the counters still count — its impl round 1).
 - The echo calls a tick bare only when nothing was written — after the title or under it. Its limit: a note written
   under the gate before the tick counts too (the echo keeps no copy of the file before the edit; the guard, which has
   both texts, is the strict check).

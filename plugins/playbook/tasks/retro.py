@@ -83,6 +83,8 @@ def _parse_task(num: int, slug: str, content: str) -> dict:
     # Heuristic: text is very short (≤60 chars), lacks outcome markers, AND has no
     # indented continuation content beneath it. Template gates are short labels.
     bare_count = 0
+    from tasks.core import gate_note_ends
+    note_ends = gate_note_ends(lines, {g["line"] for g in gates})    # once per task (impl round 1, Q4)
     for g in gates:
         if not g["checked"]:
             continue
@@ -98,7 +100,7 @@ def _parse_task(num: int, slug: str, content: str) -> dict:
         # Continuation lines beneath the gate (numbered sub-bullets, `→` lines,
         # any deeper-indented content) ARE the annotation — not bare (5a: 17/17
         # flagged "bare" gates were continuation-annotated false positives).
-        if _gate_has_continuation(lines, g["line"], {x["line"] for x in gates}):
+        if _gate_has_continuation(lines, g["line"], note_ends):
             continue
         bare_count += 1
 
@@ -128,20 +130,17 @@ def _parse_task(num: int, slug: str, content: str) -> dict:
     }
 
 
-_GATE_LINE_RE = re.compile(r'^\s*- \[[ xX]\]')
 
 
-def _gate_has_continuation(lines: list[str], line_idx: int, gate_lines: "set[int]") -> bool:
-    """True if the gate at `line_idx` has a note under it — `core.gate_note_ends`, the one rule (task 225: the non-gate
+def _gate_has_continuation(lines: list[str], line_idx: int, note_ends: "dict[int, int]") -> bool:
+    """True if the gate at `line_idx` has a note under it — `note_ends` from `core.gate_note_ends`, the one rule (task 225: the non-gate
     lines indented deeper, a blank line kept when the next is deeper; a NESTED gate is never its parent's note — codex,
     task 225's plan panel: a bare parent above a noted child counted no bare gate) — or a `→` line right after it, at
     any indent (how older records annotate, bug report #5a). So such a gate is NOT a bare checkmark."""
-    from tasks.core import gate_note_ends
     nxt = next((ln for ln in lines[line_idx + 1:] if ln.strip()), "")
     if nxt.strip().startswith("→"):
         return True
-    end = gate_note_ends(lines, gate_lines)[line_idx]
-    return any(ln.strip() for ln in lines[line_idx + 1:end])
+    return any(ln.strip() for ln in lines[line_idx + 1:note_ends[line_idx]])
 
 
 def _extract_section(lines: list[str], heading: str) -> str:

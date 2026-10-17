@@ -105,6 +105,27 @@ class TheGuardReadsTheNoteUnderTheTitle(GuardCase):
         self.all_tools(old, "- [x] A one\n  - planned: build it all\n  - built a.py, 3 tests\n"
                             "- [x] B two\n  - planned: verify all\n  - verify 9/9 green\n", 0)
 
+    def test_no_order_lets_an_unchanged_note_count(self):
+        """Impl round 1, Q2 (codex, grok): a line that goes on from an old note must not consume that old line, or the
+        gate still holding it unchanged would be credited — in either order."""
+        old = "- [ ] A one\n- [ ] B two\n  - tests green\n"
+        first = "- [x] A one\n  - tests green plus eight new chars\n- [x] B two\n  - tests green\n"
+        self.all_tools(old, first, 2)
+        old2 = "- [ ] B two\n  - tests green\n- [ ] A one\n"
+        second = "- [x] B two\n  - tests green\n- [x] A one\n  - tests green plus eight new chars\n"
+        self.all_tools(old2, second, 2)
+
+    def test_one_old_line_measures_every_continuation(self):
+        """Q2: an old line is not used up — two gates that each go on from it by a few characters gain only those."""
+        old = "- [ ] A one\n  - tests green\n- [ ] B two\n"
+        new = "- [x] A one\n  - tests green, and eight more\n- [x] B two\n  - tests green, 4\n"
+        self.all_tools(old, new, 2)                            # A gains enough; B gains ", 4" only
+
+    def test_a_stem_needs_three_characters(self):
+        """Impl round 1, Q6 (agy): a one- or two-character old line (`-`, `->`) is no stem to subtract."""
+        old = "->\n- [ ] A one\n- [ ] B two\n"
+        self.assertEqual(self.edit(old, "->\n- [x] A one\n  ->123456\n- [x] B two\n  - verify 9/9 green\n"), 0)
+
     def test_two_open_copies_of_one_title(self):
         """P1 (agy's Critical): a note under one copy of a title never counts for the other."""
         old = "- [ ] X\n  - a long note written while it was open\n- [ ] X\n- [ ] Y\n"
@@ -117,21 +138,33 @@ class TheGuardReadsTheNoteUnderTheTitle(GuardCase):
         new = "- [x] A one\n- [x] B two\n  - built a.py, three tests\n- [x] C three\n  - verify 9/9 green\n"
         self.assertEqual(self.write(old, new), 2)
 
-    def test_a_fenced_example_in_a_note_is_no_gate(self):
-        """P6 (codex): a checklist inside a code fence is an example, not a born-checked gate."""
+    def test_no_fence_hides_a_tick(self):
+        """Impl round 1, Q1 (grok's Critical; opus, sonnet, codex): a fence rule in the guard hid bare ticks the
+        counters still read — a 4-space, a tab or a backtick-info fence pair, and (opus) an Edit fragment that starts
+        at a CLOSING fence whose opener sits above it. The guard has no fence rule: every checkbox line is a gate."""
+        open3 = "- [ ] A one\n- [ ] B two\n- [ ] C three\n"
+        for name, opener, closer in (("four spaces", f"    {FENCE}", f"    {FENCE}"), ("a tab", f"\t{FENCE}", f"\t{FENCE}"),
+                                     ("backtick info", f"{FENCE}a`b", FENCE), ("column 0", FENCE, FENCE),
+                                     ("unclosed", FENCE, "")):
+            with self.subTest(fence=name):
+                self.all_tools(f"{opener}\n{open3}{closer}\n", f"{opener}\n- [x] A one\n- [x] B two\n- [x] C three\n{closer}\n", 2)
+        old = f"  {FENCE}\n- [ ] W2 two\n- [ ] W3 three\n"
+        new = f"  {FENCE}\n- [x] W2 two\n- [x] W3 three\n  {FENCE}\n  output\n  {FENCE}\n"
+        self.assertEqual(self.edit(old, new), 2)
+
+    def test_a_fenced_checkbox_in_a_note_over_blocks(self):
+        """The stated limit of Q1's fix: a fenced `- [x]` example inside a note is read as a born-checked gate — the
+        guard over-blocks there, it never under-blocks."""
         new = (f"- [x] A one\n  - the shape:\n  {FENCE}\n  - [x] an example line\n  {FENCE}\n"
                "- [x] B two\n  - verify 9/9 green\n")
-        self.all_tools(OPEN, new, 0)
-
-    def test_an_unclosed_fence_hides_no_tick(self):
-        """P6, the counters' polarity: an unclosed fence's lines stay live, so it can never hide a bare batch."""
-        self.all_tools(f"{FENCE}\n" + OPEN, f"{FENCE}\n- [x] A one\n- [x] B two\n", 2)
+        self.all_tools(OPEN, new, 2)
 
     def test_the_messages_say_under_the_title(self):
         code, out = self.run_guard("Edit", {"old_string": OPEN, "new_string": "- [x] A one\n- [x] B two\n"})
         self.assertEqual(code, 2)
         self.assertIn("lines under", out)
         self.assertIn("indented two spaces deeper", out)
+        self.assertIn("already has", out)                      # Q3: a line the file already has does not count
         self.assertNotIn("appended to the gate text", out)
         code, out = self.run_guard("Edit", {"old_string": OPEN, "new_string": "- [x] A one rewritten\n- [x] B 2\n"})
         self.assertEqual(code, 2)
@@ -176,6 +209,7 @@ class TheInstructionsSayUnderTheTitle(unittest.TestCase):
     def texts(self):
         from tasks import template
         yield "guide", template.guide_text()
+        yield "quick guide", template.guide_text("quick")
         yield "workflow_briefing", template.workflow_briefing()
         yield "agents_md_template", template.agents_md_template()
         yield "antigravity_md_template", template.antigravity_md_template()
