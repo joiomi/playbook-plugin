@@ -375,7 +375,8 @@ between. A full verify here is about 140 s.
   serves the next one. Each command's line prints as soon as it finishes.
 - Limits: git-ignored files, untracked `.agent` state and the task records the tests read, HEAD and the history, the environment, the
   clock and an edit made and undone during the run are outside the key; the journal is agent-writable like every
-  journal — the receipt names each reuse.
+  journal — the receipt names each reuse; so is its folder's permission: locked during a failing verify and unlocked
+  after, the old green comes back (the same limit, the owner's ruling).
 
 ## [1.6.3] — 2026-10-15
 
