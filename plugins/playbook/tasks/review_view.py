@@ -214,6 +214,10 @@ def availability(project: "Path | str", cfg: dict, task_file: "Path | str | None
             staged = _git(["ls-files", "-s", "-z"], path, binary=True).stdout
             if any(x.startswith(b"160000 ") for x in staged.split(b"\0")):
                 return f"{label} holds a submodule"
+            if _git(["rev-parse", "-q", "--verify", "HEAD"], path, check=False).returncode != 0:
+                return f"{label} has no commit yet — a copy is sealed to a commit"     # impl round 2 (sonnet)
+            if _git(["ls-files", "-u"], path, check=False).stdout.strip():
+                return f"{label} has unmerged entries — finish the merge or rebase first"
             inner = _inner_roots(name, list(scopes))
             for n in _listed(path):
                 if _nested(n, inner):
@@ -232,8 +236,12 @@ def availability(project: "Path | str", cfg: dict, task_file: "Path | str | None
             return f"{files} listed files is over the copy's cap of {MAX_FILES}"
         if size > MAX_BYTES:
             return f"{size} bytes of listed files is over the copy's cap of {MAX_BYTES}"
-        if len(ignored_entries(scopes)) > MAX_LIVE_BINDS:
+        live = ignored_entries(scopes)
+        if len(live) > MAX_LIVE_BINDS:
             return f"more than {MAX_LIVE_BINDS} ignored entries to show live"
+        roots = [_norm(n) for n in scopes if _norm(n)]
+        if any(x in roots or any(r.startswith(x + "/") for r in roots) for x in live):
+            return "an ignored entry overlaps a code root"          # impl round 2 (agy): said first, not refused
         if task_file is not None:
             try:
                 rel_tf = Path(task_file).resolve().relative_to(real)
@@ -343,7 +351,7 @@ class View:
     def __init__(self, root: Path, project: Path, lock_fd: int, lock_path: Path, live_binds: "list[str]",
                  vd: Path, scope_names: "list[str] | None" = None, agent_live: "list[str] | None" = None):
         self.root = root
-        self.project = project
+        self.project = Path(project).resolve()      # impl round 2 (agy, sonnet): the sandbox compares resolved paths
         self.lock_fd = lock_fd
         self.lock_path = lock_path
         self.live_binds = live_binds
@@ -359,8 +367,10 @@ class View:
         return bool(fingerprint) and tree_state_fingerprint(self.root, cfg=cfg) == fingerprint
 
     def sealed(self, fingerprint: str, cfg: dict, trees: "dict[str, str]", heads: "dict[str, str] | None",
-               exclude: "list[str]") -> bool:
+               exclude: "list[str]", snapshot: "dict | None" = None) -> bool:
         if not self.matches(fingerprint, cfg):
+            return False
+        if snapshot is not None and not self._snapshot_is_mine(snapshot, fingerprint):
             return False
         from tasks.post_d6 import worktree_tree
         if trees and {_norm(n) for n in trees} != {_norm(n) for n in self.scope_names}:
@@ -374,28 +384,65 @@ class View:
                 return False
         return True
 
+    def _snapshot_is_mine(self, snapshot: dict, fingerprint: str) -> bool:
+        """Does the recorded snapshot describe THIS copy — each scope's commit, base and dirty map? (impl round 2,
+        codex: an A→B→A while the snapshot was taken left a dirty map of B under a copy of A, and tail certification
+        later let B's code through)."""
+        from tasks.core import build_panel_snapshot
+        mine = build_panel_snapshot(self.root, fingerprint)
+        if mine is None:
+            return False
+
+        def key(sn):
+            return {_norm(k): ((v or {}).get("commit"), (v or {}).get("base"), (v or {}).get("dirty"))
+                    for k, v in (sn.get("scopes") or {}).items()}
+        return key(mine) == key(snapshot)
+
+    def freeze(self) -> None:
+        """Make the sealed copy read-only on disk (impl round 2, grok/opus: it lives inside the tree the agent is told
+        it may write; a write there would be what the judges read). `remove` makes it writable again to delete it."""
+        for dirpath, dirnames, filenames in os.walk(self.root, topdown=False):
+            for name in filenames + dirnames:
+                full = os.path.join(dirpath, name)
+                try:
+                    st = os.lstat(full)
+                    if not stat.S_ISLNK(st.st_mode):
+                        os.chmod(full, stat.S_IMODE(st.st_mode) & ~0o222)
+                except OSError:
+                    pass
+        try:
+            os.chmod(self.root, stat.S_IMODE(os.lstat(self.root).st_mode) & ~0o222)
+        except OSError:
+            pass
+
     def sandbox_view(self):
         from provider import sandbox as _sb
         return _sb.ProjectView(root=str(self.root),
                                live=tuple(str(self.project / rel) for rel in self.live_binds),
-                               agent_live=tuple(str(self.project.resolve() / rel) for rel in self.agent_live),
-                               hide=(str(self._vd.resolve()),))
+                               agent_live=tuple(str(self.project / rel) for rel in self.agent_live),
+                               hide=tuple(sorted({str(self._vd.resolve())} | {
+                                   str(x.resolve()) for x in (self.project / ".agent").glob(
+                                       f"*/journal/{VIEWS_DIRNAME}") if x.is_dir() and not x.is_symlink()} | {
+                                   str(x.resolve()) for x in [self.project / ".agent" / "journal" / VIEWS_DIRNAME]
+                                   if x.is_dir() and not x.is_symlink()})))
 
     def remove(self) -> None:
         try:
             if self.root.exists():
                 _remove_tree(self._vd, self.root)
         finally:
+            # the lock file goes while its flock is still held (impl round 2, codex: closed first, a sweeper took the
+            # inode and later deleted a retry's live copy by name)
+            try:
+                self.lock_path.unlink()
+            except OSError:
+                pass
             if self.lock_fd >= 0:
                 try:
                     os.close(self.lock_fd)
                 except OSError:
                     pass
                 self.lock_fd = -1
-            try:
-                self.lock_path.unlink()
-            except OSError:
-                pass
 
 
 def _remove_tree(base: "Path | str", target: "Path | str", task_file: "Path | str | None" = None) -> None:
@@ -485,7 +532,7 @@ def sweep(project: "Path | str", task_file: "Path | str | None" = None) -> int:
 
 def make(project: "Path | str", cfg: dict, *, run_id: str, fingerprint: str, trees: "dict[str, str]",
          heads: "dict[str, str] | None" = None, task_file: "Path | str | None" = None,
-         exclude: "list[str] | None" = None, attempts: int = 0) -> View:
+         exclude: "list[str] | None" = None, attempts: int = 0, snapshot: "dict | None" = None) -> View:
     """Make, seal and lock a copy (see the module docstring). `Unavailable` when it cannot be made, `Moved` when the
     tree kept changing. Nothing is left behind on either."""
     from tasks.core import _fingerprint_exclude_pathspecs
@@ -529,7 +576,8 @@ def make(project: "Path | str", cfg: dict, *, run_id: str, fingerprint: str, tre
             binds = _make_mountpoints(project, root, live)
             view = View(root, project, fd, lock_path, binds, vd, scope_names=names,
                         agent_live=agent_ignored(project))
-            if view.sealed(fingerprint, cfg, trees, heads, exclude):
+            if view.sealed(fingerprint, cfg, trees, heads, exclude, snapshot=snapshot):
+                view.freeze()
                 return view
             cause = "the copy is not the recorded tree"
         except (OSError, subprocess.SubprocessError, Unavailable) as e:
@@ -550,10 +598,10 @@ def _discard(view: "View | None", root: Path, fd: int, lock_path: Path, vd: Path
     except (OSError, ValueError):
         pass
     try:
-        os.close(fd)
+        lock_path.unlink()
     except OSError:
         pass
     try:
-        lock_path.unlink()
+        os.close(fd)
     except OSError:
         pass

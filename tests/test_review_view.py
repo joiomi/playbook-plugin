@@ -326,6 +326,7 @@ class FingerprintTakesTheLiveConfig(unittest.TestCase):
     def test_cfg_parameter(self):
         d = _project(self)
         view, fp = _make(self, d)
+        os.chmod(view.root / ".agent", 0o700)                # the sealed copy is read-only on disk (round 2)
         (view.root / ".agent" / "config.json").unlink()      # as if the config were ignored, bound live
         self.assertEqual(C.tree_state_fingerprint(view.root, cfg=_cfg(d)), fp)
         self.assertNotEqual(C.tree_state_fingerprint(view.root), fp)
@@ -618,6 +619,124 @@ class ImplRoundOneRealBubblewrap(unittest.TestCase):
         self.assertNotIn("NEW TASK", out)
 
 
+class ImplRoundTwo(unittest.TestCase):
+    """Task 231's impl panel round 2, red first."""
+
+    def test_r2_1_the_sealed_copy_is_read_only_on_disk(self):
+        d = _project(self)
+        view, _fp = _make(self, d)
+        with self.assertRaises(PermissionError):
+            (view.root / "src" / "a.py").write_text("x\n", encoding="utf-8")
+        with self.assertRaises(PermissionError):
+            (view.root / "src" / "planted.py").write_text("x\n", encoding="utf-8")
+
+    def test_r2_3_an_unborn_head_or_an_unmerged_index_reads_live(self):
+        root = Path(tempfile.mkdtemp(prefix="rv-unborn-"))
+        self.addCleanup(shutil.rmtree, root, True)
+        d = _init(root / "p")
+        (d / ".gitignore").write_text(".agent/journal/\n", encoding="utf-8")
+        (d / ".agent").mkdir()
+        (d / "a.py").write_text("a\n", encoding="utf-8")
+        with mock.patch.object(S, "view_mount_available", return_value=(True, "")):
+            self.assertIn("commit", _rv().availability(d, {}))
+
+    def test_r2_4_an_ignored_entry_over_a_code_root_reads_live(self):
+        d = _project(self)
+        with open(d / ".gitignore", "a", encoding="utf-8") as f:
+            f.write("deps/app/\n")
+        app = _init(d / "deps" / "app")
+        (app / "x.py").write_text("x\n", encoding="utf-8")
+        _git("add", "-A", cwd=app)
+        _git("commit", "-qm", "app", cwd=app)
+        (d / ".agent" / "config.json").write_text(json.dumps({"code_roots": ["sub", "deps/app"]}), encoding="utf-8")
+        rv = _rv()
+        with mock.patch.object(rv, "ignored_entries", return_value=["deps"]), \
+             mock.patch.object(S, "view_mount_available", return_value=(True, "")):
+            self.assertIn("overlap", rv.availability(d, _cfg(d)))
+
+    def test_r2_5_a_linked_project_path_keeps_its_live_binds(self):
+        d = _project(self)
+        link = d.parent / "linked-proj"
+        os.symlink(d, link)
+        view, _fp = _make(self, link)
+        pv = view.sandbox_view()
+        self.assertTrue(all(x.startswith(str(d.resolve())) for x in pv.live), pv.live)
+        argv = S.build_bwrap_argv(link, None, ["true"], None, project_writable=False, project_view=pv,
+                                  bwrap_exe="/usr/bin/bwrap")
+        self.assertIn(str(d.resolve()) + "/.venv", argv)
+
+    def test_r2_6_a_folder_removed_live_still_shows_the_copys_content(self):
+        d = _project(self)
+        view, _fp = _make(self, d)
+        shutil.rmtree(d / ".agent" / "tasks")
+        argv = S.build_bwrap_argv(d, None, ["true"], None, project_writable=False,
+                                  project_view=view.sandbox_view(), bwrap_exe="/usr/bin/bwrap")
+        self.assertIn(str(view.root / ".agent" / "tasks" / "042-demo"), argv)
+
+    def test_r2_7_a_snapshot_whose_dirty_map_is_not_the_copys_is_refused(self):
+        d = _project(self)
+        rv = _rv()
+        fp = C.tree_state_fingerprint(d)
+        snap = C.build_panel_snapshot(d, fp)
+        trees = {k: v["base"] for k, v in snap["scopes"].items()}
+        heads = {k: v["commit"] for k, v in snap["scopes"].items()}
+        forged = json.loads(json.dumps(snap))
+        dirty = forged["scopes"][""]["dirty"]
+        k = sorted(dirty)[0]
+        dirty[k] = "0" * len(str(dirty[k]))          # a token captured at another state (A→B→A)
+        with self.assertRaises(rv.Moved):
+            rv.make(d, _cfg(d), run_id="r27", fingerprint=fp, trees=trees, heads=heads, snapshot=forged)
+
+    def test_r2_9_the_projects_parents_under_a_writable_place_are_pinned(self):
+        d = _project(self)
+        view, _fp = _make(self, d)
+        argv = S.build_bwrap_argv(d, None, ["true"], None, project_writable=False,
+                                  project_view=view.sandbox_view(), bwrap_exe="/usr/bin/bwrap")
+        parent = str(d.resolve().parent)
+        pairs = [(argv[i + 1], argv[i + 2]) for i, a in enumerate(argv) if a == "--bind" and i + 2 < len(argv)]
+        self.assertIn((parent, parent), pairs, "the folder holding the live project can be renamed from inside")
+
+    def test_r2_10_each_attempt_has_its_own_name_and_the_lock_goes_before_its_fd(self):
+        d = _project(self)
+        rv = _rv()
+        fp, trees, heads = _snapshot_trees(d)
+        view = rv.make(d, _cfg(d), run_id="r210-a1", fingerprint=fp, trees=trees, heads=heads, attempts=1)
+        seen = []
+        real_close = os.close
+
+        def close(fd):
+            if fd == view.lock_fd:
+                seen.append(view.lock_path.exists())
+            return real_close(fd)
+
+        with mock.patch.object(rv.os, "close", close):
+            view.remove()
+        self.assertEqual(seen, [False], "the lock file outlived its fd")
+
+    def test_r2_minor_every_lanes_copies_folder_is_hidden(self):
+        d = _project(self)
+        other = d / ".agent" / "bob" / "journal" / "review-views"
+        other.mkdir(parents=True)
+        view, _fp = _make(self, d)
+        self.assertIn(str(other.resolve()), view.sandbox_view().hide)
+
+
+@unittest.skipUnless(_mountable(), "no copy can be mounted here")
+class ImplRoundTwoRealBubblewrap(unittest.TestCase):
+    def test_r2_9_the_folder_holding_the_project_cannot_be_moved(self):
+        d = _project(self)
+        view, _fp = _make(self, d)
+        parent = d.resolve().parent
+        cmd = f"mv {parent} {parent}.moved 2>&1 && echo MOVED || echo REFUSED"
+        with mock.patch.object(S, "_compose_agent_argv", lambda agent, args: [agent, *args]):
+            argv, _c = S._launch_plan("bash", ["-c", cmd], d.resolve(), None, False,
+                                      project_view=view.sandbox_view())
+        out = subprocess.run(argv, cwd=str(d), capture_output=True, text=True, timeout=60)
+        if Path(str(parent) + ".moved").exists():
+            os.rename(str(parent) + ".moved", parent)
+        self.assertIn("REFUSED", out.stdout + out.stderr)
+
+
 class _PanelHarness:
     def _models(self, d):
         (d / ".agent" / "models.json").write_text(
@@ -702,6 +821,45 @@ class PanelReadsACopy(unittest.TestCase, _PanelHarness):
             log = self._run(d, judge, ["042", "--mode", "impl", "--models", "claude:opus"])
         self.assertFalse((d / ".agent" / "tasks" / "042-demo" / "judge.md").exists(), "a round of a changed copy was saved")
         self.assertIn("copy", log.lower())
+
+    def test_critical_the_quorum_and_config_are_read_before_the_ready_line(self):
+        d = self.d
+
+        def judge(adapter, *a, **kw):
+            (d / ".agent" / "config.json").write_text(json.dumps({"code_roots": ["sub"], "panel_quorum": 1}),
+                                                      encoding="utf-8")
+            return "(error: seat down)" if kw.get("model") == "sonnet" else "1. **Note** — fine.\n"
+
+        log = self._run(d, judge, ["042", "--mode", "impl", "--models", "claude:opus,claude:sonnet"])
+        text = (d / ".agent" / "tasks" / "042-demo" / "judge.md").read_text(encoding="utf-8")
+        self.assertIn("**PANEL VERDICT: FAIL**", text, "a config written after the ready line decided the verdict")
+
+    def test_r2_2_a_seal_that_fails_without_movement_reads_live_not_refused(self):
+        d = self.d
+        rv = _rv()
+        seen = []
+
+        def judge(adapter, *a, **kw):
+            seen.append(kw.get("project_view"))
+            return "1. **Note** — fine.\n"
+
+        with mock.patch.object(rv.View, "sealed", lambda *a, **kw: False):
+            log = self._run(d, judge, ["042", "--mode", "impl", "--models", "claude:opus"])
+        self.assertEqual(seen, [None], "a structural seal failure refused the review (or still used a copy)")
+        self.assertIn("LIVE tree", log)
+        self.assertNotIn("Refused", log)
+
+    def test_the_ready_line_comes_after_every_refusal(self):
+        d = self.d
+        log = self._run(d, lambda adapter, *a, **kw: "1. **Note** — fine.\n",
+                        ["042", "--mode", "impl", "--models", "claude:opus,claude:sonnet,claude:haiku-x"])
+        lines = log.splitlines()
+        ready = [i for i, l in enumerate(lines) if "ready: you may write" in l]
+        spawn = [i for i, l in enumerate(lines) if "] done" in l]
+        if ready and spawn:
+            self.assertLess(max(ready), min(spawn))
+        self.assertTrue(ready, log[-1500:])
+        self.assertIn("ignored files stay live", lines[ready[0]])
 
     def test_a_records_edit_during_the_panel_leaves_the_close_fresh(self):
         d = self.d
@@ -846,6 +1004,16 @@ class SingleJudgeReadsACopy(unittest.TestCase, _PanelHarness):
         self.assertEqual(seen, [], "a judge ran with a reviewed snapshot of another state")
         self.assertIn("Refused", log)
 
+    def test_r2_8_an_absolute_link_into_the_project_resolves_in_the_copy(self):
+        d = self.d
+        os.unlink(d / "link.py")
+        os.symlink(str((d / "docs" / "x.md").resolve()), d / "link.py")       # the delta retargets link.py
+        seen, log = self._single(
+            "**Important** [PRE-EXISTING] [file: docs/x.md] — older than the panel.\n\nCAP: 1/5 reported, exhausted\n",
+            lambda: None)
+        self.assertTrue(seen and seen[0] is not None, log[-2000:])
+        self.assertIn("POST-D6 VERDICT: FAIL", log, "the delta's link target was lost by a host-path resolution")
+
     def test_a_file_field_resolves_in_the_copy_not_the_live_tree(self):
         d = self.d
 
@@ -889,7 +1057,9 @@ class ATreeThatKeepsMoving(unittest.TestCase, _PanelHarness):
 
 @unittest.skipUnless(_mountable(), "no copy can be mounted here")
 class ACopyThatCannotBeMade(unittest.TestCase, _PanelHarness):
-    def test_is_refused_not_read_live(self):
+    def test_without_movement_it_reads_live_and_says_so_first(self):
+        """Round 1 (G6) refused every failure; round 2 (opus) showed that refuses some projects for good. A failure
+        while the live tree did not move is structural: no ready line was printed, so the live review is safe."""
         d = _project(self)
         self._models(d)
         rv = _rv()
@@ -901,8 +1071,29 @@ class ACopyThatCannotBeMade(unittest.TestCase, _PanelHarness):
 
         with mock.patch.object(rv, "make", side_effect=rv.Unavailable("disk full")):
             log = self._run(d, judge, ["042", "--mode", "impl", "--models", "claude:opus"])
-        self.assertEqual(called, [], "a judge ran after the copy failed")
-        self.assertNotIn("LIVE tree", log)
+        self.assertEqual(called, [None])
+        self.assertIn("LIVE tree", log)
+        self.assertIn("disk full", log)
+        self.assertNotIn("ready: you may write", log)
+
+    def test_with_movement_it_is_refused(self):
+        d = _project(self)
+        self._models(d)
+        rv = _rv()
+        called, n = [], []
+
+        def failing(*a, **kw):
+            n.append(1)
+            (d / "src" / "a.py").write_text(f"a = {50 + len(n)}\n", encoding="utf-8")
+            raise rv.Unavailable("disk full")
+
+        def judge(adapter, *a, **kw):
+            called.append(1)
+            return "1. **Note** — fine.\n"
+
+        with mock.patch.object(rv, "make", failing):
+            log = self._run(d, judge, ["042", "--mode", "impl", "--models", "claude:opus"])
+        self.assertEqual(called, [])
         self.assertIn("Refused", log)
 
 

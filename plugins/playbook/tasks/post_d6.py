@@ -267,14 +267,27 @@ def _field_path(raw: str) -> str:
     return v
 
 
-def real_path(project_path, rel: str) -> str:
+def real_path(project_path, rel: str, alias: "tuple[str, str] | None" = None) -> str:
     """`rel`'s path from the project's real root when it names an existing regular
     file, links resolved (task 201, impl round 1: a spelling or a link must not hide
     a file the delta changed) — "" for anything else, a path that resolves out of
-    the project included."""
+    the project included.
+
+    `alias` (task 231, impl round 2 — codex): `(live project, copy)` when `project_path` is a review's copy mounted at
+    the live path — a link that names an absolute path in the live project is followed into the copy, as the judge
+    read it, instead of out of the copy."""
     try:
         root = os.path.realpath(str(project_path))
         full = os.path.realpath(os.path.join(root, rel))
+        if alias is not None:
+            live, copy = os.path.realpath(alias[0]), os.path.realpath(alias[1])
+            for _ in range(16):
+                if full == live or full.startswith(live + os.sep):
+                    if full.startswith(copy + os.sep) or full == copy:
+                        break
+                    full = os.path.realpath(copy + full[len(live):])
+                else:
+                    break
         if not os.path.isfile(full):
             return ""
         out = os.path.relpath(full, root)

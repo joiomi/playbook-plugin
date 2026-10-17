@@ -506,6 +506,7 @@ def _open_review_view(project_path, task_file, *, run_id: str, task_num: str = "
     last = None
     for _attempt in range(_rv.COPY_ATTEMPTS):
         exclude = None
+        fp, at_copy = "", False
         try:
             if expected is not None:
                 got = expected()
@@ -519,21 +520,42 @@ def _open_review_view(project_path, task_file, *, run_id: str, task_num: str = "
                 heads = {k: (v or {}).get("commit") for k, v in scopes.items()}
             if not fp or snap is None or not trees or not all(trees.values()):
                 raise _rv.Moved("the tree could not be fingerprinted and snapshotted")
-            view = _rv.make(project_path, cfg, run_id=run_id, fingerprint=fp, trees=trees, heads=heads,
-                            task_file=task_file, exclude=exclude if exclude is not None else snap.get("exclude"),
-                            attempts=1)
+            at_copy = True
+            view = _rv.make(project_path, cfg, run_id=f"{run_id}-a{_attempt}", fingerprint=fp, trees=trees,
+                            heads=heads, task_file=task_file,
+                            exclude=exclude if exclude is not None else snap.get("exclude"), attempts=1, snapshot=snap)
         except (_rv.Moved, _rv.Unavailable) as e:
             last = e
+            # impl round 2 (opus): a seal that fails while the live tree did NOT move is structural (line endings a
+            # copy reads differently, an unreadable file) — refusing would refuse every review for good. No ready
+            # line has been printed, so the agent is still waiting: read the live tree, saying why.
+            if not at_copy:
+                continue        # the stamp, the snapshot or the post-panel delta's checks: the tree moved
+            try:
+                still = bool(fp) and tree_state_fingerprint(project_path) == fp
+            except Exception:   # noqa: BLE001
+                still = False
+            if still:
+                _live_review_line(f"its copy could not be sealed although the tree did not move ({e})")
+                return None, "", None, cfg
             continue
         _REVIEW_VIEWS.append(view)
-        own = f" except task {task_num}'s task.md and judge.md" if task_num else ""
-        bind = (" Its PASS binds the tree it reads: a code change made meanwhile is outside it."
-                if expected is not None else "")
-        print(f"  Judges read a fixed copy of the tree ({view.root}) — ready: you may write the live tree "
-              f"now{own}; what you change from here on is after this review.{bind}", flush=True)
         return view, fp, snap, cfg
     print(f"  Refused: {last} Nothing was spent.", file=sys.stderr, flush=True)
     sys.exit(2)
+
+
+def _print_ready(view, task_num: str = "", post_panel: bool = False) -> None:
+    """The ready line — printed right before the judges start, once everything the review reads from the live tree
+    (the config, the quorum, the prompt, the chat log) has been read (impl round 2: grok's Critical — the quorum was
+    read live after it)."""
+    if view is None:
+        return
+    own = f" except task {task_num}'s task.md and judge.md" if task_num else ""
+    bind = " Its PASS binds the tree it reads: a code change made meanwhile is outside it." if post_panel else ""
+    print(f"  Judges read a fixed copy of the tree ({view.root}) — ready: you may write the live tree now{own} "
+          f"(never under {view.root.parent}); what you change from here on is after this review; ignored files "
+          f"stay live.{bind}", flush=True)
 
 
 def _round_tree_stamp(project_path: Path, fp_before: str) -> "tuple[str, str]":
@@ -2028,6 +2050,7 @@ def _cmd_panel_review(cmd_args):
     # records no spend — consistent with the single/tail-cert paths.
     _spend_round = _next_review_round(project_path, task_file)
     _spend_pending = []
+    _print_ready(_view, task_num)
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(judges)) as executor:
         futures = {executor.submit(run_judge, j): j for j in judges}
         for future in concurrent.futures.as_completed(futures):
@@ -2107,7 +2130,7 @@ def _cmd_panel_review(cmd_args):
     # exit non-zero below it (at the end, after all diagnostics print). The
     # tamper hard-stop below still wins — a mutated tree fails regardless of
     # how many judges succeeded.
-    panel_quorum = resolve_panel_quorum(project_path, requested_seats)
+    panel_quorum = _need      # task 231: read before the ready line — the live config may change after it
     panel_passed = succeeded >= panel_quorum
     verdict_reason = (
         f"{succeeded}/{len(results)} judges succeeded, quorum {panel_quorum}"
@@ -3314,6 +3337,7 @@ def _cmd_single_review(cmd, cmd_args):
     # impl-review across every backend (task 038).
     _print_background_advisory(review_timeout)
 
+    _print_ready(_view, task_num, post_panel=_pd6_round is not None and bool(_pd6_delta))
     # Spend record (task 042): bracket the judge subprocess. Only one backend
     # branch runs, so a single start stamp here measures whichever dispatch
     # fires. The seat spec + round are fixed for this single-judge invocation.
@@ -3839,7 +3863,10 @@ def _cmd_single_review(cmd, cmd_args):
         # path (task 201, #6; impl round 1: a spelling or a link names the file it reaches)
         _v = _pd6.parse_verdict(saved_review_text,
                                 delta_files=(_pd6_files or _pd6.delta_files(_pd6_delta)) if _pd6_delta else None,
-                                exists=lambda _rel: _pd6.real_path(_ctx_root, _rel))   # task 231: P16
+                                exists=lambda _rel: _pd6.real_path(
+                                    _ctx_root, _rel,
+                                    alias=((str(Path(project_path).resolve()), str(_ctx_root))
+                                           if _view is not None else None)))   # task 231: P16, impl round 2
         print("\n" + _pd6.verdict_line(_v), flush=True)
         try:
             _pd6.finish_run(task_file.parent, _pd6_rid, {

@@ -562,7 +562,9 @@ def _bwrap_record_masks(project_dir: Path | str, hidden: "list[str] | None" = No
             entries = sorted(os.scandir(real), key=lambda e: e.name)
         except OSError:
             hide(real)
-            return []
+            if source_root is None:
+                return []
+            entries = []        # impl round 2 (agy): a folder removed live still shows the copy's entries
         copy_dir = from_copy(str(real))
         if copy_dir is not None and os.path.isdir(copy_dir) and not os.path.islink(copy_dir):
             # an entry only the copy holds (removed live after the copy was sealed) is the copy's
@@ -976,7 +978,9 @@ def build_bwrap_argv(
     # below: a bind laid over a directory hides what was laid inside it earlier.
     protected = git_binds + kept
     pins: "dict[str, str]" = {}
-    for place in protected:
+    # task 231 impl round 2 (codex, measured): with a copy the project's own git places are dropped, and with them the
+    # pins they gave — a judge renamed the folder holding the live project under /tmp. The project pins its own way up.
+    for place in protected + ([project] if view_root is not None else []):
         # The governing bind is insufficient: /tmp (or a home bind) still lets
         # an ancestor ABOVE the project be moved aside. Use the outermost layer.
         covering = [w for w, writable in layers if writable and _covers(w, Path(place))]
