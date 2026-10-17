@@ -538,12 +538,14 @@ def check_mindmap_dangling_links(project_path) -> "dict | None":
 
 def check_rulings_append_only(project_path) -> "dict | None":
     """Task 227: the project's owner rulings list (`.agent/rulings.md`) is append-only — `tasks ruling` only adds at
-    the end, so each committed version is a byte prefix of the next. Walks the list's history: for every commit that
-    touched it, its first parent's version must be a prefix of its own (a commit that deleted it is named) — a merge
-    too: two branches that each added a ruling are resolved by keeping this branch's entries as they are and adding the
-    other branch's after them, renumbered, which keeps the first parent's text a prefix; HEAD's version must be a prefix
-    of the working file; a list tracked at HEAD and gone is a finding; a list that does not parse is a finding. An
-    untracked or staged-only list has nothing to compare and is clean; no list and no history of one → None (not
+    the end, so each committed version is a byte prefix of the next. Walks the list's history with `--full-history`
+    (git's default simplification hides a merge resolved with one side's list — impl round 1):
+    - each commit's version must start with its first parent's (a commit that deleted the list is named);
+    - each commit must keep every ruling each parent had, and keep ended what a parent ended — so a merge is resolved
+      by keeping this branch's entries as they are and adding the other branch's after them, renumbered;
+    - HEAD's version must be a prefix of the working file; a list tracked at HEAD and gone is a finding;
+    - a history git cannot read, and a list that does not parse, are findings.
+    An untracked or staged-only list has nothing to compare and is clean; no list and no history of one → None (not
     applicable, like the map checks with no map)."""
     from tasks import rulings as _r
     project_path = Path(project_path)
@@ -556,20 +558,44 @@ def check_rulings_append_only(project_path) -> "dict | None":
         return subprocess.run(["git", "--no-replace-objects", *args], cwd=project_path, capture_output=True, timeout=60)
 
     def blob(rev):
-        r = git("cat-file", "blob", f"{rev}:{rel}")
+        r = git("cat-file", "blob", f"{rev}:./{rel}")       # ./ = the project's path, not the repository top's
         return r.stdout if r.returncode == 0 else None
 
-    if git("rev-parse", "--is-inside-work-tree").returncode == 0:
-        log = git("log", "--format=%H %s", "--", rel)
+    def keys(raw):
+        rs = _r.parse(raw.decode("utf-8"))
+        return ({(x.date, x.words, x.holds, x.about) for x in rs},
+                {(x.date, x.words, x.holds, x.about) for x in rs if x.ended})
+
+    if git("rev-parse", "--verify", "-q", "HEAD").returncode == 0:      # a repository with commits
+        log = git("log", "--full-history", "--format=%H %P%x09%s", "--", rel)
+        if log.returncode != 0:
+            findings.append("git cannot read the list's history: "
+                            + log.stderr.decode("utf-8", errors="replace").strip()[:200])
         for line in log.stdout.decode("utf-8", errors="replace").splitlines():
             seen = True
-            sha, _, subject = line.partition(" ")
-            cur, parent = blob(sha), blob(f"{sha}^") or b""
+            ids, _, subject = line.partition("\t")
+            sha, *parents = ids.split()
+            cur = blob(sha)
+            first = (blob(parents[0]) if parents else None) or b""
             if cur is None:
                 findings.append(f"commit {sha[:12]} ({subject[:60]}) deleted the list")
-            elif not cur.startswith(parent):
+                continue
+            if not cur.startswith(first):
                 findings.append(f"commit {sha[:12]} ({subject[:60]}): an entry was changed or removed by hand — each "
                                 f"version of the list must be the start of the next")
+            for other in parents:
+                theirs = blob(other)
+                if not theirs:
+                    continue
+                try:
+                    (mine_all, mine_ended), (their_all, their_ended) = keys(cur), keys(theirs)
+                except (_r.RulingsError, UnicodeDecodeError) as e:
+                    findings.append(f"commit {sha[:12]} ({subject[:60]}): a list cannot be read ({e})")
+                    continue
+                for k in sorted(their_all - mine_all):
+                    findings.append(f"commit {sha[:12]} ({subject[:60]}) drops the ruling {k[1][:80]} its parent {other[:12]} had")
+                for k in sorted((their_ended & mine_all) - mine_ended):
+                    findings.append(f"commit {sha[:12]} ({subject[:60]}) reopens the ruling {k[1][:80]} its parent {other[:12]} ended")
         head = blob("HEAD")
         if head is not None:
             try:

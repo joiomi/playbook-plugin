@@ -134,7 +134,8 @@ def _project_rulings_part(project: "Path | None", cap: int = PROJECT_CAP) -> "li
         force = _r.in_force(_r.read(project))
     except _r.RulingsError as e:
         try:
-            raw = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            # never a link's target (impl round 1: it would reach every judge); LF lines only
+            raw = [] if path.is_symlink() else path.read_text(encoding="utf-8", errors="replace").split("\n")
         except OSError:
             raw = []
         out = [f"Project rulings (`.agent/rulings.md`) — the list cannot be read ({e}); its text, unparsed:"]
@@ -191,7 +192,7 @@ def settled_block(task_file: "Path | None", cap: int = SETTLED_CAP, *, project_p
                   *rejects, ""]
     block = "\n".join(parts).rstrip() + "\n"
     if len(block) > cap:
-        lines = block.splitlines()
+        lines = block.split("\n")                     # LF only: a U+001C inside a ruling is no line end (round 1)
         kept, used = [], 0
         room = cap - 80                                   # the notice's own line
         for ln in lines:

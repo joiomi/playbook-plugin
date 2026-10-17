@@ -142,6 +142,49 @@ class AddEndList(Project):
         self.add(WORDS1)                         # ended, so the same words may be ruled again
         self.assertIn("## R2\n", self.list.read_text(encoding="utf-8"))
 
+    def test_round1_refusals(self):
+        """Impl round 1: an entry line over the cap (opus, grok — `About` was uncapped), separators the block's cut
+        would split (codex), a lone `--` ends the options (sonnet)."""
+        self.add(WORDS1)
+        before = self.list.read_bytes()
+        for args in (("add", "--permanent", "--about", "a" * 2500, WORDS2),
+                     ("add", "--until", "u" * 2500, WORDS2),
+                     ("add", "--permanent", "a\x1cb"), ("add", "--permanent", "a\x1db"), ("add", "--permanent", "a\x1eb")):
+            r = self.cli("ruling", *args)
+            with self.subTest(args=[a[:20] for a in args]):
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+                self.assertEqual(self.list.read_bytes(), before)
+        r = self.cli("ruling", "add", "--permanent", "--", "--strange words")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("- Words: --strange words\n", self.list.read_text(encoding="utf-8"))
+
+    def test_a_list_with_empty_words_or_a_link_is_refused(self):
+        """Impl round 1 (agy, opus): `parse` refuses blank words or notes; a linked list is never read (its target
+        would reach outside judges)."""
+        self.add(WORDS1)
+        text = self.list.read_text(encoding="utf-8")
+        self.list.write_text(text.replace(f"- Words: {WORDS1}", "- Words:  "), encoding="utf-8")
+        self.assertEqual(self.cli("ruling", "list").returncode, 1)
+        secret = self.d / "elsewhere.md"                  # a valid list: only the link refusal keeps it out
+        secret.write_text(text.replace(WORDS1, '"SECRET-TOKEN"'), encoding="utf-8")
+        self.list.unlink()
+        self.list.symlink_to(secret)
+        r = self.cli("ruling", "list")
+        self.assertEqual(r.returncode, 1)
+        self.assertNotIn("SECRET-TOKEN", post_d6.settled_block(self.task))
+
+    @unittest.skipIf(os.geteuid() == 0, "root writes anywhere")
+    def test_a_write_that_fails_is_a_refusal_not_a_traceback(self):
+        """Impl round 1 (sonnet): an OSError from the write is the usual `Error: … unchanged`, exit 1."""
+        self.add(WORDS1)
+        agent = self.d / ".agent"
+        agent.chmod(0o555)
+        self.addCleanup(agent.chmod, 0o755)
+        r = self.cli("ruling", "add", "--permanent", WORDS2)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("unchanged", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+
     def test_r10_is_not_r1(self):
         for i in range(1, 11):
             self.add(f'"rule {i}"')
@@ -165,7 +208,8 @@ class AddEndList(Project):
                                   cwd=self.d, env=self.env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                  for i in range(6)]
         for p in procs:
-            self.assertEqual(p.wait(timeout=120), 0, p.stderr.read())
+            _out, err = p.communicate(timeout=120)
+            self.assertEqual(p.returncode, 0, err)
         text = self.list.read_text(encoding="utf-8")
         for i in range(6):
             self.assertIn(f'"race {i}"', text)
@@ -232,6 +276,14 @@ class EveryJudgeGetsTheRulingsInForce(Project):
         for ln in block.splitlines():
             if "ruling number" in ln:
                 self.assertTrue(ln.rstrip().endswith('w"'), ln[-40:])     # never a cut entry
+
+    def test_the_cut_splits_on_lf_only(self):
+        """Impl round 1 (codex): a task ruling holding U+001C stays one line through the 8,000 cut."""
+        odd = "- 2026-10-17: \"keep\x1cthis together\"\n"
+        self.task.write_text(TASK + odd + "".join(f"- 2026-10-17: \"filler {i} " + "f" * 150 + "\"\n"
+                                                    for i in range(80)), encoding="utf-8")
+        block = post_d6.settled_block(self.task)
+        self.assertIn("keep\x1cthis together", block)
 
     def test_the_final_cut_is_on_a_line_and_named(self):
         self.add(WORDS1)
@@ -356,6 +408,75 @@ class TheAuditCatchesAHandEdit(Project):
         r = self.audit()
         self.assertEqual(r["status"], "findings", r)
         self.assertIn("merge side, renumbering ours", r["output"])
+
+    def _two_sided(self):
+        self.add(WORDS1)
+        self.commit("R1")
+        main = self.git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+        self.git("checkout", "-qb", "side")
+        self.add('"side words"')
+        self.commit("side R2")
+        self.git("checkout", "-q", main)
+        self.add('"main words"')
+        self.commit("main R2")
+        self.git("merge", "-q", "side", check=False)
+
+    def test_a_merge_that_takes_their_list_is_found(self):
+        """Impl round 1 (opus, codex, grok — GRAVE): `--theirs` drops this branch's committed R2; git's history
+        simplification hid that merge and every commit of this branch."""
+        self._two_sided()
+        self.git("checkout", "--theirs", ".agent/rulings.md")
+        self.commit("merge side, taking theirs")
+        r = self.audit()
+        self.assertEqual(r["status"], "findings", r)
+        self.assertIn("main words", r["output"])
+
+    def test_a_merge_that_keeps_our_list_is_found(self):
+        """Impl round 1 (grok): `--ours` keeps this branch's list a prefix but drops the side's committed R2."""
+        self._two_sided()
+        self.git("checkout", "--ours", ".agent/rulings.md")
+        self.commit("merge side, keeping ours")
+        r = self.audit()
+        self.assertEqual(r["status"], "findings", r)
+        self.assertIn("side words", r["output"])
+
+    def test_a_project_inside_a_larger_repo(self):
+        """Impl round 1 (agy, opus, codex): the list's path is the project's, not the repository top's."""
+        outer = Path(tempfile.mkdtemp(prefix="pb227o-"))
+        self.addCleanup(shutil.rmtree, outer, True)
+        subprocess.run(["git", "init", "-q"], cwd=outer, check=True)
+        shutil.copytree(self.d / ".agent", outer / "sub" / ".agent")
+        (outer / "sub" / "home").mkdir()
+        from tasks import audit, rulings
+        rulings.add(outer / "sub", WORDS1, holds="permanent")
+        g = lambda *a: subprocess.run(["git", "-c", "user.email=a@b", "-c", "user.name=p", *a], cwd=outer, check=True,
+                                      capture_output=True)
+        g("add", "-A")
+        g("commit", "-qm", "R1")
+        self.assertEqual(audit.check_rulings_append_only(outer / "sub")["status"], "clean")
+        lst = outer / "sub" / ".agent" / "rulings.md"
+        lst.write_text(lst.read_text(encoding="utf-8").replace("Recomandat", "Reworded"), encoding="utf-8")
+        r = audit.check_rulings_append_only(outer / "sub")
+        self.assertEqual(r["status"], "findings", r)
+        self.assertIn("changed or removed by hand", r["output"])
+        self.assertNotIn("deleted", r["output"])
+
+    def test_git_that_cannot_read_the_history_is_a_finding(self):
+        """Impl round 1 (codex): a failing `git log` is not a clean history."""
+        from unittest import mock
+        from tasks import audit
+        self.add(WORDS1)
+        self.commit("R1")
+        real = subprocess.run
+
+        def fake(cmd, *a, **k):
+            if isinstance(cmd, list) and "log" in cmd and ".agent/rulings.md" in " ".join(cmd):
+                return subprocess.CompletedProcess(cmd, 128, b"", b"fatal: bad object")
+            return real(cmd, *a, **k)
+        with mock.patch.object(audit.subprocess, "run", side_effect=fake):
+            r = audit.check_rulings_append_only(self.d)
+        self.assertEqual(r["status"], "findings", r)
+        self.assertIn("cannot read", r["output"])
 
     def test_an_unreadable_list_is_a_finding(self):
         self.list.write_text("garbage\n", encoding="utf-8")

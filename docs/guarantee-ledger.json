@@ -21425,7 +21425,7 @@
     {
       "id": "PB-OWNER-RULINGS-LIST",
       "category": "judges-and-reviews",
-      "statement": "A ruling for a batch or the whole project is written once into the project's `.agent/rulings.md` (one list per project, whatever the lane) by `tasks ruling add`, with its number, its date, the owner's words verbatim (one line, at most 1,500 characters; the same words already in force refused) and how long it holds (`permanent` or `until <what ends it>`); `tasks ruling end <N>` appends a closing entry — every write appends under `.agent/rulings.lock` (ignored by init), so each version is the start of the next, and two writers at once keep both entries. A malformed request or a list the CLI did not write is refused with the list unchanged. `tasks audit` (`rulings-append-only`) finds a commit whose version does not start with its first parent's, a working list that does not start with HEAD's, a tracked list deleted and a list that does not parse. A commit that touches only the list is a records-only commit (a panel stays fresh). `tasks bootstrap` prints the rulings in force (task 227).",
+      "statement": "A ruling for a batch or the whole project is written once into the project's `.agent/rulings.md` (one list per project, whatever the lane) by `tasks ruling add`, with its number, its date, the owner's words verbatim (one line, at most 1,500 characters; the same words already in force refused) and how long it holds (`permanent` or `until <what ends it>`); `tasks ruling end <N>` appends a closing entry — every write appends under `.agent/rulings.lock` (ignored by init), so each version is the start of the next, and two writers at once keep both entries. A malformed request or a list the CLI did not write is refused with the list unchanged. `tasks audit` (`rulings-append-only`) walks the list's full history and finds a commit whose version does not start with its first parent's or drops a ruling any parent had (a merge resolved with one side's list included), a working list that does not start with HEAD's, a tracked list deleted, a list that does not parse and a history git cannot read; a list that is a link is never read. A commit that touches only the list is a records-only commit (a panel stays fresh). `tasks bootstrap` prints the rulings in force (task 227).",
       "owner": [
         {
           "path": "plugins/playbook/tasks/rulings.py",
@@ -21532,6 +21532,25 @@
           "type": "executable integration",
           "path": "tests/test_owner_rulings_list.py",
           "reference": "EveryJudgeGetsTheRulingsInForce.test_bootstrap_prints_them_and_survives_a_bad_list",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_owner_rulings_list.py",
+          "reference": "TheAuditCatchesAHandEdit.test_a_merge_that_takes_their_list_is_found",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_owner_rulings_list.py",
+            "reference": "TheAuditCatchesAHandEdit.test_a_merge_keeps_this_branchs_list_first"
+          },
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_owner_rulings_list.py",
+          "reference": "TheAuditCatchesAHandEdit.test_a_project_inside_a_larger_repo",
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": []

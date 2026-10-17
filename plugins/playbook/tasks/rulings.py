@@ -7,8 +7,8 @@ with its number, its date, his exact words and how long it holds (`permanent`, o
 rewrites an entry: `tasks ruling end <N> "<why>"` appends a closing entry. Every write appends at the end, so the
 committed text is always a byte prefix of the file — `tasks audit` checks that (`rulings-append-only`). Every judge's
 SETTLED block lists the rulings in force (`post_d6.settled_block`); `tasks bootstrap` prints them. A write holds
-`<project>/.agent/rulings.lock` (ignored by init). `Words:` is the rest of its line, verbatim — the CLI adds no quotes
-and strips none.
+`<project>/.agent/rulings.lock` (ignored by init). `Words:` is the rest of its line — the CLI adds no quotes and
+strips none but the argument's surrounding whitespace. A list that is a link or not a regular file is never read.
 
 The file, one fact per line (task 226):
 
@@ -38,7 +38,9 @@ from pathlib import Path
 FILE_NAME = "rulings.md"
 LOCK_NAME = "rulings.lock"
 WORDS_MAX = 1500
-_NOT_ONE_LINE = "\n\r\x0b\x0c\x85" + chr(0x2028) + chr(0x2029)
+LINE_MAX = 2000         # a whole entry's line in the SETTLED block — always under post_d6.PROJECT_CAP (impl round 1)
+# every character `str.splitlines` breaks on (U+001C-1E too: a reader's cut must not split the owner's words — round 1)
+_NOT_ONE_LINE = "\n\r\x0b\x0c\x1c\x1d\x1e\x85" + chr(0x2028) + chr(0x2029)
 HEADER = ("# Owner rulings\n"
           "> Written by `tasks ruling`; append-only — end a ruling with `tasks ruling end <N> \"<why>\"`, "
           "never edit one.\n")
@@ -108,6 +110,8 @@ def parse(text: str) -> "list[Ruling]":
             f = _FIELD_RE.match(ln)
             if not f or f.group(1) in fields:
                 raise RulingsError(f"R{n}: not a field line, or a field twice: {ln[:80]!r}")
+            if not f.group(2).strip() or any(c in f.group(2) for c in _NOT_ONE_LINE):
+                raise RulingsError(f"R{n}: {f.group(1)} is blank or holds a line separator")
             fields[f.group(1)] = f.group(2)
         want, opt = _FIELDS[is_end], _OPTIONAL[is_end]
         if any(k not in fields for k in want) or any(k not in want + opt for k in fields):
@@ -134,6 +138,7 @@ def parse(text: str) -> "list[Ruling]":
 def read(project: "Path | str") -> "list[Ruling]":
     """The rulings of the project's list; [] when there is none. RulingsError when it cannot be read."""
     p = path_for(project)
+    _regular_or_absent(p)
     try:
         raw = p.read_bytes()
     except FileNotFoundError:
@@ -144,6 +149,19 @@ def read(project: "Path | str") -> "list[Ruling]":
         return parse(raw.decode("utf-8"))
     except UnicodeDecodeError:
         raise RulingsError("the list is not UTF-8") from None
+
+
+def _regular_or_absent(p: Path) -> None:
+    """Refuse a list that is a link or not a regular file — its target would reach every judge (impl round 1)."""
+    import stat
+    try:
+        st = p.lstat()
+    except FileNotFoundError:
+        return
+    except OSError as e:
+        raise RulingsError(f"cannot read the list: {e}") from None
+    if not stat.S_ISREG(st.st_mode):
+        raise RulingsError("the list is a link or not a regular file")
 
 
 def in_force(rulings: "list[Ruling]") -> "list[Ruling]":
@@ -172,21 +190,23 @@ def _append(project: "Path | str", make_entry) -> str:
     p = path_for(project)
     if not p.parent.is_dir():
         raise RulingsError(f"no {p.parent} — not a playbook project")
-    with named_lock(p.parent / LOCK_NAME):
-        try:
-            raw = p.read_bytes()
-        except FileNotFoundError:
-            raw = b""
-        except OSError as e:
-            raise RulingsError(f"cannot read the list: {e}") from None
-        try:
-            text = raw.decode("utf-8")
-        except UnicodeDecodeError:
-            raise RulingsError("the list is not UTF-8") from None
-        rulings = parse(text) if text else []
-        entry = make_entry(rulings)
-        atomic_write(p, (text or HEADER) + "\n" + entry, newline="")
-        return entry
+    try:
+        with named_lock(p.parent / LOCK_NAME):
+            _regular_or_absent(p)
+            try:
+                raw = p.read_bytes()
+            except FileNotFoundError:
+                raw = b""
+            try:
+                text = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                raise RulingsError("the list is not UTF-8") from None
+            rulings = parse(text) if text else []
+            entry = make_entry(rulings)
+            atomic_write(p, (text or HEADER) + "\n" + entry, newline="")
+            return entry
+    except OSError as e:                         # the lock or the write (impl round 1: no traceback)
+        raise RulingsError(f"cannot write the list: {e}") from None
 
 
 def add(project, words: str, *, holds: str, about: str = "", date: str = "") -> int:
@@ -200,6 +220,8 @@ def add(project, words: str, *, holds: str, about: str = "", date: str = "") -> 
         raise RulingsError("the date is not YYYY-MM-DD HH:MM")
     if holds != "permanent" and not (holds.startswith("until ") and holds[6:].strip()):
         raise RulingsError("Holds is `permanent` or `until <what ends it>`")
+    if len(Ruling(0, date, words, holds, about).line()) > LINE_MAX:
+        raise RulingsError(f"the entry is over {LINE_MAX:,} characters (its words, Holds and About together)")
     out: "list[int]" = []
 
     def make(rulings):
@@ -269,6 +291,9 @@ def cmd_ruling(cmd_args: "list[str]") -> None:
         i = 0
         while i < len(rest):
             a = rest[i]
+            if a == "--":                        # the rest are words, even one that starts with -- (impl round 1)
+                words.extend(rest[i + 1:])
+                break
             if a == "--permanent":
                 if "holds" in opts:
                     _usage("give --permanent or --until once")

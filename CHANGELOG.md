@@ -336,16 +336,17 @@ cut at 8,000.
   `- Date:`, `- Words:` verbatim, `- Holds:`, `- About:`). `tasks ruling end <N> "<why>"` appends `## R<N> ended`; nothing
   rewrites an entry. `tasks ruling list [--all]`. Refused, with the list unchanged: no duration or two, a malformed
   date, words on more than one line or over 1,500 characters, the same words already in force, an unknown or ended
-  number, a list the CLI did not write. A write holds `.agent/rulings.lock` (in init's `.gitignore` block); two at once
-  keep both entries.
+  number, a whole entry over 2,000 characters, a list the CLI did not write (or a link — never read). A write holds
+  `.agent/rulings.lock` (in init's `.gitignore` block); two at once keep both entries.
 - Every judge's SETTLED block starts with the rulings in force — whole entries within 4,000 characters, the rest named
   ("N more in force — read `.agent/rulings.md`"); a list that cannot be read arrives as its raw text, marked so. The block
   is now sent when only the list has something, and to a taskless panel (`--bare` still gets no context); past 8,000
   characters it is cut on a line and says how many lines it left out (it used to slice mid-line).
 - `tasks bootstrap` prints the rulings in force and reminds that one ends with `tasks ruling end` once its Holds is true.
-- `tasks audit` — `rulings-append-only`: a commit whose list does not start with its first parent's (merges too — two
-  branches' rulings are resolved by keeping this branch's entries and adding the other's after them, renumbered), a
-  working list that does not start with HEAD's, a tracked list deleted, a list that does not parse.
+- `tasks audit` — `rulings-append-only` walks the list's full history: a commit whose list does not start with its
+  first parent's, or drops a ruling any parent had (a merge resolved with one side's list too — two branches' rulings
+  are resolved by keeping this branch's entries and adding the other's after them, renumbered), a working list that
+  does not start with HEAD's, a tracked list deleted, a list that does not parse, a history git cannot read.
 - A commit that touches only `.agent/rulings.md` is a records-only commit: it leaves an open task's panel fresh.
 - The CLAUDE.md template and the playbook skill say which ruling goes where; a task's own stay in `## Owner rulings`.
 
