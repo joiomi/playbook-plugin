@@ -528,6 +528,76 @@ class PanelReadsACopy(unittest.TestCase, _PanelHarness):
         self.assertTrue(beh)
 
 
+@unittest.skipUnless(_mountable(), "no copy can be mounted here")
+class SingleJudgeReadsACopy(unittest.TestCase, _PanelHarness):
+    """The post-panel judge: its copy is the delta's tree (plan panel P3), a live write while it runs voids nothing,
+    and its `[file:]` checks resolve in the copy (P16)."""
+
+    def setUp(self):
+        self.d = _project(self)
+        self._models(self.d)
+        with open(self.d / ".gitignore", "a", encoding="utf-8") as f:
+            f.write("alias.py\n")
+        os.symlink("docs/x.md", self.d / "alias.py")         # ignored: copied as a link, frozen
+        self._run(self.d, lambda adapter, *a, **kw: "1. **Note** — fine.\n",
+                  ["042", "--mode", "impl", "--models", "claude:opus"])
+        text = (self.d / ".agent" / "tasks" / "042-demo" / "judge.md").read_text(encoding="utf-8")
+        self.assertIn("**Panel-snapshot:**", text, "the panel left no snapshot")
+        (self.d / "src" / "a.py").write_text("a = 5  # after the panel\n", encoding="utf-8")    # the delta
+
+    def _single(self, judge_text, during):
+        from tasks import cli as tcli
+        seen = []
+
+        def fake_run(agent, agent_args, **kw):
+            pv = kw.get("project_view")
+            seen.append(pv)
+            during()
+            if pv is not None:
+                seen.append((Path(pv.root) / "src" / "a.py").read_text(encoding="utf-8"))
+            return subprocess.CompletedProcess(args=[], returncode=0, stdout=judge_text, stderr="")
+
+        out = io.StringIO()
+        old = os.getcwd()
+        os.chdir(self.d)
+        try:
+            with mock.patch.object(sys, "argv", ["tasks", "impl-review", "042", "--backend", "claude"]), \
+                 mock.patch("shutil.which", return_value="/usr/bin/claude"), \
+                 mock.patch("provider.sandbox.run", side_effect=fake_run), \
+                 mock.patch("provider.sandbox.format_judge_output", side_effect=lambda r: (r.stdout or "")), \
+                 contextlib.suppress(SystemExit), contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+                tcli.main()
+        finally:
+            os.chdir(old)
+        return seen, out.getvalue()
+
+    def test_the_post_panel_judge_reads_the_deltas_tree_while_the_agent_writes(self):
+        d = self.d
+
+        def during():
+            (d / "src" / "a.py").write_text("a = 6  # written while the judge ran\n", encoding="utf-8")
+
+        seen, log = self._single("1. **Note** — fine.\n\nCAP: 0/5 reported, exhausted\n", during)
+        self.assertTrue(seen and seen[0] is not None, "the post-panel judge read the live tree\n" + log[-3000:])
+        self.assertEqual(seen[1], "a = 5  # after the panel\n")
+        self.assertIn("POST-D6 VERDICT: PASS", log)
+        self.assertNotIn("TAMPER", log.upper().replace("TAMPER GUARD: CLEAN", ""))
+        self.assertEqual([p for p in _rv().views_dir(d).iterdir() if p.is_dir()], [], "the copy was left behind")
+
+    def test_a_file_field_resolves_in_the_copy_not_the_live_tree(self):
+        d = self.d
+
+        def during():
+            os.unlink(d / "alias.py")
+            os.symlink("src/a.py", d / "alias.py")          # live: now a delta file
+
+        seen, log = self._single(
+            "**Important** [PRE-EXISTING] [file: alias.py] — older than the panel.\n\nCAP: 1/5 reported, exhausted\n",
+            during)
+        self.assertTrue(seen and seen[0] is not None, log[-3000:])
+        self.assertIn("POST-D6 VERDICT: PASS", log, "the field was resolved in the live tree")
+
+
 class PanelWithoutACopy(unittest.TestCase, _PanelHarness):
     def setUp(self):
         self.d = _project(self)

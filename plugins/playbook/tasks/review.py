@@ -503,8 +503,11 @@ def _open_review_view(project_path, task_file, *, run_id: str, task_num: str = "
         return None, "", None, cfg
     last = None
     for _attempt in range(_rv.COPY_ATTEMPTS):
+        exclude = None
         if expected is not None:
-            fp, trees, heads, snap = expected()
+            got = expected()
+            fp, trees, heads, snap = got[:4]
+            exclude = got[4] if len(got) > 4 else None
         else:
             fp = tree_state_fingerprint(project_path)
             snap = build_panel_snapshot(project_path, fp) if fp else None
@@ -516,7 +519,8 @@ def _open_review_view(project_path, task_file, *, run_id: str, task_num: str = "
             return None, "", None, cfg
         try:
             view = _rv.make(project_path, cfg, run_id=run_id, fingerprint=fp, trees=trees, heads=heads,
-                            task_file=task_file, exclude=snap.get("exclude"), attempts=1)
+                            task_file=task_file, exclude=exclude if exclude is not None else snap.get("exclude"),
+                            attempts=1)
         except _rv.Moved as e:
             last = e
             continue
@@ -2827,6 +2831,7 @@ def cmd_single_review(cmd, cmd_args):
         return _cmd_single_review(cmd, cmd_args)
     finally:
         _drain_temp_registry()
+        _drop_review_views()        # task 231: its copy, on every exit
         while _PD6_PENDING:
             _td, _rid = _PD6_PENDING.pop()
             try:
@@ -2972,9 +2977,6 @@ def _cmd_single_review(cmd, cmd_args):
     _is_impl = review_cmd == "impl-review" or (
         review_cmd not in ("plan-review", "impl-review")
         and _pd6_status(task_file).startswith("done"))
-    _sj_settled = _pd6.settled_block(task_file, project_path=project_path)      # task 227: + the project's rulings
-    if _sj_settled:
-        context_parts.append(_sj_settled)
     _pd6_round = _pd6.newest_impl_round(task_file.parent) if _is_impl else None
     _pd6_panel_fp = _pd6.panel_key(_pd6_round)
     _pd6_delta = ""
@@ -3006,9 +3008,29 @@ def _cmd_single_review(cmd, cmd_args):
             print(f"  post-D6: single-judge run {_run_no} after impl panel {_pd6_panel_fp}"
                   + (f' (owner-ok: "{owner_ok_reason}")' if owner_ok_flag else ""),
                   file=sys.stderr, flush=True)
-    mm_content = _load_mind_map(project_path)
+    # Task 231 (PHASE-B item 7): the single judge reads a fixed copy of the tree too — decided and printed first;
+    # the post-panel judge's copy must BE its delta's tree (the delta's `cur` trees, plan panel P3); the payload is
+    # read from the copy (P15).
+    def _pd6_expected():
+        from tasks.core import build_panel_snapshot as _bps231, tree_state_fingerprint as _tsf231
+        _f = _tsf231(project_path)
+        _s = _bps231(project_path, _f) if _f else None
+        _h = {k: (v or {}).get("commit") for k, v in ((_s or {}).get("scopes") or {}).items()}
+        _ex = [x for x in ((_pd6_round.get("snapshot") or {}).get("exclude") or []) if isinstance(x, str)]
+        return _f, dict(_pd6_parts["trees"]), _h, _s, _ex
+    _view, _view_fp, _view_snap, _view_cfg = _open_review_view(
+        project_path, task_file, run_id=f"single-{task_num}-{os.getpid()}-{int(time.time())}", task_num=task_num,
+        expected=(_pd6_expected if (_pd6_round is not None and _pd6_parts is not None and _pd6_parts.get("trees"))
+                  else None))
+    _ctx_root = _view.root if _view is not None else project_path
+    _ctx_task = (_view.root / task_file.relative_to(project_path)) if _view is not None else task_file
+    _pview = _view.sandbox_view() if _view is not None else None
+    _sj_settled = _pd6.settled_block(_ctx_task, project_path=_ctx_root)      # task 227: + the project's rulings
+    if _sj_settled:
+        context_parts.append(_sj_settled)
+    mm_content = _load_mind_map(_ctx_root)
     _mm_part = f"=== MIND_MAP.md ===\n{mm_content}" if mm_content else ""
-    task_content = read_task_text(task_file, errors="strict")
+    task_content = read_task_text(_ctx_task, errors="strict")
     # Task 108 r2: the task gets what is LEFT after SETTLED + DELTA + the map. Task 201
     # (#7, the owner's Q-K (a)): sized by that same rule — the delta held at min(its whole
     # length, a quarter) — and the delta then gets what the task leaves, a quarter at least.
@@ -3113,7 +3135,8 @@ def _cmd_single_review(cmd, cmd_args):
     def _safe_detect():
         # The single-judge alias for the module-level `_detect_tamper_full`
         # (which the panel path also uses — parity, opus round-7); never raises.
-        return _detect_tamper_full(project_path, task_file, _tamper_before)
+        # Task 231: with a copy, the guard watches the copy — the live tree may change on purpose.
+        return _detect_tamper_full(_ctx_root, _ctx_task, _tamper_before)
 
     def _tamper_mark(full):
         return _tamper_mark_text(full)
@@ -3224,7 +3247,7 @@ def _cmd_single_review(cmd, cmd_args):
         print("  ⚠ judge running UNCONTAINED (no usable OS sandbox here) — "
               "the tamper guard is the only defense against repo mutation.",
               file=sys.stderr, flush=True)
-    _tamper_before = _snapshot_repo_state(project_path, task_file)
+    _tamper_before = _snapshot_repo_state(_ctx_root, _ctx_task)
     # PLAN S12b (task 149): a post-D6 run records the tree it reviews — the same
     # descriptor a panel round stores — and the config it ran under, so a later
     # stale close can be bound to THIS tree (core.bound_stale_close).
@@ -3233,14 +3256,18 @@ def _cmd_single_review(cmd, cmd_args):
     if _pd6_round is not None:
         try:
             from tasks.core import build_panel_snapshot, config_sha, tree_state_fingerprint
-            _fp_rev = tree_state_fingerprint(project_path)
-            _pd6_reviewed = build_panel_snapshot(project_path, _fp_rev) if _fp_rev else None
+            if _view is not None:
+                # the tree the copy was sealed to: what the judge reads, whatever the live tree does next
+                _fp_rev, _pd6_reviewed = _view_fp, _view_snap
+            else:
+                _fp_rev = tree_state_fingerprint(project_path)
+                _pd6_reviewed = build_panel_snapshot(project_path, _fp_rev) if _fp_rev else None
             _pd6_config_sha = config_sha(project_path)
         except Exception:   # noqa: BLE001 — no descriptor = the close fails closed
             _pd6_reviewed = None
     # Task 108 r2: the delta was built BEFORE this baseline — refuse if the tree
     # moved in between (the judge would review a stale delta the guard calls clean).
-    if _pd6_delta and _pd6_trees:
+    if _pd6_delta and _pd6_trees and _view is None:     # task 231: a copy was sealed to these very trees
         _snap_scopes = (_pd6_round.get("snapshot") or {}).get("scopes") or {}
         _pd6_ex = [x for x in ((_pd6_round.get("snapshot") or {}).get("exclude") or []) if isinstance(x, str)]
         from tasks.core import _tail_cert_scopes as _pd6_scopes, load_config as _pd6_lc
@@ -3320,6 +3347,7 @@ def _cmd_single_review(cmd, cmd_args):
                 "claude",
                 claude_args,
                 project_root=project_path,
+                project_view=_pview,     # task 231: the review's fixed copy at the project path
                 project_writable=False,   # judge is read-only — cannot mutate repo/task.md
                 env=env,
                 input=full_prompt,
@@ -3378,6 +3406,7 @@ def _cmd_single_review(cmd, cmd_args):
             result = _sandbox.run(
                 "codex", codex_args,
                 project_root=project_path,
+                project_view=_pview,     # task 231: the review's fixed copy at the project path
                 project_writable=False,   # judge is read-only — cannot mutate repo/task.md
                 env=codex_env,
                 input=full_prompt,
@@ -3429,6 +3458,7 @@ def _cmd_single_review(cmd, cmd_args):
             result = _sandbox.run(
                 "agy", agy_args,
                 project_root=project_path,
+                project_view=_pview,     # task 231: the review's fixed copy at the project path
                 project_writable=False,   # judge is read-only — cannot mutate repo/task.md
                 env=agy_env,
                 input=inv.stdin,
@@ -3491,6 +3521,7 @@ def _cmd_single_review(cmd, cmd_args):
             result = _sandbox.run(
                 "grok", grok_args,
                 project_root=project_path,
+                project_view=_pview,     # task 231: the review's fixed copy at the project path
                 project_writable=False,   # judge is read-only — cannot mutate repo/task.md
                 env=grok_env,
                 capture_output=True,
@@ -3551,6 +3582,7 @@ def _cmd_single_review(cmd, cmd_args):
             result = _sandbox.run(
                 "pi", pi_args,
                 project_root=project_path,
+                project_view=_pview,     # task 231: the review's fixed copy at the project path
                 project_writable=False,   # judge is read-only — cannot mutate repo/task.md
                 env=pi_env,
                 capture_output=True,
@@ -3785,7 +3817,7 @@ def _cmd_single_review(cmd, cmd_args):
         # path (task 201, #6; impl round 1: a spelling or a link names the file it reaches)
         _v = _pd6.parse_verdict(saved_review_text,
                                 delta_files=(_pd6_files or _pd6.delta_files(_pd6_delta)) if _pd6_delta else None,
-                                exists=lambda _rel: _pd6.real_path(project_path, _rel))
+                                exists=lambda _rel: _pd6.real_path(_ctx_root, _rel))   # task 231: P16
         print("\n" + _pd6.verdict_line(_v), flush=True)
         try:
             _pd6.finish_run(task_file.parent, _pd6_rid, {
