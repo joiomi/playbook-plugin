@@ -324,7 +324,7 @@ After all work patterns complete, before code becomes permanent:
 
 ## Verify once per code state
 
-Run the project's verify contract with `tasks verify` (or `tasks verify <N>`), not the raw command: it runs the contract as the close does and remembers a green run for exactly that code — every file outside `.agent/`, its bytes, mode and whether git tracks it. A close of the same code then does not run it again; its receipt says "reused: the green run of <time> on the same code (key …)". Any code edit makes the close run it. Ticking gates and writing records (`.agent/`) do not.
+Run the project's verify contract with `tasks verify` (or `tasks verify <N>`), not the raw command: it always runs the contract as the close does and remembers a green run for exactly that code — every file git lists (tracked or not, its staged blob, its bytes and mode) except the task records and untracked `.agent` files; a tracked `.agent/config.json` counts. A close of the same code then does not run it again; its receipt says "reused: the green run of <time> on the same code (key …)". Any code edit makes the close run it; ticking gates and writing task records do not. Git-ignored files, the environment and the clock are outside the key: after changing one of them, run `tasks verify` again before the close.
 
 ## Owner rulings and the post-panel judge
 

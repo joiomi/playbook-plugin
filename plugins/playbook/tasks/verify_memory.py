@@ -4,26 +4,31 @@ The owner, 2026-10-16 09:42 (task 218): "Ține minte ultima verde (Recomandat)" 
 passed the project's verify contract through the CLI, the close does not run it again.
 
 The code key, per scope the panel fingerprints (`core._tail_cert_scopes`: the outer tree and each `code_roots` repo):
-every path `git ls-files --cached --others --exclude-standard` lists — tracked or not, for a tracked one its index mode
-and blob (a staged change counts: `git diff --check` reads the index), its mode, the sha256 of its RAW working bytes (a
-link: its target, which must stay inside the scope; a tracked file gone: "missing"). Left out: the task records
-(`.agent/tasks/`) and untracked `.agent` files — so ticking gates after a green run keeps the key; a tracked
-`.agent/config.json` counts. Raw bytes, not git's tree: git normalises text by `.gitattributes`, records a nested
+the scope's HEAD commit (what an outer gitlink points at), and every path `git ls-files --cached --others
+--exclude-standard` lists — tracked or not, for a tracked one its index mode and blob (a staged change counts: `git diff
+--check` reads the index), its mode, the sha256 of its RAW working bytes (a link: its target and the bytes of the file it
+points at; a tracked file gone: "missing"); an inner scope's path is its gitlink entry. Left out: every lane's task
+records (`.agent/tasks/`, `.agent/<user>/tasks/`) and untracked `.agent` files — so ticking gates after a green run keeps
+the key; a tracked `.agent/config.json` counts. Raw bytes, not git's tree: git normalises text by `.gitattributes`, records a nested
 repository as the commit it points at, and hides an edit under a skip-worktree or assume-unchanged bit. No key — so
 nothing is reused — when a scope cannot be listed or is not its own repository (a `code_roots` dir with no `.git` would
-be listed through the outer one), an index entry is unmerged, a gitlink or an untracked repository that is not itself a
-scope, or carries one of those bits, a link leaves the scope, or anything goes wrong building it. The owner's
+be listed through the outer one), an index entry is unmerged, intent-to-add, a gitlink or an untracked repository that is
+not itself a scope, or carries one of those bits, a link leaves the scope or points at no file, or anything goes wrong
+building it. The owner's
 `fingerprint_exclude` is not applied: it may cover code.
 
 The memory: `<lane>/journal/verify-green.json` — per command, its newest run `{key, command, started, ok, ts, seconds}`,
 read and written under `<lane>/journal/verify-green.lock`. Before a command runs, its start is written as a red mark
 (`ok: false`), so a crash, a red result or an older green run finishing later never leaves a green record for that code
 (task 228's impl round 1); if that mark cannot be written, the record is removed. After the run, a green command is
-recorded only when the key before equals the key after; only a run that started later replaces a record. The close
+recorded only over its own red mark (same start, same key — so a removed or newer record is never turned green) and
+only when the key before equals the key after; only a run that started later replaces a record. `tasks verify` always
+runs the commands (and records them); only the close reuses. The close
 reuses a command whose record is green with the code's key, ran under the current timeout, and finds bash usable (else
 the command runs, and a missing bash fails it as before).
 
-Limits: what the key cannot see — git-ignored files and untracked `.agent` state the tests read, HEAD and the history,
+Limits: what the key cannot see — git-ignored files, untracked `.agent` state and the task records the tests read, the
+outer repository's HEAD and the history,
 the environment, the clock, an edit made and undone while the run ran — can make the same code red another time; a
 backward clock step can keep an older record; the journal is agent-writable, like every journal (the receipt names the
 reused run and its key).
@@ -33,6 +38,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import stat
 import subprocess
 import time
@@ -67,11 +73,33 @@ def _file_sha(path: Path) -> str:
     return h.hexdigest()
 
 
+_TASK_RECORDS = re.compile(r"^\.agent/(?:[^/]+/)?tasks(?:/|$)")      # every lane's: `.agent/tasks/`, `.agent/<user>/tasks/`
+
+
 def _skipped(p: str, tracked: bool) -> bool:
-    """The task records, and untracked `.agent` files, are outside the key."""
-    if p == ".agent/tasks" or p.startswith(".agent/tasks/"):
+    """The task records (every lane's), and untracked `.agent` files, are outside the key."""
+    if _TASK_RECORDS.match(p):
         return True
     return not tracked and (p == ".agent" or p.startswith(".agent/"))
+
+
+def _intent_to_add(repo: Path) -> "bool | None":
+    """Whether an index entry is intent-to-add (`git add -N`): its blob is the empty one either way (round 2)."""
+    out = _git(repo, ["status", "--porcelain=v1", "-z", "--untracked-files=no", "--ignore-submodules=all"])
+    if out is None:
+        return None
+    toks = out.split(b"\0")
+    i = 0
+    while i < len(toks):
+        t = toks[i]
+        i += 1
+        if len(t) < 3:
+            continue
+        if t[:2] == b" A":
+            return True
+        if t[:1] in (b"R", b"C"):
+            i += 1                                               # a rename's second path
+    return False
 
 
 def _scope_digest(repo: Path, inner: "set[str]", own_repo: bool) -> "str | None":
@@ -84,8 +112,11 @@ def _scope_digest(repo: Path, inner: "set[str]", own_repo: bool) -> "str | None"
     staged = _git(repo, ["ls-files", "-z", "-s", "--cached"])
     tags = _git(repo, ["ls-files", "-z", "-v", "--cached"])
     others = _git(repo, ["ls-files", "-z", "--others", "--exclude-standard"])
-    if staged is None or tags is None or others is None:
+    ita = _intent_to_add(repo)
+    if staged is None or tags is None or others is None or ita is None or ita:
         return None
+    head = _git(repo, ["rev-parse", "-q", "--verify", "HEAD"])      # a code root's commit (round 2: what a gitlink sees)
+    h = hashlib.sha256(b"head\0" + (head.strip() if head else b"none") + b"\n")
     index: "dict[str, str]" = {}
     for rec in staged.split(b"\0"):
         if not rec:
@@ -112,10 +143,12 @@ def _scope_digest(repo: Path, inner: "set[str]", own_repo: bool) -> "str | None"
             return None                                          # an untracked repository outside the scopes
         untracked.add(p)
     root = repo.resolve()
-    h = hashlib.sha256()
     for p in sorted(set(index) | untracked):
         tracked = p in index
-        if p in inner or _skipped(p, tracked):
+        if p in inner:
+            h.update(f"{p}\0{index.get(p, 'u')}\0scope\n".encode("utf-8", "surrogateescape"))   # its gitlink entry
+            continue
+        if _skipped(p, tracked):
             continue
         full = repo / p
         try:
@@ -126,9 +159,9 @@ def _scope_digest(repo: Path, inner: "set[str]", own_repo: bool) -> "str | None"
         if stat.S_ISLNK(st.st_mode):
             target = os.readlink(full)
             resolved = (full.parent / target).resolve()
-            if resolved != root and root not in resolved.parents:
-                return None                                      # a link out of the scope: bytes the key cannot see
-            body = "link:" + target
+            if (resolved != root and root not in resolved.parents) or not resolved.is_file():
+                return None                                      # out of the scope, a directory, or dangling
+            body = "link:" + target + "\0" + _file_sha(resolved)  # what it points at (round 2), even ignored or skipped
         elif stat.S_ISREG(st.st_mode):
             body = _file_sha(full)
         else:
@@ -254,6 +287,8 @@ def record(project: "Path | str", key_before: "str | None", key_after: "str | No
         rec = runs.get(command)
         if rec is not None and rec["started"] > started:
             return None                                           # a run that started later has the last word
+        if ok and (rec is None or rec["ok"] or rec["started"] != started or rec["key"] != key_before):
+            return None                                           # green only over this run's own red mark (round 2)
         runs[command] = {"key": key_before or "", "command": command, "started": started, "ok": bool(ok),
                          "ts": time.strftime("%Y-%m-%d %H:%M:%S"), "seconds": round(seconds, 3)}
         return "recorded" if ok else "marked"
@@ -270,7 +305,8 @@ NO_KEY = "not remembered: no code key (a nested repository, a hidden index bit, 
 UNWRITABLE = "not remembered: the journal cannot be written"
 
 
-def run_contract(project: "Path | str", commands: "list[tuple[str, str]]", timeout, run, on_result=None) -> "list[tuple]":
+def run_contract(project: "Path | str", commands: "list[tuple[str, str]]", timeout, run, on_result=None,
+                 reuse: bool = True) -> "list[tuple]":
     """Run each `(label, command)` as the close runs it — `run(command) -> (rc, output)` — reusing a green run of the
     same code. Before a command runs its start is written as a red mark; right after, its result. Returns `(label,
     command, rc, output, how)` per command — `how` "reused", "ran", or a "not remembered: …" note; `on_result` gets each
@@ -278,7 +314,7 @@ def run_contract(project: "Path | str", commands: "list[tuple[str, str]]", timeo
     out = []
     for label, cmd in commands:
         before = code_key(project)
-        rec = reusable(project, before, cmd, timeout)
+        rec = reusable(project, before, cmd, timeout) if reuse else None
         if rec is not None:
             res = (label, cmd, 0, reused_note(rec), "reused")
         else:
@@ -305,7 +341,7 @@ def run_contract(project: "Path | str", commands: "list[tuple[str, str]]", timeo
 
 
 def print_line(label: str, cmd: str, rc: int, how: str) -> None:
-    first = cmd.splitlines()[0] if cmd.strip() else cmd
+    first = cmd.strip().splitlines()[0] if cmd.strip() else cmd
     tag = "PASS" if rc == 0 else f"FAIL exit {rc}"
     if how == "reused":
         tag += ", reused"
@@ -338,11 +374,15 @@ def cmd_verify(cmd_args: "list[str]") -> None:
         sid = resolve_session_id(quiet=True)       # this session's task first (read only — no session dir is made)
         state = resolve_agent_dir(project) / "sessions" / sid / "current_state" if sid else None
         num = state.read_text(encoding="utf-8", errors="replace").strip() if state and state.is_file() else ""
-        d = find_task_dir(tasks_dir, num) if num else None
+        d = find_task_dir(tasks_dir, num.zfill(3)) if num.isdigit() else None
         task_file = (d / "task.md") if d is not None and (d / "task.md").is_file() else _find_active_task(project)
         if task_file is None:                      # every gate ticked: the newest task not yet done (impl round 1)
             from tasks.core import _is_done
-            open_ = [t for t in sorted(tasks_dir.glob("*/task.md")) if not _is_done(t)] if tasks_dir.is_dir() else []
+            def _num(t):
+                head = t.parent.name.split("-", 1)[0]
+                return int(head) if head.isdigit() else -1
+            open_ = sorted((t for t in tasks_dir.glob("*/task.md") if not _is_done(t)), key=_num) \
+                if tasks_dir.is_dir() else []
             task_file = open_[-1] if open_ else None
     risk = extract_risk(task_file) if task_file is not None else DEFAULT_RISK
     commands = resolve_verify_commands(project, risk)
@@ -361,6 +401,7 @@ def cmd_verify(cmd_args: "list[str]") -> None:
         print_line(label, cmd, rc, how)
         if rc != 0:
             print((output or "").rstrip(), flush=True)
-    results = run_contract(project, commands, timeout,
-                           lambda c: mv.run_command_capture(c, str(project), timeout_secs=timeout), on_result=show)
+    results = run_contract(project, commands, timeout,                 # always run: the agent asked (round 2)
+                           lambda c: mv.run_command_capture(c, str(project), timeout_secs=timeout), on_result=show,
+                           reuse=False)
     raise SystemExit(1 if any(r[2] != 0 for r in results) else 0)
