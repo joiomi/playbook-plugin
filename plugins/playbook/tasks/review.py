@@ -529,8 +529,10 @@ def _open_review_view(project_path, task_file, *, run_id: str, task_num: str = "
             return None, "", None, cfg
         _REVIEW_VIEWS.append(view)
         own = f" except task {task_num}'s task.md and judge.md" if task_num else ""
+        bind = (" Its PASS binds the tree it reads: a code change made meanwhile is outside it."
+                if expected is not None else "")
         print(f"  Judges read a fixed copy of the tree ({view.root}) — ready: you may write the live tree "
-              f"now{own}; what you change from here on is after this review.", flush=True)
+              f"now{own}; what you change from here on is after this review.{bind}", flush=True)
         return view, fp, snap, cfg
     print(f"  Refused: {last} Nothing was spent.", file=sys.stderr, flush=True)
     sys.exit(2)

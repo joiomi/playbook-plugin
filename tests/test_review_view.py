@@ -581,6 +581,7 @@ class SingleJudgeReadsACopy(unittest.TestCase, _PanelHarness):
         self.assertTrue(seen and seen[0] is not None, "the post-panel judge read the live tree\n" + log[-3000:])
         self.assertEqual(seen[1], "a = 5  # after the panel\n")
         self.assertIn("POST-D6 VERDICT: PASS", log)
+        self.assertIn("Its PASS binds the tree it reads", log)
         self.assertNotIn("TAMPER", log.upper().replace("TAMPER GUARD: CLEAN", ""))
         self.assertEqual([p for p in _rv().views_dir(d).iterdir() if p.is_dir()], [], "the copy was left behind")
 
@@ -596,6 +597,33 @@ class SingleJudgeReadsACopy(unittest.TestCase, _PanelHarness):
             during)
         self.assertTrue(seen and seen[0] is not None, log[-3000:])
         self.assertIn("POST-D6 VERDICT: PASS", log, "the field was resolved in the live tree")
+
+
+@unittest.skipUnless(_mountable(), "no copy can be mounted here")
+class ATreeThatKeepsMoving(unittest.TestCase, _PanelHarness):
+    def test_the_panel_is_refused_before_anything_is_spent(self):
+        d = _project(self)
+        self._models(d)
+        rv = _rv()
+        real = rv._copy_listed_files
+        n, called = [], []
+
+        def racing(*a, **kw):
+            n.append(1)
+            (d / "src" / "a.py").write_text(f"a = {100 + len(n)}\n", encoding="utf-8")
+            return real(*a, **kw)
+
+        def judge(adapter, *a, **kw):
+            called.append(1)
+            return "1. **Note** — fine.\n"
+
+        with mock.patch.object(rv, "_copy_listed_files", racing):
+            log = self._run(d, judge, ["042", "--mode", "impl", "--models", "claude:opus"])
+        self.assertEqual(called, [], "a judge ran on a tree that kept moving")
+        self.assertIn("Refused", log)
+        self.assertIn("Nothing was spent", log)
+        self.assertFalse((d / ".agent" / "tasks" / "042-demo" / "judge.md").exists())
+        self.assertEqual([p for p in rv.views_dir(d).iterdir() if p.is_dir()], [])
 
 
 class PanelWithoutACopy(unittest.TestCase, _PanelHarness):
