@@ -324,6 +324,38 @@ class Round2(Project):
         self.assertIsNone(self.key())                                     # a link to a directory: no key
 
 
+class PostPanelRun1(Project):
+    """The post-panel judge's run 1."""
+
+    def test_an_intent_to_add_entry_removed_from_the_worktree(self):
+        """codex: the flag itself, not the porcelain status (` D` once the file is removed)."""
+        (self.d / "new.py").write_text("", encoding="utf-8")
+        self.g("add", "-N", "new.py")
+        (self.d / "new.py").unlink()
+        self.assertIsNone(self.key())
+
+    def test_a_link_targets_mode_counts(self):
+        """codex: a link to a script — its target losing the execute bit moves the key."""
+        runner = self.d / ".agent" / "runner"
+        runner.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        runner.chmod(0o755)
+        (self.d / "runcheck").symlink_to(".agent/runner")
+        k = self.key()
+        self.assertTrue(k)
+        runner.chmod(0o644)
+        self.assertNotEqual(self.key(), k)
+
+    def test_a_records_only_commit_keeps_the_key(self):
+        """codex: the outer HEAD is not code — committing task records after a green run keeps the key."""
+        rec = self.d / ".agent" / "tasks" / "001-x"
+        rec.mkdir(parents=True)
+        (rec / "task.md").write_text("# x\n", encoding="utf-8")
+        k = self.key()
+        self.g("add", "-A")
+        self.g("commit", "-qm", "the task record")
+        self.assertEqual(self.key(), k)
+
+
 class TheRecord(Project):
 
     def test_record_reuse_and_the_conditions(self):

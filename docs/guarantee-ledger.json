@@ -1008,7 +1008,7 @@
     {
       "id": "PB-CLOSE-VERIFY-CONTRACT",
       "category": "risk-and-close",
-      "statement": "Declared verification commands run before close; a failing command blocks, a hanging command is killed at the ceiling and blocks, a passing command records a receipt, and a forced close is refused without --reason. The close also records the verify commands in the enforcement journal (newline-escaped to one line so a multi-line command is not dropped at its first newline; the field is still bounded by pb_journal's 200-byte head cap, with the receipt as the authoritative uncapped list), and `tasks audit` flags any command that was run at some past close but is no longer in the current contract FOR THE RISK that close ran under (per-risk, so moving a command into a narrower risk key is caught; union of all receipts across all lanes, so a weaken-then-close or a fresh lane cannot launder it). An unacknowledged removal is an advisory finding; a removal listed in `verify_contract_ack` is not silenced but degraded to an informational line (below advisory, never failing the audit) because the ack list is on the same gate-exempt path — visibility, not prevention, is the guarantee. The first close has no baseline, and the comparison is per-command cmd1, so a silent weakening/deletion of the gate-exempt `verify` contract is made visible. Since task 228 a command whose green run is remembered for exactly the same code is not run again: the code key covers, per fingerprint scope, every file git lists but the task records and untracked `.agent` files (tracked or not, a tracked one's index blob, its mode, the sha256 of its raw bytes) and refuses a nested repository outside the scopes, a code root that is not its own repository, a skip-worktree / assume-unchanged / unmerged entry and a link out of the scope; a command's start is written as a red mark before it runs (the record removed if that fails) and a green run is recorded only over its own mark and only when the key before and after it are equal (`tasks verify` always runs; only the close reuses); the key also holds each scope's HEAD and a link's target bytes, refuses an intent-to-add entry and skips every lane's task records, only a later run replaces a record, and every run is recorded before the close's red exit; a reused command needs the same key, a run within the current timeout and a usable bash, and its receipt line says \"reused … (key …)\". `tasks verify` runs the contract the same way.",
+      "statement": "Declared verification commands run before close; a failing command blocks, a hanging command is killed at the ceiling and blocks, a passing command records a receipt, and a forced close is refused without --reason. The close also records the verify commands in the enforcement journal (newline-escaped to one line so a multi-line command is not dropped at its first newline; the field is still bounded by pb_journal's 200-byte head cap, with the receipt as the authoritative uncapped list), and `tasks audit` flags any command that was run at some past close but is no longer in the current contract FOR THE RISK that close ran under (per-risk, so moving a command into a narrower risk key is caught; union of all receipts across all lanes, so a weaken-then-close or a fresh lane cannot launder it). An unacknowledged removal is an advisory finding; a removal listed in `verify_contract_ack` is not silenced but degraded to an informational line (below advisory, never failing the audit) because the ack list is on the same gate-exempt path — visibility, not prevention, is the guarantee. The first close has no baseline, and the comparison is per-command cmd1, so a silent weakening/deletion of the gate-exempt `verify` contract is made visible. Since task 228 a command whose green run is remembered for exactly the same code is not run again: the code key covers, per fingerprint scope, every file git lists but the task records and untracked `.agent` files (tracked or not, a tracked one's index blob, its mode, the sha256 of its raw bytes) and refuses a nested repository outside the scopes, a code root that is not its own repository, a skip-worktree / assume-unchanged / unmerged entry and a link out of the scope; a command's start is written as a red mark before it runs (the record removed if that fails) and a green run is recorded only over its own mark and only when the key before and after it are equal (`tasks verify` always runs; only the close reuses); the key also holds each code root's HEAD (not the outer one) and a link's target mode and bytes, refuses an intent-to-add entry (the index flag) and skips every lane's task records, only a later run replaces a record, and every run is recorded before the close's red exit; a reused command needs the same key, a run within the current timeout and a usable bash, and its receipt line says \"reused … (key …)\". `tasks verify` runs the contract the same way.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/lifecycle.py",
@@ -1433,6 +1433,30 @@
           "type": "executable unit",
           "path": "tests/test_verify_memory.py",
           "reference": "Round2.test_tasks_verify_always_runs",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_verify_memory.py",
+          "reference": "PostPanelRun1.test_an_intent_to_add_entry_removed_from_the_worktree",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_verify_memory.py",
+          "reference": "PostPanelRun1.test_a_link_targets_mode_counts",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_verify_memory.py",
+          "reference": "PostPanelRun1.test_a_records_only_commit_keeps_the_key",
           "boundary": "unit",
           "negative_control": null,
           "limitations": []

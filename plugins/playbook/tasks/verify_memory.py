@@ -4,10 +4,10 @@ The owner, 2026-10-16 09:42 (task 218): "Ține minte ultima verde (Recomandat)" 
 passed the project's verify contract through the CLI, the close does not run it again.
 
 The code key, per scope the panel fingerprints (`core._tail_cert_scopes`: the outer tree and each `code_roots` repo):
-the scope's HEAD commit (what an outer gitlink points at), and every path `git ls-files --cached --others
+a code root's HEAD commit (what an outer gitlink points at), and every path `git ls-files --cached --others
 --exclude-standard` lists — tracked or not, for a tracked one its index mode and blob (a staged change counts: `git diff
---check` reads the index), its mode, the sha256 of its RAW working bytes (a link: its target and the bytes of the file it
-points at; a tracked file gone: "missing"); an inner scope's path is its gitlink entry. Left out: every lane's task
+--check` reads the index), its mode, the sha256 of its RAW working bytes (a link: its target and the mode and bytes of the
+file it points at; a tracked file gone: "missing"); an inner scope's path is its gitlink entry. Left out: every lane's task
 records (`.agent/tasks/`, `.agent/<user>/tasks/`) and untracked `.agent` files — so ticking gates after a green run keeps
 the key; a tracked `.agent/config.json` counts. Raw bytes, not git's tree: git normalises text by `.gitattributes`, records a nested
 repository as the commit it points at, and hides an edit under a skip-worktree or assume-unchanged bit. No key — so
@@ -83,23 +83,18 @@ def _skipped(p: str, tracked: bool) -> bool:
     return not tracked and (p == ".agent" or p.startswith(".agent/"))
 
 
+_FLAGS = re.compile(rb"flags: ([0-9a-f]+)")
+_INTENT_TO_ADD = 0x20000000
+
+
 def _intent_to_add(repo: Path) -> "bool | None":
-    """Whether an index entry is intent-to-add (`git add -N`): its blob is the empty one either way (round 2)."""
-    out = _git(repo, ["status", "--porcelain=v1", "-z", "--untracked-files=no", "--ignore-submodules=all"])
+    """Whether any index entry carries the intent-to-add flag (`git add -N`) — read from the index itself
+    (`ls-files --debug`), since its blob is the empty one either way and the porcelain status changes with the worktree
+    (post-panel run 1: an intent-to-add file removed reads ` D`)."""
+    out = _git(repo, ["ls-files", "--debug"])
     if out is None:
         return None
-    toks = out.split(b"\0")
-    i = 0
-    while i < len(toks):
-        t = toks[i]
-        i += 1
-        if len(t) < 3:
-            continue
-        if t[:2] == b" A":
-            return True
-        if t[:1] in (b"R", b"C"):
-            i += 1                                               # a rename's second path
-    return False
+    return any(int(m.group(1), 16) & _INTENT_TO_ADD for m in _FLAGS.finditer(out))
 
 
 def _scope_digest(repo: Path, inner: "set[str]", own_repo: bool) -> "str | None":
@@ -115,8 +110,10 @@ def _scope_digest(repo: Path, inner: "set[str]", own_repo: bool) -> "str | None"
     ita = _intent_to_add(repo)
     if staged is None or tags is None or others is None or ita is None or ita:
         return None
-    head = _git(repo, ["rev-parse", "-q", "--verify", "HEAD"])      # a code root's commit (round 2: what a gitlink sees)
-    h = hashlib.sha256(b"head\0" + (head.strip() if head else b"none") + b"\n")
+    h = hashlib.sha256()
+    if own_repo:                                                 # a code root's commit (round 2: what a gitlink sees);
+        head = _git(repo, ["rev-parse", "-q", "--verify", "HEAD"])  # not the outer HEAD: a records commit is not code
+        h.update(b"head\0" + (head.strip() if head else b"none") + b"\n")
     index: "dict[str, str]" = {}
     for rec in staged.split(b"\0"):
         if not rec:
@@ -161,7 +158,8 @@ def _scope_digest(repo: Path, inner: "set[str]", own_repo: bool) -> "str | None"
             resolved = (full.parent / target).resolve()
             if (resolved != root and root not in resolved.parents) or not resolved.is_file():
                 return None                                      # out of the scope, a directory, or dangling
-            body = "link:" + target + "\0" + _file_sha(resolved)  # what it points at (round 2), even ignored or skipped
+            body = (f"link:{target}\0{stat.S_IMODE(resolved.stat().st_mode):o}\0"   # what it points at (round 2),
+                    + _file_sha(resolved))                       # its mode too (post-panel run 1)
         elif stat.S_ISREG(st.st_mode):
             body = _file_sha(full)
         else:
