@@ -53,8 +53,12 @@ class _Tmp(unittest.TestCase):
         (self.proc / "self").mkdir(parents=True)
         (self.root / "home").mkdir()
         self.pbj = _load_pb_journal()
+        # in-process writes: a judge's `PLAYBOOK_SESSION_ID=judge` would make the writer skip every line (agy, impl r1)
+        self._sid = os.environ.pop("PLAYBOOK_SESSION_ID", None)
 
     def tearDown(self):
+        if self._sid is not None:
+            os.environ["PLAYBOOK_SESSION_ID"] = self._sid
         for p in self.root.rglob("*"):
             try:
                 if p.is_dir() and not p.is_symlink():
@@ -167,14 +171,14 @@ class ThePythonWriter(_Tmp):
         self.assertTrue(int(before) <= rec["sts"] <= after + 1, (before, rec["sts"], after))
         boot = Path("/proc/sys/kernel/random/boot_id").read_text()[:8]
         self.assertEqual(rec["boot"], boot)
-        self.assertEqual(rec["section"], "")
+        self.assertIsNone(rec["section"])                              # no section read: null
 
     def test_values_given_are_written_as_given_once_valid(self):
         cases = [(dict(susp=0, sts=5, boot="0a1b2c3d"), (0, 5, "0a1b2c3d")),
-                 (dict(susp=-1, sts=10 ** 12, boot="0A1B2C3D"), (None, None, "")),
-                 (dict(susp="12", sts=1.5, boot="0a1b2c3"), (None, None, "")),
-                 (dict(susp=True, sts=False, boot=7), (None, None, "")),
-                 (dict(sts=5), (None, 5, ""))]                         # one given: none sampled
+                 (dict(susp=-1, sts=10 ** 12, boot="0A1B2C3D"), (None, None, None)),
+                 (dict(susp="12", sts=1.5, boot="0a1b2c3"), (None, None, None)),
+                 (dict(susp=True, sts=False, boot=7), (None, None, None)),
+                 (dict(sts=5), (None, 5, None))]                       # one given: none sampled
         for given, want in cases:
             with self.subTest(given=given):
                 self.journal.unlink(missing_ok=True)
@@ -192,7 +196,7 @@ class ThePythonWriter(_Tmp):
             self.pbj._HJ_LINE_MAX = old
         rec = self.lines()[0]
         self.assertEqual(tuple(rec), self.pbj.HOOK_FIELDS)
-        self.assertEqual((rec["detail"], rec["error"], rec["section"]), ("", "", ""))
+        self.assertEqual((rec["detail"], rec["error"], rec["section"]), ("", "", None))
         self.assertEqual((rec["task"], rec["susp"], rec["sts"], rec["boot"]), ("234", 5, 6, "0a1b2c3d"))
 
     def test_the_task_from_the_sessions_pointer(self):
@@ -215,11 +219,13 @@ class ThePythonWriter(_Tmp):
         for sid in ("", "..", ".", "../tasks", "a/b"):
             with self.subTest(sid=sid):
                 self.pbj.append_hook_run(self.project, hook="x", session_id=sid)
-                self.assertEqual(self.lines()[-1]["task"], "")
+                self.assertIsNone(self.lines()[-1]["task"])             # the session is not known: null
         self.pbj.append_hook_run(self.project, hook="x", session_id="pid-1", task="77")
         self.assertEqual(self.lines()[-1]["task"], "77")               # given: written as given, once digits
+        self.pbj.append_hook_run(self.project, hook="x", session_id="pid-1", task="")
+        self.assertEqual(self.lines()[-1]["task"], "")                 # given "": known, none
         self.pbj.append_hook_run(self.project, hook="x", session_id="pid-1", task="7a")
-        self.assertEqual(self.lines()[-1]["task"], "")
+        self.assertIsNone(self.lines()[-1]["task"])
 
     def test_a_linked_or_fifo_pointer_is_not_read(self):
         d = self.project / ".agent" / "sessions" / "pid-1"
@@ -227,20 +233,65 @@ class ThePythonWriter(_Tmp):
         (self.root / "t").write_text("7\n")
         (d / "current_state").symlink_to(self.root / "t")
         self.pbj.append_hook_run(self.project, hook="x", session_id="pid-1")
-        self.assertEqual(self.lines()[-1]["task"], "")
+        self.assertIsNone(self.lines()[-1]["task"])
         (d / "current_state").unlink()
         os.mkfifo(d / "current_state")
         t0 = time.monotonic()
         self.pbj.append_hook_run(self.project, hook="x", session_id="pid-1")
         self.assertLess(time.monotonic() - t0, 5)
-        self.assertEqual(self.lines()[-1]["task"], "")
+        self.assertIsNone(self.lines()[-1]["task"])
         (d / "current_state").unlink()
         d.rmdir()
         (self.root / "sd").mkdir()
         (self.root / "sd" / "current_state").write_text("8\n")
         d.symlink_to(self.root / "sd")
         self.pbj.append_hook_run(self.project, hook="x", session_id="pid-1")
-        self.assertEqual(self.lines()[-1]["task"], "")
+        self.assertIsNone(self.lines()[-1]["task"])
+        d.unlink()
+        self.pbj.append_hook_run(self.project, hook="x", session_id="pid-1")
+        self.assertEqual(self.lines()[-1]["task"], "")                 # a known session with no directory: none
+        d.mkdir()
+        self.pbj.append_hook_run(self.project, hook="x", session_id="pid-1")
+        self.assertEqual(self.lines()[-1]["task"], "")                 # its directory, no pointer: none (P24)
+
+    def _fake_clock(self, readings):
+        """A stand-in for pb_journal's `time`: each read pops the next (kind, ns) — `w` wall, `m` MONOTONIC, `b`
+        BOOTTIME — and the test fails if the sampler reads a kind out of the scripted order."""
+        it = iter(readings)
+
+        class T:
+            CLOCK_MONOTONIC, CLOCK_BOOTTIME = 1, 7
+
+            @staticmethod
+            def time_ns():
+                kind, v = next(it)
+                assert kind == "w", kind
+                return v
+
+            @staticmethod
+            def clock_gettime_ns(c):
+                kind, v = next(it)
+                assert kind == ("m" if c == 1 else "b"), (kind, c)
+                return v
+        return T
+
+    def test_the_sample_is_one_bracketed_reading(self):
+        """codex, opus, sonnet (impl r1): wall, MONOTONIC, BOOTTIME, MONOTONIC, wall — kept only when the two brackets
+        are short and agree; `susp` from BOOTTIME minus the bracket's middle, `sts` the second wall read."""
+        from unittest import mock
+        S = 10 ** 9
+        clean = [("w", 1760700000 * S), ("m", 100 * S), ("b", 25673 * S + S // 2), ("m", 100 * S + 2000),
+                 ("w", 1760700000 * S + 2000)]
+        with mock.patch.object(self.pbj, "time", self._fake_clock(clean)):
+            self.assertEqual(self.pbj.suspend_sample()[:2], (25573, 1760700000))
+        delay = [("w", 0), ("m", 100 * S), ("b", 25675 * S), ("m", 102 * S), ("w", 2 * S)]       # 2 s awake inside
+        slept = [("w", 0), ("m", 100 * S), ("b", 25675 * S), ("m", 100 * S + 1000), ("w", 9 * S)]   # wall jumped
+        for name, bad in (("a delay", delay), ("a suspend", slept)):
+            with self.subTest(name):
+                with mock.patch.object(self.pbj, "time", self._fake_clock(bad + clean)):
+                    self.assertEqual(self.pbj.suspend_sample()[:2], (25573, 1760700000))        # retried, then kept
+        with mock.patch.object(self.pbj, "time", self._fake_clock(delay * 3)):
+            self.assertEqual(self.pbj.suspend_sample()[:2], (None, None))                       # three bad tries
 
     def test_where_it_does_not_write(self):
         target = self.root / "target"
@@ -807,8 +858,10 @@ class ThreeWritersOneAnswer(_Tmp):
         self.assertIsInstance(recs[1].pop("sts"), int)
         self.assertRegex(recs[1].pop("boot"), r"^[0-9a-f]{8}$")
         for r in (recs[0], recs[2]):
-            self.assertEqual((r.pop("susp"), r.pop("sts"), r.pop("boot")), (None, None, ""))   # bash: none was taken
-        strip = [{k: v for k, v in r.items() if k not in ("ts", "ms", "hook", "session_id")} for r in recs]
+            self.assertEqual((r.pop("susp"), r.pop("sts"), r.pop("boot")), (None, None, None))   # bash: none was taken
+        # `task`: the lib and python know no session here (null), the nudge knows pid-1 with no pointer ("") — held to
+        # one answer by test_the_same_task_section_and_sample
+        strip = [{k: v for k, v in r.items() if k not in ("ts", "ms", "hook", "session_id", "task")} for r in recs]
         self.assertEqual(strip[0], strip[1])
         self.assertEqual(strip[2].pop("detail"), "no nudge")        # the nudge says what it did; the rest is the same
         strip[0].pop("detail")
@@ -826,7 +879,7 @@ class ThreeWritersOneAnswer(_Tmp):
             with self.subTest(sid=sid):
                 subprocess.run([bash_or_skip(), str(NUDGE)], input=self.PAYLOAD, cwd=str(p),
                                env=self.env(PLAYBOOK_SESSION_ID=sid), capture_output=True, text=True, timeout=20)
-                self.assertEqual(self.lines(a / "journal" / "hooks.jsonl")[-1]["task"], "")
+                self.assertIsNone(self.lines(a / "journal" / "hooks.jsonl")[-1]["task"])
 
     def test_the_same_task_section_and_sample(self):
         """Task 234: the three writers read the session's task from the same pointer, and write a section and a
@@ -849,7 +902,7 @@ class ThreeWritersOneAnswer(_Tmp):
         self.assertEqual([r["task"] for r in recs], ["234"] * 3)
         want = ('Work "Plan"', 25573, 1760700000, "0a1b2c3d")
         self.assertEqual([(r["section"], r["susp"], r["sts"], r["boot"]) for r in recs[:2]], [want, want])
-        self.assertEqual((recs[2]["section"], recs[2]["susp"], recs[2]["sts"], recs[2]["boot"]), ("", None, None, ""))
+        self.assertEqual((recs[2]["section"], recs[2]["susp"], recs[2]["sts"], recs[2]["boot"]), (None, None, None, None))
         strip = [{k: v for k, v in r.items() if k not in ("ts", "ms", "hook")} for r in recs[:2]]
         self.assertEqual(strip[0], strip[1])
 

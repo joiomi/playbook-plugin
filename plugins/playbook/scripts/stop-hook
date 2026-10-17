@@ -217,6 +217,7 @@ if [ -z "$TASK" ]; then
     PB_HJ_DECISION=allow; PB_HJ_DETAIL="released: no active task"
     exit 0
 fi
+PB_HJ_TASK="$TASK"      # the journal line names the task this hook decided on (task 234)
 
 # Find task file
 TASK_FILE=$(task_record_file "$AGENT_DIR" "$TASK")

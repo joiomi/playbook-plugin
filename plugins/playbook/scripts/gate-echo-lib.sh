@@ -1621,9 +1621,10 @@ PB_HJ_EVENT=""
 PB_HJ_TOOL_USE_ID=""
 PB_HJ_AGENT_ID=""
 PB_HJ_HOST_SESSION=""
-PB_HJ_SECTION=""           # task 234: the open gate's `##` section (the state echo's accepted read) and the suspend
-PB_HJ_SUSP=""              # sample a python reader took — `susp` (CLOCK_BOOTTIME − CLOCK_MONOTONIC, whole seconds),
-PB_HJ_STS=""               # `sts` (the wall time of that sample, epoch seconds), `boot` (the boot id's first 8)
+PB_HJ_TASK=""              # task 234: the task a hook's read was for (else the writer reads the session's pointer);
+unset PB_HJ_SECTION        # the open gate's `##` section — SET only by an accepted read ("" = read, none), unset = null;
+PB_HJ_SUSP=""              # the suspend sample a python reader took — `susp` (CLOCK_BOOTTIME − CLOCK_MONOTONIC, whole
+PB_HJ_STS=""               # seconds), `sts` (the wall time of that sample, epoch seconds), `boot` (the boot id's first 8)
 PB_HJ_BOOT=""
 
 # pb_hook_begin NAME — from here on, this run writes its line when the hook exits. The runner is installed in every
@@ -1665,7 +1666,7 @@ _pb_hj_exit() {
 hook_journal_append() {
     local LC_ALL=C      # lengths and cuts in bytes
     local rc="$1" failing="${2:-}" lane="" jdir hfile line ts t0="${_PB_HJ_T0:-}" t1 ms=null v
-    local hook event tool tuid sid hsid agent decision detail error task section susp=null sts=null boot=""
+    local hook event tool tuid sid hsid agent decision detail error task section=null susp=null sts=null boot=null
     [ -n "$_PB_HJ_HOOK" ] || return 0
     _pb_hj_lane
     [ -n "$lane" ] || return 0
@@ -1734,20 +1735,22 @@ hook_journal_append() {
         fi
     fi
     _pb_hj_text "$v" 240; error="$v"
-    # task 234: the session's task, read here for every hook; the section and the sample as the hook set them
-    _pb_hj_task "$lane"; task="$v"
-    _pb_hj_text "${PB_HJ_SECTION:-}" 128; section="$v"
+    # task 234 — each value is JSON: null = not on this line (not read, not known, not sampled), "" = read and none.
+    # The task the hook's read was for, else the session's pointer (impl r1: a pointer re-read here could pair another
+    # task with the hook's section); the section only when an accepted read set it; the sample as the hook took it.
+    if [[ "${PB_HJ_TASK:-}" =~ ^[0-9]{1,16}$ ]]; then task="\"$PB_HJ_TASK\""; else _pb_hj_task "$lane"; task="$v"; fi
+    if [ "${PB_HJ_SECTION+set}" = set ]; then _pb_hj_text "$PB_HJ_SECTION" 128; section="\"$v\""; fi
     if [[ "${PB_HJ_SUSP:-}" =~ ^[0-9]{1,12}$ ]]; then susp=$(( 10#$PB_HJ_SUSP )); fi     # no leading zero: JSON
     if [[ "${PB_HJ_STS:-}" =~ ^[0-9]{1,12}$ ]]; then sts=$(( 10#$PB_HJ_STS )); fi
-    if [[ "${PB_HJ_BOOT:-}" =~ ^[0-9a-f]{8}$ ]]; then boot="$PB_HJ_BOOT"; fi
+    if [[ "${PB_HJ_BOOT:-}" =~ ^[0-9a-f]{8}$ ]]; then boot="\"$PB_HJ_BOOT\""; fi
     line="{\"ts\":\"$ts\",\"hook\":\"$hook\",\"event\":\"$event\",\"tool\":\"$tool\",\"tool_use_id\":\"$tuid\""
     line="$line,\"session_id\":\"$sid\",\"host_session_id\":\"$hsid\",\"agent_id\":\"$agent\""
     line="$line,\"decision\":\"$decision\",\"detail\":\"$detail\",\"ms\":$ms,\"exit\":$rc,\"error\":\"$error\""
-    line="$line,\"task\":\"$task\",\"section\":\"$section\",\"susp\":$susp,\"sts\":$sts,\"boot\":\"$boot\"}"
+    line="$line,\"task\":$task,\"section\":$section,\"susp\":$susp,\"sts\":$sts,\"boot\":$boot}"
     if [ "${#line}" -ge "$_PB_HJ_LINE_MAX" ]; then
         # the three free texts go, every key stays (plan panel of task 234: agy, grok, opus, sonnet)
-        line="${line%%,\"detail\":*},\"detail\":\"\",\"ms\":$ms,\"exit\":$rc,\"error\":\"\",\"task\":\"$task\""
-        line="$line,\"section\":\"\",\"susp\":$susp,\"sts\":$sts,\"boot\":\"$boot\"}"
+        line="${line%%,\"detail\":*},\"detail\":\"\",\"ms\":$ms,\"exit\":$rc,\"error\":\"\",\"task\":$task"
+        line="$line,\"section\":null,\"susp\":$susp,\"sts\":$sts,\"boot\":$boot}"     # a dropped section: unknown
         if [ "${#line}" -ge "$_PB_HJ_LINE_MAX" ]; then
             [ "$locked" = none ] || { exec 208<&-; } 2>/dev/null
             return 0
@@ -1850,21 +1853,29 @@ _pb_hj_tool_use_id() {
     return 0
 }
 
-# Sets `v` to the session's task (task 234): the first line of `<lane $1>/sessions/<SESSION_ID>/current_state`, its
-# spaces dropped as the hooks read it, when that is a task number (digits, at most 16); else "". The id only as
-# resolve_session_id accepts one (a single component, never `.` or `..`), no link on the way, a regular file only (a
-# FIFO would hang the hook), one `read` — no process.
+# Sets `v` to the session's task as a JSON value (task 234): `"N"` from the first line of
+# `<lane $1>/sessions/<SESSION_ID>/current_state`, its spaces dropped as the hooks read it, when that is a task number
+# (digits, at most 16); `""` where the session is known and has none (no directory, no pointer, not a number); `null`
+# where it is not known — no id, an id resolve_session_id would refuse (one component, never `.` or `..`), a link on
+# the way, a pointer that is not a regular file (a FIFO would hang the hook). One `read`, no process.
 _pb_hj_task() {
     local d t="" id="${SESSION_ID:-}"
-    v=""
+    v=null
     case "$id" in ''|.|..|*[!A-Za-z0-9._-]*) return 0 ;; esac
     d="$1/sessions"
-    [ -d "$d" ] && [ ! -L "$d" ] || return 0
+    [ -L "$d" ] && return 0
+    v='""'
+    [ -d "$d" ] || return 0
     d="$d/$id"
-    [ -d "$d" ] && [ ! -L "$d" ] && [ -f "$d/current_state" ] && [ ! -L "$d/current_state" ] || return 0
-    { IFS= read -r t < "$d/current_state"; } 2>/dev/null || true
+    if [ -L "$d" ]; then v=null; return 0; fi
+    [ -d "$d" ] || return 0
+    d="$d/current_state"
+    if [ -L "$d" ]; then v=null; return 0; fi
+    [ -e "$d" ] || return 0
+    if [ ! -f "$d" ]; then v=null; return 0; fi
+    { IFS= read -r t < "$d"; } 2>/dev/null || true
     t="${t//[[:space:]]/}"
-    if [[ "$t" =~ ^[0-9]{1,16}$ ]]; then v="$t"; fi
+    if [[ "$t" =~ ^[0-9]{1,16}$ ]]; then v="\"$t\""; fi
     return 0
 }
 

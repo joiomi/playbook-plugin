@@ -304,11 +304,11 @@ Every line has the same eighteen keys, in this order (the last five since task 2
 | `ms` | how long the hook ran, whole milliseconds from its FIRST line to its exit; `null` when bash has no `EPOCHREALTIME` |
 | `exit` | the hook's exit status |
 | `error` | on a failure, what failed: the hook's own name for it, its own failing source line (`line 214: cat "$f"`, as written in the hook — never a command of the agent's), or a python hook's exception TYPE (`RuntimeError` — its message, which can carry a path, stays on stderr) |
-| `task` | the session's task when the hook ran (`"007"`, as `sessions/<id>/current_state` names it — read by the writer itself, for every hook), "" where the session has no task or the writer does not know the session: monitor-nudge knows it only from `PLAYBOOK_SESSION_ID`, and the command guard resolves no session on an allow (resolving it means importing `tasks.core`, ~24 ms of the guard's ~70 ms, measured) — the same call's task-gate line, with the same `tool_use_id`, names the task |
-| `section` | on the state echo's line only: the `##` section the first open gate sits in (`"Work Plan"`), from that call's own read of task.md — the heading's text without `## `, control characters and U+0085 / U+2028 / U+2029 as spaces, at most 64 bytes cut on a whole character; "" on every other line, where no gate is open, where no heading is above it, and where the read was not accepted (overtaken by another hook, or unreadable) |
-| `susp` | the whole seconds the machine had slept since boot (CLOCK_BOOTTIME − CLOCK_MONOTONIC), sampled by the python process the hook ran; `null` where it ran none |
+| `task` | the session's task (`"007"`): on the state echo's and the stop hook's lines the task their read was for; on every other line the session's pointer `sessions/<id>/current_state`, read by the writer itself; `""` where the session is known and has no task; `null` where the writer does not know the session — monitor-nudge knows it only from `PLAYBOOK_SESSION_ID`, and the command guard resolves no session on an allow (resolving it means importing `tasks.core`, ~24 ms of the guard's ~70 ms, measured), so the same call's task-gate line, with the same `tool_use_id`, names the task — or where the pointer is a link or not a regular file |
+| `section` | on the state echo's line only: the `##` section the first open gate sits in (`"Work Plan"`), from that call's own accepted read of task.md — the heading's text without `## `, control characters and U+0085 / U+2028 / U+2029 as spaces, at most 64 bytes cut on a whole character; `""` when that read found no open gate or no heading above it; `null` on every other line, and where the read was not accepted (overtaken by another hook, unreadable) or its text was dropped past the line cap |
+| `susp` | the whole seconds the machine had slept since boot (CLOCK_BOOTTIME − CLOCK_MONOTONIC), from one bracketed reading by the python process the hook ran; `null` where it ran none or no clean reading was had |
 | `sts` | the wall time of that sample, epoch seconds; `null` with `susp` |
-| `boot` | the boot id's first 8 characters (`/proc/sys/kernel/random/boot_id`), "" where none was sampled |
+| `boot` | the boot id's first 8 characters (`/proc/sys/kernel/random/boot_id`); `null` where none was sampled |
 
 Example (the state echo in a test project, task 234):
 
@@ -320,14 +320,18 @@ Example (the state echo in a test project, task 234):
 file: the open gate's `##` heading in `section`, which the task's own template or its author wrote, cut at 64 bytes.
 It is not a conversation record, so a judge's read-only sandbox does not hide it.
 
-**`""` and `null` mean "not on this line"**, never "none": a stop line with `section` "" says nothing about the gate,
-and a bash hook's `susp` `null` says no python ran there, not that the machine never slept. Where the samples are
-taken: the state echo (`task-status.py --echo`, or `--section` on a failed call), the stop hook (`--fields`), and every
-python hook (codex's, the command guard, the dialog hook's answer line — `pb_journal.append_hook_run` samples itself);
-the task gate, the chat log, the session hooks, the task-folder watch and monitor-nudge take none. **The sample's moment is `sts`, not
-`ts`:** the sample is taken while the hook runs and `ts` when it exits, so a suspend between the two falls on the right
-side only when `susp` is paired with `sts`. Between two samples of the same `boot`, the difference of `susp` is the time
-the machine slept between their `sts`; across a different `boot`, it says nothing (each boot starts from zero).
+**`null` means "not on this line", `""` means "read, and there is none"** (impl round 1, grok): a stop line's `section`
+`null` says nothing about the gate; a state echo's `""` says its read found no open gate; a bash hook's `susp` `null`
+says no python ran there, not that the machine never slept. Where the samples are taken: the state echo
+(`task-status.py --echo`, or `--section` on a failed call), the stop hook (`--fields`), and every python hook (codex's,
+the command guard, the dialog hook's answer line — `pb_journal.append_hook_run` samples itself); the task gate, the
+chat log, the session hooks, the task-folder watch and monitor-nudge take none. **The sample is one bracketed reading**
+— wall, MONOTONIC, BOOTTIME, MONOTONIC, wall, in nanoseconds — kept only when both brackets span at most 5 ms, so a delay, a suspend or a clock step inside it cannot be counted as sleep or paired with the wrong moment (up
+to three tries, then `null`). **The sample's moment is `sts`, not `ts`:** the sample is taken while the hook runs and
+`ts` when it exits, so a suspend between the two falls on the right side only when `susp` is paired with `sts`. Between
+two samples of the same `boot`, the difference of `susp` is the time the machine slept between their `sts` — a
+difference of one second either way is rounding, not sleep; across a different `boot`, it says nothing (each boot
+starts from zero).
 
 **How it is written.** The bash hooks set `_PB_HJ_T0=$EPOCHREALTIME` on their first line and call `pb_hook_begin`
 once the library is sourced; their own exit actions (the shell log's line, the stop hook's turn-end mark) go through
@@ -354,8 +358,9 @@ one write is the whole line or nothing — and a living writer's is left (the po
 made a live one look old). The journal directory is made before the lock is taken, so a project's first line holds it
 too. A host without `flock` appends directly (and never rotates). Ids
 keep only id characters; `detail`, `error` and `section` are escaped and cut on a whole character and a whole escape
-(a line past the cap drops those three texts and keeps every key); `task` is digits only, `susp` and `sts` whole
-numbers of at most 12 digits, `boot` 8 lowercase hex — anything else is "" / `null`. Nothing is
+(a line past the cap drops those three texts — `section` then `null` — and keeps every key); `task` is digits, `""`
+or `null`, `susp` and `sts` whole numbers of at most 12 digits, `boot` 8 lowercase hex — anything else is `null`.
+Nothing is
 written outside a playbook project (no `.agent/tasks`, no lane with `tasks/`), in the fresh-clone shape (lanes, no
 marker), with an invalid `.agent/current_user`,
 into a lane that is a link or not writable, through a linked `journal/`, or into a `hooks.jsonl` that is a link or not

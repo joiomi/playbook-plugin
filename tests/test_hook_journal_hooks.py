@@ -12,6 +12,7 @@ checklist). Run: python3 -m unittest tests.test_hook_journal_hooks
 """
 from __future__ import annotations
 
+import calendar
 import json
 import os
 import shutil
@@ -275,12 +276,12 @@ class TheTaskSectionAndSample(_Project):
         self.assertLess(abs(rec["sts"] - time.time()), 60)
         self.assertEqual(rec["boot"], Path("/proc/sys/kernel/random/boot_id").read_text()[:8])
 
-    def shim(self, body):
-        """A PATH whose `python3` runs BODY for task-status.py's `--echo` and is the real one otherwise."""
+    def shim(self, body, mode="--echo"):
+        """A PATH whose `python3` runs BODY for task-status.py's MODE and is the real one otherwise."""
         d = self.root / f"shim{len(list(self.root.glob('shim*')))}"
         d.mkdir()
         real = shutil.which("python3")
-        (d / "python3").write_text(f'#!/bin/bash\nREAL="{real}"\ncase "$*" in *task-status.py\\ --echo*)\n{body}\n'
+        (d / "python3").write_text(f'#!/bin/bash\nREAL="{real}"\ncase "$*" in *task-status.py\\ {mode}*)\n{body}\n'
                                    f';;\nesac\nexec "$REAL" "$@"\n')
         (d / "python3").chmod(0o755)
         return f"{d}:{os.environ['PATH']}"
@@ -318,10 +319,10 @@ class TheTaskSectionAndSample(_Project):
 
     def test_a_failed_call_with_no_task_or_no_file_names_no_section(self):
         rec, _ = self.one(self.E, post("Bash", {"command": "false"}, event="PostToolUseFailure"), 0, "ok", "failed")
-        self.assertEqual((rec["task"], rec["section"], rec["susp"]), ("", "", None))
+        self.assertEqual((rec["task"], rec["section"], rec["susp"]), ("", None, None))   # known session, no task
         (self.session_dir / "current_state").write_text("099\n")
         rec, _ = self.one(self.E, post("Bash", {"command": "false"}, event="PostToolUseFailure"), 0, "ok", "failed")
-        self.assertEqual((rec["task"], rec["section"], rec["susp"]), ("099", "", None))
+        self.assertEqual((rec["task"], rec["section"], rec["susp"]), ("099", None, None))
 
     def test_a_stale_read_logs_no_section_and_keeps_the_sample(self):
         """codex (plan panel): a read the hold rejects — task.md changed after it — must not log its section."""
@@ -330,18 +331,18 @@ class TheTaskSectionAndSample(_Project):
         tf = str(self.task_file)
         path = self.shim(f'"$REAL" "$@"; rc=$?; printf "\\n" >> "{tf}"; exit $rc')
         rec, _ = self.one(self.E, post("Bash", {"command": "true"}), 0, "ok", "stale read", PATH=path)
-        self.assertEqual((rec["task"], rec["section"]), ("001", ""))
+        self.assertEqual((rec["task"], rec["section"]), ("001", None))           # not this call's: null, not ""
         self.sample_ok(rec)
 
     def test_unreadable_gates_log_no_section_and_no_sample(self):
         self.activate()
         rec, _ = self.one(self.E, post("Bash", {"command": "true"}), 0, "context", "gates unreadable",
                           PATH=self.shim("exit 1"))
-        self.assertEqual((rec["task"], rec["section"], rec["susp"], rec["sts"], rec["boot"]), ("001", "", None, None, ""))
+        self.assertEqual((rec["task"], rec["section"], rec["susp"], rec["sts"], rec["boot"]), ("001", None, None, None, None))
         # a read whose transition is not one the echo knows is unreadable too: its section must not leak
         bad = self.shim('printf "%s\\n" 1 0 3 0 0 bogus "" a a a 1 0 0 "Leaked" "5 6 0a1b2c3d"; exit 0')
         rec, _ = self.one(self.E, post("Bash", {"command": "true"}), 0, "context", "gates unreadable", PATH=bad)
-        self.assertEqual((rec["section"], rec["susp"]), ("", None))
+        self.assertEqual((rec["section"], rec["susp"]), (None, None))
 
     def test_garbage_or_missing_extra_lines_change_nothing_else(self):
         """sonnet (plan panel): lines 14-15 are validated — garbage is null / "", and the echo is the same."""
@@ -350,18 +351,18 @@ class TheTaskSectionAndSample(_Project):
         cut = self.shim('"$REAL" "$@" | head -13; exit 0')
         rec, r = self.one(self.E, post("Bash", {"command": "true"}), 0, "context", "echo full", PATH=cut)
         self.assertIn("Working on task [001]", r.stdout)
-        self.assertEqual((rec["section"], rec["susp"], rec["sts"], rec["boot"]), ("", None, None, ""))
+        self.assertEqual((rec["section"], rec["susp"], rec["sts"], rec["boot"]), (None, None, None, None))   # no line 14
         (self.session_dir / "counters").unlink()
         junk = self.shim('"$REAL" "$@" | head -13; printf "%s\\n" "Plan" "-5 1x7 ZZZZZZZZ"; exit 0')
         rec, r = self.one(self.E, post("Bash", {"command": "true"}), 0, "context", "echo full", PATH=junk)
         self.assertIn("Working on task [001]", r.stdout)
-        self.assertEqual((rec["section"], rec["susp"], rec["sts"], rec["boot"]), ("Plan", None, None, ""))
+        self.assertEqual((rec["section"], rec["susp"], rec["sts"], rec["boot"]), ("Plan", None, None, None))
 
     def test_the_stop_hooks_line_carries_the_sample_and_no_section(self):
         self.activate()
         self.hook(self.E, post("Bash", {"command": "true"}))
         rec, _ = self.one("stop-hook", {"stop_hook_active": False}, 2, "block", "held")
-        self.assertEqual((rec["task"], rec["section"]), ("001", ""))
+        self.assertEqual((rec["task"], rec["section"]), ("001", None))
         self.sample_ok(rec)
 
     def test_every_hooks_line_names_the_task(self):
@@ -371,10 +372,44 @@ class TheTaskSectionAndSample(_Project):
         self.activate()
         r, new = self.hook("chat-log-hook", {"session_id": "host-1", "hook_event_name": "UserPromptSubmit",
                                              "prompt": "again"})
-        self.assertEqual([(x["task"], x["section"], x["susp"]) for x in new], [("001", "", None)])
+        self.assertEqual([(x["task"], x["section"], x["susp"]) for x in new], [("001", None, None)])
         rec, _ = self.one("task-gate-hook", pre("Edit", {"file_path": str(self.project / "src" / "app.py")}), 0,
                           "allow", "active task 001")
+        self.assertEqual((rec["task"], rec["section"]), ("001", None))
+
+    def test_an_accepted_read_with_no_open_gate_is_an_empty_section(self):
+        """grok (impl r1): "" is a read that found none; null is no read — the two differ."""
+        self.activate()
+        self.set_task("in_progress", "- [x] a — done")
+        rec, _ = self.one(self.E, post("Bash", {"command": "true"}), 0, "context", "echo full")
         self.assertEqual((rec["task"], rec["section"]), ("001", ""))
+
+    def test_a_switch_after_the_read_keeps_the_reads_task(self):
+        """codex, grok, opus, sonnet (impl r1; codex reproduced): a `tasks work M` landing after the state echo read
+        task N's gates must not pair M with N's section — the line names the task its read was for."""
+        self.activate()
+        self.one(self.E, post("Bash", {"command": "true"}), 0, "context", "echo full")
+        (self.agent / "tasks" / "002-y").mkdir()
+        (self.agent / "tasks" / "002-y" / "task.md").write_text(
+            "# 002 - y\n\n## Status\nin_progress\n\n## Design Phase\n- [ ] d\n", encoding="utf-8")
+        ptr = self.session_dir / "current_state"
+        self.set_task("in_progress", self.TWO)
+        switch = self.shim(f'"$REAL" "$@"; rc=$?; printf "002\\n" > "{ptr}"; exit $rc')
+        rec, _ = self.one(self.E, post("Bash", {"command": "true"}), 0, "context", "echo full", PATH=switch)
+        self.assertEqual((rec["task"], rec["section"]), ("001", "Build Phase"))
+        ptr.write_text("001\n")
+        switch = self.shim(f'"$REAL" "$@"; rc=$?; printf "002\\n" > "{ptr}"; exit $rc', mode="--section")
+        rec, _ = self.one(self.E, post("Bash", {"command": "false"}, event="PostToolUseFailure"), 0, "ok",
+                          "failed call counted", PATH=switch)
+        self.assertEqual((rec["task"], rec["section"]), ("001", "Build Phase"))
+
+    def test_sts_is_the_reads_moment_not_the_lines(self):
+        """grok (impl r1): a sample taken at exit would pair `susp` with `ts` — `sts` must be the read's own time."""
+        self.activate()
+        slow = self.shim('"$REAL" "$@"; rc=$?; sleep 2; exit $rc')
+        rec, _ = self.one(self.E, post("Bash", {"command": "true"}), 0, "context", "echo full", PATH=slow)
+        ts = calendar.timegm(time.strptime(rec["ts"], "%Y-%m-%dT%H:%M:%SZ"))
+        self.assertGreaterEqual(ts - rec["sts"], 2, rec)
 
 
 class TheOthers(_Project):

@@ -262,6 +262,7 @@ _HJ_SESSION = re.compile(r"[A-Za-z0-9._-]+")
 _HJ_TASK = re.compile(rb"[0-9]{1,16}")
 _HJ_BOOT = re.compile(r"[0-9a-f]{8}")
 _HJ_COUNT_MAX = 999_999_999_999         # the bash writer's `^[0-9]{1,12}$`
+_HJ_SAMPLE_SLACK_NS = 5_000_000         # a bracketed clock reading is kept only when it spans at most 5 ms
 _HJ_ARCHIVE = re.compile(r"hooks\.jsonl\.archived-\d{8}-\d{6}-(\d{1,12})-\d+")
 
 
@@ -287,22 +288,33 @@ def _hj_text(value, cap: int) -> str:
 
 def suspend_sample():
     """(susp, sts, boot): the seconds the machine had slept since boot (CLOCK_BOOTTIME − CLOCK_MONOTONIC, whole), the
-    wall time of that reading (epoch seconds) and the boot id's first 8 characters — None / None / "" where they cannot
-    be read. The time-by-phase adder pairs `susp` with `sts`, never with a line's `ts` (plan panel of task 234: codex,
-    grok, sonnet)."""
+    wall time of that reading (epoch seconds) and the boot id's first 8 characters — None where they cannot be read.
+    The time-by-phase adder pairs `susp` with `sts`, never with a line's `ts` (plan panel of task 234: codex, grok,
+    sonnet). ONE bracketed reading, in nanoseconds — wall, MONOTONIC, BOOTTIME, MONOTONIC, wall — kept only when both
+    brackets span at most 5 ms: a delay inside it would read as sleep, a suspend or a clock step inside it
+    would pair the total with the wrong moment (impl r1: codex measured 25573 → 25575 → 25573 with a 2 s delay). Up to
+    three tries, then None. `susp` is BOOTTIME minus the bracket's middle."""
+    susp = sts = None
     try:
-        mono = time.clock_gettime(time.CLOCK_MONOTONIC)
-        wall = time.time()
-        boot_t = time.clock_gettime(time.CLOCK_BOOTTIME)
-        susp, sts = max(0, int(boot_t - mono)), int(wall)
-    except (AttributeError, OSError, ValueError, OverflowError):
+        t = time
+        for _ in range(3):
+            w1 = t.time_ns()
+            m1 = t.clock_gettime_ns(t.CLOCK_MONOTONIC)
+            b = t.clock_gettime_ns(t.CLOCK_BOOTTIME)
+            m2 = t.clock_gettime_ns(t.CLOCK_MONOTONIC)
+            w2 = t.time_ns()
+            dm, dw = m2 - m1, w2 - w1
+            if 0 <= dm <= _HJ_SAMPLE_SLACK_NS and 0 <= dw <= _HJ_SAMPLE_SLACK_NS:     # (so they agree within 5 ms too)
+                susp, sts = max(0, (b - (m1 + m2) // 2) // 1_000_000_000), w2 // 1_000_000_000
+                break
+    except (AttributeError, OSError, ValueError, OverflowError, TypeError):
         susp = sts = None
     try:
         with open("/proc/sys/kernel/random/boot_id", "rb") as f:
-            b = f.read(8).decode("ascii", "replace")
-        boot = b if _HJ_BOOT.fullmatch(b) else ""
+            b8 = f.read(8).decode("ascii", "replace")
+        boot = b8 if _HJ_BOOT.fullmatch(b8) else None
     except OSError:
-        boot = ""
+        boot = None
     return susp, sts, boot
 
 
@@ -310,31 +322,40 @@ def _hj_count(v):
     return v if isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= _HJ_COUNT_MAX else None
 
 
-def _hj_session_task(lane: Path, session_id) -> str:
+def _hj_session_task(lane: Path, session_id) -> "str | None":
     """The session's task, as the bash writer reads it: the first line of `<lane>/sessions/<id>/current_state`, its
-    spaces dropped, when that is a task number (digits, at most 16); else "". The id only as resolve_session_id
-    accepts one; no link on the way; a regular file only, opened without blocking (a FIFO would hang the hook)."""
+    spaces dropped, when that is a task number (digits, at most 16); "" where the session is known and has none; None
+    where it is not known — no id or one resolve_session_id would refuse, a link on the way, a pointer that is not a
+    regular file (opened without blocking: a FIFO would hang the hook)."""
     try:
         sid = str(session_id or "")
         if not _HJ_SESSION.fullmatch(sid) or sid in (".", ".."):
-            return ""
+            return None
         d = lane / "sessions"
-        if d.is_symlink() or not d.is_dir():
+        if d.is_symlink():
+            return None
+        if not d.is_dir():
             return ""
         d = d / sid
-        if d.is_symlink() or not d.is_dir():
+        if d.is_symlink():
+            return None
+        if not d.is_dir():
             return ""
-        fd = os.open(str(d / "current_state"), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+        try:
+            fd = os.open(str(d / "current_state"),
+                         os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+        except FileNotFoundError:
+            return ""
         try:
             if not stat.S_ISREG(os.fstat(fd).st_mode):
-                return ""
+                return None
             data = os.read(fd, 4096)
         finally:
             os.close(fd)
         t = re.sub(rb"[ \t\n\r\f\v]", b"", data.split(b"\n", 1)[0])
         return t.decode("ascii") if _HJ_TASK.fullmatch(t) else ""
     except (OSError, ValueError):
-        return ""
+        return None
 
 
 def resolve_hook_lane(project_root) -> "Path | None":
@@ -365,13 +386,14 @@ def resolve_hook_lane(project_root) -> "Path | None":
 
 def append_hook_run(project_root, *, hook, event="", tool="", tool_use_id="", session_id="", host_session_id="",
                     agent_id="", decision="", detail="", ms=None, exit_code=0, error="", timing=None, task=None,
-                    section="", susp=None, sts=None, boot=None) -> None:
+                    section=None, susp=None, sts=None, boot=None) -> None:
     """Append one hook-journal line for a run of `hook` in the project at `project_root`. Never raises; a write that
     cannot be made is skipped. `ms` is the run's duration (None when unknown); `timing` = (start stamp, fallback
     time) instead makes the duration be taken AFTER the journal's own rotation (impl panel r1, codex). No line for a
     review's session (`PLAYBOOK_SESSION_ID` judge / tail-cert: a review must not write the project — opus).
-    Task 234: `task` None → read from the session's pointer (as the bash writer does); `susp`, `sts` and `boot` all
-    None → this process's own sample; given values are written once valid (digits / 8 hex), else null / ""."""
+    Task 234 — null = not on this line, "" = read and none: `task` None → read from the session's pointer (as the bash
+    writer does), else written once digits ("" kept, anything else null); `section` None → null; `susp`, `sts` and
+    `boot` all None → this process's own sample; given values are written once valid (digits / 8 hex), else null."""
     try:
         if os.environ.get("PLAYBOOK_SESSION_ID", "") in ("judge", "tail-cert"):
             return
@@ -405,13 +427,15 @@ def append_hook_run(project_root, *, hook, event="", tool="", tool_use_id="", se
                 task = _hj_session_task(lane, session_id)
             if susp is None and sts is None and boot is None:
                 susp, sts, boot = suspend_sample()
-            rec["task"] = task if isinstance(task, str) and _HJ_TASK.fullmatch(task.encode("ascii", "replace")) else ""
-            rec["section"] = _hj_text(section, 128)
+            rec["task"] = (task if isinstance(task, str) and (task == "" or _HJ_TASK.fullmatch(task.encode("ascii",
+                           "replace"))) else None)
+            rec["section"] = _hj_text(section, 128) if isinstance(section, str) else None
             rec["susp"], rec["sts"] = _hj_count(susp), _hj_count(sts)
-            rec["boot"] = boot if isinstance(boot, str) and _HJ_BOOT.fullmatch(boot) else ""
+            rec["boot"] = boot if isinstance(boot, str) and _HJ_BOOT.fullmatch(boot) else None
             data = (json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
             if len(data) > _HJ_LINE_MAX:
-                rec["detail"] = rec["error"] = rec["section"] = ""
+                rec["detail"] = rec["error"] = ""
+                rec["section"] = None                   # a dropped section: unknown, not "none"
                 data = (json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
                 if len(data) > _HJ_LINE_MAX:
                     return

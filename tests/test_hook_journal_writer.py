@@ -186,8 +186,8 @@ class TheLine(_Project):
                          ("pid-4242", "host-sess-1", ""))
         self.assertEqual((rec["decision"], rec["detail"], rec["exit"], rec["error"]), ("allow", "", 0, ""))
         self.assertIsInstance(rec["ms"], int)
-        # task 234: no pointer, no section, no sample on this line — "" / null mean "not on this line"
-        self.assertEqual((rec["task"], rec["section"], rec["susp"], rec["sts"], rec["boot"]), ("", "", None, None, ""))
+        # task 234: a known session with no task is ""; no section read and no sample taken here are null
+        self.assertEqual((rec["task"], rec["section"], rec["susp"], rec["sts"], rec["boot"]), ("", None, None, None, None))
 
     def test_the_decision_by_exit_status(self):
         cases = [(PRE, 0, "allow"), (PRE, 2, "block"), (SUB, 0, "ok"), (SUB, 2, "block"), ("", 0, "ok"),
@@ -335,17 +335,17 @@ class TheTaskSectionAndSample(_Project):
         d = self.lane / "sessions" / "pid-4242"
         d.mkdir(parents=True)
         (d / "current_state").symlink_to(target / "current_state")
-        self.assertEqual(self.rec()["task"], "")
+        self.assertIsNone(self.rec()["task"])                           # not trusted: unknown, not "none"
         (d / "current_state").unlink()
         d.rmdir()
         d.symlink_to(target)
-        self.assertEqual(self.rec()["task"], "")
+        self.assertIsNone(self.rec()["task"])
         d.unlink()
         (self.lane / "sessions").rmdir()
         (self.lane / "sessions").symlink_to(self.root)
         (self.root / "pid-4242").mkdir()
         (self.root / "pid-4242" / "current_state").write_text("8\n")
-        self.assertEqual(self.rec()["task"], "")
+        self.assertIsNone(self.rec()["task"])
 
     @_needs("mkfifo")
     def test_a_fifo_pointer_hangs_nothing(self):
@@ -353,7 +353,7 @@ class TheTaskSectionAndSample(_Project):
         d.mkdir(parents=True)
         os.mkfifo(d / "current_state")
         t0 = time.monotonic()
-        self.assertEqual(self.rec()["task"], "")
+        self.assertIsNone(self.rec()["task"])
         self.assertLess(time.monotonic() - t0, 5)
 
     def test_a_session_id_that_is_not_one_component_reads_nothing(self):
@@ -368,7 +368,7 @@ class TheTaskSectionAndSample(_Project):
         for sid in ("../tasks", "..", ".", "a/b", "a b", ""):
             with self.subTest(sid=sid):
                 rec = self.rec(f'SESSION_ID="{sid}"\nexit 0')
-                self.assertEqual(rec["task"], "")
+                self.assertIsNone(rec["task"])                          # the session is not known
 
     def test_the_section_and_the_sample_as_the_hook_set_them(self):
         rec = self.rec('PB_HJ_SECTION="Work Plan"; PB_HJ_SUSP=25573; PB_HJ_STS=1760700000; PB_HJ_BOOT=0a1b2c3d\nexit 0')
@@ -382,7 +382,7 @@ class TheTaskSectionAndSample(_Project):
                 self.assertEqual((rec["susp"], rec["sts"]), (None, None))
         for boot in ("", "-", "0A1B2C3D", "0a1b2c3", "0a1b2c3d9", "0a1b2c3g", '0a1b"c3d'):
             with self.subTest(boot=boot):
-                self.assertEqual(self.rec('PB_HJ_BOOT="$V"\nexit 0', V=boot)["boot"], "")
+                self.assertIsNone(self.rec('PB_HJ_BOOT="$V"\nexit 0', V=boot)["boot"])
         self.assertEqual(self.rec("PB_HJ_SUSP=0; PB_HJ_STS=0\nexit 0")["susp"], 0)
         rec = self.rec("PB_HJ_SUSP=0042; PB_HJ_STS=007\nexit 0")            # a leading zero is not JSON: read as 42
         self.assertEqual((rec["susp"], rec["sts"]), (42, 7))
@@ -392,7 +392,7 @@ class TheTaskSectionAndSample(_Project):
         rec = self.rec('_PB_HJ_LINE_MAX=520; PB_HJ_DETAIL="$Q"; PB_HJ_ERROR="$Q"; PB_HJ_SECTION="$Q"\n'
                        'PB_HJ_SUSP=5; PB_HJ_STS=6; PB_HJ_BOOT=0a1b2c3d\nexit 1', Q="x" * 300)
         self.assertEqual(list(rec), FIELDS)
-        self.assertEqual((rec["detail"], rec["error"], rec["section"]), ("", "", ""))
+        self.assertEqual((rec["detail"], rec["error"], rec["section"]), ("", "", None))   # the dropped section: unknown
         self.assertEqual((rec["task"], rec["susp"], rec["sts"], rec["boot"], rec["exit"]), ("234", 5, 6, "0a1b2c3d", 1))
 
     def test_the_section_is_escaped_and_cut(self):
@@ -403,8 +403,21 @@ class TheTaskSectionAndSample(_Project):
         self.assertEqual(self.rec('PB_HJ_SECTION=$\'a\\tb\\x01c\'\nexit 0')["section"], "a b c")
 
     def test_the_new_variables_start_empty_in_every_hook(self):
-        rec = self.rec(PB_HJ_SECTION="inherited", PB_HJ_SUSP="5", PB_HJ_STS="6", PB_HJ_BOOT="0a1b2c3d")
-        self.assertEqual((rec["section"], rec["susp"], rec["sts"], rec["boot"]), ("", None, None, ""))
+        rec = self.rec(PB_HJ_SECTION="inherited", PB_HJ_SUSP="5", PB_HJ_STS="6", PB_HJ_BOOT="0a1b2c3d", PB_HJ_TASK="999")
+        self.assertEqual((rec["task"], rec["section"], rec["susp"], rec["sts"], rec["boot"]), ("", None, None, None, None))
+
+    def test_a_section_read_and_empty_is_empty_and_an_unread_one_null(self):
+        """grok (impl r1): "" is a read that found no section; null is no read."""
+        self.assertEqual(self.rec('PB_HJ_SECTION=""\nexit 0')["section"], "")
+        self.assertIsNone(self.rec('PB_HJ_SECTION=x; unset PB_HJ_SECTION\nexit 0')["section"])
+
+    def test_the_task_the_hook_read_wins_over_a_later_pointer(self):
+        """codex, grok, opus, sonnet (impl r1): the state echo names the task its read was for — a pointer moved
+        after the read must not be paired with that read's section."""
+        self.pointer("234\n")
+        rec = self.rec('PB_HJ_TASK=77; PB_HJ_SECTION="Work Plan"\nexit 0')
+        self.assertEqual((rec["task"], rec["section"]), ("77", "Work Plan"))
+        self.assertEqual(self.rec("PB_HJ_TASK=7a\nexit 0")["task"], "234")     # not a task number: the pointer
 
 
 class TheToolCallId(_Project):
