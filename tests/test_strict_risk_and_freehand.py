@@ -56,9 +56,7 @@ class TheRiskValue(unittest.TestCase):
 
     def test_a_separator_after_the_value_leaves_it_unclassified(self):
         for value in RISK_CLASSES:
-            for sep in SEPARATORS:
-                if sep == "\r":
-                    continue        # a CR at the very end of the line is its line end (a CRLF file read raw)
+            for sep in SEPARATORS:          # a CR too: the reader's lines are `read_task_text`'s, CRLF folded once
                 with self.subTest(value=value, sep=hex(ord(sep))):
                     self.assertEqual(_risk(f"{value}{sep}why"), "unclassified")
                     self.assertEqual(_risk(f"{value}{sep}"), "unclassified")
@@ -66,13 +64,24 @@ class TheRiskValue(unittest.TestCase):
     def test_the_plain_forms_still_read(self):
         for value in RISK_CLASSES:
             for form in (value, f"  {value}", f"\t{value}", f"`{value}`", f"**{value}**", f"{value} — the reason",
-                         f"{value}\tthe reason", value.capitalize(), f"{value}  ", f"{value}\r",
+                         f"{value}\tthe reason", value.capitalize(), f"{value}  ",
                          f"` {value} `", f"** {value} **", f"_ {value}_"):        # marks around spaces (impl round 1)
                 with self.subTest(form=form):
                     self.assertEqual(_risk(form), value)
-        crlf = "# 001 - X\r\n\r\n## Risk\r\nassertive\r\n\r\n## Intent\r\nx\r\n"
-        self.assertEqual(extract_risk_from_text(crlf), "assertive")
-        self.assertEqual(_risk("assertive\r\r"), "unclassified")    # one CR is the line's end; CRLF never leaves two
+
+    def test_a_file_folds_crlf_once_and_reads_a_lone_cr_strictly(self):
+        """Impl round 2 (codex, grok): `read_task_text` folds CRLF once; a CR left in the value is a separator — the
+        reader folds nothing more (`irreversible\r\r\n` read `irreversible`, and the command guard acknowledged)."""
+        from tasks.core import extract_risk
+        d = Path(tempfile.mkdtemp(prefix="pb224crlf-"))
+        self.addCleanup(shutil.rmtree, d, True)
+        f = d / "task.md"
+        for raw, want in ((b"## Risk\r\nassertive\r\n", "assertive"), (b"## Risk\r\nirreversible\r\r\n", "unclassified"),
+                          (b"## Risk\r\n*irreversible*\r\r\n", "unclassified"), (b"## Risk\nassertive\r\r\n", "unclassified"),
+                          (b"## Risk\nassertive\rwhy\n", "unclassified")):
+            f.write_bytes(b"# 001 - X\r\n\r\n" + raw + b"\r\n## Intent\r\nx\r\n")
+            with self.subTest(raw=raw):
+                self.assertEqual(extract_risk(f), want)
 
     def test_the_command_guard_does_not_take_such_a_value_as_irreversible(self):
         d = Path(tempfile.mkdtemp(prefix="pb224cg-"))
@@ -86,8 +95,8 @@ class TheRiskValue(unittest.TestCase):
         g = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(g)
         for value, want in (("irreversible", True), ("\x85irreversible", False), ("\u2028irreversible", False),
-                            ("irreversible\xa0x", False)):
-            tf.write_text(f"# 001\n\n## Status\nin_progress\n\n## Risk\n{value}\n", encoding="utf-8")
+                            ("irreversible\xa0x", False), ("irreversible\r\r", False)):    # the last on disk: \r\r\n
+            tf.write_bytes(f"# 001\n\n## Status\nin_progress\n\n## Risk\n{value}\n".encode("utf-8"))
             with self.subTest(value=repr(value)), mock.patch.dict(os.environ, {"PLAYBOOK_SESSION_ID": "pid-strict-test"}):
                 self.assertEqual(g._active_task_is_irreversible(str(d)), want)
 
@@ -95,9 +104,10 @@ class TheRiskValue(unittest.TestCase):
 class TheFreehandStart(unittest.TestCase):
 
     def test_a_separator_before_freehand_releases_nothing(self):
-        for sep in SEPARATORS:                 # a CR too (impl round 1): it is a line's end only at its very end
-            with self.subTest(sep=hex(ord(sep))):
-                self.assertFalse(_freehand_release_allowed(_freehand_lines(f" {sep}Freehand now")))
+        for sep in SEPARATORS:                 # a CR too (impl round 1); three positions (impl round 2, sonnet)
+            for first in (f" {sep}Freehand now", f"{sep}Freehand now", f"{sep} Freehand now"):
+                with self.subTest(sep=hex(ord(sep)), first=repr(first)):
+                    self.assertFalse(_freehand_release_allowed(_freehand_lines(first)))
 
     def test_the_plain_forms_still_release(self):
         for first in (" Freehand now", "\tFreehand now", "  Freehand — stay to discuss the work with the user."):
@@ -112,10 +122,11 @@ class TheFreehandStart(unittest.TestCase):
         self.assertIsNone(_FREEHAND_RE.match(first))
 
     def _task_status(self, *args) -> "list[str]":
+        # bytes, split on b"\n" only (impl round 2, opus): text mode would turn a raw CR into a line break and hide it
         r = subprocess.run([sys.executable, str(_PLAYBOOK / "scripts" / "task-status.py"), *args],
-                           capture_output=True, text=True, timeout=60)
+                           capture_output=True, timeout=60)
         self.assertEqual(r.returncode, 0, r.stderr)
-        return r.stdout.split("\n")
+        return [ln.decode("utf-8") for ln in r.stdout.split(b"\n")]
 
     def test_the_stop_hooks_fields_and_the_echo(self):
         d = Path(tempfile.mkdtemp(prefix="pb224ts-"))
@@ -127,6 +138,8 @@ class TheFreehandStart(unittest.TestCase):
             with self.subTest(first=repr(first)):
                 fields = self._task_status("--fields", str(tf))
                 self.assertEqual(fields[3], release)
+                self.assertNotIn("\r", fields[2])
+                self.assertEqual(fields[2].startswith("Freehand"), release == "release", fields[2])
                 echo = self._task_status("--echo", str(tf))
                 self.assertEqual(echo[7].startswith("Freehand"), release == "release", echo[7])
 

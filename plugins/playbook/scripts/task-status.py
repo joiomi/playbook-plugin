@@ -90,7 +90,9 @@ def _echo_fields(lines: "list[str]", prev: "tuple[int, int, int, int, int, str] 
             # a lone CR inside the text (not a line break, task 214) never reaches the stored copy, where the gates are
             # read (task 220, sonnet: the stored copy never matched) — task 224: trimmed of spaces and tabs only, as core
             # reads it, and an inner CR kept VISIBLE as the two characters `\r` (deleting it made `\rFreehand …` read
-            # `Freehand …`, so the state-echo hook's `case` went into Freehand mode while the stop hook held — impl r1)
+            # `Freehand …`, so the state-echo hook's `case` went into Freehand mode while the stop hook held — impl r1).
+            # A literal backslash-r in a gate then reads the same as a CR: neither can start with `Freehand`, and the
+            # tick compares copies made the same way (impl round 2, opus, sonnet)
             gates.append((i + 1, m.group(1) != " ", raw[m.end():].strip(" \t").replace("\r", "\\r")))
     first = next((k for k, g in enumerate(gates) if not g[1]), -1)
     below = sum(1 for g in gates[first + 1:] if g[1]) if first >= 0 else 0
@@ -187,9 +189,11 @@ def main(argv: "list[str]") -> int:
     if fields:
         unchecked, _total, first = _live_gate_state(lines)
         # The gate text is ONE physical line, so it cannot carry `\n`; any other
-        # separator char stays inside the field, and a stray CR is dropped so the
-        # third field is exactly one line for the hook's `read`.
-        out += [str(unchecked), first.replace("\r", ""),
+        # separator char stays inside the field, and a stray CR is shown as the two
+        # characters `\r` (task 224, impl round 2: deleted, `\rFreehand now` showed as
+        # `Freehand now` in the stop hook's message while the release line said `hold`)
+        # so the third field is exactly one line for the hook's `read`.
+        out += [str(unchecked), first.replace("\r", "\\r"),
                 "release" if _freehand_release_allowed(lines) else "hold"]
     # Bytes, `\n` only: a text-mode print() may translate the newline to CRLF, and
     # bash command substitution keeps the CR, so `blocked\r` would miss the hook's

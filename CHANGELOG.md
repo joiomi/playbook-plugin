@@ -261,12 +261,13 @@ and the command guard's acknowledgement follow that value), and `- [ ] \x85Freeh
 - The `## Risk` value: only spaces and tabs around the word (and around the `` ` `` `*` `_` marks), and the word ends
   at the first space or tab; any other such character (U+0085, U+2028, U+2029, U+00A0, VT, FF, a CR inside the line,
   U+3000 and the rest — 26 besides space, tab and the line feed) before, in or after it leaves the value
-  `unclassified`, which the close holds to the strict bar. One CR at the line's very end is still that line's end.
+  `unclassified`, which the close holds to the strict review bar (a CR left after `read_task_text` folded CRLF once
+  counts as such a character).
 - A gate's text after its box is trimmed of spaces and tabs only, so such a character before `Freehand` keeps the
   gate an ordinary one: the stop hook's release (`task-status.py --fields`), codex's echo and the state echo's
-  Freehand mode all read it so. The echo's gate text keeps such a character where it used to drop it at the ends,
-  and shows a CR inside it as the two characters `\r` (it used to delete it, so `\rFreehand …` echoed as
-  `Freehand …`).
+  Freehand mode all read it so. The echo's gate text and the stop hook's message keep such a character where they
+  used to drop it at the ends, and show a CR inside it as the two characters `\r` (they used to delete it, so
+  `\rFreehand …` showed as `Freehand …`).
 - A record whose value or gate has such a character next to it now reads stricter (the owner's rule: design for new
   projects).
 

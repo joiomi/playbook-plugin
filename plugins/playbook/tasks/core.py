@@ -1919,7 +1919,8 @@ def _writer_section_span(lines: "list[str]", title: str) -> "tuple[int, int] | N
 
 
 def extract_risk_from_text(text: str) -> str:
-    """`extract_risk` for a buffer already in hand (task 058, plan panel P2).
+    """`extract_risk` for a buffer already in hand (task 058, plan panel P2) — the text as `read_task_text` returns it,
+    CRLF folded once (task 224: folding again is not idempotent, `\r\r\n` → `\r\n` → `\n`).
 
     The destructive-command guard read the task file TWICE — once for the
     status, once through `extract_risk` — so a write landing between them could
@@ -1961,9 +1962,10 @@ def _risk_from_lines(lines: "list[str]") -> str:
     # Task 224 (task 214's V2; the owner 2026-10-16 09:48: "Riscul … se citesc strict"): only spaces and tabs separate
     # — `str.strip` / `str.split` took U+0085, U+2028, U+00A0, VT, FF… for white space, so `\x85irreversible` read
     # `irreversible`. Such a character before, in or after the token leaves it unrecognised (`unclassified`, the strict
-    # bar). One CR at the line's very end is that line's end (a CRLF text read raw; CRLF never leaves two). The marks
-    # (`` ` `` `*` `_`) come off between two space/tab trims, so `` ` reversible ` `` reads as before (impl round 1).
-    raw = lines[i + 1].removesuffix("\r").strip(" \t").strip("`*_").strip(" \t").lower()
+    # bar). The lines are `read_task_text`'s, which folded CRLF once; a CR left in them is a separator like the rest
+    # (impl round 2, codex, grok: folding one more read `irreversible\r\r\n` as `irreversible`). The marks (`` ` ``
+    # `*` `_`) come off between two space/tab trims, so `` ` reversible ` `` reads as before (impl round 1).
+    raw = lines[i + 1].strip(" \t").strip("`*_").strip(" \t").lower()
     token = re.split(r"[ \t]", raw, maxsplit=1)[0]
     if token in RISK_CLASSES:
         return token
