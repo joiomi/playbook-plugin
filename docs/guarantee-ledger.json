@@ -1314,7 +1314,7 @@
     {
       "id": "PB-RISK-CLASSIFY",
       "category": "risk-and-close",
-      "statement": "Risk metadata recognizes the configured reversible/irreversible/assertive values; an offered-but-unset or duplicated Risk field degrades to unclassified and blocks the close, while a legacy task with no Risk heading keeps the warning-only path. The value is read with spaces and tabs as its only separators (task 224, the owner's 2026-10-16 ruling on task 214's V2): any other character str.isspace() accepts — U+0085, U+2028, U+00A0, VT, FF and the rest — before, in or after the word leaves it unclassified, so it can raise neither the close's bar nor the command guard's irreversible acknowledgement; a CR at the line's very end is its line end.",
+      "statement": "Risk metadata recognizes the configured reversible/irreversible/assertive values; an offered-but-unset or duplicated Risk field degrades to unclassified and blocks the close, while a legacy task with no Risk heading keeps the warning-only path. The value is read with spaces and tabs as its only separators (task 224, the owner's 2026-10-16 ruling on task 214's V2): any other character str.isspace() accepts — U+0085, U+2028, U+00A0, VT, FF and the rest — before, in or after the word leaves it unclassified — never read as a class: no irreversible acknowledgement from the command guard, and the close held to the strict bar; one CR at the line's very end is its line end.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/core.py",

@@ -1961,8 +1961,9 @@ def _risk_from_lines(lines: "list[str]") -> str:
     # Task 224 (task 214's V2; the owner 2026-10-16 09:48: "Riscul … se citesc strict"): only spaces and tabs separate
     # — `str.strip` / `str.split` took U+0085, U+2028, U+00A0, VT, FF… for white space, so `\x85irreversible` read
     # `irreversible`. Such a character before, in or after the token leaves it unrecognised (`unclassified`, the strict
-    # bar). A CR at the line's very end is that line's end (a CRLF text read raw).
-    raw = lines[i + 1].rstrip("\r").strip(" \t").strip("`*_").lower()
+    # bar). One CR at the line's very end is that line's end (a CRLF text read raw; CRLF never leaves two). The marks
+    # (`` ` `` `*` `_`) come off between two space/tab trims, so `` ` reversible ` `` reads as before (impl round 1).
+    raw = lines[i + 1].removesuffix("\r").strip(" \t").strip("`*_").strip(" \t").lower()
     token = re.split(r"[ \t]", raw, maxsplit=1)[0]
     if token in RISK_CLASSES:
         return token

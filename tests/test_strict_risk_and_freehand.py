@@ -66,11 +66,13 @@ class TheRiskValue(unittest.TestCase):
     def test_the_plain_forms_still_read(self):
         for value in RISK_CLASSES:
             for form in (value, f"  {value}", f"\t{value}", f"`{value}`", f"**{value}**", f"{value} — the reason",
-                         f"{value}\tthe reason", value.capitalize(), f"{value}  ", f"{value}\r"):
+                         f"{value}\tthe reason", value.capitalize(), f"{value}  ", f"{value}\r",
+                         f"` {value} `", f"** {value} **", f"_ {value}_"):        # marks around spaces (impl round 1)
                 with self.subTest(form=form):
                     self.assertEqual(_risk(form), value)
         crlf = "# 001 - X\r\n\r\n## Risk\r\nassertive\r\n\r\n## Intent\r\nx\r\n"
         self.assertEqual(extract_risk_from_text(crlf), "assertive")
+        self.assertEqual(_risk("assertive\r\r"), "unclassified")    # one CR is the line's end; CRLF never leaves two
 
     def test_the_command_guard_does_not_take_such_a_value_as_irreversible(self):
         d = Path(tempfile.mkdtemp(prefix="pb224cg-"))
@@ -83,7 +85,7 @@ class TheRiskValue(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("cg_224", _PLAYBOOK / "scripts" / "command_guard.py")
         g = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(g)
-        for value, want in (("irreversible", True), ("\x85irreversible", False), (" irreversible", False),
+        for value, want in (("irreversible", True), ("\x85irreversible", False), ("\u2028irreversible", False),
                             ("irreversible\xa0x", False)):
             tf.write_text(f"# 001\n\n## Status\nin_progress\n\n## Risk\n{value}\n", encoding="utf-8")
             with self.subTest(value=repr(value)), mock.patch.dict(os.environ, {"PLAYBOOK_SESSION_ID": "pid-strict-test"}):
@@ -93,9 +95,7 @@ class TheRiskValue(unittest.TestCase):
 class TheFreehandStart(unittest.TestCase):
 
     def test_a_separator_before_freehand_releases_nothing(self):
-        for sep in SEPARATORS:
-            if sep == "\r":
-                continue            # a CR right after the box: the gate reader drops it with the line's end only
+        for sep in SEPARATORS:                 # a CR too (impl round 1): it is a line's end only at its very end
             with self.subTest(sep=hex(ord(sep))):
                 self.assertFalse(_freehand_release_allowed(_freehand_lines(f" {sep}Freehand now")))
 
@@ -121,8 +121,8 @@ class TheFreehandStart(unittest.TestCase):
         d = Path(tempfile.mkdtemp(prefix="pb224ts-"))
         self.addCleanup(shutil.rmtree, d, True)
         tf = d / "task.md"
-        for first, release in ((" \x85Freehand now", "hold"), ("  Freehand now", "hold"),
-                               (" Freehand now", "release")):
+        for first, release in ((" \x85Freehand now", "hold"), (" \u2028Freehand now", "hold"),
+                               (" \rFreehand now", "hold"), (" Freehand now", "release")):
             tf.write_text("\n".join(_freehand_lines(first)) + "\n", encoding="utf-8")
             with self.subTest(first=repr(first)):
                 fields = self._task_status("--fields", str(tf))

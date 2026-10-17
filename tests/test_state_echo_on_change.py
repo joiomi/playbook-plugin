@@ -872,7 +872,11 @@ class EchoFields(unittest.TestCase):
         self.assertEqual((f["transition"], f["ticked"]), ("done", "3"))
 
     def test_a_lone_cr_inside_a_gates_text_still_matches_its_stored_copy(self):
-        f = self.run_echo("## Work\n- [ ] Alpha\rstep\n- [ ] B\n", 0, 0, 1, 0, 0, "Alphastep")
+        # the stored copy is the text the echo printed — since task 224 an inner CR is kept visible as `\r` (deleted,
+        # `\rFreehand …` read as `Freehand …` in the hook's case); it still holds no CR and still matches
+        printed = self.run_echo("## Work\n- [ ] Alpha\rstep\n- [ ] B\n")["text"]
+        self.assertEqual(printed, "Alpha\\rstep")
+        f = self.run_echo("## Work\n- [ ] Alpha\rstep\n- [ ] B\n", 0, 0, 1, 0, 0, printed)
         self.assertEqual(f["transition"], "same")      # sonnet
 
     def test_the_cut_texts_count_characters(self):
