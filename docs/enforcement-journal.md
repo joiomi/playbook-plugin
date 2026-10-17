@@ -304,7 +304,7 @@ Every line has the same eighteen keys, in this order (the last five since task 2
 | `ms` | how long the hook ran, whole milliseconds from its FIRST line to its exit; `null` when bash has no `EPOCHREALTIME` |
 | `exit` | the hook's exit status |
 | `error` | on a failure, what failed: the hook's own name for it, its own failing source line (`line 214: cat "$f"`, as written in the hook — never a command of the agent's), or a python hook's exception TYPE (`RuntimeError` — its message, which can carry a path, stays on stderr) |
-| `task` | the session's task (`"007"`): on the state echo's and the stop hook's lines the task their read was for; on every other line the session's pointer `sessions/<id>/current_state`, read by the writer itself; `""` where the session is known and has no task; `null` where the writer does not know the session — monitor-nudge knows it only from `PLAYBOOK_SESSION_ID`, and the command guard resolves no session on an allow (resolving it means importing `tasks.core`, ~24 ms of the guard's ~70 ms, measured), so the same call's task-gate line, with the same `tool_use_id`, names the task — or where the pointer is a link or not a regular file |
+| `task` | the session's task (`"007"`): on the state echo's and the stop hook's lines the task their read was for; on every other line the session's pointer `sessions/<id>/current_state`, read by the writer itself; `""` where the session is known and has no task; `null` where the writer does not know the session — monitor-nudge knows it only from `PLAYBOOK_SESSION_ID`, and the command guard resolves no session on an allow (resolving it means importing `tasks.core`, ~24 ms of the guard's ~70 ms, measured), so the same call's task-gate line, with the same `tool_use_id`, names the task — or where the pointer the writer reads is a link or not a regular file (the state echo and the stop hook follow a linked pointer, as they always have, and name the task they acted on; routed to one rule, task 234's impl round 2) |
 | `section` | on the state echo's line only: the `##` section the first open gate sits in (`"Work Plan"`), from that call's own accepted read of task.md — the heading's text without `## `, control characters and U+0085 / U+2028 / U+2029 as spaces, at most 64 bytes cut on a whole character; `""` when that read found no open gate or no heading above it; `null` on every other line, and where the read was not accepted (overtaken by another hook, unreadable) or its text was dropped past the line cap |
 | `susp` | the whole seconds the machine had slept since boot (CLOCK_BOOTTIME − CLOCK_MONOTONIC), from one bracketed reading by the python process the hook ran; `null` where it ran none or no clean reading was had |
 | `sts` | the wall time of that sample, epoch seconds; `null` with `susp` |
@@ -329,7 +329,9 @@ chat log, the session hooks, the task-folder watch and monitor-nudge take none. 
 — wall, MONOTONIC, BOOTTIME, MONOTONIC, wall, in nanoseconds — kept only when both brackets span at most 5 ms, so a delay, a suspend or a clock step inside it cannot be counted as sleep or paired with the wrong moment (up
 to three tries, then `null`). **The sample's moment is `sts`, not `ts`:** the sample is taken while the hook runs and
 `ts` when it exits, so a suspend between the two falls on the right side only when `susp` is paired with `sts`. Between
-two samples of the same `boot`, the difference of `susp` is the time the machine slept between their `sts` — a
+two samples of the same `boot`, the difference of `susp` is the time the machine slept between their `sts`, as
+CLOCK_BOOTTIME counts it — measured on this laptop (task 234, W7): 18.7 s under the kernel's suspend entry-to-exit
+spans over 3 suspends, about 6 s each, the device suspend and resume work CLOCK_MONOTONIC counts as awake — and a
 difference of one second either way is rounding, not sleep; across a different `boot`, it says nothing (each boot
 starts from zero).
 
