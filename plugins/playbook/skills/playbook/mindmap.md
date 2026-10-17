@@ -26,7 +26,8 @@ The rules every reader (`tasks recall`, the bootstrap, the audit, `tasks mindmap
 - No `#` heading or code fence among the facts: readers disagree on where a node with a heading ends, and an unclosed fence stops `tasks mindmap-sync --fix`.
 - A summary node (its full text in `MIND_MAP_OVERFLOW.md`) carries `↗` on its title line, right after the bold title.
 - Any `↗` on a title line marks a summary, so a full node keeps `↗` off its title line.
-- `tasks mindmap-sync --fix` never syncs a node that holds `↗` on any line; it names such a node for a sync by hand.
+- Keep `↗` out of a full node's facts too: `tasks mindmap-sync --fix` never replaces an overflow node's text with a node that holds `↗` on any line, and names it for a sync by hand.
+- A node missing from `MIND_MAP_OVERFLOW.md` is still appended to it whole, marker or not.
 
 How to write them:
 - The facts are `- ` lines right under the title, one fact each, with no blank line among them.

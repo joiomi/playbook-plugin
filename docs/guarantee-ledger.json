@@ -10699,7 +10699,7 @@
     {
       "id": "PB-MINDMAP-SYNC",
       "category": "mind-map",
-      "statement": "Mind-map synchronization updates live nodes, preserves fenced blocks and LF/CRLF newline style, is idempotent on a second run, and degrades to a clean note when no overflow file exists. A node is its title line plus its fact lines (task 226): a summary node is one whose marker is on its title line, so a fact that mentions the marker does not hide a full node's drift, and --fix copies only a node with no marker on any line, so a summary node's fuller overflow text stays — also when its marker was put on a fact line.",
+      "statement": "Mind-map synchronization updates live nodes, preserves fenced blocks and LF/CRLF newline style, is idempotent on a second run, and degrades to a clean note when no overflow file exists. A node is its title line plus its fact lines (task 226): a summary node is one whose marker is on its title line, so a fact that mentions the marker does not hide a full node's drift, and --fix replaces an overflow node's text only with a node that holds no marker on any line, so a summary node's fuller overflow text stays — also when its marker was put on a fact line (a node missing from the overflow is still appended).",
       "owner": [
         {
           "path": "plugins/playbook/tasks/mindmap.py",
