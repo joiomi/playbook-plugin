@@ -431,7 +431,7 @@ class TheComposition(_Tmp):
              "duration_ms": 20000, "status": "ok", "usage": {"status": "known", "in": 1, "out": 1}},
             {"ts": iso(close_t - 2), "hook": "verify", "task": "007", "rc": 0, "how": "ran", "seconds": 5},
             {"ts": iso(close_t + 1), "hook": "close", "task": "007", "reason": "stale close owner-ok",
-             "command": "the owner's word"},
+             "command": 'owner-ok: "the owner\'s word"'},          # as lifecycle writes it: the bound, labelled
             {"ts": iso(close_t + 60), "hook": "review", "task": "007", "kind": "panel", "seat": "late", "round": 2,
              "duration_ms": 1000}])
         self.write("hooks.jsonl", [
@@ -777,6 +777,306 @@ class TheBudget(_CliProject):
         r = self.cli("work", "done", "--force", "--reason", "x",
                      driver="from tasks import numbers\nnumbers.write_closure = lambda *a, **k: None\n")
         self.assertIn("numbers: not written", r.stderr)
+
+
+# --- task 236: the findings task 235's last round routed ---------------------------------------------------------------
+
+def big_session(n, step=2):
+    """A session of `n` lines, a suspend sample on every one (what pb_journal's python writers and the state echo
+    leave), turns every 50 lines."""
+    out = []
+    for i in range(n):
+        ev = "UserPromptSubmit" if i % 50 == 0 else ("PreToolUse" if i % 2 else "PostToolUse")
+        rec = hl(T0 + i * step, ev, tool="Bash", tid=f"t{i // 2}", section="Work Plan", susp=100, sts=T0 + i * step,
+                 boot="aaaaaaaa")
+        rec["_t"] = T0 + i * step
+        out.append(rec)
+    return out
+
+
+class TheScale(unittest.TestCase):
+    """W1 (opus, sonnet, codex; measured 13.7 s on 6,000 lines): the partition is linear and keeps the deadline."""
+
+    def test_twenty_thousand_lines_inside_the_budget(self):
+        lines = big_session(20000)
+        t = time.monotonic()
+        got = numbers.session_partition(lines, "007", lines[-1]["_t"], [], [], deadline=time.monotonic() + 30)
+        self.assertLess(time.monotonic() - t, 3)
+        self.assertEqual(got["total"], lines[-1]["_t"] - lines[0]["_t"])
+
+    def test_a_past_deadline_stops_the_partition_itself(self):
+        lines = big_session(5000)
+        with self.assertRaises(numbers.OutOfTime):
+            numbers.session_partition(lines, "007", lines[-1]["_t"], [], [], deadline=time.monotonic() - 1)
+
+    def test_the_dialog_entries_are_indexed_once(self):
+        idx = numbers.dialog_index(TheDialogs.LOG)
+        self.assertEqual(idx["toolu_A"], {"id": "M001", "questions": 2, "answers": 2})
+        self.assertEqual(idx["toolu_B"], {"id": "M002", "questions": 1, "answers": 1})
+        self.assertNotIn("toolu_C", idx)
+
+
+class TheRoutedFindings(unittest.TestCase):
+    """Task 235's last round, W2-W10 and the Minor ones — each built from the writers' output where a writer exists."""
+
+    def receipt_task(self, ts="2026-10-18T01:00:00+03:00", **kw):
+        from tasks.core import format_verify_receipt
+        block = format_verify_receipt([("verify", "x", 0, "ok")], "abc", "assertive", timestamp=ts, **kw)
+        return "# 007 - x\n\n## Status\ndone\n\n## Verification Receipt\n\n" + block + "\n"
+
+    def test_w2_owner_ok_stop_rule_and_post_panel_reasons_whole_from_the_receipt(self):
+        from tasks.post_d6 import receipt_line
+        long = "the owner, 2026-10-18 02:30: " + "a reason that runs well past two hundred bytes " * 6
+        post = receipt_line([{"panel": "fp", "verdict": "FAIL", "owner_ok": None},
+                             {"panel": "fp", "verdict": "PASS", "owner_ok": long}], "fp")
+        got = numbers.receipt_close(self.receipt_task(
+            freshness={"verdict": "STALE", "round_fp": "a", "now_fp": "b", "accepted_reason": long,
+                       "bound": f'owner-ok: "{" ".join(long.split())}"',      # as core.bound_stale_close writes it
+                       "stop_rule": "stop rule (D6): 2 of 2 impl rounds used (assertive); no judge read after x"},
+            post_d6=post))
+        self.assertEqual(got["owner_ok"], " ".join(long.split()))
+        self.assertTrue(got["stop_rule"].startswith("stop rule (D6): 2 of 2 impl rounds used"))
+        self.assertEqual(got["post_panel"], {"runs": 2, "verdict": "PASS", "owner_ok": [" ".join(long.split())]})
+        text = "\n".join(numbers.format_closure({"closed_at": "x", "window": {}, "time": None, "close": got}))
+        self.assertEqual(text.count("owner-ok"), 1)                # the label once, the reason whole
+
+    def test_w3_a_receipt_quoted_in_a_fence_is_not_the_receipt(self):
+        real = self.receipt_task()
+        fenced = ("# 007 - x\n\n## Recent Chat\n```text\n## Verification Receipt\n\n"
+                  "### 2026-12-31T00:00:00+03:00 · risk reversible · commit zzz\n- **Forced close, reason:** quoted\n```\n\n")
+        got = numbers.receipt_close(fenced + real.split("\n", 2)[2])
+        self.assertEqual((got["stamp"], got["forced_reason"]), ("2026-10-18T01:00:00+03:00", None))
+
+    def test_w7_a_reopen_with_no_new_prompt_counts_no_earlier_prompt(self):
+        lines = [L(0, "UserPromptSubmit", detail="logged M001", task=""), L(2, "PostToolUse", tid="w"),
+                 L(50, "PreToolUse", tool="Bash", tid="c"), L(52, "PostToolUse", tool="Bash", tid="c", task=""),
+                 L(60, "PreToolUse", tool="Bash", tid="r", task=""), L(61, "PostToolUse", tool="Bash", tid="r"),
+                 L(70, "PostToolUse", tid="z")]
+        self.assertEqual(numbers.owner_table(lines, "007", None, start=T0 + 61)["ids"], [])
+
+    def test_w8_a_task_activated_while_another_was_active_keeps_its_prompt(self):
+        lines = [L(0, "UserPromptSubmit", detail="logged M005", task="234"),
+                 L(1, "PreToolUse", hook="command-guard", tool="Bash", tid="w", task=None),
+                 L(1, "PreToolUse", hook="task-gate", tool="Bash", tid="w", task="234"),
+                 L(3, "PostToolUse", tool="Bash", tid="w", task="235"), L(9, "PostToolUse", tid="x", task="235")]
+        self.assertEqual(numbers.owner_table(lines, "235", None, start=T0 + 3)["ids"], ["M005"])
+
+    def test_w9_the_closing_session_is_the_one_whose_open_call_is_this_tasks(self):
+        lines_1 = [L(0, "UserPromptSubmit", host="h-1"), L(40, "PreToolUse", tool="Bash", tid="close", host="h-1")]
+        lines_2 = [L(0, "UserPromptSubmit", host="h-2", task="008"),
+                   L(45, "PreToolUse", tool="Bash", tid="other", host="h-2", task="008")]
+        self.assertEqual(numbers.closing_session({"h-1": lines_1, "h-2": lines_2}, "007", T0 + 60), "h-1")
+        # the closing session's own call runs to the close: the gap from its Pre to `end` is the task's agent time
+        # (agy's "the end line carries the task" changes nothing observable: that gap counts only when its first line
+        # is the task's, and the end line took that line's task — kept for clarity, noted as equivalent)
+        got = numbers.session_partition(lines_1, "007", T0 + 60, [], [])
+        self.assertEqual((got["by_kind"], got["not_task"], got["wall"]), ({"agent": 60}, 0, 60))
+
+    def test_w10_a_sample_after_the_close_brackets_the_closing_gap(self):
+        lines = [L(0, "UserPromptSubmit", susp=0, sts=T0, boot="aaaaaaaa"), L(10, "PreToolUse", tool="Bash", tid="c"),
+                 L(30, "PostToolUse", tool="Bash", tid="c", susp=0, sts=T0 + 30, boot="aaaaaaaa")]
+        got = numbers.session_partition(lines, "007", T0 + 20, [], [])
+        self.assertEqual((got["total"], got["sleep_unmeasured"]), (20, 0))
+
+    def test_a_pre_sorted_after_its_post_leaves_no_call_open(self):
+        lines = [L(0, "UserPromptSubmit"), L(5, "PostToolUse", tool="Bash", tid="x"),
+                 L(5, "PreToolUse", tool="Bash", tid="x"), L(9, "Stop", decision="allow")]
+        self.assertEqual(part(lines, reviews=[(0, 20)])["by_kind"], {"agent": 9})
+
+    def test_a_gap_crossing_the_window_start_is_clipped_not_dropped(self):
+        lines = [L(-10, "UserPromptSubmit"), L(20, "PostToolUse", tid="a"), L(30, "Stop", decision="allow")]
+        got = numbers.session_partition(lines, "007", T0 + 30, [], [], start=T0)
+        self.assertEqual((got["by_kind"], got["wall"]), ({"agent": 30}, 30))
+
+    def test_the_dialog_marker_is_read_as_the_writer_wrote_it(self):
+        log = TheDialogs.LOG.replace("<!-- dialog:toolu_A -->", "<!-- dialog:toolu_Aweird -->")
+        self.assertEqual(numbers.dialog_counts(log, "toolu_A weird!")["id"], "M001")
+
+    def test_bound_is_displayed(self):
+        text = "\n".join(numbers.format_closure({"closed_at": "x", "window": {}, "time": None,
+                                                "close": {"freshness": "STALE", "bound": "post-panel PASS z"}}))
+        self.assertIn("bound: post-panel PASS z", text)
+
+
+class TheRoutedCloseFindings(_CliProject):
+    def test_w4_two_closes_in_one_second_keep_two_entries(self):
+        self.cli("new", "quick", "first")
+        self.cli("work", "1")
+        self.cli("work", "done", "--force", "--reason", "one")
+        doc = self.numbers_doc()
+        second = dict(doc["closures"][0], closure_no=doc["closures"][0]["closure_no"] + 1)
+        orig = numbers.compose
+        numbers.compose = lambda *a, **k: second
+        try:
+            numbers.write_closure(self.project / ".agent", self.task_dir(), "001")
+        finally:
+            numbers.compose = orig
+        self.assertEqual([c["closure_no"] for c in self.numbers_doc()["closures"]], [1, 2])
+
+    def test_w6_a_reopened_task_shows_a_snapshot_of_its_new_life(self):
+        self.cli("new", "quick", "first")
+        self.cli("work", "1")
+        self.cli("work", "done", "--force", "--reason", "one")
+        time.sleep(1.1)
+        self.cli("work", "1", "--reopen")
+        c = numbers.compose(self.project / ".agent", self.task_dir(), "001", deadline=time.monotonic() + 30)
+        self.assertTrue(c["snapshot"])
+        self.assertIsNone(c["closed_at"])
+        r = self.cli("numbers", "1")
+        self.assertIn("closure ", r.stdout)                         # the saved closure
+        self.assertIn("snapshot", r.stdout)                         # and the life in progress
+
+    def test_the_close_records_stop_at_the_next_activation(self):
+        self.cli("new", "quick", "first")
+        self.cli("work", "1")
+        self.cli("work", "done", "--force", "--reason", "one")
+        first = self.numbers_doc()["closures"][0]
+        end = numbers._iso_epoch(first["closed_at"])
+        with open(self.journal, "a") as f:
+            f.write(json.dumps({"ts": iso(end + 30), "hook": "tasks", "decision": "record", "reason": "work",
+                                "task": "001"}) + "\n")
+            f.write(json.dumps({"ts": iso(end + 60), "hook": "close", "decision": "record",
+                                "reason": "stale close owner-ok", "command": "the second close's", "task": "001"}) + "\n")
+        c = numbers.compose(self.project / ".agent", self.task_dir(), "001", deadline=time.monotonic() + 30, end=end)
+        self.assertNotEqual((c["close"] or {}).get("owner_ok"), "the second close's")
+
+
+class TheLinkedJournal(_Tmp):
+    def test_w5_a_rotation_held_lock_makes_the_reader_wait_not_skip(self):
+        if not shutil.which("flock"):
+            self.skipTest("no flock(1)")
+        self.write("hooks.jsonl", [hl(T0, "PostToolUse")])
+        holder = subprocess.Popen(["flock", "-x", str(self.jdir), "sleep", "3"])
+        try:
+            time.sleep(0.3)
+            t = time.monotonic()
+            with self.assertRaises(numbers.OutOfTime):
+                numbers.read_hook_lines(self.jdir, T0, time.monotonic() + 1)
+            self.assertLess(time.monotonic() - t, 2.5)
+        finally:
+            holder.wait()
+        self.assertEqual(len(numbers.read_hook_lines(self.jdir, T0, time.monotonic() + 5)), 1)
+
+    def test_read_enforcement_refuses_a_linked_journal(self):
+        real = self.d / "other"
+        real.mkdir()
+        (real / "enforcement.jsonl").write_text(json.dumps({"ts": iso(T0), "hook": "tasks", "reason": "work",
+                                                            "task": "007"}) + "\n")
+        lane = self.d / "lane2"
+        lane.mkdir()
+        (lane / "journal").symlink_to(real)
+        self.assertEqual(numbers.read_enforcement(lane, time.monotonic() + 5), [])
+
+
+class TheMutationGaps(_Tmp):
+    """Task 236's mutation pass: what the first tests did not hold apart (X3, X4, X7, X8, X9)."""
+
+    def test_the_sleep_placement_keeps_the_deadline_by_itself(self):
+        # nine gaps (the gap loop checks every 2,000) and 1,500 samples after the close: only the placement can stop
+        lines = big_session(10)
+        end = lines[-1]["_t"]
+        ahead = []
+        for i in range(1500):
+            rec = hl(end + 1 + i, "PostToolUse", tool="Bash", tid=f"a{i}", susp=100, sts=end + 1 + i, boot="aaaaaaaa")
+            rec["_t"] = end + 1 + i
+            ahead.append(rec)
+        with self.assertRaisesRegex(numbers.OutOfTime, "sleep placement"):
+            numbers.session_partition(lines + ahead, "007", end, [], [], deadline=time.monotonic() - 1)
+
+    def test_the_gap_loop_keeps_the_deadline_by_itself(self):
+        # 5,000 lines with no sample: nothing to place, only the gap loop can stop
+        lines = [{k: v for k, v in r.items() if k not in ("susp", "sts", "boot")} for r in big_session(5000)]
+        with self.assertRaisesRegex(numbers.OutOfTime, "partition"):
+            numbers.session_partition(lines, "007", lines[-1]["_t"], [], [], deadline=time.monotonic() - 1)
+
+    def test_a_dialog_with_an_unsafe_long_id_found_as_the_writer_marked_it(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("dialog_log_x", _PLAYBOOK / "scripts" / "dialog_log.py")
+        dlog = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(dlog)
+        tid = "toolu/" + "A" * 130                 # the writer drops the `/` and keeps 120 characters
+        lane = self.d / ".agent"                  # made by _Tmp, with its journal/
+        self.assertTrue(dlog.write_entry(lane, tid, ["Options dialog — x", 'A1: "Red"', "Q1 (Color): Pick a color"],
+                                         "claude", "s").startswith("logged M"))
+        lines = [L(10, "PreToolUse", hook="dialog-log", tool="AskUserQuestion", tid=tid),
+                 L(40, "PostToolUse", hook="dialog-log", tool="AskUserQuestion", tid=tid, detail="logged M001")]
+        got = numbers.owner_table(lines, "007", (lane / "chat_log.md").read_text(encoding="utf-8"))
+        self.assertEqual((got["dialogs"], got["questions"], got["answers"], got["wait"]), (1, 1, 1, 30))
+
+    def test_a_block_fenced_inside_the_receipt_is_not_a_close(self):
+        real = TheRoutedFindings.receipt_task(None)
+        quoted = ("```text\n### 2026-12-31T00:00:00+03:00 · risk reversible · commit zzz\n"
+                  "- **Forced close, reason:** quoted\n```\n\n")
+        text = real.replace("## Verification Receipt\n\n", "## Verification Receipt\n\n" + quoted, 1)
+        got = numbers.receipt_close(text)
+        self.assertEqual((got["stamp"], got["forced_reason"]), ("2026-10-18T01:00:00+03:00", None))
+
+    def test_a_clipped_gap_keeps_only_the_sleep_its_window_part_holds(self):
+        # 80 s slept inside a 100 s gap and the window starting at its middle: the window's 50 s hold 50 of it (X17)
+        lines = [L(-50, "PostToolUse", tid="a", susp=100, sts=T0 - 50, boot="aaaaaaaa"),
+                 L(50, "Stop", decision="allow", susp=180, sts=T0 + 50, boot="aaaaaaaa")]
+        got = numbers.session_partition(lines, "007", T0 + 50, [], [], start=T0)
+        self.assertEqual((got["slept"], got["total"], got["wall"]), (50, 50, 50))
+
+    def test_a_turn_a_notification_opened_takes_no_earlier_prompt(self):
+        # M001's turn ended (a released stop); a background notification opened the turn that activated the task (X19)
+        lines = [L(0, "UserPromptSubmit", detail="logged M001", task=""), L(5, "Stop", decision="allow", task=""),
+                 L(20, "UserPromptSubmit", detail="not logged: a notification", task=""),
+                 L(22, "PreToolUse", tool="Bash", tid="w", task=""), L(23, "PostToolUse", tool="Bash", tid="w"),
+                 L(30, "PostToolUse", tid="z")]
+        self.assertEqual(numbers.owner_table(lines, "007", None, start=T0 + 23)["ids"], [])
+
+    def receipt(self, ts="2026-10-17T21:01:40+03:00", accepted="docs only", bound='owner-ok: "the receipt\'s whole word"'):
+        from tasks.core import format_verify_receipt
+        block = format_verify_receipt([("verify", "x", 0, "ok")], "abc", "assertive", timestamp=ts,
+                                      freshness={"verdict": "STALE", "round_fp": "a", "now_fp": "b",
+                                                 "accepted_reason": accepted, "bound": bound})
+        return "# 007 - x\n\n## Status\ndone\n\n## Verification Receipt\n\n" + block + "\n"
+
+    def test_the_receipts_owner_ok_wins_over_the_journals(self):
+        lane, td, _ = TheComposition.project(self)
+        (td / "task.md").write_text(self.receipt(), encoding="utf-8")
+        got = numbers.compose(lane, td, "007", deadline=time.monotonic() + 30)
+        self.assertEqual(got["close"]["owner_ok"], "the receipt's whole word")          # X24
+
+    def test_an_owner_ok_quoted_inside_the_accepted_reason_is_not_the_bound(self):
+        got = numbers.receipt_close(self.receipt(accepted='the note quotes owner-ok: "x" as text'))
+        self.assertEqual(got["owner_ok"], "the receipt's whole word")                    # X30
+
+    def test_a_done_record_seconds_after_the_stamp_still_numbers_the_close(self):
+        lane, td, close_t = TheComposition.project(self)
+        with open(self.jdir / "enforcement.jsonl", "a") as f:       # a slow close: its `done` 2 s after the receipt
+            f.write(json.dumps({"ts": iso(close_t + 2), "hook": "tasks", "reason": "done", "task": "007"}) + "\n")
+        self.assertEqual(numbers.compose(lane, td, "007", deadline=time.monotonic() + 30)["closure_no"], 1)   # X29
+
+
+class TheMutationCloseGaps(_CliProject):
+    def closed(self):
+        self.cli("new", "quick", "first")
+        self.cli("work", "1")
+        self.cli("work", "done", "--force", "--reason", "one")
+        return self.numbers_doc()
+
+    def test_a_newest_close_missing_from_the_file_is_composed_and_shown(self):
+        doc = self.closed()            # the file holds an earlier closure only: this close's write failed
+        older = dict(doc["closures"][0], closed_at="2026-01-01T00:00:00+02:00")
+        (self.task_dir() / "numbers.json").write_text(json.dumps(dict(doc, closures=[older])), encoding="utf-8")
+        r = self.cli("numbers", "1")
+        self.assertIn("the newest close is not in numbers.json", r.stdout)                # X27
+        self.assertIn("forced: one", r.stdout)
+
+    def test_entries_of_one_second_sorted_by_their_number(self):
+        doc = self.closed()
+        entry = doc["closures"][0]
+        (self.task_dir() / "numbers.json").write_text(json.dumps(dict(doc, closures=[dict(entry, closure_no=2)])),
+                                                      encoding="utf-8")
+        orig = numbers.compose
+        numbers.compose = lambda *a, **k: dict(entry, closure_no=1)
+        try:
+            numbers.write_closure(self.project / ".agent", self.task_dir(), "001")
+        finally:
+            numbers.compose = orig
+        self.assertEqual([c["closure_no"] for c in self.numbers_doc()["closures"]], [1, 2])   # X31
 
 
 if __name__ == "__main__":

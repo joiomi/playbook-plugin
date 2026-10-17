@@ -19666,7 +19666,7 @@
     {
       "id": "PB-TASK-NUMBERS",
       "category": "risk-and-close",
-      "statement": "At every successful close, after its `done` record, the close composes the task's numbers for that closure from the plugin's own records only (the enforcement journal, the hook journal with its archives and spools, the run ledger, chat_log.md and the receipt) and keeps them in `<task>/numbers.json` (`closures[]`, keyed by the receipt's stamp; a re-close adds one), under the task lock and only while that receipt is still the task's newest; a fault, or 5 s passed (one deadline for the reading, the lock wait and the write), prints one line and changes nothing of the close. The task's time is split per host session: a gap counts only when both its lines are the task's; slept (the `susp` difference between two samples of one boot, given to the gaps overlapping their own sts interval, largest overlap first, capped; what cannot be placed is counted apart), unknown across a boot change, away (over 2 h awake), outside a turn owner-idle or background, inside a turn (a tool event proves one; a new prompt ends calls left open) owner-question or agent, with Bash and background time inside the task's review spans carved as judges and inside its recorded verify spans (less the review spans) as verify; only the closing session's open call runs to the close; per session the parts add up to the task's time and, with the time not the task's, to the session's span. `tasks numbers [N]` reads them and writes nothing. The close's `hook=close` records name their task.",
+      "statement": "At every successful close, after its `done` record, the close composes the task's numbers for that closure from the plugin's own records only (the enforcement journal, the hook journal with its archives and spools, the run ledger, chat_log.md and the receipt) and keeps them in `<task>/numbers.json` (`closures[]`, keyed by the receipt's stamp and the close's number; a re-close adds one, two closes in one second keep two), under the task lock and only while that receipt is still the task's newest; a fault, or 5 s passed (one deadline for the reading, the lock wait and the write), prints one line and changes nothing of the close. The task's time is split per host session: a gap counts only when both its lines are the task's; slept (the `susp` difference between two samples of one boot, given to the gaps overlapping their own sts interval, largest overlap first, capped; what cannot be placed is counted apart), unknown across a boot change, away (over 2 h awake), outside a turn owner-idle or background, inside a turn (a tool event proves one; a new prompt ends calls left open) owner-question or agent, with Bash and background time inside the task's review spans carved as judges and inside its recorded verify spans (less the review spans) as verify; only this task's latest open call runs to the close; the time split is linear and keeps the deadline; per session the parts add up to the task's time and, with the time not the task's, to the session's span. The close's reasons are read whole from the fence-aware receipt; the hook journal is read under its directory's shared lock. `tasks numbers [N]` reads them and writes nothing, adding a snapshot of a reopened task's life in progress. The close's `hook=close` records name their task.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/numbers.py",
@@ -19800,6 +19800,36 @@
           "negative_control": null,
           "limitations": [
             "Impl r1 (opus, grok, agy): receipts made by core.format_verify_receipt itself."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_task_numbers.py",
+          "reference": "TheScale.test_twenty_thousand_lines_inside_the_budget",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 236 (W1): 20,000 lines with a sample on each; measured 6,000 lines 13.73 s → 0.05 s."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_task_numbers.py",
+          "reference": "TheRoutedFindings.test_w2_owner_ok_stop_rule_and_post_panel_reasons_whole_from_the_receipt",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 236 (W2): the receipt made by core.format_verify_receipt and post_d6.receipt_line."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_task_numbers.py",
+          "reference": "TheRoutedCloseFindings.test_w6_a_reopened_task_shows_a_snapshot_of_its_new_life",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task 236 (W6): a real reopen in a temp project."
           ]
         }
       ],

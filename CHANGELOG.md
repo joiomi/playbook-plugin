@@ -16,6 +16,12 @@ after about 30 days; tasks 232-234 made the plugin record the facts, and now the
   replaces a newer one. A fault or a composition past 5 s prints one line and changes nothing of the close.
 - `tasks numbers [N]` shows them (read-only; an open task as a snapshot).
 - The close's `hook=close` journal records now name their `task`.
+- Task 236 (the findings of 235's last round): the time split is linear in the journal's lines (6,000 lines took
+  13.7 s, now 0.05 s; 60,000 take 0.5 s) and checks its deadline inside; the journal is read under its directory's
+  shared lock, so a rotation cannot drop lines mid-read; each entry carries `closure_no`, so two closes in one second
+  keep two; the receipt is found fence-aware and its owner-ok / stop-rule / post-panel reasons read whole; a reopened
+  task shows a snapshot of its new life; the first prompt is the one that opened the activating turn; the close's open
+  call is this task's, of any tool; samples after the close bracket its last gap.
 
 **Every hook-journal line names its task; the state echo's names the open gate's section; python's carry a suspend
 sample** — PHASE-B.md item 6, third part, task 234. With these the close can split a task's time by phase and drop the
