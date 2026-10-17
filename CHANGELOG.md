@@ -6,14 +6,15 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [1.6.4] — 2026-10-17
 
-**Phase B, items 2 and 3: how the plugin writes, and a verify the close remembers** — tasks 212-228. Item 2 (the
-owner's answers of 2026-10-15 and 2026-10-16) changes what the plugin writes and reads: the judges' trim keeps the Work
-Plan; a task.md carries one audit receipt and no instruction text (`tasks guide` holds it once); every task.md reader
-and writer works on physical lines; the gate echo prints only on a change; the shell log keeps only the agent's
-commands and a hook journal records every hook run; each gate title is one sentence, its note on the lines under it; the
-guide and the mind map write one fact per line; a ruling for more than one task is written once into the project's
-list (`tasks ruling`). Item 3: `tasks verify` remembers a green run, and the close does not run the same code's verify
-again. The suite has 5,255 tests (4,827 at 1.6.3); CI is the same two Linux lanes.
+**Phase B, items 2 and 3: how the plugin writes, and a verify the close remembers** — tasks 212-228. Item 2 (the owner's
+answers of 2026-10-15 and 2026-10-16) changes what the plugin writes and reads: the judges' trim keeps the Work Plan; a
+task.md carries one audit receipt and no instruction text (`tasks guide` holds it once); every task.md reader and writer
+works on physical lines; the gate echo prints only on a change; the shell log keeps only the agent's commands and a hook
+journal records every hook run in the agent's session; each gate title is one sentence, its note on the lines under it;
+the guide and the mind map write one fact per line; a ruling for more than one task is written once into the project's
+list (`tasks ruling`). Item 3: `tasks verify` remembers a green run, and the close can reuse it instead of running the
+verify again on the same tracked code (it runs again when the timeout, the shell or the journal does not qualify). The
+suite has 5,255 tests (4,827 at 1.6.3); CI is the same two Linux lanes.
 
 **Upgrading:** `/playbook:upgrade`, restart every Claude Code session, then re-run `/playbook:init` in each project that
 uses the plugin. Init brings the CLAUDE.md block's new bullets (a gate's note under its title, the project rulings list,
@@ -22,13 +23,17 @@ uses the plugin. Init brings the CLAUDE.md block's new bullets (a gate's note un
 `~/.bash_profile`, `~/.profile` and `~/.zshenv`, each saved to init's user backup first (the hook writes the shell log
 now). Before init, 1.6.4 runs on a project 1.6.3 initialised: measured on a fresh copy, `doctor`, `bootstrap`, `new`,
 `work`, `verify`, `ruling list` and `audit` ran clean, and each of the eight hooks ran (the stop hook blocking an open
-task, as it should) and wrote its journal line. **This release moves data:** at the next `tasks audit` of a task, the
-older audit receipts in its task.md move to `audit-log.md` beside it — nothing is deleted. **A task already in flight**
-keeps the instruction text its template wrote (a new task.md has none — `tasks guide <type>`); a gate's note may stay on
-its own line — the guard and the echo read both; its `## Risk` value is read with spaces and tabs only. **Going back to
-1.6.3** after init: install 1.6.3, then re-run its `/playbook:init` (it puts the shell logger back); 1.6.3's writers
-split a task.md line at any line separator other than LF (U+0085, U+2028, U+2029, VT, FF, U+001C-U+001E), and its
-batch-tick guard does not see a note written under a gate.
+task, as it should) and wrote its journal line; until init, each agent command lands twice in the shell log — once from
+1.6.3's logger, still in `BASH_ENV`, once from the hook (measured). **This release moves data:** at the next
+`tasks audit` of a task, the older audit receipts in its task.md move to `audit-log.md` beside it — nothing is deleted.
+**A task already in flight** keeps the instruction text its template wrote (a new task.md has none —
+`tasks guide <type>`); a gate's note may stay on its own line — the guard and the echo read both; its `## Risk` value is
+read with spaces and tabs only. **Going back to 1.6.3** after init: point the marketplace clone at 1.6.3's commit
+`5a6c837` and update the plugin (a downgrade this way is not measured), then re-run its `/playbook:init` (it puts the
+shell logger back). 1.6.3 splits a task.md line at any line separator other than LF (CR, U+0085, U+2028, U+2029, VT, FF,
+U+001C-U+001E); its batch-tick guard does not see a note written under a gate, so it blocks a tick of two or more gates
+noted that way as bare (measured — tick them one at a time); it does not read `.agent/rulings.md` (copy a ruling still
+needed into each open task's `## Owner rulings`) and has no `tasks guide`.
 
 **The judges' trim keeps the Work Plan** — PHASE-B.md item 2 (first part), task 212. A task.md longer than a judge's
 window used to be cut by keeping Intent/Design and filling from the end of the file, where the template's standing
@@ -203,10 +208,10 @@ host the whole desktop session — and it cost each of them time (a small script
   chat after returning to a task is read as the task in between's; a command the agent itself starts with
   `export PLAYBOOK_SESSION_ID=<its own session>; ` loses that prefix in the log. The hook journal the owner asked for in the same answer is the next entry (task 222).
 
-**Every hook run leaves one line in the hook journal** — PHASE-B.md item 2, task 222, the owner's answer of 2026-10-16
-("Istoric curat + jurnal de hook-uri": "daca nu avem date despre cum a lucrat si ce a facut, nu il vom putea
-imbunatati"). Until now a hook left a trace only for what `enforcement.jsonl` records (a block, an override, an
-allowed code edit) or when it printed (the host's transcript): a silent allow, an echo shown or skipped, a released
+**Every hook run in the agent's session leaves one line in the hook journal** — PHASE-B.md item 2, task 222, the owner's
+answer of 2026-10-16 ("Istoric curat + jurnal de hook-uri": "daca nu avem date despre cum a lucrat si ce a facut, nu il
+vom putea imbunatati"). Until now a hook left a trace only for what `enforcement.jsonl` records (a block, an override,
+an allowed code edit) or when it printed (the host's transcript): a silent allow, an echo shown or skipped, a released
 stop and every duration left none.
 - Each run of a playbook hook in a playbook project appends ONE line to `.agent/<lane>/journal/hooks.jsonl` — a file
   of its own beside `enforcement.jsonl`: Claude's and grok's eight bash hooks, the project's `monitor-nudge.sh`,
@@ -323,8 +328,8 @@ the lines under its title — this is the note half). Measured before (task 218)
   (`)` is no end mark); a dash glued to a title starts its note; the ellipsis guard and an older record's trim are
   tested; the guide renders a type's notes once; `tasks retro` ends its guide with a blank line; the arena's config is
   read and closed; a freehand block names `tasks guide freehand` in the file.
-- This repository's own CLAUDE.md and every record written before keep notes on the gate's line; the installed guard
-  reads only those until a release and `/playbook:init`.
+- This repository's own CLAUDE.md and every record written before keep notes on the gate's line; this version's guard
+  reads both, and `/playbook:init` brings the new instruction into a project's CLAUDE.md.
 
 **The guide and the mind map write one fact per line** — PHASE-B.md item 2, task 226, the other half of the owner's
 answer of 2026-10-16 ("Liste scurte de la început"). Measured before (task 218): a line diff of the map counts 29x the
@@ -377,14 +382,15 @@ cut at 8,000.
 - A commit that touches only `.agent/rulings.md` is a records-only commit: it leaves an open task's panel fresh.
 - The CLAUDE.md template and the playbook skill say which ruling goes where; a task's own stay in `## Owner rulings`.
 
-**A green verify is remembered for exactly that code** — PHASE-B.md item 3, task 228, the owner's answer of 2026-10-16
-("Ține minte ultima verde"). Measured before (task 218, estimates): 323 full verify runs for 135 closed tasks; of 65
-closes, 13 came right after a green full verify and 14 right after a close whose contract was green, with no edit
-between. A full verify here is about 140 s.
+**A green verify is remembered for the same tracked code** — PHASE-B.md item 3, task 228, the owner's answer of
+2026-10-16 ("Ține minte ultima verde"). Measured before (task 218, estimates): 323 full verify runs for 135 closed
+tasks; of 65 closes, 13 came right after a green full verify and 14 right after a close whose contract was green, with
+no edit between. A full verify here is about 140 s.
 - `tasks verify [<N>]` always runs the verify contract the way the close does and remembers a green run per command
   (`.agent/journal/verify-green.json`). `tasks work done` does not run a command again when its green run is for the
-  same code, ran within the current timeout, bash is usable and the journal folder is writable; the receipt line says "reused: the green run of <time>
-  on the same code (key <12 hex>)". Ticking gates and writing records after the run keep it; any code edit does not.
+  same code, ran within the current timeout, bash is usable and the journal folder is writable; the receipt line says
+  "reused: the green run of <time> on the same code (key <12 hex>)". Ticking gates and writing records after the run
+  keep it; any code edit does not.
 - The code key, per fingerprint scope: a code root's HEAD (not the outer one — committing records keeps the key) and
   every file git lists — tracked or not (a tracked one with its index blob, so a staged change counts), its mode, the
   sha256 of its raw bytes (not git's tree, which normalises text and records a nested repository as a commit), a link's
