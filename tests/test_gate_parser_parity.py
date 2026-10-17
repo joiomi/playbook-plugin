@@ -25,6 +25,7 @@ so a fourth parser cannot silently diverge again.
 Pure stdlib unittest. Run: python3 tests/test_gate_parser_parity.py
 """
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -49,14 +50,16 @@ STOP_HOOK_GREP = "^(\ufeff)*[[:space:]]*- \\[ \\]"
 def hook_fields(path: Path) -> "tuple[str, int, str, str]":
     """What the enforcing hooks read: `task-status.py --fields` → (status, live
     unchecked count, first live unchecked gate text, freehand `release`/`hold`).
-    Exactly the bytes the hook consumes — LF-only, four lines."""
+    Exactly the bytes the hook consumes — LF-only, four lines, then the suspend
+    sample the stop hook puts on its journal line only (task 234)."""
     r = subprocess.run([sys.executable, str(TASK_STATUS), "--fields", str(path)],
                        capture_output=True)
     assert r.returncode == 0, r.stderr
     out = r.stdout.decode("utf-8")
     assert b"\r" not in r.stdout, "hook fields must be LF-only bytes"
     parts = out.split("\n")
-    assert len(parts) == 5 and parts[4] == "", f"frame must be exactly 4 LF-terminated lines: {out!r}"
+    assert len(parts) == 6 and parts[5] == "", f"frame must be exactly 5 LF-terminated lines: {out!r}"
+    assert re.fullmatch(r"(\d+|-) (\d+|-) ([0-9a-f]{8}|-)", parts[4]), f"the fifth line is the sample: {out!r}"
     status, count, first, release = parts[:4]
     assert release in ("release", "hold"), release
     return status, int(count), first, release

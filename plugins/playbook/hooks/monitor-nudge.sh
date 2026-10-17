@@ -79,7 +79,7 @@ fi
 PB_HJ_DECISION=""; PB_HJ_DETAIL=""
 _pb_nudge_journal() {
     local rc=$? LC_ALL=C lane="$AGENT_DIR" p="$PROJECT_DIR" jdir hfile ts ms=null t0="${_PB_HJ_T0:-}" t1 locked=none
-    local re v h k sub event tool tuid sid hsid agent decision detail line error="" fresh=false
+    local re v h k sub event tool tuid sid hsid agent decision detail line error="" fresh=false task=""
     set +e
     case "${PLAYBOOK_SESSION_ID:-}" in judge|tail-cert) exit "$rc" ;; esac
     _pbn_id() { v="${1:0:$(( $2 * 2 ))}"; v="${v//[^A-Za-z0-9._:@\/+=-]/}"; v="${v:0:$2}"; }
@@ -140,9 +140,21 @@ _pb_nudge_journal() {
                 *) _pbn_text "$BASH_COMMAND" 240; error="$v" ;;
             esac
             case "$rc" in ''|*[!0-9]*) rc=255 ;; esac
-            printf -v line '{"ts":"%s","hook":"monitor-nudge","event":"%s","tool":"%s","tool_use_id":"%s","session_id":"%s","host_session_id":"%s","agent_id":"%s","decision":"%s","detail":"%s","ms":%s,"exit":%s,"error":"%s"}' \
-                "$ts" "$event" "$tool" "$tuid" "$sid" "$hsid" "$agent" "$decision" "$detail" "$ms" "$rc" "$error"
-            if [ "${#line}" -lt 1024 ]; then
+            # task 234: the session's task as the lib reads it (one component id, no link, a regular file, one `read`);
+            # no section and no suspend sample here (no python runs)
+            v="${PLAYBOOK_SESSION_ID:-}"
+            case "$v" in
+                ''|.|..|*[!A-Za-z0-9._-]*) ;;
+                *)  h="$lane/sessions"; sub="$h/$v"
+                    if [ -d "$h" ] && [ ! -L "$h" ] && [ -d "$sub" ] && [ ! -L "$sub" ] && [ -f "$sub/current_state" ] \
+                       && [ ! -L "$sub/current_state" ]; then
+                        v=""; { IFS= read -r v < "$sub/current_state"; } 2>/dev/null
+                        v="${v//[[:space:]]/}"; [[ "$v" =~ ^[0-9]{1,16}$ ]] && task="$v"
+                    fi ;;
+            esac
+            printf -v line '{"ts":"%s","hook":"monitor-nudge","event":"%s","tool":"%s","tool_use_id":"%s","session_id":"%s","host_session_id":"%s","agent_id":"%s","decision":"%s","detail":"%s","ms":%s,"exit":%s,"error":"%s","task":"%s","section":"","susp":null,"sts":null,"boot":""}' \
+                "$ts" "$event" "$tool" "$tuid" "$sid" "$hsid" "$agent" "$decision" "$detail" "$ms" "$rc" "$error" "$task"
+            if [ "${#line}" -lt 2048 ]; then
                 if [ "$locked" = no ]; then
                     v="hooks.jsonl.spool-${ts//:/}-$$-$RANDOM$RANDOM"     # the NAME sanitized, never the path (run 4)
                     sub="$jdir/$v"; h="$jdir/hooks.jsonl.spooling-${v#hooks.jsonl.spool-}"

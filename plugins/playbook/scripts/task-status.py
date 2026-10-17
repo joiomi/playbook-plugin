@@ -13,16 +13,20 @@ uses, so Python and the enforcing hooks cannot disagree about the same file.
 
   task-status.py <task.md>           one line: the status (`pending`, `blocked`,
                                      `done (…)`, `unknown` when no live `## Status`)
-  task-status.py --fields <task.md>  four lines: status, live unchecked gate
+  task-status.py --fields <task.md>  five lines: status, live unchecked gate
                                      count, first live unchecked gate text (empty
-                                     when none), and `release`/`hold` — whether the
+                                     when none), `release`/`hold` — whether the
                                      stop-hook's Freehand arm may waive the block
                                      (`tasks.core._freehand_release_allowed`: the
                                      ONE rule, decided here, never re-derived from
-                                     the gate text in bash) — one spawn for
-                                     everything the stop-hook needs
+                                     the gate text in bash) — and the suspend
+                                     sample (below) — one spawn for everything the
+                                     stop-hook needs
+  task-status.py --section <task.md> two lines: the first live open gate's `##`
+                                     section and the suspend sample — the state
+                                     echo's read on a failed call (task 234)
   task-status.py --echo <task.md> [<P> <B> <OPENS> <CHECKS> <ABOVE> <T>]
-                                     thirteen lines for the state echo (tasks 219,
+                                     fifteen lines for the state echo (tasks 219,
                                      220): total, checked, the first live open
                                      gate's line, its position among the live gates
                                      (-1 none), the checked live gates below it, the
@@ -41,6 +45,19 @@ uses, so Python and the enforcing hooks cannot disagree about the same file.
                                      line (done only); the first open gate's full
                                      text, its first 200 and 60 characters, and that
                                      text's OPENS, CHECKS and ABOVE for the next call
+                                     (thirteen, `_echo_fields`); then (task 234) the
+                                     first open gate's `##` section and the suspend
+                                     sample
+
+The section (task 234) is the nearest live `## ` heading above the first live open
+gate — read with the gates' own fence flags and `core._atx_h2_text` — without the
+`## `, control characters and U+0085 / U+2028 / U+2029 as spaces, spaces folded,
+cut at 64 bytes on a whole character; empty when no gate is open or no heading is
+above it. The suspend sample is one line `<susp> <sts> <boot>` (pb_journal's
+`suspend_sample`): the whole seconds the machine had slept since boot, the wall
+time of that reading and the boot id's first 8 characters, `-` for one that could
+not be read. Each extra is computed apart: a fault there prints `` / `- - -` and
+never fails the lines before it.
 
 Exits 0 on success. Any failure (missing file, import error) exits non-zero with a
 one-line diagnostic on stderr; the hooks treat that as UNREADABLE state and fail
@@ -145,12 +162,69 @@ def _echo_fields(lines: "list[str]", prev: "tuple[int, int, int, int, int, str] 
             str(len(matches_of(text)) if first >= 0 else 0), str(above_of(text) if first >= 0 else 0)]
 
 
+_SECTION_MAX = 64          # bytes; JSON-escaped, at most twice that — the hook journal's 128 for `section`
+
+
+def _section_text(title: str) -> str:
+    """A heading's title as the hook journal keeps it: control characters (C0, DEL, C1 — U+0085 among them) and
+    U+2028 / U+2029 as spaces, spaces folded, at most 64 bytes cut on a whole character."""
+    t = "".join(" " if (c < " " or "\x7f" <= c <= "\x9f" or c in "\u2028\u2029") else c for c in title)
+    b = " ".join(t.split()).encode("utf-8", "replace")
+    return b[:_SECTION_MAX].decode("utf-8", "ignore").rstrip(" ")
+
+
+def _head_section(lines: "list[str]") -> str:
+    """The `##` section the first live open gate sits in (task 234): the nearest live H2 above it, read with the same
+    fence flags `_echo_fields` reads the gates with (plan panel, sonnet) — "" when no gate is open or none is above."""
+    from tasks.core import _GATE_LINE_RE, _atx_h2_text, _iter_fenced_flags
+    fenced = _iter_fenced_flags(lines, unclosed_is_live=True, track_indented_code=False)
+    first = next((i for i, line in enumerate(lines) if not fenced[i]
+                  and (m := _GATE_LINE_RE.match(line.lstrip("\ufeff").rstrip("\r\n"))) and m.group(1) == " "), None)
+    if first is None:
+        return ""
+    for i in range(first - 1, -1, -1):
+        if not fenced[i]:
+            h = _atx_h2_text(lines[i])
+            if h:
+                return _section_text(h[3:])
+    return ""
+
+
+def _sample_line() -> str:
+    """`<susp> <sts> <boot>`, `-` for a value that could not be read (an empty first word would shift the hook's
+    `read`). pb_journal sits beside this file; under `-I` its directory is not on the path, so it is added LAST."""
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.append(here)
+    from pb_journal import suspend_sample
+    susp, sts, boot = suspend_sample()
+    return f"{'-' if susp is None else susp} {'-' if sts is None else sts} {boot or '-'}"
+
+
+def _extras(lines: "list[str]", section: bool = True) -> "list[str]":
+    """Task 234's lines after a mode's own, each in its own `try` (plan panel, grok: never fail what comes before)."""
+    out = []
+    if section:
+        try:
+            out.append(_head_section(lines))
+        except Exception:  # noqa: BLE001
+            out.append("")
+    try:
+        out.append(_sample_line())
+    except Exception:  # noqa: BLE001
+        out.append("- - -")
+    return out
+
+
 def main(argv: "list[str]") -> int:
-    fields = echo = False
+    fields = echo = section_only = False
     prev: "tuple[int, int, int, int, int, str] | None" = None
     args = argv[1:]
     if args and args[0] == "--fields":
         fields = True
+        args = args[1:]
+    elif args and args[0] == "--section":
+        section_only = True
         args = args[1:]
     elif args and args[0] == "--echo":
         echo = True
@@ -163,7 +237,8 @@ def main(argv: "list[str]") -> int:
                 return 2
             args = args[:1]
     if len(args) != 1:
-        print("usage: task-status.py [--fields | --echo] <task.md> [<P> <B> <OPENS> <CHECKS> <ABOVE> <T>]", file=sys.stderr)
+        print("usage: task-status.py [--fields | --section | --echo] <task.md> [<P> <B> <OPENS> <CHECKS> <ABOVE> <T>]",
+              file=sys.stderr)
         return 2
     task_file = Path(args[0])
     if not task_file.is_file():
@@ -192,7 +267,12 @@ def main(argv: "list[str]") -> int:
         except Exception as exc:  # noqa: BLE001 — any failure is "unreadable": the hook echoes as it can
             print(f"task-status: --echo failed: {exc}", file=sys.stderr)
             return 1
+        out += _extras(lines)
         sys.stdout.buffer.write(("\n".join(out) + "\n").encode("utf-8", "replace"))
+        sys.stdout.buffer.flush()
+        return 0
+    if section_only:
+        sys.stdout.buffer.write(("\n".join(_extras(lines)) + "\n").encode("utf-8", "replace"))
         sys.stdout.buffer.flush()
         return 0
     out = [_status_from_lines(lines)]
@@ -205,6 +285,7 @@ def main(argv: "list[str]") -> int:
         # so the third field is exactly one line for the hook's `read`.
         out += [str(unchecked), first.replace("\r", "\\r"),
                 "release" if _freehand_release_allowed(lines) else "hold"]
+        out += _extras(lines, section=False)
     # Bytes, `\n` only: a text-mode print() may translate the newline to CRLF, and
     # bash command substitution keeps the CR, so `blocked\r` would miss the hook's
     # exact match (round-5 panel). The hook also strips one trailing CR — belt + braces.

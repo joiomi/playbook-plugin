@@ -123,20 +123,124 @@ class ThePythonWriter(_Tmp):
                                  host_session_id="h-1", decision="allow", detail='released "x" \\ y', ms=12,
                                  exit_code=0)
         rec = self.lines()[0]
+        self.assertEqual(tuple(rec), ("ts", "hook", "event", "tool", "tool_use_id", "session_id", "host_session_id",
+                                      "agent_id", "decision", "detail", "ms", "exit", "error", "task", "section",
+                                      "susp", "sts", "boot"))
         self.assertEqual(tuple(rec), self.pbj.HOOK_FIELDS)
         self.assertEqual((rec["hook"], rec["event"], rec["decision"], rec["detail"], rec["ms"], rec["exit"]),
                          ("codex-stop", "Stop", "allow", 'released "x" \\ y', 12, 0))
 
-    def test_the_line_stays_within_one_kib(self):
+    def test_the_line_stays_within_two_kib(self):
         for q in ('"' * 3000, "\\" * 3000, "é" * 3000, "😀" * 2000):
             with self.subTest(q=q[:3]):
                 self.journal.unlink(missing_ok=True)
                 self.pbj.append_hook_run(self.project, hook="h" * 400, event=q, tool=q, tool_use_id=q, session_id=q,
                                          host_session_id=q, agent_id=q, decision=q, detail=q, ms=10 ** 20,
-                                         exit_code=0, error=q)
+                                         exit_code=0, error=q, section=q, susp=10 ** 20, sts=10 ** 20, boot=q)
                 raw = self.journal.read_bytes()
-                self.assertLessEqual(len(raw), 1024)
+                self.assertLessEqual(len(raw), 2048)
                 self.assertEqual(tuple(json.loads(raw)), self.pbj.HOOK_FIELDS)
+
+    def test_a_line_with_every_field_at_its_cap_is_written_whole(self):
+        """Task 234: past the old 1,024 bytes with the five keys, under the 2,048 cap — no text dropped (P11 of the
+        mutation pass: a cap left at 1,024 in python alone survived the other tests)."""
+        i, q = "i" * 100, '"' * 400
+        self.pbj.append_hook_run(self.project, hook=i, event=i, tool=i, tool_use_id=i, session_id=i, host_session_id=i,
+                                 agent_id=i, decision=i, detail=q, ms=10 ** 20, exit_code=1, error=q, task="9" * 16,
+                                 section=q, susp=999_999_999_999, sts=999_999_999_999, boot="ffffffff")
+        raw = self.journal.read_bytes()
+        self.assertGreater(len(raw), 1024)
+        self.assertLessEqual(len(raw), 2048)
+        rec = json.loads(raw)
+        self.assertEqual((rec["detail"], rec["section"], rec["error"]), ('"' * 64, '"' * 64, '"' * 120))
+
+    def test_python_samples_the_suspend_clock_itself(self):
+        """Task 234: a python hook's line carries the sample its own process took — `susp` (CLOCK_BOOTTIME minus
+        CLOCK_MONOTONIC, whole seconds), `sts` (the wall time of that sample) and `boot` (the boot id's first 8)."""
+        before = time.time()
+        self.pbj.append_hook_run(self.project, hook="codex-stop", session_id="pid-1")
+        after = time.time()
+        rec = self.lines()[0]
+        slept = time.clock_gettime(time.CLOCK_BOOTTIME) - time.clock_gettime(time.CLOCK_MONOTONIC)
+        self.assertIsInstance(rec["susp"], int)
+        self.assertLessEqual(abs(rec["susp"] - slept), 2)
+        self.assertTrue(int(before) <= rec["sts"] <= after + 1, (before, rec["sts"], after))
+        boot = Path("/proc/sys/kernel/random/boot_id").read_text()[:8]
+        self.assertEqual(rec["boot"], boot)
+        self.assertEqual(rec["section"], "")
+
+    def test_values_given_are_written_as_given_once_valid(self):
+        cases = [(dict(susp=0, sts=5, boot="0a1b2c3d"), (0, 5, "0a1b2c3d")),
+                 (dict(susp=-1, sts=10 ** 12, boot="0A1B2C3D"), (None, None, "")),
+                 (dict(susp="12", sts=1.5, boot="0a1b2c3"), (None, None, "")),
+                 (dict(susp=True, sts=False, boot=7), (None, None, "")),
+                 (dict(sts=5), (None, 5, ""))]                         # one given: none sampled
+        for given, want in cases:
+            with self.subTest(given=given):
+                self.journal.unlink(missing_ok=True)
+                self.pbj.append_hook_run(self.project, hook="x", **given)
+                rec = self.lines()[0]
+                self.assertEqual((rec["susp"], rec["sts"], rec["boot"]), want)
+
+    def test_a_line_past_the_cap_drops_the_three_texts_and_keeps_every_key(self):
+        old = self.pbj._HJ_LINE_MAX
+        self.pbj._HJ_LINE_MAX = 520
+        try:
+            self.pbj.append_hook_run(self.project, hook="x", detail="x" * 300, error="x" * 300, section="x" * 300,
+                                     task="234", susp=5, sts=6, boot="0a1b2c3d", exit_code=1)
+        finally:
+            self.pbj._HJ_LINE_MAX = old
+        rec = self.lines()[0]
+        self.assertEqual(tuple(rec), self.pbj.HOOK_FIELDS)
+        self.assertEqual((rec["detail"], rec["error"], rec["section"]), ("", "", ""))
+        self.assertEqual((rec["task"], rec["susp"], rec["sts"], rec["boot"]), ("234", 5, 6, "0a1b2c3d"))
+
+    def test_the_task_from_the_sessions_pointer(self):
+        d = self.project / ".agent" / "sessions" / "pid-1"
+        d.mkdir(parents=True)
+        (d / "current_state").write_text("  45 \t\n99\n")
+        self.pbj.append_hook_run(self.project, hook="x", session_id="pid-1")
+        self.assertEqual(self.lines()[-1]["task"], "45")
+        for text in ("", "abc\n", "1" * 17, "23x\n"):
+            with self.subTest(text=text):
+                (d / "current_state").write_text(text)
+                self.pbj.append_hook_run(self.project, hook="x", session_id="pid-1")
+                self.assertEqual(self.lines()[-1]["task"], "")
+        a = self.project / ".agent"
+        (a / "tasks" / "current_state").write_text("5\n")                # a decoy where each id would lead
+        (a / "current_state").write_text("6\n")
+        (a / "sessions" / "current_state").write_text("4\n")
+        (a / "sessions" / "a" / "b").mkdir(parents=True)
+        (a / "sessions" / "a" / "b" / "current_state").write_text("3\n")
+        for sid in ("", "..", ".", "../tasks", "a/b"):
+            with self.subTest(sid=sid):
+                self.pbj.append_hook_run(self.project, hook="x", session_id=sid)
+                self.assertEqual(self.lines()[-1]["task"], "")
+        self.pbj.append_hook_run(self.project, hook="x", session_id="pid-1", task="77")
+        self.assertEqual(self.lines()[-1]["task"], "77")               # given: written as given, once digits
+        self.pbj.append_hook_run(self.project, hook="x", session_id="pid-1", task="7a")
+        self.assertEqual(self.lines()[-1]["task"], "")
+
+    def test_a_linked_or_fifo_pointer_is_not_read(self):
+        d = self.project / ".agent" / "sessions" / "pid-1"
+        d.mkdir(parents=True)
+        (self.root / "t").write_text("7\n")
+        (d / "current_state").symlink_to(self.root / "t")
+        self.pbj.append_hook_run(self.project, hook="x", session_id="pid-1")
+        self.assertEqual(self.lines()[-1]["task"], "")
+        (d / "current_state").unlink()
+        os.mkfifo(d / "current_state")
+        t0 = time.monotonic()
+        self.pbj.append_hook_run(self.project, hook="x", session_id="pid-1")
+        self.assertLess(time.monotonic() - t0, 5)
+        self.assertEqual(self.lines()[-1]["task"], "")
+        (d / "current_state").unlink()
+        d.rmdir()
+        (self.root / "sd").mkdir()
+        (self.root / "sd" / "current_state").write_text("8\n")
+        d.symlink_to(self.root / "sd")
+        self.pbj.append_hook_run(self.project, hook="x", session_id="pid-1")
+        self.assertEqual(self.lines()[-1]["task"], "")
 
     def test_where_it_does_not_write(self):
         target = self.root / "target"
@@ -698,11 +802,56 @@ class ThreeWritersOneAnswer(_Tmp):
         self.assertEqual(len(recs), 3)
         for r in recs:
             self.assertEqual(tuple(r), self.pbj.HOOK_FIELDS)
+        # the sample is the python process's own (task 234): its shape here, its value in ThePythonWriter
+        self.assertIsInstance(recs[1].pop("susp"), int)
+        self.assertIsInstance(recs[1].pop("sts"), int)
+        self.assertRegex(recs[1].pop("boot"), r"^[0-9a-f]{8}$")
+        for r in (recs[0], recs[2]):
+            self.assertEqual((r.pop("susp"), r.pop("sts"), r.pop("boot")), (None, None, ""))   # bash: none was taken
         strip = [{k: v for k, v in r.items() if k not in ("ts", "ms", "hook", "session_id")} for r in recs]
         self.assertEqual(strip[0], strip[1])
         self.assertEqual(strip[2].pop("detail"), "no nudge")        # the nudge says what it did; the rest is the same
         strip[0].pop("detail")
         self.assertEqual(strip[0], strip[2])
+
+    def test_the_nudge_reads_only_a_one_component_id_and_no_link(self):
+        p = self.root / "nudtask"
+        a = p / ".agent"
+        (a / "tasks").mkdir(parents=True)
+        (a / "tasks" / "current_state").write_text("5\n")                  # where `../tasks` would lead
+        (a / "sessions" / "pid-1").mkdir(parents=True)
+        (self.root / "t").write_text("7\n")
+        (a / "sessions" / "pid-1" / "current_state").symlink_to(self.root / "t")
+        for sid in ("../tasks", "pid-1"):
+            with self.subTest(sid=sid):
+                subprocess.run([bash_or_skip(), str(NUDGE)], input=self.PAYLOAD, cwd=str(p),
+                               env=self.env(PLAYBOOK_SESSION_ID=sid), capture_output=True, text=True, timeout=20)
+                self.assertEqual(self.lines(a / "journal" / "hooks.jsonl")[-1]["task"], "")
+
+    def test_the_same_task_section_and_sample(self):
+        """Task 234: the three writers read the session's task from the same pointer, and write a section and a
+        sample given to them the same way."""
+        p = self.root / "same234"
+        (p / ".agent" / "tasks").mkdir(parents=True)
+        (p / ".agent" / "sessions" / "pid-1").mkdir(parents=True)
+        (p / ".agent" / "sessions" / "pid-1" / "current_state").write_text("234\n")
+        script = ('_PB_HJ_T0=$EPOCHREALTIME\nsource "$1"\npb_hook_begin parity\nINPUT=$(cat)\n'
+                  'PROJECT_DIR="$2"; SESSION_ID=pid-1\n'
+                  'PB_HJ_SECTION=\'Work "Plan"\'; PB_HJ_SUSP=25573; PB_HJ_STS=1760700000; PB_HJ_BOOT=0a1b2c3d\nexit 0\n')
+        subprocess.run([bash_or_skip(), "-c", script, "_", str(SCRIPTS / "gate-echo-lib.sh"), str(p)],
+                       input=self.PAYLOAD, cwd=str(p), env=self.env(), capture_output=True, text=True, timeout=20)
+        self.pbj.append_hook_run(p, hook="parity", event="PostToolUse", tool="Bash", tool_use_id="toolu_P",
+                                 session_id="pid-1", host_session_id="h-1", decision="ok", ms=1, exit_code=0,
+                                 section='Work "Plan"', susp=25573, sts=1760700000, boot="0a1b2c3d")
+        self.nudge(p)
+        recs = self.lines(p / ".agent" / "journal" / "hooks.jsonl")
+        self.assertEqual(len(recs), 3)
+        self.assertEqual([r["task"] for r in recs], ["234"] * 3)
+        want = ('Work "Plan"', 25573, 1760700000, "0a1b2c3d")
+        self.assertEqual([(r["section"], r["susp"], r["sts"], r["boot"]) for r in recs[:2]], [want, want])
+        self.assertEqual((recs[2]["section"], recs[2]["susp"], recs[2]["sts"], recs[2]["boot"]), ("", None, None, ""))
+        strip = [{k: v for k, v in r.items() if k not in ("ts", "ms", "hook")} for r in recs[:2]]
+        self.assertEqual(strip[0], strip[1])
 
 
 if __name__ == "__main__":

@@ -1607,7 +1607,8 @@ _shell_log_spool() {
 # hook writes its turn-end mark only after an allowed stop — plan panel 2026-10-16, all five judges) and it ends with
 # `exit` of that status. A journal failure never changes a decision. A hook killed by the host writes nothing.
 _PB_HJ_LIMIT=20971520           # past 20 MB the file is closed: renamed, compressed, kept (the owner, 2026-10-16 18:04)
-_PB_HJ_LINE_MAX=1024            # one append of at most this many bytes, the newline included (PIPE_BUF is 4096)
+_PB_HJ_LINE_MAX=2048            # one append of at most this many bytes, the newline included (PIPE_BUF is 4096; a
+                                # line with every field at its cap measured 1,122 bytes with task 234's five keys)
 _PB_HJ_HOOK=""
 _PB_HJ_ACTIONS=()
 _PB_HJ_ERR_CMD=""
@@ -1620,6 +1621,10 @@ PB_HJ_EVENT=""
 PB_HJ_TOOL_USE_ID=""
 PB_HJ_AGENT_ID=""
 PB_HJ_HOST_SESSION=""
+PB_HJ_SECTION=""           # task 234: the open gate's `##` section (the state echo's accepted read) and the suspend
+PB_HJ_SUSP=""              # sample a python reader took — `susp` (CLOCK_BOOTTIME − CLOCK_MONOTONIC, whole seconds),
+PB_HJ_STS=""               # `sts` (the wall time of that sample, epoch seconds), `boot` (the boot id's first 8)
+PB_HJ_BOOT=""
 
 # pb_hook_begin NAME — from here on, this run writes its line when the hook exits. The runner is installed in every
 # case (it runs the hook's own exit actions); no LINE is written for a review's session (`judge`, `tail-cert`: a review
@@ -1660,7 +1665,7 @@ _pb_hj_exit() {
 hook_journal_append() {
     local LC_ALL=C      # lengths and cuts in bytes
     local rc="$1" failing="${2:-}" lane="" jdir hfile line ts t0="${_PB_HJ_T0:-}" t1 ms=null v
-    local hook event tool tuid sid hsid agent decision detail error
+    local hook event tool tuid sid hsid agent decision detail error task section susp=null sts=null boot=""
     [ -n "$_PB_HJ_HOOK" ] || return 0
     _pb_hj_lane
     [ -n "$lane" ] || return 0
@@ -1729,11 +1734,20 @@ hook_journal_append() {
         fi
     fi
     _pb_hj_text "$v" 240; error="$v"
+    # task 234: the session's task, read here for every hook; the section and the sample as the hook set them
+    _pb_hj_task "$lane"; task="$v"
+    _pb_hj_text "${PB_HJ_SECTION:-}" 128; section="$v"
+    if [[ "${PB_HJ_SUSP:-}" =~ ^[0-9]{1,12}$ ]]; then susp=$(( 10#$PB_HJ_SUSP )); fi     # no leading zero: JSON
+    if [[ "${PB_HJ_STS:-}" =~ ^[0-9]{1,12}$ ]]; then sts=$(( 10#$PB_HJ_STS )); fi
+    if [[ "${PB_HJ_BOOT:-}" =~ ^[0-9a-f]{8}$ ]]; then boot="$PB_HJ_BOOT"; fi
     line="{\"ts\":\"$ts\",\"hook\":\"$hook\",\"event\":\"$event\",\"tool\":\"$tool\",\"tool_use_id\":\"$tuid\""
     line="$line,\"session_id\":\"$sid\",\"host_session_id\":\"$hsid\",\"agent_id\":\"$agent\""
-    line="$line,\"decision\":\"$decision\",\"detail\":\"$detail\",\"ms\":$ms,\"exit\":$rc,\"error\":\"$error\"}"
+    line="$line,\"decision\":\"$decision\",\"detail\":\"$detail\",\"ms\":$ms,\"exit\":$rc,\"error\":\"$error\""
+    line="$line,\"task\":\"$task\",\"section\":\"$section\",\"susp\":$susp,\"sts\":$sts,\"boot\":\"$boot\"}"
     if [ "${#line}" -ge "$_PB_HJ_LINE_MAX" ]; then
-        line="${line%%,\"detail\":*},\"detail\":\"\",\"ms\":$ms,\"exit\":$rc,\"error\":\"\"}"
+        # the three free texts go, every key stays (plan panel of task 234: agy, grok, opus, sonnet)
+        line="${line%%,\"detail\":*},\"detail\":\"\",\"ms\":$ms,\"exit\":$rc,\"error\":\"\",\"task\":\"$task\""
+        line="$line,\"section\":\"\",\"susp\":$susp,\"sts\":$sts,\"boot\":\"$boot\"}"
         if [ "${#line}" -ge "$_PB_HJ_LINE_MAX" ]; then
             [ "$locked" = none ] || { exec 208<&-; } 2>/dev/null
             return 0
@@ -1833,6 +1847,24 @@ _pb_hj_tool_use_id() {
         re='"(tool_use_id|toolUseId)"[[:space:]]*:[[:space:]]*"([^"]*)"'
         if [[ "${INPUT:-}" =~ $re ]]; then v="${BASH_REMATCH[2]}"; fi
     fi
+    return 0
+}
+
+# Sets `v` to the session's task (task 234): the first line of `<lane $1>/sessions/<SESSION_ID>/current_state`, its
+# spaces dropped as the hooks read it, when that is a task number (digits, at most 16); else "". The id only as
+# resolve_session_id accepts one (a single component, never `.` or `..`), no link on the way, a regular file only (a
+# FIFO would hang the hook), one `read` — no process.
+_pb_hj_task() {
+    local d t="" id="${SESSION_ID:-}"
+    v=""
+    case "$id" in ''|.|..|*[!A-Za-z0-9._-]*) return 0 ;; esac
+    d="$1/sessions"
+    [ -d "$d" ] && [ ! -L "$d" ] || return 0
+    d="$d/$id"
+    [ -d "$d" ] && [ ! -L "$d" ] && [ -f "$d/current_state" ] && [ ! -L "$d/current_state" ] || return 0
+    { IFS= read -r t < "$d/current_state"; } 2>/dev/null || true
+    t="${t//[[:space:]]/}"
+    if [[ "$t" =~ ^[0-9]{1,16}$ ]]; then v="$t"; fi
     return 0
 }
 

@@ -39,7 +39,7 @@ SCRIPTS = Path(__file__).resolve().parent.parent / "plugins" / "playbook" / "scr
 LIB = SCRIPTS / "gate-echo-lib.sh"
 LIMIT = 20971520
 FIELDS = ["ts", "hook", "event", "tool", "tool_use_id", "session_id", "host_session_id", "agent_id", "decision",
-          "detail", "ms", "exit", "error"]
+          "detail", "ms", "exit", "error", "task", "section", "susp", "sts", "boot"]
 
 PRE = ('{"session_id":"host-sess-1","transcript_path":"/t","cwd":"/c","permission_mode":"default",'
        '"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"echo hi"},'
@@ -186,6 +186,8 @@ class TheLine(_Project):
                          ("pid-4242", "host-sess-1", ""))
         self.assertEqual((rec["decision"], rec["detail"], rec["exit"], rec["error"]), ("allow", "", 0, ""))
         self.assertIsInstance(rec["ms"], int)
+        # task 234: no pointer, no section, no sample on this line — "" / null mean "not on this line"
+        self.assertEqual((rec["task"], rec["section"], rec["susp"], rec["sts"], rec["boot"]), ("", "", None, None, ""))
 
     def test_the_decision_by_exit_status(self):
         cases = [(PRE, 0, "allow"), (PRE, 2, "block"), (SUB, 0, "ok"), (SUB, 2, "block"), ("", 0, "ok"),
@@ -245,19 +247,42 @@ class TheStrings(_Project):
         self.run_hook(self.in_lane('PB_HJ_DETAIL="$DETAIL"\nexit 0'), DETAIL=detail)
         self.assertEqual(self.lines()[-1]["detail"], 'say "hi" \\ there tab bell')
 
-    def test_the_encoded_line_stays_within_one_kib(self):
+    def test_the_encoded_line_stays_within_two_kib(self):
         big_id = "a" * 5000
         payload = (f'{{"session_id":"{big_id}","agent_id":"{big_id}","hook_event_name":"{big_id}",'
                    f'"tool_name":"{big_id}","tool_input":{{}},"tool_use_id":"{big_id}"}}')
-        body = self.in_lane('PB_HJ_DETAIL="$Q"; PB_HJ_ERROR="$Q"; PB_HJ_DECISION="$Q"; SESSION_ID="$Q"\nexit 0')
+        body = self.in_lane('PB_HJ_DETAIL="$Q"; PB_HJ_ERROR="$Q"; PB_HJ_DECISION="$Q"; SESSION_ID="$Q"\n'
+                            'PB_HJ_SECTION="$Q"; PB_HJ_SUSP=999999999999; PB_HJ_STS=999999999999; PB_HJ_BOOT=ffffffff\n'
+                            '_PB_HJ_T0=000000000001.000000\nexit 0')
         for q in ('"' * 3000, "\\" * 3000, '\\"' * 1500, "é" * 2000, "😀" * 1000):
             with self.subTest(q=q[:4]):
                 self.journal.unlink(missing_ok=True)
                 self.run_hook(body, hook="h" * 300, payload=payload, Q=q)
                 raw = self.journal.read_bytes()
-                self.assertLessEqual(len(raw), 1024, raw[:200])
+                self.assertLessEqual(len(raw), 2048, raw[:200])
                 rec = json.loads(raw.decode("utf-8"))           # whole characters, whole escapes
                 self.assertEqual(list(rec), FIELDS)
+
+    def test_a_line_with_every_field_at_its_cap_is_written_whole(self):
+        """Task 234 (grok K1, opus, sonnet, agy): with the five new keys a maxed line passes the old 1,024 bytes; the
+        cap is 2,048 in all three writers, so no field is dropped by the over-cap fallback."""
+        i = "i" * 100
+        payload = (f'{{"session_id":"{i}","agent_id":"{i}","hook_event_name":"{i}",'
+                   f'"tool_name":"{i}","tool_input":{{}},"tool_use_id":"{i}"}}')
+        d = self.lane / "sessions" / ("s" * 64)
+        d.mkdir(parents=True)
+        (d / "current_state").write_text("9" * 16 + "\n")
+        body = self.in_lane(f'SESSION_ID={"s" * 64}; PB_HJ_DETAIL="$Q"; PB_HJ_ERROR="$Q"; PB_HJ_DECISION={i}\n'
+                            'PB_HJ_SECTION="$Q"; PB_HJ_SUSP=999999999999; PB_HJ_STS=999999999999; PB_HJ_BOOT=ffffffff\n'
+                            '_PB_HJ_T0=000000000001.000000\nexit 1')
+        self.run_hook(body, hook="h" * 300, payload=payload, Q='"' * 400)
+        raw = self.journal.read_bytes()
+        self.assertGreater(len(raw), 1024, raw[:200])
+        self.assertLessEqual(len(raw), 2048)
+        rec = json.loads(raw)
+        self.assertEqual(list(rec), FIELDS)
+        self.assertEqual((rec["task"], rec["section"], rec["detail"], rec["error"]), ("9" * 16, '"' * 64, '"' * 64,
+                                                                                     '"' * 120))
 
     def test_a_cut_ends_on_a_whole_character_and_a_whole_escape(self):
         for q in ("é" * 400, "x" + "é" * 400, '\\' * 401, 'x"' * 300):
@@ -267,6 +292,119 @@ class TheStrings(_Project):
                 detail = json.loads(self.journal.read_bytes().decode("utf-8"))["detail"]
                 self.assertTrue(q.startswith(detail), detail[-10:])
                 self.assertGreater(len(detail), 20)
+
+
+class TheTaskSectionAndSample(_Project):
+    """Task 234 (PHASE-B item 6): every line names the session's task, read by the writer itself from
+    `<lane>/sessions/<id>/current_state` (plan panel: opus, sonnet, codex — a line of any hook, not only the state
+    echo's); `section` and the suspend sample (`susp`, `sts`, `boot`) are what the hook set, validated."""
+
+    def pointer(self, text, sid="pid-4242"):
+        d = self.lane / "sessions" / sid
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "current_state").write_text(text)
+        return d / "current_state"
+
+    def rec(self, body="exit 0", **extra):
+        self.journal.unlink(missing_ok=True)
+        r = self.run_hook(self.in_lane(body), payload=PRE, **extra)
+        self.assertEqual(r.returncode, int(body.rsplit("exit ", 1)[1]) if "exit " in body else 0, r.stderr)
+        recs = self.lines()
+        self.assertEqual(len(recs), 1)
+        return recs[0]
+
+    def test_the_task_from_the_sessions_pointer(self):
+        self.pointer("234\n")
+        self.assertEqual(self.rec()["task"], "234")
+        self.assertEqual(self.rec("exit 2")["task"], "234")             # a block names it too
+
+    def test_a_pointer_that_is_not_a_task_number_is_empty(self):
+        for text in ("", "\n", "abc\n", "23x\n", "1" * 17 + "\n", "../9\n", "*\n"):
+            with self.subTest(text=text):
+                self.pointer(text)
+                self.assertEqual(self.rec()["task"], "")
+
+    def test_the_pointers_spaces_are_dropped_as_the_hooks_read_it(self):
+        self.pointer("  45 \t\r\n99\n")                               # the first line, spaces dropped: the hooks' reading
+        self.assertEqual(self.rec()["task"], "45")
+
+    def test_a_linked_pointer_or_session_directory_is_not_read(self):
+        target = self.root / "elsewhere"
+        target.mkdir()
+        (target / "current_state").write_text("7\n")
+        d = self.lane / "sessions" / "pid-4242"
+        d.mkdir(parents=True)
+        (d / "current_state").symlink_to(target / "current_state")
+        self.assertEqual(self.rec()["task"], "")
+        (d / "current_state").unlink()
+        d.rmdir()
+        d.symlink_to(target)
+        self.assertEqual(self.rec()["task"], "")
+        d.unlink()
+        (self.lane / "sessions").rmdir()
+        (self.lane / "sessions").symlink_to(self.root)
+        (self.root / "pid-4242").mkdir()
+        (self.root / "pid-4242" / "current_state").write_text("8\n")
+        self.assertEqual(self.rec()["task"], "")
+
+    @_needs("mkfifo")
+    def test_a_fifo_pointer_hangs_nothing(self):
+        d = self.lane / "sessions" / "pid-4242"
+        d.mkdir(parents=True)
+        os.mkfifo(d / "current_state")
+        t0 = time.monotonic()
+        self.assertEqual(self.rec()["task"], "")
+        self.assertLess(time.monotonic() - t0, 5)
+
+    def test_a_session_id_that_is_not_one_component_reads_nothing(self):
+        # a decoy where each id would lead: `../tasks`, `..` (the lane), `.` (sessions/), `a/b`, `a b`
+        (self.lane / "tasks" / "current_state").write_text("5\n")
+        (self.lane / "current_state").write_text("6\n")
+        (self.lane / "sessions" / "a" / "b").mkdir(parents=True)
+        (self.lane / "sessions" / "current_state").write_text("4\n")
+        (self.lane / "sessions" / "a" / "b" / "current_state").write_text("3\n")
+        (self.lane / "sessions" / "a b").mkdir()
+        (self.lane / "sessions" / "a b" / "current_state").write_text("2\n")
+        for sid in ("../tasks", "..", ".", "a/b", "a b", ""):
+            with self.subTest(sid=sid):
+                rec = self.rec(f'SESSION_ID="{sid}"\nexit 0')
+                self.assertEqual(rec["task"], "")
+
+    def test_the_section_and_the_sample_as_the_hook_set_them(self):
+        rec = self.rec('PB_HJ_SECTION="Work Plan"; PB_HJ_SUSP=25573; PB_HJ_STS=1760700000; PB_HJ_BOOT=0a1b2c3d\nexit 0')
+        self.assertEqual((rec["section"], rec["susp"], rec["sts"], rec["boot"]),
+                         ("Work Plan", 25573, 1760700000, "0a1b2c3d"))
+
+    def test_a_sample_that_is_not_digits_or_hex_is_null_or_empty(self):
+        for susp in ("", "-", "12x", "1e3", "-5", " 7", "0x10", "1" * 13):
+            with self.subTest(susp=susp):
+                rec = self.rec('PB_HJ_SUSP="$V"; PB_HJ_STS="$V"\nexit 0', V=susp)
+                self.assertEqual((rec["susp"], rec["sts"]), (None, None))
+        for boot in ("", "-", "0A1B2C3D", "0a1b2c3", "0a1b2c3d9", "0a1b2c3g", '0a1b"c3d'):
+            with self.subTest(boot=boot):
+                self.assertEqual(self.rec('PB_HJ_BOOT="$V"\nexit 0', V=boot)["boot"], "")
+        self.assertEqual(self.rec("PB_HJ_SUSP=0; PB_HJ_STS=0\nexit 0")["susp"], 0)
+        rec = self.rec("PB_HJ_SUSP=0042; PB_HJ_STS=007\nexit 0")            # a leading zero is not JSON: read as 42
+        self.assertEqual((rec["susp"], rec["sts"]), (42, 7))
+
+    def test_a_line_past_the_cap_drops_the_three_texts_and_keeps_every_key(self):
+        self.pointer("234\n")
+        rec = self.rec('_PB_HJ_LINE_MAX=520; PB_HJ_DETAIL="$Q"; PB_HJ_ERROR="$Q"; PB_HJ_SECTION="$Q"\n'
+                       'PB_HJ_SUSP=5; PB_HJ_STS=6; PB_HJ_BOOT=0a1b2c3d\nexit 1', Q="x" * 300)
+        self.assertEqual(list(rec), FIELDS)
+        self.assertEqual((rec["detail"], rec["error"], rec["section"]), ("", "", ""))
+        self.assertEqual((rec["task"], rec["susp"], rec["sts"], rec["boot"], rec["exit"]), ("234", 5, 6, "0a1b2c3d", 1))
+
+    def test_the_section_is_escaped_and_cut(self):
+        q = 'Plan "review" \\ ' + "é" * 200
+        rec = self.rec('PB_HJ_SECTION="$Q"\nexit 0', Q=q)
+        self.assertTrue(q.startswith(rec["section"]), rec["section"])
+        self.assertLessEqual(len(json.dumps(rec["section"], ensure_ascii=False).encode()) - 2, 128)
+        self.assertEqual(self.rec('PB_HJ_SECTION=$\'a\\tb\\x01c\'\nexit 0')["section"], "a b c")
+
+    def test_the_new_variables_start_empty_in_every_hook(self):
+        rec = self.rec(PB_HJ_SECTION="inherited", PB_HJ_SUSP="5", PB_HJ_STS="6", PB_HJ_BOOT="0a1b2c3d")
+        self.assertEqual((rec["section"], rec["susp"], rec["sts"], rec["boot"]), ("", None, None, ""))
 
 
 class TheToolCallId(_Project):

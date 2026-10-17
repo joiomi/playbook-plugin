@@ -766,10 +766,95 @@ class EchoFields(unittest.TestCase):
                             *map(str, prev)], capture_output=True, text=True, timeout=60)
         self.assertEqual(r.returncode, 0, r.stderr)
         lines = r.stdout.split("\n")
-        self.assertEqual(len(lines), 14, r.stdout)         # thirteen fields and the final newline
+        self.assertEqual(len(lines), 16, r.stdout)         # thirteen fields, task 234's two, and the final newline
         keys = ("total", "checked", "line", "pos", "below", "transition", "ticked", "text", "text200", "text60",
-                "opens", "checks", "above")
-        return dict(zip(keys, lines[:13]))
+                "opens", "checks", "above", "section", "sample")
+        return dict(zip(keys, lines[:15]))
+
+    # --- task 234: the open gate's `##` section and the suspend sample, after the thirteen ---------------------------
+
+    def test_the_section_of_the_first_open_gate(self):
+        cases = [("## Design Phase\n- [x] A — ok\n\n## Work Plan\n### Build\n- [ ] B\n", "Work Plan"),
+                 ("## Work Plan ##\n- [ ] B\n", "Work Plan"),                       # closing hashes are not the title
+                 ("##\tTabbed\n- [ ] B\n", "Tabbed"),
+                 ("## Real\n```text\n## Fenced\n```\n- [ ] B\n", "Real"),          # a fenced heading is not one
+                 ("## Real\n    ## Indented\n- [ ] B\n", "Real"),                   # 4 spaces: not a heading
+                 ("## Real\n```text\n- [ ] fenced\n```\n## Next\n- [ ] B\n", "Next"),   # a fenced gate is not open
+                 ("- [ ] B\n## Later\n", ""),                                     # no heading above the gate
+                 ("## Work\n- [x] A — ok\n", ""),                                 # no open gate
+                 ("\ufeff## Bom\n- [ ] B\n", "Bom"),
+                 ("## A\x85B\u2028C\u2029D\x01E\x7fF\tG   H\n- [ ] B\n", "A B C D E F G H")]
+        for text, want in cases:
+            with self.subTest(text=text[:30]):
+                self.assertEqual(self.run_echo(text)["section"], want)
+
+    def test_a_long_heading_is_cut_at_64_bytes_on_a_whole_character(self):
+        sec = self.run_echo("## " + "é" * 100 + "\n- [ ] B\n")["section"]
+        self.assertEqual(sec, "é" * 32)
+        sec = self.run_echo("## x" + "é" * 100 + "\n- [ ] B\n")["section"]
+        self.assertEqual(sec, "x" + "é" * 31)                               # 63 bytes: the 64th would split one
+
+    def test_the_sample_line(self):
+        before = time.time()
+        sample = self.run_echo("## W\n- [ ] B\n")["sample"]
+        after = time.time()
+        susp, sts, boot = sample.split(" ")
+        slept = time.clock_gettime(time.CLOCK_BOOTTIME) - time.clock_gettime(time.CLOCK_MONOTONIC)
+        self.assertLessEqual(abs(int(susp) - slept), 2)
+        self.assertTrue(int(before) <= int(sts) <= after + 1)
+        self.assertEqual(boot, Path("/proc/sys/kernel/random/boot_id").read_text()[:8])
+
+    def test_a_fault_in_the_extras_leaves_the_thirteen(self):
+        """grok (Minor): the extras are computed apart — a fault there prints `""` / `- - -`, never fails the echo."""
+        import importlib.util
+        import io
+        from unittest import mock
+        spec = importlib.util.spec_from_file_location("task_status_t234", SCRIPTS / "task-status.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        d = Path(tempfile.mkdtemp(prefix="pb234e-"))
+        self.addCleanup(shutil.rmtree, d, True)
+        f = d / "task.md"
+        f.write_text("## W\n- [ ] B\n", encoding="utf-8")
+        buf = io.BytesIO()
+        with mock.patch.object(mod, "_head_section", side_effect=RuntimeError("boom")), \
+                mock.patch.object(mod, "_sample_line", side_effect=RuntimeError("boom")), \
+                mock.patch.object(mod.sys, "stdout", mock.Mock(buffer=buf)):
+            rc = mod.main(["task-status.py", "--echo", str(f)])
+        self.assertEqual(rc, 0)
+        lines = buf.getvalue().decode().split("\n")
+        self.assertEqual(lines[5], "none")
+        self.assertEqual(lines[13:], ["", "- - -", ""])
+
+    def test_a_value_the_clocks_cannot_give_is_a_dash(self):
+        """An empty first word would shift the hook's `read`: `susp` missing must not make `sts` read as `susp`."""
+        import importlib.util
+        from unittest import mock
+        spec = importlib.util.spec_from_file_location("task_status_t234d", SCRIPTS / "task-status.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        mod._sample_line()                                  # pb_journal imported once, then its sampler replaced
+        import pb_journal
+        with mock.patch.object(pb_journal, "suspend_sample", return_value=(None, 1760700000, "")):
+            self.assertEqual(mod._sample_line(), "- 1760700000 -")
+
+    def test_fields_carries_the_sample_and_section_mode_prints_both(self):
+        d = Path(tempfile.mkdtemp(prefix="pb234f-"))
+        self.addCleanup(shutil.rmtree, d, True)
+        f = d / "task.md"
+        f.write_text("## Status\nin_progress\n\n## Work Plan\n- [ ] B\n", encoding="utf-8")
+        for mode, n in (("--fields", 5), ("--section", 2)):
+            with self.subTest(mode=mode):
+                r = subprocess.run([sys.executable, "-I", str(SCRIPTS / "task-status.py"), mode, str(f)],
+                                   capture_output=True, text=True, timeout=60)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                lines = r.stdout.split("\n")
+                self.assertEqual(len(lines), n + 1, r.stdout)
+                self.assertRegex(lines[n - 1], r"^\d+ \d+ [0-9a-f]{8}$")
+                if mode == "--fields":
+                    self.assertEqual(lines[:4], ["in_progress", "1", "B", "hold"])
+                else:
+                    self.assertEqual(lines[0], "Work Plan")
 
     def test_no_previous(self):
         f = self.run_echo("## Work\n- [x] A — ok\n- [ ] B\n- [ ] C\n")

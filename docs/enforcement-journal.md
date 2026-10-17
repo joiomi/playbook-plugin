@@ -287,7 +287,7 @@ this one grows tens of times faster (measured on this repository, 2026-10-07 to 
 day, implied by the transcripts' tool calls, against 80-500 enforcement records a day). The two files share no key
 beyond the session ids and the time.
 
-Every line has the same thirteen keys, in this order:
+Every line has the same eighteen keys, in this order (the last five since task 234):
 
 | key | meaning |
 |---|---|
@@ -304,15 +304,30 @@ Every line has the same thirteen keys, in this order:
 | `ms` | how long the hook ran, whole milliseconds from its FIRST line to its exit; `null` when bash has no `EPOCHREALTIME` |
 | `exit` | the hook's exit status |
 | `error` | on a failure, what failed: the hook's own name for it, its own failing source line (`line 214: cat "$f"`, as written in the hook — never a command of the agent's), or a python hook's exception TYPE (`RuntimeError` — its message, which can carry a path, stays on stderr) |
+| `task` | the session's task when the hook ran (`"007"`, as `sessions/<id>/current_state` names it — read by the writer itself, for every hook), "" where the session has no task or the writer does not know the session: monitor-nudge knows it only from `PLAYBOOK_SESSION_ID`, and the command guard resolves no session on an allow (resolving it means importing `tasks.core`, ~24 ms of the guard's ~70 ms, measured) — the same call's task-gate line, with the same `tool_use_id`, names the task |
+| `section` | on the state echo's line only: the `##` section the first open gate sits in (`"Work Plan"`), from that call's own read of task.md — the heading's text without `## `, control characters and U+0085 / U+2028 / U+2029 as spaces, at most 64 bytes cut on a whole character; "" on every other line, where no gate is open, where no heading is above it, and where the read was not accepted (overtaken by another hook, or unreadable) |
+| `susp` | the whole seconds the machine had slept since boot (CLOCK_BOOTTIME − CLOCK_MONOTONIC), sampled by the python process the hook ran; `null` where it ran none |
+| `sts` | the wall time of that sample, epoch seconds; `null` with `susp` |
+| `boot` | the boot id's first 8 characters (`/proc/sys/kernel/random/boot_id`), "" where none was sampled |
 
-Example (a live session, task 222):
+Example (the state echo in a test project, task 234):
 
 ```json
-{"ts":"2026-10-16T16:00:17Z","hook":"command-guard","event":"PreToolUse","tool":"Bash","tool_use_id":"toolu_01QQ4HUXVqTcKHE1zLD87eio","session_id":"pid-2025865","host_session_id":"f156c929-b7b5-4e71-bf48-878ac7c78aeb","agent_id":"","decision":"block","detail":"git-push-force","ms":64,"exit":2,"error":""}
+{"ts":"2026-10-17T20:09:07Z","hook":"state-echo","event":"PostToolUse","tool":"Bash","tool_use_id":"toolu_01QQ4HUXVqTcKHE1zLD87eio","session_id":"s234","host_session_id":"f156c929-b7b5-4e71-bf48-878ac7c78aeb","agent_id":"","decision":"context","detail":"echo full","ms":223,"exit":0,"error":"","task":"007","section":"Work Plan","susp":25573,"sts":1792267747,"boot":"d6a8e5ef"}
 ```
 
-**What it never holds:** no command, no path, no prompt, no file content — only the hooks' own words and ids. It is
-not a conversation record, so a judge's read-only sandbox does not hide it.
+**What it never holds:** no command, no path, no prompt — only the hooks' own words and ids, and one text taken from a
+file: the open gate's `##` heading in `section`, which the task's own template or its author wrote, cut at 64 bytes.
+It is not a conversation record, so a judge's read-only sandbox does not hide it.
+
+**`""` and `null` mean "not on this line"**, never "none": a stop line with `section` "" says nothing about the gate,
+and a bash hook's `susp` `null` says no python ran there, not that the machine never slept. Where the samples are
+taken: the state echo (`task-status.py --echo`, or `--section` on a failed call), the stop hook (`--fields`), and every
+python hook (codex's, the command guard, the dialog hook's answer line — `pb_journal.append_hook_run` samples itself);
+the task gate, the chat log, the session hooks, the task-folder watch and monitor-nudge take none. **The sample's moment is `sts`, not
+`ts`:** the sample is taken while the hook runs and `ts` when it exits, so a suspend between the two falls on the right
+side only when `susp` is paired with `sts`. Between two samples of the same `boot`, the difference of `susp` is the time
+the machine slept between their `sts`; across a different `boot`, it says nothing (each boot starts from zero).
 
 **How it is written.** The bash hooks set `_PB_HJ_T0=$EPOCHREALTIME` on their first line and call `pb_hook_begin`
 once the library is sourced; their own exit actions (the shell log's line, the stop hook's turn-end mark) go through
@@ -326,7 +341,8 @@ host session and the agent the first match in the payload's HEAD — before its 
 come before any tool input in every payload captured; the Agent tool's response carries a nested `agentId`, which must
 not stand in for the caller's).
 
-Each line is one append of at most 1,024 bytes (Linux's `PIPE_BUF` is 4,096), so hooks side by side tear none. Each
+Each line is one append of at most 2,048 bytes (Linux's `PIPE_BUF` is 4,096; a line with every field at its cap measured
+1,122 bytes with task 234's five keys, 898 before them, under a cap of 1,024 then), so hooks side by side tear none. Each
 append holds a SHARED lock on the journal directory (`flock`; renaming and compressing hold it exclusively), so no
 line is in flight while a closed file is compressed, whatever the clock — the owner, 2026-10-16 22:21: "Lacăt la
 fiecare rând" (a forward clock jump made the time rule below insufficient — the post-panel judge). The lock is taken
@@ -337,7 +353,9 @@ temporary is never removed for its age: one whose writer (the pid in its name) i
 one write is the whole line or nothing — and a living writer's is left (the post-panel judge's run 4: a clock step
 made a live one look old). The journal directory is made before the lock is taken, so a project's first line holds it
 too. A host without `flock` appends directly (and never rotates). Ids
-keep only id characters; `detail` and `error` are escaped and cut on a whole character and a whole escape. Nothing is
+keep only id characters; `detail`, `error` and `section` are escaped and cut on a whole character and a whole escape
+(a line past the cap drops those three texts and keeps every key); `task` is digits only, `susp` and `sts` whole
+numbers of at most 12 digits, `boot` 8 lowercase hex — anything else is "" / `null`. Nothing is
 written outside a playbook project (no `.agent/tasks`, no lane with `tasks/`), in the fresh-clone shape (lanes, no
 marker), with an invalid `.agent/current_user`,
 into a lane that is a link or not writable, through a linked `journal/`, or into a `hooks.jsonl` that is a link or not

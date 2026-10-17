@@ -267,13 +267,16 @@ STATUS_LINE=""
 UNCHECKED=""
 FIRST_GATE=""
 PB_RELEASE=""
+PB_SAMPLE_READ=""
 if [ "$PB_PY_FLOOR" = true ]; then
 {
     IFS= read -r STATUS_LINE || PB_STATE_READ=false
     IFS= read -r UNCHECKED   || PB_STATE_READ=false
     IFS= read -r FIRST_GATE  || PB_STATE_READ=false
     IFS= read -r PB_RELEASE  || PB_STATE_READ=false
+    IFS= read -r PB_SAMPLE_READ || true     # task 234: the suspend sample, for the journal line only
 } < <(python3 -E -s "$HOOK_DIR/task-status.py" --fields "$TASK_FILE" 2>/dev/null) || PB_STATE_READ=false
+read -r PB_HJ_SUSP PB_HJ_STS PB_HJ_BOOT _ <<< "${PB_SAMPLE_READ:-}" || true
 else
     PB_STATE_READ=false    # below the floor (task 193): the reader is not run; the python-free count below
 fi

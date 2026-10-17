@@ -250,11 +250,18 @@ def append_lifecycle(agent_dir, *, event, task, detail="", session_id="") -> Non
 # inline copy, to the same answers). Python writes it for the hooks that are python: codex's three and
 # command_guard.py. Past 20 MB the file is closed — renamed, compressed, kept (the owner, 2026-10-16 18:04: "Comprimate,
 # toate") — so a project whose only hooks are python rotates too (plan panel 2026-10-16: codex, grok, opus).
+# Task 234 (PHASE-B item 6): five keys after `error` — the session's task (read by the writer itself), the open gate's
+# `##` section (the state echo's line only) and the suspend sample: `susp` (CLOCK_BOOTTIME − CLOCK_MONOTONIC, whole
+# seconds the machine had slept since boot), `sts` (the wall time of that sample) and `boot` (the boot id's first 8).
 HOOK_FIELDS = ("ts", "hook", "event", "tool", "tool_use_id", "session_id", "host_session_id", "agent_id", "decision",
-               "detail", "ms", "exit", "error")
+               "detail", "ms", "exit", "error", "task", "section", "susp", "sts", "boot")
 _HJ_LIMIT = 20971520
-_HJ_LINE_MAX = 1024                     # bytes, the newline included (one append; Linux's PIPE_BUF is 4096)
+_HJ_LINE_MAX = 2048                     # bytes, the newline included (one append; Linux's PIPE_BUF is 4096)
 _HJ_ID_DROP = re.compile(r"[^A-Za-z0-9._:@/+=-]")
+_HJ_SESSION = re.compile(r"[A-Za-z0-9._-]+")
+_HJ_TASK = re.compile(rb"[0-9]{1,16}")
+_HJ_BOOT = re.compile(r"[0-9a-f]{8}")
+_HJ_COUNT_MAX = 999_999_999_999         # the bash writer's `^[0-9]{1,12}$`
 _HJ_ARCHIVE = re.compile(r"hooks\.jsonl\.archived-\d{8}-\d{6}-(\d{1,12})-\d+")
 
 
@@ -276,6 +283,58 @@ def _hj_text(value, cap: int) -> str:
         out.append(ch)
         used += n
     return "".join(out).encode("utf-8", "replace").decode("utf-8")
+
+
+def suspend_sample():
+    """(susp, sts, boot): the seconds the machine had slept since boot (CLOCK_BOOTTIME − CLOCK_MONOTONIC, whole), the
+    wall time of that reading (epoch seconds) and the boot id's first 8 characters — None / None / "" where they cannot
+    be read. The time-by-phase adder pairs `susp` with `sts`, never with a line's `ts` (plan panel of task 234: codex,
+    grok, sonnet)."""
+    try:
+        mono = time.clock_gettime(time.CLOCK_MONOTONIC)
+        wall = time.time()
+        boot_t = time.clock_gettime(time.CLOCK_BOOTTIME)
+        susp, sts = max(0, int(boot_t - mono)), int(wall)
+    except (AttributeError, OSError, ValueError, OverflowError):
+        susp = sts = None
+    try:
+        with open("/proc/sys/kernel/random/boot_id", "rb") as f:
+            b = f.read(8).decode("ascii", "replace")
+        boot = b if _HJ_BOOT.fullmatch(b) else ""
+    except OSError:
+        boot = ""
+    return susp, sts, boot
+
+
+def _hj_count(v):
+    return v if isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= _HJ_COUNT_MAX else None
+
+
+def _hj_session_task(lane: Path, session_id) -> str:
+    """The session's task, as the bash writer reads it: the first line of `<lane>/sessions/<id>/current_state`, its
+    spaces dropped, when that is a task number (digits, at most 16); else "". The id only as resolve_session_id
+    accepts one; no link on the way; a regular file only, opened without blocking (a FIFO would hang the hook)."""
+    try:
+        sid = str(session_id or "")
+        if not _HJ_SESSION.fullmatch(sid) or sid in (".", ".."):
+            return ""
+        d = lane / "sessions"
+        if d.is_symlink() or not d.is_dir():
+            return ""
+        d = d / sid
+        if d.is_symlink() or not d.is_dir():
+            return ""
+        fd = os.open(str(d / "current_state"), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                return ""
+            data = os.read(fd, 4096)
+        finally:
+            os.close(fd)
+        t = re.sub(rb"[ \t\n\r\f\v]", b"", data.split(b"\n", 1)[0])
+        return t.decode("ascii") if _HJ_TASK.fullmatch(t) else ""
+    except (OSError, ValueError):
+        return ""
 
 
 def resolve_hook_lane(project_root) -> "Path | None":
@@ -305,11 +364,14 @@ def resolve_hook_lane(project_root) -> "Path | None":
 
 
 def append_hook_run(project_root, *, hook, event="", tool="", tool_use_id="", session_id="", host_session_id="",
-                    agent_id="", decision="", detail="", ms=None, exit_code=0, error="", timing=None) -> None:
+                    agent_id="", decision="", detail="", ms=None, exit_code=0, error="", timing=None, task=None,
+                    section="", susp=None, sts=None, boot=None) -> None:
     """Append one hook-journal line for a run of `hook` in the project at `project_root`. Never raises; a write that
     cannot be made is skipped. `ms` is the run's duration (None when unknown); `timing` = (start stamp, fallback
     time) instead makes the duration be taken AFTER the journal's own rotation (impl panel r1, codex). No line for a
-    review's session (`PLAYBOOK_SESSION_ID` judge / tail-cert: a review must not write the project — opus)."""
+    review's session (`PLAYBOOK_SESSION_ID` judge / tail-cert: a review must not write the project — opus).
+    Task 234: `task` None → read from the session's pointer (as the bash writer does); `susp`, `sts` and `boot` all
+    None → this process's own sample; given values are written once valid (digits / 8 hex), else null / ""."""
     try:
         if os.environ.get("PLAYBOOK_SESSION_ID", "") in ("judge", "tail-cert"):
             return
@@ -339,9 +401,17 @@ def append_hook_run(project_root, *, hook, event="", tool="", tool_use_id="", se
                    "decision": _hj_id(decision, 16), "detail": _hj_text(detail, 128),
                    "ms": _cap_int(ms) if ms is not None else None, "exit": max(0, min(code, 255)),
                    "error": _hj_text(error, 240)}
+            if task is None:
+                task = _hj_session_task(lane, session_id)
+            if susp is None and sts is None and boot is None:
+                susp, sts, boot = suspend_sample()
+            rec["task"] = task if isinstance(task, str) and _HJ_TASK.fullmatch(task.encode("ascii", "replace")) else ""
+            rec["section"] = _hj_text(section, 128)
+            rec["susp"], rec["sts"] = _hj_count(susp), _hj_count(sts)
+            rec["boot"] = boot if isinstance(boot, str) and _HJ_BOOT.fullmatch(boot) else ""
             data = (json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
             if len(data) > _HJ_LINE_MAX:
-                rec["detail"] = rec["error"] = ""
+                rec["detail"] = rec["error"] = rec["section"] = ""
                 data = (json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
                 if len(data) > _HJ_LINE_MAX:
                     return

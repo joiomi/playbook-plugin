@@ -18974,7 +18974,7 @@
     {
       "id": "PB-HOOK-JOURNAL",
       "category": "providers-and-hooks",
-      "statement": "Every run of a playbook hook that finds a playbook project appends ONE line to the lane's `journal/hooks.jsonl` — Claude's and grok's eight bash hooks, the project's `monitor-nudge.sh`, codex's three python hooks and `command_guard.py` (Claude's and grok's through command-guard-hook's `exec`, codex's directly) — with the keys ts (UTC, at exit), hook, event, tool, tool_use_id (the host's id of the tool call), session_id (playbook's), host_session_id, agent_id (a subagent's), decision (allow/block/context/ok/skip/error), detail, ms (from the hook's first line), exit and error, and no command, path or prompt. The bash runner keeps the hook's exit status exactly and gives each exit action the hook's own status as `$?` (a blocked stop leaves no turn-end mark); a failing write or action changes nothing. The ids come from the normalizer's frame (v4) where the hook reads it, so a key nested in a tool's input or response cannot stand in for them; elsewhere `tool_use_id` is the last match in the payload's last 4 KiB. Each line is one append of at most 1,024 bytes, so writers side by side tear none, made under a shared lock on the journal directory that renaming and compressing take exclusively (the owner, 2026-10-16 22:21), so no line is in flight while a closed file is compressed; the lock is taken before the duration, and past a 1 s wait the line goes to a spool file that the next exclusive holder moves into the journal — never an unlocked append (the owner, 2026-10-17 00:13), a dead writer's temporary taken the same way and a living one's never removed, the directory made before the lock; nothing is written in the fresh-clone shape, with an invalid marker, into a lane that is a link or not writable, through a linked `journal/`, or into a `hooks.jsonl` that is a link or not a regular file. About one run in 32 looks at the journal directory under a lock taken without waiting: past 20 MB, after a second look, the file is renamed to `hooks.jsonl.archived-<stamp>-<epoch>-<pid>` (the name records the rename time, written by the rename itself); a closed file is compressed beside it only 10 minutes after the rename its name records and after its last write, and never when its name records no rename time (a hook that opened it before the rename can still append), and every archive is kept (the owner, 2026-10-16 18:04); the python writer rotates the same way, and both take the duration after that work. No line is written for a review's session (judge, tail-cert) or a nested run (PLAYBOOK_HOOK_NESTED=1, codex's Stop calling the stop hook); the pattern reads the event, session and agent only in the payload's head (before its first tool input, within 4 KiB); a python error is named by its type.",
+      "statement": "Every run of a playbook hook that finds a playbook project appends ONE line to the lane's `journal/hooks.jsonl` — Claude's and grok's eight bash hooks, the project's `monitor-nudge.sh`, codex's three python hooks and `command_guard.py` (Claude's and grok's through command-guard-hook's `exec`, codex's directly) — with the keys ts (UTC, at exit), hook, event, tool, tool_use_id (the host's id of the tool call), session_id (playbook's), host_session_id, agent_id (a subagent's), decision (allow/block/context/ok/skip/error), detail, ms (from the hook's first line), exit, error, task (the session's task, read by the writer itself from `sessions/<id>/current_state` — digits, else \"\"; the command guard's allow line has none, it resolves no session there, and the same call's task-gate line names it), section (on the state echo's line only: the open gate's `##` heading from that call's accepted read, \"\" on a read overtaken by another hook; a failed call reads task.md as it is then, never a memory), susp / sts / boot (the suspend sample a python process took — CLOCK_BOOTTIME − CLOCK_MONOTONIC in whole seconds, the wall time of that sample, the boot id's first 8 — null / \"\" where none ran), and no command, path or prompt; the one text from a file is that heading, cut at 64 bytes. \"\" and null mean not on this line. The bash runner keeps the hook's exit status exactly and gives each exit action the hook's own status as `$?` (a blocked stop leaves no turn-end mark); a failing write or action changes nothing. The ids come from the normalizer's frame (v4) where the hook reads it, so a key nested in a tool's input or response cannot stand in for them; elsewhere `tool_use_id` is the last match in the payload's last 4 KiB. Each line is one append of at most 2,048 bytes (a line past it drops detail, error and section and keeps every key), so writers side by side tear none, made under a shared lock on the journal directory that renaming and compressing take exclusively (the owner, 2026-10-16 22:21), so no line is in flight while a closed file is compressed; the lock is taken before the duration, and past a 1 s wait the line goes to a spool file that the next exclusive holder moves into the journal — never an unlocked append (the owner, 2026-10-17 00:13), a dead writer's temporary taken the same way and a living one's never removed, the directory made before the lock; nothing is written in the fresh-clone shape, with an invalid marker, into a lane that is a link or not writable, through a linked `journal/`, or into a `hooks.jsonl` that is a link or not a regular file. About one run in 32 looks at the journal directory under a lock taken without waiting: past 20 MB, after a second look, the file is renamed to `hooks.jsonl.archived-<stamp>-<epoch>-<pid>` (the name records the rename time, written by the rename itself); a closed file is compressed beside it only 10 minutes after the rename its name records and after its last write, and never when its name records no rename time (a hook that opened it before the rename can still append), and every archive is kept (the owner, 2026-10-16 18:04); the python writer rotates the same way, and both take the duration after that work. No line is written for a review's session (judge, tail-cert) or a nested run (PLAYBOOK_HOOK_NESTED=1, codex's Stop calling the stop hook); the pattern reads the event, session and agent only in the payload's head (before its first tool input, within 4 KiB); a python error is named by its type.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/gate-echo-lib.sh",
@@ -18995,6 +18995,18 @@
         {
           "path": "plugins/playbook/hooks/monitor-nudge.sh",
           "reference": "function:_pb_nudge_journal"
+        },
+        {
+          "path": "plugins/playbook/scripts/gate-echo-lib.sh",
+          "reference": "function:_pb_hj_task"
+        },
+        {
+          "path": "plugins/playbook/scripts/pb_journal.py",
+          "reference": "symbol:suspend_sample"
+        },
+        {
+          "path": "plugins/playbook/scripts/task-status.py",
+          "reference": "symbol:_head_section"
         }
       ],
       "failure_consequence": "Medium",
@@ -19060,11 +19072,11 @@
         {
           "type": "executable integration",
           "path": "tests/test_hook_journal_writer.py",
-          "reference": "TheStrings.test_the_encoded_line_stays_within_one_kib",
+          "reference": "TheStrings.test_the_encoded_line_stays_within_two_kib",
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": [
-            "Fields of 3,000 quotes, backslashes, `é`, emoji: the line stays ≤ 1,024 bytes and decodes."
+            "Fields of 3,000 quotes, backslashes, `é`, emoji: the line stays ≤ 2,048 bytes and decodes."
           ]
         },
         {
@@ -19543,6 +19555,69 @@
           "negative_control": null,
           "limitations": [
             "Post-panel judge run 5 (codex — reproduced with RLIMIT_FSIZE): a short write removed the spool and left a torn line; now rolled back, the spool kept."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_hook_journal_writer.py",
+          "reference": "TheStrings.test_a_line_with_every_field_at_its_cap_is_written_whole",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task 234 (plan panel, grok K1): today's maxed line was 898 bytes, the five keys take it past 1,024; at the 2,048 cap no field is dropped."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_hook_journal_writer.py",
+          "reference": "TheTaskSectionAndSample.test_the_task_from_the_sessions_pointer",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_hook_journal_writer.py",
+            "reference": "TheTaskSectionAndSample.test_a_pointer_that_is_not_a_task_number_is_empty"
+          },
+          "limitations": [
+            "The bash writer reads the pointer for any hook, a block's line too; a non-number, a link, a FIFO or a session id that is not one component reads \"\" (the sibling tests)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_hook_journal_python.py",
+          "reference": "ThreeWritersOneAnswer.test_the_same_task_section_and_sample",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The bash lib, pb_journal and monitor-nudge's copy name the same task from the same pointer; the lib and pb_journal write a given section and sample the same."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_hook_journal_hooks.py",
+          "reference": "TheTaskSectionAndSample.test_a_stale_read_logs_no_section_and_keeps_the_sample",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The real state echo: a read overtaken by a write to task.md (a `python3` shim appends after `--echo`) logs section \"\" and keeps its sample (codex, plan panel)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_hook_journal_hooks.py",
+          "reference": "TheTaskSectionAndSample.test_a_switch_then_a_failed_call_names_the_new_task_and_its_section",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "After the pointer moves to another task, a failed call's line names that task and ITS section — a fresh `--section` read, no memory (opus, sonnet, codex, grok)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_hook_journal_python.py",
+          "reference": "ThePythonWriter.test_python_samples_the_suspend_clock_itself",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "susp within 2 s of CLOCK_BOOTTIME − CLOCK_MONOTONIC read beside it, sts between the call's bounds, boot equal to /proc's; the kernel's own suspend intervals are compared live (task 234, W7)."
           ]
         }
       ],

@@ -4,6 +4,23 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+**Every hook-journal line names its task; the state echo's names the open gate's section; python's carry a suspend
+sample** — PHASE-B.md item 6, third part, task 234. With these the close can split a task's time by phase and drop the
+time the laptop slept (the owner, 2026-10-15: suspends are not work time) from the plugin's own journal, not the
+host's transcripts.
+- Five keys after `error` in `journal/hooks.jsonl`, in all three writers: `task` (the session's task, read by the
+  writer itself from `sessions/<id>/current_state` — for every hook but the command guard's allow line, which resolves no session; the same call's task-gate line names it), `section` (the state echo's line only: the open
+  gate's `##` heading from that call's accepted read, cut at 64 bytes; "" on a read another hook overtook — a failed
+  call reads task.md as it is then, never a memory, so after `tasks work M` it names M's gate), and `susp` / `sts` /
+  `boot` — CLOCK_BOOTTIME − CLOCK_MONOTONIC in whole seconds, the wall time of THAT sample (pair `susp` with `sts`, not
+  with `ts`), the boot id's first 8 — taken by the python each hook already runs (the state echo's, the stop hook's,
+  every python hook's), `null` / "" elsewhere. "" and `null` mean "not on this line".
+- A line may now be 2,048 bytes (1,024 before: a line with every field at its cap measured 1,122); a line past it drops
+  `detail`, `error` and `section` and keeps every key.
+- `task-status.py --echo` prints fifteen lines (the section and the sample after its thirteen), `--fields` five (the
+  sample last), and a new `--section` two; each extra is computed apart, so a fault there never fails the lines the
+  hooks decide on.
+
 **The owner's options-dialog answers reach the chat log** — PHASE-B.md item 6, second part, task 233 (the owner,
 2026-10-10, retro 177: "capture them where the prompts are captured"). His answers in an options dialog are decisions,
 and until now no log held them — `chat_log.md` had his prompts only.

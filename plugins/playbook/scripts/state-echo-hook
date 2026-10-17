@@ -348,9 +348,26 @@ if [ "$AGENT_WRITABLE" = true ]; then
         esac
     fi
 fi
-# A failed call: counted above, no gate echo (task 196).
+# A failed call: counted above, no gate echo (task 196). Its journal line names the open gate's section as task.md has
+# it NOW — a read of its own (a failed call is 0.6 % of calls, measured: 36 of 5,588), never a memory: after `tasks work
+# M` a memory would still name the old task's gate (task 234's plan panel: opus, sonnet, codex, grok). No pointer, no
+# task file, a read that fails: no section and no sample.
 if [ "$PB_HOOK_EVENT" = PostToolUseFailure ]; then
     PB_HJ_DECISION=ok; PB_HJ_DETAIL="failed call counted"
+    PB_FAILED_TASK=""
+    if [ -f "$STATE_FILE" ] && [ ! -L "$STATE_FILE" ]; then
+        { IFS= read -r PB_FAILED_TASK < "$STATE_FILE"; } 2>/dev/null || true
+        PB_FAILED_TASK="${PB_FAILED_TASK//[[:space:]]/}"
+    fi
+    case "$PB_FAILED_TASK" in
+        ''|*[!0-9]*) ;;
+        *)  PB_FAILED_FILE=$(task_record_file "$AGENT_DIR" "$PB_FAILED_TASK")
+            if [ -n "$PB_FAILED_FILE" ] \
+               && PB_FAILED_READ=$(python3 -E -s "$HOOK_DIR/task-status.py" --section "$PB_FAILED_FILE" 2>/dev/null); then
+                { IFS= read -r PB_HJ_SECTION || true; IFS= read -r PB_FAILED_SAMPLE || true; } <<< "$PB_FAILED_READ"
+                read -r PB_HJ_SUSP PB_HJ_STS PB_HJ_BOOT _ <<< "$PB_FAILED_SAMPLE" || true
+            fi ;;
+    esac
     exit 0
 fi
 
@@ -620,6 +637,7 @@ PB_ECHO_OUT=$(python3 -E -s "$HOOK_DIR/task-status.py" --echo "$TASK_FILE" "${PB
     || PB_GATES_OK=false
 TOTAL_GATES=""; DONE_GATES=""; GATE_LINE=""; GATE_POS=""; GATE_BELOW=""; TRANS=""; TICKED_LINE=""
 GATE_TEXT_FULL=""; GATE_TEXT=""; PB_SHORT=""; GATE_OPENS=""; GATE_CHECKS=""; GATE_ABOVE=""
+PB_SECTION_READ=""; PB_SAMPLE_READ=""
 {
     IFS= read -r TOTAL_GATES || true
     IFS= read -r DONE_GATES || true
@@ -634,6 +652,8 @@ GATE_TEXT_FULL=""; GATE_TEXT=""; PB_SHORT=""; GATE_OPENS=""; GATE_CHECKS=""; GAT
     IFS= read -r GATE_OPENS || true
     IFS= read -r GATE_CHECKS || true
     IFS= read -r GATE_ABOVE || true
+    IFS= read -r PB_SECTION_READ || true        # task 234: the open gate's `##` section, then the suspend sample —
+    IFS= read -r PB_SAMPLE_READ || true         # for the journal line only; a missing line reads as ""
 } <<< "$PB_ECHO_OUT"
 case "$TRANS" in none|same|skip|done|done-bare|moved|reworded) ;; *) PB_GATES_OK=false ;; esac
 if [ "$PB_GATES_OK" != true ]; then
@@ -643,6 +663,10 @@ if [ "$PB_GATES_OK" != true ]; then
     PB_HJ_DECISION=context; PB_HJ_DETAIL="gates unreadable"
     exit 0
 fi
+# The read is accepted (task 234): its section and sample go on this call's journal line — unless the hold below finds
+# the read stale, which blanks the section (a clock reading is never stale).
+PB_HJ_SECTION="$PB_SECTION_READ"
+read -r PB_HJ_SUSP PB_HJ_STS PB_HJ_BOOT _ <<< "$PB_SAMPLE_READ" || true
 TOTAL_GATES=$(_safe_int "$TOTAL_GATES"); DONE_GATES=$(_safe_int "$DONE_GATES"); GATE_BELOW=$(_safe_int "$GATE_BELOW")
 case "$GATE_LINE" in *[!0-9]*) GATE_LINE="" ;; esac
 case "$TICKED_LINE" in *[!0-9]*) TICKED_LINE="" ;; esac
@@ -767,6 +791,7 @@ if [ "$AGENT_WRITABLE" = true ]; then
             echo '{}'
             PB_HJ_DECISION=ok; PB_HJ_DETAIL="stale read (counted)"
         fi
+        PB_HJ_SECTION=""            # the read was overtaken: its section is not this call's (task 234, codex)
         exit 0
     fi
 fi
