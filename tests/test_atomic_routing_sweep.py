@@ -38,6 +38,17 @@ MIRROR_PREFIX = "scripts/lib/provider/"
 # (relative file, a substring of the call's source line) -> why it is NOT routed
 # through tasks.atomic. Every entry must still match a real site (stale entries fail).
 APPROVED = {
+    ("tasks/review_view.py", 'shutil.copyfile(src_git / "config", gd / "config")'):
+        "task 231: a review's copy of the tree — a fresh clone made in a new folder under the lane journal "
+        "(`review-views/<run>`), read-only to the judges and removed on every exit; its files are new, never state",
+    ("tasks/review_view.py", 'shutil.copy2(idx, gd / "index")'):
+        "task 231: the live index copied into the review copy's fresh clone (copy2 keeps its mtime for git's "
+        "racy-clean rule) — an ephemeral copy, removed on every exit",
+    ("tasks/review_view.py", "shutil.copy2(shared, gd / shared.name)"):
+        "task 231: a split index's shared part copied with it into the review copy — ephemeral, removed on every exit",
+    ("tasks/review_view.py", "shutil.copyfile(s, d, follow_symlinks=False)"):
+        "task 231: each listed file copied into the review copy's new folder (never over an existing file — the "
+        "folder is made for this run) — ephemeral, removed on every exit",
     ("tasks/post_d6.py", "shutil.copy2(real, idx)"):
         "task 108: a copy of the git index into a private mkdtemp dir (the temporary GIT_INDEX_FILE "
         "for the post-D6 base tree), removed in `finally` — ephemeral, never state",
