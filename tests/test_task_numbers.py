@@ -106,8 +106,9 @@ class TheHookJournal(_Tmp):
         new = self.jdir / f"hooks.jsonl.archived-20261017-100000-{T0 + 10}-1.gz"
         with gzip.open(new, "wt") as f:
             f.write(json.dumps(hl(T0 + 5, "PostToolUse")) + "\n")
-        old = self.jdir / f"hooks.jsonl.archived-20261016-100000-{T0 - 10}-2"
-        old.write_text(json.dumps(hl(T0 - 20, "PostToolUse")) + "\n")          # renamed before the window: skipped
+        # renamed before the window's margin: never opened (its line, impossible in a real archive, would be read)
+        old = self.jdir / f"hooks.jsonl.archived-20261016-100000-{T0 - 7200}-2"
+        old.write_text(json.dumps(hl(T0 + 6, "PostToolUse")) + "\n")
         got = numbers.read_hook_lines(self.jdir, T0, time.monotonic() + 30)
         self.assertEqual([r["_t"] for r in got], [T0 + 5])
 
@@ -155,7 +156,8 @@ class TheTaskRecords(_Tmp):
                 {"ts": iso(T0 + 6), "hook": "task-gate", "task": "007", "decision": "block"},
                 {"ts": iso(T0 - 9), "hook": "review", "task": "007", "seat": "old"}]
         self.write("enforcement.jsonl", recs)
-        got = numbers.read_task_records(self.d / ".agent", "007", T0, T0 + 100, time.monotonic() + 30)
+        got = numbers.task_records(numbers.read_enforcement(self.d / ".agent", time.monotonic() + 30), "007", T0,
+                                   T0 + 100)
         self.assertEqual([r["seat"] for r in got["review"]], ["a"])
         self.assertEqual(len(got["verify"]), 1)
         self.assertEqual(len(got["close"]), 1)                    # the record without a task is not this task's
@@ -394,12 +396,15 @@ class TheSideTables(unittest.TestCase):
                 {"id": "old", "kind": "panel", "mode": "plan", "status": "done", "outcome": "completed",
                  "ts": "2026-10-01T00:00:00+00:00"}]
         start = numbers._epoch("2026-10-17T00:00:00Z")
-        got = numbers.rounds_table(runs, [{"kind": "single", "round": 4}, {"kind": "single", "round": 4},
-                                          {"kind": "tail-cert", "round": 5}], start, start + 86400)
-        self.assertEqual(got["panels"], [{"mode": "plan", "outcome": "completed", "critical": 3, "important": 19},
-                                         {"mode": "impl", "outcome": "void", "critical": None, "important": None}])
-        self.assertEqual(got["post_panel"], [{"verdict": "FAIL", "critical": 0, "important": 2}])
-        self.assertEqual((got["single"], got["tail_cert"]), (1, 1))         # a round's seats are one run
+        got = numbers.rounds_table(runs, [{"kind": "single", "round": 4, "_t": start + 10},
+                                          {"kind": "single", "round": 4, "_t": start + 20},
+                                          {"kind": "tail-cert", "round": 5, "_t": start + 30}], start, start + 86400)
+        self.assertEqual(got["panels"], [{"mode": "plan", "outcome": "completed", "critical": 3, "important": 19,
+                                          "owner_ok": None},
+                                         {"mode": "impl", "outcome": "void", "critical": None, "important": None,
+                                          "owner_ok": None}])
+        self.assertEqual(got["post_panel"], [{"verdict": "FAIL", "critical": 0, "important": 2, "owner_ok": None}])
+        self.assertEqual((got["single"], got["tail_cert"]), (2, 1))         # each single-judge call is a run (V6)
 
     def test_the_owners_prompts_and_dialogs_with_their_wait(self):
         lines = [L(0, "UserPromptSubmit", detail="logged M001"), L(5, "UserPromptSubmit", detail="not logged: a notification"),
@@ -454,6 +459,27 @@ class TheComposition(_Tmp):
         self.assertEqual(got["close"]["owner_ok"], "the owner's word")
         self.assertEqual(got["late_records"], 1)                  # the review written after the close
         self.assertEqual(got["schema"], numbers.SCHEMA)
+
+    def test_only_the_closing_sessions_open_call_ends_at_the_close(self):
+        """V3 (opus): a second session that died with a call open does not run on to the close."""
+        lane, td, close_t = self.project()
+        with open(self.jdir / "hooks.jsonl", "a") as f:
+            for rec in (hl(close_t - 90, "UserPromptSubmit", hook="chat-log", host="h-2", detail="logged M009"),
+                        hl(close_t - 80, "PreToolUse", tool="Bash", tid="dies", hook="task-gate", host="h-2")):
+                f.write(json.dumps(rec) + "\n")
+        got = numbers.compose(lane, td, "007", deadline=time.monotonic() + 30)
+        self.assertEqual(got["time"]["sessions"], 2)
+        self.assertEqual(got["time"]["by_kind"]["agent"], 39 + 10)          # h-2: 10 s, not 90
+
+    def test_failed_runs_and_unplaced_sleep_reach_the_closure(self):
+        lane, td, close_t = self.project()
+        (td / "post-panel-reviews.jsonl").write_text(
+            json.dumps({"id": "f1", "kind": "panel", "mode": "impl", "status": "reserved",
+                        "ts": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(close_t - 50))}) + "\n"
+            + json.dumps({"id": "f1", "status": "failed"}) + "\n")
+        got = numbers.compose(lane, td, "007", deadline=time.monotonic() + 30)
+        self.assertEqual(got["rounds"]["failed"], 1)
+        self.assertIn("sleep_unplaced", got["time"])
 
     def test_a_task_never_activated_has_no_time(self):
         lane, td, close_t = self.project()
@@ -597,6 +623,160 @@ class TheNumbersCommand(_CliProject):
         r = self.cli("numbers", "1", "2", ok=False)
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("tasks numbers [N]", r.stdout + r.stderr)       # refused as wrong usage, not as unknown
+
+
+# --- impl round 1's findings (V1-V8) ----------------------------------------------------------------------------------
+
+class TheRealReceipt(unittest.TestCase):
+    """V1 (opus, grok, agy): the receipt as `core.format_verify_receipt` really writes it."""
+
+    def task(self, ts="2026-10-18T01:00:00+03:00", **kw):
+        from tasks.core import format_verify_receipt
+        entries = kw.pop("entries", [("verify", "x", 0, "ok"), ("lint", "y", 1, "bad")])
+        block = format_verify_receipt(entries, "abc", "assertive", timestamp=ts, **kw)
+        return "# 007 - x\n\n## Status\ndone\n\n## Verification Receipt\n\n" + block + "\n"
+
+    def test_an_accepted_reason_followed_by_a_bound_and_a_stop_rule(self):
+        got = numbers.receipt_close(self.task(freshness={"verdict": "STALE", "round_fp": "a", "now_fp": "b",
+                                                         "accepted_reason": 'docs "only"', "bound": "post-panel PASS x",
+                                                         "stop_rule": "stop rule: no judge needed"}))
+        self.assertEqual((got["freshness"], got["accepted_reason"]), ("STALE", 'docs "only"'))
+
+    def test_each_verdicts_own_wording(self):
+        for v, want in (("NO-STAMP", "NO-STAMP"), ("UNREADABLE", "UNREADABLE"), ("FRESH", "FRESH"),
+                        ("TAMPER-GUARD-DEGRADED", "TAMPER-GUARD-DEGRADED"), ("TAIL-CERT-PASS", "TAIL-CERTIFIED"),
+                        ("EXCLUDE-COVERS-CODE", "EXCLUDE-COVERS-CODE"), ("SINGLE-TAMPER-DEGRADED", "SINGLE-TAMPER-DEGRADED"),
+                        ("STALE", "STALE")):
+            with self.subTest(v=v):
+                got = numbers.receipt_close(self.task(freshness={"verdict": v, "round_fp": "a", "now_fp": "b",
+                                                                 "cert_clause": "c", "tamper_degraded_detail": "d"}))
+                self.assertEqual(got["freshness"], want)
+
+    def test_a_failed_command_is_counted(self):
+        self.assertEqual(numbers.receipt_close(self.task())["commands"], {"pass": 1, "fail": 1})
+
+    def test_a_utc_stamp_with_z(self):
+        got = numbers.receipt_close(self.task(ts="2026-10-17T22:00:00Z"))
+        self.assertEqual(got["epoch"], numbers._epoch("2026-10-17T22:00:00Z"))
+
+
+class RoundOneFindings(unittest.TestCase):
+    def test_a_window_that_starts_mid_turn_is_agent_time(self):
+        """V2 (opus, sonnet): the turn's prompt is older than the read margin — a tool event proves a turn."""
+        got = part([L(0, "PostToolUse", tid="a"), L(10, "PreToolUse", tool="Bash", tid="b"),
+                    L(20, "PostToolUse", tool="Bash", tid="b"), L(30, "Stop", decision="allow"),
+                    L(90, "UserPromptSubmit")])
+        self.assertEqual(got["by_kind"], {"agent": 30, "owner-idle": 60})
+
+    def test_a_new_prompt_ends_a_call_that_never_ended(self):
+        """V3 (opus, sonnet): a cancelled dialog fires no PostToolUse; the next prompt starts clean."""
+        got = part([L(0, "UserPromptSubmit"), L(10, "PreToolUse", tool="AskUserQuestion", tid="q", hook="dialog-log"),
+                    L(50, "UserPromptSubmit"), L(60, "PostToolUse", tid="x"), L(70, "Stop", decision="allow")])
+        self.assertEqual(got["by_kind"], {"agent": 30, "owner-question": 40})
+
+    def test_sleep_goes_where_its_samples_were_taken(self):
+        """V4 (codex's example): a sample written 60 s after it was taken (sts 1, ts 61) — the 60 s slept fall in the gap
+        that holds them, not in the last short gap."""
+        got = part([L(-1, "UserPromptSubmit"), L(0, "PostToolUse", tid="a", susp=0, sts=T0, boot="aaaaaaaa"),
+                    L(61, "PostToolUse", tid="b", susp=0, sts=T0 + 1, boot="aaaaaaaa"),
+                    L(62, "PostToolUse", tid="c", susp=60, sts=T0 + 62, boot="aaaaaaaa")])
+        self.assertEqual((got["slept"], got["by_kind"], got["sleep_unplaced"]), (60, {"agent": 3}, 0))
+
+    def test_sleep_that_cannot_be_placed_is_counted_not_dropped(self):
+        got = part([L(-1, "UserPromptSubmit"), L(0, "PostToolUse", tid="a", susp=0, sts=T0, boot="aaaaaaaa"),
+                    L(10, "PostToolUse", tid="b", susp=50, sts=T0 + 10, boot="aaaaaaaa")])
+        self.assertEqual((got["slept"], got["sleep_unplaced"]), (10, 40))
+
+    def test_overlapping_review_and_verify_spans_count_once(self):
+        """V5 (codex): a 100 s Bash gap under both spans for 50 s is 50 judges and 50 agent."""
+        got = part([L(0, "UserPromptSubmit"), L(0, "PreToolUse", tool="Bash", tid="b"),
+                    L(100, "PostToolUse", tool="Bash", tid="b")], reviews=[(0, 50)], verifies=[(0, 50)])
+        self.assertEqual(got["by_kind"], {"judges": 50, "agent": 50})
+
+    def test_rounds_count_each_call_and_keep_overrides(self):
+        """V6 (agy, codex, grok)."""
+        t = numbers._epoch("2026-10-17T21:00:00Z")
+        runs = [{"id": "p1", "kind": "panel", "mode": "impl", "status": "done", "outcome": "completed",
+                 "measures": {"critical": 0, "important": 2}, "owner_ok": "the owner said a third round",
+                 "ts": "2026-10-17T20:00:00+00:00"},
+                {"id": "s1", "panel": "fp", "status": "done", "verdict": "PASS", "critical": 0, "important": 0,
+                 "owner_ok": None, "ts": "2026-10-17T21:00:30+00:00"}]
+        reviews = [{"kind": "single", "round": 4, "_t": t}, {"kind": "single", "round": 4, "_t": t + 3000},
+                   {"kind": "tail-cert", "round": 5, "_t": t + 4000}, {"kind": "tail-cert", "round": 5, "_t": t + 5000}]
+        got = numbers.rounds_table(runs, reviews, t - 7200, t + 7200)
+        self.assertEqual(got["panels"][0]["owner_ok"], "the owner said a third round")
+        self.assertEqual((got["single"], got["tail_cert"]), (1, 2))        # the record at t is the post-panel run
+
+    def test_the_closures_first_prompt_is_counted(self):
+        """grok (Minor): the prompt that asked for `tasks work N` was logged before the pointer moved."""
+        lines = [L(0, "UserPromptSubmit", detail="logged M001", task=""), L(2, "PostToolUse", tid="w"),
+                 L(9, "UserPromptSubmit", detail="logged M002")]
+        self.assertEqual(numbers.owner_table(lines, "007", None)["ids"], ["M001", "M002"])
+        lines = [L(0, "UserPromptSubmit", detail="logged M001", task="008"), L(1, "PostToolUse", tid="z", task="008"),
+                 L(2, "PostToolUse", tid="w")]
+        self.assertEqual(numbers.owner_table(lines, "007", None)["ids"], [])      # another task's prompt is not this one's
+        # the live shape (W8): that prompt is logged seconds BEFORE the window starts at the `work` record
+        lines = [L(0, "UserPromptSubmit", detail="logged M001", task=""), L(3, "PostToolUse", tid="w"),
+                 L(9, "UserPromptSubmit", detail="logged M002"), L(-5, "UserPromptSubmit", detail="logged M000", task=""),
+                 L(-9, "UserPromptSubmit", detail="logged M099"), L(-8, "PostToolUse", tid="old")]   # the earlier life
+        lines.sort(key=lambda r: r["_t"])
+        self.assertEqual(numbers.owner_table(lines, "007", None, start=T0 + 3)["ids"], ["M001", "M002"])
+
+    def test_a_dialog_answer_delivered_twice_counts_once(self):
+        post = L(40, "PostToolUse", hook="dialog-log", tool="AskUserQuestion", tid="toolu_A", detail="logged M002")
+        lines = [L(10, "PreToolUse", hook="dialog-log", tool="AskUserQuestion", tid="toolu_A"), post, dict(post)]
+        got = numbers.owner_table(lines, "007", TheDialogs.LOG.replace("M001", "M002"))
+        self.assertEqual((got["dialogs"], got["wait"], got["questions"]), (1, 30, 2))
+
+    def test_the_display(self):
+        c = {"closed_at": "x", "window": {}, "time": None, "judges_wall": 0,
+             "rounds": {"panels": [{"mode": "impl", "outcome": "void", "critical": None, "important": None}],
+                        "post_panel": [], "single": 0, "tail_cert": 0},
+             "seats": {"s": {"runs": 2, "ok": 1, "failed": 1, "seconds": 90.5, "in": 1, "out": 1, "cache_read": 0,
+                             "cache_write": 0, "unknown": 0, "kinds": {}}},
+             "verify": {"runs": 1, "ran": 1, "reused": 0, "failed": 0, "seconds": 83.75}, "owner": {}, "close": None}
+        text = "\n".join(numbers.format_closure(c))
+        self.assertIn("impl panel void (C- I-)", text)
+        self.assertIn("1m30.5s", text)
+        self.assertIn("1m23.8s", text)
+
+
+class TheArchiveMargin(_Tmp):
+    def test_an_archive_renamed_just_before_the_window_is_read(self):
+        """V8 (agy): its lines hold the samples that bracket the window's first gaps."""
+        arch = self.jdir / f"hooks.jsonl.archived-20261017-100000-{T0 - 100}-1"
+        arch.write_text(json.dumps(hl(T0 - 200, "PostToolUse", susp=5, sts=T0 - 200, boot="aaaaaaaa")) + "\n")
+        got = numbers.read_hook_lines(self.jdir, T0, time.monotonic() + 30)
+        self.assertEqual([r["_t"] for r in got], [T0 - 200])
+
+
+class TheBudget(_CliProject):
+    def test_a_held_lock_cannot_hold_the_close_past_its_budget(self):
+        """V7 (codex, opus): one deadline through the composition, the lock wait and the write."""
+        if not shutil.which("flock"):
+            self.skipTest("no flock(1)")
+        from tasks.filelock import lock_path_for
+        self.cli("new", "quick", "first")
+        self.cli("work", "1")
+        self.cli("work", "done", "--force", "--reason", "one")
+        tf = self.task_dir() / "task.md"
+        holder = subprocess.Popen(["flock", str(lock_path_for(tf)), "sleep", "8"])
+        try:
+            time.sleep(0.3)
+            t = time.monotonic()
+            with self.assertRaises(Exception):
+                numbers.write_closure(self.project / ".agent", self.task_dir(), "001", budget=1.0)
+            self.assertLess(time.monotonic() - t, 4)
+        finally:
+            holder.kill()
+            holder.wait()
+
+    def test_a_write_that_did_not_happen_says_so(self):
+        self.cli("new", "quick", "first")
+        self.cli("work", "1")
+        r = self.cli("work", "done", "--force", "--reason", "x",
+                     driver="from tasks import numbers\nnumbers.write_closure = lambda *a, **k: None\n")
+        self.assertIn("numbers: not written", r.stderr)
 
 
 if __name__ == "__main__":

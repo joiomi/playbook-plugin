@@ -1441,6 +1441,9 @@ def cmd_work(cmd_args):
                     except ValueError:
                         _shown = _np
                     print(f"numbers: {_shown} (this closure's numbers — commit it with the task)")
+                else:                       # impl r1, grok: a write that did not happen says so
+                    print("numbers: not written (no receipt to key it, a newer close, or a link in its place)",
+                          file=sys.stderr)
             except (Exception, SystemExit) as _nexc:  # noqa: BLE001 — never changes the close
                 print(f"numbers: not written ({type(_nexc).__name__})", file=sys.stderr)
 

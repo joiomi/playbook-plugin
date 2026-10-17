@@ -95,8 +95,8 @@ def _lines_of(path: Path) -> "list[str]":
 
 def read_hook_lines(jdir: Path, start: float, deadline: float, end: "float | None" = None,
                     margin: float = 3600) -> "list[dict]":
-    """The hook journal's lines from `start - margin` to `end + margin`: the archives renamed at or after the window's
-    start (an archive renamed before it holds only older lines), the live file, then the unmerged spools — sorted by
+    """The hook journal's lines from `start - margin` to `end + margin`: the archives renamed at or after `start -
+    margin` (an archive renamed earlier holds only older lines; impl r1, agy), the live file, then the unmerged spools — sorted by
     `ts`, file order kept within a second, exact duplicates dropped (a spool taken over but not yet removed). Each line
     gets `_t` (epoch seconds). The margin keeps the suspend samples just outside the window."""
     lo = _iso(start - margin)
@@ -110,7 +110,7 @@ def read_hook_lines(jdir: Path, start: float, deadline: float, end: "float | Non
         return []
     for name in names:
         m = _ARCHIVE.fullmatch(name)
-        if m and int(m.group(1)) >= start:
+        if m and int(m.group(1)) >= start - margin:
             files.append((int(m.group(1)), jdir / name))
     files.sort(key=lambda f: f[0])
     paths = [p for _, p in files] + [jdir / "hooks.jsonl"] + [jdir / n for n in names if _SPOOL.fullmatch(n)]
@@ -119,7 +119,9 @@ def read_hook_lines(jdir: Path, start: float, deadline: float, end: "float | Non
     for path in paths:
         if time.monotonic() > deadline:
             raise OutOfTime(str(path))
-        for raw in _lines_of(path):
+        for n, raw in enumerate(_lines_of(path)):
+            if n % 2000 == 1999 and time.monotonic() > deadline:
+                raise OutOfTime(str(path))      # checked inside a file too (impl r1, codex)
             raw = raw.strip()
             head = _TS_HEAD.match(raw)
             if not head or raw in seen:
@@ -149,8 +151,8 @@ _TASK_HOOKS = ("review", "verify", "tasks", "close")
 def read_enforcement(lane: Path, deadline: float) -> "list[dict]":
     """The enforcement journal's review / verify / tasks / close records (with `_t`)."""
     out = []
-    for raw in _lines_of(lane / "journal" / "enforcement.jsonl"):
-        if time.monotonic() > deadline:
+    for n, raw in enumerate(_lines_of(lane / "journal" / "enforcement.jsonl")):
+        if n % 2000 == 0 and time.monotonic() > deadline:
             raise OutOfTime("enforcement.jsonl")
         raw = raw.strip()
         if not raw.startswith("{") or not any(f'"hook":"{h}"' in raw or f'"hook": "{h}"' in raw for h in _TASK_HOOKS):
@@ -167,10 +169,10 @@ def read_enforcement(lane: Path, deadline: float) -> "list[dict]":
     return out
 
 
-def read_task_records(lane: Path, task: str, start: float, end: float, deadline: float) -> "dict[str, list[dict]]":
+def task_records(records: "list[dict]", task: str, start: float, end: float) -> "dict[str, list[dict]]":
     """This task's review, verify, tasks and close records in [start, end] (a record with no `task` is no task's)."""
     got: "dict[str, list[dict]]" = {h: [] for h in _TASK_HOOKS}
-    for rec in read_enforcement(lane, deadline):
+    for rec in records:
         if str(rec.get("task", "")) == str(task) and start <= rec["_t"] <= end:
             got[rec["hook"]].append(rec)
     return got
@@ -223,6 +225,15 @@ def dialog_counts(log_text: str, tool_use_id: str) -> "dict | None":
 # --- the receipt ------------------------------------------------------------------------------------------------------
 
 _BLOCK = re.compile(r"^### (\S+) · risk (\S+)")
+# each verdict as `core.format_verify_receipt` words its line, checked in this order
+_FRESHNESS = (("TAIL-CERTIFIED", "TAIL-CERTIFIED"), ("TAMPER-GUARD-DEGRADED", "TAMPER-GUARD-DEGRADED"),
+              ("EXCLUDE-COVERS-CODE", "EXCLUDE-COVERS-CODE"), (" — UNREADABLE", "UNREADABLE"),
+              ("no stamp recorded", "NO-STAMP"), ("single-judge review ran with a", "SINGLE-TAMPER-DEGRADED"),
+              (" — FRESH", "FRESH"), (" — STALE", "STALE"))
+
+
+def _freshness_of(line: str) -> str:
+    return next((name for token, name in _FRESHNESS if token in line), "other")
 
 
 def receipt_close(task_text: str) -> "dict | None":
@@ -247,9 +258,8 @@ def receipt_close(task_text: str) -> "dict | None":
             cur["lines"].append(ln)
     best = None
     for b in blocks:
-        try:
-            b["epoch"] = int(datetime.fromisoformat(b["stamp"]).timestamp())
-        except ValueError:
+        b["epoch"] = _iso_epoch(b["stamp"])         # a `Z` stamp too: fromisoformat refuses it on 3.10 (impl r1, agy)
+        if b["epoch"] is None:
             continue
         if best is None or b["epoch"] > best["epoch"]:
             best = b
@@ -262,17 +272,15 @@ def receipt_close(task_text: str) -> "dict | None":
         if s.startswith("- **Forced close, reason:**"):
             out["forced_reason"] = s.split(":**", 1)[1].strip()
         elif s.startswith("- **Panel tree-state:**"):
-            if "TAIL-CERTIFIED" in s:
-                out["freshness"] = "TAIL-CERTIFIED"
-            else:
-                m = re.search(r" — (FRESH|STALE|NO-STAMP)\b", s) or re.search(r"\b(EXCLUDE-COVERS-CODE|n/a)\b", s)
-                out["freshness"] = m.group(1) if m else "other"
-            m = re.search(r', accepted: "(.*)"$', s)
+            out["freshness"] = _freshness_of(s)
+            # the accepted reason ends at its closing quote before `; <bound>` / `; <stop rule>` or the line's end
+            # (core.format_verify_receipt; impl r1, opus, grok)
+            m = re.search(r', accepted: "(.*?)"(?=;|$)', s)
             if m:
                 out["accepted_reason"] = m.group(1)
-        elif s.startswith("- [PASS]"):
+        elif re.match(r"- \[PASS\]", s):
             out["commands"]["pass"] += 1
-        elif s.startswith("- [FAIL]"):
+        elif re.match(r"- \[FAIL", s):          # `[FAIL(exit 1)]`
             out["commands"]["fail"] += 1
     return out
 
@@ -319,17 +327,9 @@ def _sample(rec: dict):
     return None
 
 
-def session_partition(lines: "list[dict]", task: str, end: float, reviews: "list[tuple[float, float]]",
-                      verifies: "list[tuple[float, float]]", start: "float | None" = None) -> dict:
-    """Task `task`'s share of one host session's time up to `end` (see the block comment above). Returns integer
-    seconds: wall (the session's span in the window), total (the task's), not_task, slept, away, unknown,
-    sleep_unmeasured (the task's time no two samples of one boot bracket), by_kind and by_section (both without zeros).
-    Holds Q1: sum(by_kind) + slept + away + unknown == total; total + not_task == wall."""
-    task = str(task)
-    lines = [r for r in lines if r["_t"] <= end]
-    if not lines:
-        return {"wall": 0, "total": 0, "not_task": 0, "slept": 0, "away": 0, "unknown": 0, "sleep_unmeasured": 0,
-                "by_kind": {}, "by_section": {}}
+def _task_of_lines(lines: "list[dict]"):
+    """task_of(line): the line's own task (digits), else its call's by `tool_use_id` — a command guard's allow line
+    names no task (it resolves no session), the same call's task-gate line does."""
     by_tid: "dict[str, str]" = {}
     for r in lines:
         t = r.get("task")
@@ -341,53 +341,121 @@ def session_partition(lines: "list[dict]", task: str, end: float, reviews: "list
         if isinstance(t, str) and _TASK_RE.fullmatch(t):
             return t
         return by_tid.get(r.get("tool_use_id") or "")
+    return task_of
 
-    # an open call at `end` (the close's own Bash) ends there: a virtual line closes the session
-    pend: "dict[str, str]" = {}
-    for r in lines:
-        ev = r.get("event")
+
+_TOOL_EVENTS = ("PreToolUse", "PostToolUse", "PostToolUseFailure")
+
+
+def _step(state: dict, r: dict) -> None:
+    """Advance a session's turn state by one line: a prompt opens a turn and ends every call left open (an interrupted
+    call, a cancelled dialog, a blocked command fire no PostToolUse — impl r1, opus, sonnet); a tool event proves a
+    turn (the turn's prompt may be older than the read margin — impl r1, opus, sonnet); a released stop or a session's
+    start or end closes it."""
+    ev = r.get("event")
+    if ev == "UserPromptSubmit":
+        state["in_turn"] = True
+        state["pending"].clear()
+    elif ev in ("SessionStart", "SessionEnd") or (ev == "Stop" and r.get("decision") == "allow"):
+        state["in_turn"] = False
+        state["pending"].clear()
+    elif ev in _TOOL_EVENTS:
+        state["in_turn"] = True
         if ev == "PreToolUse" and r.get("tool_use_id"):
-            pend[r["tool_use_id"]] = r.get("tool") or ""
-        elif ev in ("PostToolUse", "PostToolUseFailure"):
-            pend.pop(r.get("tool_use_id"), None)
-        elif ev in ("SessionStart", "SessionEnd") or (ev == "Stop" and r.get("decision") == "allow"):
-            pend.clear()
-    if pend and lines[-1]["_t"] < end:
+            state["pending"][r["tool_use_id"]] = (r.get("tool") or "", r["_t"])
+        elif ev != "PreToolUse":
+            state["pending"].pop(r.get("tool_use_id"), None)
+
+
+def open_calls(lines: "list[dict]", end: float) -> "dict[str, tuple[str, float]]":
+    """The calls still open at `end` in one session: tool_use_id → (tool, its PreToolUse time)."""
+    state = {"in_turn": False, "pending": {}}
+    for r in lines:
+        if r["_t"] <= end:
+            _step(state, r)
+    return dict(state["pending"])
+
+
+def _minus(spans: "list[tuple[float, float]]", cut: "list[tuple[float, float]]") -> "list[tuple[float, float]]":
+    """`spans` without the time `cut` covers (both unions)."""
+    out = []
+    for a, b in spans:
+        pieces = [(a, b)]
+        for x, y in cut:
+            nxt = []
+            for p, q in pieces:
+                if y <= p or x >= q:
+                    nxt.append((p, q))
+                    continue
+                if p < x:
+                    nxt.append((p, x))
+                if y < q:
+                    nxt.append((y, q))
+            pieces = nxt
+        out.extend(pieces)
+    return out
+
+
+def session_partition(lines: "list[dict]", task: str, end: float, reviews: "list[tuple[float, float]]",
+                      verifies: "list[tuple[float, float]]", start: "float | None" = None,
+                      close_open: bool = True) -> dict:
+    """Task `task`'s share of one host session's time up to `end` (see the block comment above). Returns integer
+    seconds: wall (the session's span in the window), total (the task's), not_task, slept, away, unknown,
+    sleep_unmeasured (the task's time no two samples of one boot bracket), sleep_unplaced (sleep the samples recorded
+    that no gap could hold — counted, never dropped), by_kind and by_section (both without zeros). `close_open`: this
+    session holds the close's own call, which ends at `end` (only that session — impl r1, opus). Holds Q1:
+    sum(by_kind) + slept + away + unknown == total; total + not_task == wall."""
+    task = str(task)
+    lines = [r for r in lines if r["_t"] <= end]
+    empty = {"wall": 0, "total": 0, "not_task": 0, "slept": 0, "away": 0, "unknown": 0, "sleep_unmeasured": 0,
+             "sleep_unplaced": 0, "by_kind": {}, "by_section": {}}
+    if not lines:
+        return empty
+    task_of = _task_of_lines(lines)
+    if close_open and open_calls(lines, end) and lines[-1]["_t"] < end:
         lines = lines + [{"_t": end, "event": "End", "task": task_of(lines[-1]), "_virtual": True}]
 
-    # sleep, per gap: the `susp` difference between two samples of one boot, to the gaps between them, longest first,
-    # each capped at its length; across a boot change those gaps are unknown
+    # sleep, per gap: between two samples of one boot, the `susp` difference goes to the gaps overlapping the samples'
+    # own [sts1, sts2] — a sample can be written later than it was taken, so the line's time is not its moment (impl
+    # r1, codex, grok) — largest overlap first, each gap capped at its length; what no gap can hold is
+    # `sleep_unplaced`; across a boot change the overlapped gaps are unknown
     n = len(lines) - 1
     slept = [0.0] * n
     unknown = [False] * n
     bracketed = [False] * n
-    samples = [(i, s) for i, r in enumerate(lines) if (s := _sample(r)) is not None]
-    for (i1, s1), (i2, s2) in zip(samples, samples[1:]):
-        idx = list(range(i1, i2))
-        if s1[2] != s2[2]:
-            for k in idx:
+    unplaced = 0.0
+    samples = sorted(((smp[1], smp[0], smp[2], i) for i, r in enumerate(lines) if (smp := _sample(r)) is not None),
+                     key=lambda x: (x[0], x[3]))
+    for (t1, s1, b1, _), (t2, s2, b2, _) in zip(samples, samples[1:]):
+        if t2 <= t1:
+            continue
+        over = [(k, max(0.0, min(lines[k + 1]["_t"], t2) - max(lines[k]["_t"], t1))) for k in range(n)]
+        over = [(k, o) for k, o in over if o > 0]
+        if b1 != b2:
+            for k, _o in over:
                 unknown[k] = True
             continue
-        for k in idx:
+        for k, _o in over:
             bracketed[k] = True
-        left = s2[0] - s1[0]
+        left = s2 - s1
         if left < SLEEP_MIN_S:
             continue
-        for k in sorted(idx, key=lambda k: lines[k + 1]["_t"] - lines[k]["_t"], reverse=True):
-            room = (lines[k + 1]["_t"] - lines[k]["_t"]) - slept[k]
-            take = min(room, left)
+        for k, o in sorted(over, key=lambda x: x[1], reverse=True):
+            room = min(o, (lines[k + 1]["_t"] - lines[k]["_t"]) - slept[k])
+            take = max(0.0, min(room, left))
             slept[k] += take
             left -= take
             if left <= 0:
                 break
+        unplaced += max(0.0, left)
 
-    review_u, verify_u = _union(list(reviews)), _union(list(verifies))
+    review_u = _union(list(reviews))
+    verify_u = _minus(_union(list(verifies)), review_u)     # an overlap counts once, as judges (impl r1, codex)
     acc = {"wall": 0.0, "total": 0.0, "not_task": 0.0, "slept": 0.0, "away": 0.0, "unknown": 0.0,
            "sleep_unmeasured": 0.0}
     by_kind: "dict[str, float]" = {}
     by_section: "dict[str, dict[str, float]]" = {}
-    in_turn = False
-    pending: "dict[str, str]" = {}
+    state = {"in_turn": False, "pending": {}}
     section: "dict[str, str]" = {}
 
     def add(kind, sec, v):
@@ -398,16 +466,7 @@ def session_partition(lines: "list[dict]", task: str, end: float, reviews: "list
 
     for k in range(n):
         a, b = lines[k], lines[k + 1]
-        ev = a.get("event")
-        if ev == "UserPromptSubmit":
-            in_turn = True
-        elif ev in ("SessionStart", "SessionEnd") or (ev == "Stop" and a.get("decision") == "allow"):
-            in_turn = False
-            pending.clear()
-        elif ev == "PreToolUse" and a.get("tool_use_id"):
-            pending[a["tool_use_id"]] = a.get("tool") or ""
-        elif ev in ("PostToolUse", "PostToolUseFailure"):
-            pending.pop(a.get("tool_use_id"), None)
+        _step(state, a)
         ta = task_of(a)
         if a.get("hook") == "state-echo" and ta and isinstance(a.get("section"), str):
             section[ta] = a["section"]
@@ -424,22 +483,23 @@ def session_partition(lines: "list[dict]", task: str, end: float, reviews: "list
             continue
         if not bracketed[k]:
             acc["sleep_unmeasured"] += gap
-        s = slept[k]
-        acc["slept"] += s
-        awake = gap - s
+        sl = slept[k]
+        acc["slept"] += sl
+        awake = gap - sl
         if awake > AWAY_S:
             acc["away"] += awake
             continue
         sec = section.get(task, "?")
-        if not in_turn:
+        tools = [v[0] for v in state["pending"].values()]
+        if not state["in_turn"]:
             note = str(b.get("detail") or "")
             kind = ("background" if b.get("event") == "UserPromptSubmit"
                     and note.startswith("not logged: a notification") else "owner-idle")
             carve = kind == "background"
-        elif "AskUserQuestion" in pending.values():
+        elif "AskUserQuestion" in tools:
             kind, carve = "owner-question", False
         else:
-            kind, carve = "agent", any(v in ("Bash", "Shell", "run_terminal_command") for v in pending.values())
+            kind, carve = "agent", any(v in ("Bash", "Shell", "run_terminal_command") for v in tools)
         if carve and awake > 0:
             j = min(awake, _overlap(a["_t"], b["_t"], review_u))
             v = min(awake - j, _overlap(a["_t"], b["_t"], verify_u))
@@ -451,6 +511,7 @@ def session_partition(lines: "list[dict]", task: str, end: float, reviews: "list
     def r(v):
         return int(round(v))
     out = {k: r(v) for k, v in acc.items()}
+    out["sleep_unplaced"] = r(unplaced)
     out["by_kind"] = {k: r(v) for k, v in by_kind.items() if r(v)}
     out["by_section"] = {s: {k: r(v) for k, v in d.items() if r(v)} for s, d in by_section.items()}
     out["by_section"] = {s: d for s, d in out["by_section"].items() if d}
@@ -510,10 +571,11 @@ def _iso_epoch(ts) -> "int | None":
         return None
 
 
-def rounds_table(runs: "list[dict]", reviews: "list[dict]", start: float, end: float) -> dict:
-    """The closure's review rounds: panels (mode, outcome, critical, important — from the merged run ledger,
-    `post_d6.read_runs`), post-panel runs (verdict, critical, important), and the single-judge and tail-certification
-    runs from the review records (a round's seats are one run)."""
+def rounds_table(runs: "list[dict]", reviews: "list[dict]", start: float, end: float, failed: int = 0) -> dict:
+    """The closure's review rounds: panels (mode, outcome, critical, important, owner_ok — from the merged run ledger,
+    `post_d6.read_runs`), post-panel runs (verdict, critical, important, owner_ok), the single-judge calls and the
+    tail certifications counted one per review record — a single-judge record within 120 s of a post-panel row is that
+    run, not another one (impl r1, agy, codex, grok) — and the runs the ledger marks failed (which read_runs drops)."""
     panels, post = [], []
     for r in runs:
         t = _iso_epoch(r.get("ts"))
@@ -522,41 +584,58 @@ def rounds_table(runs: "list[dict]", reviews: "list[dict]", start: float, end: f
         if r.get("kind") == "panel":
             m = r.get("measures") if isinstance(r.get("measures"), dict) else {}
             panels.append({"mode": r.get("mode"), "outcome": r.get("outcome"), "critical": m.get("critical"),
-                           "important": m.get("important")})
+                           "important": m.get("important"), "owner_ok": r.get("owner_ok")})
         elif "verdict" in r:
-            post.append({"verdict": r.get("verdict"), "critical": r.get("critical"), "important": r.get("important")})
-    kinds = {(str(r.get("kind")), r.get("round")) for r in reviews}
-    return {"panels": panels, "post_panel": post, "single": sum(1 for k, _ in kinds if k == "single"),
-            "tail_cert": sum(1 for k, _ in kinds if k == "tail-cert")}
+            post.append({"verdict": r.get("verdict"), "critical": r.get("critical"), "important": r.get("important"),
+                         "owner_ok": r.get("owner_ok"), "_t": t})
+    unmatched = [p["_t"] for p in post]
+    single = 0
+    for rec in sorted((r for r in reviews if r.get("kind") == "single"), key=lambda r: r.get("_t") or 0):
+        t = rec.get("_t")
+        hit = next((u for u in unmatched if t is not None and abs(u - t) <= 120), None)
+        if hit is not None:
+            unmatched.remove(hit)
+        else:
+            single += 1
+    for p in post:
+        p.pop("_t", None)
+    return {"panels": panels, "post_panel": post, "single": single,
+            "tail_cert": sum(1 for r in reviews if r.get("kind") == "tail-cert"), "failed": failed}
 
 
-def _task_of_lines(lines: "list[dict]"):
-    by_tid = {}
-    for r in lines:
-        t = r.get("task")
-        if isinstance(t, str) and _TASK_RE.fullmatch(t) and r.get("tool_use_id"):
-            by_tid.setdefault(r["tool_use_id"], t)
-
-    def task_of(r):
-        t = r.get("task")
-        if isinstance(t, str) and _TASK_RE.fullmatch(t):
-            return t
-        return by_tid.get(r.get("tool_use_id") or "")
-    return task_of
-
-
-def owner_table(lines: "list[dict]", task: str, log_text: "str | None") -> dict:
-    """The owner's part: his prompts (the chat-log hook's `logged M<n>` lines of this task), the background
-    notifications, his options dialogs — answered (the dialog hook's `logged M<n>` PostToolUse), cancelled (a
-    PreToolUse with no answer), their questions and answers counted from the DIALOG entry in chat_log.md (task 233),
-    and the time he took to answer (PreToolUse → PostToolUse)."""
+def owner_table(lines: "list[dict]", task: str, log_text: "str | None", start: "float | None" = None) -> dict:
+    """The owner's part: his prompts (the chat-log hook's `logged M<n>` lines of this task, and the prompt that started
+    the closure — logged before the pointer moved, the last prompt before the session's first line of the task with no
+    other task's line between; impl r1, grok), the background notifications, his options dialogs — answered (the dialog
+    hook's `logged M<n>` PostToolUse, once per call), cancelled (a PreToolUse with no answer), their questions and
+    answers counted from the DIALOG entry in chat_log.md (task 233), and the time he took to answer. `lines` may reach
+    before `start` (the read margin): only the closure's first prompt is taken from there (it is logged before the
+    `work` record that opens the window — seen live, W8)."""
+    task = str(task)
     task_of = _task_of_lines(lines)
     out = {"prompts": 0, "notifications": 0, "dialogs": 0, "cancelled": 0, "questions": 0, "answers": 0, "wait": 0,
            "ids": []}
     opened: "dict[str, int]" = {}
     answered: "set[str]" = set()
-    for r in lines:
-        if task_of(r) != str(task):
+    first_prompt: "set[int]" = set()
+    by_session: "dict[str, list[int]]" = {}
+    for i, r in enumerate(lines):
+        by_session.setdefault(str(r.get("host_session_id") or r.get("session_id") or "?"), []).append(i)
+    for idx in by_session.values():
+        first = next((i for i in idx if task_of(lines[i]) == task
+                      and (start is None or lines[i]["_t"] >= start)), None)     # this closure's, not an earlier life's
+        if first is None:
+            continue
+        for i in reversed([j for j in idx if j < first]):
+            r = lines[i]
+            t = task_of(r)
+            if t and t != task:
+                break
+            if r.get("hook") == "chat-log" and str(r.get("detail") or "").startswith("logged M"):
+                first_prompt.add(i)
+                break
+    for i, r in enumerate(lines):
+        if i not in first_prompt and (task_of(r) != task or (start is not None and r["_t"] < start)):
             continue
         hook, ev, detail = r.get("hook"), r.get("event"), str(r.get("detail") or "")
         if hook == "chat-log" and ev == "UserPromptSubmit":
@@ -569,7 +648,7 @@ def owner_table(lines: "list[dict]", task: str, log_text: "str | None") -> dict:
             tid = r["tool_use_id"]
             if ev == "PreToolUse":
                 opened.setdefault(tid, r["_t"])
-            elif ev == "PostToolUse" and detail.startswith("logged M"):
+            elif ev == "PostToolUse" and detail.startswith("logged M") and tid not in answered:
                 answered.add(tid)
                 out["dialogs"] += 1
                 out["ids"].append(detail.split()[1])
@@ -588,6 +667,20 @@ def owner_table(lines: "list[dict]", task: str, log_text: "str | None") -> dict:
 CLOSE_RECORD_LAG_S = 600    # the close writes its `hook=close` records seconds after the receipt's stamp
 
 
+def _failed_runs(task_dir: Path, start: float, end: float) -> int:
+    """Runs the ledger marks `failed` (read_runs drops them) whose reservation falls in the window (impl r1, opus)."""
+    rows: "dict[str, dict]" = {}
+    for raw in _lines_of(Path(task_dir) / "post-panel-reviews.jsonl"):
+        try:
+            r = json.loads(raw)
+        except ValueError:
+            continue
+        if isinstance(r, dict) and r.get("id"):
+            rows.setdefault(str(r["id"]), {}).update(r)
+    return sum(1 for r in rows.values() if r.get("status") == "failed"
+               and (t := _iso_epoch(r.get("ts"))) is not None and start <= t <= end)
+
+
 def compose(lane: Path, task_dir: Path, task: str, deadline: float, end: "float | None" = None) -> dict:
     """One closure of `task`, from the plugin's records only. `end` defaults to the receipt's newest stamp (a closed
     task) or now (an open task: a snapshot). Raises OutOfTime past the deadline; the caller catches everything."""
@@ -604,9 +697,8 @@ def compose(lane: Path, task_dir: Path, task: str, deadline: float, end: "float 
     window = closure_window([r for r in enf if r.get("hook") == "tasks"], task, end)
     start = window[0] if window else None
     mine = [r for r in enf if str(r.get("task", "")) == task]
-    in_win = (lambda r: start <= r["_t"] <= end) if start is not None else (lambda r: False)
-    reviews = [r for r in mine if r["hook"] == "review" and in_win(r)]
-    verifies = [r for r in mine if r["hook"] == "verify" and in_win(r)]
+    win = task_records(enf, task, start, end) if start is not None else {h: [] for h in _TASK_HOOKS}
+    reviews, verifies = win["review"], win["verify"]
     closes = [r for r in mine if r["hook"] == "close" and start is not None
               and start <= r["_t"] <= end + CLOSE_RECORD_LAG_S]
     late = sum(1 for r in mine if r["hook"] in ("review", "verify") and r["_t"] > end)
@@ -623,14 +715,22 @@ def compose(lane: Path, task_dir: Path, task: str, deadline: float, end: "float 
         for r in lines:
             key = str(r.get("host_session_id") or r.get("session_id") or "?")
             sessions.setdefault(key, []).append(r)
-        tot = {"wall": 0, "total": 0, "not_task": 0, "slept": 0, "away": 0, "unknown": 0, "sleep_unmeasured": 0}
+        tot = {"wall": 0, "total": 0, "not_task": 0, "slept": 0, "away": 0, "unknown": 0, "sleep_unmeasured": 0,
+               "sleep_unplaced": 0}
         by_kind: "dict[str, int]" = {}
         by_section: "dict[str, dict[str, int]]" = {}
         used = 0
+        # the close's own call ends at `end` only in the session that holds it: the latest Bash call still open
+        # (another session that died with a call open does not run on to the close — impl r1, opus)
+        closing, latest = None, None
+        for key, sl in sessions.items():
+            for tool, t in open_calls(sl, end).values():
+                if tool in ("Bash", "Shell", "run_terminal_command") and (latest is None or t > latest):
+                    closing, latest = key, t
         for key, sl in sessions.items():
             if time.monotonic() > deadline:
                 raise OutOfTime("partition")
-            p = session_partition(sl, task, end, review_spans, verify_spans, start=start)
+            p = session_partition(sl, task, end, review_spans, verify_spans, start=start, close_open=key == closing)
             if not p["total"]:
                 continue
             used += 1
@@ -644,7 +744,7 @@ def compose(lane: Path, task_dir: Path, task: str, deadline: float, end: "float 
                     dd[k] = dd.get(k, 0) + v
         out["time"] = {"sessions": used, "total": tot["total"], "by_kind": by_kind, "by_section": by_section,
                        "slept": tot["slept"], "away": tot["away"], "unknown": tot["unknown"],
-                       "sleep_unmeasured": tot["sleep_unmeasured"]}
+                       "sleep_unmeasured": tot["sleep_unmeasured"], "sleep_unplaced": tot["sleep_unplaced"]}
     out["judges_wall"] = int(sum(b - a for a, b in _union(review_spans)))
     out["seats"] = seats_table(reviews)
     out["verify"] = verify_table(verifies)
@@ -653,12 +753,14 @@ def compose(lane: Path, task_dir: Path, task: str, deadline: float, end: "float 
         runs = read_runs(task_dir)
     except Exception:                       # noqa: BLE001 — a ledger that cannot be read leaves the rounds empty
         runs = []
-    out["rounds"] = rounds_table(runs, reviews, start if start is not None else end, end)
+    out["rounds"] = rounds_table(runs, reviews, start if start is not None else end, end,
+                                 failed=_failed_runs(task_dir, start if start is not None else end, end))
     log = None
     if any(r.get("hook") == "dialog-log" for r in lines):
         raw = _read_regular(lane / "chat_log.md")
         log = raw.decode("utf-8", "replace") if raw is not None else None
-    out["owner"] = owner_table([r for r in lines if start is not None and start <= r["_t"] <= end], task, log)
+    out["owner"] = owner_table([r for r in lines if r["_t"] <= end], task, log, start=start) if start is not None \
+        else owner_table([], task, log)
     close = dict(rc) if rc else {}
     close.pop("epoch", None)
     for r in closes:
@@ -698,11 +800,15 @@ def write_closure(lane: Path, task_dir: Path, task: str, budget: float = BUDGET_
     from tasks.atomic import atomic_write
     from tasks.filelock import task_lock
     task_dir = Path(task_dir)
-    closure = compose(lane, task_dir, task, deadline=time.monotonic() + budget)
+    deadline = time.monotonic() + budget     # ONE deadline: the reading, the lock wait and the write (impl r1, codex)
+    closure = compose(lane, task_dir, task, deadline=deadline)
     if closure.get("snapshot") or not closure.get("closed_at"):
         return None
     path = task_dir / FILE_NAME
-    with task_lock(task_dir / "task.md"):
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise OutOfTime("before the lock")
+    with task_lock(task_dir / "task.md", timeout=left):     # LockTimeout past it
         data = _read_regular(task_dir / "task.md")
         newest = receipt_close(data.decode("utf-8", "replace")) if data is not None else None
         if not newest or newest["stamp"] != closure["closed_at"]:
@@ -718,13 +824,22 @@ def write_closure(lane: Path, task_dir: Path, task: str, budget: float = BUDGET_
     return path
 
 
-def _dur(s) -> str:
-    s = int(s or 0)
-    if s >= 3600:
-        return f"{s // 3600}h{s % 3600 // 60:02d}m"
-    if s >= 60:
-        return f"{s // 60}m{s % 60:02d}s"
-    return f"{s}s"
+def _dur(s, tenths: bool = False) -> str:
+    """Seconds as `1h05m` / `3m07s` / `9s`; `tenths` keeps one decimal of the seconds (seat and verify seconds)."""
+    v = float(s or 0)
+    if v >= 3600:
+        return f"{int(v) // 3600}h{int(v) % 3600 // 60:02d}m"
+    if tenths:
+        m, rest = divmod(round(v, 1), 60)
+        return f"{int(m)}m{rest:04.1f}s" if m else f"{rest:.1f}s"
+    v = int(v)
+    if v >= 60:
+        return f"{v // 60}m{v % 60:02d}s"
+    return f"{v}s"
+
+
+def _n(v) -> str:
+    return "-" if v is None else str(v)
 
 
 _KINDS = ("agent", "judges", "verify", "owner-idle", "owner-question", "background")
@@ -749,21 +864,24 @@ def format_closure(c: dict) -> "list[str]":
     else:
         out.append("  time: no activation record in the journal for this closure")
     r = c.get("rounds") or {}
-    bits = [f"{p.get('mode')} panel {p.get('outcome')} (C{p.get('critical')} I{p.get('important')})"
-            for p in r.get("panels") or []]
-    bits += [f"post-panel {p.get('verdict')} (C{p.get('critical')} I{p.get('important')})" for p in r.get("post_panel") or []]
+    bits = [f"{p.get('mode')} panel {p.get('outcome')} (C{_n(p.get('critical'))} I{_n(p.get('important'))})"
+            + (f" owner-ok: {p['owner_ok']}" if p.get("owner_ok") else "") for p in r.get("panels") or []]
+    bits += [f"post-panel {p.get('verdict')} (C{_n(p.get('critical'))} I{_n(p.get('important'))})"
+             + (f" owner-ok: {p['owner_ok']}" if p.get("owner_ok") else "") for p in r.get("post_panel") or []]
+    if r.get("failed"):
+        bits.append(f"failed runs ×{r['failed']}")
     if r.get("single"):
         bits.append(f"single judge ×{r['single']}")
     if r.get("tail_cert"):
         bits.append(f"tail-cert ×{r['tail_cert']}")
     out.append("  rounds: " + (" · ".join(bits) or "none") + f"  — judges' wall time {_dur(c.get('judges_wall'))}")
     for seat, s in sorted((c.get("seats") or {}).items()):
-        out.append(f"  seat {seat}: {s['runs']} run(s), {s['failed']} failed, {_dur(s['seconds'])}, "
+        out.append(f"  seat {seat}: {s['runs']} run(s), {s['failed']} failed, {_dur(s['seconds'], True)}, "
                    f"in {s['in']} out {s['out']} cache {s['cache_read']}/{s['cache_write']}"
                    + (f", {s['unknown']} without usage" if s.get("unknown") else ""))
     v = c.get("verify") or {}
     out.append(f"  verify: {v.get('runs', 0)} run(s), {v.get('reused', 0)} reused, {v.get('failed', 0)} failed, "
-               f"{_dur(v.get('seconds'))}")
+               f"{_dur(v.get('seconds'), True)}")
     o = c.get("owner") or {}
     out.append(f"  owner: {o.get('prompts', 0)} prompt(s), {o.get('dialogs', 0)} dialog(s) "
                f"({o.get('questions', 0)} question(s)) answered in {_dur(o.get('wait'))}, {o.get('cancelled', 0)} cancelled")

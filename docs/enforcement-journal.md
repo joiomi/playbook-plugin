@@ -406,7 +406,8 @@ journal, the hook journal (with its archives and spools), the run ledger, `chat_
 them in `numbers.json` in the task folder, one entry per close (`closures[]`, keyed by the receipt's stamp; a re-close
 adds one). It writes under the task lock and only while that receipt is still the task's newest, so a close that paused
 before writing never replaces a later close's numbers. The close prints `numbers: <path>` (commit it with the task); a
-fault, or a composition past 5 s, prints `numbers: not written (<type>)` and changes nothing else. `tasks numbers [N]`
+fault, or 5 s passed — one deadline for the reading, the lock wait and the write — prints `numbers: not written (…)`
+and changes nothing else. `tasks numbers [N]`
 shows them and writes nothing; for a task not yet closed it composes a snapshot up to now, marked as one.
 
 | key | meaning |
@@ -414,11 +415,11 @@ shows them and writes nothing; for a task not yet closed it composes a snapshot 
 | `closed_at` | the receipt's stamp (the close's moment; it keys the closure) |
 | `window` | UTC `start` (the first `tasks work N` after the last `done` that a later `work` follows, else the first) and `end` (the receipt's stamp) |
 | `snapshot` | true for an open task's composition (never written) |
-| `time` | the task's share of time, wall seconds summed over host sessions: `sessions`, `total`, `by_kind`, `by_section` (the state echo's `##` sections; `?` before the first), `slept`, `away`, `unknown`, `sleep_unmeasured`; null when the journal holds no activation record for the task |
+| `time` | the task's share of time, wall seconds summed over host sessions: `sessions`, `total`, `by_kind`, `by_section` (the state echo's `##` sections; `?` before the first), `slept`, `away`, `unknown`, `sleep_unmeasured`, `sleep_unplaced` (sleep the samples recorded that no gap could hold — outside `total`); null when the journal holds no activation record for the task |
 | `judges_wall` | the union of the task's review spans, wall seconds |
 | `seats` | per judge seat: runs, ok, failed, seconds — summed over that seat's runs, not wall time — tokens in / out / cache_read / cache_write from the runs whose usage is known, how many were unknown, the runs by kind |
 | `verify` | the recorded verify runs (the close's, `tasks verify`): runs, ran, reused, failed, seconds |
-| `rounds` | panels (mode, outcome, critical, important — the run ledger's), post-panel runs (verdict, critical, important), single-judge and tail-certification runs |
+| `rounds` | panels (mode, outcome, critical, important, owner_ok — the run ledger's), post-panel runs (verdict, critical, important, owner_ok), single-judge calls and tail certifications counted one per review record (a single-judge record within 120 s of a post-panel row is that run), the runs the ledger marks failed |
 | `owner` | his prompts, the background notifications, his options dialogs answered and cancelled, their questions and answers (counted from the DIALOG entries, matched by their `<!-- dialog:<id> -->` marker), the time he took to answer, the entries' ids |
 | `close` | `freshness` (FRESH / STALE / TAIL-CERTIFIED / NO-STAMP / …), `accepted_reason`, `forced_reason`, `owner_ok`, `bound`, `stop_rule`, the commands' pass / fail counts, `risk` — from the receipt and the task's `hook=close` records |
 | `late_records` | the task's review / verify records written after the close (`tasks numbers` recounts them) |
@@ -426,29 +427,34 @@ shows them and writes nothing; for a task not yet closed it composes a snapshot 
 Example — the live check of task 235 (a scratch session: prompts, a Read, an options dialog answered after 8 s, a failed
 call, a background `sleep 12`, a switch to task 002 and back, then a forced close); its transcript, counted B1's way,
 gave agent 32.9 s, owner-question 8.5 s, background 10.7 s for the whole session, and task 001 plus task 002 here give
-32, 8 and 11 (the closure below without its keys that were empty in that session — `seats`, `verify`, `rounds`,
+32, 8 and 11 (the closure below, composed again from the same records after impl round 1 — which added the prompt
+that started it, M001 — without its keys that were empty in that session — `seats`, `verify`, `rounds`,
 `late_records` — and the schema / task fields of the file around it):
 
 ```json
-{"closed_at":"2026-10-18T01:22:06+03:00","window":{"start":"2026-10-17T22:17:33Z","end":"2026-10-17T22:22:06Z"},"time":{"sessions":1,"total":222,"by_kind":{"agent":25,"owner-idle":178,"owner-question":8,"background":11},"by_section":{"Debrief":{"agent":25,"owner-idle":178,"owner-question":8,"background":11}},"slept":0,"away":0,"unknown":0,"sleep_unmeasured":1},"judges_wall":0,"owner":{"prompts":6,"notifications":1,"dialogs":1,"cancelled":0,"questions":1,"answers":1,"wait":8,"ids":["M002","M003","M004","M005","M006","M007","M010"]},"close":{"stamp":"2026-10-18T01:22:06+03:00","risk":"reversible","freshness":null,"accepted_reason":null,"forced_reason":"live","commands":{"pass":0,"fail":0}}}
+{"closed_at":"2026-10-18T01:22:06+03:00","window":{"start":"2026-10-17T22:17:33Z","end":"2026-10-17T22:22:06Z"},"time":{"sessions":1,"total":222,"by_kind":{"agent":25,"owner-idle":178,"owner-question":8,"background":11},"by_section":{"Debrief":{"agent":25,"owner-idle":178,"owner-question":8,"background":11}},"slept":0,"away":0,"unknown":0,"sleep_unmeasured":1,"sleep_unplaced":0},"owner":{"prompts":7,"notifications":1,"dialogs":1,"cancelled":0,"questions":1,"answers":1,"wait":8,"ids":["M001","M002","M003","M004","M005","M006","M007","M010"]},"close":{"stamp":"2026-10-18T01:22:06+03:00","risk":"reversible","freshness":null,"accepted_reason":null,"forced_reason":"live","commands":{"pass":0,"fail":0}}}
 ```
 
 **How the time is split**, per host session, over the gaps between its consecutive hook-journal lines (each gap once):
 
 1. A gap is the task's only when both its lines are the task's (their `task`, or a command guard's line joined to its
    call by `tool_use_id`). The time spent on another task in between, and the call that switches tasks, is in no closure.
-2. *Slept:* between two suspend samples of one `boot`, the `susp` difference goes to the gaps between them, longest
-   first, each capped at its length. Across a `boot` change those gaps are `unknown`. A gap no two samples of one boot
-   bracket counts in `sleep_unmeasured` as well (its sleep, if any, stays in its kind).
+2. *Slept:* between two suspend samples of one `boot`, the `susp` difference goes to the gaps overlapping the two
+   samples' own `[sts1, sts2]` (a sample can be written later than it was taken), largest overlap first, each capped at
+   its overlap; what no gap can hold is `sleep_unplaced`. Across a `boot` change those gaps are `unknown`. A gap no two
+   samples of one boot bracket counts in `sleep_unmeasured` as well (its sleep, if any, stays in its kind).
 3. *Away:* a gap whose awake time is over 2 h (B1's rule, judged after the sleep is taken out).
 4. *Outside a turn* — from a RELEASED stop or a session's start to the next prompt or the session's end:
    `owner-idle`, or `background` when the prompt ending it is a background task's notification. A held stop does not
-   end a turn.
+   end a turn; a tool event proves one (the turn's prompt can be older than the lines read); a new prompt ends every
+   call left open (an interrupted call, a cancelled dialog and a blocked command fire no PostToolUse).
 5. *Inside a turn:* `owner-question` while an options dialog is open, else `agent` — the model's time and every
    tool's together.
 6. The part of a gap with a Bash call open, or of a background gap, that overlaps the task's review spans (each review
-   record's end minus its duration) is `judges`; overlapping its recorded verify spans, `verify`.
-7. A call still open at the close — the close's own — ends at the receipt's stamp.
+   record's end minus its duration) is `judges`; overlapping its recorded verify spans, `verify` (a stretch under both
+   counts once, as judges).
+7. The call still open at the close — the close's own, the latest open Bash call of any session — ends at the
+   receipt's stamp; a call another session left open does not run on.
 
 Per session, `by_kind` + `slept` + `away` + `unknown` equals the task's time, and with the time that is not the task's
 it equals the session's span (a test holds this over 400 built timelines).
