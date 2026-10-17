@@ -103,7 +103,12 @@ judge, its delta's tree) and HEAD is the same. bubblewrap then mounts the copy r
 ignores is bound from the live tree at its own path, as the judges always saw it, and `.agent`'s record masks are
 built from the live `.agent`, its other entries bound back from the copy (tracked) or the live tree (ignored). The
 tamper guard then watches the copy; the stamp is the sealed fingerprint and the snapshot is the one taken before
-the spawn, so a live tree that moves on purpose is not "moved". No copy is possible inside a sandbox, without
+the spawn, so a live tree that moves on purpose is not "moved". The recorded snapshot must be the copy's own (each
+scope's commit, base and dirty map); the copy is frozen read-only on disk; records are never copied and the copies
+folder is hidden from the judges; the judge runs in a PID namespace of its own and the folders above the project are
+pinned. The ready line comes right before the judges start, after everything the review reads from the live tree (the
+config and its quorum, the prompt, the chat log). A copy that cannot be sealed while the live tree did not move reads
+the live tree, said first. No copy is possible inside a sandbox, without
 bubblewrap, for a project in a subdirectory of its repository, a linked worktree, a linked `.agent` or lane, a
 linked code root, a submodule or untracked nested repository, a `fingerprint_exclude` that hides code, an unignored
 journal, or more than 50,000 listed files / 1 GiB / 2,000 ignored entries — the review then says so first and reads

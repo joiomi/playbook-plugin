@@ -23804,7 +23804,7 @@
     {
       "id": "PB-REVIEW-COPY",
       "category": "judges-and-reviews",
-      "statement": "A panel and a single review (task 231, PHASE-B item 7) either say first that the judges read the LIVE tree and why, or read a fixed copy of what git lists — the outer repository and each `code_roots` repository, cloned with every ref, the live config, index and listed files — that is kept only when sealed by content: its fingerprint (with the live config) equals the stamp taken from the live tree, each scope's working-tree object equals the recorded tree (a panel's snapshot base, the post-panel judge's delta tree) and HEAD is the recorded commit; a tree that changed while the copy was made is tried three times, then the review is refused before any judge is spent. bubblewrap mounts the copy read-only at the project path in place of the project; entries git ignores are bound from the live tree; `.agent`'s records and their targets are masked from the live inventory and its other entries bound from the copy (tracked) or the live tree (ignored). Every seat of a panel and the single judge receive the copy (a copy that cannot be mounted raises — never a silent live read), the payload is read from the copy, the tamper guard watches the copy, the round's stamp is the sealed fingerprint with the pre-spawn snapshot, the post-panel judge's `[file:]` checks resolve in the copy, and the copy is removed on every exit; a sweep removes only copies whose `flock` nobody holds.",
+      "statement": "A panel and a single review (task 231, PHASE-B item 7) either say first that the judges read the LIVE tree and why, or read a fixed copy of what git lists — the outer repository and each `code_roots` repository, cloned with every ref, the live config, index and listed files — that is kept only when sealed by content: its fingerprint (with the live config) equals the stamp taken from the live tree, each scope's working-tree object equals the recorded tree (a panel's snapshot base, the post-panel judge's delta tree) and HEAD is the recorded commit, and the recorded snapshot (each scope's commit, base and dirty map) is the copy's own; a tree that changed while the copy was made is tried three times, then the review is refused before any judge is spent, and a copy that cannot be sealed while the live tree did not move reads the live tree, said first. The sealed copy is frozen read-only on disk, records are never copied, and the ready line is printed right before the judges start — after the config, its quorum, the prompt and the chat log are read. bubblewrap mounts the copy read-only at the project path in place of the project, in a PID namespace of its own and with the folders above the project pinned; entries git ignores are bound from the live tree; `.agent`'s records and their targets are masked from the live inventory and its other entries bound from the copy (tracked) or the live tree (only when git ignores them); every lane's copies folder is hidden. Every seat of a panel and the single judge receive the copy (a copy that cannot be mounted raises — never a silent live read), the payload is read from the copy, the tamper guard watches the copy, the round's stamp is the sealed fingerprint with the pre-spawn snapshot, the post-panel judge's `[file:]` checks resolve in the copy, and the copy is removed on every exit; a sweep removes only copies whose `flock` nobody holds.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/review_view.py",
@@ -23919,6 +23919,81 @@
             "reference": "Lifetime.test_a_copy_whose_owner_died_is_swept"
           },
           "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_review_view.py",
+          "reference": "ImplRoundOneRealBubblewrap.test_g1_the_judge_reads_the_dotted_code_roots_copy",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Skipped where no copy can be mounted."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_review_view.py",
+          "reference": "ImplRoundOneRealBubblewrap.test_g2_no_alias_of_the_copies_inside_the_sandbox",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Skipped where no copy can be mounted."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_review_view.py",
+          "reference": "ImplRoundOneRealBubblewrap.test_g3_host_processes_are_not_reachable",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Skipped where no copy can be mounted."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_review_view.py",
+          "reference": "ImplRoundTwoRealBubblewrap.test_r2_9_the_folder_holding_the_project_cannot_be_moved",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Skipped where no copy can be mounted."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_review_view.py",
+          "reference": "PanelReadsACopy.test_critical_the_quorum_and_config_are_read_before_the_ready_line",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_review_view.py",
+          "reference": "ImplRoundTwo.test_r2_7_a_snapshot_whose_dirty_map_is_not_the_copys_is_refused",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_review_view.py",
+          "reference": "SingleJudgeReadsACopy.test_r2_8_an_absolute_link_into_the_project_resolves_in_the_copy",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_review_view.py",
+          "reference": "ACopyThatCannotBeMade.test_without_movement_it_reads_live_and_says_so_first",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_review_view.py",
+            "reference": "ACopyThatCannotBeMade.test_with_movement_it_is_refused"
+          },
+          "limitations": []
         }
       ],
       "applicable_platforms": [
@@ -23936,7 +24011,9 @@
         "No copy (the review reads the live tree, said first): inside a sandbox, without bubblewrap, a project in a subdirectory of its repository, a linked worktree, a linked `.agent`/lane/code root, a submodule or untracked nested repository, a special file, a `fingerprint_exclude` hiding code, an unignored journal, over 50,000 listed files / 1 GiB / 2,000 ignored entries.",
         "That the agent does not edit the reviewed task's task.md/judge.md during its review is stated (the ready line, the template, the skill), not enforced (PLAN.md Phase B inputs, task 231 P10).",
         "Two reviews at once are allowed; nothing limits the memory or the seats' credit they use together.",
-        "The real-bubblewrap and end-to-end proofs skip where no copy can be mounted."
+        "The real-bubblewrap and end-to-end proofs skip where no copy can be mounted.",
+        "The frozen copy can still be made writable by one who chmods it (a deliberate write-then-revert before the judges end is not seen); the ready line names its folder as off-limits.",
+        "Ignored files inside a copied `.agent` folder (e.g. under `.agent/tasks/<N>/`) are not shown to the judges."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],

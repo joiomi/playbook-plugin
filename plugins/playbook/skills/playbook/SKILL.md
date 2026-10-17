@@ -324,7 +324,7 @@ After all work patterns complete, before code becomes permanent:
 
 While it runs you can work, once it says so. The judges read a fixed copy of the tree, mounted read-only at the project path (what git lists is copied and sealed to the stamp; what git ignores — `.venv`, `node_modules`, the journal — is shown live, as before). Watch the review's log for its first line about the tree:
 - `Judges read a fixed copy of the tree (…) — ready: you may write the live tree now …` — write anything except the reviewed task's task.md and judge.md;
-- `Judges read the LIVE tree — <why>` — no copy is possible here (no bubblewrap, already in a sandbox, a linked worktree, …): write nothing until the review ends, or its tamper guard voids the round;
+- `Judges read the LIVE tree — <why>` — no copy is possible here (no bubblewrap, already in a sandbox, a linked worktree, no commit yet, …) or it could not be sealed though nothing moved: write nothing until the review ends, or its tamper guard voids the round;
 - `Refused: the tree changed while its copy was made …` — something wrote the tree before the ready line; nothing was spent: run it again and wait for the line.
 
 What you write counts after that review. During an impl review or a post-panel judge, records, notes, tests and docs keep the close cheap (an `.agent/` record is outside the fingerprint; tests and docs go to tail certification), but code makes the reviewed task's close STALE — start another task's code after the reviewed task closes. During a plan review anything goes. Two reviews at once are allowed, but each panel needs several GB of memory and spends every seat's credit.

@@ -12,9 +12,12 @@ any repo write while the judges read the live tree.
   tree. With a copy: the CLI copies what git lists — the outer repository and each `code_roots` repository, each a
   `git clone --local --mirror` with the live config, index and listed files — into `<lane>/journal/review-views/`,
   seals it by content (its fingerprint equals the stamp, each scope's working-tree object the snapshot's base — for
-  the post-panel judge its delta's tree — and HEAD the same), and prints `ready: you may write the live tree now`.
-  bubblewrap mounts the copy read-only at the project path; what git ignores is shown live; `.agent`'s records stay
-  masked from the live inventory and its other entries come from the copy (tracked) or the live tree (ignored).
+  the post-panel judge its delta's tree — and HEAD the same; the recorded snapshot, dirty maps included, must be the
+  copy's own), freezes it read-only on disk, and — once the config, the quorum, the prompt and the chat log have been
+  read — prints `ready: you may write the live tree now` right before the judges start. bubblewrap mounts the copy
+  read-only at the project path, in a PID namespace of its own, with the project's parents pinned; what git ignores is
+  shown live; records are never copied and stay masked from the live inventory, the copies folder is hidden, and an
+  `.agent` entry made after the seal is shown only if git ignores it.
 - The guard watches the copy, the stamp is the sealed fingerprint and the snapshot the pre-spawn one — a live write
   during the review no longer voids it; what changed is after the panel (STALE at the close: tail certification
   takes records, tests and docs). The post-panel judge's `[file:]` checks resolve in the copy. The copy is removed
@@ -22,8 +25,10 @@ any repo write while the judges read the live tree.
 - No copy is possible inside a sandbox, without bubblewrap, for a project in a subdirectory of its repository, a
   linked worktree, a linked `.agent`/lane/code root, a submodule or untracked nested repository, a
   `fingerprint_exclude` that hides code, an unignored journal, or over 50,000 listed files / 1 GiB / 2,000 ignored
-  entries: the review says `Judges read the LIVE tree — <why>` first and runs as before. A tree that keeps changing
-  while its copy is made (three times) is refused before anything is spent.
+  entries, a scope with no commit yet or unmerged entries, an ignored entry over a code root: the review says
+  `Judges read the LIVE tree — <why>` first and runs as before. A copy that cannot be sealed while the live tree did not
+  move reads the live tree the same way; a tree that keeps changing while its copy is made (three times) is refused
+  before anything is spent. The post-panel judge's `[file:]` checks follow absolute links into the copy.
 - The CLAUDE.md template and the playbook skill say when the agent may write (after the ready line, never the
   reviewed task's task.md/judge.md) and what a code change during an impl review costs. Tail certification still
   reads the live tree (the close certifies the current tree).
