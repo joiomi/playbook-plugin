@@ -40,9 +40,9 @@ Because state lives in the file and not in memory, execution survives context co
 
 **The chat log** records every message you send. A gate in the design phase checks the task against it - pulling in things you said conversationally but never wrote down. If your messages and the task don't agree, that's a bug in the plan, not just a documentation gap.
 
-**Hooks** enforce the structure at the system level. The agent can't edit code without an active task, can't skip gates, can't mark work done with gates still open. Warnings don't stick, so we block instead. ([How enforcement works](docs/architecture.md).)
+**Hooks** enforce the structure at the system level. The agent can't edit code without an active task, can't skip gates, can't mark work done with gates still open. Warnings don't stick, so we block instead. Every hook run leaves one line in a hook journal (what it decided and why), so the enforcement itself can be measured. ([How enforcement works](docs/architecture.md).)
 
-**The correctness contract** makes a close earned, not asserted. Every task carries a `## Risk` class (`reversible` / `irreversible` / `assertive` — the last for changes to *claims about the world*, which can't skip review for being small diffs); `tasks work done` runs the project's declared verify commands and records a receipt (command, exit code, commit) into task.md, refusing to close on a failure — `--force` requires a recorded `--reason`. `tasks audit` runs mechanical pre-review sweeps (conflict markers, merge artifacts, stale markers, mind-map drift against the real file tree) so judges spend tokens on hard problems; panels return a PASS/FAIL verdict against a configurable quorum instead of a bare count; review rounds stop by the task's risk — one impl panel round for a reversible task, two for an assertive or irreversible one — and after a panel a single judge reads only an irreversible or unclassified task's changed code, or the files a project lists as the code that guards it (`guard_paths`); and a task waiting on the user's decision has an honest `blocked` state instead of a faked checkbox.
+**The correctness contract** makes a close earned, not asserted. Every task carries a `## Risk` class (`reversible` / `irreversible` / `assertive` — the last for changes to *claims about the world*, which can't skip review for being small diffs); `tasks work done` runs the project's declared verify commands and records a receipt (command, exit code, commit) into task.md, refusing to close on a failure — `--force` requires a recorded `--reason`. `tasks audit` runs mechanical pre-review sweeps (conflict markers, merge artifacts, stale markers, mind-map drift against the real file tree) so judges spend tokens on hard problems; panels return a PASS/FAIL verdict against a configurable quorum instead of a bare count; review rounds stop by the task's risk — one impl panel round for a reversible task, two for an assertive or irreversible one — and after a panel a single judge reads only an irreversible or unclassified task's changed code, or the files a project lists as the code that guards it (`guard_paths`); a task waiting on the user's decision has an honest `blocked` state instead of a faked checkbox; a ruling the owner gives for more than one task is written once into the project's list (`tasks ruling`) and reaches every judge; and the close does not re-run a verify that `tasks verify` already passed on exactly the same code (the receipt says "reused").
 
 **The monitor** is a second agent watching from outside: it reads the session transcript incrementally and nudges the working agent when the trajectory drifts - a separate context window, so it judges without the front agent's anchoring.
 
@@ -131,13 +131,18 @@ One setup that works well: the **orchestrator** runs outside the sandbox - write
 
 ## The mind map in practice
 
-> **[1] Project Overview** - Claude Playbook packages an agent steering methodology as a distributable plugin **[2]**. The core insight: the solution to agent autonomy is text, not code **[18]**. Refined across 700+ tasks...
+> **[1] Project Overview** - Claude Playbook packages an agent steering methodology as a distributable plugin **[2]**.
+> - The core insight: the solution to agent autonomy is text, not code **[18]**.
+> - Refined across 700+ tasks...
 >
-> **[5] Task System** - Each task is a living document that IS the execution trace **[19]**. Design Phase → Work Plan → Pre-review. Task types: feature → Build, research → Investigate, audit → Evaluate, bugfix → Fix...
+> **[5] Task System** - Each task is a living document that IS the execution trace **[19]**.
+> - Design Phase → Work Plan → Pre-review.
+> - Task types: feature → Build, research → Investigate, audit → Evaluate, bugfix → Fix...
 >
-> **[19] Document-Driven Execution** - task.md is a computational model: checkboxes = state, sections = memory, templates = instruction set, agent = interpreter **[5]**...
+> **[19] Document-Driven Execution** - task.md is a computational model **[5]**.
+> - Checkboxes = state, sections = memory, templates = instruction set, agent = interpreter...
 
-Nodes cross-reference each other - **[5]** links to **[19]** which links back. What was decided, what failed, what got tried and why - it persists between sessions instead of being re-explained from scratch.
+One fact per line, under each node's title; nodes cross-reference each other - **[5]** links to **[19]** which links back. What was decided, what failed, what got tried and why - it persists between sessions instead of being re-explained from scratch.
 
 ## When not to use it
 
@@ -156,4 +161,4 @@ Then restart Claude Code and continue with `/playbook:init` as described under [
 
 A later version started on macOS or Windows prints a warning at session start and carries on, unsupported.
 
-<!-- readme-audit: v1.6.3 @ 2026-10-15 -->
+<!-- readme-audit: v1.6.4 @ 2026-10-17 -->
