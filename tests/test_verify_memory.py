@@ -169,6 +169,84 @@ class TheKey(Project):
         self.assertTrue(self.key())
 
 
+class Round1(Project):
+    """Impl round 1: each case is a reuse on code that would fail — a guard failing open."""
+
+    def test_a_staged_change_moves_the_key(self):
+        """grok: `git diff --check` reads the index — a staged change restored in the worktree must move the key."""
+        k = self.key()
+        (self.d / "src.py").write_text("x = 1 \n", encoding="utf-8")
+        self.g("add", "src.py")
+        (self.d / "src.py").write_text("x = 1\n", encoding="utf-8")
+        self.assertNotEqual(self.key(), k)
+
+    def test_tracked_agent_files_count_task_records_do_not(self):
+        """grok: a tracked `.agent/config.json` is code a verify can read; the task records are not."""
+        k = self.key()
+        rec = self.d / ".agent" / "tasks" / "001-x"
+        rec.mkdir(parents=True)
+        (rec / "task.md").write_text("# x\n", encoding="utf-8")
+        self.g("add", "-A")
+        (rec / "task.md").write_text("# x, ticked\n", encoding="utf-8")
+        self.assertEqual(self.key(), k)
+        cfg = self.d / ".agent" / "config.json"
+        cfg.write_text(cfg.read_text() + " ", encoding="utf-8")
+        self.assertNotEqual(self.key(), k)
+
+    def test_a_newer_red_run_is_not_undone_by_an_older_green(self):
+        """codex, grok: a red run leaves its start time; an older green finishing after it is not recorded."""
+        k = self.key()
+        verify_memory.record(self.d, k, k, A, False, started=200.0, seconds=1.0)
+        self.assertEqual(verify_memory.record(self.d, k, k, A, True, started=100.0, seconds=1.0), "kept")
+        self.assertIsNone(verify_memory.reusable(self.d, k, A, timeout=1200))
+
+    def test_a_code_root_without_its_own_repository(self):
+        """codex: a `code_roots` dir with no `.git` of its own would be listed through the outer repo — no key."""
+        (self.d / "nested").mkdir()
+        (self.d / "nested" / "lib.py").write_text("z = 1\n", encoding="utf-8")
+        (self.d / ".gitignore").write_text((self.d / ".gitignore").read_text() + "nested/\n", encoding="utf-8")
+        self.contract(A, extra={"code_roots": ["nested"]})
+        self.assertIsNone(self.key())
+
+    def test_a_red_result_that_cannot_be_written_still_ends_the_green(self):
+        """codex: the run's start is written before the command runs; if the journal cannot be written, the record is
+        removed — never left green for code that just failed."""
+        k = self.key()
+        verify_memory.record(self.d, k, k, A, True, started=1.0, seconds=50.0)
+        with mock.patch("tasks.atomic.atomic_write", side_effect=OSError("disk full")):
+            out = verify_memory.run_contract(self.d, [("config", A)], 10, lambda c: (1, "red"))
+        self.assertEqual(out[0][2], 1)
+        self.assertIsNone(verify_memory.reusable(self.d, k, A, timeout=None))
+
+    def test_a_run_that_dies_midway_leaves_no_green(self):
+        """codex: the start is marked red before the command runs — a run killed midway (here: the runner raises)
+        leaves no green record for that code."""
+        k = self.key()
+        verify_memory.record(self.d, k, k, A, True, started=1.0, seconds=50.0)
+
+        def dies(_cmd):
+            raise RuntimeError("killed")
+        with self.assertRaises(RuntimeError):
+            verify_memory.run_contract(self.d, [("config", A)], 10, dies)
+        self.assertIsNone(verify_memory.reusable(self.d, k, A, timeout=None))
+
+    def test_the_key_never_raises(self):
+        """sonnet, opus: a key that cannot be built is no key — never a traceback in the close."""
+        with mock.patch("os.readlink", side_effect=OSError("gone")):
+            (self.d / "link.py").symlink_to("src.py")
+            self.assertIsNone(self.key())
+        with mock.patch.object(verify_memory, "_scope_digest", side_effect=MemoryError()):
+            self.assertIsNone(self.key())
+
+    def test_a_link_out_of_the_scope_is_no_key(self):
+        """grok: a link is keyed by its target; one that leaves the scope points at bytes the key cannot see."""
+        outside = Path(tempfile.mkdtemp(prefix="pb228x-"))
+        self.addCleanup(shutil.rmtree, outside, True)
+        (outside / "real.py").write_text("q = 1\n", encoding="utf-8")
+        (self.d / "far.py").symlink_to(outside / "real.py")
+        self.assertIsNone(self.key())
+
+
 class TheRecord(Project):
 
     def test_record_reuse_and_the_conditions(self):
@@ -184,20 +262,24 @@ class TheRecord(Project):
     def test_only_a_later_run_replaces_or_removes(self):
         k = self.key()
         verify_memory.record(self.d, k, k, A, True, started=200.0, seconds=1.0)
-        self.assertNotEqual(verify_memory.record(self.d, k, k, A, False, started=100.0, seconds=1.0), "removed")
+        self.assertEqual(verify_memory.record(self.d, k, k, A, False, started=100.0, seconds=1.0), "kept")
         self.assertIsNotNone(verify_memory.reusable(self.d, k, A, timeout=1200))
-        self.assertEqual(verify_memory.record(self.d, k, k, A, False, started=300.0, seconds=1.0), "removed")
+        self.assertEqual(verify_memory.record(self.d, k, k, A, False, started=300.0, seconds=1.0), "marked")
         self.assertIsNone(verify_memory.reusable(self.d, k, A, timeout=1200))
         verify_memory.record(self.d, k, k, A, True, started=500.0, seconds=1.0)
         other = "3" * 64
         self.assertEqual(verify_memory.record(self.d, other, other, A, True, started=400.0, seconds=1.0), "kept")
         self.assertIsNotNone(verify_memory.reusable(self.d, k, A, timeout=1200))      # the newer run stays
 
-    def test_a_red_run_removes_only_its_own_code(self):
+    def test_the_newest_run_of_a_command_has_the_last_word(self):
+        """One record per command — its newest run: a later red run on other code ends the green too (the command
+        then runs again: conservative); a later green run on other code replaces it."""
         k = self.key()
         verify_memory.record(self.d, k, k, A, True, started=100.0, seconds=1.0)
         verify_memory.record(self.d, "1" * 64, "1" * 64, A, False, started=200.0, seconds=1.0)
-        self.assertIsNotNone(verify_memory.reusable(self.d, k, A, timeout=1200))
+        self.assertIsNone(verify_memory.reusable(self.d, k, A, timeout=1200))
+        verify_memory.record(self.d, k, k, B, True, started=300.0, seconds=1.0)
+        self.assertIsNotNone(verify_memory.reusable(self.d, k, B, timeout=1200))      # another command untouched
 
     def test_moved_code_or_no_key_is_not_recorded(self):
         k = self.key()
@@ -240,6 +322,23 @@ class TheCommand(Project):
 
     def contract_cmd(self):
         return json.loads((self.d / ".agent" / "config.json").read_text())["verify"]
+
+    def test_a_task_number_and_wrong_calls(self):
+        """agy, codex: `tasks verify 1` finds `001-*`; a wrong call or an unknown task is exit 2."""
+        r = self.cli("new", "light", "probe", "probe")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.cli("verify", "1").returncode, 0)
+        self.assertEqual(self.cli("verify", "001").returncode, 0)
+        self.assertEqual(self.cli("verify", "999").returncode, 2)
+        self.assertEqual(self.cli("verify", "bad").returncode, 2)
+        self.assertEqual(self.cli("verify", "1", "2").returncode, 2)
+
+    def test_no_key_says_so(self):
+        """opus: a run with no code key is not remembered, and says why."""
+        self.g("update-index", "--skip-worktree", "src.py")
+        r = self.cli("verify")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("not remembered: no code key", r.stdout)
 
     def test_no_contract_records_nothing(self):
         (self.d / ".agent" / "config.json").write_text("{}", encoding="utf-8")
@@ -294,9 +393,10 @@ class TheClose(Project):
         self.task()
         k = self.key()
         verify_memory.record(self.d, k, k, A, True, started=1.0, seconds=50.0)
-        self.contract(A, extra={"verify_timeout_secs": 10})
         self.red()
-        r = self.cli("work", "done")
+        env = dict(self.env(), PLAYBOOK_VERIFY_TIMEOUT_SECS="10")
+        r = subprocess.run([sys.executable, "-m", "tasks.cli", "work", "done"], cwd=self.d, env=env,
+                           capture_output=True, text=True, timeout=300)
         self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(self.runs(), 1)
         self.assertIsNone(verify_memory.reusable(self.d, self.key(), A, timeout=None))
@@ -313,14 +413,19 @@ class TheClose(Project):
         self.assertEqual(self.runs(), 1)
 
     def test_two_commands_one_reused_one_run(self):
-        self.contract(A, B)
-        self.task()
+        """The reversible bar runs A; the task turns assertive (a task record — outside the key): its close reuses A
+        and runs B."""
+        (self.d / ".agent" / "config.json").write_text(json.dumps({"verify": {"_always": [A], "assertive": [B]}}),
+                                                       encoding="utf-8")
+        self.g("add", "-A")
+        self.g("commit", "-qm", "two risk classes")
+        tf = self.task()
         self.assertEqual(self.cli("verify").returncode, 0)
-        C = marker_cmd("c")
-        self.contract(A, C)
-        r = self.cli("work", "done")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertEqual((self.runs("a"), self.runs("b"), self.runs("c")), (1, 1, 1))
+        self.assertEqual((self.runs("a"), self.runs("b")), (1, 0))
+        tf.write_text(tf.read_text(encoding="utf-8").replace("## Risk\nreversible\n", "## Risk\nassertive\n"),
+                      encoding="utf-8")
+        self.cli("work", "done")                                   # blocked later (no review) — the verify ran first
+        self.assertEqual((self.runs("a"), self.runs("b")), (1, 1))
 
 
 if __name__ == "__main__":

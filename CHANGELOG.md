@@ -359,15 +359,20 @@ between. A full verify here is about 140 s.
   (`.agent/journal/verify-green.json`). `tasks work done` does not run a command again when its green run is for the
   same code, ran within the current timeout and bash is usable; the receipt line says "reused: the green run of <time>
   on the same code (key <12 hex>)". Ticking gates and writing records after the run keep it; any code edit does not.
-- The code key, per fingerprint scope: every file git lists outside `.agent/` — tracked or not, its mode, the sha256 of
-  its raw bytes (not git's tree, which normalises text and records a nested repository as a commit). No key, so no
-  reuse, with a nested repository outside the scopes, a skip-worktree or assume-unchanged entry, or an unfinished
-  merge; the owner's `fingerprint_exclude` is not applied.
-- A green run is remembered only when the code did not change while it ran ("not remembered: …" otherwise); a red run
-  forgets that command's green run of the same code; only a later run replaces a record (under a lock); the close
-  records each run before its red exit and before the later gates, so a blocked close's green run serves the next one.
-- Limits: git-ignored files the tests read, HEAD and the history, the environment, the clock and an edit made and undone
-  during the run are outside the key; the journal is agent-writable like every journal — the receipt names each reuse.
+- The code key, per fingerprint scope: every file git lists — tracked or not (a tracked one with its index blob, so a
+  staged change counts), its mode, the sha256 of its raw bytes (not git's tree, which normalises text and records a
+  nested repository as a commit) — except the task records and untracked `.agent` files (a tracked
+  `.agent/config.json` counts). No key, so no reuse, with a nested repository outside the scopes, a `code_roots` dir
+  that is not its own repository, a skip-worktree / assume-unchanged / unmerged entry, a link out of the scope; the
+  owner's `fingerprint_exclude` is not applied.
+- Before a command runs its start is written as a red mark, so a crash, a red result or an older run finishing later
+  never leaves it green (if the mark cannot be written, the record is removed); a green run is remembered only when the
+  code did not change while it ran ("not remembered: …" with the reason otherwise); only a later run replaces a record
+  (under a lock); the close records each run before its red exit and the later gates, so a blocked close's green run
+  serves the next one. Each command's line prints as soon as it finishes.
+- Limits: git-ignored files and untracked `.agent` state the tests read, HEAD and the history, the environment, the
+  clock and an edit made and undone during the run are outside the key; the journal is agent-writable like every
+  journal — the receipt names each reuse.
 
 ## [1.6.3] — 2026-10-15
 
