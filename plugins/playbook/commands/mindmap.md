@@ -14,7 +14,7 @@ Generate a populated `MIND_MAP.md` for this project. Work directly — no Task a
 
 ## Key Rules
 
-- Each node must be a **single line** (grep-friendly)
+- One fact per line: a node is its `[N] **Title** - …` line, then its facts, one `- ` line each, no blank line inside it
 - Target **20-50 nodes** with cross-links
 - Routing nodes [1-5] link to everything else
 - Links embedded naturally in text, not clustered at end

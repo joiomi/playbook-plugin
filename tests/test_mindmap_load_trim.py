@@ -93,7 +93,8 @@ class TestNodeAwareTrim(unittest.TestCase):
         # The judge prompts claim the map "is provided" — the text has to contradict
         # that itself, or the omission stays invisible.
         self.assertIn("NOT the full map", self.out)
-        self.assertIn("grep '^\\[N\\]' MIND_MAP.md", self.out)
+        self.assertIn("`tasks recall <N>`", self.out)
+        self.assertNotIn("grep '^", self.out)
 
     def test_notice_precedes_the_nodes(self):
         # First thing after the header, so a reader learns the map is partial before

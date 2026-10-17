@@ -10507,7 +10507,7 @@
     {
       "id": "PB-MINDMAP-LOAD",
       "category": "mind-map",
-      "statement": "Bootstrap returns a small mind map whole, presents an indexed whole-node view once the map exceeds the bootstrap budget, falls back to the whole-node trim rather than slicing when a few fat nodes exceed it, and reports a missing map visibly.",
+      "statement": "Bootstrap returns a small mind map whole, presents an indexed whole-node view once the map exceeds the bootstrap budget, falls back to the whole-node trim rather than slicing when a few fat nodes exceed it, and reports a missing map visibly. A node is its title line plus one fact per line (task 226): the index lists each such node once, titled, and points to `tasks recall <N>`, as does the judges' trim notice.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/project_setup.py",
@@ -10571,6 +10571,22 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_map_one_fact_per_line.py",
+          "reference": "EveryReaderReadsBothForms.test_the_bootstrap_index_and_its_hint",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_map_one_fact_per_line.py",
+          "reference": "EveryReaderReadsBothForms.test_the_judges_trim_names_recall",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": []
         }
       ],
       "applicable_platforms": [
@@ -10593,7 +10609,7 @@
     {
       "id": "PB-MINDMAP-RECALL",
       "category": "mind-map",
-      "statement": "tasks recall prints a node id from both mind-map tiers, ranks keyword matches across both files, and reports fenced, duplicate, absent, and unbalanced-fence cases explicitly instead of silently.",
+      "statement": "tasks recall prints a node id from both mind-map tiers, ranks keyword matches across both files, and reports fenced, duplicate, absent, and unbalanced-fence cases explicitly instead of silently. A node of several lines (its title line plus its fact lines, task 226) is printed whole, and only it.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/mindmap.py",
@@ -10653,6 +10669,14 @@
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_map_one_fact_per_line.py",
+          "reference": "EveryReaderReadsBothForms.test_recall_prints_the_whole_node_and_only_it",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
         }
       ],
       "applicable_platforms": [
@@ -10675,7 +10699,7 @@
     {
       "id": "PB-MINDMAP-SYNC",
       "category": "mind-map",
-      "statement": "Mind-map synchronization updates live nodes, preserves fenced blocks and LF/CRLF newline style, is idempotent on a second run, and degrades to a clean note when no overflow file exists.",
+      "statement": "Mind-map synchronization updates live nodes, preserves fenced blocks and LF/CRLF newline style, is idempotent on a second run, and degrades to a clean note when no overflow file exists. A node is its title line plus its fact lines (task 226): a summary node is one whose marker is on its title line, so a fact that mentions the marker does not hide a full node's drift, and --fix leaves a summary node's fuller overflow text alone.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/mindmap.py",
@@ -10724,6 +10748,25 @@
           "negative_control": {
             "path": "tests/test_mindmap_sync_no_overflow.py",
             "reference": "NoOverflowGracefulDegrade.test_missing_main_map_still_errors"
+          },
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_map_one_fact_per_line.py",
+          "reference": "EveryReaderReadsBothForms.test_mindmap_sync_reads_the_summary_from_the_title_line",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_map_one_fact_per_line.py",
+          "reference": "EveryReaderReadsBothForms.test_mindmap_sync_fix_keeps_a_summary_nodes_fuller_overflow",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_map_one_fact_per_line.py",
+            "reference": "EveryReaderReadsBothForms.test_mindmap_sync_fix_rewrites_the_overflow_node_whole"
           },
           "limitations": []
         }

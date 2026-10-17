@@ -72,7 +72,7 @@ run it after the merge and before committing.
 ## MIND_MAP_OVERFLOW.md — the gotchas that make plan-review unnecessary
 
 `MIND_MAP_OVERFLOW.md` holds the full text of nodes that appear in `MIND_MAP.md`
-only as a one-line `↗` summary. Every real-world merge defect a review caught was
+only as a short `↗` summary. Every real-world merge defect a review caught was
 one of these. Encode them as a checklist — they are the heart of this skill:
 
 1. **One-sided OVERFLOW auto-merges to STALE numbers — renumber is MANUAL.**
@@ -93,7 +93,7 @@ one of these. Encode them as a checklist — they are the heart of this skill:
    it is the step that actually writes the archive (Step 6).
 
 3. **The `↗` contract.** `↗` on a MIND_MAP node means "full text lives in
-   `MIND_MAP_OVERFLOW.md`" (grep `^[N]`), NOT a task-trace pointer. A `↗` node
+   `MIND_MAP_OVERFLOW.md`" (`tasks recall <N>` prints both), NOT a task-trace pointer. A `↗` node
    MUST have a matching overflow entry. Full/anchor nodes (no `↗`) appear
    **byte-identical in both files** — that mirror is by design, not duplication
    to "fix." (`ref-integrity.py` enforces this contract.)

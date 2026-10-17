@@ -45,13 +45,13 @@ class TemplateCommentary(unittest.TestCase):
 
     def test_the_work_plan_guidance_is_a_member(self):
         members = core.template_commentary_lines()
-        self.assertTrue(any(ln.startswith("> For each work section: what could go wrong?") for ln in members))
+        self.assertTrue(any(ln.startswith("> - For each work section: what could go wrong") for ln in members))
 
 
 def _guide() -> str:
     """The template's Work Plan guidance line, as the CLI renders it."""
     return next(ln for ln in core.template_commentary_lines()
-                if ln.startswith("> For each work section: what could go wrong?"))
+                if ln.startswith("> - For each work section: what could go wrong"))
 
 
 def _fat(heading: str, chars: int) -> str:

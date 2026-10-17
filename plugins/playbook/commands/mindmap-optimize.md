@@ -67,7 +67,7 @@ still ahead / planned / TODO) that appears in MORE THAN ONE node:
 
 Report:
 - MIND_MAP.md size (chars and approximate tokens at 4 chars/token)
-- How many nodes are full vs summary (↗) vs title-only (↗ + single line)
+- How many nodes are full vs summary (↗) vs title-only (↗ and no fact lines under the title)
 - Nodes that are full but could be compressed (long content, low cross-reference count from other nodes)
 - Nodes that are ↗ summary but have been heavily edited recently (may need promotion back to full)
 

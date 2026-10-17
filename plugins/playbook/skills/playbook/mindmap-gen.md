@@ -109,10 +109,10 @@ Under ~15 is usually too shallow; if a node is documenting rather than mapping
 
 For each node:
 
-1. Clear noun-phrase title
-2. Opening sentence defines the concept, links to parent nodes
-3. Core content with specific details (file paths, function names, numbers)
-4. Embed `[N]` links naturally throughout — don't list them at the end
+1. The title line: `[N] **Title** - ` and one sentence that defines the concept, linking its parent nodes
+2. Then one fact per line, each a `- ` line right under the title — no blank line inside the node
+3. Facts with specific details (file paths, function names, numbers)
+4. Embed `[N]` links naturally in the facts — don't list them at the end; a fact never begins with `[`
 5. Explain WHY, not just WHAT
 
 ### 3.3 Weave Links
@@ -136,4 +136,5 @@ Prepend the standard AI agent header (see [mindmap.md](mindmap.md)).
 - [ ] Every node has 2+ links
 - [ ] Important nodes have 5+ links
 - [ ] Links are bidirectional where appropriate
+- [ ] One fact per line: each node is its title line plus `- ` fact lines
 - [ ] 20-50 nodes total

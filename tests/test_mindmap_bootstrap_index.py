@@ -130,7 +130,8 @@ class TestBootstrapLoader(unittest.TestCase):
         # The index announces itself and how to recover a node.
         self.assertIn("MIND MAP INDEX", out)
         self.assertIn("[1]-[5]", out)
-        self.assertIn("grep '^\\[N\\]' MIND_MAP.md", out)
+        self.assertIn("`tasks recall <N>`", out)
+        self.assertNotIn("grep '^", out)
         # Every node is still reachable: routing (full) + indexed (titled) == all.
         self.assertEqual(sorted(set(ids_in(out))), list(range(1, 41)))
 

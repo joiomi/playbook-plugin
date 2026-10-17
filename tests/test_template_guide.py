@@ -28,25 +28,113 @@ from tasks import template  # noqa: E402
 from tasks.core import PLAYBOOKS, extract_risk, extract_risk_from_text, has_risk_section  # noqa: E402
 
 BEFORE = _HERE / "fixtures" / "template_before_213"
-# Lines of the old templates that a later task REWORDED in the guide, old -> new (the guide holds the new one; a
-# record written before keeps the old line — one stale line, not worth code that recognises it: the owner's rule of
-# 2026-10-16, "design for new projects, not legacy").
+# Lines of the old templates that a later task REWORDED in the guide, old -> the new lines that say it (the guide
+# holds the new ones; a record written before keeps the old line — one stale line, not worth code that recognises it:
+# the owner's rule of 2026-10-16, "design for new projects, not legacy"). Task 219 moved the drift signal to the
+# 10-call reminder; task 225 put a gate's note on the lines under its title; task 226 split each line into short
+# lines of one fact (the owner, 2026-10-16 09:36: "Liste scurte de la început").
 REWORDED = {
-    # task 225: a gate's note goes on the lines under its title (the owner, 2026-10-16: "Liste scurte de la început")
-    "> Never backfill. The document IS the execution trace. Closing several ALREADY-DONE gates in one edit is allowed ONLY when each line carries its own outcome note (hook-enforced, max 5; a bare batch tick is blocked; where no hook runs, keep to one gate at a time).":
-        "> Never backfill. The document IS the execution trace. Closing several ALREADY-DONE gates in one edit is allowed ONLY when each gate carries its own outcome note (hook-enforced, max 5; a bare batch tick is blocked; where no hook runs, keep to one gate at a time).",
-    "> **Closing a gate:** check the box, append your outcome. Never replace the original text.":
-        "> **Closing a gate:** check the box and, in the same edit, write its outcome on the lines under it — indented two spaces deeper than the gate, one fact per line (`- [x] <the gate>` then `  - 283 tests green` on the next line). Never replace the original text.",
-    "> **Write a 1-sentence answer for each gate.** A bare checkmark means you skipped it.":
-        "> **Answer each gate on the lines under it** (indented two spaces deeper, one fact per line). A bare checkmark means you skipped it.",
-    "> Never backfill. The document IS the execution trace. Batch-closing ALREADY-DONE gates needs an outcome note per line (hook-enforced; where no hook runs, one gate at a time).":
-        "> Never backfill. The document IS the execution trace. A gate's outcome goes on the lines under it, indented two spaces deeper, one fact per line. Batch-closing ALREADY-DONE gates needs an outcome note per gate (hook-enforced; where no hook runs, one gate at a time).",
-    "> Gate discipline unchanged: one gate → do work → check box with its outcome. Never backfill. Batch-closing ALREADY-DONE gates needs an outcome note per line (hook-enforced; where no hook runs, one at a time).":
-        "> Gate discipline unchanged: one gate → do work → check box, its outcome on the lines under it (indented two spaces deeper, one fact per line). Never backfill. Batch-closing ALREADY-DONE gates needs an outcome note per gate (hook-enforced; where no hook runs, one at a time).",
-    # task 219: the echo no longer repeats after every call — the drift signal is the 10-call reminder
-    "> If you see the same gate 5+ times in the hook echo, you're drifting — STOP and update.":
-        "> If the hook's reminder (one line every 10 calls on the same gate) names the same gate a third time, "
-        "you're drifting — STOP and update.",
+    '> **Gate discipline:** One gate → do work → check box → next gate.': (
+        '> **Gate discipline:**',
+        '> - One gate → do the work → check the box → the next gate.',
+    ),
+    '> Never backfill. The document IS the execution trace. Closing several ALREADY-DONE gates in one edit is allowed ONLY when each line carries its own outcome note (hook-enforced, max 5; a bare batch tick is blocked; where no hook runs, keep to one gate at a time).': (
+        '> - Never backfill: the document IS the execution trace.',
+        '> - Closing several ALREADY-DONE gates in one edit: only when each gate carries its own outcome note (hook-enforced, at most 5; a bare batch tick is blocked; where no hook runs, one gate at a time).',
+    ),
+    '> **Never born checked:** write each gate BEFORE you do its step, then check it — a gate may never be born checked. To record work you already finished, add the gate unchecked, then check it in a SEPARATE edit with its outcome note.': (
+        '> - Never born checked: write each gate BEFORE you do its step, then check it.',
+        '> - Work you already finished: add its gate unchecked, then check it in a SEPARATE edit, with its outcome.',
+    ),
+    '> **Closing a gate:** check the box, append your outcome. Never replace the original text.': (
+        '> - Closing a gate: check the box and, in the same edit, write its outcome on the lines under it — indented two spaces deeper than the gate, one fact per line (`- [x] <the gate>`, then `  - 283 tests green`).',
+        "> - Never replace a gate's original text.",
+    ),
+    '> **Sanctioned compaction (the one exception):** when this file grows past the review context budget, old *Plan Review / Implementation Review triage narrative* may move VERBATIM to `task-archive.md` (same dir). Never gates, never Intent/Design/Parked/receipts — moving history is not deleting it. Do it mechanically: wrap each cold block in `<!-- archive:start -->` … `<!-- archive:end -->` then run `.claude/bin/tasks compact <N>` (it refuses to move a gate, a pin, or a protected heading, so a mismark fails loud).': (
+        '> **Sanctioned compaction (the one exception):**',
+        '> - When this file grows past the review context budget, old Plan Review / Implementation Review triage narrative may move VERBATIM to `task-archive.md` (same dir).',
+        '> - Never gates, never Intent/Design/Parked/receipts — moving history is not deleting it.',
+        '> - Do it mechanically: wrap each cold block in `<!-- archive:start -->` … `<!-- archive:end -->`, then run `.claude/bin/tasks compact <N>`.',
+        '> - It refuses to move a gate, a pin or a protected heading, so a mismark fails loud.',
+    ),
+    '> Design Phase = orientation (one gate, brief answer). Work Plan = real work (one gate, full effort).': (
+        '> - Design Phase = orientation (one gate, a brief answer); Work Plan = real work (one gate, full effort).',
+    ),
+    "> If you see the same gate 5+ times in the hook echo, you're drifting — STOP and update.": (
+        "> - If the hook's reminder (one line every 10 calls on the same gate) names the same gate a third time, you're drifting — STOP and update.",
+    ),
+    "> **Before filling this in:** run `.claude/bin/tasks work <N>` to activate this task. Hooks won't enforce until activated.": (
+        '> **Before filling this in:**',
+        '> - Run `.claude/bin/tasks work <N>` to activate this task.',
+        "> - Hooks won't enforce until it is activated.",
+    ),
+    '> - `reversible` — the question is whether the WORLD reverts, not the diff: touches only code/config that `git revert` fully undoes. A change that deletes/migrates persisted data, alters an on-disk format, rotates a secret, rewrites history, or publishes/asserts a claim about the world is NOT reversible even when its diff reverts cleanly. Normal bar.': (
+        '> - `reversible`: the question is whether the WORLD reverts, not the diff.',
+        '>   - It touches only code/config that `git revert` fully undoes; the normal bar.',
+        '>   - NOT reversible even when its diff reverts cleanly: deleting or migrating persisted data, changing an on-disk format, rotating a secret, rewriting history, publishing or asserting a claim about the world.',
+    ),
+    '> - `irreversible` — deletes/migrates data, rotates a secret, rewrites history, or publishes. Needs a named rollback plan + explicit confirmation, and cannot light-close.': (
+        '> - `irreversible`: deletes/migrates data, rotates a secret, rewrites history, or publishes.',
+        '>   - It needs a named rollback plan and explicit confirmation, and cannot light-close.',
+    ),
+    '> - `assertive` — changes a **claim about the world** (docs, a calibration, a measurement, a "verified accurate"). Reviewed for the claim AND its instrument regardless of diff size — a docs-only diff can be the most review-worthy thing a task produces. Cannot light-close.': (
+        '> - `assertive`: changes a **claim about the world** (docs, a calibration, a measurement, a "verified accurate").',
+        ">   - It is reviewed for the claim AND its instrument whatever the diff's size — a docs-only diff can be the most review-worthy thing a task produces.",
+        '>   - It cannot light-close.',
+    ),
+    '> - Leaving it `unclassified` is **not** the cheap way out: an unset gate cannot be evaluated, so the close is held to the same bar as `assertive`/`irreversible` (review evidence, or `--force --reason`). One word here is the whole cost.': (
+        '> - Leaving it `unclassified` is **not** the cheap way out: an unset gate cannot be evaluated.',
+        '>   - The close is then held to the same bar as `assertive`/`irreversible` (review evidence, or `--force --reason`); one word here is the whole cost.',
+    ),
+    '> **Write a 1-sentence answer for each gate.** A bare checkmark means you skipped it.': (
+        '> - **Answer each gate on the lines under it** (indented two spaces deeper, one fact per line).',
+        '> - A bare checkmark means you skipped it.',
+    ),
+    '> Complete these gates before writing the work plan.': (
+        '> - Complete these gates before writing the work plan.',
+    ),
+    '> (The `/playbook` skill has workflow patterns if you need a reference.)': (
+        '> - The `/playbook` skill has workflow patterns if you need a reference.',
+    ),
+    '> For each work section: what could go wrong? How will you know it worked? (specific check, not "looks good")': (
+        '> - For each work section: what could go wrong, and how will you know it worked (a specific check, not "looks good")?',
+    ),
+    '> Standard feature: 6-8 work gates + tests. Large tasks work fine — if >15 gates, add a mid-point checkpoint to reassess direction.': (
+        '> - A standard feature: 6-8 work gates + tests.',
+        '> - Large tasks work fine — past 15 gates, add a mid-point checkpoint to reassess direction.',
+    ),
+    '> Never backfill. The document IS the execution trace. Batch-closing ALREADY-DONE gates needs an outcome note per line (hook-enforced; where no hook runs, one gate at a time).': (
+        '> - One gate → do the work → check the box → the next gate.',
+        '> - Never backfill: the document IS the execution trace.',
+        "> - A gate's outcome goes on the lines under it, indented two spaces deeper, one fact per line.",
+        '> - Batch-closing ALREADY-DONE gates needs an outcome note per gate (hook-enforced; where no hook runs, one gate at a time).',
+    ),
+    '> **Never born checked:** write the gate BEFORE you do its step, then check it — a gate may never be born checked. To record work you already finished, add it unchecked, then check it in a SEPARATE edit with its outcome.': (
+        '> - Never born checked: write the gate BEFORE you do its step, then check it.',
+        '> - Work you already finished: add its gate unchecked, then check it in a SEPARATE edit, with its outcome.',
+    ),
+    '> **Light shape** — small, sub-day work; ceremony compressed, review NEVER waived: risk decides review, smallness never does. If this grows beyond small, convert: `tasks new <type> <name>`.': (
+        '> **Light shape** — small, sub-day work:',
+        '> - Ceremony compressed, review NEVER waived: risk decides review, smallness never does.',
+        '> - If this grows beyond small, convert: `tasks new <type> <name>`.',
+    ),
+    '> Gate discipline unchanged: one gate → do work → check box with its outcome. Never backfill. Batch-closing ALREADY-DONE gates needs an outcome note per line (hook-enforced; where no hook runs, one at a time).': (
+        '> - Gate discipline unchanged: one gate → do the work → check the box.',
+        "> - A gate's outcome goes on the lines under it, indented two spaces deeper, one fact per line.",
+        '> - Never backfill; batch-closing ALREADY-DONE gates needs an outcome note per gate (hook-enforced; where no hook runs, one at a time).',
+    ),
+    '> Fix/Verify pairs. What could this break?': (
+        '> - Fix / Verify pairs.',
+        '> - What could this break?',
+    ),
+    '> Apply lenses consistently. Assess first, decide action after.': (
+        '> - Apply the lenses consistently.',
+        '> - Assess first, decide the action after.',
+    ),
+    '> Rounds: hypothesis → test → result → checkpoint. Stop when converging.': (
+        '> - Rounds: hypothesis → test → result → checkpoint.',
+        '> - Stop when converging.',
+    ),
 }
 MOVED = [ln for ln in (BEFORE / "commentary.txt").read_text(encoding="utf-8").splitlines()
          if ln and ln not in REWORDED]
@@ -83,7 +171,20 @@ class TheGuideHoldsEveryMovedLine(unittest.TestCase):
         for old, new in REWORDED.items():
             with self.subTest(reworded=old[:60]):
                 self.assertNotIn(old, guide)
-                self.assertIn(new, guide)
+                for ln in new:
+                    self.assertIn(ln, guide)
+
+    def test_one_fact_per_line(self):
+        # task 226: a guide line says one thing — the longest new line is 209 characters; the *GATE_NOTES
+        # tables (what a long gate title used to say, quoted verbatim under its short title) are the exception
+        tables = {f"> {said}" for notes in (template.GATE_NOTES, template.RETRO_GATE_NOTES,
+                                            template.FREEHAND_GATE_NOTES) for _title, said in notes}
+        for ty in (None, "quick", "light", "retro", "freehand"):
+            for ln in template.guide_text(ty).splitlines():
+                if ln in tables:
+                    continue
+                with self.subTest(type=ty, line=ln[:60]):
+                    self.assertLessEqual(len(ln), 240)
 
     def test_a_type_guide_carries_its_own_shape(self):
         quick, light, feature = (template.guide_text(t) for t in ("quick", "light", "feature"))
@@ -255,7 +356,7 @@ class ThroughTheCli(unittest.TestCase):
     def test_tasks_guide_prints_the_whole_copy(self):
         r = self.run_cli("guide")
         self.assertEqual(r.returncode, 0, r.stderr)
-        for ln in MOVED + MOVED_ORDERS:
+        for ln in MOVED + MOVED_ORDERS + [n for new in REWORDED.values() for n in new]:
             self.assertIn(ln, r.stdout.splitlines())
 
     def test_tasks_guide_of_a_type_and_wrong_usage(self):

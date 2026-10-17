@@ -34,7 +34,7 @@ def _omitted_nodes_notice(omitted_ids: list[int], total: int, *,
     Load-bearing, not decoration: every judge prompt asserts "the MIND_MAP.md is
     provided" (`template.py`), so a silently-trimmed map reads as a complete one
     and the judge never goes looking for what is missing. Naming the ids — and the
-    grep that fetches them — is what turns a silent loss into a recoverable one.
+    command that fetches them — is what turns a silent loss into a recoverable one.
     Every kind of loss this trim can inflict has to be speakable here, or it is
     back to being invisible.
     """
@@ -47,7 +47,7 @@ def _omitted_nodes_notice(omitted_ids: list[int], total: int, *,
             f"[... MIND MAP TRIMMED to fit the context budget: "
             f"{len(omitted_ids)} of {total} nodes omitted — {ids}. "
             f"This is NOT the full map. Read any omitted node with: "
-            f"grep '^\\[N\\]' MIND_MAP.md ...]"
+            f"`tasks recall <N>` (or read MIND_MAP.md from its [N] line to the next node's) ...]"
         )
     if preamble_dropped:
         parts.append(
@@ -68,10 +68,10 @@ def _trim_mind_map_by_node(content: str, max_chars: int) -> str | None:
     Returns None when `content` has no usable node markers, so the caller can fall
     back to the line-based trim (a mind map is not required to be node-shaped).
 
-    Why not the line-based trim: mind-map nodes are conventionally ONE long line
-    each (`^[N] **Title** - prose…`), so cutting on a line boundary at 60%/40%
-    does not shed prose evenly — it sheds entire subsystem chapters, and says only
-    "N lines omitted". A 120 KB / 19-node map delivered nodes [0], [17], [18] and
+    Why not the line-based trim: a mind-map node is a span of lines — its
+    `[N] **Title**` line and one fact per line under it, or (a map written before
+    task 226) one long line — so cutting on a line boundary at 60%/40% either cuts a
+    node mid-way or sheds entire subsystem chapters, and says only "N lines omitted". A 120 KB / 19-node map delivered nodes [0], [17], [18] and
     nothing else. Whole nodes in, named ids for the rest, is strictly more useful
     at the same byte cost.
 
@@ -177,7 +177,7 @@ def _load_mind_map(project_path: Path, max_chars: int = 25000) -> str | None:
 
     Trimming is node-aware (`_trim_mind_map_by_node`): whole `^[N]` nodes are
     dropped to fit and the dropped ids are NAMED in the returned text, so the
-    reader knows what is missing and can grep for it. A map with no node markers
+    reader knows what is missing and can recall it. A map with no node markers
     falls back to the older line-based head+tail trim.
 
     Set PLAYBOOK_MINDMAP_MAX env var to override max_chars (0 or less = suppress
@@ -234,7 +234,7 @@ _BOLD_TITLE_RE = re.compile(r"\*\*(.+?)\*\*")
 
 # Bootstrap-only mind-map budget. Deliberately much smaller than
 # `_load_mind_map`'s 25000: bootstrap is ORIENTATION (the agent needs the shape
-# plus the entry nodes, then greps the 2-3 nodes its task touches), so a full
+# plus the entry nodes, then recalls the 2-3 nodes its task touches), so a full
 # dump is resident cost paid every session for context the task never reads. A
 # map under this many chars is cheap enough to dump whole — the retrieval
 # round-trips an index would force are not worth saving a few hundred tokens.
@@ -272,8 +272,8 @@ def _mind_map_toc(content: str) -> str | None:
 
     The titles are the whole point: `_omitted_nodes_notice` can only name dropped
     ids (`[47]`), which tells a reader something is missing but not WHICH node to
-    fetch. A titled line (`[47] Sandbox containment`) turns "grep blindly" into
-    "grep the one node this task touches" — the difference between an index and a
+    fetch. A titled line (`[47] Sandbox containment`) turns "fetch blindly" into
+    "recall the one node this task touches" — the difference between an index and a
     hole.
     """
     lines = content.splitlines(keepends=True)
@@ -292,10 +292,10 @@ def _bootstrap_mind_map(project_path: Path,
     Distinct from `_load_mind_map` (the judge/review path) ON PURPOSE. A judge is
     AUDITING and may need many whole nodes at once, so that path keeps the 25k
     whole-node trim. Bootstrap is ORIENTING a fresh agent, which needs the map's
-    SHAPE and its entry nodes, then greps the handful its task touches — so over
+    SHAPE and its entry nodes, then recalls the handful its task touches — so over
     budget it returns the first `routing` nodes in full (the overview/routing
-    hubs the header says to read first) plus a TITLED one-line TOC of every other
-    node and the grep that fetches them. Resident cost drops from up-to-25k of
+    hubs the header says to read first) plus a TITLED TOC, one line per other
+    node, and the command that fetches them. Resident cost drops from up-to-25k of
     prose to a few routing nodes plus one line per subsystem.
 
     Honours `PLAYBOOK_MINDMAP_MAX <= 0` as the global "no mind-map context"
@@ -334,7 +334,7 @@ def _bootstrap_mind_map(project_path: Path,
     toc = "\n".join(f"[{nid}] {_node_title(lines[idx])[1]}" for idx, nid in indexed)
     has_overflow = (project_path / "MIND_MAP_OVERFLOW.md").exists()
     fetch = ("`tasks recall <N>` (spans MIND_MAP.md + the fuller MIND_MAP_OVERFLOW.md)"
-             if has_overflow else "`tasks recall <N>` or grep '^\\[N\\]' MIND_MAP.md")
+             if has_overflow else "`tasks recall <N>` (or read MIND_MAP.md from its [N] line to the next node's)")
     n_indexed = len(indexed)
     node_word = "node" if n_indexed == 1 else "nodes"
     notice = (
@@ -596,37 +596,9 @@ def cmd_mindmap_sync(cmd_args):
     fix_mode = "--fix" in cmd_args
 
     def _extract_nodes(filepath: Path) -> dict[int, str]:
-        """Extract {node_id: full_text} from a mind map file.
-
-        Node STARTS come from the shared fence-aware `_node_starts` scan, so a
-        `[N]` line inside a ``` fence is NOT a node boundary (it stays part of
-        the enclosing node) — the three mind-map parsers agree on starts.
-
-        The LAST node would otherwise absorb everything to EOF, so a trailing
-        `## Legacy`/notes section is cut at the first markdown heading (`#…`)
-        after the node's first line — but NOT a `#` line inside a fenced code
-        block (a `# comment` in a code example), so multi-line overflow node
-        bodies with code aren't truncated.
-        """
-        content = filepath.read_text(encoding="utf-8")
-        lines = content.splitlines(keepends=True)
-        starts, _ = _node_starts(lines)   # fence-aware: a fenced [N] is not a node
-        nodes: dict[int, str] = {}
-        for k, (idx, nid) in enumerate(starts):
-            end_idx = starts[k + 1][0] if k + 1 < len(starts) else len(lines)
-            part = ''.join(lines[idx:end_idx])
-            plines = part.split('\n')
-            end = len(plines)
-            in_fence = False
-            for i in range(1, len(plines)):
-                if plines[i].lstrip().startswith('```'):
-                    in_fence = not in_fence
-                    continue
-                if not in_fence and _re.match(r'^#{1,6}\s', plines[i]):
-                    end = i
-                    break
-            nodes[nid] = '\n'.join(plines[:end]).strip()
-        return nodes
+        """Extract {node_id: full_text} from a mind map file — each node's extent
+        as `map_node_spans` reads it (a later duplicate id wins, as before)."""
+        return dict(map_node_spans(filepath.read_text(encoding="utf-8")))
 
     main_nodes = _extract_nodes(main_file)
     overflow_nodes = _extract_nodes(overflow_file)
@@ -651,7 +623,7 @@ def cmd_mindmap_sync(cmd_args):
     # Size stats
     main_size = main_file.stat().st_size
     overflow_size = overflow_file.stat().st_size
-    full_count = sum(1 for nid in main_nodes if '↗' not in main_nodes[nid])
+    full_count = sum(1 for nid in main_nodes if not _is_summary_node(main_nodes[nid]))
     summary_count = len(main_nodes) - full_count
     print(f"MIND_MAP.md: {main_size:,} chars (~{main_size // 4:,} tokens), "
           f"{len(main_nodes)} nodes ({full_count} full, {summary_count} summary/↗)")
@@ -672,7 +644,7 @@ def cmd_mindmap_sync(cmd_args):
     # used to be mis-bucketed as "overflow ahead" and skipped by --fix; it now
     # lands in `drifted` and is auto-syncable. main is the canonical source, so
     # all drift syncs main→overflow.
-    # NOTE: the `'↗' not in main_text` gate means SUMMARY (↗) nodes never enter
+    # NOTE: the `_is_summary_node` gate means SUMMARY (↗) nodes never enter
     # this comparison — so mindmap-sync structurally CANNOT catch a stale ref
     # buried in the OVERFLOW body of a ↗-summary node (the §4.3 case). That is
     # ref-integrity.py's job (whole-file ref scan) + the skill's manual grep.
@@ -680,7 +652,7 @@ def cmd_mindmap_sync(cmd_args):
     for nid in sorted(set(main_nodes) & set(overflow_nodes)):
         main_text = main_nodes[nid]
         overflow_text = overflow_nodes[nid]
-        if '↗' not in main_text and main_text != overflow_text:
+        if not _is_summary_node(main_text) and main_text != overflow_text:
             drifted.append((nid, len(main_text) - len(overflow_text)))
 
     if drifted:
@@ -829,6 +801,47 @@ def cmd_mindmap_sync(cmd_args):
 # has a fuller twin in a second file and to grep it by hand. `recall <N>` pulls
 # both; `recall <keyword>` locates the node ids to pull. This is "know exactly
 # where to look, load exactly what you need" as one command.
+
+def map_node_spans(content: str) -> "list[tuple[int, str]]":
+    """`(node_id, text)` for every fence-aware node, in file order: from its `[N]`
+    line to the next node's, stripped. Node STARTS come from the shared
+    `_node_starts` scan, so a `[N]` line inside a ``` fence is NOT a node boundary
+    (it stays part of the enclosing node). The LAST node would otherwise absorb
+    everything to EOF, so a trailing `## Legacy`/notes section is cut at the first
+    markdown heading (`#…`) after the node's first line — but NOT a `#` line inside
+    a fenced code block (a `# comment` in a code example), so multi-line overflow
+    node bodies with code aren't truncated. A node is its title line and one fact
+    per line under it (task 226): `mindmap-sync` and the retro's map size both read
+    a node's extent here."""
+    lines = content.splitlines(keepends=True)
+    starts, _ = _node_starts(lines)
+    out: "list[tuple[int, str]]" = []
+    for k, (idx, nid) in enumerate(starts):
+        end_idx = starts[k + 1][0] if k + 1 < len(starts) else len(lines)
+        plines = "".join(lines[idx:end_idx]).split("\n")
+        end = len(plines)
+        in_fence = False
+        for i in range(1, len(plines)):
+            if plines[i].lstrip().startswith("```"):
+                in_fence = not in_fence
+                continue
+            if not in_fence and re.match(r"^#{1,6}\s", plines[i]):
+                end = i
+                break
+        out.append((nid, "\n".join(plines[:end]).strip()))
+    return out
+
+
+def _is_summary_node(text: str) -> bool:
+    """True when a node is a `↗` summary (its full text lives in
+    MIND_MAP_OVERFLOW.md): the marker is on its title line. A node is its title
+    line and one fact per line under it (task 226), so a fact that mentions `↗`
+    does not make a full node a summary — its drift stays seen, and `--fix` still
+    syncs it. A node written as one line is all title line, so such a map reads
+    exactly as before (measured on every MIND_MAP.md on the build machine: 764
+    nodes, the same verdict)."""
+    return "↗" in text.split("\n", 1)[0]
+
 
 def _iter_map_nodes(content: str) -> "list[tuple[int, str, str]]":
     """`(node_id, title, full_text)` for every fence-aware node, in file order.

@@ -401,20 +401,19 @@ def build_task_windows(chatlog_path: Path, journal_path: Path | None = None) -> 
 def extract_mindmap(path: Path) -> list[dict]:
     """Extract nodes from MIND_MAP.md.
 
-    Returns list of dicts with keys: id, text, size (bytes)
+    Returns list of dicts with keys: id, text, size (bytes). A node is read as
+    `mindmap-sync` reads it (`mindmap.map_node_spans`): its title line and every
+    fact line under it, to the next node or the first heading (task 226 — a node
+    is its title line plus one fact per line); `text` is that, without its `[N] `.
     """
     if not path.exists():
         return []
 
+    from tasks.mindmap import map_node_spans
     content = path.read_text(encoding="utf-8", errors="replace")
     nodes = []
-
-    # Pattern: [N] **Title** — description
-    node_pattern = re.compile(r'^\[(\d+)\]\s+(.*)', re.MULTILINE)
-
-    for m in node_pattern.finditer(content):
-        node_id = int(m.group(1))
-        text = m.group(2).strip()
+    for node_id, body in map_node_spans(content):
+        text = _NODE_PREFIX_RE.sub("", body, count=1)
         nodes.append({
             "id": node_id,
             "text": text,
@@ -422,6 +421,9 @@ def extract_mindmap(path: Path) -> list[dict]:
         })
 
     return nodes
+
+
+_NODE_PREFIX_RE = re.compile(r"^\[\d+\]\s*")
 
 
 # --- Retro task generator ---
@@ -792,7 +794,7 @@ def analyze_mindmap(nodes: list[dict]) -> list[dict]:
         if size > 500:
             proposals.append({
                 "id": n["id"],
-                "text_preview": text[:80],
+                "text_preview": " ".join(text.split())[:80],
                 "size": size,
                 "proposal": "compress",
                 "reason": f"Large node ({size} bytes) — review for compressible content",
@@ -804,7 +806,7 @@ def analyze_mindmap(nodes: list[dict]) -> list[dict]:
             if pattern.search(text):
                 proposals.append({
                     "id": n["id"],
-                    "text_preview": text[:80],
+                    "text_preview": " ".join(text.split())[:80],
                     "size": size,
                     "proposal": "review",
                     "reason": reason,

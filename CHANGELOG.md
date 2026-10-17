@@ -300,6 +300,31 @@ the lines under its title — this is the note half). Measured before (task 218)
 - This repository's own CLAUDE.md and every record written before keep notes on the gate's line; the installed guard
   reads only those until a release and `/playbook:init`.
 
+**The guide and the mind map write one fact per line** — PHASE-B.md item 2, task 226, the other half of the owner's
+answer of 2026-10-16 ("Liste scurte de la început"). Measured before (task 218): a line diff of the map counts 29x the
+words that changed (its nodes were one line each — a median 762 / 1,862 characters a line in the two projects).
+- `tasks guide`: the gate-discipline stickers, the Status note, the Risk explanation, the Design Phase note and the Work
+  Plan notes are short `> - ` lines, one fact each (the longest is 209 characters; the quoted old gate texts under
+  "Gates — what each short title asks" stay as they were). A test holds every guide line to 240 characters.
+- The map format (`skills/playbook/mindmap.md`): a node is its `[N] **Title** - <one sentence>` line, then one `- ` fact
+  line each; one blank line between nodes; never begin a fact with `[` (a line that begins with `[5]` starts node 5); no
+  heading or code fence among the facts (readers disagree on where a node with a heading ends, and an unclosed fence
+  stops `tasks mindmap-sync --fix`). The header every map starts with, the examples, the node template, `/mindmap`,
+  `mindmap-gen`, `/mindmap-optimize` and the merge skill say it; nothing says a node is one line any more.
+- Fetching a node is `tasks recall <N>`: the bootstrap header, the bootstrap index's hint and the judges' trim notice
+  used to say `grep '^\[N\]' MIND_MAP.md`, which on a node of several lines returns its title alone.
+- `tasks mindmap-sync` takes a node for a summary when `↗` is on its title line (it used to be anywhere in the node),
+  so a fact that mentions `↗` no longer hides a full node's drift. A map of one-line nodes reads exactly as before:
+  measured on every MIND_MAP.md on the build machine (764 nodes), the same verdict; `--fix` leaves a summary node's
+  fuller overflow text alone (tested). The merge skill's `ref-integrity.py` keeps its narrower rule (`**Title** ↗` or
+  the line's end), which reads this repository's own `[N] **Title** - ↗ …` nodes as full — loud, not a write; a Phase
+  B input.
+- The retro's map size counts every line of a node, to the next node or the first heading (it counted the first line).
+- Every map reader is tested on the same map written both ways — recall, the bootstrap index, the judges' trim, the
+  node parsers, the four map audits (on a map with a defect each flags), `mindmap-sync` read-only and `--fix`, the
+  retro (`tests/test_map_one_fact_per_line.py`).
+- This repository's own MIND_MAP.md keeps its one-line nodes (the project's file).
+
 ## [1.6.3] — 2026-10-15
 
 **The review stop rule as the plugin's default** — PHASE-B.md item 1, task 209. Until now the round cap (the owner's

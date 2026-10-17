@@ -11,16 +11,32 @@ The map answers **"how does this work, and where is it?"** — never **"what hap
 
 ## Node Format
 
-**Each node must be a single line** — no line breaks within a node. This makes grep trivial: `grep "^\[5\]" MIND_MAP.md` returns the entire node.
+**One fact per line.** A node is its title line, then one fact per line under it — so a change touches one short line, and a diff shows that line alone.
 
 ```
-[N] **Title** - Text with [link-nr] embedded naturally. Dense but readable, 150-400 words per node. Every sentence adds information. All on one line, no matter how long.
+[N] **Title** - One sentence that defines the concept, with [link-nr] where it fits.
+- A fact, with [link-nr] embedded naturally.
+- Another fact: a file it owns, a number, a decision and its reason.
 ```
+
+The rules every reader (`tasks recall`, the bootstrap, the audit, `tasks mindmap-sync`, the merge checks) relies on:
+- A node starts at its title line: `[N]`, a space, then the bold `**Title**`.
+- It runs to the next title line; leave one blank line between two nodes.
+- Its facts are `- ` lines right under the title, one fact each, with no blank line among them.
+- Never begin a fact with `[`: a line that begins with `[5]` starts node 5.
+- No `#` heading or code fence among the facts: readers disagree on where a node with a heading ends, and an unclosed fence stops `tasks mindmap-sync --fix`.
+- Dense but readable: 150-400 words per node, every line adds information.
+- A summary node (full text in `MIND_MAP_OVERFLOW.md`) carries `↗` right after its bold title, or at the end of its title line; only the title line marks a summary, so a fact may mention `↗`.
 
 Every `MIND_MAP.md` starts with this header:
 
 ```markdown
-> **For AI Agents:** This mind map is your primary knowledge index. Read overview nodes [1-5] first, then follow links [N] to find what you need. Always reference node IDs. When you make changes, update outdated nodes immediately — especially overview nodes. Add new nodes only for genuinely new concepts. Keep it compact (20-50 nodes typical). The mind map wraps every task: consult it, rely on it, update it.
+> **For AI Agents:**
+> - This mind map is your primary knowledge index.
+> - Read overview nodes [1-5] first, then follow links [N] to what you need; always reference node IDs.
+> - When you change something, update the outdated nodes at once — the overview nodes first.
+> - Add a node only for a genuinely new concept; keep the map compact (20-50 nodes typical).
+> - The mind map wraps every task: consult it, rely on it, update it.
 ```
 
 ## Routing Nodes [1-5]
@@ -45,11 +61,13 @@ The first 5 nodes are **routing hubs** — they point to everything else and get
 
 ## Link Principles
 
-Links `[N]` flow naturally in sentences, not listed at the end:
+Links `[N]` flow naturally in the facts, not listed at the end:
 - Good: "The storage layer [6] handles persistence"
 - Bad: "The storage layer handles persistence [6][7][8][12]"
 
-Every node links to 2-3+ others; important nodes link to 5-10. Bidirectional: if [5] mentions [12], [12] should mention [5]. Link every 1-2 sentences, not every clause.
+- Every node links to 2-3+ others; important nodes link to 5-10.
+- Bidirectional: if [5] mentions [12], [12] should mention [5].
+- Link every fact or two, not every clause.
 
 **Density targets:**
 - Overview nodes: 5-10 links
@@ -69,52 +87,72 @@ Every node links to 2-3+ others; important nodes link to 5-10. Bidirectional: if
 
 ## Examples
 
-### Good — Single-Line Nodes, Natural Linking
+### Good — One Fact per Line, Natural Linking
 
 ```
-[1] **Project Overview** - TaskFlow is a command-line task manager built in Python that emphasizes keyboard-driven workflows. The core architecture separates task storage [6] from the rendering layer [7], allowing multiple output formats without touching business logic. Users interact primarily through vim-style keybindings [12] which were chosen over menus for speed. The data model [3] uses a flat JSON structure rather than nested categories because real-world task hierarchies rarely go deeper than two levels. Integration with external calendars [9] was added in v2.0 after user feedback showed most people needed deadline sync.
+[1] **Project Overview** - TaskFlow is a command-line task manager built in Python, driven from the keyboard.
+- Task storage [6] is separate from the rendering layer [7], so a new output format never touches business logic.
+- Users work through vim-style keybindings [12], chosen over menus for speed.
+- The data model [3] is flat JSON, not nested categories: real task hierarchies rarely go deeper than two levels.
+- Calendar sync [9] exists because most users needed deadlines in their calendar.
 
-[6] **Storage Layer** - The StorageManager class in storage.py handles all persistence operations [1][3]. It maintains an in-memory cache that syncs to disk on every write, which is acceptable for typical task volumes (under 10,000 items). The JSON file format was chosen over SQLite for portability and easy manual editing. Backup rotation keeps the last 5 versions automatically.
+[6] **Storage Layer** - `StorageManager` in `storage.py` handles all persistence [1][3].
+- An in-memory cache syncs to disk on every write — enough for typical volumes (under 10,000 items).
+- JSON, not SQLite: portable and editable by hand.
+- Backup rotation keeps the last 5 versions automatically.
+```
+
+### Bad — A Paragraph on One Line
+
+```
+[6] **Storage Layer** - The StorageManager class in storage.py handles all persistence operations [1][3]. It maintains an in-memory cache that syncs to disk on every write, which is acceptable for typical task volumes. The JSON file format was chosen over SQLite for portability.
 ```
 
 ### Bad — Links Clustered at End
 
 ```
-[1] **Project Overview** - TaskFlow is a command-line task manager... Integration was added in v2.0. [3][6][7][9][12]
+[1] **Project Overview** - TaskFlow is a command-line task manager.
+- Integration with calendars exists. [3][6][7][9][12]
 ```
 
 ### Bad — Over-Linked
 
 ```
-[1] **Project Overview** - TaskFlow [2] is a command-line [4] task manager [3] built in Python [5] that emphasizes keyboard-driven [12] workflows [7].
+[1] **Project Overview** - TaskFlow [2] is a command-line [4] task manager [3] built in Python [5].
+- It emphasizes keyboard-driven [12] workflows [7].
 ```
 
 ## Node Templates
 
 **System node:**
 ```
-[N] **System Name** - Brief definition and purpose [parent-node]. The system consists of COMPONENT1 which handles TASK1 [detail-node], COMPONENT2 for TASK2 [detail-node]. Implementation resides in path/to/files using TECHNOLOGY [tech-node]. Integrates with EXTERNAL_SYSTEM [integration-node] through API_METHOD. Key parameters include PARAM1 (range, default) and PARAM2 (type, purpose) [parameter-node].
+[N] **System Name** - Brief definition and purpose [parent-node].
+- COMPONENT1 handles TASK1 [detail-node].
+- COMPONENT2 handles TASK2 [detail-node].
+- Implementation: path/to/files, using TECHNOLOGY [tech-node].
+- Integrates with EXTERNAL_SYSTEM [integration-node] through API_METHOD.
+- PARAM1: range, default; PARAM2: type, purpose [parameter-node].
 ```
 
 **No history node.** Resist the urge to add a "Development History" node full of commit hashes and dates — that is a log, and it bloats the resident map for information git already holds. When the *evolution* of a subsystem carries a design lesson, fold that lesson (the decision and its reason, not the hash) into the owning subsystem node: "Storage moved from SQLite to flat JSON so tasks stay hand-editable" — not "commit a1b2c3d (2024-03) switched to JSON".
 
-## Retrieval — `tasks recall` (preferred) and grep
+## Retrieval — `tasks recall`
 
-`tasks recall` is the sharpest way in, because it spans both tiers and ranks by relevance:
+`tasks recall` is the way in: it prints a node whole, spans both tiers and ranks by relevance:
 
 ```bash
 tasks recall 5             # node 5 in FULL — from MIND_MAP.md AND MIND_MAP_OVERFLOW.md
 tasks recall auth policy   # ranked relevance search (BM25 + plural stemming), best node first
 ```
 
-Plain grep still works on the single-line format:
+Without the CLI, a node is the lines from its title line to the next one:
 
 ```bash
-grep "^\[5\]" MIND_MAP.md         # Returns entire node 5 (one line)
-grep "\[5\]" MIND_MAP.md          # All lines referencing node 5
+grep -n "^\[5\] " MIND_MAP.md        # where node 5 starts — read on to the next [M] line
+grep -n "\[5\]" MIND_MAP.md          # every line that references node 5
 ```
 
-**Keyword aliases (optional):** a node can declare synonyms its prose doesn't spell out, so a search finds it by *meaning*, not just wording. Put `<!-- keywords: login, credentials, sso -->` on any line of the node; `tasks recall` weights those terms heavily. Use this for a node whose common search terms differ from its title (an "Identity" node people look for as "auth"/"login").
+**Keyword aliases (optional):** a node can declare synonyms its prose doesn't spell out, so a search finds it by *meaning*, not just wording. Put `<!-- keywords: login, credentials, sso -->` at the end of any of the node's lines; `tasks recall` weights those terms heavily. Use this for a node whose common search terms differ from its title (an "Identity" node people look for as "auth"/"login").
 
 ## Quality Checklist
 
@@ -123,6 +161,6 @@ grep "\[5\]" MIND_MAP.md          # All lines referencing node 5
 - Design *decisions* and their reasons captured — but no commit hashes, dates, or a history node (git holds the *when*)
 - Every node has 2+ links, important nodes 5+
 - Links embedded naturally in text, bidirectional where appropriate
-- Each node has a clear title, first sentence defines the concept
+- Each node has a clear title, and its title line defines the concept
 - Actual file/function names used, not generic descriptions
-- Each node is a single line (grep-friendly)
+- One fact per line: the title line, then `- ` fact lines, no blank line inside a node

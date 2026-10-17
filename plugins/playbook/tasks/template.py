@@ -33,13 +33,21 @@ def pointer(task_type: "str | None" = None) -> str:
 def sticker() -> str:
     """The full types' gate discipline — in the guide only (task 213)."""
     return """\
-> **Gate discipline:** One gate \u2192 do work \u2192 check box \u2192 next gate.
-> Never backfill. The document IS the execution trace. Closing several ALREADY-DONE gates in one edit is allowed ONLY when each gate carries its own outcome note (hook-enforced, max 5; a bare batch tick is blocked; where no hook runs, keep to one gate at a time).
-> **Never born checked:** write each gate BEFORE you do its step, then check it — a gate may never be born checked. To record work you already finished, add the gate unchecked, then check it in a SEPARATE edit with its outcome note.
-> **Closing a gate:** check the box and, in the same edit, write its outcome on the lines under it — indented two spaces deeper than the gate, one fact per line (`- [x] <the gate>` then `  - 283 tests green` on the next line). Never replace the original text.
-> **Sanctioned compaction (the one exception):** when this file grows past the review context budget, old *Plan Review / Implementation Review triage narrative* may move VERBATIM to `task-archive.md` (same dir). Never gates, never Intent/Design/Parked/receipts \u2014 moving history is not deleting it. Do it mechanically: wrap each cold block in `<!-- archive:start -->` \u2026 `<!-- archive:end -->` then run `.claude/bin/tasks compact <N>` (it refuses to move a gate, a pin, or a protected heading, so a mismark fails loud).
-> Design Phase = orientation (one gate, brief answer). Work Plan = real work (one gate, full effort).
-> If the hook's reminder (one line every 10 calls on the same gate) names the same gate a third time, you're drifting \u2014 STOP and update."""
+> **Gate discipline:**
+> - One gate → do the work → check the box → the next gate.
+> - Never backfill: the document IS the execution trace.
+> - Never born checked: write each gate BEFORE you do its step, then check it.
+> - Work you already finished: add its gate unchecked, then check it in a SEPARATE edit, with its outcome.
+> - Closing a gate: check the box and, in the same edit, write its outcome on the lines under it — indented two spaces deeper than the gate, one fact per line (`- [x] <the gate>`, then `  - 283 tests green`).
+> - Never replace a gate's original text.
+> - Closing several ALREADY-DONE gates in one edit: only when each gate carries its own outcome note (hook-enforced, at most 5; a bare batch tick is blocked; where no hook runs, one gate at a time).
+> - Design Phase = orientation (one gate, a brief answer); Work Plan = real work (one gate, full effort).
+> - If the hook's reminder (one line every 10 calls on the same gate) names the same gate a third time, you're drifting — STOP and update.
+> **Sanctioned compaction (the one exception):**
+> - When this file grows past the review context budget, old Plan Review / Implementation Review triage narrative may move VERBATIM to `task-archive.md` (same dir).
+> - Never gates, never Intent/Design/Parked/receipts — moving history is not deleting it.
+> - Do it mechanically: wrap each cold block in `<!-- archive:start -->` … `<!-- archive:end -->`, then run `.claude/bin/tasks compact <N>`.
+> - It refuses to move a gate, a pin or a protected heading, so a mismark fails loud."""
 
 
 def status() -> str:
@@ -48,8 +56,9 @@ def status() -> str:
 
 def status_note() -> str:
     """What `## Status` used to explain in every task.md — in the guide only (task 213)."""
-    return ("> **Before filling this in:** run `.claude/bin/tasks work <N>` to activate this task. "
-            "Hooks won't enforce until activated.")
+    return ("> **Before filling this in:**\n"
+            "> - Run `.claude/bin/tasks work <N>` to activate this task.\n"
+            "> - Hooks won't enforce until it is activated.")
 
 
 def risk() -> str:
@@ -69,10 +78,16 @@ def risk_explanation() -> str:
     """The `## Risk` explanation every task.md used to carry — in the guide only (task 213)."""
     return """\
 > **Set this at the Structure gate** to one of: `reversible` / `irreversible` / `assertive`.
-> - `reversible` — the question is whether the WORLD reverts, not the diff: touches only code/config that `git revert` fully undoes. A change that deletes/migrates persisted data, alters an on-disk format, rotates a secret, rewrites history, or publishes/asserts a claim about the world is NOT reversible even when its diff reverts cleanly. Normal bar.
-> - `irreversible` — deletes/migrates data, rotates a secret, rewrites history, or publishes. Needs a named rollback plan + explicit confirmation, and cannot light-close.
-> - `assertive` — changes a **claim about the world** (docs, a calibration, a measurement, a "verified accurate"). Reviewed for the claim AND its instrument regardless of diff size — a docs-only diff can be the most review-worthy thing a task produces. Cannot light-close.
-> - Leaving it `unclassified` is **not** the cheap way out: an unset gate cannot be evaluated, so the close is held to the same bar as `assertive`/`irreversible` (review evidence, or `--force --reason`). One word here is the whole cost."""
+> - `reversible`: the question is whether the WORLD reverts, not the diff.
+>   - It touches only code/config that `git revert` fully undoes; the normal bar.
+>   - NOT reversible even when its diff reverts cleanly: deleting or migrating persisted data, changing an on-disk format, rotating a secret, rewriting history, publishing or asserting a claim about the world.
+> - `irreversible`: deletes/migrates data, rotates a secret, rewrites history, or publishes.
+>   - It needs a named rollback plan and explicit confirmation, and cannot light-close.
+> - `assertive`: changes a **claim about the world** (docs, a calibration, a measurement, a "verified accurate").
+>   - It is reviewed for the claim AND its instrument whatever the diff's size — a docs-only diff can be the most review-worthy thing a task produces.
+>   - It cannot light-close.
+> - Leaving it `unclassified` is **not** the cheap way out: an unset gate cannot be evaluated.
+>   - The close is then held to the same bar as `assertive`/`irreversible` (review evidence, or `--force --reason`); one word here is the whole cost."""
 
 
 def intent_why_refs(playbook: str) -> str:
@@ -98,9 +113,10 @@ def design_phase_intro() -> str:
 def design_phase_note() -> str:
     """The Design Phase's instructions — in the guide only (task 213)."""
     return """\
-> **Answer each gate on the lines under it** (indented two spaces deeper, one fact per line). A bare checkmark means you skipped it.
-> Complete these gates before writing the work plan.
-> (The `/playbook` skill has workflow patterns if you need a reference.)"""
+> - **Answer each gate on the lines under it** (indented two spaces deeper, one fact per line).
+> - A bare checkmark means you skipped it.
+> - Complete these gates before writing the work plan.
+> - The `/playbook` skill has workflow patterns if you need a reference."""
 
 
 def chat_log_research() -> str:
@@ -729,11 +745,12 @@ def standing_orders() -> str:
 # task.md keeps `pointer()` at the top and `risk()`'s one pointer line under its value.
 WORK_PLAN_NOTES = {
     "Build": """\
-> For each work section: what could go wrong? How will you know it worked? (specific check, not "looks good")
-> Standard feature: 6-8 work gates + tests. Large tasks work fine — if >15 gates, add a mid-point checkpoint to reassess direction.""",
-    "Fix": "> Fix/Verify pairs. What could this break?",
-    "Investigate": "> Rounds: hypothesis → test → result → checkpoint. Stop when converging.",
-    "Evaluate": "> Apply lenses consistently. Assess first, decide action after.",
+> - For each work section: what could go wrong, and how will you know it worked (a specific check, not "looks good")?
+> - A standard feature: 6-8 work gates + tests.
+> - Large tasks work fine — past 15 gates, add a mid-point checkpoint to reassess direction.""",
+    "Fix": "> - Fix / Verify pairs.\n> - What could this break?",
+    "Investigate": "> - Rounds: hypothesis → test → result → checkpoint.\n> - Stop when converging.",
+    "Evaluate": "> - Apply the lenses consistently.\n> - Assess first, decide the action after.",
 }
 
 
@@ -899,7 +916,7 @@ def mind_map_header() -> str:
     return (
         "Project knowledge graph. Nodes cross-reference with [N] IDs.\n"
         "Below is either the full map or an index (routing nodes + titles) —\n"
-        "drill into any node: grep '^\\[N\\]' MIND_MAP.md\n"
+        "drill into any node: `tasks recall <N>` (a node is its [N] line and the fact lines under it)\n"
         "Format spec: /mindmap skill"
     )
 
@@ -1176,17 +1193,26 @@ Examples:
 # Composition
 def sticker_quick() -> str:
     return """\
-> **Gate discipline:** One gate \u2192 do work \u2192 check box \u2192 next gate.
-> Never backfill. The document IS the execution trace. A gate's outcome goes on the lines under it, indented two spaces deeper, one fact per line. Batch-closing ALREADY-DONE gates needs an outcome note per gate (hook-enforced; where no hook runs, one gate at a time).
-> **Never born checked:** write the gate BEFORE you do its step, then check it \u2014 a gate may never be born checked. To record work you already finished, add it unchecked, then check it in a SEPARATE edit with its outcome.
-> **Selection rule:** quick is for declared-reversible trivia only \u2014 anything touching docs, claims, data, or publishing belongs in `light` or heavier (risk decides review; smallness never does)."""
+> **Gate discipline:**
+> - One gate → do the work → check the box → the next gate.
+> - Never backfill: the document IS the execution trace.
+> - A gate's outcome goes on the lines under it, indented two spaces deeper, one fact per line.
+> - Batch-closing ALREADY-DONE gates needs an outcome note per gate (hook-enforced; where no hook runs, one gate at a time).
+> - Never born checked: write the gate BEFORE you do its step, then check it.
+> - Work you already finished: add its gate unchecked, then check it in a SEPARATE edit, with its outcome.
+> **Selection rule:** quick is for declared-reversible trivia only — anything touching docs, claims, data, or publishing belongs in `light` or heavier (risk decides review; smallness never does)."""
 
 
 def sticker_light() -> str:
     return """\
-> **Light shape** \u2014 small, sub-day work; ceremony compressed, review NEVER waived: risk decides review, smallness never does. If this grows beyond small, convert: `tasks new <type> <name>`.
-> Gate discipline unchanged: one gate \u2192 do work \u2192 check box, its outcome on the lines under it (indented two spaces deeper, one fact per line). Never backfill. Batch-closing ALREADY-DONE gates needs an outcome note per gate (hook-enforced; where no hook runs, one at a time).
-> **Never born checked:** write the gate BEFORE you do its step, then check it \u2014 a gate may never be born checked. To record work you already finished, add it unchecked, then check it in a SEPARATE edit with its outcome.
+> **Light shape** — small, sub-day work:
+> - Ceremony compressed, review NEVER waived: risk decides review, smallness never does.
+> - If this grows beyond small, convert: `tasks new <type> <name>`.
+> - Gate discipline unchanged: one gate → do the work → check the box.
+> - A gate's outcome goes on the lines under it, indented two spaces deeper, one fact per line.
+> - Never backfill; batch-closing ALREADY-DONE gates needs an outcome note per gate (hook-enforced; where no hook runs, one at a time).
+> - Never born checked: write the gate BEFORE you do its step, then check it.
+> - Work you already finished: add its gate unchecked, then check it in a SEPARATE edit, with its outcome.
 > **Selection rule:** `quick` is for declared-reversible trivia only; docs, claims, data, or publishing belong here or heavier."""
 
 
