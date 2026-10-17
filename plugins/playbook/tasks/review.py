@@ -501,32 +501,30 @@ def _open_review_view(project_path, task_file, *, run_id: str, task_num: str = "
     if why:
         _live_review_line(why)
         return None, "", None, cfg
+    # From here a copy was chosen: every failure is retried and then refused, never a live review (plan panel P8,
+    # impl round 1 G6) — the agent may already be waiting for the ready line to write.
     last = None
     for _attempt in range(_rv.COPY_ATTEMPTS):
         exclude = None
-        if expected is not None:
-            got = expected()
-            fp, trees, heads, snap = got[:4]
-            exclude = got[4] if len(got) > 4 else None
-        else:
-            fp = tree_state_fingerprint(project_path)
-            snap = build_panel_snapshot(project_path, fp) if fp else None
-            scopes = (snap or {}).get("scopes") or {}
-            trees = {k: (v or {}).get("base") for k, v in scopes.items()}
-            heads = {k: (v or {}).get("commit") for k, v in scopes.items()}
-        if not fp or snap is None or not trees or not all(trees.values()):
-            _live_review_line("the tree could not be fingerprinted for a copy")
-            return None, "", None, cfg
         try:
+            if expected is not None:
+                got = expected()
+                fp, trees, heads, snap = got[:4]
+                exclude = got[4] if len(got) > 4 else None
+            else:
+                fp = tree_state_fingerprint(project_path)
+                snap = build_panel_snapshot(project_path, fp) if fp else None
+                scopes = (snap or {}).get("scopes") or {}
+                trees = {k: (v or {}).get("base") for k, v in scopes.items()}
+                heads = {k: (v or {}).get("commit") for k, v in scopes.items()}
+            if not fp or snap is None or not trees or not all(trees.values()):
+                raise _rv.Moved("the tree could not be fingerprinted and snapshotted")
             view = _rv.make(project_path, cfg, run_id=run_id, fingerprint=fp, trees=trees, heads=heads,
                             task_file=task_file, exclude=exclude if exclude is not None else snap.get("exclude"),
                             attempts=1)
-        except _rv.Moved as e:
+        except (_rv.Moved, _rv.Unavailable) as e:
             last = e
             continue
-        except _rv.Unavailable as e:
-            _live_review_line(str(e))
-            return None, "", None, cfg
         _REVIEW_VIEWS.append(view)
         own = f" except task {task_num}'s task.md and judge.md" if task_num else ""
         bind = (" Its PASS binds the tree it reads: a code change made meanwhile is outside it."
@@ -2046,6 +2044,10 @@ def _cmd_panel_review(cmd_args):
                                    _judge_error(output, _st_now)))
 
     _tamper_full = _detect_tamper_full(_ctx_root, _ctx_task, _tamper_before)
+    if _view is not None and not _view.matches(_fp_before, _view_cfg):
+        # impl round 1 (grok): the copy the judges read is no longer the sealed tree — no review of that stamp
+        _tamper_full.setdefault("mutations", []).append(
+            "the review's copy changed while the judges read it (its fingerprint is no longer the sealed one)")
     # On a MUTATION the panel, like the single-judge path, does NOTHING but emit
     # the banner and exit — before the tree fingerprint and judge.md assembly/
     # write below, any of which could hang (an unbounded/FIFO read) or write
@@ -3014,12 +3016,26 @@ def _cmd_single_review(cmd, cmd_args):
     # the post-panel judge's copy must BE its delta's tree (the delta's `cur` trees, plan panel P3); the payload is
     # read from the copy (P15).
     def _pd6_expected():
-        from tasks.core import build_panel_snapshot as _bps231, tree_state_fingerprint as _tsf231
+        from tasks import review_view as _rv231
+        from tasks.core import (build_panel_snapshot as _bps231, tree_state_fingerprint as _tsf231,
+                                _tail_cert_scopes as _sc231, load_config as _lc231, _scope_identity as _id231)
+        _trees = dict(_pd6_parts["trees"])
+        _panel = (_pd6_round.get("snapshot") or {}).get("scopes") or {}
+        _now = _sc231(Path(project_path), _lc231(Path(project_path)))
+        # impl round 1 (G4): the scope set and each scope's identity are still the delta's — a code root added
+        # between the delta and the copy would be recorded as reviewed though no judge read it
+        if set(_now) != set(_trees) or any(isinstance(_panel.get(_n), dict) and _panel[_n].get("identity")
+                                           != _id231(Path(project_path), _now[_n]) for _n in _now if _n in _panel):
+            raise _rv231.Moved("the scope set or a scope's directory changed since the delta was built")
         _f = _tsf231(project_path)
         _s = _bps231(project_path, _f) if _f else None
+        _bases = {k: (v or {}).get("base") for k, v in ((_s or {}).get("scopes") or {}).items()}
+        if _s is None or _bases != _trees:
+            # the recorded tree must BE the delta's tree (opus, grok: A→B→A, or an exclude changed since the panel)
+            raise _rv231.Moved("the tree moved since the delta was built")
         _h = {k: (v or {}).get("commit") for k, v in ((_s or {}).get("scopes") or {}).items()}
         _ex = [x for x in ((_pd6_round.get("snapshot") or {}).get("exclude") or []) if isinstance(x, str)]
-        return _f, dict(_pd6_parts["trees"]), _h, _s, _ex
+        return _f, _trees, _h, _s, _ex
     _view, _view_fp, _view_snap, _view_cfg = _open_review_view(
         project_path, task_file, run_id=f"single-{task_num}-{os.getpid()}-{int(time.time())}", task_num=task_num,
         expected=(_pd6_expected if (_pd6_round is not None and _pd6_parts is not None and _pd6_parts.get("trees"))
@@ -3138,7 +3154,11 @@ def _cmd_single_review(cmd, cmd_args):
         # The single-judge alias for the module-level `_detect_tamper_full`
         # (which the panel path also uses — parity, opus round-7); never raises.
         # Task 231: with a copy, the guard watches the copy — the live tree may change on purpose.
-        return _detect_tamper_full(_ctx_root, _ctx_task, _tamper_before)
+        _full = _detect_tamper_full(_ctx_root, _ctx_task, _tamper_before)
+        if _view is not None and not _view.matches(_view_fp, _view_cfg):
+            _full.setdefault("mutations", []).append(
+                "the review's copy changed while the judge read it (its fingerprint is no longer the sealed one)")
+        return _full
 
     def _tamper_mark(full):
         return _tamper_mark_text(full)

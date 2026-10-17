@@ -88,35 +88,80 @@ def _listed(scope: Path) -> "list[str]":
     return [os.fsdecode(x) for x in out.split(b"\0") if x]
 
 
+def _norm(name: str) -> str:
+    """A scope's name as a clean project-relative path ('' for the project): `./sub` and `sub/` are `sub` (impl round
+    1, G1 — codex measured a live code root bound over its copy when the config said `./sub`)."""
+    n = os.path.normpath(name) if name else ""
+    return "" if n in ("", ".") else n.replace(os.sep, "/")
+
+
 def _nested(name: str, roots: "list[str]") -> bool:
     return any(name == r or name.startswith(r + "/") for r in roots)
 
 
 def _inner_roots(scope_name: str, names: "list[str]") -> "list[str]":
-    """The code roots below `scope_name`, relative to it."""
-    pre = scope_name + "/" if scope_name else ""
-    return [n[len(pre):] for n in names if n and n != scope_name and n.startswith(pre)]
+    """The code roots below `scope_name`, relative to it (normalized)."""
+    base = _norm(scope_name)
+    pre = base + "/" if base else ""
+    out = []
+    for n in names:
+        nn = _norm(n)
+        if nn and nn != base and nn.startswith(pre):
+            out.append(nn[len(pre):])
+    return out
+
+
+def _expand_around_roots(project: Path, full: str, roots: "list[str]", out: "set[str]") -> None:
+    """`full` is ignored and holds a code root: bind its other children live, descend toward the root (impl round 1,
+    G7 — `deps/` ignored with `deps/app` a code root lost `deps/tool`)."""
+    try:
+        children = sorted(os.scandir(project / full), key=lambda e: e.name)
+    except OSError:
+        return
+    for c in children:
+        rel = f"{full}/{c.name}"
+        if rel in roots:
+            continue
+        if any(r.startswith(rel + "/") for r in roots) and c.is_dir(follow_symlinks=False):
+            _expand_around_roots(project, rel, roots, out)
+        else:
+            out.add(rel)
 
 
 def ignored_entries(scopes: "dict[str, Path]") -> "list[str]":
     """Project-relative entries git ignores in each scope (a directory collapsed to one entry), minus `.agent` (the
-    record masks' business), the code roots (copied) and anything holding one."""
+    record masks' business) and the code roots (copied); an ignored folder that holds a code root is opened and its
+    other children listed."""
     names = sorted(scopes)
+    roots = sorted(_norm(n) for n in names if _norm(n))
+    project = scopes[""] if "" in scopes else Path(".")
     out: "set[str]" = set()
     for name in names:
+        base = _norm(name)
         raw = _git(["ls-files", "-o", "-i", "--exclude-standard", "--directory", "-z"], scopes[name],
                    binary=True).stdout
         for x in raw.split(b"\0"):
             if not x:
                 continue
             rel = os.fsdecode(x).rstrip("/")
-            full = f"{name}/{rel}" if name else rel
-            if not name and (rel == ".agent" or rel.startswith(".agent/")):
+            full = _norm(f"{base}/{rel}" if base else rel)
+            if not base and (full == ".agent" or full.startswith(".agent/")):
                 continue
-            if any(r and (full == r or r.startswith(full + "/")) for r in names):
+            if full in roots:
+                continue
+            if any(r.startswith(full + "/") for r in roots):
+                _expand_around_roots(project, full, roots, out)
                 continue
             out.add(full)
     return sorted(out)
+
+
+def agent_ignored(project: Path) -> "list[str]":
+    """Project-relative `.agent` entries git ignores (a directory collapsed to one) — the only `.agent` entries a judge
+    may see from the live tree (impl round 1, G5: a task folder made after the seal was shown live)."""
+    raw = _git(["ls-files", "-o", "-i", "--exclude-standard", "--directory", "-z", "--", ".agent"], project,
+               binary=True).stdout
+    return sorted(_norm(os.fsdecode(x).rstrip("/")) for x in raw.split(b"\0") if x)
 
 
 def availability(project: "Path | str", cfg: dict, task_file: "Path | str | None" = None) -> str:
@@ -189,6 +234,13 @@ def availability(project: "Path | str", cfg: dict, task_file: "Path | str | None
             return f"{size} bytes of listed files is over the copy's cap of {MAX_BYTES}"
         if len(ignored_entries(scopes)) > MAX_LIVE_BINDS:
             return f"more than {MAX_LIVE_BINDS} ignored entries to show live"
+        if task_file is not None:
+            try:
+                rel_tf = Path(task_file).resolve().relative_to(real)
+            except ValueError:
+                return "the task file is outside the project"
+            if _git(["check-ignore", "-q", "--no-index", str(rel_tf)], project, check=False).returncode == 0:
+                return f"git ignores the task's records ({rel_tf}) — a copy of what git lists would not hold them"
         vd = views_dir(project, task_file)
         try:
             rel_vd = (vd / "probe").resolve().relative_to(real)
@@ -229,10 +281,20 @@ def _clone_scope(src: Path, dst: Path) -> None:
         shutil.copy2(shared, gd / shared.name)
 
 
-def _copy_listed_files(src: Path, dst: Path, skip: "list[str]") -> "tuple[int, int]":
+def _is_record(name: str) -> bool:
+    """A path under `.agent` that is (or is inside) a conversation record — never copied: the judges must not read
+    one, and the copies folder could expose it (impl round 1, G2 — codex read an untracked chat log through it)."""
+    parts = name.split("/")
+    if parts[0] != ".agent":
+        return False
+    from provider.sandbox import _is_record_dir, _is_record_file
+    return any(_is_record_dir(x) for x in parts[1:-1]) or _is_record_file(parts[-1]) or _is_record_dir(parts[-1])
+
+
+def _copy_listed_files(src: Path, dst: Path, skip: "list[str]", outer: bool = False) -> "tuple[int, int]":
     files = size = 0
     for name in _listed(src):
-        if _nested(name, skip) or name.endswith("/"):
+        if _nested(name, skip) or name.endswith("/") or (outer and _is_record(name)):
             continue
         s = src / name
         try:
@@ -279,13 +341,15 @@ class View:
     """A sealed copy and the lock that keeps it alive."""
 
     def __init__(self, root: Path, project: Path, lock_fd: int, lock_path: Path, live_binds: "list[str]",
-                 vd: Path):
+                 vd: Path, scope_names: "list[str] | None" = None, agent_live: "list[str] | None" = None):
         self.root = root
         self.project = project
         self.lock_fd = lock_fd
         self.lock_path = lock_path
         self.live_binds = live_binds
         self._vd = vd
+        self.scope_names = list(scope_names or [""])
+        self.agent_live = list(agent_live or [])
 
     def scope_path(self, name: str) -> Path:
         return self.root / name if name else self.root
@@ -299,6 +363,8 @@ class View:
         if not self.matches(fingerprint, cfg):
             return False
         from tasks.post_d6 import worktree_tree
+        if trees and {_norm(n) for n in trees} != {_norm(n) for n in self.scope_names}:
+            return False        # impl round 1 (G4): every copied scope is a recorded one, and only those
         for name, want in (trees or {}).items():
             if not want or worktree_tree(self.scope_path(name), exclude) != want:
                 return False
@@ -311,7 +377,9 @@ class View:
     def sandbox_view(self):
         from provider import sandbox as _sb
         return _sb.ProjectView(root=str(self.root),
-                               live=tuple(str(self.project / rel) for rel in self.live_binds))
+                               live=tuple(str(self.project / rel) for rel in self.live_binds),
+                               agent_live=tuple(str(self.project.resolve() / rel) for rel in self.agent_live),
+                               hide=(str(self._vd.resolve()),))
 
     def remove(self) -> None:
         try:
@@ -340,17 +408,38 @@ def _remove_tree(base: "Path | str", target: "Path | str", task_file: "Path | st
         raise ValueError(f"{t} is not a copy folder")
     if t.resolve().parent != vd.resolve() or vd.is_symlink():
         raise ValueError(f"{t} is not inside {vd}")
-    shutil.rmtree(t)
+
+    def _writable_then_retry(func, path, _exc):
+        # a read-only folder in the copy (a copied 0555 `info/`, a listed file's mode) — ours to delete
+        parent = os.path.dirname(path)
+        try:
+            os.chmod(parent, 0o700)
+            if os.path.isdir(path) and not os.path.islink(path):
+                os.chmod(path, 0o700)
+            func(path)
+        except OSError:
+            pass
+
+    shutil.rmtree(t, onerror=_writable_then_retry)
 
 
 def _lock(path: Path) -> int:
-    fd = os.open(str(path), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
+    """An exclusive `flock` on the file at `path` — re-taken when another process's sweep replaced the file between
+    the open and the lock (impl round 1, opus: the lock held must be the file a later sweep finds)."""
+    for _ in range(5):
+        fd = os.open(str(path), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            raise
+        try:
+            if os.fstat(fd).st_ino == os.stat(str(path), follow_symlinks=False).st_ino:
+                return fd
+        except OSError:
+            pass
         os.close(fd)
-        raise
-    return fd
+    raise OSError(errno.EAGAIN, f"{path} kept being replaced")
 
 
 def sweep(project: "Path | str", task_file: "Path | str | None" = None) -> int:
@@ -429,22 +518,26 @@ def make(project: "Path | str", cfg: dict, *, run_id: str, fingerprint: str, tre
             for name in names:
                 _clone_scope(scopes[name], root / name if name else root)
             for name in names:
-                _copy_listed_files(scopes[name], root / name if name else root, _inner_roots(name, names))
+                _copy_listed_files(scopes[name], root / name if name else root, _inner_roots(name, names),
+                                   outer=not name)
             for name in names:
                 _git(["update-index", "-q", "--refresh"], root / name if name else root, check=False)
-            binds = _make_mountpoints(project, root, ignored_entries(scopes))
-            view = View(root, project, fd, lock_path, binds, vd)
+            live = ignored_entries(scopes)
+            roots = [_norm(n) for n in names if _norm(n)]
+            if any(x in roots or any(r.startswith(x + "/") for r in roots) for x in live):
+                raise Unavailable("an ignored entry overlaps a copied code root")   # never bind live over a copy
+            binds = _make_mountpoints(project, root, live)
+            view = View(root, project, fd, lock_path, binds, vd, scope_names=names,
+                        agent_live=agent_ignored(project))
             if view.sealed(fingerprint, cfg, trees, heads, exclude):
                 return view
-        except Unavailable:
-            _discard(view, root, fd, lock_path, vd)
-            raise
-        except (OSError, subprocess.SubprocessError) as e:
-            _discard(view, root, fd, lock_path, vd)
-            raise Unavailable(f"the copy could not be made ({e})") from None
+            cause = "the copy is not the recorded tree"
+        except (OSError, subprocess.SubprocessError, Unavailable) as e:
+            # impl round 1 (G6): once a copy is tried, a failure is retried and then refused — never a live review
+            cause = str(e) or type(e).__name__
         _discard(view, root, fd, lock_path, vd)
-    raise Moved(f"the tree changed while its copy was made, {attempts or COPY_ATTEMPTS} times — let nothing write "
-                "it until the review prints that its copy is ready, then run the review again")
+    raise Moved(f"the tree changed while its copy was made, {attempts or COPY_ATTEMPTS} times (last: {cause}) — let "
+                "nothing write it until the review prints that its copy is ready, then run the review again")
 
 
 def _discard(view: "View | None", root: Path, fd: int, lock_path: Path, vd: Path) -> None:

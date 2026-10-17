@@ -367,6 +367,10 @@ class ProjectView:
     from the live tree as the judges always saw it) is bound read-only at its own path after it."""
     root: str
     live: "tuple[str, ...]" = ()
+    # task 231 impl round 1: the `.agent` entries git ignores (the only ones a judge sees from the live tree — G5) and
+    # the places hidden from the judge (the copies folder, reachable through the live journal — G2)
+    agent_live: "tuple[str, ...]" = ()
+    hide: "tuple[str, ...]" = ()
 
 
 def view_mount_available() -> "tuple[bool, str]":
@@ -484,7 +488,8 @@ def _record_link_targets(agent: Path, linked: "dict[str, Path]") -> "tuple[list[
 
 
 def _bwrap_record_masks(project_dir: Path | str, hidden: "list[str] | None" = None,
-                        source_root: "Path | str | None" = None) -> list[str]:
+                        source_root: "Path | str | None" = None,
+                        live_allowed: "Iterable[str] | None" = None) -> list[str]:
     """bwrap args that hide the conversation records from a read-only judge (task
     125; task 138 G3-2..G3-4). `.agent`, each directory in it, and the real
     directory behind each symlinked lane become an empty tmpfs LAYER onto which
@@ -509,7 +514,9 @@ def _bwrap_record_masks(project_dir: Path | str, hidden: "list[str] | None" = No
     — plan panel P2); every other entry is bound back FROM THE COPY when the copy has it, and from the live tree
     only when it does not (an entry git ignores: the journal, models.json, current_user). An entry only the copy has
     is bound from the copy too. Bound onto itself, the live entry would lay the live `.agent` back over the copy
-    (plan panel P1)."""
+    (plan panel P1). With a copy, an entry neither the copy has nor git ignores (`live_allowed`: the ignored
+    `.agent` entries, absolute) is not shown at all — made after the seal, it is no part of what was reviewed (impl
+    round 1, G5)."""
     def hide(path) -> None:
         if hidden is not None and str(path) not in hidden:
             hidden.append(str(path))
@@ -532,6 +539,11 @@ def _bwrap_record_masks(project_dir: Path | str, hidden: "list[str] | None" = No
         proj_real = Path(project_dir).resolve()
     except OSError:
         proj_real = Path(project_dir)
+
+    allowed = [Path(a) for a in (live_allowed or ())]
+
+    def live_ok(path: str) -> bool:
+        return any(_covers(a, Path(path)) for a in allowed)
 
     def from_copy(path: str) -> "str | None":
         """The copy's counterpart of a live path inside the project, if the copy has it."""
@@ -574,12 +586,23 @@ def _bwrap_record_masks(project_dir: Path | str, hidden: "list[str] | None" = No
                     hide(path)
                 elif link and lanes and e.name in linked:
                     args.extend(["--symlink", str(linked[e.name]), path])   # the masked dir
+                elif source_root is not None and from_copy(path) is not None:
+                    src = from_copy(path)
+                    # the copy's own kind decides (agy, impl round 1: a live link over a copied file was dropped)
+                    if os.path.islink(src):
+                        args.extend(["--symlink", os.readlink(src), path])
+                    elif os.path.isdir(src) and lanes:
+                        subs.append(real / e.name)
+                    else:
+                        args.extend(["--ro-bind", src, path])
+                elif source_root is not None and not live_ok(path):
+                    continue        # neither copied nor ignored: made after the seal — not shown (G5)
                 elif link:
-                    args.extend(["--symlink", os.readlink(from_copy(path) or e.path), path])
+                    args.extend(["--symlink", os.readlink(e.path), path])
                 elif is_dir and lanes:
                     subs.append(real / e.name)
                 else:
-                    args.extend(["--ro-bind", from_copy(path) or path, path])
+                    args.extend(["--ro-bind", path, path])
             except OSError:
                 continue
         return subs
@@ -698,6 +721,10 @@ def build_bwrap_argv(
         git_source_links = [g for g in (git_source_links or []) if not _under(g)]
 
     argv = ["bwrap", "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev"]
+    if project_view is not None:
+        # task 231 impl round 1 (G3, opus): the guard watches the copy, so the judge must not reach the live tree
+        # through a host process (`/proc/<pid>/root`) — its own PID namespace shows it none
+        argv.append("--unshare-pid")
     if no_network:
         argv.append("--unshare-net")
     # Every bind below, in order, with whether it leaves its path writable: what a
@@ -776,8 +803,16 @@ def build_bwrap_argv(
     # mask_records=False (the monitor, task 138 G3-1).
     hidden: list[str] = []
     if (not project_writable) if mask_records is None else mask_records:
-        argv += _bwrap_record_masks(project, hidden, source_root=view_root)
+        argv += _bwrap_record_masks(project, hidden, source_root=view_root,
+                                    live_allowed=(project_view.agent_live if project_view is not None else None))
         layers += [(h, False) for h in hidden]
+    if project_view is not None:
+        # the copies folder is reachable through the live journal: hidden (G2 — every copy, this one and others')
+        for place in project_view.hide:
+            if os.path.isdir(place) and not os.path.islink(place):
+                argv += ["--tmpfs", place]
+                hidden.append(place)
+                layers.append((place, False))
 
     # What the masks hide must stay hidden, and a bind laid after them replaces
     # them wherever it lands. One that COVERS a hidden place binds the real records

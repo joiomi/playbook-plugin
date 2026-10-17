@@ -452,6 +452,172 @@ class RealBubblewrap(unittest.TestCase):
         self.assertFalse((d / "src" / "new.py").exists())
 
 
+class ImplRoundOne(unittest.TestCase):
+    """Task 231's impl panel round 1: the holes its judges found (G1-G7 and the minors), red first."""
+
+    def test_g1_a_dotted_code_root_is_copied_never_bound_live(self):
+        d = _project(self)
+        (d / ".agent" / "config.json").write_text(json.dumps({"code_roots": ["./sub"]}), encoding="utf-8")
+        view, _fp = _make(self, d)
+        self.assertFalse(any(x in ("sub", "./sub") or x.startswith(("sub/", "./sub/")) and "__pycache__" not in x
+                             for x in view.live_binds), view.live_binds)
+
+    def test_g2_records_are_not_copied_and_the_copies_folder_is_hidden(self):
+        d = _project(self)
+        text = (d / ".gitignore").read_text(encoding="utf-8").replace(".agent/chat_log.md\n", "")
+        (d / ".gitignore").write_text(text, encoding="utf-8")
+        view, _fp = _make(self, d)
+        self.assertFalse((view.root / ".agent" / "chat_log.md").exists(), "a record was copied")
+        self.assertIn(str(_rv().views_dir(d).resolve()), view.sandbox_view().hide)
+
+    def test_g5_a_live_only_agent_entry_is_shown_only_when_ignored(self):
+        d = _project(self)
+        view, _fp = _make(self, d)
+        (d / ".agent" / "tasks" / "999-new").mkdir()
+        (d / ".agent" / "tasks" / "999-new" / "task.md").write_text("NEW TASK\n", encoding="utf-8")
+        argv = S.build_bwrap_argv(d, None, ["true"], None, project_writable=False,
+                                  project_view=view.sandbox_view(), bwrap_exe="/usr/bin/bwrap")
+        p = str(d.resolve())
+        self.assertNotIn(p + "/.agent/tasks/999-new", argv, "a live, unignored .agent entry was bound")
+        self.assertIn(p + "/.agent/journal/hooks.jsonl", argv, "an ignored live entry was lost")
+
+    def test_g6_a_failure_during_the_copy_is_retried_then_refused_never_live(self):
+        d = _project(self)
+        rv = _rv()
+        fp, trees, heads = _snapshot_trees(d)
+        real, n = rv._clone_scope, []
+
+        def failing(*a, **kw):
+            n.append(1)
+            raise subprocess.CalledProcessError(1, ["git", "update-ref"], "", "fatal: bad object")
+
+        with mock.patch.object(rv, "_clone_scope", failing):
+            with self.assertRaises(rv.Moved):
+                rv.make(d, _cfg(d), run_id="g6", fingerprint=fp, trees=trees, heads=heads)
+        self.assertEqual(len(n), rv.COPY_ATTEMPTS)
+        self.assertEqual(list(rv.views_dir(d).glob("g6*")), [])
+
+    def test_g7_an_ignored_folder_holding_a_code_root_keeps_its_ignored_siblings(self):
+        d = _project(self)
+        with open(d / ".gitignore", "a", encoding="utf-8") as f:
+            f.write("deps/\n")
+        app = _init(d / "deps" / "app")
+        (app / "x.py").write_text("x\n", encoding="utf-8")
+        _git("add", "-A", cwd=app)
+        _git("commit", "-qm", "app", cwd=app)
+        (d / "deps" / "tool").mkdir()
+        (d / "deps" / "tool" / "python").write_text("TOOL\n", encoding="utf-8")
+        (d / ".agent" / "config.json").write_text(json.dumps({"code_roots": ["sub", "deps/app"]}), encoding="utf-8")
+        view, _fp = _make(self, d)
+        self.assertIn("deps/tool", view.live_binds)
+        self.assertNotIn("deps", view.live_binds)
+        self.assertFalse(any(x == "deps/app" or x.startswith("deps/app/") and "__pycache__" not in x
+                             for x in view.live_binds))
+
+    def test_a_scope_set_other_than_the_trees_refuses_the_seal(self):
+        d = _project(self)
+        rv = _rv()
+        fp, trees, heads = _snapshot_trees(d)
+        view = rv.make(d, _cfg(d), run_id="scopes", fingerprint=fp, trees=trees, heads=heads)
+        self.addCleanup(view.remove)
+        only_outer = {"": trees[""]}
+        self.assertFalse(view.sealed(fp, _cfg(d), only_outer, None, [":(exclude).agent"]))
+
+    def test_an_ignored_task_record_refuses_the_copy(self):
+        d = _project(self)
+        with open(d / ".gitignore", "a", encoding="utf-8") as f:
+            f.write(".agent/tasks/\n")
+        tf = d / ".agent" / "tasks" / "042-demo" / "task.md"
+        with mock.patch.object(S, "view_mount_available", return_value=(True, "")):
+            self.assertIn("task", _rv().availability(d, _cfg(d), tf))
+
+    def test_a_copy_entry_that_is_a_file_is_bound_even_if_live_became_a_link(self):
+        d = _project(self)
+        view, _fp = _make(self, d)
+        cfgp = d / ".agent" / "config.json"
+        cfgp.unlink()
+        os.symlink("/etc/hostname", cfgp)
+        argv = S.build_bwrap_argv(d, None, ["true"], None, project_writable=False,
+                                  project_view=view.sandbox_view(), bwrap_exe="/usr/bin/bwrap")
+        p = str(d.resolve())
+        self.assertIn(p + "/.agent/config.json", argv, "the entry was dropped")
+        i = argv.index(p + "/.agent/config.json")
+        self.assertEqual(argv[i - 1], str(view.root / ".agent" / "config.json"))
+
+    def test_a_read_only_folder_in_the_copy_is_removed(self):
+        d = _project(self)
+        rv = _rv()
+        fp, trees, heads = _snapshot_trees(d)
+        view = rv.make(d, _cfg(d), run_id="ro", fingerprint=fp, trees=trees, heads=heads)
+        os.chmod(view.root / "docs", 0o555)
+        view.remove()
+        self.assertFalse(view.root.exists())
+
+    def test_the_lock_is_retaken_when_its_file_was_replaced_before_the_flock(self):
+        d = _project(self)
+        rv = _rv()
+        vd = rv.views_dir(d)
+        vd.mkdir(parents=True, exist_ok=True)
+        path = vd / "race.lock"
+        real_flock = rv.fcntl.flock
+        swapped = []
+
+        def flock(fd, op):
+            if not swapped:
+                swapped.append(1)
+                os.unlink(path)
+                path.write_text("", encoding="utf-8")       # another process's sweep replaced it
+            return real_flock(fd, op)
+
+        with mock.patch.object(rv.fcntl, "flock", flock):
+            fd = rv._lock(path)
+        self.addCleanup(os.close, fd)
+        self.assertEqual(os.fstat(fd).st_ino, os.stat(path).st_ino, "the lock held is not the file at the path")
+
+
+@unittest.skipUnless(_mountable(), "no copy can be mounted here")
+class ImplRoundOneRealBubblewrap(unittest.TestCase):
+    def _run(self, d, view, cmd):
+        with mock.patch.object(S, "_compose_agent_argv", lambda agent, args: [agent, *args]):
+            argv, _c = S._launch_plan("bash", ["-c", cmd], d.resolve(), None, False,
+                                      project_view=view.sandbox_view())
+        out = subprocess.run(argv, cwd=str(d), capture_output=True, text=True, timeout=60)
+        return out.stdout + out.stderr
+
+    def test_g1_the_judge_reads_the_dotted_code_roots_copy(self):
+        d = _project(self)
+        (d / ".agent" / "config.json").write_text(json.dumps({"code_roots": ["./sub"]}), encoding="utf-8")
+        view, _fp = _make(self, d)
+        (d / "sub" / "m.py").write_text("m = 99  # live after the copy\n", encoding="utf-8")
+        text = self._run(d, view, "cat sub/m.py")
+        self.assertIn("m = 2  # dirty in the code root", text)
+        self.assertNotIn("m = 99", text)
+
+    def test_g2_no_alias_of_the_copies_inside_the_sandbox(self):
+        d = _project(self)
+        text = (d / ".gitignore").read_text(encoding="utf-8").replace(".agent/chat_log.md\n", "")
+        (d / ".gitignore").write_text(text, encoding="utf-8")
+        view, _fp = _make(self, d)
+        out = self._run(d, view, "ls -A .agent/journal/review-views 2>&1; "
+                                 "cat .agent/journal/review-views/*/.agent/chat_log.md 2>&1 | head -1")
+        self.assertNotIn("SECRET CHAT", out)
+        self.assertNotIn(view.root.name, out, "the copies folder is visible")
+
+    def test_g3_host_processes_are_not_reachable(self):
+        d = _project(self)
+        view, _fp = _make(self, d)
+        out = self._run(d, view, f"test -d /proc/{os.getpid()} && echo HOST-PID-VISIBLE || echo HIDDEN")
+        self.assertIn("HIDDEN", out)
+
+    def test_g5_a_task_made_after_the_seal_is_not_visible(self):
+        d = _project(self)
+        view, _fp = _make(self, d)
+        (d / ".agent" / "tasks" / "999-new").mkdir()
+        (d / ".agent" / "tasks" / "999-new" / "task.md").write_text("NEW TASK\n", encoding="utf-8")
+        out = self._run(d, view, "cat .agent/tasks/999-new/task.md 2>&1 | head -1")
+        self.assertNotIn("NEW TASK", out)
+
+
 class _PanelHarness:
     def _models(self, d):
         (d / ".agent" / "models.json").write_text(
@@ -517,6 +683,25 @@ class PanelReadsACopy(unittest.TestCase, _PanelHarness):
         self.assertNotIn("Tree moved during review", text)
         self.assertIn("**Tamper guard:** clean", text)
         self.assertEqual([p for p in _rv().views_dir(d).iterdir() if p.is_dir()], [], "the copy was left behind")
+
+    def test_a_copy_that_changed_under_the_judges_voids_the_round(self):
+        d = self.d
+        rv = _rv()
+
+        def judge(adapter, *a, **kw):
+            return "1. **Note** — fine.\n"
+
+        real = rv.View.matches
+        calls = []
+
+        def matches(self_, fp, cfg):
+            calls.append(1)
+            return real(self_, fp, cfg) if len(calls) == 1 else False
+
+        with mock.patch.object(rv.View, "matches", matches):
+            log = self._run(d, judge, ["042", "--mode", "impl", "--models", "claude:opus"])
+        self.assertFalse((d / ".agent" / "tasks" / "042-demo" / "judge.md").exists(), "a round of a changed copy was saved")
+        self.assertIn("copy", log.lower())
 
     def test_a_records_edit_during_the_panel_leaves_the_close_fresh(self):
         d = self.d
@@ -622,6 +807,45 @@ class SingleJudgeReadsACopy(unittest.TestCase, _PanelHarness):
         self.assertEqual(seen, [], "a judge ran on a copy that is not the delta's tree")
         self.assertIn("Refused", log)
 
+    def test_g4_a_code_root_added_after_the_delta_refuses_the_run(self):
+        from tasks import post_d6
+        d = self.d
+        other = _init(d / "extra")
+        (other / "e.py").write_text("e\n", encoding="utf-8")
+        _git("add", "-A", cwd=other)
+        _git("commit", "-qm", "e", cwd=other)
+        with open(d / ".gitignore", "a", encoding="utf-8") as f:
+            f.write("extra/\n")
+        real = post_d6.delta_parts
+
+        def then_add_a_root(*a, **kw):
+            out = real(*a, **kw)
+            (d / ".agent" / "config.json").write_text(json.dumps({"code_roots": ["sub", "extra"]}), encoding="utf-8")
+            return out
+
+        with mock.patch.object(post_d6, "delta_parts", then_add_a_root):
+            seen, log = self._single("1. **Note** — fine.\n\nCAP: 0/5 reported, exhausted\n", lambda: None)
+        self.assertEqual(seen, [], "a judge ran though a scope was added after its delta")
+        self.assertIn("Refused", log)
+
+    def test_a_snapshot_of_another_state_is_never_recorded_as_reviewed(self):
+        """A→B→A around the post-panel judge's snapshot: the recorded tree must BE the delta's (impl round 1)."""
+        from tasks import core as tcore
+        d = self.d
+        real = tcore.build_panel_snapshot
+
+        def at_b(project, fp):
+            (d / "src" / "a.py").write_text("a = 7  # state B\n", encoding="utf-8")
+            try:
+                return real(project, fp)
+            finally:
+                (d / "src" / "a.py").write_text("a = 5  # after the panel\n", encoding="utf-8")
+
+        with mock.patch.object(tcore, "build_panel_snapshot", at_b):
+            seen, log = self._single("1. **Note** — fine.\n\nCAP: 0/5 reported, exhausted\n", lambda: None)
+        self.assertEqual(seen, [], "a judge ran with a reviewed snapshot of another state")
+        self.assertIn("Refused", log)
+
     def test_a_file_field_resolves_in_the_copy_not_the_live_tree(self):
         d = self.d
 
@@ -661,6 +885,25 @@ class ATreeThatKeepsMoving(unittest.TestCase, _PanelHarness):
         self.assertIn("Nothing was spent", log)
         self.assertFalse((d / ".agent" / "tasks" / "042-demo" / "judge.md").exists())
         self.assertEqual([p for p in rv.views_dir(d).iterdir() if p.is_dir()], [])
+
+
+@unittest.skipUnless(_mountable(), "no copy can be mounted here")
+class ACopyThatCannotBeMade(unittest.TestCase, _PanelHarness):
+    def test_is_refused_not_read_live(self):
+        d = _project(self)
+        self._models(d)
+        rv = _rv()
+        called = []
+
+        def judge(adapter, *a, **kw):
+            called.append(kw.get("project_view"))
+            return "1. **Note** — fine.\n"
+
+        with mock.patch.object(rv, "make", side_effect=rv.Unavailable("disk full")):
+            log = self._run(d, judge, ["042", "--mode", "impl", "--models", "claude:opus"])
+        self.assertEqual(called, [], "a judge ran after the copy failed")
+        self.assertNotIn("LIVE tree", log)
+        self.assertIn("Refused", log)
 
 
 class PanelWithoutACopy(unittest.TestCase, _PanelHarness):
