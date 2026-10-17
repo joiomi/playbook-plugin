@@ -347,13 +347,8 @@ if [ -z "$USER_MESSAGE" ]; then
     exit 0
 fi
 
-# Initialize local chat log with header if it doesn't exist
-if [ ! -f "$LOCAL_LOG" ]; then
-    echo "# Project Chat Log" > "$LOCAL_LOG"
-    echo "" >> "$LOCAL_LOG"
-    echo "User messages logged with timestamps." >> "$LOCAL_LOG"
-    echo "" >> "$LOCAL_LOG"
-fi
+# (The log's header is written inside the append's hold below, and only to an empty log — task 233: written here, outside
+# the lock and with `>`, it truncated an entry the options-dialog hook had made in between.)
 
 # Migrate old format if needed (runs once, idempotent)
 migrate_if_needed "$LOCAL_LOG" "$COUNTER_FILE"
@@ -387,6 +382,9 @@ PROVIDER="${PLAYBOOK_PROVIDER:-claude}"
 # between, so the file held M11 before M10. One hold, so the ids follow the file. Prints the id it wrote.
 append_message() {
     local n
+    if [ ! -s "$LOCAL_LOG" ]; then
+        printf '# Project Chat Log\n\nUser messages logged with timestamps.\n\n' >> "$LOCAL_LOG"
+    fi
     n=$(_safe_int "$(cat "$COUNTER_FILE" 2>/dev/null)")      # untrusted bytes never reach $(( )) (C5)
     echo $((n + 1)) > "$COUNTER_FILE"
     MSG_ID=$(printf "M%03d" $((n + 1)))
@@ -399,14 +397,16 @@ append_message() {
     printf '%s' "$MSG_ID"
 }
 if command -v flock &>/dev/null; then
+    # `set -e` again inside: bash drops it in a command substitution, and a failed append must not read as logged
     MSG_ID=$(
         (
+            set -e
             flock -x 201
             append_message
         ) 201>"$COUNTER_FILE.lock"
     )
 else
-    MSG_ID=$(append_message)
+    MSG_ID=$(set -e; append_message)
 fi
 
 # Reset tool/write counters for this session (new user prompt = fresh count)

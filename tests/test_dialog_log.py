@@ -28,7 +28,7 @@ from tasks import retro  # noqa: E402
 from tasks.core import _gate_counts  # noqa: E402
 from tasks.lifecycle import _capture_recent_chat  # noqa: E402
 
-PROBE = _HERE.parent.parent / ".agent" / "tasks"
+FIXTURES = _HERE / "fixtures" / "claude-2.1.302"
 COLOR = {"questions": [{"question": "Pick a color", "header": "Color", "multiSelect": False,
                         "options": [{"label": "Red", "description": "Choose red"},
                                     {"label": "Blue", "description": "Choose blue"}]}],
@@ -51,7 +51,7 @@ def payload(event, response=None, tool_use_id="toolu_01M7cKrdinbVxKCCP7mF7qtR", 
 
 
 def a_lines(text):
-    return [ln for ln in text.splitlines() if re.match(r"A\d+ ", ln)]
+    return [ln for ln in text.split("\n") if re.match(r"A\d+: ", ln)]
 
 
 class _Project(unittest.TestCase):
@@ -96,7 +96,7 @@ class TheEntry(_Project):
         self.assertTrue(text.startswith("# Project Chat Log\n\nUser messages logged with timestamps.\n\n---\n\n"))
         (head,) = self.entries()
         self.assertRegex(head, r"^\*\*\[M001\]\*\* \[\d{4}-\d\d-\d\d \d\d:\d\d:\d\d UTC\] `DIALOG` \(claude/s233\)$")
-        self.assertIn(head + "\n\n" + INTRO + "\nA1 (Color): \"Red\"\nQ1 (Color): Pick a color\n"
+        self.assertIn(head + "\n\n" + INTRO + "\nA1: \"Red\"\nQ1 (Color): Pick a color\n"
                       "<!-- dialog:toolu_01M7cKrdinbVxKCCP7mF7qtR -->\n\n", text)
         self.assertEqual((self.agent / "chat_log_counter").read_text().strip(), "1")
         (line,) = [x for x in self.journal() if x["hook"] == "dialog-log"]
@@ -105,9 +105,7 @@ class TheEntry(_Project):
 
     def test_the_probed_payloads(self):
         """grok's K3: the answers are keyed by the question's text — task 232's two captured PostToolUse payloads."""
-        files = sorted(PROBE.glob("232-*/evidence/w1/post-*.json"))
-        if len(files) != 2:
-            self.skipTest("task 232's probe payloads are not beside this checkout")
+        files = [FIXTURES / "dialog-post-option.json", FIXTURES / "dialog-post-typed.json"]
         for i, f in enumerate(files):
             p = json.loads(f.read_text())
             p["tool_use_id"] = f"toolu_probe_{i}"
@@ -175,12 +173,12 @@ class TheEntry(_Project):
         lines = body.splitlines()
         self.assertEqual(lines[0], INTRO)
         self.assertEqual([ln.split(" ", 1)[0] for ln in lines[1:]],
-                         ["A1", "A2", "Notes2:", "A3", "A4", "Q1", "Q2", "Q3", "Q4", "<!--"])
+                         ["A1:", "A2:", "Notes2:", "A3:", "A4:", "Q1", "Q2", "Q3", "Q4", "<!--"])
         self.assertEqual(json.loads(lines[1].split(": ", 1)[1]), resp["answers"]["Name a fruit\n--- or a nut"])
         self.assertEqual(json.loads(lines[2].split(": ", 1)[1]), "Taste\u2028\x85 \\ \"q\"")
         self.assertEqual(json.loads(lines[3].split(": ", 1)[1]), "said with a smile")
         self.assertEqual(json.loads(lines[4].split(": ", 1)[1]), ["a", "b"])
-        self.assertEqual(lines[5], "A4 (Skip): (no answer)")
+        self.assertEqual(lines[5], "A4: (no answer)")
         self.assertEqual(lines[6], "Q1 (Fruit): Name a fruit --- or a nut")
         self.assertEqual(len(body.split("\n")), len(lines), "no raw line break inside the entry")
         self.assertEqual(len(self.entries()), 1, "the header-shaped answer is no entry of its own")
@@ -191,7 +189,7 @@ class TheEntry(_Project):
         self.run_hook(payload("PostToolUse", resp))
         text = self.log.read_text(encoding="utf-8")
         self.assertIn("Q1 (Long): " + "x" * 299 + "…\n", text)
-        self.assertIn('A1 (Long): "' + "y" * 900 + '"\n', text)
+        self.assertIn('A1: "' + "y" * 900 + '"\n', text)
 
     def test_a_response_that_is_not_the_object_is_logged_as_given(self):
         self.run_hook(payload("PostToolUse", "User has answered:\n- [ ] Pick a color=Red\n## heading"))
@@ -336,7 +334,13 @@ class AStoppedRun(_Project):
 
     def test_a_run_stopped_before_its_write_leaves_a_gap_and_the_redelivery_logs(self):
         import dialog_log
-        with mock.patch.object(dialog_log, "_append", side_effect=OSError("stopped")):
+        real = dialog_log._write_all
+
+        def stop_at_the_entry(fd, data):          # the counter's write goes through; the entry's never starts
+            if b"`DIALOG`" in data:
+                raise OSError("stopped")
+            real(fd, data)
+        with mock.patch.object(dialog_log, "_write_all", side_effect=stop_at_the_entry):
             with self.assertRaises(OSError):
                 dialog_log.write_entry(self.agent, "toolu_x", dialog_log.entry_body(COLOR), "claude", "pid-233")
         self.assertEqual(self.entries(), [], "no part of the entry was written")
@@ -347,16 +351,154 @@ class AStoppedRun(_Project):
 
     def test_a_partial_write_has_no_marker_so_the_redelivery_logs_whole(self):
         import dialog_log
-        real = dialog_log._append
+        real = dialog_log._write_all
 
         def half(fd, data):
+            if b"`DIALOG`" not in data:
+                return real(fd, data)
             real(fd, data[: len(data) // 2])
             raise OSError("cut")
-        with mock.patch.object(dialog_log, "_append", side_effect=half):
+        with mock.patch.object(dialog_log, "_write_all", side_effect=half):
             with self.assertRaises(OSError):
                 dialog_log.write_entry(self.agent, "toolu_y", dialog_log.entry_body(FRUIT), "claude", "pid-233")
         self.run_hook(payload("PostToolUse", FRUIT, tool_use_id="toolu_y"))
         self.assertEqual(self.log.read_text(encoding="utf-8").count("<!-- dialog:toolu_y -->\n"), 1)
+
+
+class RoundOne(_Project):
+    """Task 233's impl round 1: the findings, each red first."""
+
+    def test_the_agents_header_is_never_read_as_his_words(self):
+        """codex, grok: the header sat on the A line, so a header `Tasks work done` ended Recent Chat and a header
+        `wrong` made steering report a correction; the header is the Q line's only."""
+        self.run_hook({"hook_event_name": "UserPromptSubmit", "prompt": "an earlier prompt", "session_id": "x"},
+                      hook=CHAT_HOOK)
+        resp = {"questions": [{"question": "Close?", "header": "Tasks work done", "options": []}],
+                "answers": {"Close?": "Continue"}, "annotations": {}}
+        self.run_hook(payload("PostToolUse", resp))
+        self.assertEqual(len(_capture_recent_chat(self.project, max_gap_seconds=10 ** 9)), 2)
+        resp = {"questions": [{"question": "Pick", "header": "wrong", "options": []}],
+                "answers": {"Pick": "Red"}, "annotations": {}}
+        self.run_hook(payload("PostToolUse", resp, tool_use_id="toolu_w"))
+        self.assertEqual(retro.analyze_steering(retro.extract_chatlog(self.log)), [])
+        self.assertIn("A1: \"Red\"\nQ1 (wrong): Pick\n", self.log.read_text(encoding="utf-8"))
+
+    def test_steering_counts_his_words_not_the_line(self):
+        """A 100-word answer is short enough for steering (its limit); read as the whole `A1: "…"` line it would be
+        101 words and skipped — the readers take the decoded value."""
+        answer = "wrong " + " ".join(["w"] * 99)
+        resp = {"questions": [{"question": "Q?", "header": "H", "options": []}], "answers": {"Q?": answer},
+                "annotations": {}}
+        self.run_hook(payload("PostToolUse", resp))
+        self.assertEqual(len(retro.analyze_steering(retro.extract_chatlog(self.log))), 1)
+
+    def test_a_huge_answer_is_never_cut(self):
+        """opus, sonnet, codex, agy: the 50,000-character cap cut the joined body inside his answer's literal."""
+        big = ("line\n" * 25000) + "x" * 49900
+        resp = {"questions": [{"question": "Q?", "header": "H", "options": []}], "answers": {"Q?": big},
+                "annotations": {}}
+        self.run_hook(payload("PostToolUse", resp))
+        (line,) = a_lines(self.log.read_text(encoding="utf-8"))
+        self.assertEqual(json.loads(line.split(": ", 1)[1]), big)
+
+    def test_a_lone_surrogate_is_kept_exact(self):
+        """opus, sonnet: an answer holding a lone surrogate failed to encode, after the counter had stepped."""
+        resp = {"questions": [{"question": "Q?", "header": "H", "options": []}], "answers": {"Q?": "a\ud83db"},
+                "annotations": {}}
+        r = self.run_hook(payload("PostToolUse", resp))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        (line,) = a_lines(self.log.read_text(encoding="utf-8"))
+        self.assertEqual(json.loads(line.split(": ", 1)[1]), "a\ud83db")
+        self.assertEqual((self.agent / "chat_log_counter").read_text().strip(), "1")
+
+    def test_a_short_write_is_finished_or_reported(self):
+        """codex, grok: os.write's count was ignored."""
+        import dialog_log
+        real = os.write
+
+        def halves(fd, data):
+            return real(fd, data[: max(1, len(data) // 2)])
+        with mock.patch.object(dialog_log.os, "write", side_effect=halves):
+            done = dialog_log.write_entry(self.agent, "toolu_s", dialog_log.entry_body(FRUIT), "claude", "s233")
+        self.assertEqual(done, "logged M001")
+        self.assertEqual(self.log.read_text(encoding="utf-8").count("<!-- dialog:toolu_s -->\n"), 1)
+        self.assertIn('A1: "mango, because it is sweet"', self.log.read_text(encoding="utf-8"))
+        with mock.patch.object(dialog_log.os, "write", side_effect=lambda fd, data: 0):
+            with self.assertRaises(OSError):
+                dialog_log.write_entry(self.agent, "toolu_t", dialog_log.entry_body(FRUIT), "claude", "s233")
+
+    def test_an_entry_after_a_cut_fragment_starts_on_its_own_line(self):
+        """codex: a redelivery after a half-written entry appended `---` straight after the fragment, and Recent Chat
+        swallowed the recovered entry."""
+        import dialog_log
+        real = dialog_log._write_all
+
+        def half(fd, data):
+            if b"`DIALOG`" not in data:            # the counter's write goes through whole
+                return real(fd, data)
+            real(fd, data[: len(data) // 2])
+            raise OSError("cut")
+        resp = {"questions": [{"question": "Q?", "header": "H", "options": []}], "answers": {"Q?": "y" * 800},
+                "annotations": {}}
+        with mock.patch.object(dialog_log, "_write_all", side_effect=half):
+            with self.assertRaises(OSError):
+                dialog_log.write_entry(self.agent, "toolu_f", dialog_log.entry_body(resp), "claude", "s233")
+        self.run_hook(payload("PostToolUse", resp, tool_use_id="toolu_f"))
+        recent = _capture_recent_chat(self.project, max_gap_seconds=10 ** 9)
+        own = [b for b in recent if b.startswith("**[M002]**")]
+        self.assertEqual(len(own), 1, "the redelivered entry is a message of its own, not the fragment's tail")
+        self.assertIn('A1: "' + "y" * 800 + '"', own[0])
+
+    def test_the_counter_never_reuses_an_id_in_the_log(self):
+        """codex: the counter was truncated before its new value was written; a crash between left it empty and the
+        next entry reused M001. Written whole now, and the log's own highest id is a floor."""
+        self.run_hook(payload("PostToolUse"))
+        (self.agent / "chat_log_counter").write_text("")
+        self.run_hook(payload("PostToolUse", tool_use_id="toolu_2"))
+        self.assertEqual([h.split("]")[0][3:] for h in self.entries()], ["M001", "M002"])
+        import dialog_log
+        src = Path(dialog_log.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("O_TRUNC", src, "the counter is replaced whole, never truncated in place")
+
+    def test_a_held_lock_gives_up_in_time_and_says_so(self):
+        """sonnet: the flock waited without limit inside a hook the host kills at 5 s."""
+        import fcntl
+        import time
+        fd = os.open(str(self.agent / "chat_log_counter.lock"), os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            t0 = time.monotonic()
+            r = self.run_hook(payload("PostToolUse"))
+            took = time.monotonic() - t0
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+        self.assertEqual(r.returncode, 0)
+        self.assertLess(took, 4.5)
+        self.assertEqual(self.entries(), [])
+        self.assertEqual(self.journal()[-1]["detail"], "not logged: the chat log's lock is busy")
+
+    def test_a_skip_line_names_the_session(self):
+        """agy: the wrapper's skip arm left the session empty."""
+        fake = self.d / "bin"
+        fake.mkdir()
+        (fake / "python3").write_text("#!/bin/sh\nexit 1\n")
+        (fake / "python3").chmod(0o755)
+        self.run_hook(payload("PostToolUse"), PATH=f"{fake}:{os.environ['PATH']}")
+        (line,) = self.journal()
+        self.assertEqual((line["decision"], line["session_id"]), ("skip", "s233"))
+
+
+class ThePromptHook(_Project):
+    def test_its_header_never_truncates_and_its_writes_stop_on_a_failure(self):
+        """grok: the prompt hook wrote the log's header with `>` outside the lock (a dialog's entry made in between
+        was truncated away); opus: inside `$( … )` bash drops `set -e`, so a failed append still said `logged`."""
+        src = CHAT_HOOK.read_text(encoding="utf-8")
+        self.assertNotIn('> "$LOCAL_LOG"', src.replace('>> "$LOCAL_LOG"', ''))
+        self.assertIn("set -e", src[src.index("append_message() {"):src.index("# Reset tool/write counters")])
+        self.log.write_text("# Project Chat Log\n\nUser messages logged with timestamps.\n\nkeep me\n")
+        self.run_hook({"hook_event_name": "UserPromptSubmit", "prompt": "a prompt", "session_id": "x"}, hook=CHAT_HOOK)
+        self.assertIn("keep me\n", self.log.read_text(encoding="utf-8"))
 
 
 class TheReaders(_Project):
@@ -378,7 +520,7 @@ class TheReaders(_Project):
         recent = _capture_recent_chat(self.project, max_gap_seconds=10 ** 9)
         self.assertEqual(len(recent), 2, recent)
         self.assertIn("an earlier prompt of his", recent[0])
-        self.assertIn('A1 (Close): "No, implement the validation first"', recent[1])
+        self.assertIn('A1: "No, implement the validation first"', recent[1])
         self.assertIn(INTRO, recent[1])
 
     def test_recent_chat_takes_no_header_inside_an_entry(self):
@@ -406,7 +548,7 @@ class TheReaders(_Project):
         self.run_hook(payload("PostToolUse", resp))
         (block,) = _capture_recent_chat(self.project, max_gap_seconds=10 ** 9)
         for i in range(4):
-            self.assertIn(f'A{i + 1} (H{i}): "answer {i}"', block)
+            self.assertIn(f'A{i + 1}: "answer {i}"', block)
 
     def test_retro_reads_the_whole_entry_and_no_fabricated_message(self):
         self._dialog()
@@ -417,7 +559,7 @@ class TheReaders(_Project):
         msgs = retro.extract_chatlog(self.log)
         self.assertEqual([m["speaker"] for m in msgs], ["DIALOG", "DIALOG"])
         self.assertIn("Q1 (Close): Should I run tasks work done now? --- really", msgs[0]["text"])
-        self.assertIn('A1 (Close): "No, implement the validation first"', msgs[0]["text"])
+        self.assertIn('A1: "No, implement the validation first"', msgs[0]["text"])
 
     def test_retro_steering_reads_only_his_answers(self):
         resp = {"questions": [{"question": "Stop the rule? No, don't — wrong?", "header": "Rule", "options": []}],

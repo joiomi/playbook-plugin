@@ -8,12 +8,14 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 2026-10-10, retro 177: "capture them where the prompts are captured"). His answers in an options dialog are decisions,
 and until now no log held them — `chat_log.md` had his prompts only.
 - A new hook on `AskUserQuestion` (`dialog-log-hook` → `dialog_log.py`): after he answers, one `DIALOG` entry in the
-  same `chat_log.md` — his answers first and exact (each its JSON string literal, so none of his characters changes),
-  then the agent's questions flattened and cut at 300 characters, the tool call's id last (a second delivery writes
-  nothing). Every body line starts with a fixed prefix (`A1`, `Notes1`, `Q1`), so no line is a heading, a gate or an
-  entry header. Its PreToolUse run — before the dialog shows — starts no python and writes only its hook-journal line,
+  same `chat_log.md` — his answers first and exact (each its JSON string literal, so none of his characters changes and
+  none is cut), then the agent's questions with their headers, flattened and cut at 300 characters, the tool call's id
+  last (a second delivery within the log's last 256 KB writes nothing). Every body line starts with a fixed prefix
+  (`Options dialog`, `A1:`, `Notes1:`, `Q1`, `<!-- dialog:`), so no line is a heading, a gate or an entry header; the
+  lock is waited for 3 s at most, the counter is replaced whole, and an entry after a fragment starts its own line. Its PreToolUse run — before the dialog shows — starts no python and writes only its hook-journal line,
   the dialog's opening; a cancelled dialog leaves that line alone. No counter of the session is touched.
-- The chat-log hook now takes a prompt's id and appends it under ONE hold of the chat log's lock (two holds before),
+- The chat-log hook now takes a prompt's id and appends it under ONE hold of the chat log's lock (two holds before), writes
+  the log's header there and only to an empty log (it truncated with `>` outside the lock before), keeps `set -e` there,
   so the ids follow the file with two writers; the readers — Recent Chat, retro, merge-prep — take an entry header only
   at a line start (a header-shaped text inside an entry is its text); Recent Chat's stop at "tasks work done" reads only
   a dialog's answer lines; retro cuts an entry at a `---` that starts a line, and its steering pass reads only a dialog's

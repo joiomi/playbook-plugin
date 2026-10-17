@@ -23,3 +23,10 @@ What they show (task 232's plan-panel triage):
 - a bad model is `subtype` `success` with `is_error` true, and `result` holds the same sentence plain mode prints.
 
 An account limit could not be provoked; the tests build its JSON-mode envelope from the plain line task 156 captured.
+
+Two more files from task 232's dialog probe (an interactive `claude --model haiku` in a scratch project, two options
+dialogs answered by keys — one option chosen, one typed "Other" answer): `dialog-post-option.json` and
+`dialog-post-typed.json` are the PostToolUse hook payloads Claude Code sent to a hook on AskUserQuestion, verbatim except
+that the three path fields (`cwd`, `transcript_path`, `scratchpad_dir`) were replaced by `/scratch/…` to keep personal
+paths out (task 233).
+

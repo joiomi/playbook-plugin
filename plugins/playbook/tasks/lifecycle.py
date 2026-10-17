@@ -139,7 +139,8 @@ def _capture_recent_chat(project_path: Path, max_messages: int = 10,
         # Q lines are the agent's, which may well name `tasks work done` — plan panel, codex's probe; task 233)
         said = text
         if tag == "DIALOG":
-            said = "\n".join(ln for ln in text.splitlines() if re.match(r"(?:A|Notes)\d+\b", ln))
+            from tasks.core import dialog_answer_text
+            said = dialog_answer_text(text)
         text_lower = said.lower()
         if "tasks done" in text_lower or "tasks work done" in text_lower:
             break

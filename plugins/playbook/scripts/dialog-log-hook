@@ -21,6 +21,7 @@ if [[ "$INPUT" =~ $_pb_dl_pre ]]; then
 fi
 _pb_dl_skip() {
     { source "$HOOK_DIR/gate-echo-lib.sh" && pb_hook_begin dialog-log; } 2>/dev/null || exit 0
+    SESSION_ID="$(resolve_session_id 2>/dev/null)" || SESSION_ID=""
     PB_HJ_DECISION=skip; PB_HJ_DETAIL="not logged: $1"
     exit 0
 }

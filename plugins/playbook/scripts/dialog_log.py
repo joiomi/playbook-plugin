@@ -12,22 +12,28 @@ One entry, in the chat-log hook's frame (`---`, a blank line, the header, a blan
     **[M042]** [2026-10-17 20:12:00 UTC] `DIALOG` (claude/pid-123)
 
     Options dialog — the user's answers (A, exact: JSON string literals), then the agent's questions (Q):
-    A1 (Color): "Red"
+    A1: "Red"
     Notes1: "said with a smile"
     Q1 (Color): Pick a color
     <!-- dialog:toolu_… -->
 
-His answers come first (Recent Chat cuts an entry at 1,000 characters) and exact: each is its JSON literal, so none of
-his characters changes — `json.loads` gives the text back — and no newline of his starts a line. The agent's questions
-follow, flattened to one line and cut at 300 characters. Every body line starts with one of those fixed prefixes, so
-no line of the entry is a heading, a gate or an entry header. The last line names the tool call: a second delivery
-of the same call writes nothing (a call without an id is logged at each delivery).
+His answers come first (Recent Chat cuts an entry at 1,000 characters) and exact: each is its JSON literal — a lone
+surrogate escaped too — so none of his characters changes (`json.loads` gives the text back), no newline of his
+starts a line, and none is ever cut. The agent's questions follow, each with its header, flattened to one line and cut
+at 300 characters; the header stays on the Q line, never on his (impl round 1: a header `tasks work done` read as his
+words ended Recent Chat). Every body line starts with one of those fixed prefixes — the first line `Options dialog`,
+the last `<!-- dialog:` — so no line of the entry is a heading, a gate or an entry header. The last line names the
+tool call: a second delivery of the same call within the log's last 256 KB writes nothing (a call without an id is
+logged at each delivery).
 
 An answer is not a prompt: nothing of the session's turn (its counters, the stop hook's marks) is touched. The entry
 is written under the lock the chat-log hook, the state echo and `tasks tag` hold (`chat_log_counter.lock`, flock(2)):
-in one hold, the duplicate check, the counter's step, then the whole entry in one write with its marker last — a run
-stopped before the write leaves a gap in the ids, never a half entry that a redelivery would not repeat. The chat-log
-hook's sinks are refused (a link, a FIFO, any non-regular file: nothing written, said on stderr). It exits 0.
+in one hold, the duplicate check, the counter's step (the new value replaces the file whole, and the log's own highest id
+is its floor), then the whole entry written to its last byte with its marker last — a run stopped before the write
+leaves a gap in the ids, a run stopped during it a fragment without a marker, after which the redelivered entry starts
+on a line of its own. The lock is waited for 3 s at most (the host kills the hook at 5): past that nothing is written
+and the journal line says so. The chat-log hook's sinks are refused (a link, a FIFO, any non-regular file: nothing
+written, said on stderr). It exits 0.
 """
 from __future__ import annotations
 
@@ -46,8 +52,10 @@ LOG_NAME = "chat_log.md"
 COUNTER_NAME = "chat_log_counter"
 HEADER = "# Project Chat Log\n\nUser messages logged with timestamps.\n\n"
 Q_CAP = 300                   # characters of one question kept (the agent's words; his answers are never cut)
-BODY_CAP = 50000              # the chat-log hook's cap on one message
 TAIL_BYTES = 262144           # how far back a redelivery is looked for: it comes within seconds
+LOCK_WAIT = 3.0               # seconds the lock is waited for (the host kills the hook at 5)
+_ENTRY_ID = re.compile(rb"(?m)^\*\*\[M(\d+)\]\*\*")
+_SURROGATE = re.compile("[\ud800-\udfff]")
 _ID_SAFE = re.compile(r"[^A-Za-z0-9_.:-]")
 # Line breaks a JSON literal written with ensure_ascii=False would leave raw, and that str.splitlines() splits on
 _RAW_BREAKS = {"\x85": "\\u0085", " ": "\\u2028", " ": "\\u2029"}
@@ -67,7 +75,7 @@ def literal(value) -> str:
     s = json.dumps(value, ensure_ascii=False)
     for raw, esc in _RAW_BREAKS.items():
         s = s.replace(raw, esc)
-    return s
+    return _SURROGATE.sub(lambda m: f"\\u{ord(m.group(0)):04x}", s)     # a lone surrogate cannot be written as UTF-8
 
 
 def flat(text, cap: int = 0) -> str:
@@ -101,13 +109,13 @@ def entry_body(response) -> "list[str]":
             asked.append((str(text), ""))
     a_lines, q_lines = [], []
     for i, (text, head) in enumerate(asked, 1):
-        tag = f" ({flat(head, 60)})" if head else ""
-        a_lines.append(f"A{i}{tag}: {literal(answers[text])}" if text in answers else f"A{i}{tag}: (no answer)")
+        a_lines.append(f"A{i}: {literal(answers[text])}" if text in answers else f"A{i}: (no answer)")
         note = notes.get(text)
         if isinstance(note, dict):
             note = note.get("notes")
         if isinstance(note, str) and note:
             a_lines.append(f"Notes{i}: {literal(note)}")
+        tag = f" ({flat(head, 60)})" if head else ""
         q_lines.append(f"Q{i}{tag}: {flat(text, Q_CAP)}")
     if not asked:
         a_lines.append("A0: (no question or answer in the tool's response)")
@@ -162,9 +170,44 @@ def _open(path: Path, flags: int, mode: int = 0o644) -> int:
     return fd
 
 
-def _append(fd: int, data: bytes) -> None:
-    """The entry's one write (a seam the tests use to stop a run between its steps)."""
-    os.write(fd, data)
+def _write_all(fd: int, data: bytes) -> None:
+    """Every byte, or an error: a short write (a signal, a size limit) is continued, a write of nothing fails."""
+    view = memoryview(data)
+    while view:
+        n = os.write(fd, view)
+        if n <= 0:
+            raise OSError("the chat log took no bytes")
+        view = view[n:]
+
+
+def _lock(fd: int) -> bool:
+    end = time.monotonic() + LOCK_WAIT
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except BlockingIOError:
+            if time.monotonic() >= end:
+                return False
+            time.sleep(0.05)
+
+
+def _replace_counter(lane: Path, counter: Path, n: int) -> None:
+    """The counter's new value replaces the file whole (a crash leaves the old value or the new, never an empty one)."""
+    tmp = lane / f"{COUNTER_NAME}.dialog-{os.getpid()}"
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    try:
+        try:
+            _write_all(fd, f"{n}\n".encode())
+        finally:
+            os.close(fd)
+        os.replace(tmp, counter)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def write_entry(lane: Path, tool_use_id: str, body: "list[str]", provider: str, session: str) -> str:
@@ -175,10 +218,13 @@ def write_entry(lane: Path, tool_use_id: str, body: "list[str]", provider: str, 
             return f"not logged: {p.name} is a link or not a regular file"
     safe_id = _ID_SAFE.sub("", tool_use_id)[:120]
     mark = f"<!-- dialog:{safe_id} -->" if safe_id else ""
+    body_bytes = ("\n".join(body) + "\n" + (mark + "\n" if mark else "") + "\n").encode("utf-8", "replace")
     lfd = _open(lock, os.O_RDWR | os.O_CREAT)
     try:
-        fcntl.flock(lfd, fcntl.LOCK_EX)
-        if mark and log.exists():
+        if not _lock(lfd):
+            return "not logged: the chat log's lock is busy"
+        tail, size = b"", 0
+        if log.exists():
             fd = _open(log, os.O_RDONLY)
             try:
                 size = os.fstat(fd).st_size
@@ -186,8 +232,8 @@ def write_entry(lane: Path, tool_use_id: str, body: "list[str]", provider: str, 
                 tail = os.read(fd, TAIL_BYTES)
             finally:
                 os.close(fd)
-            if ("\n" + mark + "\n").encode() in tail:
-                return "not logged: a duplicate"
+        if mark and ("\n" + mark + "\n").encode() in tail:
+            return "not logged: a duplicate"
         try:
             cfd = _open(counter, os.O_RDONLY)
             try:
@@ -196,23 +242,19 @@ def write_entry(lane: Path, tool_use_id: str, body: "list[str]", provider: str, 
                 os.close(cfd)
         except FileNotFoundError:
             raw = ""
-        n = (int(raw) if raw.isdigit() else 0) + 1
+        seen = [int(x) for x in _ENTRY_ID.findall(tail)]
+        n = max([int(raw) if raw.isdigit() else 0] + seen) + 1
         msg = f"M{n:03d}"
-        cfd = _open(counter, os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
-        try:
-            os.write(cfd, f"{n}\n".encode())
-        finally:
-            os.close(cfd)
-        text = "\n".join(body)
-        if len(text) > BODY_CAP:
-            text = text[:BODY_CAP] + f"...[{len(text) - BODY_CAP} chars removed]"
+        _replace_counter(lane, counter, n)
         stamp = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
-        entry = (f"---\n\n**[{msg}]** [{stamp}] `DIALOG` ({provider}/{session})\n\n{text}\n"
-                 + (mark + "\n" if mark else "") + "\n")
-        fresh = not log.exists()
+        head = (f"---\n\n**[{msg}]** [{stamp}] `DIALOG` ({provider}/{session})\n\n").encode("utf-8", "replace")
+        if size == 0:
+            head = HEADER.encode() + head
+        elif not tail.endswith(b"\n"):
+            head = b"\n" + head          # after a fragment a run stopped mid-write, the entry starts its own line
         fd = _open(log, os.O_WRONLY | os.O_APPEND | os.O_CREAT)
         try:
-            _append(fd, ((HEADER if fresh else "") + entry).encode("utf-8", "surrogateescape"))
+            _write_all(fd, head + body_bytes)
         finally:
             os.close(fd)
         return f"logged {msg}"

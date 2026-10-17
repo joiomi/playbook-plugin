@@ -704,8 +704,9 @@ def analyze_steering(chatlog: list[dict]) -> list[dict]:
     for msg in chatlog:
         text = msg["text"]
         if msg.get("speaker") == "DIALOG":
-            # an options-dialog entry: the user's words are its answer lines; its Q lines are the agent's (task 233)
-            text = "\n".join(ln for ln in text.splitlines() if re.match(r"(?:A|Notes)\d+\b", ln))
+            # an options-dialog entry: the user's words are its answers' values; its Q lines are the agent's (task 233)
+            from tasks.core import dialog_answer_text
+            text = dialog_answer_text(text)
         words = text.split()
         # Filter: short messages only
         if len(words) > 100:

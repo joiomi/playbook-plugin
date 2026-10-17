@@ -526,6 +526,28 @@ def resolve_agent_dir(project_path: Path) -> Path:
     return project_path / ".agent" / name
 
 
+_DIALOG_ANSWER = re.compile(r"(?:A|Notes)\d+: (.*)")
+
+
+def dialog_answer_text(text: str) -> str:
+    """The user's own words in an options-dialog chat-log entry (task 233): the values of its `A<n>:` / `Notes<n>:`
+    lines, each decoded from its JSON literal (a value that is not one is kept as written) — never the agent's `Q`
+    lines or their headers. The readers that judge the user's words (Recent Chat's stop test, retro's steering) read
+    a `DIALOG` entry through this."""
+    import json as _json
+    words = []
+    for ln in (text or "").split("\n"):
+        m = _DIALOG_ANSWER.match(ln)
+        if not m:
+            continue
+        try:
+            v = _json.loads(m.group(1))
+        except ValueError:
+            v = m.group(1)
+        words.append(v if isinstance(v, str) else _json.dumps(v, ensure_ascii=False))
+    return "\n".join(words)
+
+
 def canonical_path(path: "Path | str") -> str:
     """Canonical cross-language string form of a path: forward-slash separators.
 
