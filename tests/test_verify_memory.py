@@ -356,6 +356,24 @@ class PostPanelRun1(Project):
         self.assertEqual(self.key(), k)
 
 
+class PostPanelRun2(Project):
+    """The post-panel judge's run 2."""
+
+    @unittest.skipIf(os.geteuid() == 0, "root writes anywhere")
+    def test_a_journal_that_cannot_be_written_is_never_trusted(self):
+        """codex: with the journal folder read-only a red run can neither replace nor remove the old green — so a
+        record is reused only when the journal can still be written."""
+        k = self.key()
+        self.green(k, A, 1.0, 1.0)
+        self.assertIsNotNone(verify_memory.reusable(self.d, k, A, timeout=None))
+        j = self.d / ".agent" / "journal"
+        j.chmod(0o555)
+        self.addCleanup(j.chmod, 0o755)
+        self.red()
+        self.assertEqual(self.cli("verify").returncode, 1)
+        self.assertIsNone(verify_memory.reusable(self.d, k, A, timeout=None))
+
+
 class TheRecord(Project):
 
     def test_record_reuse_and_the_conditions(self):

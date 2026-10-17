@@ -24,8 +24,9 @@ read and written under `<lane>/journal/verify-green.lock`. Before a command runs
 recorded only over its own red mark (same start, same key — so a removed or newer record is never turned green) and
 only when the key before equals the key after; only a run that started later replaces a record. `tasks verify` always
 runs the commands (and records them); only the close reuses. The close
-reuses a command whose record is green with the code's key, ran under the current timeout, and finds bash usable (else
-the command runs, and a missing bash fails it as before).
+reuses a command whose record is green with the code's key, ran under the current timeout, finds bash usable and the
+journal folder writable — a memory that could not be ended is never trusted (else the command runs, and a missing bash
+fails it as before).
 
 Limits: what the key cannot see — git-ignored files, untracked `.agent` state and the task records the tests read, the
 outer repository's HEAD and the history,
@@ -219,7 +220,10 @@ def reusable(project: "Path | str", key: "str | None", command: str, timeout: "f
     from tasks import bash_resolver
     if not bash_resolver.usable_bash()[0]:
         return None
-    rec = _load(project).get(command)
+    j = _journal(project)
+    if not os.access(j, os.W_OK | os.X_OK):
+        return None                                              # a memory that cannot be ended is never trusted
+    rec = _load(project).get(command)                            # (post-panel run 2: a read-only journal folder)
     if rec is None or not rec["ok"] or rec["key"] != key:
         return None
     if timeout and rec["seconds"] >= timeout:

@@ -357,11 +357,12 @@ closes, 13 came right after a green full verify and 14 right after a close whose
 between. A full verify here is about 140 s.
 - `tasks verify [<N>]` always runs the verify contract the way the close does and remembers a green run per command
   (`.agent/journal/verify-green.json`). `tasks work done` does not run a command again when its green run is for the
-  same code, ran within the current timeout and bash is usable; the receipt line says "reused: the green run of <time>
+  same code, ran within the current timeout, bash is usable and the journal folder is writable; the receipt line says "reused: the green run of <time>
   on the same code (key <12 hex>)". Ticking gates and writing records after the run keep it; any code edit does not.
-- The code key, per fingerprint scope: its HEAD and every file git lists — tracked or not (a tracked one with its index
-  blob, so a staged change counts), its mode, the sha256 of its raw bytes (not git's tree, which normalises text and
-  records a nested repository as a commit), a link's target and the bytes it points at — except every lane's task
+- The code key, per fingerprint scope: a code root's HEAD (not the outer one — committing records keeps the key) and
+  every file git lists — tracked or not (a tracked one with its index blob, so a staged change counts), its mode, the
+  sha256 of its raw bytes (not git's tree, which normalises text and records a nested repository as a commit), a link's
+  target and the mode and bytes it points at — except every lane's task
   records and untracked `.agent` files (a tracked `.agent/config.json` counts). No key, so no reuse, with a nested
   repository outside the scopes, a `code_roots` dir that is not its own repository, a skip-worktree / assume-unchanged
   / unmerged / intent-to-add entry, a link out of the scope or to no file; the owner's `fingerprint_exclude` is not
