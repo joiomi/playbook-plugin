@@ -148,7 +148,7 @@ class SettledBlock(_TmpDir):
             f"- 2026-09-29 ruling {i} " + "x" * 200 + "\n" for i in range(200))
         block = post_d6.settled_block(self._task(many), cap=4000)
         self.assertLessEqual(len(block), 4200)
-        self.assertIn("truncated", block)
+        self.assertIn("left out at the 4,000-character cap", block)     # task 227: cut on a line, the count named
 
 
 # ── verdict: what counts against PASS ────────────────────────────────────────

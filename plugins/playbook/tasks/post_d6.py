@@ -116,19 +116,74 @@ def extract_rejected_findings(task_dir: Path) -> "list[str]":
     return out
 
 
-def settled_block(task_file: Path, cap: int = SETTLED_CAP) -> str:
-    """The `=== SETTLED ===` context part, or "" when nothing is settled."""
+PROJECT_CAP = 4000      # task 227: the project's rulings take at most this much of the SETTLED block, whole entries
+
+
+def _project_rulings_part(project: "Path | None", cap: int = PROJECT_CAP) -> "list[str]":
+    """The SETTLED lines for the project's owner rulings in force (`.agent/rulings.md`, task 227), or [] when there
+    are none. Whole entries only, in order, within `cap` characters; the rest are named, never cut. A list that cannot
+    be read arrives as its raw text (within `cap`, whole lines) under "cannot be read" — its words still reach the
+    judge (plan panel P9)."""
+    if project is None:
+        return []
+    from tasks import rulings as _r
+    path = _r.path_for(project)
+    if not path.is_file():
+        return []
     try:
-        from tasks.core import read_task_text
-        text = read_task_text(Path(task_file))       # task 214 (U5): a lone CR stays inside its line
-    except OSError:
-        text = ""
+        force = _r.in_force(_r.read(project))
+    except _r.RulingsError as e:
+        try:
+            raw = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            raw = []
+        out = [f"Project rulings (`.agent/rulings.md`) — the list cannot be read ({e}); its text, unparsed:"]
+        used = len(out[0]) + 1
+        for i, ln in enumerate(raw):
+            if used + len(ln) + 1 > cap:
+                out.append(f"[... {len(raw) - i} more line(s) of the list — read `.agent/rulings.md` ...]")
+                break
+            out.append(ln)
+            used += len(ln) + 1
+        return out
+    if not force:
+        return []
+    out = ["Project rulings in force (`.agent/rulings.md`):"]
+    used = len(out[0]) + 1
+    for i, r in enumerate(force):
+        ln = "- " + r.line()
+        if used + len(ln) + 1 > cap:
+            out.append(f"[... {len(force) - i} more in force — read `.agent/rulings.md` ...]")
+            break
+        out.append(ln)
+        used += len(ln) + 1
+    return out
+
+
+def settled_block(task_file: "Path | None", cap: int = SETTLED_CAP, *, project_path: "Path | None" = None) -> str:
+    """The `=== SETTLED ===` context part, or "" when nothing is settled: the project's owner rulings in force first
+    (task 227 — read from `project_path`, or from the project a task.md sits in; a taskless review gets them too), then
+    the task's own `## Owner rulings`, then the REJECT lines of its triage. Past `cap` the block is cut on a line
+    boundary and says how many lines it left out."""
+    text = ""
+    if task_file is not None:
+        try:
+            from tasks.core import read_task_text
+            text = read_task_text(Path(task_file))       # task 214 (U5): a lone CR stays inside its line
+        except OSError:
+            text = ""
+    if project_path is None and task_file is not None:
+        from tasks.rulings import project_of_task
+        project_path = project_of_task(task_file)
+    project = _project_rulings_part(project_path)
     rulings = extract_owner_rulings(text)
-    rejects = extract_rejected_findings(Path(task_file).parent)
-    if not rulings and not rejects:
+    rejects = extract_rejected_findings(Path(task_file).parent) if task_file is not None else []
+    if not project and not rulings and not rejects:
         return ""
     parts = ["=== SETTLED (owner rulings + findings already rejected in triage) ===",
              SETTLED_HEADER, ""]
+    if project:
+        parts += [*project, ""]
     if rulings:
         parts += ["Owner rulings (task.md `## Owner rulings`):", *rulings, ""]
     if rejects:
@@ -136,7 +191,16 @@ def settled_block(task_file: Path, cap: int = SETTLED_CAP) -> str:
                   *rejects, ""]
     block = "\n".join(parts).rstrip() + "\n"
     if len(block) > cap:
-        block = block[:cap].rstrip() + f"\n[... settled block truncated at {cap:,} chars ...]\n"
+        lines = block.splitlines()
+        kept, used = [], 0
+        room = cap - 80                                   # the notice's own line
+        for ln in lines:
+            if used + len(ln) + 1 > room:
+                break
+            kept.append(ln)
+            used += len(ln) + 1
+        block = ("\n".join(kept).rstrip() + f"\n[... {len(lines) - len(kept)} more line(s) left out at the "
+                 f"{cap:,}-character cap ...]\n")
     return block
 
 

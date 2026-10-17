@@ -169,6 +169,21 @@ def cmd_bootstrap(cmd_args):
         print(mm_content.rstrip())
         print()
 
+    # Task 227: the project's owner rulings in force, written once (`.agent/rulings.md`). Advisory: a list that cannot
+    # be read is one line here, never a failed bootstrap.
+    try:
+        from tasks import rulings as _rulings
+        _force = _rulings.in_force(_rulings.read(project_path))
+        if _force:
+            print("=== OWNER RULINGS IN FORCE (.agent/rulings.md) ===")
+            for _r in _force:
+                print(_r.line())
+            print('(end one with `tasks ruling end <N> "<why>"` once its Holds is true)')
+            print()
+    except Exception as _e:   # noqa: BLE001 — orientation must not fail on the list
+        print(f"(.agent/rulings.md cannot be read: {_e} — `tasks ruling list` says the same)")
+        print()
+
     # Unconsumed session handoff (C1): the newest task blocked with reason
     # "handoff". A fresh session must see it FIRST — resuming consumes it.
     try:

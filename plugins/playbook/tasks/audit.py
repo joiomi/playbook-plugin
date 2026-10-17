@@ -536,6 +536,71 @@ def check_mindmap_dangling_links(project_path) -> "dict | None":
     }
 
 
+def check_rulings_append_only(project_path) -> "dict | None":
+    """Task 227: the project's owner rulings list (`.agent/rulings.md`) is append-only — `tasks ruling` only adds at
+    the end, so each committed version is a byte prefix of the next. Walks the list's history: for every commit that
+    touched it, its first parent's version must be a prefix of its own (a commit that deleted it is named) — a merge
+    too: two branches that each added a ruling are resolved by keeping this branch's entries as they are and adding the
+    other branch's after them, renumbered, which keeps the first parent's text a prefix; HEAD's version must be a prefix
+    of the working file; a list tracked at HEAD and gone is a finding; a list that does not parse is a finding. An
+    untracked or staged-only list has nothing to compare and is clean; no list and no history of one → None (not
+    applicable, like the map checks with no map)."""
+    from tasks import rulings as _r
+    project_path = Path(project_path)
+    rel = ".agent/" + _r.FILE_NAME
+    path = project_path / rel
+    findings: "list[str]" = []
+    seen = path.exists()
+
+    def git(*args):
+        return subprocess.run(["git", "--no-replace-objects", *args], cwd=project_path, capture_output=True, timeout=60)
+
+    def blob(rev):
+        r = git("cat-file", "blob", f"{rev}:{rel}")
+        return r.stdout if r.returncode == 0 else None
+
+    if git("rev-parse", "--is-inside-work-tree").returncode == 0:
+        log = git("log", "--format=%H %s", "--", rel)
+        for line in log.stdout.decode("utf-8", errors="replace").splitlines():
+            seen = True
+            sha, _, subject = line.partition(" ")
+            cur, parent = blob(sha), blob(f"{sha}^") or b""
+            if cur is None:
+                findings.append(f"commit {sha[:12]} ({subject[:60]}) deleted the list")
+            elif not cur.startswith(parent):
+                findings.append(f"commit {sha[:12]} ({subject[:60]}): an entry was changed or removed by hand — each "
+                                f"version of the list must be the start of the next")
+        head = blob("HEAD")
+        if head is not None:
+            try:
+                work = path.read_bytes()
+            except FileNotFoundError:
+                work = None
+            except OSError as e:
+                work = b""
+                findings.append(f"the working list cannot be read: {e}")
+            if work is None:
+                findings.append("the list is tracked at HEAD and gone from the working tree")
+            elif not work.startswith(head):
+                findings.append("the working list: an entry HEAD holds was changed or removed by hand")
+    if path.is_file():
+        try:
+            _r.read(project_path)
+        except _r.RulingsError as e:
+            findings.append(f"the list cannot be read: {e}")
+    if not seen:
+        return None
+    return {
+        "name": "rulings-append-only",
+        "severity": "advisory",
+        "why": "the owner's rulings list is written once — an edited or removed entry changes what judges are told",
+        "command": "(built-in)",
+        "rc": 0 if findings else 1,
+        "status": "findings" if findings else "clean",
+        "output": "\n".join(findings),
+    }
+
+
 def check_mindmap_wellformed(project_path) -> "dict | None":
     """Advisory: STRUCTURAL defects in how the map is written, caught mechanically
     instead of hoping the author followed the /mindmap checklist. Three kinds, all
@@ -934,6 +999,7 @@ def run_audit(project_path) -> dict:
         ("mindmap-node-freshness", check_mindmap_node_freshness),
         ("mindmap-dangling-links", check_mindmap_dangling_links),
         ("mindmap-wellformed", check_mindmap_wellformed),
+        ("rulings-append-only", check_rulings_append_only),        # task 227
         ("verify-contract-change", check_verify_contract_change),  # T5 drift
     ):
         try:

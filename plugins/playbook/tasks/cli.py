@@ -31,7 +31,7 @@ COMMANDS = (
     "models", "plan-review", "impl-review", "judge", "context", "intent",
     "timeline", "tagger", "tag", "retro", "status", "audit", "blocked",
     "handoff", "parked", "freehand", "adopt", "doctor", "environment", "detect-verify", "merge-doctor",
-    "mindmap-sync", "log", "prepare-merge", "compact", "recall", "dashboard", "guide",
+    "mindmap-sync", "log", "prepare-merge", "compact", "recall", "dashboard", "guide", "ruling",
 )
 
 
@@ -272,6 +272,11 @@ def _main():
         # The single copy of the template's instructions (task 213): a task.md points here.
         from tasks.lifecycle import cmd_guide
         cmd_guide(cmd_args)
+
+    elif cmd == "ruling":
+        # The project's owner rulings list, written once (task 227).
+        from tasks.rulings import cmd_ruling
+        cmd_ruling(cmd_args)
 
     else:
         print(f"Unknown command: {cmd}", file=sys.stderr)

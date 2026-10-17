@@ -126,6 +126,8 @@ GITIGNORE_ENTRIES = (
     ".agent/*/task-registry.lock",
     ".agent/.task-creating.*",
     ".agent/*/.task-creating.*",
+    # Task 227: the lock `tasks ruling` holds while it appends to the project's `.agent/rulings.md` (which is tracked).
+    ".agent/rulings.lock",
 )
 
 

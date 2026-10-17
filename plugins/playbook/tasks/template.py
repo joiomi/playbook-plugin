@@ -963,6 +963,7 @@ Tasks CLI:
     tasks status               current gate position
     tasks dashboard            read-only: what playbook runs on now — panel seats + 14d journal stats, knobs, hooks, judgebench exam, 3 triggers with exact commands
     tasks recall <id|words>    fetch a mind-map node (main+overflow) by id, or locate by keyword
+    tasks ruling add|end|list  the project's owner rulings, written once: add (--permanent | --until "<what ends it>") "<his exact words>"
     tasks compact <N>          move <!-- archive:start/end --> narrative to task-archive.md"""
 
 
@@ -1130,6 +1131,8 @@ Commands:
   new --stub <type> <name> [intent]   Create stub (expands on work)
   guide [<type>]      How to fill a task.md in — gate discipline, what each ## Risk value
                       means, the standing orders; printed by `new` (a stub: when it expands)
+  ruling add|end|list The project's owner rulings, written once into .agent/rulings.md:
+                      add (--permanent | --until "<what ends it>") "<his exact words>"; end <N> "<why>"
   list [--pending]    List all tasks with status
   status              Show head position for active tasks
   compact <N> [--dry-run]  Move <!-- archive:start/end --> narrative from a bloated

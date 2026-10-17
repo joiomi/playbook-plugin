@@ -3473,9 +3473,12 @@ def bound_stale_close(project_path: Path, task_dir: Path, *,
 
 
 # Paths a records-only commit may touch (task 085 round 3, U4): a task's own
-# record directory, the session pointers, the enforcement journal, the chat log.
+# record directory, the session pointers, the enforcement journal, the chat log —
+# and the project's owner rulings list (task 227, plan panel P8: a ruling commit
+# changes no reviewed code, so it leaves every open task's panel fresh).
 _RECORD_PATH = re.compile(
-    r"(^|/)\.agent/(?:[^/]+/)?(?:tasks|sessions|journal)/|(^|/)\.agent/(?:[^/]+/)?chat_log\.md$")
+    r"(^|/)\.agent/(?:[^/]+/)?(?:tasks|sessions|journal)/|(^|/)\.agent/(?:[^/]+/)?chat_log\.md$"
+    r"|(^|/)\.agent/rulings\.md$")
 
 
 def records_only_delta(project_path: Path, snapshot: "dict | None",

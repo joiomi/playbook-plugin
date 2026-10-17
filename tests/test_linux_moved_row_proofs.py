@@ -1074,6 +1074,9 @@ class TheExitCodesTheReferenceStates(unittest.TestCase):
         "and exits 2. The same line ends with the flag that approves exactly that":
             ("tests/test_intent_cost_question.py", "ThroughTheCommandLine",
              "test_the_bare_command_exits_2_and_starts_no_judge"),
+        # task 227: `tasks ruling` — a wrong call, a refused one
+        "leaves the list unchanged (exit codes 2 and 1)":
+            ("tests/test_owner_rulings_list.py", "AddEndList", "test_refusals_leave_the_file_unchanged"),
     }
     REFUSING = ("status", "list", "ls", "parked", "bootstrap", "dashboard", "timeline", "mindmap-sync",
                 "retro", "freehand", "audit")

@@ -327,6 +327,28 @@ words that changed (its nodes were one line each — a median 762 / 1,862 charac
   retro (`tests/test_map_one_fact_per_line.py`).
 - This repository's own MIND_MAP.md keeps its one-line nodes (the project's file).
 
+**The owner's rulings for more than one task, written once** — PHASE-B.md item 2, task 227, the owner's answer of
+2026-10-16 ("Listă de proiect cu durată"). Measured before (task 218, a copy-pattern estimate): 39 of 312 distinct
+rulings sat in 2-6 tasks each (127 copies), at most 9 in force at once (4,779 characters); task 170's SETTLED block was
+cut at 8,000.
+- `tasks ruling add (--permanent | --until "<what ends it>") [--about …] [--date …] "<his exact words>"` writes the
+  ruling once into `.agent/rulings.md` — one list per project, whatever the lane; committed; one fact per line (`## R<N>`,
+  `- Date:`, `- Words:` verbatim, `- Holds:`, `- About:`). `tasks ruling end <N> "<why>"` appends `## R<N> ended`; nothing
+  rewrites an entry. `tasks ruling list [--all]`. Refused, with the list unchanged: no duration or two, a malformed
+  date, words on more than one line or over 1,500 characters, the same words already in force, an unknown or ended
+  number, a list the CLI did not write. A write holds `.agent/rulings.lock` (in init's `.gitignore` block); two at once
+  keep both entries.
+- Every judge's SETTLED block starts with the rulings in force — whole entries within 4,000 characters, the rest named
+  ("N more in force — read `.agent/rulings.md`"); a list that cannot be read arrives as its raw text, marked so. The block
+  is now sent when only the list has something, and to a taskless panel (`--bare` still gets no context); past 8,000
+  characters it is cut on a line and says how many lines it left out (it used to slice mid-line).
+- `tasks bootstrap` prints the rulings in force and reminds that one ends with `tasks ruling end` once its Holds is true.
+- `tasks audit` — `rulings-append-only`: a commit whose list does not start with its first parent's (merges too — two
+  branches' rulings are resolved by keeping this branch's entries and adding the other's after them, renumbered), a
+  working list that does not start with HEAD's, a tracked list deleted, a list that does not parse.
+- A commit that touches only `.agent/rulings.md` is a records-only commit: it leaves an open task's panel fresh.
+- The CLAUDE.md template and the playbook skill say which ruling goes where; a task's own stay in `## Owner rulings`.
+
 ## [1.6.3] — 2026-10-15
 
 **The review stop rule as the plugin's default** — PHASE-B.md item 1, task 209. Until now the round cap (the owner's

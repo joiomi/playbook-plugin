@@ -1602,8 +1602,9 @@ def _cmd_panel_review(cmd_args):
 
     # Task 108 (post-D6 protocol, part a): the owner's rulings + already-rejected
     # triage lines ride FIRST in the payload so a head-clamp never drops them.
+    # Task 227: the project's rulings in force too — a taskless panel gets them; `--bare` gets no context at all.
     from tasks.post_d6 import settled_block as _settled_block
-    _settled_part = _settled_block(task_file) if (task_file and not bare) else ""
+    _settled_part = _settled_block(task_file, project_path=project_path) if not bare else ""
 
     def _build_payload(budget: int) -> dict:
         parts, receipts = [], []
@@ -2886,7 +2887,7 @@ def _cmd_single_review(cmd, cmd_args):
     _is_impl = review_cmd == "impl-review" or (
         review_cmd not in ("plan-review", "impl-review")
         and _pd6_status(task_file).startswith("done"))
-    _sj_settled = _pd6.settled_block(task_file)
+    _sj_settled = _pd6.settled_block(task_file, project_path=project_path)      # task 227: + the project's rulings
     if _sj_settled:
         context_parts.append(_sj_settled)
     _pd6_round = _pd6.newest_impl_round(task_file.parent) if _is_impl else None
