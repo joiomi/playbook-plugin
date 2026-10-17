@@ -1077,6 +1077,9 @@ class TheExitCodesTheReferenceStates(unittest.TestCase):
         # task 227: `tasks ruling` — a wrong call, a refused one
         "leaves the list unchanged (exit codes 2 and 1)":
             ("tests/test_owner_rulings_list.py", "AddEndList", "test_refusals_leave_the_file_unchanged"),
+        # task 228: `tasks verify` — its result is the contract's
+        "(exit 1 when a command fails, 2 for a wrong call)":
+            ("tests/test_verify_memory.py", "TheCommand", "test_tasks_verify_records_green_not_red"),
     }
     REFUSING = ("status", "list", "ls", "parked", "bootstrap", "dashboard", "timeline", "mindmap-sync",
                 "retro", "freehand", "audit")

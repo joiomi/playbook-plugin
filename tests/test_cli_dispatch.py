@@ -98,6 +98,7 @@ _BASELINE = {
     "dashboard": (0, "PLAYBOOK DASHBOARD"),
     "guide": (0, "### Gate discipline (feature"),             # task 213: the single copy of the template text
     "ruling": (2, "say add, end or list"),                     # task 227: the project's owner rulings list
+    "verify": (0, "no verify contract declared — nothing to verify"),   # task 228: in an empty project
 }
 
 

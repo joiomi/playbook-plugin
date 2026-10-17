@@ -351,6 +351,24 @@ cut at 8,000.
 - A commit that touches only `.agent/rulings.md` is a records-only commit: it leaves an open task's panel fresh.
 - The CLAUDE.md template and the playbook skill say which ruling goes where; a task's own stay in `## Owner rulings`.
 
+**A green verify is remembered for exactly that code** — PHASE-B.md item 3, task 228, the owner's answer of 2026-10-16
+("Ține minte ultima verde"). Measured before (task 218, estimates): 323 full verify runs for 135 closed tasks; of 65
+closes, 13 came right after a green full verify and 14 right after a close whose contract was green, with no edit
+between. A full verify here is about 140 s.
+- `tasks verify [<N>]` runs the verify contract the way the close does and remembers a green run per command
+  (`.agent/journal/verify-green.json`). `tasks work done` does not run a command again when its green run is for the
+  same code, ran within the current timeout and bash is usable; the receipt line says "reused: the green run of <time>
+  on the same code (key <12 hex>)". Ticking gates and writing records after the run keep it; any code edit does not.
+- The code key, per fingerprint scope: every file git lists outside `.agent/` — tracked or not, its mode, the sha256 of
+  its raw bytes (not git's tree, which normalises text and records a nested repository as a commit). No key, so no
+  reuse, with a nested repository outside the scopes, a skip-worktree or assume-unchanged entry, or an unfinished
+  merge; the owner's `fingerprint_exclude` is not applied.
+- A green run is remembered only when the code did not change while it ran ("not remembered: …" otherwise); a red run
+  forgets that command's green run of the same code; only a later run replaces a record (under a lock); the close
+  records each run before its red exit and before the later gates, so a blocked close's green run serves the next one.
+- Limits: git-ignored files the tests read, HEAD and the history, the environment, the clock and an edit made and undone
+  during the run are outside the key; the journal is agent-writable like every journal — the receipt names each reuse.
+
 ## [1.6.3] — 2026-10-15
 
 **The review stop rule as the plugin's default** — PHASE-B.md item 1, task 209. Until now the round cap (the owner's

@@ -595,14 +595,17 @@ def cmd_work(cmd_args):
                     _vt = resolve_verify_timeout(project_path)
                     print(f"Verifying close ({len(commands)} declared command(s), risk={risk})...",
                           flush=True)
-                    for label, cmd in commands:
-                        rc, output = mv.run_command_capture(
-                            cmd, str(project_path), timeout_secs=_vt)
+                    # Task 228 (PHASE-B.md item 3; the owner, 2026-10-16 09:42 "Ține minte ultima verde"): a command
+                    # whose green run is remembered for exactly this code is not run again; every run is recorded
+                    # right after it ran — before the red exit below and before the later gates.
+                    from tasks import verify_memory as _vm
+                    for label, cmd, rc, output, how in _vm.run_contract(
+                            project_path, commands, _vt,
+                            lambda _c: mv.run_command_capture(_c, str(project_path), timeout_secs=_vt)):
                         entries.append((label, cmd, rc, output))
                         if rc != 0:
                             verify_failed = True
-                        print(f"  [{'PASS' if rc == 0 else f'FAIL exit {rc}'}] {cmd.splitlines()[0]}",
-                              flush=True)
+                        _vm.print_line(label, cmd, rc, how)
                 else:
                     print(f"  (no verify contract declared — NOTHING verified at close; risk={risk})",
                           file=sys.stderr, flush=True)

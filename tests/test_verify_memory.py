@@ -1,0 +1,327 @@
+#!/usr/bin/env python3
+"""Remember the last green verify (task 228, PHASE-B.md item 3).
+
+The owner, 2026-10-16 09:42 (task 218): "Ține minte ultima verde (Recomandat)" — when exactly the same code already
+passed the verify contract through the CLI, the close does not run it again. The verify commands here append to a
+marker file under `.agent/` each time they run (outside the code key), so a test sees whether one ran; they fail while
+`.agent/red.flag` exists.
+
+Pure stdlib unittest. Run: python3 tests/test_verify_memory.py
+"""
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+_HERE = Path(__file__).resolve().parent
+_PLAYBOOK = _HERE.parent / "plugins" / "playbook"
+sys.path.insert(0, str(_PLAYBOOK))
+from tasks import verify_memory  # noqa: E402
+
+
+def marker_cmd(name):
+    return ("python3 -c \"import pathlib,sys; p=pathlib.Path('.agent/ran-" + name + ".log'); "
+            "p.write_text((p.read_text() if p.exists() else '')+'x'); "
+            "sys.exit(1 if pathlib.Path('.agent/red.flag').exists() else 0)\"")
+
+
+A = marker_cmd("a")
+B = marker_cmd("b")
+
+
+class Project(unittest.TestCase):
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp(prefix="pb228-"))
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.g("init", "-q")
+        (self.d / "home").mkdir()
+        (self.d / ".gitignore").write_text("home/\n.agent/journal/\n.agent/sessions/\n.agent/*.log\n.agent/red.flag\n",
+                                           encoding="utf-8")
+        (self.d / "src.py").write_text("x = 1\n", encoding="utf-8")
+        (self.d / ".agent" / "tasks").mkdir(parents=True)
+        self.contract(A)
+        self.g("add", "-A")
+        self.g("commit", "-qm", "start")
+
+    def contract(self, *cmds, extra=None):
+        cfg = {"verify": cmds[0] if len(cmds) == 1 else {"_always": list(cmds)}}
+        cfg.update(extra or {})
+        (self.d / ".agent" / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+
+    def g(self, *args, cwd=None):
+        return subprocess.run(["git", "-c", "user.email=a@b", "-c", "user.name=p", *args], cwd=cwd or self.d,
+                              capture_output=True, text=True, check=True)
+
+    def env(self):
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("PLAYBOOK_", "CLAUDE"))}
+        env.update({"PYTHONPATH": str(_PLAYBOOK), "HOME": str(self.d / "home"),
+                    "PLAYBOOK_SESSION_ID": "pid-verify-probe"})
+        return env
+
+    def cli(self, *args):
+        return subprocess.run([sys.executable, "-m", "tasks.cli", *args], cwd=self.d, env=self.env(),
+                              capture_output=True, text=True, timeout=300)
+
+    def runs(self, name="a"):
+        p = self.d / ".agent" / f"ran-{name}.log"
+        return len(p.read_text()) if p.exists() else 0
+
+    def red(self, on=True):
+        f = self.d / ".agent" / "red.flag"
+        f.write_text("") if on else f.unlink(missing_ok=True)
+
+    def key(self):
+        return verify_memory.code_key(self.d)
+
+    def recorded(self, cmd=A):
+        return verify_memory.reusable(self.d, self.key(), cmd, timeout=1200)
+
+
+class TheKey(Project):
+
+    def test_stable_and_blind_to_agent_records(self):
+        k = self.key()
+        self.assertTrue(k)
+        self.assertEqual(self.key(), k)
+        (self.d / ".agent" / "tasks" / "note.md").write_text("a record\n", encoding="utf-8")
+        self.assertEqual(self.key(), k)
+
+    def test_every_kind_of_code_change_moves_it(self):
+        changes = {
+            "tracked edit": lambda: (self.d / "src.py").write_text("x = 2\n", encoding="utf-8"),
+            "same-size edit": lambda: (self.d / "src.py").write_text("y = 1\n", encoding="utf-8"),
+            "untracked file": lambda: (self.d / "new.py").write_text("y = 1\n", encoding="utf-8"),
+            "deletion": lambda: (self.d / "src.py").unlink(),
+            "mode": lambda: (self.d / "src.py").chmod(0o755),
+            "LF to CRLF": lambda: (self.d / "src.py").write_bytes(b"x = 1\r\n"),
+        }
+        k = self.key()
+        mode = (self.d / "src.py").stat().st_mode & 0o7777
+        for name, change in changes.items():
+            change()
+            with self.subTest(change=name):
+                self.assertNotEqual(self.key(), k)
+            (self.d / "new.py").unlink(missing_ok=True)
+            self.g("checkout", "-q", "--", "src.py")
+            (self.d / "src.py").chmod(mode)
+            self.assertEqual(self.key(), k, name)
+
+    def test_staging_an_untracked_file_moves_it(self):
+        (self.d / "new.py").write_text("y = 1\n", encoding="utf-8")
+        k = self.key()
+        self.g("add", "new.py")
+        self.assertNotEqual(self.key(), k)
+
+    def test_the_owner_exclude_does_not_hide_code(self):
+        self.contract(A, extra={"fingerprint_exclude": ["src.py"]})
+        k = self.key()
+        (self.d / "src.py").write_text("x = 2\n", encoding="utf-8")
+        self.assertNotEqual(self.key(), k)
+
+    def test_a_nested_code_root(self):
+        sub = self.d / "nested"
+        sub.mkdir()
+        self.g("init", "-q", cwd=sub)
+        (sub / "lib.py").write_text("z = 1\n", encoding="utf-8")
+        self.g("add", "-A", cwd=sub)
+        self.g("commit", "-qm", "n", cwd=sub)
+        (self.d / ".gitignore").write_text((self.d / ".gitignore").read_text() + "nested/\n", encoding="utf-8")
+        self.contract(A, extra={"code_roots": ["nested"]})
+        k = self.key()
+        self.assertTrue(k)
+        (sub / "lib.py").write_text("z = 2\n", encoding="utf-8")
+        self.assertNotEqual(self.key(), k)
+
+    def test_no_key_for_a_repository_outside_the_scopes(self):
+        sub = self.d / "embedded"
+        sub.mkdir()
+        self.g("init", "-q", cwd=sub)
+        (sub / "lib.py").write_text("z = 1\n", encoding="utf-8")
+        self.g("add", "-A", cwd=sub)
+        self.g("commit", "-qm", "e", cwd=sub)
+        self.assertIsNone(self.key())                                    # an untracked embedded repository
+        self.g("add", "embedded")                                        # now a gitlink
+        self.assertIsNone(self.key())
+
+    def test_no_key_during_an_unfinished_merge(self):
+        main = self.g("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+        self.g("checkout", "-qb", "side")
+        (self.d / "src.py").write_text("x = 'side'\n", encoding="utf-8")
+        self.g("commit", "-qam", "side")
+        self.g("checkout", "-q", main)
+        (self.d / "src.py").write_text("x = 'main'\n", encoding="utf-8")
+        self.g("commit", "-qam", "main")
+        subprocess.run(["git", "-c", "user.email=a@b", "-c", "user.name=p", "merge", "-q", "side"], cwd=self.d,
+                       capture_output=True)
+        self.assertIsNone(self.key())
+
+    def test_no_key_with_hidden_index_bits(self):
+        for flag in ("--skip-worktree", "--assume-unchanged"):
+            self.g("update-index", flag, "src.py")
+            with self.subTest(flag=flag):
+                self.assertIsNone(self.key())
+            self.g("update-index", flag.replace("--", "--no-"), "src.py")
+        self.assertTrue(self.key())
+
+
+class TheRecord(Project):
+
+    def test_record_reuse_and_the_conditions(self):
+        k = self.key()
+        self.assertEqual(verify_memory.record(self.d, k, k, A, True, started=100.0, seconds=5.0), "recorded")
+        self.assertIsNotNone(verify_memory.reusable(self.d, k, A, timeout=1200))
+        self.assertIsNone(verify_memory.reusable(self.d, k, A, timeout=3))            # the run would time out now
+        self.assertIsNone(verify_memory.reusable(self.d, k, B, timeout=1200))         # another command
+        self.assertIsNone(verify_memory.reusable(self.d, "0" * 64, A, timeout=1200))  # other code
+        with mock.patch("tasks.bash_resolver.usable_bash", return_value=(None, "gone")):
+            self.assertIsNone(verify_memory.reusable(self.d, k, A, timeout=1200))     # no bash: run it (126)
+
+    def test_only_a_later_run_replaces_or_removes(self):
+        k = self.key()
+        verify_memory.record(self.d, k, k, A, True, started=200.0, seconds=1.0)
+        self.assertNotEqual(verify_memory.record(self.d, k, k, A, False, started=100.0, seconds=1.0), "removed")
+        self.assertIsNotNone(verify_memory.reusable(self.d, k, A, timeout=1200))
+        self.assertEqual(verify_memory.record(self.d, k, k, A, False, started=300.0, seconds=1.0), "removed")
+        self.assertIsNone(verify_memory.reusable(self.d, k, A, timeout=1200))
+        verify_memory.record(self.d, k, k, A, True, started=500.0, seconds=1.0)
+        other = "3" * 64
+        self.assertEqual(verify_memory.record(self.d, other, other, A, True, started=400.0, seconds=1.0), "kept")
+        self.assertIsNotNone(verify_memory.reusable(self.d, k, A, timeout=1200))      # the newer run stays
+
+    def test_a_red_run_removes_only_its_own_code(self):
+        k = self.key()
+        verify_memory.record(self.d, k, k, A, True, started=100.0, seconds=1.0)
+        verify_memory.record(self.d, "1" * 64, "1" * 64, A, False, started=200.0, seconds=1.0)
+        self.assertIsNotNone(verify_memory.reusable(self.d, k, A, timeout=1200))
+
+    def test_moved_code_or_no_key_is_not_recorded(self):
+        k = self.key()
+        self.assertEqual(verify_memory.record(self.d, k, "2" * 64, A, True, started=1.0, seconds=1.0), "skipped")
+        self.assertEqual(verify_memory.record(self.d, None, None, A, True, started=1.0, seconds=1.0), "skipped")
+        self.assertEqual(verify_memory.record(self.d, k, k, "", True, started=1.0, seconds=1.0), "skipped")
+
+    def test_a_corrupt_record_is_none(self):
+        j = self.d / ".agent" / "journal"
+        j.mkdir(parents=True, exist_ok=True)
+        (j / "verify-green.json").write_text("{not json", encoding="utf-8")
+        self.assertIsNone(verify_memory.reusable(self.d, self.key(), A, timeout=1200))
+        k = self.key()
+        self.assertEqual(verify_memory.record(self.d, k, k, A, True, started=1.0, seconds=1.0), "recorded")
+
+
+class TheCommand(Project):
+
+    def test_tasks_verify_records_green_not_red(self):
+        self.red()
+        r = self.cli("verify")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIsNone(self.recorded())
+        self.red(False)
+        r = self.cli("verify")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.runs(), 2)
+        self.assertIsNotNone(self.recorded())
+        r = self.cli("verify")                                   # the same code: reused, not run
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.runs(), 2)
+        self.assertIn("reused", r.stdout)
+
+    def test_code_that_moves_while_it_runs_is_not_remembered(self):
+        self.contract(A.replace("sys.exit(", "pathlib.Path('src.py').write_text('x = 9\\\\n'); sys.exit("))
+        r = self.cli("verify")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("not remembered", r.stdout + r.stderr)
+        self.assertIsNone(verify_memory.reusable(self.d, self.key(), self.contract_cmd(), timeout=1200))
+
+    def contract_cmd(self):
+        return json.loads((self.d / ".agent" / "config.json").read_text())["verify"]
+
+    def test_no_contract_records_nothing(self):
+        (self.d / ".agent" / "config.json").write_text("{}", encoding="utf-8")
+        r = self.cli("verify")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertFalse((self.d / ".agent" / "journal" / "verify-green.json").exists())
+
+
+class TheClose(Project):
+
+    def task(self, risk="reversible"):
+        r = self.cli("new", "light", "probe", "probe the reuse")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        tf = next((self.d / ".agent" / "tasks").glob("001-*/task.md"))
+        text = tf.read_text(encoding="utf-8").replace("## Risk\nunclassified\n", f"## Risk\n{risk}\n")
+        text = text.replace("- [ ] ", "- [x] ") .replace("\n- [x] ", "\n- [x] ")
+        text = "\n".join(ln + (" — done" if ln.startswith("- [x] ") else "") for ln in text.split("\n"))
+        tf.write_text(text, encoding="utf-8")
+        self.g("add", "-A")
+        self.g("commit", "-qm", "the task")
+        r = self.cli("work", "1")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        return tf
+
+    def test_the_close_reuses_a_green_run_of_the_same_code(self):
+        """Q1."""
+        tf = self.task()
+        self.assertEqual(self.cli("verify").returncode, 0)
+        self.assertEqual(self.runs(), 1)
+        r = self.cli("work", "done")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.runs(), 1)                                   # not run again
+        self.assertIn("reused", r.stdout + r.stderr)
+        text = tf.read_text(encoding="utf-8")
+        self.assertRegex(text, r"\[PASS\] `[^`]+` \([^)]+\) — reused: the green run of .+ on the same code \(key [0-9a-f]{12}\)")
+        from tasks import audit
+        sweep = audit.check_verify_contract_change(self.d)
+        self.assertNotEqual((sweep or {}).get("status"), "findings", sweep)
+
+    def test_the_close_runs_after_a_code_edit(self):
+        """Q2."""
+        self.task()
+        self.assertEqual(self.cli("verify").returncode, 0)
+        (self.d / "src.py").write_text("x = 2\n", encoding="utf-8")
+        r = self.cli("work", "done")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.runs(), 2)
+
+    def test_a_red_close_clears_the_record_before_it_exits(self):
+        """A green record the close may not reuse (its 50 s are over a 10 s timeout) — the command runs, red, and its
+        result is recorded before the close exits: the record is gone."""
+        self.task()
+        k = self.key()
+        verify_memory.record(self.d, k, k, A, True, started=1.0, seconds=50.0)
+        self.contract(A, extra={"verify_timeout_secs": 10})
+        self.red()
+        r = self.cli("work", "done")
+        self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.runs(), 1)
+        self.assertIsNone(verify_memory.reusable(self.d, self.key(), A, timeout=None))
+
+    def test_a_close_blocked_after_a_green_verify_is_reused_next_time(self):
+        tf = self.task(risk="unclassified")                                 # blocked after the verify: no review
+        r = self.cli("work", "done")
+        self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.runs(), 1)
+        tf.write_text(tf.read_text(encoding="utf-8").replace("## Risk\nunclassified\n", "## Risk\nreversible\n"),
+                      encoding="utf-8")
+        r = self.cli("work", "done")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.runs(), 1)
+
+    def test_two_commands_one_reused_one_run(self):
+        self.contract(A, B)
+        self.task()
+        self.assertEqual(self.cli("verify").returncode, 0)
+        C = marker_cmd("c")
+        self.contract(A, C)
+        r = self.cli("work", "done")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual((self.runs("a"), self.runs("b"), self.runs("c")), (1, 1, 1))
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

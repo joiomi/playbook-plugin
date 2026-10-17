@@ -31,7 +31,7 @@ COMMANDS = (
     "models", "plan-review", "impl-review", "judge", "context", "intent",
     "timeline", "tagger", "tag", "retro", "status", "audit", "blocked",
     "handoff", "parked", "freehand", "adopt", "doctor", "environment", "detect-verify", "merge-doctor",
-    "mindmap-sync", "log", "prepare-merge", "compact", "recall", "dashboard", "guide", "ruling",
+    "mindmap-sync", "log", "prepare-merge", "compact", "recall", "dashboard", "guide", "ruling", "verify",
 )
 
 
@@ -277,6 +277,11 @@ def _main():
         # The project's owner rulings list, written once (task 227).
         from tasks.rulings import cmd_ruling
         cmd_ruling(cmd_args)
+
+    elif cmd == "verify":
+        # The verify contract as the close runs it, a green run remembered for the same code (task 228).
+        from tasks.verify_memory import cmd_verify
+        cmd_verify(cmd_args)
 
     else:
         print(f"Unknown command: {cmd}", file=sys.stderr)

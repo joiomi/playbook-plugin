@@ -1,0 +1,282 @@
+"""Remember the last green verify (task 228, PHASE-B.md item 3).
+
+The owner, 2026-10-16 09:42 (task 218): "Ține minte ultima verde (Recomandat)" — when exactly the same code already
+passed the project's verify contract through the CLI, the close does not run it again.
+
+The code key, per scope the panel fingerprints (`core._tail_cert_scopes`: the outer tree and each `code_roots` repo):
+every path `git ls-files --cached --others --exclude-standard` lists outside `.agent/` — tracked or not, its mode, the
+sha256 of its RAW working bytes (a link: its target; a tracked file gone: "missing"). Raw bytes, not git's tree: git
+normalises text by `.gitattributes`, records a nested repository as the commit it points at, and hides an edit under a
+skip-worktree or assume-unchanged bit (task 228's plan panel). No key — so nothing is reused — when a scope cannot be
+listed, an index entry is unmerged, a gitlink or an untracked repository that is not itself a scope, or carries one of
+those bits. The owner's `fingerprint_exclude` is not applied: it may cover code. `.agent` is outside the key, so gates
+and records written after a run keep it valid.
+
+The memory: `<lane>/journal/verify-green.json` — per command, its newest green run `{key, command, started, ts,
+seconds}`, read and written under `<lane>/journal/verify-green.lock`. A green command is recorded only when the key
+before its run equals the key after it; a red one removes that command's record of that key; only a run that started
+later replaces or removes a record. The close reuses a command when its record has the code's key, its seconds are
+under the current timeout and bash is usable (else the command runs, and a missing bash fails it as before).
+
+Limits: what the key cannot see — git-ignored files the tests read, HEAD and the history, the environment, the clock,
+an edit made and undone while the run ran — can make the same code red another time; the journal is agent-writable, like
+every journal (the receipt names the reused run and its key).
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import stat
+import subprocess
+import time
+from pathlib import Path
+
+FILE_NAME = "verify-green.json"
+LOCK_NAME = "verify-green.lock"
+VERSION = 2
+
+
+def _journal(project: "Path | str") -> Path:
+    from tasks.core import resolve_agent_dir
+    return resolve_agent_dir(Path(project)) / "journal"
+
+
+def _git(repo: Path, args: "list[str]") -> "bytes | None":
+    try:
+        r = subprocess.run(["git", "--no-replace-objects", *args], cwd=repo, capture_output=True, timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout if r.returncode == 0 else None
+
+
+def _scope_digest(repo: Path, inner: "set[str]") -> "str | None":
+    """The digest of one scope's working files, or None when it cannot be trusted (see the module docstring)."""
+    staged = _git(repo, ["ls-files", "-z", "-s", "--cached"])
+    tags = _git(repo, ["ls-files", "-z", "-v", "--cached"])
+    others = _git(repo, ["ls-files", "-z", "--others", "--exclude-standard"])
+    if staged is None or tags is None or others is None:
+        return None
+    tracked: "set[str]" = set()
+    for rec in staged.split(b"\0"):
+        if not rec:
+            continue
+        meta, _, path = rec.partition(b"\t")
+        mode, _sha, stage = meta.split(b" ")[:3]
+        p = path.decode("utf-8", "surrogateescape")
+        if stage != b"0":
+            return None                                          # an unfinished merge
+        if mode == b"160000" and p not in inner:
+            return None                                          # a gitlink outside the scopes
+        tracked.add(p)
+    for rec in tags.split(b"\0"):
+        if rec and (rec[:1] == b"S" or rec[:1].islower()):
+            return None                                          # skip-worktree / assume-unchanged
+    untracked: "set[str]" = set()
+    for rec in others.split(b"\0"):
+        if not rec:
+            continue
+        p = rec.decode("utf-8", "surrogateescape")
+        if p.endswith("/"):
+            if p.rstrip("/") in inner:
+                continue
+            return None                                          # an untracked repository outside the scopes
+        untracked.add(p)
+    h = hashlib.sha256()
+    for p in sorted(tracked | untracked):
+        if p == ".agent" or p.startswith(".agent/") or p in inner:
+            continue
+        full = repo / p
+        try:
+            st = os.lstat(full)
+        except FileNotFoundError:
+            h.update(f"{p}\0{'t' if p in tracked else 'u'}\0missing\n".encode("utf-8", "surrogateescape"))
+            continue
+        except OSError:
+            return None
+        if stat.S_ISLNK(st.st_mode):
+            body = "link:" + os.readlink(full)
+        elif stat.S_ISREG(st.st_mode):
+            try:
+                body = hashlib.sha256(full.read_bytes()).hexdigest()
+            except OSError:
+                return None
+        else:
+            return None                                          # a directory or a special file where a file was
+        h.update(f"{p}\0{'t' if p in tracked else 'u'}\0{stat.S_IMODE(st.st_mode):o}\0{body}\n"
+                 .encode("utf-8", "surrogateescape"))
+    return h.hexdigest()
+
+
+def code_key(project: "Path | str") -> "str | None":
+    """The key of the code as it stands now, or None when it cannot be trusted."""
+    from tasks.core import _tail_cert_scopes, load_config
+    project = Path(project)
+    try:
+        cfg = load_config(project)
+    except Exception:
+        cfg = {}
+    scopes = _tail_cert_scopes(project, cfg)
+    h = hashlib.sha256(f"v{VERSION}\n".encode("utf-8"))
+    for name, repo in sorted(scopes.items()):
+        base = Path(repo).resolve()
+        inner = set()
+        for other in scopes.values():
+            o = Path(other).resolve()
+            if o != base and base in o.parents:
+                inner.add(o.relative_to(base).as_posix())
+        part = _scope_digest(Path(repo), inner)
+        if part is None:
+            return None
+        h.update(f"{name}\0{part}\n".encode("utf-8"))
+    return h.hexdigest()
+
+
+def _load(project) -> dict:
+    try:
+        data = json.loads((_journal(project) / FILE_NAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    runs = data.get("runs") if isinstance(data, dict) and data.get("v") == VERSION else None
+    if not isinstance(runs, dict):
+        return {}
+    return {c: r for c, r in runs.items()
+            if isinstance(r, dict) and r.get("command") == c and isinstance(r.get("key"), str)
+            and isinstance(r.get("started"), (int, float)) and isinstance(r.get("seconds"), (int, float))
+            and isinstance(r.get("ts"), str)}
+
+
+def reusable(project: "Path | str", key: "str | None", command: str, timeout: "float | None") -> "dict | None":
+    """The green record the close may reuse for `command` on code `key`, or None."""
+    if not key or not command:
+        return None
+    from tasks import bash_resolver
+    if not bash_resolver.usable_bash()[0]:
+        return None
+    rec = _load(project).get(command)
+    if rec is None or rec["key"] != key:
+        return None
+    if timeout and rec["seconds"] >= timeout:
+        return None
+    return rec
+
+
+def record(project: "Path | str", key_before: "str | None", key_after: "str | None", command: str, ok: bool,
+           *, started: float, seconds: float) -> str:
+    """After one command ran: "recorded" (green, the code unchanged while it ran), "removed" (red, its record of this
+    code, older than this run), "kept" or "skipped". Never raises for a journal it cannot write."""
+    if not command or not key_before:
+        return "skipped"
+    if ok and key_before != key_after:
+        return "skipped"
+    from tasks.atomic import atomic_write
+    from tasks.filelock import named_lock
+    j = _journal(project)
+    try:
+        j.mkdir(parents=True, exist_ok=True)
+        with named_lock(j / LOCK_NAME):
+            runs = _load(project)
+            rec = runs.get(command)
+            if ok:
+                if rec is not None and rec["started"] >= started:
+                    return "kept"                                # a run that started later already recorded
+                runs[command] = {"key": key_before, "command": command, "started": started,
+                                 "ts": time.strftime("%Y-%m-%d %H:%M:%S"), "seconds": round(seconds, 3)}
+                what = "recorded"
+            else:
+                if rec is None or rec["key"] != key_before or rec["started"] >= started:
+                    return "kept"
+                del runs[command]
+                what = "removed"
+            atomic_write(j / FILE_NAME, json.dumps({"v": VERSION, "runs": runs}, sort_keys=True) + "\n")
+            return what
+    except Exception:                                            # noqa: BLE001 — the memory never breaks a close
+        return "skipped"
+
+
+def reused_note(rec: dict) -> str:
+    """The receipt's first output line for a reused command."""
+    return f"reused: the green run of {rec['ts']} on the same code (key {rec['key'][:12]})"
+
+
+NOT_REMEMBERED = "not remembered: the code changed while the verify ran"
+
+
+def run_contract(project: "Path | str", commands: "list[tuple[str, str]]", timeout, run) -> "list[tuple]":
+    """Run each `(label, command)` as the close runs it — `run(command) -> (rc, output)` — reusing a green run of the
+    same code, and record each result right after it ran (before any caller can exit on a red one). Returns
+    `(label, command, rc, output, how)` per command, `how` one of "reused", "ran", or NOT_REMEMBERED (green, but the
+    code moved while it ran)."""
+    out = []
+    for label, cmd in commands:
+        before = code_key(project)
+        rec = reusable(project, before, cmd, timeout)
+        if rec is not None:
+            out.append((label, cmd, 0, reused_note(rec), "reused"))
+            continue
+        started = time.time()
+        rc, output = run(cmd)
+        seconds = time.time() - started
+        after = code_key(project)
+        record(project, before, after, cmd, rc == 0, started=started, seconds=seconds)
+        moved = rc == 0 and before is not None and before != after
+        out.append((label, cmd, rc, output, NOT_REMEMBERED if moved else "ran"))
+    return out
+
+
+def print_line(label: str, cmd: str, rc: int, how: str) -> None:
+    first = cmd.splitlines()[0] if cmd.strip() else cmd
+    tag = "PASS" if rc == 0 else f"FAIL exit {rc}"
+    if how == "reused":
+        tag += ", reused"
+    print(f"  [{tag}] {first}" + (f"  ({NOT_REMEMBERED})" if how == NOT_REMEMBERED else ""), flush=True)
+
+
+def cmd_verify(cmd_args: "list[str]") -> None:
+    """`tasks verify [<N>]` — run the project's verify contract as the close runs it (for task N's risk, or the active
+    task's, else the `_always` bar) and remember a green run, so a close of the same code does not run it again."""
+    import sys
+    from tasks.core import (DEFAULT_RISK, _find_active_task, extract_risk, resolve_agent_dir,
+                            resolve_verify_commands, resolve_verify_timeout)
+    from tasks.shared import find_project_root
+    if len(cmd_args) > 1 or (cmd_args and not cmd_args[0].isdigit()):
+        print("Error: usage: tasks verify [<N>]", file=sys.stderr)
+        raise SystemExit(2)
+    from tasks.core import resolve_session_id
+    from tasks.intent import find_task_dir
+    project = find_project_root()
+    tasks_dir = resolve_agent_dir(project) / "tasks"
+    task_file = None
+    if cmd_args:
+        d = find_task_dir(tasks_dir, cmd_args[0])
+        if d is None or not (d / "task.md").is_file():
+            print(f"Error: no task {cmd_args[0]}", file=sys.stderr)
+            raise SystemExit(2)
+        task_file = d / "task.md"
+    else:
+        sid = resolve_session_id(quiet=True)       # this session's task first (read only — no session dir is made)
+        state = resolve_agent_dir(project) / "sessions" / sid / "current_state" if sid else None
+        num = state.read_text(encoding="utf-8", errors="replace").strip() if state and state.is_file() else ""
+        d = find_task_dir(tasks_dir, num) if num else None
+        task_file = (d / "task.md") if d is not None and (d / "task.md").is_file() else _find_active_task(project)
+    risk = extract_risk(task_file) if task_file is not None else DEFAULT_RISK
+    commands = resolve_verify_commands(project, risk)
+    if not commands:
+        print("(no verify contract declared — nothing to verify)")
+        return
+    from tasks.lifecycle import _merge_verify_module
+    mv = _merge_verify_module()
+    if mv is None:
+        print("Error: cannot load the verify runner (skills/merge/merge-verify.py missing).", file=sys.stderr)
+        raise SystemExit(1)
+    timeout = resolve_verify_timeout(project)
+    print(f"Verifying ({len(commands)} declared command(s), risk={risk})...", flush=True)
+    results = run_contract(project, commands, timeout,
+                           lambda c: mv.run_command_capture(c, str(project), timeout_secs=timeout))
+    failed = False
+    for label, cmd, rc, output, how in results:
+        print_line(label, cmd, rc, how)
+        if rc != 0:
+            failed = True
+            print((output or "").rstrip(), flush=True)
+    raise SystemExit(1 if failed else 0)
