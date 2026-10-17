@@ -271,6 +271,34 @@ and the command guard's acknowledgement follow that value), and `- [ ] \x85Freeh
 - A record whose value or gate has such a character next to it now reads stricter (the owner's rule: design for new
   projects).
 
+**A gate's note goes on the lines under its title** — PHASE-B.md item 2, task 225, the owner's answer of 2026-10-16
+("Liste scurte de la început": the template, the guide and the map write one fact per line, and a gate's note goes on
+the lines under its title — this is the note half). Measured before (task 218): a gate line with its note was a median
+636 characters, and a line diff of task.md counts 2x the words that changed.
+- Every instruction says it: the gate-discipline stickers ("check the box and, in the same edit, write its outcome on
+  the lines under it — indented two spaces deeper than the gate, one fact per line"), the Design Phase note, the
+  activation briefing, the AGENTS / Antigravity templates, the CLAUDE.md template, the light Verify gate ("… paste its
+  result under this gate"), the guard's messages and the hook's bare-tick warning; the playbook skill's sample gates
+  are one sentence each. A note written after the title still counts everywhere.
+- The batch-tick guard counts the note: a gate's annotation is what its line gained plus what its note adds over the
+  lines the old text already had — the note being the non-gate lines indented deeper than the gate, a blank line kept
+  when the next line is deeper (`core.gate_note_ends`, the judges' trim's rule, copied into the guard so it imports
+  nothing it could fail on, held equal by a test). A note written while the gate was still open, or moved from another
+  gate, adds nothing; a line that only goes on from one adds what follows it; the 8-character floor is over the sum. A
+  checkbox inside a closed code fence is now an example, not a gate (a note may hold one); an unclosed fence hides
+  nothing.
+- The echo calls a tick bare only when nothing was written — after the title or under it. Its limit: a note written
+  under the gate before the tick counts too (the echo keeps no copy of the file before the edit; the guard, which has
+  both texts, is the strict check).
+- The retro's bare count reads the same rule: a nested checked gate is no longer its parent's note (a bare parent above
+  a noted child counted no bare gate); a `→` line right after a gate still counts.
+- Task 223's leftovers: a filled-in placeholder (`Fix: (what to change) make …`) keeps its own text in the judges' trim
+  (`)` is no end mark); a dash glued to a title starts its note; the ellipsis guard and an older record's trim are
+  tested; the guide renders a type's notes once; `tasks retro` ends its guide with a blank line; the arena's config is
+  read and closed; a freehand block names `tasks guide freehand` in the file.
+- This repository's own CLAUDE.md and every record written before keep notes on the gate's line; the installed guard
+  reads only those until a release and `/playbook:init`.
+
 ## [1.6.3] — 2026-10-15
 
 **The review stop rule as the plugin's default** — PHASE-B.md item 1, task 209. Until now the round cap (the owner's

@@ -32,6 +32,17 @@ BEFORE = _HERE / "fixtures" / "template_before_213"
 # record written before keeps the old line — one stale line, not worth code that recognises it: the owner's rule of
 # 2026-10-16, "design for new projects, not legacy").
 REWORDED = {
+    # task 225: a gate's note goes on the lines under its title (the owner, 2026-10-16: "Liste scurte de la început")
+    "> Never backfill. The document IS the execution trace. Closing several ALREADY-DONE gates in one edit is allowed ONLY when each line carries its own outcome note (hook-enforced, max 5; a bare batch tick is blocked; where no hook runs, keep to one gate at a time).":
+        "> Never backfill. The document IS the execution trace. Closing several ALREADY-DONE gates in one edit is allowed ONLY when each gate carries its own outcome note (hook-enforced, max 5; a bare batch tick is blocked; where no hook runs, keep to one gate at a time).",
+    "> **Closing a gate:** check the box, append your outcome. Never replace the original text.":
+        "> **Closing a gate:** check the box and, in the same edit, write its outcome on the lines under it — indented two spaces deeper than the gate, one fact per line (`- [x] <the gate>` then `  - 283 tests green` on the next line). Never replace the original text.",
+    "> **Write a 1-sentence answer for each gate.** A bare checkmark means you skipped it.":
+        "> **Answer each gate on the lines under it** (indented two spaces deeper, one fact per line). A bare checkmark means you skipped it.",
+    "> Never backfill. The document IS the execution trace. Batch-closing ALREADY-DONE gates needs an outcome note per line (hook-enforced; where no hook runs, one gate at a time).":
+        "> Never backfill. The document IS the execution trace. Batch-closing ALREADY-DONE gates needs an outcome note per gate (hook-enforced; where no hook runs, one gate at a time).",
+    "> Gate discipline unchanged: one gate → do work → check box with its outcome. Never backfill. Batch-closing ALREADY-DONE gates needs an outcome note per line (hook-enforced; where no hook runs, one at a time).":
+        "> Gate discipline unchanged: one gate → do work → check box, its outcome on the lines under it (indented two spaces deeper, one fact per line). Never backfill. Batch-closing ALREADY-DONE gates needs an outcome note per gate (hook-enforced; where no hook runs, one at a time).",
     # task 219: the echo no longer repeats after every call — the drift signal is the 10-call reminder
     "> If you see the same gate 5+ times in the hook echo, you're drifting — STOP and update.":
         "> If the hook's reminder (one line every 10 calls on the same gate) names the same gate a third time, "

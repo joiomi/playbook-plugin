@@ -227,7 +227,8 @@ class BatchBlocks(unittest.TestCase):
         # Batch-5 field finding (task 011 journal): the agent's first batches
         # were born-checked-blocked because it REWROTE the gate text while
         # checking, then had to infer the cause. The block message must name
-        # the likely cause and the fix (restore original text, APPEND).
+        # the likely cause and the fix (restore original text; since task 225 the outcome goes on the lines under
+        # the gate, indented — the owner's 2026-10-16 "Liste scurte de la început").
         f = ProjectFixture()
         rewritten = ["- [x] G1: suite ran and everything is green now",
                      "- [x] G2: mind map refreshed in place, node 10"]
@@ -235,7 +236,7 @@ class BatchBlocks(unittest.TestCase):
         self.assertEqual(r.returncode, 2, r.stderr.decode())
         err = r.stderr.decode()
         self.assertIn("rewrote", err.lower())
-        self.assertIn("append", err.lower())
+        self.assertIn("lines under it", err.lower())
 
     def test_born_checked_block_shows_the_closest_original(self):
         # Batch-6 journal one-change (F20): the agent truncated a parenthetical

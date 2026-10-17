@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -68,6 +69,12 @@ REWORDED = {
         "Assess first and fix after: keep the two separate.",
     "Midpoint checkpoint: patterns emerging? Abort early or continue?":
         "Midpoint checkpoint: are patterns emerging, and do you stop early or continue?",
+}
+# Task 225: a one-sentence title reworded because its note now goes under it (the owner's 2026-10-16 "Liste scurte de
+# la început") — nothing else was in the old text.
+NOTE_REWORDED = {
+    "Verify: run the check that proves it — paste the result on this line":
+        "Verify: run the check that proves it and paste its result under this gate.",
 }
 # The retro scaffold's (`retro.py`) gates before this task, old -> new; two carried more and are in
 # `RETRO_GATE_NOTES`, the rest are rewords.
@@ -211,6 +218,10 @@ class TheFreehandGates(unittest.TestCase):
                 self.assertEqual(sentences(title), 1, title)
         notes = {t for t, _old in template.FREEHAND_GATE_NOTES}
         self.assertEqual(sum(t in notes for t in written), 4)
+        # both blocks name their guide in the file (task 225; grok, 223's impl round 2)
+        for f in sorted((self.d / ".agent" / "tasks").glob("*/task.md")):
+            with self.subTest(file=f.parent.name):
+                self.assertIn(lifecycle._FREEHAND_POINTER, f.read_text(encoding="utf-8"))
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         (self.d / ".agent" / "chat_log.md").write_text(
             f"# Project Chat Log\n\n---\n\n**[M001]** [{now}] `HOST` (claude/pid-223-freehand)\n\nfreehand work\n",
@@ -227,7 +238,7 @@ class TheRetroCommand(TheFreehandGates):
     def test_the_retro_prints_its_guide_and_points_at_it(self):
         self.cli("new", "quick", "probe")
         r = self.cli("retro")
-        self.assertIn("=== TASK GUIDE (again: tasks guide retro) ===\n" + template.guide_text("retro"), r.stdout)
+        self.assertIn("=== TASK GUIDE (again: tasks guide retro) ===\n" + template.guide_text("retro") + "\n\n", r.stdout)
         text = next((self.d / ".agent" / "tasks").glob("002-retro-*/task.md")).read_text(encoding="utf-8")
         self.assertIn("`.claude/bin/tasks guide retro`", text)
         for title, _old in template.RETRO_GATE_NOTES:
@@ -238,18 +249,39 @@ class TheRetroCommand(TheFreehandGates):
 
 class TheGuideHoldsWhatTheTitlesSaid(unittest.TestCase):
 
+    def test_a_type_guide_renders_its_notes_once(self):
+        """Task 225 (223's impl round 2, sonnet): `gate_notes_text` renders the type — once per guide."""
+        with mock.patch.object(template, "gate_notes_text", wraps=template.gate_notes_text) as spy:
+            template.guide_text("feature")
+        self.assertEqual(spy.call_count, 1)
+
+    def test_the_arena_config_is_read_and_closed(self):
+        """Task 225 (agy, 223's impl round 2, [PRE-EXISTING]): no file is left open by the eval switch."""
+        import json as _json
+        import warnings
+        d = Path(tempfile.mkdtemp(prefix="pb225eval-"))
+        self.addCleanup(shutil.rmtree, d, True)
+        cfg = d / "eval.json"
+        cfg.write_text(_json.dumps({"sticker": "off"}), encoding="utf-8")
+        with mock.patch.dict(os.environ, {"PLAYBOOK_EVAL_CONFIG": str(cfg)}), warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always", ResourceWarning)
+            text = template.render_template(1, "X", "feature")
+        self.assertNotIn(template.pointer("feature"), text)            # the switch was read
+        self.assertEqual([x for x in w if issubclass(x.category, ResourceWarning)], [])
+
     def test_every_changed_title_is_in_the_guide_or_a_plain_reword(self):
         guide = template.guide_text()
         changed = old_to_new()
-        self.assertEqual(len(changed), 27)
+        self.assertEqual(len(changed), 28)
+        plain = {**REWORDED, **NOTE_REWORDED}
         for old, new in changed.items():
             with self.subTest(old=old[:60]):
-                if old in REWORDED:
-                    self.assertEqual(REWORDED[old], new)
+                if old in plain:
+                    self.assertEqual(plain[old], new)
                     self.assertNotIn(old, guide)
                 else:
                     self.assertIn(f"> **{new}**\n> {old}", guide)
-        self.assertEqual(len(changed) - len(REWORDED), len(template.GATE_NOTES))
+        self.assertEqual(len(changed) - len(plain), len(template.GATE_NOTES))
 
     def test_the_retro_gates(self):
         new = retro_fixed_gates(retro_text())
@@ -390,6 +422,41 @@ class TheTrimReadsTheNewTitles(unittest.TestCase):
         for body, want in cases:
             with self.subTest(body=body):
                 self.assertEqual(core._template_title_of(body), want)
+
+    def test_a_filled_in_placeholder_keeps_its_own_words(self):
+        """Task 225 (223's impl round 2, grok): `)` is no end mark — a fill-in gate completed on its line is the
+        agent's own title, not the placeholder's."""
+        body = "Fix: (what to change) make _template_title_of keep the filled-in text"
+        self.assertIsNone(core._template_title_of(body))
+        self.assertIn(body[:TRIM_TITLE_MAX], self._trim(body + " — note " + "n" * 300))
+        self.assertEqual(core._template_title_of("Fix: (what to change) — done"), "Fix: (what to change)")
+
+    def test_a_dash_glued_to_the_title_starts_the_note(self):
+        """Task 225 (223's impl round 2, opus): `Do the work—done` / `Do the work–done` — the note starts at
+        the dash, as it does after a space."""
+        for dash in ("—", "–"):
+            with self.subTest(dash=hex(ord(dash))):
+                self.assertEqual(core._template_title_of(f"Do the work{dash}done"), "Do the work")
+        self.assertIsNone(core._template_title_of("Do the work-around"))     # a hyphen is a word's, not a note's
+
+    def test_a_template_title_past_the_limit_is_cut_with_an_ellipsis(self):
+        """The guard arm for a built-in title past TRIM_TITLE_MAX (223's impl round 2, opus, sonnet): none is today
+        (the sweep forbids it), so a long one is planted for the test."""
+        long_title = "Run the long thing " + "x" * 200
+        with mock.patch.object(core, "_TEMPLATE_GATE_TITLES", (long_title,)):
+            out = self._trim(long_title + " — note-start " + "n" * 300)
+        self.assertIn(long_title[:TRIM_TITLE_MAX].rstrip() + " …", out)
+        self.assertIn("[… note cut", out)
+
+    def test_an_older_records_long_title_reads_like_an_agents(self):
+        """The CHANGELOG's stated limit (223's impl round 2, opus): a title from before task 223 is no template title
+        now — its first 120 characters, then more of its own text where the note's start used to show."""
+        old = max(gates((BEFORE / "render-default.md").read_text(encoding="utf-8")), key=len)
+        self.assertGreater(len(old), 300)
+        lines = [(1, "## Work\n"), (2, f"- [x] {old} — note-start {'n' * 300}\n")]
+        out = core._trim_notes(lines, 40, set())[1][1]
+        self.assertTrue(out.startswith("- [x] " + old[:TRIM_TITLE_MAX]), out[:200])
+        self.assertNotIn("note-start", out)
 
     def test_a_template_title_with_its_note_keeps_the_title_whole(self):
         out = self._trim("Do the work — 02:06: " + "n" * 300)

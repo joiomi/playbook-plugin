@@ -38,7 +38,7 @@ them, the agent stays in action mode and produces shallow output.
 
 **Critique** (use FIRST — before diving in, and when output feels thin):
 ```
-- [ ] Critique: What's shallow here? What am I avoiding? What would a skeptic ask?
+- [ ] Critique: what is shallow here, what am I avoiding, what would a skeptic ask?
 ```
 Critique was the highest-leverage gate in the first task that used it. Starting
 with "what's wrong with the previous approach?" shaped everything that followed.
@@ -46,7 +46,7 @@ Use it at task start, not just when struggling.
 
 **Checkpoint** (after completing a work section):
 ```
-- [ ] Checkpoint: What did I just learn that I didn't expect? Is the approach working? Scope check: has scope changed from the original Intent? Continue, replan, or split?
+- [ ] Checkpoint: what did I learn, is the approach working, has the scope moved — continue, replan or split?
 ```
 The question "what didn't I expect?" is more generative than "is this working?"
 It forces noticing, not just confirming. **Investigation checkpoints must include
@@ -56,7 +56,7 @@ the data model wrong. A concrete example would have caught it.
 
 **Replan** (when reality diverges from the plan):
 ```
-- [ ] Replan: Original assumption was X. Reality is Y. New approach:
+- [ ] Replan: the assumption was X, reality is Y, the new approach is Z.
 ```
 
 Use Critique at the start and at transitions. Use Checkpoint after every
@@ -68,7 +68,7 @@ pattern section. Use Replan when stuck or when critique reveals a gap.
 - **Extension:** Task spawns new scope within the document, with Critique at the boundary. Scope grows explicitly, not silently.
 - **Adversarial examples:** "Who was right?" with quoted evidence. Tests the model against reality, not just coverage metrics.
 - **Quantified checkpoints:** Numbers, not yes/no. "57 tests doing real work" beats "tests look good."
-- **Decide:** Inline tradeoff gate: `- [ ] Decide: A is ___. B is ___. Choosing ___ because ___.` For major decisions, add an options table with pros/cons/cost-to-undo before deciding.
+- **Decide:** Inline tradeoff gate: `- [ ] Decide: A is ___, B is ___ — choosing ___ because ___.` For major decisions, add an options table with pros/cons/cost-to-undo before deciding.
 
 ---
 

@@ -98,7 +98,7 @@ def _parse_task(num: int, slug: str, content: str) -> dict:
         # Continuation lines beneath the gate (numbered sub-bullets, `→` lines,
         # any deeper-indented content) ARE the annotation — not bare (5a: 17/17
         # flagged "bare" gates were continuation-annotated false positives).
-        if _gate_has_continuation(lines, g["line"], g["indent"]):
+        if _gate_has_continuation(lines, g["line"], {x["line"] for x in gates}):
             continue
         bare_count += 1
 
@@ -131,29 +131,17 @@ def _parse_task(num: int, slug: str, content: str) -> dict:
 _GATE_LINE_RE = re.compile(r'^\s*- \[[ xX]\]')
 
 
-def _gate_has_continuation(lines: list[str], line_idx: int, indent: int) -> bool:
-    """True if the gate at `line_idx` is annotated by continuation content on the
-    following lines — a deeper-indented sub-bullet/prose, or a `→` line. This is
-    how agents annotate multi-part outcomes ("Fix — 4 changes:" then numbered
-    sub-bullets), so such a gate is NOT a bare checkmark (bug report #5a).
-
-    Only the first non-blank line after the gate is inspected, and a same-or-less
-    indented new gate ends the gate's scope — so an unrelated indented block far
-    below can't mask a genuinely bare gate."""
-    for i in range(line_idx + 1, len(lines)):
-        raw = lines[i]
-        stripped = raw.strip()
-        if not stripped:
-            continue  # skip blank lines between a gate and its continuation
-        if stripped.startswith("→"):
-            return True
-        line_indent = len(raw) - len(raw.lstrip())
-        # A new gate at same-or-shallower indent = next gate; scope ended.
-        if _GATE_LINE_RE.match(raw) and line_indent <= indent:
-            return False
-        # Deeper-indented non-gate content = this gate's annotation.
-        return line_indent > indent
-    return False
+def _gate_has_continuation(lines: list[str], line_idx: int, gate_lines: "set[int]") -> bool:
+    """True if the gate at `line_idx` has a note under it — `core.gate_note_ends`, the one rule (task 225: the non-gate
+    lines indented deeper, a blank line kept when the next is deeper; a NESTED gate is never its parent's note — codex,
+    task 225's plan panel: a bare parent above a noted child counted no bare gate) — or a `→` line right after it, at
+    any indent (how older records annotate, bug report #5a). So such a gate is NOT a bare checkmark."""
+    from tasks.core import gate_note_ends
+    nxt = next((ln for ln in lines[line_idx + 1:] if ln.strip()), "")
+    if nxt.strip().startswith("→"):
+        return True
+    end = gate_note_ends(lines, gate_lines)[line_idx]
+    return any(ln.strip() for ln in lines[line_idx + 1:end])
 
 
 def _extract_section(lines: list[str], heading: str) -> str:

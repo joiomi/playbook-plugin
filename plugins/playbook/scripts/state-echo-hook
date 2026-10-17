@@ -40,7 +40,7 @@ NUDGES_TEST=(
     "Is this gate done?"
 )
 NUDGES_REFLECT=(
-    "If that was a bare checkmark, go back and append what happened."
+    "If that was a bare checkmark, go back and write what happened on the lines under it."
     "Re-read what you just wrote — does it match what you did?"
     "Closing to move on? Or because it's actually done?"
     "Would a new agent understand this gate from what you wrote?"
@@ -803,7 +803,7 @@ elif [ -n "$PREV_TASK" ]; then
             TRANSITION_MSG="# ✓ previous gate done (${PREV_COUNT} tool calls)"
             if [ "$TRANS" = done-bare ]; then
                 BARE_MSG="
-# ⚠ Gate closed with bare checkmark — append your outcome. (line ${TICKED_LINE})"
+# ⚠ Gate closed with bare checkmark — write your outcome on the lines under it. (line ${TICKED_LINE})"
             fi
             ;;
         moved)

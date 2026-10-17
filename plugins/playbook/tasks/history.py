@@ -697,6 +697,7 @@ def cmd_retro(cmd_args):
     from tasks.template import guide_text
     print("=== TASK GUIDE (again: tasks guide retro) ===")
     print(guide_text("retro"))
+    print()                                   # the blank line `tasks new`'s guide ends with (task 225)
     print(f"Next: tasks work {task_num}")
 
 def cmd_log(cmd_args):

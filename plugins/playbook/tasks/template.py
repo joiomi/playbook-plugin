@@ -34,9 +34,9 @@ def sticker() -> str:
     """The full types' gate discipline — in the guide only (task 213)."""
     return """\
 > **Gate discipline:** One gate \u2192 do work \u2192 check box \u2192 next gate.
-> Never backfill. The document IS the execution trace. Closing several ALREADY-DONE gates in one edit is allowed ONLY when each line carries its own outcome note (hook-enforced, max 5; a bare batch tick is blocked; where no hook runs, keep to one gate at a time).
+> Never backfill. The document IS the execution trace. Closing several ALREADY-DONE gates in one edit is allowed ONLY when each gate carries its own outcome note (hook-enforced, max 5; a bare batch tick is blocked; where no hook runs, keep to one gate at a time).
 > **Never born checked:** write each gate BEFORE you do its step, then check it — a gate may never be born checked. To record work you already finished, add the gate unchecked, then check it in a SEPARATE edit with its outcome note.
-> **Closing a gate:** check the box, append your outcome. Never replace the original text.
+> **Closing a gate:** check the box and, in the same edit, write its outcome on the lines under it — indented two spaces deeper than the gate, one fact per line (`- [x] <the gate>` then `  - 283 tests green` on the next line). Never replace the original text.
 > **Sanctioned compaction (the one exception):** when this file grows past the review context budget, old *Plan Review / Implementation Review triage narrative* may move VERBATIM to `task-archive.md` (same dir). Never gates, never Intent/Design/Parked/receipts \u2014 moving history is not deleting it. Do it mechanically: wrap each cold block in `<!-- archive:start -->` \u2026 `<!-- archive:end -->` then run `.claude/bin/tasks compact <N>` (it refuses to move a gate, a pin, or a protected heading, so a mismark fails loud).
 > Design Phase = orientation (one gate, brief answer). Work Plan = real work (one gate, full effort).
 > If the hook's reminder (one line every 10 calls on the same gate) names the same gate a third time, you're drifting \u2014 STOP and update."""
@@ -98,7 +98,7 @@ def design_phase_intro() -> str:
 def design_phase_note() -> str:
     """The Design Phase's instructions — in the guide only (task 213)."""
     return """\
-> **Write a 1-sentence answer for each gate.** A bare checkmark means you skipped it.
+> **Answer each gate on the lines under it** (indented two spaces deeper, one fact per line). A bare checkmark means you skipped it.
 > Complete these gates before writing the work plan.
 > (The `/playbook` skill has workflow patterns if you need a reference.)"""
 
@@ -818,7 +818,8 @@ def _guide_sections(task_type: "str | None") -> "list[tuple[str, str]]":
     common = [("Status", status_note()), ("Risk", risk_explanation())]
     notes = [(f"Work Plan ({pattern}: {', '.join(t for t, p in PLAYBOOKS.items() if p == pattern)})", text)
              for pattern, text in WORK_PLAN_NOTES.items()]
-    gates = [(GATES_HEADING, gate_notes_text(task_type))] if gate_notes_text(task_type) else []
+    notes_text = gate_notes_text(task_type)                 # once: it renders the type (223's impl round 2, sonnet)
+    gates = [(GATES_HEADING, notes_text)] if notes_text else []
     if task_type == "quick":
         return [full[2]] + common + gates
     if task_type == "light":
@@ -908,7 +909,8 @@ def workflow_briefing() -> str:
     """Workflow rules shown at task activation (tasks work <N>)."""
     return """\
 - One gate at a time: read gate → do work → check box → next gate
-- Closing several ALREADY-DONE gates in one edit: allowed only when each line carries its own outcome note (hook-enforced, max 5; where no hook runs, keep to one at a time). Bare batch ticks are blocked.
+- Close a gate with its outcome on the lines under it, indented two spaces deeper, one fact per line, in the same edit as the tick.
+- Closing several ALREADY-DONE gates in one edit: allowed only when each gate carries its own outcome note (hook-enforced, max 5; where no hook runs, keep to one at a time). Bare batch ticks are blocked.
 - Pattern templates in task.md ARE the work plan — fill them in, don't skip"""
 
 
@@ -984,9 +986,10 @@ This sets the active task.  Without it, edits are blocked.
 
 - Read the task.md that `tasks work` prints.
 - Work **one gate at a time**: read the gate → do the work → check the box
-  (append your outcome on the same line) → move to the next gate.
+  (write its outcome on the lines under it, indented two spaces deeper, one fact
+  per line) → move to the next gate.
 - Never skip gates.  Batch-closing ALREADY-DONE gates in one edit is allowed
-  only where a hook enforces an outcome note per line — no such hook runs on
+  only where a hook enforces an outcome note per gate — no such hook runs on
   this provider, so keep to one gate at a time here.
 - If you discover new work, add new gates to task.md immediately.
 
@@ -1046,8 +1049,10 @@ Activate a task:
 ## Working Through a Task
 
 Work one gate at a time.  Check each gate box before moving to the next.
-Never skip.  Batch-closing needs a hook that enforces per-line outcome
-notes — none runs on this provider, so keep to one gate at a time here.
+Never skip.  Write each gate's outcome on the lines under it, indented two
+spaces deeper, one fact per line.  Batch-closing needs a hook that enforces
+an outcome note per gate — none runs on this provider, so keep to one gate at
+a time here.
 
 ## End of Task
 
@@ -1172,7 +1177,7 @@ Examples:
 def sticker_quick() -> str:
     return """\
 > **Gate discipline:** One gate \u2192 do work \u2192 check box \u2192 next gate.
-> Never backfill. The document IS the execution trace. Batch-closing ALREADY-DONE gates needs an outcome note per line (hook-enforced; where no hook runs, one gate at a time).
+> Never backfill. The document IS the execution trace. Batch-closing ALREADY-DONE gates needs an outcome note per gate (hook-enforced; where no hook runs, one gate at a time).
 > **Never born checked:** write the gate BEFORE you do its step, then check it \u2014 a gate may never be born checked. To record work you already finished, add it unchecked, then check it in a SEPARATE edit with its outcome.
 > **Selection rule:** quick is for declared-reversible trivia only \u2014 anything touching docs, claims, data, or publishing belongs in `light` or heavier (risk decides review; smallness never does)."""
 
@@ -1180,7 +1185,7 @@ def sticker_quick() -> str:
 def sticker_light() -> str:
     return """\
 > **Light shape** \u2014 small, sub-day work; ceremony compressed, review NEVER waived: risk decides review, smallness never does. If this grows beyond small, convert: `tasks new <type> <name>`.
-> Gate discipline unchanged: one gate \u2192 do work \u2192 check box with its outcome. Never backfill. Batch-closing ALREADY-DONE gates needs an outcome note per line (hook-enforced; where no hook runs, one at a time).
+> Gate discipline unchanged: one gate \u2192 do work \u2192 check box, its outcome on the lines under it (indented two spaces deeper, one fact per line). Never backfill. Batch-closing ALREADY-DONE gates needs an outcome note per gate (hook-enforced; where no hook runs, one at a time).
 > **Never born checked:** write the gate BEFORE you do its step, then check it \u2014 a gate may never be born checked. To record work you already finished, add it unchecked, then check it in a SEPARATE edit with its outcome.
 > **Selection rule:** `quick` is for declared-reversible trivia only; docs, claims, data, or publishing belong here or heavier."""
 
@@ -1239,7 +1244,7 @@ def render_light_template(num: int, title: str) -> str:
         """## Work
 - [ ] Orient: name the files/claims this touches and what "verified" means (one paragraph)
 - [ ] Do the work
-- [ ] Verify: run the check that proves it — paste the result on this line""",
+- [ ] Verify: run the check that proves it and paste its result under this gate.""",
         """## Review
 - [ ] Review routing honored: assertive or irreversible work had the implementation panel, triaged in judge.md.""",
         """## Pre-review
@@ -1278,7 +1283,8 @@ def render_template(num: int, title: str, task_type: str | None = None) -> str:
     if _eval_config_path:
         try:
             import json as _json
-            _eval_cfg = _json.loads(open(_eval_config_path).read())
+            with open(_eval_config_path, encoding="utf-8") as _fh:      # closed (task 225; agy, 223's impl round 2)
+                _eval_cfg = _json.loads(_fh.read())
         except Exception:
             pass
 

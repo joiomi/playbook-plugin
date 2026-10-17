@@ -56,11 +56,11 @@ tasks new <type> <name> [intent]   # creates task.md — then immediately:
 tasks work <N>                     # activate it — hooks start enforcing
 ```
 
-Work through task.md gates: Design Phase (understand, structure, verify) → Work Plan (build/investigate gates) → Pre-review. Check each gate's checkbox as you complete it, appending your observations on the same line.
+Work through task.md gates: Design Phase (understand, structure, verify) → Work Plan (build/investigate gates) → Pre-review. Check each gate's checkbox as you complete it and, in the same edit, write your observations on the lines under it — indented two spaces deeper than the gate, one fact per line.
 
 When done: `tasks work done` — runs the project's verify contract, records a receipt, sets status to done.
 
-The task.md **is** the execution trace. Never skip checkboxes. Never backfill. Close each gate as you complete it; closing several ALREADY-DONE gates in one edit is allowed only when each line carries its own outcome note (hook-enforced, max 5 — a bare batch tick is blocked; where no hook runs, keep to one gate at a time).
+The task.md **is** the execution trace. Never skip checkboxes. Never backfill. Close each gate as you complete it; closing several ALREADY-DONE gates in one edit is allowed only when each gate carries its own outcome note (hook-enforced, max 5 — a bare batch tick is blocked; where no hook runs, keep to one gate at a time).
 
 ## Correctness Contract
 

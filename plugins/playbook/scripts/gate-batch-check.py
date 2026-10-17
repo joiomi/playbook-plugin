@@ -18,9 +18,18 @@ The rules (design-1.5.5.md, F1 — including the judge's corrections):
     x-count delta — unchecking in the same write must not launder n.
   * n ≤ 1 → allow silently (singles keep their old freedom).
   * 2 ≤ n ≤ 5 → allow ONLY if no born-checked line and every newly-checked
-    line's annotation has ≥ 8 unicode non-whitespace characters ("→ 283
-    green" passes; "— done" does not; a pointer like "— see Round 2 Result"
-    is the sanctioned idiom when the outcome lives under the gate).
+    gate's annotation has ≥ 8 unicode non-whitespace characters ("283 green"
+    passes; "done" does not). The annotation is what the gate's line gained
+    PLUS the lines of its note that the write adds (task 225, the owner's
+    2026-10-16 "Liste scurte de la început": a gate's note goes on the lines
+    under its title) — the note is the non-gate lines indented deeper than the
+    gate, a blank line kept when the next line is deeper (`core.gate_note_ends`,
+    the judges' trim's rule; a copy here, held equal by a test); a note line the
+    old text already has adds nothing, one that only goes on from an old line
+    adds what follows it — so a note written while the gate was open, or moved
+    from another gate, never makes a bare tick an annotated one.
+  * a checkbox inside a code fence is an example, not a gate (task 225) — with
+    the gate counters' polarity: an UNCLOSED fence hides nothing.
   * n ≥ 6 → block even fully annotated (the whole-plan-in-one-write ceiling).
   * consecutive-batch guard: an allowed batch records the session's `tools`
     counter; the NEXT batch blocks unless at least one other tool call
@@ -35,17 +44,19 @@ from collections import Counter
 from pathlib import Path
 
 GATE_RE = re.compile(r"^[ \t]*- \[([ xX])\]\s*(.*)$")       # spaces or tabs only, as the gate counters (task 214, T6)
+_SUBHEADING_RE = re.compile(r"^#{3,}(?:[ \t]|$)")             # a `###` heading ends a gate's note (the trim's rule)
+_FENCE_RE = re.compile(r"^[ \t]*(`{3,}|~{3,})")
 ANNOTATION_FLOOR = 8   # unicode non-whitespace chars (never bash bytes)
 BATCH_CEILING = 5
 
 BARE_MSG = """\
 BLOCKED: {n} gates closed in one write, but {k} carry no outcome note.
-Batch-closing ALREADY-DONE gates requires each line to carry its own outcome
-(>= {floor} non-space chars appended to the gate text) — e.g. "→ 283 green",
-or a pointer to where the outcome lives: "— see Round 2 Result".
+Batch-closing ALREADY-DONE gates requires each gate to carry its own outcome
+(>= {floor} non-space chars) written in the same write on the lines under the
+gate, indented two spaces deeper, one fact per line — e.g. "  - 283 green".
 Bare lines:
 {lines}
-Append each gate's outcome, or close them one at a time as you work."""
+Write each gate's outcome under it, or close them one at a time as you work."""
 
 CEILING_MSG = """\
 BLOCKED: {n} gates closed in one write — more than {ceiling} even with notes.
@@ -58,8 +69,8 @@ BLOCKED: this batch mints gate line(s) already checked (born-checked):
 Gates are added OPEN the moment you discover the work (`tasks guide`, Standing Orders),
 then closed after the work is done — a line born [x] was never observable.
 Most common cause: you REWROTE the gate's text while checking it. Keep the
-original gate text byte-for-byte and APPEND your outcome after it — e.g.
-"- [x] <original text> — 316 green"."""
+original gate text byte-for-byte and write your outcome on the lines under it,
+indented — e.g. "- [x] <original text>" then "  - 316 green"."""
 
 CONSECUTIVE_MSG = """\
 BLOCKED: second batch close with no tool call in between.
@@ -94,16 +105,100 @@ def gate_bodies(text: str) -> "tuple[list[str], list[str]]":
     return checked, unchecked
 
 
-def partition(old: str, new: str):
-    """Return (newly_checked [(body, annotation)], born_checked [body])."""
-    new_checked, _ = gate_bodies(new)
-    old_checked, old_unchecked = gate_bodies(old)
+def _indent(s: str) -> int:
+    return len(s.expandtabs(4)) - len(s.expandtabs(4).lstrip(" "))
 
-    carried = Counter(old_checked)
-    originals = Counter(o for o in old_unchecked if o)
+
+def _fenced(lines: "list[str]") -> "list[bool]":
+    """True for a line inside a code fence (its fence lines included). An UNCLOSED fence hides nothing: its lines stay
+    live, as the gate counters read them (`unclosed_is_live`), so no fence can hide a real tick (task 225, P6)."""
+    out = [False] * len(lines)
+    opener = None
+    for i, ln in enumerate(lines):
+        m = _FENCE_RE.match(ln)
+        if opener is None:
+            if m:
+                opener = (i, m.group(1)[0], len(m.group(1)))
+                out[i] = True
+        else:
+            out[i] = True
+            if m and m.group(1)[0] == opener[1] and len(m.group(1)) >= opener[2] and not ln.strip()[len(m.group(1)):]:
+                opener = None
+    if opener is not None:
+        for i in range(opener[0], len(lines)):
+            out[i] = False
+    return out
+
+
+def _note_lines(lines: "list[str]", k: int, gates: "set[int]") -> "list[str]":
+    """The note under the gate at line k, stripped: the non-gate lines indented deeper than it, a blank line kept when
+    the next non-blank line is deeper and not a gate, a `###` heading ending it — `core.gate_note_ends`' rule (the
+    judges' trim), copied so this guard imports nothing it could fail on (`tests/test_note_under_title.py` holds them
+    equal)."""
+    ind = _indent(lines[k])
+    out: "list[str]" = []
+    j = k + 1
+    while j < len(lines) and j not in gates:
+        t = lines[j]
+        if not t.strip():
+            nxt = next((q for q in range(j + 1, len(lines)) if lines[q].strip()), None)
+            if nxt is not None and nxt not in gates and _indent(lines[nxt]) > ind:
+                j += 1
+                continue
+            break
+        if _indent(t) > ind and not _SUBHEADING_RE.match(t):
+            out.append(t.strip())
+            j += 1
+            continue
+        break
+    return out
+
+
+def _gates(text: str) -> "tuple[list[str], set[int], list[tuple[int, bool, str]]]":
+    """(lines, live gate line indexes, [(index, checked, body)]) on physical lines (task 214) — never splitlines();
+    a checkbox inside a closed code fence is an example, not a gate (task 225)."""
+    lines = [ln.rstrip("\r") for ln in text.split("\n")]
+    fenced = _fenced(lines)
+    found = []
+    for i, line in enumerate(lines):
+        m = None if fenced[i] else GATE_RE.match(line)
+        if m:
+            found.append((i, m.group(1) in "xX", m.group(2).strip()))
+    return lines, {i for i, _c, _b in found}, found
+
+
+def _added(note: "list[str]", base: "list[str]") -> "list[str]":
+    """What `note` adds over `base` (the old text's lines, consumed as they are used): a line `base` has adds nothing,
+    one that only goes on from a `base` line adds what follows it (the rule a gate's own line has), any other line
+    adds itself (task 225, P1 — no pairing of a note to an open copy of its title is needed)."""
+    out: "list[str]" = []
+    for ln in note:
+        if ln in base:
+            base.remove(ln)
+            continue
+        stem = max((o for o in base if o and ln.startswith(o)), key=len, default=None)
+        if stem is not None:
+            base.remove(stem)
+            out.append(ln[len(stem):])
+        else:
+            out.append(ln)
+    return out
+
+
+def partition(old: str, new: str):
+    """Return (newly_checked [(body, annotation)], born_checked [body]). A newly checked gate's annotation is what its
+    line gained plus what the note lines under it add over the old text's lines (task 225)."""
+    new_lines, new_gates, new_found = _gates(new)
+    old_lines, old_gates, old_found = _gates(old)
+
+    carried = Counter(b for _i, c, b in old_found if c)
+    originals = Counter(b for _i, c, b in old_found if not c and b)
+    base = [ln.strip() for i, ln in enumerate(old_lines) if i not in old_gates and ln.strip()]
     newly: "list[tuple[str, str]]" = []
     born: "list[str]" = []
-    for body in new_checked:
+    for i, checked, body in new_found:
+        if not checked:
+            continue
         if carried[body] > 0:
             carried[body] -= 1
             continue
@@ -113,7 +208,7 @@ def partition(old: str, new: str):
             continue
         orig = max(candidates, key=len)
         originals[orig] -= 1
-        newly.append((body, body[len(orig):]))
+        newly.append((body, " ".join([body[len(orig):]] + _added(_note_lines(new_lines, i, new_gates), base))))
     return newly, born
 
 
@@ -256,7 +351,7 @@ def main() -> int:
             close = difflib.get_close_matches(b, open_originals, n=1, cutoff=0.4)
             if close:
                 rendered.append("      closest open gate (restore byte-for-byte, "
-                                f"then append your outcome):\n      - [ ] {close[0]}")
+                                f"then write your outcome under it):\n      - [ ] {close[0]}")
         print(BORN_MSG.format(lines="\n".join(rendered)))
         _journal_block("born-checked")
         return 2

@@ -49,27 +49,41 @@ class BareCheckmarkTest(unittest.TestCase):
 
     def test_arrow_continuation_any_indent(self):
         lines = ["- [x] Do the thing", "→ outcome on next line", "- [ ] next"]
-        self.assertTrue(_gate_has_continuation(lines, 0, 0))
+        self.assertTrue(_cont(lines))
 
     def test_deeper_indent_is_continuation(self):
         lines = ["- [x] header", "    some indented detail", "- [ ] next"]
-        self.assertTrue(_gate_has_continuation(lines, 0, 0))
+        self.assertTrue(_cont(lines))
 
     def test_next_gate_same_indent_is_not_continuation(self):
         lines = ["- [x] bare gate", "- [x] another bare gate"]
-        self.assertFalse(_gate_has_continuation(lines, 0, 0))
+        self.assertFalse(_cont(lines))
 
     def test_same_indent_prose_is_not_continuation(self):
         lines = ["- [x] bare gate", "prose at column zero"]
-        self.assertFalse(_gate_has_continuation(lines, 0, 0))
+        self.assertFalse(_cont(lines))
 
     def test_blank_then_continuation(self):
         lines = ["- [x] header", "", "  1. sub-bullet after a blank"]
-        self.assertTrue(_gate_has_continuation(lines, 0, 0))
+        self.assertTrue(_cont(lines))
 
     def test_blank_then_next_gate_not_continuation(self):
         lines = ["- [x] bare", "", "- [x] next bare"]
-        self.assertFalse(_gate_has_continuation(lines, 0, 0))
+        self.assertFalse(_cont(lines))
+
+    def test_a_nested_gate_is_not_its_parents_note(self):
+        """Task 225 (codex, its plan panel): a bare parent above a noted, checked child is still bare — the shared
+        rule (`core.gate_note_ends`) never takes a gate for a note."""
+        lines = ["- [x] parent", "  - [x] child — with its own note", "- [ ] next"]
+        self.assertFalse(_cont(lines))
+        content = "# 003\n## Work\n" + "\n".join(lines) + "\n"
+        self.assertEqual(_parse_task(3, "x", content)["bare_checkmark_count"], 1)   # the parent
+
+
+def _cont(lines):
+    """`_gate_has_continuation` for the gate on line 0, every gate line known (as `_parse_task` passes them)."""
+    import re as _re
+    return _gate_has_continuation(lines, 0, {i for i, ln in enumerate(lines) if _re.match(r"^[ \t]*- \[[ xX]\]", ln)})
 
 
 class TasksLogTest(unittest.TestCase):

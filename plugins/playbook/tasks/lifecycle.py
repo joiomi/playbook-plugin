@@ -2135,6 +2135,8 @@ _FREEHAND_RENAME_GATE = ("- [ ] Rename the task folder and header to what was do
 # its `Freehand log` start.
 _FREEHAND_LOG_GATE = ("- [ ] Freehand log \u2014 run `.claude/bin/tasks freehand log`, then add checked gates for the "
                       "work done.\n")
+# A freehand block carries no task pointer, so it names its own guide (task 225; grok, 223's impl round 2).
+_FREEHAND_POINTER = "> What each freehand gate asks: `.claude/bin/tasks guide freehand`.\n"
 
 
 def cmd_freehand(cmd_args):
@@ -2258,6 +2260,7 @@ def cmd_freehand(cmd_args):
                 f"## Work Plan\n\n"
                 f"### Freehand\n"
                 f"<!-- freehand-start: {now_iso} -->\n"
+                f"{_FREEHAND_POINTER}"
                 f"- [ ] Freehand\n"
                 f"{_FREEHAND_LOG_GATE}"
                 f"- [ ] Rewrite this freehand work into normal task gates inside this task so the final trace reads like ordinary tracked work\n"
@@ -2295,6 +2298,7 @@ def cmd_freehand(cmd_args):
         freehand_block = (
             f"\n### Freehand\n"
             f"<!-- freehand-start: {now_iso} -->\n"
+            f"{_FREEHAND_POINTER}"
             f"- [ ] Freehand\n"
             f"{_FREEHAND_LOG_GATE}"
             f"- [ ] Rewrite this freehand work into normal task gates inside this task so the final trace reads like ordinary tracked work\n"

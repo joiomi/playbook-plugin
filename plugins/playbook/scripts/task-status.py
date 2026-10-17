@@ -77,7 +77,9 @@ def _echo_fields(lines: "list[str]", prev: "tuple[int, int, int, int, int, str] 
     previous gate T was ticked when its open copies are FEWER than before AND the checked gates that are T with one
     span inserted (a note after, before or inside it) are MORE than before — and, while a copy of T is still open,
     more of them ABOVE that first open copy. The tick named is that match at the previous place P, else the one
-    nearest to it; bare when it is exactly T."""
+    nearest to it; bare when it is exactly T and no note sits under it (task 225). A note written under T while it was
+    still open counts too: the echo keeps no copy of the file before the edit — a stated limit, the batch-tick guard
+    (which has both texts) is the strict check (its plan panel, P5)."""
     from tasks.core import _GATE_LINE_RE, _iter_fenced_flags
     fenced = _iter_fenced_flags(lines, unclosed_is_live=True, track_indented_code=False)
     gates: "list[tuple[int, bool, str]]" = []          # (line, checked, text)
@@ -97,6 +99,12 @@ def _echo_fields(lines: "list[str]", prev: "tuple[int, int, int, int, int, str] 
     first = next((k for k, g in enumerate(gates) if not g[1]), -1)
     below = sum(1 for g in gates[first + 1:] if g[1]) if first >= 0 else 0
     text = gates[first][2] if first >= 0 else ""
+
+    def _has_note_under(idx: int) -> bool:
+        from tasks.core import gate_note_ends
+        texts = [ln.rstrip("\r\n") for ln in lines]
+        end = gate_note_ends(texts, {g[0] - 1 for g in gates})[idx]
+        return any(t.strip() for t in texts[idx + 1:end])
 
     def opens_of(t: str) -> int:
         return sum(1 for g in gates if not g[1] and g[2] == t)
@@ -119,7 +127,9 @@ def _echo_fields(lines: "list[str]", prev: "tuple[int, int, int, int, int, str] 
         if (opens_of(prev_text) < prev_opens and len(matches) > prev_checks
                 and (not still_open or above_of(prev_text) > prev_above)):
             k = pos if pos in matches else min(matches, key=lambda m: (abs(m - pos), m))
-            transition = "done-bare" if gates[k][2] == prev_text else "done"
+            # bare only when nothing was written: not after the title, and no note under it (task 225 — a gate's note
+            # goes on the lines under its title; `core.gate_note_ends`, the judges' trim's rule)
+            transition = "done-bare" if gates[k][2] == prev_text and not _has_note_under(gates[k][0] - 1) else "done"
             ticked = str(gates[k][0])
         elif first >= 0 and text == prev_text:
             # a skip: a gate BELOW the open one was checked — counted below it, so it holds at any position

@@ -33,7 +33,7 @@ Available patterns:
 - **UI Debug** — script-probe-screenshot for browser bugs
 
 Decide is an inline tradeoff gate you drop into any pattern for a major choice
-(`- [ ] Decide: A is ___. B is ___. Choosing ___ because ___.`), not a
+(`- [ ] Decide: A is ___, B is ___ — choosing ___ because ___.`), not a
 standalone pattern.
 
 Also explain: reflection gates (Critique, Checkpoint, Replan), the Design Phase,

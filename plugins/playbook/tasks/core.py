@@ -1116,15 +1116,17 @@ def _template_gate_titles() -> "tuple[str, ...]":
     return _TEMPLATE_GATE_TITLES
 
 
-# Where a gate's note starts after a template title (task 223, impl round 1): `: …`, or white space then a dash, a
-# bracket or a colon (`— 02:06 …`, `- …`, `(…)`, `[…]`); after a title that ends a sentence, any white space.
-_NOTE_START_RE = re.compile(r"(?::\s|\s+(?:[\u2014\u2013:(\[]|-\s))")
+# Where a gate's note starts after a template title (task 223, impl round 1): `: …`; an em or en dash, glued or after
+# white space (`— 02:06 …`, `—done` — task 225); or white space then a colon, a bracket or `- ` (`(…)`, `[…]`, `- …`);
+# after a title that ends a sentence (`.`, `?`, `!`), any white space. Not `)` (task 225, 223's impl round 2, grok: a
+# fill-in placeholder `Fix: (what to change)` completed on its line is the agent's own title).
+_NOTE_START_RE = re.compile(r"(?::\s|\s*[\u2014\u2013]|\s+(?::|\(|\[|-\s))")
 _NOTE_AFTER_END_RE = re.compile(r"\s")
 
 
 def _template_title_of(body: str) -> "str | None":
     """The template gate title `body` is, or begins with before its note: the body ends there, or goes on with a
-    note start (`_NOTE_START_RE`), or — the title ending with `.`, `?`, `!` or `)` — with white space. Task 223 (plan
+    note start (`_NOTE_START_RE`), or — the title ending with `.`, `?` or `!` — with white space. Task 223 (plan
     panel P7): with short titles a bare `startswith` took an agent's own gate (`Do the work in lifecycle.py …`) for
     the template's `Do the work`, and the trim kept only those words of it; impl round 1 (agy, opus): a comma or a
     hyphen glued to the title (`Do the work, then …`, `Do the work-around …`) is the agent's own title too, and a
@@ -1133,7 +1135,7 @@ def _template_title_of(body: str) -> "str | None":
         if body.startswith(t):
             rest = body[len(t):]
             if (not rest.strip() or _NOTE_START_RE.match(rest)
-                    or (t[-1:] in ".?!)" and _NOTE_AFTER_END_RE.match(rest))):
+                    or (t[-1:] in ".?!" and _NOTE_AFTER_END_RE.match(rest))):
                 return t
     return None
 
@@ -1217,31 +1219,44 @@ def _trim_gate_lines(lines: "list[tuple[int, str]]") -> "set[int]":
     return {k for k, (_, ln) in enumerate(lines) if not fl[k] and _TRIM_GATE_RE.match(ln)}
 
 
-def _trim_gate_units(lines: "list[tuple[int, str]]") -> "list[tuple[int, int]]":
-    """[(start, end)] of each gate: its line plus the NON-gate lines indented below it (a blank line stays
-    inside when the next line is indented deeper). Every gate line starts its own unit, a nested one too
-    (impl round 1, R1: a nested gate was folded into its parent and went with the parent's note)."""
-    gates = _trim_gate_lines(lines)
-    spans = []
+_NOTE_SUBHEADING_RE = re.compile(r'^#{3,}(?:[ \t]|\r?\n|$)')
+
+
+def gate_note_ends(texts: "list[str]", gates: "set[int]") -> "dict[int, int]":
+    """{k: end} for each gate line k of `gates`: lines k+1 .. end-1 are its note — the NON-gate lines indented deeper
+    than the gate, a blank line kept inside when the next non-blank line is deeper and not a gate, a `###` heading
+    ending it, no blank line at its end. The one rule for "the note under a gate" (task 225, the owner's 2026-10-16
+    "Liste scurte de la început": a gate's note goes on the lines under its title): the judges' trim (task 212, its
+    impl round 1 R1/R2) and the echo's bare-tick reading use it; `scripts/gate-batch-check.py` keeps a copy a test
+    holds equal (a guard imports nothing it could fail on). `texts` with or without their line ends."""
+    ends: "dict[int, int]" = {}
     for k in sorted(gates):
-        ind = _trim_indent(_TRIM_GATE_RE.match(lines[k][1]).group(1))  # type: ignore[union-attr]
+        ind = _trim_indent(texts[k])
         j = k + 1
-        while j < len(lines) and j not in gates:
-            t = lines[j][1]
+        while j < len(texts) and j not in gates:
+            t = texts[j]
             if not t.strip():
-                nxt = next((q for q in range(j + 1, len(lines)) if lines[q][1].strip()), None)
-                if nxt is not None and nxt not in gates and _trim_indent(lines[nxt][1]) > ind:
+                nxt = next((q for q in range(j + 1, len(texts)) if texts[q].strip()), None)
+                if nxt is not None and nxt not in gates and _trim_indent(texts[nxt]) > ind:
                     j += 1
                     continue
                 break
-            if _trim_indent(t) > ind and not _TRIM_SUBHEADING_RE.match(t):
+            if _trim_indent(t) > ind and not _NOTE_SUBHEADING_RE.match(t):
                 j += 1
                 continue
             break
-        while j > k + 1 and not lines[j - 1][1].strip():
+        while j > k + 1 and not texts[j - 1].strip():
             j -= 1
-        spans.append((k, j))
-    return spans
+        ends[k] = j
+    return ends
+
+
+def _trim_gate_units(lines: "list[tuple[int, str]]") -> "list[tuple[int, int]]":
+    """[(start, end)] of each gate: its line plus its note (`gate_note_ends`). Every gate line starts its own unit, a
+    nested one too (impl round 1, R1: a nested gate was folded into its parent and went with the parent's note)."""
+    gates = _trim_gate_lines(lines)
+    ends = gate_note_ends([ln for _, ln in lines], gates)
+    return [(k, ends[k]) for k in sorted(gates)]
 
 
 def _trim_notes(lines: "list[tuple[int, str]]", keep_chars: int, cut: "set[int]") -> "list[tuple[int, str]]":
@@ -1264,7 +1279,7 @@ def _trim_notes(lines: "list[tuple[int, str]]", keep_chars: int, cut: "set[int]"
         # the title is kept up to 120 characters, then the note's start (task 212's impl round 2, S1: the template's
         # titles ran to 612 characters and crowded the agent's notes out: "șablonul pleacă"). Since task 223 no built-in
         # title is longer than TRIM_TITLE_MAX (a test holds them to it); the ellipsis arm stays as the guard for one
-        # that is
+        # that ever is (task 225: a test plants one)
         shown = full[:tlen] if tlen <= TRIM_TITLE_MAX else full[:TRIM_TITLE_MAX].rstrip() + " …"
         cut.add(no)
         out[a:b] = [(no, f"{first[:m.end()]}{shown}{full[tlen:tlen + keep_chars].rstrip()}"
