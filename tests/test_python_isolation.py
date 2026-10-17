@@ -673,7 +673,7 @@ class EveryShippedInlinePythonIsIsolated(unittest.TestCase):
         problems, _, _, _ = sweep()
         self.assertEqual(problems, [], "\n" + "\n".join(problems))
 
-    # Every isolated inline call the sweep sees, file by file — 55 when this was written, 57 since task 192, 59 since task 193, 61 since task 194.
+    # Every isolated inline call the sweep sees, file by file — 55 when this was written, 57 since task 192, 59 since task 193, 61 since task 194, 63 since task 233.
     # A rule that stopped SEEING some of them would still find "nothing wrong" (impl
     # panel r1, sonnet: the first guard here asked only for "at least 40", and a rule
     # that lost the eight stdin programs passed it). Adding or removing a call means
@@ -684,6 +684,7 @@ class EveryShippedInlinePythonIsIsolated(unittest.TestCase):
         "hooks/monitor-nudge.sh": 2,
         "scripts/chat-log-hook": 3,        # +1: the Python floor probe (task 193, #46)
         "scripts/command-guard-hook": 1,
+        "scripts/dialog-log-hook": 1,     # the Python floor probe (task 233)
         "scripts/gate-echo-lib.sh": 1,
         "scripts/init": 4,
         "scripts/monitor-lib/bootstrap.sh": 4,
@@ -706,7 +707,7 @@ class EveryShippedInlinePythonIsIsolated(unittest.TestCase):
         _, counts, inline, _ = sweep()
         self.assertEqual(inline, self.ISOLATED_INLINE_CALLS)
         self.assertEqual(counts.get("ok-inline"), sum(self.ISOLATED_INLINE_CALLS.values()))
-        self.assertEqual(sum(self.ISOLATED_INLINE_CALLS.values()), 62)   # 55 + the floor probes of tasks 192 (2), 193 (2) and 194 (2) + task 198's resolved path - task 219's one JSON writer + task 221's fallback command
+        self.assertEqual(sum(self.ISOLATED_INLINE_CALLS.values()), 63)   # 55 + the floor probes of tasks 192 (2), 193 (2) and 194 (2) + task 198's resolved path - task 219's one JSON writer + task 221's fallback command + task 233's floor probe
 
     # Every call that starts a FILE of the plugin's, file by file — 22 when task 180
     # isolated them (18 in the hooks and scripts, 4 that the merge skill gives the agent).
@@ -714,6 +715,7 @@ class EveryShippedInlinePythonIsIsolated(unittest.TestCase):
     ISOLATED_FILE_CALLS = {
         "scripts/chat-log-hook": 1,
         "scripts/command-guard-hook": 1,
+        "scripts/dialog-log-hook": 1,     # dialog_log.py (task 233)
         "scripts/gate-echo-lib.sh": 1,
         "scripts/init": 3,
         "scripts/monitor-lib/bootstrap.sh": 2,
@@ -729,7 +731,7 @@ class EveryShippedInlinePythonIsIsolated(unittest.TestCase):
         _, counts, _, files = sweep()
         self.assertEqual(files, self.ISOLATED_FILE_CALLS)
         self.assertEqual(counts.get("ok-file"), sum(self.ISOLATED_FILE_CALLS.values()))
-        self.assertEqual(sum(self.ISOLATED_FILE_CALLS.values()), 24)   # + the state echo's task-status.py (task 219)
+        self.assertEqual(sum(self.ISOLATED_FILE_CALLS.values()), 25)   # + the state echo's task-status.py (task 219) + dialog_log.py (task 233)
 
     def test_no_shipped_python_source_starts_a_file_through_an_argv_list(self):
         # the sweep reads an argv list only for its mode flag; a list that hands the

@@ -323,8 +323,12 @@ def _prepare_merge_chatlog(project_path: Path, agent_dir: Path, target: str,
         except subprocess.CalledProcessError:
             return ""
 
+    # Task 233: an entry's id is the one that STARTS a line (every writer puts the header there); an id written
+    # inside an entry — the agent's question in an options-dialog entry, a quote — is text, never renumbered.
+    _MID = re.compile(r"(?m)^\*\*\[M(\d+)\]\*\*")
+
     def _last_mid(text: str) -> int:
-        mids = re.findall(r"\*\*\[M(\d+)\]\*\*", text)
+        mids = _MID.findall(text)
         return max(int(m) for m in mids) if mids else 0
 
     chat_log_rel = agent_dir_rel + "/chat_log.md"
@@ -337,7 +341,7 @@ def _prepare_merge_chatlog(project_path: Path, agent_dir: Path, target: str,
         return
 
     current_text, _chat_lossy = _read_text_lossy(chat_log)
-    new_mids = [int(m) for m in re.findall(r"\*\*\[M(\d+)\]\*\*", current_text) if int(m) > base_last]
+    new_mids = [int(m) for m in _MID.findall(current_text) if int(m) > base_last]
 
     if not new_mids:
         print("Chat log: no new entries beyond merge base — already clean.")
@@ -360,7 +364,7 @@ def _prepare_merge_chatlog(project_path: Path, agent_dir: Path, target: str,
             return f"**[M{mid + offset:0{width}d}]**"
         return m.group(0)
 
-    updated = re.sub(r"\*\*\[M(\d+)\]\*\*", _reseq, current_text)
+    updated = _MID.sub(_reseq, current_text)
     new_highest = max(new_mids) + offset
 
     print(f"Chat log: re-sequencing {len(new_mids)} new entr{'y' if len(new_mids)==1 else 'ies'} "

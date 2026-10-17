@@ -741,7 +741,7 @@ def cmd_log(cmd_args):
         )
         if m:
             mid, ts, role, provider, body = m.groups()
-            agent = provider or role
+            agent = "dialog" if role == "DIALOG" else (provider or role)    # an options dialog's answer (task 233)
             body = " ".join(body.split())
             if len(body) > width:
                 body = body[:width - 1] + "…"

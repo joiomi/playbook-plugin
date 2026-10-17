@@ -5733,11 +5733,11 @@
     {
       "id": "PB-CHAT-LOG",
       "category": "sessions-and-attribution",
-      "statement": "User messages append in sequence to the lane chat log with a provider attribution suffix that is not leaked into the message text, and legacy unsuffixed entries still parse; a prompt whose body BEGINS (after leading whitespace) with a harness marker — `<task-notification>`, `<local-command-caveat>`, `<command-name>` or `[SYSTEM NOTIFICATION` — is a harness event, not the user's words, and is not logged, while a prompt that merely mentions a marker is (task 088, PLAN S5a). The hook writes nothing through a link or into a file that is not a regular one at the log, its counter, the counter's lock or the migration's `.new`/`.bak` — a cloned repository can ship any of them under `.agent/`; such a file is named on stderr and the prompt is not logged (task 193, measured before: the prompt appended to a link's target, the counter's target truncated, a FIFO held the prompt). BOUND: a swap of the file between the check and the write is not closed.",
+      "statement": "User messages append in sequence to the lane chat log with a provider attribution suffix that is not leaked into the message text, and legacy unsuffixed entries still parse; a prompt whose body BEGINS (after leading whitespace) with a harness marker — `<task-notification>`, `<local-command-caveat>`, `<command-name>` or `[SYSTEM NOTIFICATION` — is a harness event, not the user's words, and is not logged, while a prompt that merely mentions a marker is (task 088, PLAN S5a). The hook writes nothing through a link or into a file that is not a regular one at the log, its counter, the counter's lock or the migration's `.new`/`.bak` — a cloned repository can ship any of them under `.agent/`; such a file is named on stderr and the prompt is not logged (task 193, measured before: the prompt appended to a link's target, the counter's target truncated, a FIFO held the prompt). BOUND: a swap of the file between the check and the write is not closed. Since task 233 an answered options dialog (Claude Code's AskUserQuestion) is one more entry in the same log, tagged `DIALOG`: the user's answers first and exact — each its JSON string literal, which `json.loads` gives back — then the agent's questions flattened and cut at 300 characters, every body line under a fixed prefix (`A<n>`, `Notes<n>`, `Q<n>`), the tool call's id last; a second delivery of that call writes nothing, no session counter is touched, the entry takes its id and is appended under one hold of the chat log's lock (as a prompt's now is), and the readers (Recent Chat — whose stop test reads only such an entry's answer lines —, retro, merge-prep, `tasks log`) take an entry header only at a line start.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/chat-log-hook",
-          "reference": "function:get_next_id"
+          "reference": "function:append_message"
         },
         {
           "path": "plugins/playbook/scripts/chat-log-hook",
@@ -5750,6 +5750,18 @@
         {
           "path": "plugins/playbook/scripts/gate-echo-lib.sh",
           "reference": "function:_pb_sink_ok"
+        },
+        {
+          "path": "plugins/playbook/scripts/dialog_log.py",
+          "reference": "symbol:write_entry"
+        },
+        {
+          "path": "plugins/playbook/scripts/dialog_log.py",
+          "reference": "symbol:entry_body"
+        },
+        {
+          "path": "plugins/playbook/scripts/dialog-log-hook",
+          "reference": "whole-file"
         }
       ],
       "failure_consequence": "Medium",
@@ -5847,6 +5859,19 @@
           },
           "limitations": [
             "The real chat hook as a subprocess with a link or a FIFO at each of the five files; red on nested `2537bcd` (three hangs, writes through)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_dialog_log.py",
+          "reference": "TheEntry.test_his_answers_are_exact_and_first",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_dialog_log.py",
+            "reference": "TheEntry.test_other_tools_and_garbage_exit_zero_and_write_nothing"
+          },
+          "limitations": [
+            "Task 233: the hook runs as a subprocess on the payload shapes claude 2.1.302 sent in task 232's probe (`TheEntry.test_the_probed_payloads` reads those two captured files); the readers' side is `TheReaders` (Recent Chat keeps an entry whose question names `tasks work done` and the prompts before it, retro returns it whole and no fabricated message, steering reads only the answers, `tasks log` says `dialog`, a pasted entry adds no gate); the one hold is `OneHold` (ids 1-24 in file order, one `flock -x` per prompt). Not covered: claude's shape for a multi-select answer and for `annotations` were never captured (a list and a notes object are assumed — rendered as their JSON either way); two questions with the same text share one answer, claude's own `answers` keys them by the text; codex's prompt writer (`codex_hooks.py`) still takes the id and appends without the lock (codex has no dialog tool)."
           ]
         }
       ],

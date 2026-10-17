@@ -19,7 +19,7 @@ MIN_IMAGE, NEW_IMAGE, OLD_IMAGE = "python:3.10-slim", "python:3.15-slim", "pytho
 FLOOR_ENTRY_POINTS = ("tasks", "sandbox", "init", "playbook-codex", "playbook-grok", "playbook-agy", "playbook-pi",
                       "monitor-lib/launch-monitor", "command-guard-hook", "codex-user-prompt-hook",
                       "codex-stop-hook", "codex-apply-patch-hook", "session-start-hook", "session-end-hook",
-                      "stop-hook", "chat-log-hook", "task-gate-hook", "state-echo-hook")
+                      "stop-hook", "chat-log-hook", "task-gate-hook", "state-echo-hook", "dialog-log-hook")
 LAUNCHERS = FLOOR_ENTRY_POINTS[:8]           # refuse: exit 1 with the message
 HOOKS = FLOOR_ENTRY_POINTS[8:]               # a hook that cannot run lets the call through, loud (node [5])
 # The Claude hooks.json commands that do NOT check the interpreter themselves (command-guard-hook checked first;

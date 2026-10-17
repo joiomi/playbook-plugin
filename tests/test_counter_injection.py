@@ -8,7 +8,7 @@ substitution inside `$(( ))`. A counters file containing
 file lives under `.agent/`, which the task-gate EXEMPTS from the code-edit gate,
 so an agent (or prompt injection) can write it and achieve arbitrary command
 execution in the hook context. The same class exists in `chat-log-hook`'s
-`get_next_id` (`$(( n + 1 ))` on the raw `chat_log_counter`).
+`append_message` (`$(( n + 1 ))` on the raw `chat_log_counter`; `get_next_id` until task 233).
 
 Fix: read counters through a strict integer coercion (`_safe_int`), never feed
 raw file bytes to `$(( ))`. These tests drive the REAL hooks with a poisoned

@@ -102,8 +102,10 @@ def _capture_recent_chat(project_path: Path, max_messages: int = 10,
     # suffix to the header since 1.4.3, so anchoring the backtick-host tag right
     # before the newline made this parser DEAD on every modern entry (I12).
     # Consume the rest of the header line, matching both legacy and modern.
+    # Task 233: the header starts a line (a header-shaped text inside an entry is the entry's text), and its tag is
+    # kept — an options-dialog entry (`DIALOG`) holds the agent's question beside the user's answer.
     msg_pattern = re.compile(
-        r'\*\*\[(M\d+)\]\*\*\s+\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) UTC\]\s+`\w+`[^\n]*\n\s*\n(.*?)(?=\n---|\Z)',
+        r'(?m)^\*\*\[(M\d+)\]\*\*\s+\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) UTC\]\s+`(\w+)`[^\n]*\n\s*\n(.*?)(?=\n---|\Z)',
         re.DOTALL
     )
 
@@ -111,12 +113,13 @@ def _capture_recent_chat(project_path: Path, max_messages: int = 10,
     for m in msg_pattern.finditer(content):
         msg_id = m.group(1)
         timestamp_str = m.group(2)
-        text = m.group(3).strip()
+        tag = m.group(3)
+        text = m.group(4).strip()
         try:
             ts = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
         except ValueError:
             continue
-        messages.append((msg_id, ts, timestamp_str, text))
+        messages.append((msg_id, ts, timestamp_str, text, tag))
 
     if not messages:
         return []
@@ -124,7 +127,7 @@ def _capture_recent_chat(project_path: Path, max_messages: int = 10,
     # Scan backwards
     captured = []
     prev_ts = None
-    for msg_id, ts, ts_str, text in reversed(messages):
+    for msg_id, ts, ts_str, text, tag in reversed(messages):
         # Stop at time gap
         if prev_ts is not None:
             gap = (prev_ts - ts).total_seconds()
@@ -132,8 +135,12 @@ def _capture_recent_chat(project_path: Path, max_messages: int = 10,
                 break
         prev_ts = ts
 
-        # Stop at task-done marker
-        text_lower = text.lower()
+        # Stop at task-done marker — in the user's own words: of an options-dialog entry, only its answer lines (its
+        # Q lines are the agent's, which may well name `tasks work done` — plan panel, codex's probe; task 233)
+        said = text
+        if tag == "DIALOG":
+            said = "\n".join(ln for ln in text.splitlines() if re.match(r"(?:A|Notes)\d+\b", ln))
+        text_lower = said.lower()
         if "tasks done" in text_lower or "tasks work done" in text_lower:
             break
 

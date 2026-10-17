@@ -110,26 +110,6 @@ done
 # Create agent directory if it doesn't exist
 mkdir -p "$AGENT_DIR"
 
-# Get next message ID (flock for atomicity where available, plain fallback otherwise)
-get_next_id() {
-    local counter_file="$1"
-    # _safe_int on the file content: chat_log_counter lives under .agent/
-    # (gate-exempt, untrusted), and `$(( n + 1 ))` executes command
-    # substitution embedded in `n` (C5). Coerce before any arithmetic.
-    if command -v flock &>/dev/null; then
-        (
-            flock -x 200
-            local n=$(_safe_int "$(cat "$counter_file" 2>/dev/null)")
-            echo $((n + 1)) > "$counter_file"
-            printf "M%03d" $((n + 1))
-        ) 200>"$counter_file.lock"
-    else
-        local n=$(_safe_int "$(cat "$counter_file" 2>/dev/null)")
-        echo $((n + 1)) > "$counter_file"
-        printf "M%03d" $((n + 1))
-    fi
-}
-
 # Migrate old format entries to new format with IDs
 # Old: **[2026-01-27 07:42:28 UTC]** `SANDBOX`
 # New: **[M001]** [2026-01-27 07:42:28 UTC] `HOST`
@@ -387,9 +367,6 @@ if [ "[$TIMESTAMP]" = "$LAST_TS" ] && [ "$USER_MESSAGE" = "$LAST_MSG" ]; then
     exit 0
 fi
 
-# Get next message ID
-MSG_ID=$(get_next_id "$COUNTER_FILE")
-
 # Session ID (the PID tag in the chat log) — resolved above, before the
 # harness-marker exit; `no-session` when unresolved (task 105).
 LOG_SESSION_TAG="${SESSION_ID:-no-session}"
@@ -404,21 +381,32 @@ PROVIDER="${PLAYBOOK_PROVIDER:-claude}"
 # protocols serialize; where `flock` is unavailable (no util-linux)
 # the append is unchanged and `tasks tag` still refuses a stale rewrite rather
 # than losing a message.
+#
+# Task 233: the id is taken in that SAME hold (it used to be taken in a hold of its own, before): the options-dialog
+# hook (dialog_log.py) writes entries too, and with two holds a dialog's entry could take the next id and land in
+# between, so the file held M11 before M10. One hold, so the ids follow the file. Prints the id it wrote.
 append_message() {
+    local n
+    n=$(_safe_int "$(cat "$COUNTER_FILE" 2>/dev/null)")      # untrusted bytes never reach $(( )) (C5)
+    echo $((n + 1)) > "$COUNTER_FILE"
+    MSG_ID=$(printf "M%03d" $((n + 1)))
     echo "---" >> "$LOCAL_LOG"
     echo "" >> "$LOCAL_LOG"
     echo "**[$MSG_ID]** [$TIMESTAMP] \`HOST\` ($PROVIDER/$LOG_SESSION_TAG)" >> "$LOCAL_LOG"
     echo "" >> "$LOCAL_LOG"
     echo "$USER_MESSAGE" >> "$LOCAL_LOG"
     echo "" >> "$LOCAL_LOG"
+    printf '%s' "$MSG_ID"
 }
 if command -v flock &>/dev/null; then
-    (
-        flock -x 201
-        append_message
-    ) 201>"$COUNTER_FILE.lock"
+    MSG_ID=$(
+        (
+            flock -x 201
+            append_message
+        ) 201>"$COUNTER_FILE.lock"
+    )
 else
-    append_message
+    MSG_ID=$(append_message)
 fi
 
 # Reset tool/write counters for this session (new user prompt = fresh count)

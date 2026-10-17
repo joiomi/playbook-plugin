@@ -30,9 +30,9 @@ from pathlib import Path
 # must be registered for that event.
 EXPECTED_HOOKS = {
     "SessionStart": ["session-start-hook"],
-    "PreToolUse": ["task-gate-hook", "command-guard-hook", "task-dir-watch-hook"],
+    "PreToolUse": ["task-gate-hook", "command-guard-hook", "task-dir-watch-hook", "dialog-log-hook"],
     "UserPromptSubmit": ["chat-log-hook"],
-    "PostToolUse": ["state-echo-hook", "task-dir-watch-hook"],
+    "PostToolUse": ["state-echo-hook", "task-dir-watch-hook", "dialog-log-hook"],
     "PostToolUseFailure": ["state-echo-hook", "task-dir-watch-hook"],
     "Stop": ["stop-hook"],
     "SessionEnd": ["session-end-hook"],

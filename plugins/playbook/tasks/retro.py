@@ -205,8 +205,10 @@ def extract_chatlog(path: Path, task_windows: dict[int, tuple[str, str]] | None 
     # The (provider/pid) suffix is optional: multi-provider tagging added it in
     # 1.4.3 and it must not leak into message text (same disease `tasks log`
     # had; entries from before the suffix still parse).
+    # Task 233: a header STARTS a line (every writer puts it there) — a header-shaped text inside an entry (an
+    # options-dialog entry's question, a quote) is the entry's text, never a message of its own (plan panel, codex).
     msg_pattern = re.compile(
-        r'\*\*\[M(\d+)\]\*\*\s+\[(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:\s+UTC)?)\]\s+`(\w+)`(?:[ \t]*\([^)\n]*\))?'
+        r'(?m)^\*\*\[M(\d+)\]\*\*\s+\[(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:\s+UTC)?)\]\s+`(\w+)`(?:[ \t]*\([^)\n]*\))?'
     )
 
     # Split on message headers
@@ -218,9 +220,11 @@ def extract_chatlog(path: Path, task_windows: dict[int, tuple[str, str]] | None 
         timestamp = parts[i + 1].strip()
         speaker = parts[i + 2]
         text = parts[i + 3].strip()
-        # Trim text to first --- or next message
-        if "---" in text:
-            text = text[:text.index("---")].strip()
+        # Trim text at the entry separator — a `---` that starts a line, as the other readers cut (task 233: a
+        # `---` inside a line, an options-dialog answer's or a prompt's, is the entry's text)
+        cut = re.search(r"(?m)^---", text)
+        if cut:
+            text = text[:cut.start()].strip()
 
         msg = {
             "id": msg_id,
@@ -699,6 +703,9 @@ def analyze_steering(chatlog: list[dict]) -> list[dict]:
     corrections = []
     for msg in chatlog:
         text = msg["text"]
+        if msg.get("speaker") == "DIALOG":
+            # an options-dialog entry: the user's words are its answer lines; its Q lines are the agent's (task 233)
+            text = "\n".join(ln for ln in text.splitlines() if re.match(r"(?:A|Notes)\d+\b", ln))
         words = text.split()
         # Filter: short messages only
         if len(words) > 100:

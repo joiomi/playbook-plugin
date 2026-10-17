@@ -249,6 +249,9 @@ def _intent_check(task_path: str) -> str:
             "The task's `## Intent`, `## Why` and `### Recent Chat` (the user's messages as captured when "
             f"the task was activated — each whole up to {_recent_chat_cut():,} characters, a longer one cut "
             "there and marked with what was left out) carry the user's own words. "
+            # task 233: an options dialog's entry holds the agent's question beside the user's answer
+            "An entry that opens with `Options dialog` is an options dialog: its `A`/`Notes` lines are the user's "
+            "answers (exact, as JSON string literals), its `Q` lines the agent's questions. "
             "Check whether the task addresses what the user actually asked for, not just the agent's interpretation. "
         )
     return ""

@@ -770,7 +770,13 @@ class TagDoesNotLoseAnAppendedPrompt(unittest.TestCase):
         self.assertIn('"chat_log_counter.lock"', src)
         self.assertIn("named_lock(", src)
         hook = (PLUGIN / "scripts" / "chat-log-hook").read_text(encoding="utf-8")
-        self.assertIn('200>"$counter_file.lock"', hook)
+        # task 233: the id and the append share one hold (the old id-only hold on fd 200 is gone)
+        self.assertIn('COUNTER_FILE="$AGENT_DIR/chat_log_counter"', hook)
+        self.assertIn('201>"$COUNTER_FILE.lock"', hook)
+        self.assertNotIn('200>"$counter_file.lock"', hook)
+        dialog = (PLUGIN / "scripts" / "dialog_log.py").read_text(encoding="utf-8")
+        self.assertIn('COUNTER_NAME = "chat_log_counter"', dialog)
+        self.assertIn('lane / (COUNTER_NAME + ".lock")', dialog)
 
     def test_tag_refuses_when_the_log_changed_under_it(self):
         # Deterministic: the append happens exactly in the window the guard

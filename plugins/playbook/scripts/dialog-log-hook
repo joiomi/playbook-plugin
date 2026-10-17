@@ -1,0 +1,41 @@
+#!/bin/bash
+_PB_HJ_T0=$EPOCHREALTIME     # the hook journal's start (task 222): first, before anything else runs
+# dialog-log-hook — PreToolUse and PostToolUse on AskUserQuestion (task 233, PHASE-B item 6). The owner's answers to an
+# options dialog go into the lane's chat_log.md, beside his prompts (dialog_log.py); the dialog's opening is this
+# hook's PreToolUse line in the hook journal. It never holds the dialog: every path exits 0.
+#
+# PreToolUse runs before the host shows the dialog, so it starts no python: the lib's runner writes its one journal
+# line (event, tool, the tool-call id the PostToolUse line will carry) and the hook exits. PostToolUse runs
+# dialog_log.py — not `exec`ed: whatever it does, this wrapper's status is 0 (a PreToolUse status of 2 would block).
+if [ "${PLAYBOOK_ROLE:-}" = "monitor" ]; then exit 0; fi
+HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
+INPUT=$(cat)
+# The event, read by pattern as the lib's journal writer reads it: a quote inside a JSON string is escaped, so a
+# question's text cannot spell `"hook_event_name": "PreToolUse"`.
+_pb_dl_pre='"hook_event_name"[[:space:]]*:[[:space:]]*"PreToolUse"'
+if [[ "$INPUT" =~ $_pb_dl_pre ]]; then
+    { source "$HOOK_DIR/gate-echo-lib.sh" && pb_hook_begin dialog-log; } 2>/dev/null || exit 0
+    SESSION_ID="$(resolve_session_id 2>/dev/null)" || SESSION_ID=""     # the line names the session, as the answer's does
+    PB_HJ_DECISION=ok; PB_HJ_DETAIL="dialog opened"
+    exit 0
+fi
+_pb_dl_skip() {
+    { source "$HOOK_DIR/gate-echo-lib.sh" && pb_hook_begin dialog-log; } 2>/dev/null || exit 0
+    PB_HJ_DECISION=skip; PB_HJ_DETAIL="not logged: $1"
+    exit 0
+}
+command -v python3 >/dev/null 2>&1 || {
+    echo "playbook: no python3 on PATH — the dialog's answer is not logged" >&2
+    _pb_dl_skip "no python3"
+}
+python3 -I -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null || {
+    echo "playbook: needs python3 >= 3.10 ($(python3 --version 2>&1 | head -1)) — the dialog's answer is not logged" >&2
+    _pb_dl_skip "python < 3.10"
+}
+[ -r "$HOOK_DIR/dialog_log.py" ] || {
+    echo "playbook: $HOOK_DIR/dialog_log.py is not readable — the dialog's answer is not logged" >&2
+    _pb_dl_skip "helper not readable"
+}
+export _PB_HJ_T0
+printf '%s' "$INPUT" | python3 -E -s "$HOOK_DIR/dialog_log.py" || true
+exit 0

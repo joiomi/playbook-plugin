@@ -65,7 +65,7 @@ The **hostile-sequence** lens walks every state-changing flow the change touches
 
 **`tasks context <N>`** — extract the chat messages attributed to task N. Useful when revisiting an old task and the task.md alone doesn't explain a decision.
 
-**`tasks log [N] [--width W]`** — compact one-line-per-message view of the chat log (`.agent/chat_log.md`) — the quick way to scan what was said without the gate echo noise.
+**`tasks log [N] [--width W]`** — compact one-line-per-message view of the chat log (`.agent/chat_log.md`) — the quick way to scan what was said without the gate echo noise. An options dialog's entry (task 233) shows `dialog` as its agent.
 
 **`tasks timeline` / `tasks tagger` / `tasks tag`** — internal retro-support tooling: chronological reconstruction of tasks + messages, and tagging tasks for retro analysis. Not part of the daily workflow.
 

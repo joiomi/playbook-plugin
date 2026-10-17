@@ -4,6 +4,21 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+**The owner's options-dialog answers reach the chat log** — PHASE-B.md item 6, second part, task 233 (the owner,
+2026-10-10, retro 177: "capture them where the prompts are captured"). His answers in an options dialog are decisions,
+and until now no log held them — `chat_log.md` had his prompts only.
+- A new hook on `AskUserQuestion` (`dialog-log-hook` → `dialog_log.py`): after he answers, one `DIALOG` entry in the
+  same `chat_log.md` — his answers first and exact (each its JSON string literal, so none of his characters changes),
+  then the agent's questions flattened and cut at 300 characters, the tool call's id last (a second delivery writes
+  nothing). Every body line starts with a fixed prefix (`A1`, `Notes1`, `Q1`), so no line is a heading, a gate or an
+  entry header. Its PreToolUse run — before the dialog shows — starts no python and writes only its hook-journal line,
+  the dialog's opening; a cancelled dialog leaves that line alone. No counter of the session is touched.
+- The chat-log hook now takes a prompt's id and appends it under ONE hold of the chat log's lock (two holds before),
+  so the ids follow the file with two writers; the readers — Recent Chat, retro, merge-prep — take an entry header only
+  at a line start (a header-shaped text inside an entry is its text); Recent Chat's stop at "tasks work done" reads only
+  a dialog's answer lines; retro cuts an entry at a `---` that starts a line, and its steering pass reads only a dialog's
+  answers; `tasks log` shows `dialog`; the judges are told how to read such an entry.
+
 **The plugin records what a task's close will need to count — first part** — PHASE-B.md item 6, task 232 (the
 owner, 2026-10-13: "În Faza B (Recomandat)"). Until now every number about a task's time, reviews and owner answers came
 from the host's session transcripts, which it deletes after about 30 days. This part records three of them in the
