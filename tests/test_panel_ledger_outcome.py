@@ -113,6 +113,16 @@ class CompletedRound(_Panel):
         self.assertEqual(stop_rule.round_findings(rnd), {"critical": 0, "important": 1})
         self.assertEqual(stop_rule.round_criticals(rnd), 0)
 
+    def test_a_count_that_fails_keeps_the_verdict_and_says_so(self):
+        """Impl round 1 (sonnet, Minor): the counts' failure must not erase the verdict fields, nor pass silently."""
+        def _boom(rnd):
+            raise ValueError("unreadable round")
+        self._run(extra_patches=[mock.patch.object(stop_rule, "round_findings", _boom)])
+        m = self._done()["measures"]
+        self.assertEqual((m["verdict"], m["succeeded"], m["seated"]), ("PASS", 2, 2))
+        self.assertNotIn("critical", m)
+        self.assertEqual(m["counts_error"], "unreadable round")
+
     def test_below_quorum_is_a_completed_fail(self):
         (self.agent / "config.json").write_text(json.dumps({"panel_quorum": 2}), encoding="utf-8")
         self._run(outputs={"opus": OPUS, "sonnet": "(FAILED — exit 1)\n[stderr tail]\nboom"})

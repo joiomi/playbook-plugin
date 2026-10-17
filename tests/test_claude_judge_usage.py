@@ -301,7 +301,36 @@ class SinglePathReadsTheEnvelope(_Project):
         _calls, recs, _printed = self._single(_fx("budget-stop.stdout"), rc=1)
         self.assertEqual(recs[0]["status"], "fail")
         self.assertEqual(recs[0]["usage"], BUDGET)
+        self.assertEqual(recs[0]["error"], "exit 1: Reached maximum budget ($0.00001)")
         self.assertFalse((self.agent / "tasks" / "042-demo" / "judge.log").exists())
+
+    def test_single_budget_stop_still_says_how_to_raise_the_cap(self):
+        """Impl round 1 (grok, Important): plain mode's single path read claude's raw `Error: Exceeded USD budget` and
+        told the operator to raise the cap; under JSON mode the words are `Reached maximum budget` inside the shaped
+        failure text — the notice must still come, for both shapes."""
+        for stdout in (_fx("budget-stop.stdout"), _fx("plain-budget-stop.stdout")):
+            _calls, _recs, printed = self._single(stdout, rc=1)
+            self.assertIn("budget cap and produced no review", printed, stdout[:40])
+            self.assertIn("Raise judge_budget_usd", printed)
+
+
+class BudgetExceeded(unittest.TestCase):
+    """`models_check.budget_exceeded` reads claude's budget line at the start of the text (claude's older exit-0 form)
+    or as the FIRST line of a failure block's stdout tail — plain mode's and JSON mode's words."""
+
+    def test_the_shapes(self):
+        from tasks.models_check import budget_exceeded
+        shaped = claude_judge_output(_cp(_fx("budget-stop.stdout"), rc=1), sandbox.format_judge_output)
+        plain = sandbox.format_judge_output(_cp(_fx("plain-budget-stop.stdout"), rc=1))
+        self.assertTrue(budget_exceeded(shaped))
+        self.assertTrue(budget_exceeded(plain))
+        self.assertTrue(budget_exceeded("Error: Exceeded USD budget (1)"))
+
+    def test_a_quote_is_not_a_budget_stop(self):
+        from tasks.models_check import budget_exceeded
+        self.assertFalse(budget_exceeded("1. **Important** — claude printed `Reached maximum budget ($1)` here."))
+        self.assertFalse(budget_exceeded("(FAILED — exit 1)\n[stdout tail]\nA review line.\nReached maximum budget ($1)"))
+        self.assertFalse(budget_exceeded("(FAILED — exit 1)\n[stderr tail]\nReached maximum budget ($1)"))
 
 
 class PanelSeatRecordsUsage(_Project):

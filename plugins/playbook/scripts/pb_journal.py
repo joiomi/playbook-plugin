@@ -138,15 +138,17 @@ def append_review(agent_dir, *, session_id="", seat="", task="", round_no=0,
                         when that budget is under 8 bytes.
       * `usage`       — token usage WHERE the CLI reports it, else the explicit
                         marker `{"status":"unknown"}`. Numbers are NEVER fabricated:
-                        codex/grok judge seats carry the CLI's own per-call counts
-                        (structured output, task 056); the claude judge runs in
-                        plain-text mode, so its seats — and every timeout, spawn
-                        error or unrecognized output — stay `unknown`.
+                        codex/grok/agy judge seats carry the CLI's own per-call counts
+                        (structured output, task 056), claude's since task 232
+                        (`-p --output-format json`, with `cache_read` and
+                        `cache_write` beside `in` and `out`); every timeout without a
+                        complete frame, spawn error or unrecognized output stays
+                        `unknown`.
 
     Every field is bounded so REAL records stay well under the 512-byte
     atomic-write floor: strings are byte-capped with control characters stripped,
     numerics are magnitude-capped, `session_id` is capped, and `usage` is
-    normalized to the fixed `{status[,in,out]}` schema (arbitrary caller dicts are
+    normalized to the fixed `{status[,in,out[,cache_read,cache_write]]}` schema (arbitrary caller dicts are
     NOT copied verbatim). This is the same HONEST bound `append` documents: a
     pathological caller could still exceed PIPE_BUF (e.g. a field stuffed with
     `"`/`\\`, which JSON escapes 2×) — an accepted best-effort bound, never a
@@ -183,7 +185,7 @@ def append_verify(agent_dir, *, task="", command="", rc=0, how="", seconds=0.0, 
     """Append one VERIFY-RUN record and return None. Never raises (task 232, PHASE-B item 6).
 
     One per command the verify contract ran or reused — at the close and in `tasks verify` alike
-    (`tasks.verify_memory.run_contract`): `task` ("-" when none), the command's first line (capped), its exit `rc`,
+    (`tasks.verify_memory.run_contract`): `task` ("-" when none), the command's first line (capped at 120 bytes), its exit `rc`,
     `how` ("ran" or "reused") and `seconds` — the monotonic time the run took, 0 for a reused one (that time was spent
     once, by the run it reuses). Same HARD CONTRACT and envelope as `append` (`hook="verify"`, `decision="record"`,
     `reason="verify run"`); every field bounded."""
@@ -195,7 +197,7 @@ def append_verify(agent_dir, *, task="", command="", rc=0, how="", seconds=0.0, 
             "decision": "record",
             "reason": "verify run",
             "task": _head(str(task or "-"), 16),
-            "command": _head(command, 160),
+            "command": _head(command, 120),      # 120: JSON may double each `"`/`\` and the line must stay under 512
             # signed: a command killed by a signal exits negative, and `_cap_int` would turn that into a green 0
             "rc": max(-_INT_CAP, min(int(rc), _INT_CAP)) if _is_int(rc) else -1,
             "how": "reused" if how == "reused" else "ran",

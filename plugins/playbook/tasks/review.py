@@ -2302,14 +2302,14 @@ def _cmd_panel_review(cmd_args):
         if _panel_save_failed:
             _PD6_PANEL_ENDED[_prid] = {"outcome": "unsaved"}
         else:
+            _measures = {"round_id": _prid, "verdict": "PASS" if panel_passed else "FAIL", "succeeded": succeeded,
+                         "seated": len(results), "quorum": panel_quorum}
             try:
                 from tasks.stop_rule import round_findings
-                _found = round_findings({"body": "\n".join(lines), "format": 2})
-                _PD6_PANEL_ENDED[_prid] = {"outcome": "completed", "measures": {
-                    "round_id": _prid, "verdict": "PASS" if panel_passed else "FAIL", "succeeded": succeeded,
-                    "seated": len(results), "quorum": panel_quorum, **_found}}
-            except Exception:
-                _PD6_PANEL_ENDED[_prid] = {"outcome": "completed"}
+                _measures.update(round_findings({"body": "\n".join(lines), "format": 2}))
+            except Exception as _e:        # the verdict fields stand; the counts say why they are missing (impl r1)
+                _measures["counts_error"] = " ".join(str(_e).split())[:120] or type(_e).__name__
+            _PD6_PANEL_ENDED[_prid] = {"outcome": "completed", "measures": _measures}
     summary = (f"\nPANEL {'PASS' if panel_passed else 'FAIL'}: {verdict_reason}"
                + _saved_note)
     if failed:

@@ -25,8 +25,11 @@ and the numbers composed at the close follow.
   written the same on every exit before, a tamper void and a crash included.
 - **Every verify run.** The close and `tasks verify` journal one `hook=verify` record per command — the task, the
   command, its exit (signed), ran or reused, and the seconds it ran (0 when reused, so a sum counts it once).
-- Measured besides, not changed (PLAN.md): `models_check.budget_exceeded` never fires for claude — claude exits 1 on a
-  budget stop, so the text starts `(FAILED — exit 1)` and the "raise judge_budget_usd" hint is not printed.
+- `models_check.budget_exceeded` also reads claude's budget line as the first line of a failure block's stdout tail, in
+  plain mode's words and JSON mode's (`Reached maximum budget`): the single judge's "raise judge_budget_usd" notice
+  keeps working under JSON mode (it read plain mode's raw stdout before), and the panel's budget notice, silent for
+  claude since claude began to exit 1 on a budget stop, prints again.
+- Limits: a panel killed by SIGKILL (or an unhandled SIGTERM) still leaves its reservation without a `done` record.
 
 **Judges read a fixed copy of the tree, so the agent works while they run** — PHASE-B.md item 7, task 231, the
 owner's answer of 2026-10-17 ("Copie pe aceeași cale"). Measured before: in the 31 hours before the decision, 32

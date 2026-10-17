@@ -266,7 +266,7 @@ Example:
 One per command of the verify contract, at the close and in `tasks verify` alike (`tasks/verify_memory.py`
 `run_contract`, via `pb_journal.append_verify`), right after the command ran or was reused; `reason` is
 `"verify run"`. Fields: `task` (the task number, or `"-"` when `tasks verify` resolved none), `command` (its first
-line, capped at 160 bytes), `rc` (its exit, signed — a command killed by a signal exits negative), `how` (`ran` or
+line, capped at 120 bytes), `rc` (its exit, signed — a command killed by a signal exits negative), `how` (`ran` or
 `reused`) and `seconds` — the monotonic time the run took (it stops while the machine sleeps), `0` for a reused
 command: that time was spent once, by the run it reuses, so a sum over the records counts it once. A run that ended
 "not remembered" (the code moved while it ran, no code key) is `ran`. Like every family, a write failure never

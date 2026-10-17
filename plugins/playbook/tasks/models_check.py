@@ -93,6 +93,7 @@ OTHER = "OTHER"
 
 _CLAUDE_MODEL_GONE = "There's an issue with the selected model"
 _BUDGET_EXCEEDED = "Error: Exceeded USD budget"
+_BUDGET_REACHED = "Reached maximum budget"      # claude's JSON mode words for the same stop (task 232, claude 2.1.302)
 
 # Live-captured grok bad-model signature (task 014): exit 1 + stderr
 # `Couldn't set model 'x': Invalid params: "unknown model id". Run 'grok
@@ -129,8 +130,22 @@ def judge_failed(text: str) -> bool:
 
 
 def budget_exceeded(text: str) -> bool:
-    """True when a judge's output is claude's budget-exhaustion message."""
-    return (text or "").lstrip().startswith(_BUDGET_EXCEEDED)
+    """True when a judge's output is claude's budget-exhaustion message: at the start of the text (claude's older
+    exit-0 form), or — claude exits 1 on it now — as the FIRST line of a `(FAILED …)` block's stdout tail, in plain
+    mode's words (`Error: Exceeded USD budget`) or JSON mode's (`Reached maximum budget`, task 232). A review that
+    quotes either has other lines first, or is no failure block."""
+    t = (text or "").lstrip()
+    if t.startswith(_BUDGET_EXCEEDED):
+        return True
+    if not t.startswith("(FAILED"):
+        return False
+    lines = t.splitlines()
+    try:
+        at = lines.index("[stdout tail]")
+    except ValueError:
+        return False
+    first = lines[at + 1].strip() if at + 1 < len(lines) else ""
+    return first.startswith((_BUDGET_EXCEEDED, _BUDGET_REACHED))
 
 
 def classify_failure(output_text: str) -> str:
