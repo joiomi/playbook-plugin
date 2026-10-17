@@ -338,7 +338,8 @@ cut at 8,000.
   date, words on more than one line or over 1,500 characters, the same words already in force, an unknown or ended
   number, a whole entry over 2,000 characters, a list the CLI did not write (or a link — never read). A write holds
   `.agent/rulings.lock` (in init's `.gitignore` block); two at once keep both entries.
-- Every judge's SETTLED block starts with the rulings in force — whole entries within 4,000 characters, the rest named
+- The SETTLED block of every panel and single-judge review (not the tail-certification judge, which gets none) starts
+  with the rulings in force — whole entries within 4,000 characters, the rest named
   ("N more in force — read `.agent/rulings.md`"); a list that cannot be read arrives as its raw text, marked so. The block
   is now sent when only the list has something, and to a taskless panel (`--bare` still gets no context); past 8,000
   characters it is cut on a line and says how many lines it left out (it used to slice mid-line).

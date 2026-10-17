@@ -21568,7 +21568,8 @@
       "missing_evidence_or_limitation": [
         "Which ruling is project-wide is the agent's call; the list does not check that the words are the owner's — like a task's `## Owner rulings`, it is agent-written (the audit keeps its history honest, not its source).",
         "A ruling `until <what ends it>` holds until someone runs `tasks ruling end`; nothing ends it when its condition comes true (the bootstrap prints the reminder).",
-        "Two branches that each add a ruling conflict at the list's end; the resolution is by hand (keep this branch's entries, add the other's after them, renumbered) — no repair command yet (PLAN.md Phase B inputs)."
+        "Two branches that each add a ruling conflict at the list's end; the resolution is by hand (keep this branch's entries, add the other's after them, renumbered) — no repair command yet (PLAN.md Phase B inputs).",
+        "The tail-certification judge receives no SETTLED block (true before task 227 too) — so no project ruling reaches it; the panel and the single judge receive them (PLAN.md Phase B inputs)."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],
