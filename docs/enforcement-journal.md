@@ -407,7 +407,8 @@ them in `numbers.json` in the task folder, one entry per close (`closures[]`, ke
 adds one). It composes and writes under the task lock and only while that receipt is still the task's newest, so a
 close that paused before writing never replaces a later close's numbers, and no reopen or second close can come between
 the receipt it reads and the journal it reads; a reopen that came before the write does not stop it (the closure is
-bounded by the reopen's `work`). It holds the task lock for that time, at most the 5 s budget, so another session's
+bounded by the reopen's `work`). It holds the task lock for that time — about the 5 s budget: the reading and the
+composition keep the deadline, the run ledger's read and the write after them are not bounded — so another session's
 write to the task waits that long. The close prints `numbers: <path>` (commit it with the task); a
 fault, or 5 s passed — one deadline for the reading, the lock wait and the write — prints `numbers: not written (…)`
 and changes nothing else. `tasks numbers [N]`
