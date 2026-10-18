@@ -14,21 +14,34 @@ prints its ready line; tail certification still reads the live tree. Item 6 (the
 transcripts, which it deletes after about 30 days, and `tasks numbers [N]` shows them; to feed it, the claude judge
 seats report their tokens, the run ledger says how each panel ended, every verify run is journaled, the owner's
 options-dialog answers reach `chat_log.md`, and every hook-journal line names its task. Also fixed: `tasks audit` on a
-host with no git (a 1.6.4 bug). The suite has ⟦W2: test count⟧ tests (5,255 at 1.6.4); CI is the same two Linux lanes.
+host with no git (a 1.6.4 bug). The suite has 5,599 tests (5,255 at 1.6.4); CI is the same two Linux lanes.
 The guarantee ledger has 135 rows, 121 verified (133 and 120 at 1.6.4): two new rows, PB-REVIEW-COPY and
 PB-TASK-NUMBERS, and PB-INSTALL-ROLLBACK back to partially evidenced (Known limitations). The live gauntlet on this
-release: ⟦W3: PASS / WAITING / FAIL⟧.
+release: 17 PASS, 5 WAITING (the grok rows: its account is out of credit), 1 FAIL (PB-INSTALL-ROLLBACK, Known
+limitations).
 
 **Upgrading:** `/playbook:upgrade`, restart every Claude Code session, then re-run `/playbook:init` in each project that
 uses the plugin. Init brings the CLAUDE.md block's new bullet ("Work while a review runs — after its ready line") and
-refreshes the project's copy of `.claude/hooks/monitor-nudge.sh`, whose journal lines now name their task; `scripts/init`
-itself, its `.gitignore` block and the CLAUDE.md merge are unchanged since 1.6.4. The options-dialog hook comes with the
-plugin and needs no init step. The review copy lives under `.agent/journal/`, which init's `.gitignore` block already
-ignores; a project set up by the bare `tasks init` alone has no such block, and its reviews read the live tree and say
-so. From 1.6.3, 1.6.4's upgrade notes apply as written, its data move included (at the next `tasks audit` of a task,
-its older audit receipts move to `audit-log.md` beside it — nothing is deleted). A task activated only before 1.6.4
-has no activation record, so its closure's time is empty; one activated again since counts from then. Measured before the release, in temporary folders: ⟦W3: the window
-from 1.6.3⟧. **Going back** ⟦W3b: 1.6.3 `5a6c837` and 1.6.4 `80dc9df` on a project 1.6.5 wrote⟧.
+refreshes the project's copy of `.claude/hooks/monitor-nudge.sh`, whose journal lines now name their task;
+`scripts/init` itself, its `.gitignore` block and the CLAUDE.md merge are unchanged since 1.6.4. The options-dialog
+hook comes with the plugin and needs no init step. The review copy lives under `.agent/journal/`, which init's
+`.gitignore` block already ignores; a project set up by the bare `tasks init` alone has no such block, and its reviews
+read the live tree and say so. From 1.6.3, 1.6.4's upgrade notes apply as written, its data move included (at the next
+`tasks audit` of a task, its older audit receipts move to `audit-log.md` beside it — nothing is deleted). A task
+activated only before 1.6.4 has no activation record, so its closure's time is empty; one activated again since counts
+from then. Measured before the release, in temporary folders, on a project 1.6.3's `/playbook:init` set up, with a
+task 1.6.3 left in flight: 1.6.5's `doctor`, `bootstrap`, `new`, `work`, `verify`, `audit` and a close ran clean and
+wrote `numbers.json`; a real session with 1.6.5's hooks, before its init, ran each of them (an options dialog
+included) with no hook error and closed the 1.6.3 task, its numbers written; 1.6.5's init then brought the bullet,
+refreshed `monitor-nudge.sh` and removed 1.6.3's shell logger. **Going back** to 1.6.4 (`80dc9df`) or 1.6.3
+(`5a6c837`): point the marketplace clone at that commit and update the plugin (a downgrade this way is not measured),
+then re-run that version's `/playbook:init` before any review — it takes the bullet out of CLAUDE.md (that version's
+reviews read the live tree, so the agent must not write while one runs) and puts its own `monitor-nudge.sh` back;
+1.6.3's also puts its shell logger back. Measured with the CLI on copies of a project 1.6.5 wrote (closures in
+`numbers.json`, the hook journal's new keys, a dialog entry, a panel record with `outcome` and `measures`, the verify
+memory): each version's `doctor`, `bootstrap`, `list`, `status`, `new`, `work`, `audit` and a close ran clean and left
+1.6.5's `numbers.json` untouched — neither writes nor shows the numbers; their hooks were not run there. Going back to
+1.6.3, 1.6.4's notes on 1.6.3's limits still apply.
 
 **Judges read a fixed copy of the tree, so the agent works while they run** — PHASE-B.md item 7, task 231. Measured
 before: in the 31 hours before the decision, 32 panels held the agent idle for 368.6 minutes and 11 single-judge runs
