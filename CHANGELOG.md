@@ -29,19 +29,25 @@ hook comes with the plugin and needs no init step. The review copy lives under `
 read the live tree and say so. From 1.6.3, 1.6.4's upgrade notes apply as written, its data move included (at the next
 `tasks audit` of a task, its older audit receipts move to `audit-log.md` beside it — nothing is deleted). A task
 activated only before 1.6.4 has no activation record, so its closure's time is empty; one activated again since counts
-from then. Measured before the release, in temporary folders, on a project 1.6.3's `/playbook:init` set up, with a
-task 1.6.3 left in flight: 1.6.5's `doctor`, `bootstrap`, `new`, `work`, `verify`, `audit` and a close ran clean and
+from then.
+
+**Measured before the release**, in temporary folders, on a project 1.6.3's `/playbook:init` set up, with a task 1.6.3
+left in flight: 1.6.5's `doctor`, `bootstrap`, `new`, `work`, `verify`, `audit` and a close ran clean and
 wrote `numbers.json`; a real session with 1.6.5's hooks, before its init, ran each of them (an options dialog
-included) with no hook error and closed the 1.6.3 task, its numbers written; 1.6.5's init then brought the bullet,
-refreshed `monitor-nudge.sh` and removed 1.6.3's shell logger. **Going back** to 1.6.4 (`80dc9df`) or 1.6.3
-(`5a6c837`): point the marketplace clone at that commit and update the plugin (a downgrade this way is not measured),
-then re-run that version's `/playbook:init` before any review — it takes the bullet out of CLAUDE.md (that version's
+included) with no hook error and closed the 1.6.3 task (with `--force`, its gates open), its numbers written; 1.6.5's
+init then brought the bullet, refreshed `monitor-nudge.sh` and removed 1.6.3's shell logger.
+
+**Going back** to 1.6.4 (`80dc9df`) or 1.6.3 (`5a6c837`): in the release clone the marketplace reads,
+`git -C <clone> checkout <commit>`, then `claude plugin marketplace update playbook-x-marketplace` and
+`claude plugin update playbook@playbook-x-marketplace` (a downgrade this way is not measured); then re-run that
+version's `/playbook:init` before any review — it takes the bullet out of CLAUDE.md (that version's
 reviews read the live tree, so the agent must not write while one runs) and puts its own `monitor-nudge.sh` back;
 1.6.3's also puts its shell logger back. Measured with the CLI on copies of a project 1.6.5 wrote (closures in
 `numbers.json`, the hook journal's new keys, a dialog entry, a panel record with `outcome` and `measures`, the verify
 memory): each version's `doctor`, `bootstrap`, `list`, `status`, `new`, `work`, `audit` and a close ran clean and left
 1.6.5's `numbers.json` untouched — neither writes nor shows the numbers; their hooks were not run there. Going back to
-1.6.3, 1.6.4's notes on 1.6.3's limits still apply.
+1.6.3, 1.6.4's notes on 1.6.3's limits still apply. Before the next `/playbook:upgrade`, `git -C <clone> checkout main`:
+its `git pull --ff-only` refuses a detached HEAD.
 
 **Judges read a fixed copy of the tree, so the agent works while they run** — PHASE-B.md item 7, task 231. Measured
 before: in the 31 hours before the decision, 32 panels held the agent idle for 368.6 minutes and 11 single-judge runs
@@ -50,7 +56,8 @@ for 30.9 — the tamper guard voided a round on any repo write while the judges 
   tree. With a copy, the CLI copies what git lists — the repository and each `code_roots` repository — into
   `<lane>/journal/review-views/`, seals it by content, freezes it read-only and prints
   `ready: you may write the live tree now` right before the judges start; bubblewrap mounts it read-only at the
-  project path. What git ignores is shown live; the task records are never copied.
+  project path. What git ignores is shown live; the conversation records (the chat log, the shell history, the
+  sessions) are never copied.
 - A write to the live tree during the review no longer voids it: the tamper guard watches the copy. What changed is
   after the review — the close reads STALE, and tail certification takes records, tests and docs. The copy is removed
   on every exit; one left by a review that died is swept by the next.
