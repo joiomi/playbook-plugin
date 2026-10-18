@@ -578,13 +578,13 @@ class GuaranteeLedgerValidation(_LedgerFixture):
         self.assertIn(8, entry["follow_up_phases"],
                       "the row keeps its Phase 8 live evidence on the schedule")
 
-    def test_the_real_ledger_names_its_open_known_violations(self):
-        # Task 242 (1.6.5): PB-INSTALL-ROLLBACK's HOME-write clause fails live since task 221 — the owner's fix
-        # (init fails and restores, 2026-10-18 ~13:30) is the next task, which takes this row off the list again.
+    def test_the_real_ledger_has_no_open_known_violation(self):
+        # Task 242 (1.6.5) listed PB-INSTALL-ROLLBACK here (its HOME-write clause failed live since task 221); task 243
+        # (init fails and restores, the owner 2026-10-18 ~13:30) fixed it and the live row passes again.
         violations = [e for e in self.ledger["guarantees"]
                       if e["status"] == "known_violation"]
-        self.assertEqual(["PB-INSTALL-ROLLBACK"], [e["id"] for e in violations])
-        self.assertIn("Known violations of a stated guarantee: 1",
+        self.assertEqual([], [e["id"] for e in violations])
+        self.assertIn("Known violations of a stated guarantee: 0",
                       MODULE.coverage_summary(self.ledger))
 
     def test_the_synthesized_violation_is_otherwise_valid(self):

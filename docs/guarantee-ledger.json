@@ -9118,7 +9118,7 @@
     {
       "id": "PB-INSTALL-ROLLBACK",
       "category": "installation-and-upgrade",
-      "statement": "A failed initialization — the first one, or the re-initialization an upgrade runs once the plugin manager has installed the new copy — rolls back without losing user or project content or leaving a mixed-version enforcing installation: a failing write in the project (a hard abort), a step that fails softly and is reported at the summary, and a SIGTERM each restore everything init touched — the old shell logger it removes from the user's HOME included (task 221), and a plain re-run then installs the one new version. The plugin manager's own copy step is not covered.",
+      "statement": "A failed initialization — the first one, or the re-initialization an upgrade runs once the plugin manager has installed the new copy — rolls back without losing user or project content or leaving a mixed-version enforcing installation: a failing write in the project (a hard abort), a step that fails softly and is reported at the summary, a change in the user's HOME that cannot be made or a file there init cannot look at (task 243: the old shell logger is removed whole or not at all), and a SIGTERM each restore everything init touched — the old shell logger it removes from the user's HOME included (task 221), and a plain re-run then installs the one new version. The plugin manager's own copy step is not covered.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/init",
@@ -9161,6 +9161,46 @@
           "negative_control": null,
           "limitations": [
             "Soft route: a malformed project settings.json fails its merge, init goes on to its summary and exits 1 — after it removed an old logger file, its BASH_ENV and its rc lines; all come back byte-identical. (Until task 221 this route was a read-only ~/.claude failing the logger's deploy, which no longer exists.)"
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_init_fails_and_restores.py",
+          "reference": "WhenInitCannotFinishItRestores.test_t1_a_read_only_claude_dir_over_the_old_logger_fails_and_restores",
+          "boundary": "real-os",
+          "negative_control": null,
+          "limitations": [
+            "Task 243: a read-only ~/.claude over the old logger — the removal's first change fails, init exits 1 naming it, stops at that change, and the HOME and the project are byte-identical to right before (a sha256 and mode map)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_init_fails_and_restores.py",
+          "reference": "WhenInitCannotFinishItRestores.test_t3_a_later_write_failing_brings_back_the_file_and_the_key_already_removed",
+          "boundary": "real-os",
+          "negative_control": null,
+          "limitations": [
+            "Task 243: a change that fails AFTER two that succeeded (the HOME read-only, ~/.claude writable) — the logger file and its BASH_ENV, already removed, come back."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_init_fails_and_restores.py",
+          "reference": "WhenInitCannotFinishItRestores.test_t2_a_claude_dir_that_cannot_be_searched_stops_init_before_any_change",
+          "boundary": "real-os",
+          "negative_control": null,
+          "limitations": [
+            "Task 243: a ~/.claude that cannot be searched — the pre-init snapshot (init_txn.py begin) refuses before any change, naming the path; until then `os.path.isfile` read EACCES as absent and init saw no logger."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_init_fails_and_restores.py",
+          "reference": "WhenInitCannotFinishItRestores.test_t7_a_crash_of_the_removal_step_fails_and_restores",
+          "boundary": "real-os",
+          "negative_control": null,
+          "limitations": [
+            "Task 243: a crash of the removal step (a python3 shim failing that one call) is a failure, restored."
           ]
         },
         {
@@ -9210,6 +9250,16 @@
           "limitations": [
             "The post-panel judge of task 221 (run 1, reproduced): init writes `.agent/config.json` through a dangling link; the target it made is removed, the link kept."
           ]
+        },
+        {
+          "type": "live-platform test",
+          "path": "tests/live/gauntlet.sh",
+          "reference": "scenario:PB-INSTALL-ROLLBACK",
+          "boundary": "live-platform",
+          "negative_control": null,
+          "limitations": [
+            "2026-10-18, candidate nested 65b6fc7 (task 243), run from the nested repository: a disposable HOME with the real plugin manager, 1.6.0 upgraded to the candidate; three induced failures in the re-init — a read-only project file the upgrade must change, a read-only ~/.claude over the old shell logger, a SIGTERM at the CLAUDE.md merge — each left the project and the user's files byte-identical (rc 1, 1, 143; the restore said); the control without the transaction left HOME/.claude/settings.json and HOME/.claude/bash-log.sh changed; a plain re-run recovered (one version, 1.6.5, runs; the user's content kept). 8 of 8 clauses; PB-UPGRADE-INSTALLED-COPY 9 of 9 in the same run."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -9220,10 +9270,9 @@
         "codex",
         "grok"
       ],
-      "status": "known_violation",
+      "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
-        "2026-10-18 (task 242, the 1.6.5 release): the live row's clause 'a write in the user's HOME fails (~/.claude read-only): init fails, says it restores, and the project and the user's files are byte-identical' FAILS since task 221 (1.6.4) — init's shell-logger removal (`retire_shell_logger`, written to never fail) skips an unreadable ~/.claude file, removes the logger's lines from ~/.bash_profile and returns 0, leaving the old logger half-removed (live gauntlet 2026-10-18, 1 of 8 clauses). The owner, 2026-10-18 ~13:30: 'Oprește și reface tot (Recomandat)' — a failed write there is to fail and restore; its own task after the release. Until then this row is a known violation (R2 of task 242, codex: the ledger contract, docs/guarantee-ledger.md, names a reproduced contradiction `known_violation`); its reproduction is the live scenario, moved out of the proofs.",
-        "Until 2026-10-18 the live scenario was this row's live proof; its limitation then read: A disposable HOME with the real plugin manager, 1.6.0 upgraded to the candidate as 1.6.1: three induced failures in the re-init (a read-only project file the upgrade must change, a read-only ~/.claude, a SIGTERM) each left the project and the user's files byte-identical; the control without the transaction left a file changed; a plain re-run recovered.",
+        "2026-10-18: from task 221 (1.6.4) through 1.6.5 the live clause 'a write in the user's HOME fails (~/.claude read-only): init fails, says it restores, and the project and the user's files are byte-identical' FAILED — the shell-logger removal, written to never fail, skipped the unwritable ~/.claude files, removed the rc lines and exited 0; 1.6.5 shipped the row as a known violation (task 242). The owner, 2026-10-18 ~13:30: 'Oprește și reface tot (Recomandat)'. Task 243 made the removal look first and fail-and-restore, and the snapshot refuse a path it cannot look at; the live scenario is this row's live proof again (its limitation names the run).",
         "scripts/init is now transactional (init_txn.py snapshots every file it may modify and, on any non-zero exit, restores the pre-init state and removes what it created), proven on the host OS by three induced-failure integration tests plus a negative control. Two boundaries remain unproved.",
         "Upgrade is a Claude skill (commands/upgrade.md), NOT scripts/init, and remains snapshot-less: it re-runs init (which now rolls itself back), but the skill's own in-place refresh (clone pull, marketplace update, plugin update) has no transactional wrapper, so a mid-upgrade failure is not proven rollback-safe here. See PB-UPGRADE-INSTALLED-COPY.",
         "Interrupt coverage, Linux: the tests' trapped SIGTERM, and live (task 184, scenario PB-INSTALL-ROLLBACK) three controlled interruptions of the re-init — a project write that fails, a read-only ~/.claude, a SIGTERM at the CLAUDE.md merge. Real power loss is not covered; Windows is not claimed since 2026-10-08.",
@@ -9247,20 +9296,7 @@
         }
       ],
       "semantic_protocol": null,
-      "violation_reproduction": {
-        "type": "live-platform test",
-        "path": "tests/live/gauntlet.sh",
-        "reference": "scenario:PB-INSTALL-ROLLBACK",
-        "invocation": "tests/live/gauntlet.sh --out <dir> PB-INSTALL-ROLLBACK, run from the nested repository inside the workspace (the install rows need its local `main`)",
-        "observed": "2026-10-18, candidate 1.6.5 (nested 30f89c5; the same at d05e0c4): the clause 'a write in the user's HOME fails (~/.claude read-only): init fails, says it restores, and the project and the user's files are byte-identical to right before' FAILS — rc=0, restore said: False, differs: project .claude/hooks/monitor-nudge.sh, project .gitignore, project CLAUDE.md; the other 7 clauses pass. init's shell-logger removal (`retire_shell_logger`, written to never fail since task 221) keeps the unwritable ~/.claude files and returns 0.",
-        "platforms": [
-          "linux"
-        ],
-        "artifacts": [
-          "plugins/playbook/scripts/init"
-        ],
-        "phase": 2
-      }
+      "violation_reproduction": null
     },
     {
       "id": "PB-SANDBOX-WRITE",
