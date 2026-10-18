@@ -141,11 +141,6 @@
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/session-end-hook\"",
             "timeout": 5
-          },
-          {
-            "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/agent-usage-hook\"",
-            "timeout": 5
           }
         ]
       }

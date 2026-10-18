@@ -718,13 +718,13 @@ def agent_table(records: "list[dict]") -> "dict | None":
     """The main agent's tokens in a closure (task 244), from its `agent-usage` records, or None when it has none (never
     zero calls for what was not recorded). Per model — a subagent's (`side`) as "<model> (subagent)" — calls, in, out,
     cache_read, cache_write, thinking (a PART of out, as the host counts it: never added to it) and unreadable entries;
-    `unknown`: spans not counted (a seed, a file not readable then); `dropped`: a record of one file's span already
-    counted (an exact duplicate) or overlapping another — written without the lane lock. A record of the same span for
-    another model or side is kept. In file order, the first record of a span wins."""
+    `unknown`: spans not counted (a seed, a file not readable then); `dropped`: an exact duplicate of a record already
+    counted (the same file, span, model and side). Spans that overlap are NOT dropped: the recorder writes only under
+    the lane lock, so overlapping spans are a file read again from 0 — another file put in its place, which counts
+    (impl round 1 of task 244, codex: the overlap rule dropped such a file's calls)."""
     if not records:
         return None
     models: "dict[str, dict]" = {}
-    kept: "dict[tuple, list]" = {}
     seen: set = set()
     unknown = dropped = 0
     for r in sorted(records, key=lambda x: x.get("_n", 0)):
@@ -734,17 +734,11 @@ def agent_table(records: "list[dict]") -> "dict | None":
         a, b = r.get("from"), r.get("to")
         model, side = str(r.get("model") or "?"), 1 if r.get("side") else 0
         if all(isinstance(v, int) and not isinstance(v, bool) for v in (a, b)):
-            ident = (r.get("file"), r.get("ino"))
-            if (ident, a, b, model, side) in seen:
+            key = (r.get("file"), str(r.get("ino")), r.get("head"), a, b, model, side)
+            if key in seen:
                 dropped += 1
                 continue
-            spans = kept.setdefault(ident, [])
-            if (a, b) not in spans and any(a < y and x < b for x, y in spans):
-                dropped += 1
-                continue
-            if (a, b) not in spans:
-                spans.append((a, b))
-            seen.add((ident, a, b, model, side))
+            seen.add(key)
         m = models.setdefault(model + (" (subagent)" if side else ""), {k: 0 for k in _AGENT_KEYS})
         for k in _AGENT_KEYS:
             v = r.get(k)

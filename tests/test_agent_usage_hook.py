@@ -1,13 +1,14 @@
-"""`agent-usage-hook` — the recorder of the main agent's tokens, on Stop and SessionEnd (task 244, PHASE-B item 6).
+"""`agent-usage-hook` — the recorder of the main agent's tokens, on Stop (task 244, PHASE-B item 6).
 
-At each turn's end (Stop) and at the session's end (SessionEnd) it reads the session's host transcript (the payload's
+At each turn's end (Stop) it reads the session's host transcript (the payload's
 `transcript_path`, then the session dir's pointer) and its subagents' files from where the journal last stopped, and
 appends `hook: "agent-usage"` records under the session's task (`scripts/agent_usage.py` `record_spans`).
 
 Held:
   * a Stop records the session's calls under its task, prints nothing (a Stop hook's stdout could carry a decision)
     and exits 0; its hook-journal line says so;
-  * SessionEnd records too; with no path in the payload the session's pointer is read;
+  * with no path in the payload the session's pointer is read; it is wired on Stop only (impl round 1, codex:
+    on SessionEnd it raced session-end-hook's removal of the session dir);
   * a session with no task records under "-";
   * a judge, tail-cert or monitor session records nothing (task 232 counts the judges' own usage);
   * a crash of the recorder exits 0, prints nothing, records nothing, and its journal line says it was skipped;
@@ -96,9 +97,9 @@ class Recording(_Project):
         self.assertEqual(line[0]["decision"], "ok")
         self.assertIn("recorded 2 call", line[0]["detail"])
 
-    def test_session_end_records_too_and_the_pointer_serves_when_the_payload_has_no_path(self):
+    def test_the_pointer_serves_when_the_payload_has_no_path(self):
         (self.sdir / "transcript_path").write_text(str(self.transcript) + "\n")
-        r = self.run_hook(self.payload("SessionEnd", path=False))
+        r = self.run_hook(self.payload("Stop", path=False))
         self.assertEqual((r.returncode, r.stdout), (0, ""), r.stderr)
         self.assertEqual([x["calls"] for x in self.records()], [2])
 
@@ -113,6 +114,14 @@ class Recording(_Project):
         (self.sdir / "current_state").unlink()
         self.run_hook(self.payload())
         self.assertEqual([x["task"] for x in self.records()], ["-"])
+
+
+class TheWiring(unittest.TestCase):
+    def test_it_runs_on_stop_and_not_on_session_end(self):
+        hooks = json.loads((HOOK.parent.parent / "hooks" / "hooks.json").read_text())["hooks"]
+        cmds = {ev: [h["command"] for m in v for h in m["hooks"]] for ev, v in hooks.items()}
+        self.assertTrue(any("agent-usage-hook" in c for c in cmds["Stop"]))
+        self.assertFalse(any("agent-usage-hook" in c for c in cmds.get("SessionEnd", [])))
 
 
 class WhatItLeavesAlone(_Project):

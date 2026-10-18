@@ -2363,6 +2363,11 @@ def cmd_freehand(cmd_args):
         session_id = require_session_id()   # task 105: never `sessions/""`
         session_dir = agent_dir / "sessions" / session_id
         session_dir.mkdir(parents=True, exist_ok=True)
+        # task 244 (impl round 1, opus): what this session's agent spent before belongs to the task it leaves
+        _prev = (session_dir / "current_state")
+        _prev_task = (_prev.read_text(encoding="utf-8", errors="replace").split("\n", 1)[0].strip()
+                      if _prev.is_file() and not _prev.is_symlink() else "")
+        _record_agent_usage(agent_dir, _prev_task or "-", [session_dir])
         atomic_write(session_dir / "current_state", f"{task_num}\n")
         _record_transition(agent_dir, "new", task_num, "freehand freehand")
         _record_transition(agent_dir, "work", task_num)

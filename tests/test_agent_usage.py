@@ -202,8 +202,15 @@ class _Lane(unittest.TestCase):
         p = self.lane / "journal" / "enforcement.jsonl"
         if not p.exists():
             return []
-        return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines()
-                if l.strip() and json.loads(l).get("hook") == "agent-usage"]
+        out = []
+        for l in p.read_text(encoding="utf-8").splitlines():
+            try:
+                r = json.loads(l)
+            except ValueError:
+                continue
+            if isinstance(r, dict) and r.get("hook") == "agent-usage" and r.get("file") != ["not", "hashable"]:
+                out.append(r)
+        return out
 
     def record(self, task="7", paths=None, **kw):
         return self.mod.record_spans(self.lane, task=task, paths=[str(p) for p in (paths or [self.main])],
@@ -223,7 +230,7 @@ class RecordingSpans(_Lane):
         self.assertEqual((rec["calls"], rec["task"], rec["side"], rec["from"]), (2, "7", 0, 0))
         self.assertEqual(rec["to"], self.main.stat().st_size)
         self.assertEqual(rec["last_id"], "m2")
-        self.assertEqual(rec["ino"], self.main.stat().st_ino)
+        self.assertEqual(rec["ino"], str(self.main.stat().st_ino))
         self.assertEqual(len(rec["file"]), 16)
         with open(self.main, "ab") as fh:
             fh.write(lines(entry("m2"), entry("m3")))
@@ -313,6 +320,85 @@ class RecordingSpans(_Lane):
         self.record()
         raw = (self.lane / "journal" / "enforcement.jsonl").read_bytes().splitlines()[-1]
         self.assertLess(len(raw) + 1, 512, raw)
+
+
+
+class RoundOneFixes(_Lane):
+    """Task 244's impl round 1 (codex, opus, sonnet)."""
+    def test_a_span_of_two_models_is_one_append(self):
+        self.main.write_bytes(lines(entry("m1"), entry("h1", model="claude-haiku-5-5")))
+        calls = []
+        real = self.pbj._write_record
+
+        def count(agent_dir, rec, name="enforcement.jsonl", data=None):
+            calls.append(data)
+            return real(agent_dir, rec, name, data)
+        self.pbj._write_record = count
+        self.record()
+        self.assertEqual(len(calls), 1, "both models' records in one write")
+        self.assertEqual(len(self.records()), 2)
+
+    def test_a_file_replaced_in_place_is_counted_in_full_by_the_table(self):
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "plugins" / "playbook"))
+        from tasks import numbers
+        self.main.write_bytes(lines(entry("m1"), entry("m2")))
+        self.record()
+        with open(self.main, "r+b") as fh:            # in place: the same inode
+            fh.truncate(0)
+            fh.write(lines(*[entry(f"n{i}") for i in range(5)]))
+        self.record(fresh_max=10 ** 6)
+        recs = [dict(r, _t=0.0, _n=n) for n, r in enumerate(self.records())]
+        self.assertEqual(numbers.agent_table(recs)["models"]["claude-opus-5-5"]["calls"], 7)
+
+    def test_an_inode_number_past_the_integer_cap_is_kept_exactly(self):
+        big = 10 ** 17 + 5
+        self.pbj.append_agent_usage(self.lane, task="7", file="f" * 16, ino=big, span_from=0, span_to=10, model="m",
+                                    calls=1, counts={})
+        self.assertEqual(self.records()[-1]["ino"], str(big))
+
+    def test_a_key_the_cut_scan_did_not_reach_gets_a_seed_not_a_read_from_zero(self):
+        self.main.write_bytes(lines(entry("m1")))
+        self.record()
+        filler = {"ts": "2026-10-19T00:00:00Z", "hook": "verify", "decision": "record", "reason": "verify run",
+                  "task": "7", "command": "x" * 100, "rc": 0, "how": "ran", "seconds": 1}
+        with open(self.lane / "journal" / "enforcement.jsonl", "a") as fh:
+            for _ in range(200):
+                fh.write(json.dumps(filler) + "\n")
+        with open(self.main, "ab") as fh:
+            fh.write(lines(entry("m2")))
+        self.record(fresh_max=10 ** 6, scan_max=4096)
+        r = self.records()
+        self.assertEqual(r[-1].get("status"), "unknown", "a seed, since the scan could not reach the old record")
+        self.assertEqual(self.total(), 1, "m1 is not counted a second time")
+
+    def test_broken_assistant_lines_are_unreadable_even_in_a_span_with_no_call(self):
+        self.main.write_bytes(lines(entry("m1")) + b'{"type": "assistant", broken\n')
+        self.record()
+        self.assertEqual(self.records()[-1].get("unreadable"), 1)
+        with open(self.main, "ab") as fh:
+            fh.write(b'{"type": "assistant", broken again\n')
+        self.record()
+        last = self.records()[-1]
+        self.assertEqual((last.get("calls"), last.get("unreadable")), (0, 1))
+
+    def test_an_entry_with_no_id_is_unreadable_never_counted(self):
+        e = entry("x")
+        del e["message"]["id"]
+        self.write_main = None
+        self.main.write_bytes(lines(e, e, e))
+        self.record()
+        self.assertEqual(self.total(), 0)
+        self.assertEqual(sum(r.get("unreadable", 0) for r in self.records()), 3)
+
+    def test_odd_lines_in_the_journal_do_not_stop_the_recorder(self):
+        (self.lane / "journal").mkdir(exist_ok=True)
+        with open(self.lane / "journal" / "enforcement.jsonl", "a") as fh:
+            fh.write('["agent-usage"]\n')
+            fh.write(json.dumps({"hook": "agent-usage", "file": ["not", "hashable"]}) + "\n")
+        self.main.write_bytes(lines(entry("m1")))
+        self.record()
+        self.assertEqual(self.total(), 1)
 
 
 if __name__ == "__main__":

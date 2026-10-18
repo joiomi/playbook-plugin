@@ -7,7 +7,7 @@ never crosses a transition. `numbers.py` then sums this task's records of the cl
 
 Held:
   * `agent_table`: per model and side; `thinking` is a part of `out`, never added; a record of the same span for
-    another model is kept, an exact duplicate or an overlapping span of one file is dropped (and counted); `unknown`
+    another model is kept, an exact duplicate is dropped (and counted), an overlapping span counts; `unknown`
     spans are counted, never as zero tokens;
   * a closure counts the agent records of its task between its first `work` and its `done`, by file order; another
     task's, and one written after the `done`, are not its;
@@ -58,11 +58,12 @@ class TheTable(unittest.TestCase):
         self.assertEqual(m["claude-opus-5-5 (subagent)"]["calls"], 1)
         self.assertEqual((got["unknown"], got["dropped"]), (0, 0))
 
-    def test_another_model_of_one_span_is_kept_a_duplicate_or_an_overlap_is_dropped(self):
+    def test_another_model_of_one_span_is_kept_an_exact_duplicate_dropped_an_overlap_counted(self):
+        # impl round 1 (codex): an overlapping span is a file read again from 0 (another one in its place) — it counts
         got = numbers.agent_table([au(1), au(2, model="claude-haiku-5-5"), au(3), au(4, frm=50, to=150)])
-        self.assertEqual(got["models"]["claude-opus-5-5"]["calls"], 1)
+        self.assertEqual(got["models"]["claude-opus-5-5"]["calls"], 2)
         self.assertEqual(got["models"]["claude-haiku-5-5"]["calls"], 1)
-        self.assertEqual(got["dropped"], 2)
+        self.assertEqual(got["dropped"], 1)
 
     def test_unknown_spans_are_counted_never_as_zero_tokens(self):
         seed = {"ts": iso(1000), "hook": "agent-usage", "task": "007", "status": "unknown", "why": "no earlier record",
@@ -170,6 +171,14 @@ class TheCli(_CliProject):
         self.say(1)
         self.cli("work", "done", "--force", "--reason", "again")
         self.assertEqual(self.calls_by_task(), {"001": 3})
+
+    def test_freehand_records_what_came_before_it(self):
+        self.pointer()
+        self.say(2)
+        self.cli("freehand")
+        self.say(1)
+        self.cli("work", "done", "--force", "--reason", "freehand close")
+        self.assertEqual(self.calls_by_task(), {"-": 2, "001": 1})
 
     def test_a_close_with_no_record_says_so(self):
         self.cli("new", "quick", "first")

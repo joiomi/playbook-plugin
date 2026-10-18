@@ -165,43 +165,49 @@ def _take(raw: bytes, out: dict, seen: set, last: str) -> str:
         out["unreadable"] += 1
         return last
     mid = msg.get("id")
-    mid = idkey(mid) if isinstance(mid, str) else ""
+    mid = idkey(mid) if isinstance(mid, str) and mid else ""
     model = msg.get("model")
     model = model[:_MODEL_MAX] if isinstance(model, str) and model else "?"
     if model == "<synthetic>":
         return last
-    if mid and mid in seen:
+    if not mid:                      # no id: one call or several cannot be told (impl round 1, sonnet) — never guessed
+        out["unreadable"] += 1
+        return last
+    if mid in seen:
         return mid
     counts = _counts(msg.get("usage"))
     if counts is None:
         out["unreadable"] += 1
         return last
-    if mid:
-        seen.add(mid)
+    seen.add(mid)
     bucket = out["sidechain" if rec.get("isSidechain") is True else "models"].setdefault(model, _blank())
     bucket["calls"] += 1
     for k, v in counts.items():
         bucket[k] += v
-    return mid or last
+    return mid
 
 
 # --- recording: the journal is the read position (design v2, plan round 1) --------------------------------------------
 
-def _newest(journal: str, keys: "set[str]") -> "dict[str, dict]":
-    """Each file key's newest `agent-usage` record in `journal`, read backwards in blocks (at most `_SCAN_MAX` bytes):
-    {key: record}. A key with none is absent. Never follows a link; a journal it cannot read gives {}."""
+def _newest(journal: str, keys: "set[str]", scan_max: int = _SCAN_MAX) -> "tuple[dict[str, dict], bool]":
+    """Each file key's newest `agent-usage` record in `journal`, read backwards in blocks (at most `scan_max` bytes),
+    and whether the scan reached the journal's start: ({key: record}, complete). A key absent from a COMPLETE scan has
+    no record; absent from a cut one, it may have one further back (impl round 1, sonnet / opus) — the caller seeds it.
+    A missing journal is complete and empty; one it cannot read is incomplete. Never follows a link."""
     found: "dict[str, dict]" = {}
     try:
         fd = os.open(journal, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError:
+        return found, True
     except OSError:
-        return found
+        return found, False
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
-            return found
+            return found, False
         pos = os.lseek(fd, 0, os.SEEK_END)
         scanned, tail = 0, b""
-        while pos > 0 and scanned < _SCAN_MAX and len(found) < len(keys):
-            n = min(1 << 16, pos)
+        while pos > 0 and scanned < scan_max and len(found) < len(keys):
+            n = min(1 << 16, pos, max(scan_max - scanned, 1))
             pos -= n
             os.lseek(fd, pos, os.SEEK_SET)
             block = os.read(fd, n) + tail
@@ -215,10 +221,12 @@ def _newest(journal: str, keys: "set[str]") -> "dict[str, dict]":
                     rec = json.loads(raw)
                 except ValueError:
                     continue
-                k = rec.get("file") if isinstance(rec, dict) else None
-                if rec.get("hook") == "agent-usage" and k in keys and k not in found:
+                if not isinstance(rec, dict) or rec.get("hook") != "agent-usage":
+                    continue                    # an odd line never stops the recorder (impl round 1, opus / sonnet)
+                k = rec.get("file")
+                if isinstance(k, str) and k in keys and k not in found:
                     found[k] = rec
-        return found
+        return found, pos == 0 or len(found) == len(keys)
     finally:
         os.close(fd)
 
@@ -264,13 +272,15 @@ def session_files(paths: "list[str]") -> "list[str]":
 
 
 def record_spans(lane, *, task: str, paths: "list[str]", session_id: str, pbj, lock_wait: float = 2.0,
-                 fresh_max: int = FRESH_MAX) -> dict:
+                 fresh_max: int = FRESH_MAX, scan_max: int = _SCAN_MAX) -> dict:
     """Read every file of the session from its newest record's `to` and append what it holds, under the lane lock.
 
     `paths` are the main transcripts (the Stop payload's, the session dir's pointer); their subagents' files are added.
-    A file with no record (or whose inode changed) is read from 0 when at most `fresh_max` bytes, else gets a seed — a
-    record `unknown`, `from = to = size` — so no history is charged to one task. One record per model and side; a span
-    with no call writes nothing. `pbj` is the loaded `pb_journal` module. Returns {"files", "calls", "skipped"}."""
+    A file with no record (or another file in its place: inode or `head` differ) is read from 0 when at most
+    `fresh_max` bytes, else gets a seed — a record `unknown`, `from = to = size` — so no history is charged to one
+    task; so does a file the journal scan could not reach back to (`scan_max`). A span's records (one per model and
+    side) go in ONE append; a span with neither calls nor unreadable entries writes nothing. `pbj` is the loaded
+    `pb_journal` module. Returns {"files", "calls", "skipped"}."""
     lane = str(lane)
     out = {"files": 0, "calls": 0, "skipped": ""}
     files = session_files(paths)
@@ -283,7 +293,7 @@ def record_spans(lane, *, task: str, paths: "list[str]", session_id: str, pbj, l
         return out
     try:
         keys = {file_key(f): f for f in files}
-        newest = _newest(os.path.join(lane, "journal", "enforcement.jsonl"), set(keys))
+        newest, complete = _newest(os.path.join(lane, "journal", "enforcement.jsonl"), set(keys), scan_max)
         for key, f in keys.items():
             try:
                 st = os.lstat(f)
@@ -293,17 +303,18 @@ def record_spans(lane, *, task: str, paths: "list[str]", session_id: str, pbj, l
                 continue
             prev = newest.get(key)
             p_to = prev.get("to") if prev else None
-            same = (prev is not None and prev.get("ino") == st.st_ino and isinstance(p_to, int)
+            same = (prev is not None and str(prev.get("ino")) == str(st.st_ino) and isinstance(p_to, int)
                     and prev.get("head") == head_of(f, min(HEAD_MAX, p_to)))
             if same:
                 start, last = int(p_to), str(prev.get("last_id") or "")
-            elif st.st_size <= fresh_max:
-                start, last = 0, ""
+            elif (prev is not None or complete) and st.st_size <= fresh_max:
+                start, last = 0, ""            # a new file, or another one in its place: from its start
             else:
+                why = ("no earlier record for this transcript: usage before now not counted" if complete or prev
+                       else "the journal scan did not reach this transcript's last record: usage before now not counted")
                 pbj.append_agent_usage(lane, task=task, file=key, ino=st.st_ino, span_from=st.st_size,
                                        span_to=st.st_size, head=head_of(f, min(HEAD_MAX, st.st_size)), known=False,
-                                       session_id=session_id,
-                                       why="no earlier record for this transcript: usage before now not counted")
+                                       session_id=session_id, why=why)
                 continue
             r = read_span(f, start, last)
             out["files"] += 1
@@ -311,22 +322,22 @@ def record_spans(lane, *, task: str, paths: "list[str]", session_id: str, pbj, l
                 continue                       # not readable now: the span stays for a later read
             frm = 0 if r["restarted"] else start
             side_file = "/subagents/" in f
-            head = head_of(f, min(HEAD_MAX, r["offset"]))
-            wrote = False
+            span = dict(task=task, file=key, ino=st.st_ino, span_from=frm, span_to=r["offset"],
+                        head=head_of(f, min(HEAD_MAX, r["offset"])), last_id=r["last_id"], session_id=session_id)
+            bad = r["unreadable"] + r["bad_lines"]     # a broken assistant line is unreadable too (impl round 1, codex)
+            items = []
             for side, bucket in ((False, r["models"]), (True, r["sidechain"])):
                 for model, c in sorted(bucket.items()):
-                    if not c["calls"]:
-                        continue
-                    pbj.append_agent_usage(lane, task=task, file=key, ino=st.st_ino, span_from=frm,
-                                           span_to=r["offset"], head=head, last_id=r["last_id"], model=model,
-                                           side=side or side_file, calls=c["calls"], counts=c,
-                                           unreadable=0 if wrote else r["unreadable"], session_id=session_id)
-                    out["calls"] += c["calls"]
-                    wrote = True
-            if not wrote and r["unreadable"]:
-                pbj.append_agent_usage(lane, task=task, file=key, ino=st.st_ino, span_from=frm, span_to=r["offset"],
-                                       head=head, last_id=r["last_id"], model="?", side=side_file, calls=0, counts={},
-                                       unreadable=r["unreadable"], session_id=session_id)
+                    if c["calls"]:
+                        items.append(dict(span, model=model, side=side or side_file, calls=c["calls"], counts=c))
+                        out["calls"] += c["calls"]
+            if bad:
+                if items:
+                    items[0]["unreadable"] = bad
+                else:
+                    items.append(dict(span, model="?", side=side_file, calls=0, counts={}, unreadable=bad))
+            if items:
+                pbj.append_agent_usage_span(lane, items)   # one write: the span's `to` lands with all its models
         return out
     finally:
         os.close(fd)
@@ -367,7 +378,7 @@ def load_journal():
 
 
 def hook_main(payload_text: str) -> str:
-    """The recorder (`agent-usage-hook`, Stop and SessionEnd): one line saying what it recorded or why not."""
+    """The recorder (`agent-usage-hook`, Stop): one line saying what it recorded or why not."""
     try:
         payload = json.loads(payload_text) if payload_text.strip() else {}
     except ValueError:

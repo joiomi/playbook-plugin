@@ -282,8 +282,9 @@ changes the verify's result.
 The owner, 2026-10-18: "Da, după 243 (Recomandat)" — a closure's numbers carry the main agent's own tokens beside the
 judge seats'. Only the host's session transcript holds them (one `type: "assistant"` entry per content block of an API
 call, each repeating the call's `message.usage`), and the host deletes transcripts after `cleanupPeriodDays` (30 by
-default), so they are recorded as the work goes: `scripts/agent-usage-hook` at each turn's end (Stop) and at the
-session's end, and the CLI at its own transitions — `tasks work N` under the task it leaves (`-` for none), the close
+default), so they are recorded as the work goes: `scripts/agent-usage-hook` at each turn's end (Stop — not at the
+session's end, where it raced the session dir's removal; nothing is spent after the last Stop), and the CLI at its own
+transitions — `tasks work N` and `tasks freehand` under the task they leave (`-` for none), the close
 under the closing task, before its `done` record — so a recorded span never crosses a transition. Each record covers
 one span of one transcript file for one model: `task`, `file` (16 hex of the file's absolute path's sha1), `ino` and
 `head` (8 hex of the sha1 of the file's first min(4096, `to`) bytes — a transcript only grows at its end, so this tells
@@ -292,10 +293,13 @@ the same file from one put in its place even under a reused inode number), `from
 `<session>/subagents/` or a sidechain entry), `calls` (one per `message.id`, however many entries carry it), `in`,
 `out`, `cache_read`, `cache_write`, `thinking` (a part of `out`, as the host counts it) and `unreadable` (entries whose
 usage could not be read — never counted as zero). The record IS the read position: the next read of that file starts at
-its newest record's `to`, under the lane's lock (`journal/agent-usage.lock`), so two readers never count one span and a
-read stopped before its append is read again. A file with no record is read from 0 up to 8 MiB; a larger one (a session
-begun before the recorder was installed) gets a seed — `status: "unknown"`, `why`, `from` = `to` = its size — so no
-history is charged to one task. No conversation text is written: only the model's name. Bounds: a span after the
+its newest record's `to`, under the lane's lock (`journal/agent-usage.lock`; without it nothing is written), so two
+readers never count one span and a read stopped before its append is read again; a span's records (one per model and
+side) go in one append, so the span's `to` never lands without all of them. A file with no record is read from 0 up to
+8 MiB; a larger one (a session begun before the recorder was installed) gets a seed — `status: "unknown"`, `why`,
+`from` = `to` = its size — so no history is charged to one task; so does a file whose last record the backward scan of
+the journal (32 MiB at most) did not reach. A broken assistant line and an entry with no `message.id` count as
+`unreadable`, never as a call. `ino` is text (an inode number can pass the integer cap). No conversation text is written: only the model's name. Bounds: a span after the
 close's own read (the rest of that turn) is not the closure's; a transcript never read again (a crash with no
 SessionEnd, never continued) keeps its unread tail; a judge's, tail-cert's or the monitor's session records nothing
 (task 232 counts the judges' usage). A real record — task 244's timing run, on a copy of a 22 MB transcript tail:
@@ -453,7 +457,7 @@ journal's lines (60,000 lines in about half a second, measured).
 | `time` | the task's share of time, wall seconds summed over host sessions: `sessions`, `total`, `by_kind`, `by_section` (the state echo's `##` sections; `?` before the first), `slept`, `away`, `unknown`, `sleep_unmeasured`, `sleep_unplaced` (sleep the samples recorded that no gap could hold — outside `total`); null when the journal holds no activation record for the task |
 | `judges_wall` | the union of the task's review spans, wall seconds |
 | `seats` | per judge seat: runs, ok, failed, seconds — summed over that seat's runs, not wall time — tokens in / out / cache_read / cache_write from the runs whose usage is known, how many were unknown, the runs by kind |
-| `agent` | the main agent's tokens (task 244), from this task's `agent-usage` records between its first `work` and its `done`: per model (a subagent's as `<model> (subagent)`) calls, in, out, cache_read, cache_write, thinking (a part of out), unreadable; `unknown` spans not counted, `dropped` duplicate or overlapping spans; null when the closure has no record (no recorder ran) — a closure written before task 244 has no such key |
+| `agent` | the main agent's tokens (task 244), from this task's `agent-usage` records between its first `work` and its `done`: per model (a subagent's as `<model> (subagent)`) calls, in, out, cache_read, cache_write, thinking (a part of out), unreadable; `unknown` spans not counted, `dropped` exact duplicates of a span already counted (overlapping spans count: another file read in a file's place); null when the closure has no record (no recorder ran) — a closure written before task 244 has no such key |
 | `verify` | the recorded verify runs (the close's, `tasks verify`): runs, ran, reused, failed, seconds |
 | `rounds` | panels (mode, outcome, critical, important, owner_ok — the run ledger's), post-panel runs (verdict, critical, important, owner_ok), single-judge calls and tail certifications counted one per review record (a single-judge record within 120 s of a post-panel row is that run), the runs the ledger marks failed |
 | `owner` | his prompts — the closure's first one too, logged before the `work` record that opens the window: the prompt that opened the turn in which the task was activated (a prompt that switches tasks counts for both) — the background notifications, his options dialogs answered and cancelled, their questions and answers (counted from the DIALOG entries, matched by their `<!-- dialog:<id> -->` marker), the time he took to answer, the entries' ids |
