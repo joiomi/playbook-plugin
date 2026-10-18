@@ -123,9 +123,16 @@ def echo(d: Path) -> None:
     bad = _without_pair_response(ev)
     got, said = rows_session.parallel_echoes(bad, line="")
     check("I4 parallel echoes — the pair's second Read response removed", got, False, said)
-    post = rows_session.hook_responses(bad, "PostToolUse")
-    check("I4 a count over the session on that copy (it passes: Read responses >= the pair's two calls)",
-          sum(1 for x in post if x.get("hook_name") == "PostToolUse:Read") >= 2, True)
+    # PLAN.md "From task 242" (b): the count control is about the INSTRUMENT (a count cannot see a call left without
+    # its echo), so its copy gets one Read response seeded outside the pair — a session that read task.md has one, but
+    # 2026-10-18's sessions edited it unread and made only the pair's two Reads, and the control failed on a good row
+    reads = [e for e in bad if e.get("subtype") == "hook_response" and e.get("hook_name") == "PostToolUse:Read"]
+    seeded = bad + ([dict(reads[0])] if reads else [])
+    post = rows_session.hook_responses(seeded, "PostToolUse")
+    check("I4 a count over the session on that copy, one Read response seeded outside the pair (it passes: Read "
+          "responses >= the pair's two calls)", sum(1 for x in post if x.get("hook_name") == "PostToolUse:Read") >= 2, True)
+    got, said = rows_session.parallel_echoes(seeded, line="")
+    check("I4 parallel echoes — that seeded copy still fails per call", got, False, said)
 
 
 GATE = "- [ ] Freehand log — run `.claude/bin/tasks freehand log` to capture chat_log messages, then check this box"
@@ -303,6 +310,7 @@ def gauntlet_quarantine() -> None:
             "import os, sys, pathlib\n"
             "pathlib.Path(sys.argv[2], sys.argv[1] + '.txt').write_text('# stub\\nROW ' + sys.argv[1] + ': PASS (1 clauses)\\n')\n"
             f"os._exit({code})\n")
+        (d / "lib" / "preflight.py").write_text("import sys\nsys.exit(0)\n")   # the checkout check, stubbed (task 245)
         (d / "selfcheck.py").write_text("import sys\nsys.exit(0)\n")
         out = d / "out"
         r = subprocess.run(["bash", str(d / "gauntlet.sh"), "--out", str(out), "PB-PYTHON-FLOOR"],
@@ -362,6 +370,7 @@ def gauntlet_missing_and_lock() -> None:
     (d / "lib").mkdir()
     (d / "gauntlet.sh").write_text((Path(__file__).resolve().parent / "gauntlet.sh").read_text())
     (d / "lib" / "run_row.py").write_text("import sys\nsys.exit(0)\n")
+    (d / "lib" / "preflight.py").write_text("import sys\nsys.exit(0)\n")   # the checkout check, stubbed (task 245)
     (d / "selfcheck.py").write_text("import sys\nsys.exit(0)\n")
     out = d / "out"
     r = subprocess.run(["bash", str(d / "gauntlet.sh"), "--out", str(out), "PB-PYTHON-FLOOR"], capture_output=True,
@@ -855,6 +864,7 @@ def _gauntlet_copy(run_row: str, selfcheck: str) -> Path:
     (d / "lib").mkdir()
     (d / "gauntlet.sh").write_text((Path(__file__).resolve().parent / "gauntlet.sh").read_text())
     (d / "lib" / "run_row.py").write_text(run_row)
+    (d / "lib" / "preflight.py").write_text("import sys\nsys.exit(0)\n")   # the checkout check, stubbed (task 245)
     (d / "selfcheck.py").write_text(selfcheck)
     return d
 

@@ -16,7 +16,10 @@ The seal, by content: the copy is kept only when its fingerprint (`core.tree_sta
 equals the stamp the review took from the live tree, each scope's working-tree object (`post_d6.worktree_tree`) equals
 the tree the review recorded (a panel's snapshot `base`, the post-panel judge's delta `cur`), and each scope's HEAD is
 the recorded commit. A tree that moved while the copy was made is tried again, `COPY_ATTEMPTS` times, then refused
-(`Moved`) — the caller spends nothing and never falls back to the live tree after trying a copy (plan panel P8).
+(`Moved`) — the caller spends nothing and does not fall back to the live tree for a tree that moved (plan panel P8). A
+seal that fails while the live tree did NOT move (line endings a copy reads differently, an unreadable file) is
+structural, and refusing would refuse every review for good: the caller then reads the live tree and says why, before
+any ready line (`review.py`, task 231's impl round 2).
 
 Lifetime: a copy lives in `<lane>/journal/review-views/<run>-<attempt>/` (git-ignored by init's block — refused when
 it is not) with an `flock` held on `<run>-<attempt>.lock` beside it for the review's whole life; `sweep` removes only

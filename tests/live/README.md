@@ -24,6 +24,12 @@ exactly one such copy is refused, never fallen back from. Each artifact names it
 install either way: they publish this checkout's HEAD over v1.6.0 (`rows_install.OLD_REF`), so on
 the installed root HEAD must be the released commit.
 
+**Where to run it from:** the nested repository inside the workspace. Two rows read beyond the plugin
+tree: the install rows publish this checkout by a bare clone of it and clone that `-b main`, so it needs a
+local `main` branch; PB-CLI-INTENT checks the owner's distillation record (task 183's intent run and INTENT.md
+in the workspace around this repository). `lib/preflight.py` checks both for the rows chosen and refuses
+before any row runs, saying why — a fresh clone elsewhere once failed four rows halfway (task 242).
+
 One artifact per row, `<dir>/<ROW-ID>.txt`: the candidate commit, tool versions,
 every command with its full output and the filesystem delta it was told to watch,
 one `CLAUSE PASS|FAIL` line per clause with the observed evidence, and the last

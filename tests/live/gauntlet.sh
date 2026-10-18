@@ -37,6 +37,8 @@ flock -n 9 || { echo "another gauntlet run is using $OUT" >&2; exit 2; }
 if [ ${#ROWS[@]} -eq 0 ]; then
     mapfile -t ROWS < <("${BASH_SOURCE[0]}" --list)
 fi
+# what this checkout must have for these rows (PLAN.md "From task 242" (a)): refused here, before any row, with why
+python3 -I "$HERE/lib/preflight.py" "${ROWS[@]}" || { echo "nothing was run" >&2; exit 2; }
 
 # A row runs in the background so a signal to this script reaches it: run_row.py turns SIGTERM/SIGHUP into an
 # exit that ends its steps' processes and a detached session first (impl panel round 2, T14). A row's old
