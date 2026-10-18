@@ -61,6 +61,57 @@ def _record_transition(agent_dir: Path, event: str, task, detail: str = "") -> N
         pass
 
 
+def _record_agent_usage(agent_dir: Path, task, session_dirs) -> None:
+    """Task 244 (PHASE-B item 6; design v2 of its plan round 1): the main agent's tokens up to now, recorded under
+    `task` — the task a transition leaves (the close's own, or the one `tasks work` switches from; "-" for none) — before
+    the transition is written, so a recorded span never crosses one. Reads each session dir's `transcript_path` pointer
+    (session-start-hook writes it) and hands the files to `agent_usage.record_spans`, which holds the lane lock.
+    Best-effort and fully wrapped, like `_record_transition`: a failure never changes or breaks the command."""
+    try:
+        import importlib.util as _ilu
+        from tasks.core import resolve_session_id
+        scripts = Path(__file__).resolve().parent.parent / "scripts"
+
+        def _load(name, file):
+            spec = _ilu.spec_from_file_location(name, scripts / file)
+            if spec is None or spec.loader is None:
+                raise ImportError(file)
+            mod = _ilu.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+        au = _load("_agent_usage_cli", "agent_usage.py")
+        paths = [p for p in (au._pointer(str(agent_dir), Path(d).name) for d in session_dirs) if p]
+        if not paths:
+            return
+        au.record_spans(str(agent_dir), task=str(task or "-"), paths=paths,
+                        session_id=resolve_session_id(quiet=True) or "", pbj=_load("_pb_journal_agent_cli",
+                                                                                    "pb_journal.py"),
+                        lock_wait=5.0)
+    except Exception:
+        pass
+
+
+def _sessions_on_task(agent_dir: Path, task) -> list:
+    """The session dirs of the lane whose task pointer names `task` (not through links) — the sessions a close of
+    `task` reads before it removes them."""
+    out = []
+    try:
+        sdir = agent_dir / "sessions"
+        if sdir.is_symlink() or not sdir.is_dir():
+            return out
+        for d in sorted(sdir.iterdir()):
+            if d.is_symlink() or not d.is_dir():
+                continue
+            st = d / "current_state"
+            if st.is_symlink() or not st.is_file():
+                continue
+            if st.read_text(encoding="utf-8", errors="replace").split("\n", 1)[0].strip() == str(task):
+                out.append(d)
+    except OSError:
+        pass
+    return out
+
+
 # How much of one chat message `### Recent Chat` keeps. The judge prompt that
 # describes those excerpts (`template._intent_check`) reads this same number. The
 # chat log itself keeps up to 50,000 characters of a message, so "whole" is no
@@ -1426,6 +1477,9 @@ def cmd_work(cmd_args):
             # Inside the project only, through descriptors (task 194, impl panel r2, opus and sonnet: the
             # `glob` + `rmtree` here followed a linked `.agent/sessions` into its target).
             from tasks.shared import _remove_sessions_of_task
+            # task 244: the agent's tokens up to the close, under this task — before its `done` and before the
+            # removal below takes the sessions' transcript pointers away
+            _record_agent_usage(agent_dir, prev_task, _sessions_on_task(agent_dir, prev_task))
             _remove_sessions_of_task(Path(project_path), agent_dir, prev_task)  # agent_dir already resolved above
             _record_transition(agent_dir, "done", prev_task)
             print(f"Task {prev_task} done.")
@@ -1783,6 +1837,8 @@ def cmd_work(cmd_args):
             print(f"Expanded stub to full {stub_type} template.")
             print()
             _print_guide(stub_type)
+        # task 244: what this session's agent spent before this activation belongs to the task it leaves ("-": none)
+        _record_agent_usage(agent_dir, prev_task or "-", [session_dir])     # the same task again: still its own
         _activate_status_then_publish(task_file, task_num, _resume_target, _reopen_target,
                                       _pointer_tmp, session_state)
         _record_transition(agent_dir, "work", task_num)

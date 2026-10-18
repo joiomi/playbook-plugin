@@ -182,11 +182,12 @@ def _read_hook_lines_locked(jdir: Path, lo: str, hi: "str | None", start: float,
 
 
 _TASK_HOOKS = ("review", "verify", "tasks", "close")
+_AGENT_HOOK = "agent-usage"        # task 244: the main agent's tokens, read beside `_TASK_HOOKS`, never one of them
 
 
 def read_enforcement(lane: Path, deadline: float) -> "list[dict]":
-    """The enforcement journal's review / verify / tasks / close records (with `_t`). A linked `journal/` is not read
-    (the writers refuse it; task 235's last round, grok)."""
+    """The enforcement journal's review / verify / tasks / close records, and the agent's `agent-usage` ones (task
+    244), with `_t`. A linked `journal/` is not read (the writers refuse it; task 235's last round, grok)."""
     out = []
     if (Path(lane) / "journal").is_symlink():
         return out
@@ -194,13 +195,14 @@ def read_enforcement(lane: Path, deadline: float) -> "list[dict]":
         if n % 2000 == 0 and time.monotonic() > deadline:
             raise OutOfTime("enforcement.jsonl")
         raw = raw.strip()
-        if not raw.startswith("{") or not any(f'"hook":"{h}"' in raw or f'"hook": "{h}"' in raw for h in _TASK_HOOKS):
+        if not raw.startswith("{") or not any(f'"hook":"{h}"' in raw or f'"hook": "{h}"' in raw
+                                              for h in _TASK_HOOKS + (_AGENT_HOOK,)):
             continue
         try:
             rec = json.loads(raw)
         except ValueError:
             continue
-        if isinstance(rec, dict) and rec.get("hook") in _TASK_HOOKS:
+        if isinstance(rec, dict) and rec.get("hook") in _TASK_HOOKS + (_AGENT_HOOK,):
             t = _epoch(rec.get("ts"))
             if t is not None:
                 rec["_t"], rec["_n"] = t, n         # its line: the file's order, inside one second too (Y5)
@@ -212,7 +214,7 @@ def task_records(records: "list[dict]", task: str, start: float, end: float) -> 
     """This task's review, verify, tasks and close records in [start, end] (a record with no `task` is no task's)."""
     got: "dict[str, list[dict]]" = {h: [] for h in _TASK_HOOKS}
     for rec in records:
-        if str(rec.get("task", "")) == str(task) and start <= rec["_t"] <= end:
+        if rec["hook"] in got and str(rec.get("task", "")) == str(task) and start <= rec["_t"] <= end:
             got[rec["hook"]].append(rec)
     return got
 
@@ -709,6 +711,48 @@ def seats_table(reviews: "list[dict]") -> "dict[str, dict]":
     return out
 
 
+_AGENT_KEYS = ("calls", "in", "out", "cache_read", "cache_write", "thinking", "unreadable")
+
+
+def agent_table(records: "list[dict]") -> "dict | None":
+    """The main agent's tokens in a closure (task 244), from its `agent-usage` records, or None when it has none (never
+    zero calls for what was not recorded). Per model — a subagent's (`side`) as "<model> (subagent)" — calls, in, out,
+    cache_read, cache_write, thinking (a PART of out, as the host counts it: never added to it) and unreadable entries;
+    `unknown`: spans not counted (a seed, a file not readable then); `dropped`: a record of one file's span already
+    counted (an exact duplicate) or overlapping another — written without the lane lock. A record of the same span for
+    another model or side is kept. In file order, the first record of a span wins."""
+    if not records:
+        return None
+    models: "dict[str, dict]" = {}
+    kept: "dict[tuple, list]" = {}
+    seen: set = set()
+    unknown = dropped = 0
+    for r in sorted(records, key=lambda x: x.get("_n", 0)):
+        if r.get("status") == "unknown":
+            unknown += 1
+            continue
+        a, b = r.get("from"), r.get("to")
+        model, side = str(r.get("model") or "?"), 1 if r.get("side") else 0
+        if all(isinstance(v, int) and not isinstance(v, bool) for v in (a, b)):
+            ident = (r.get("file"), r.get("ino"))
+            if (ident, a, b, model, side) in seen:
+                dropped += 1
+                continue
+            spans = kept.setdefault(ident, [])
+            if (a, b) not in spans and any(a < y and x < b for x, y in spans):
+                dropped += 1
+                continue
+            if (a, b) not in spans:
+                spans.append((a, b))
+            seen.add((ident, a, b, model, side))
+        m = models.setdefault(model + (" (subagent)" if side else ""), {k: 0 for k in _AGENT_KEYS})
+        for k in _AGENT_KEYS:
+            v = r.get(k)
+            if isinstance(v, int) and not isinstance(v, bool) and v >= 0:
+                m[k] += v
+    return {"models": models, "unknown": unknown, "dropped": dropped}
+
+
 def verify_table(verifies: "list[dict]") -> dict:
     """The recorded verify runs (the close's, `tasks verify`): runs, ran, reused, failed, seconds."""
     out = {"runs": 0, "ran": 0, "reused": 0, "failed": 0, "seconds": 0.0}
@@ -925,6 +969,7 @@ def compose(lane: Path, task_dir: Path, task: str, deadline: float, end: "float 
         reviews = [r for r in in_life if r["hook"] == "review" and r["_n"] < done["_n"]]
         verifies = [r for r in in_life if r["hook"] == "verify" and r["_n"] < done["_n"]]
         late = sum(1 for r in in_life if r["hook"] in ("review", "verify") and r["_n"] > done["_n"])
+        agents = [r for r in in_life if r["hook"] == _AGENT_HOOK and r["_n"] < done["_n"]]
         closing_sid = str(done.get("session_id") or "")
     else:
         # no `done` to anchor on (an open task's snapshot, records from before the transition records): by time
@@ -938,6 +983,7 @@ def compose(lane: Path, task_dir: Path, task: str, deadline: float, end: "float 
         win = task_records(enf, task, start, end) if start is not None else {h: [] for h in _TASK_HOOKS}
         reviews, verifies = win["review"], win["verify"]
         late = sum(1 for r in mine if r["hook"] in ("review", "verify") and end < r["_t"] < nxt_t)
+        agents = [r for r in mine if r["hook"] == _AGENT_HOOK and start is not None and start <= r["_t"] <= end]
         closing_sid = ""
     review_spans = [(r["_t"] - r["duration_ms"] / 1000.0, r["_t"]) for r in reviews
                     if isinstance(r.get("duration_ms"), (int, float)) and not isinstance(r.get("duration_ms"), bool)]
@@ -990,6 +1036,7 @@ def compose(lane: Path, task_dir: Path, task: str, deadline: float, end: "float 
                        "sleep_unmeasured": tot["sleep_unmeasured"], "sleep_unplaced": tot["sleep_unplaced"]}
     out["judges_wall"] = int(sum(b - a for a, b in _union(review_spans)))
     out["seats"] = seats_table(reviews)
+    out["agent"] = agent_table(agents)
     out["verify"] = verify_table(verifies)
     try:
         from tasks.post_d6 import read_runs
@@ -1146,6 +1193,18 @@ def format_closure(c: dict) -> "list[str]":
         out.append(f"  seat {seat}: {s['runs']} run(s), {s['failed']} failed, {_dur(s['seconds'], True)}, "
                    f"in {s['in']} out {s['out']} cache {s['cache_read']}/{s['cache_write']}"
                    + (f", {s['unknown']} without usage" if s.get("unknown") else ""))
+    if "agent" in c:                         # task 244; a closure written before it has no such key: nothing said
+        a = c.get("agent")
+        if not a:
+            out.append("  agent: no record of its tokens (no recorder ran in this closure)")
+        else:
+            for model, m in sorted((a.get("models") or {}).items()):
+                out.append(f"  agent {model}: {m['calls']} call(s), in {m['in']} out {m['out']} "
+                           f"(of which thinking {m['thinking']}) cache {m['cache_read']}/{m['cache_write']}"
+                           + (f", {m['unreadable']} unreadable" if m.get("unreadable") else ""))
+            if a.get("unknown") or a.get("dropped"):
+                out.append(f"  agent: {a.get('unknown', 0)} span(s) not counted, "
+                           f"{a.get('dropped', 0)} duplicate span(s) dropped")
     v = c.get("verify") or {}
     out.append(f"  verify: {v.get('runs', 0)} run(s), {v.get('reused', 0)} reused, {v.get('failed', 0)} failed, "
                f"{_dur(v.get('seconds'), True)}")
