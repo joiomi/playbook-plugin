@@ -494,7 +494,9 @@ def _open_review_view(project_path, task_file, *, run_id: str, task_num: str = "
     the judges can read a fixed copy of the tree, and if so make and seal it (`tasks/review_view.py`). Returns
     `(view, fingerprint, snapshot, cfg)`; `view` is None when no copy is possible — then the reason is printed and
     the review reads the live tree as before. A copy that cannot be sealed because the tree keeps changing exits 2
-    before anything is spent (plan panel P8).
+    before anything is spent (plan panel P8); a seal that fails while the live tree did NOT move (structural: line
+    endings a copy reads differently, an unreadable file) reads the live tree and says why, before any ready line
+    (task 231's impl round 2) — `review_view.py`'s docstring says the same.
 
     `expected`: None for a panel and a whole-task single judge — the stamp and the snapshot are taken here from the
     live tree and the copy must equal the snapshot's base trees; for the post-panel judge, a callable returning
@@ -506,8 +508,9 @@ def _open_review_view(project_path, task_file, *, run_id: str, task_num: str = "
     if why:
         _live_review_line(why)
         return None, "", None, cfg
-    # From here a copy was chosen: every failure is retried and then refused, never a live review (plan panel P8,
-    # impl round 1 G6) — the agent may already be waiting for the ready line to write.
+    # From here a copy was chosen: a failure because the tree moved is retried and then refused, never a live review
+    # (plan panel P8, impl round 1 G6); a seal that fails on a tree that did NOT move reads the live tree, said
+    # (below, impl round 2) — no ready line has been printed either way, so the agent is still waiting.
     last = None
     for _attempt in range(_rv.COPY_ATTEMPTS):
         exclude = None

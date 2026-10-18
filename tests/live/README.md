@@ -28,7 +28,9 @@ the installed root HEAD must be the released commit.
 tree: the install rows publish this checkout by a bare clone of it and clone that `-b main`, so it needs a
 local `main` branch; PB-CLI-INTENT checks the owner's distillation record (task 183's intent run and INTENT.md
 in the workspace around this repository). `lib/preflight.py` checks both for the rows chosen and refuses
-before any row runs, saying why — a fresh clone elsewhere once failed four rows halfway (task 242).
+before any row runs, saying why — a fresh clone elsewhere once failed three rows halfway (task 242; a
+fourth failed that run for another reason). The install rows also need v1.6.0's commit (`rows_install.OLD_REF`)
+in the checkout: a shallow clone may lack it, and the preflight says so.
 
 One artifact per row, `<dir>/<ROW-ID>.txt`: the candidate commit, tool versions,
 every command with its full output and the filesystem delta it was told to watch,

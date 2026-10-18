@@ -93,8 +93,9 @@ def activate(d: Path) -> None:
 
 def _without_pair_response(ev: "list[dict]") -> "list[dict]":
     """The session with the LAST Read response inside the parallel pair's second call removed — the message that made
-    the most Read calls, its second call's window (its tool_use to its tool_result). Since task 219 the session holds
-    more Read calls than the pair, so its last Read response overall is not one of the pair's."""
+    the most Read calls, its second call's window (its tool_use to its tool_result). A session may hold more Read calls
+    than the pair (one that read task.md before its edit) or only the pair (2026-10-18's sessions edited it unread):
+    the response removed is the one inside the pair's second call either way (task 245)."""
     use_at: "dict[str, tuple[int, str]]" = {}
     result_at: "dict[str, int]" = {}
     for i, e in enumerate(ev):
@@ -361,6 +362,46 @@ def docker_timeout() -> None:
                           text=True).stdout.strip() if seen else "?"
     check("K1 a container step that timed out leaves no container behind", r.returncode == 124 and left == "", True,
           f"rc {r.returncode}; container {seen[:1]} still there: {left!r}")
+
+
+def gauntlet_preflight() -> None:
+    """The checkout check (task 245, PLAN.md "From task 242" (a)): `preflight.problems` gives each reason on a scratch
+    repository that lacks them and none once they are there; and gauntlet.sh honours a refusal — no row runs, it says
+    "nothing was run" and exits 2 (impl round 1: every other fake gauntlet stubs the preflight to pass)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_pb_preflight_check", Path(__file__).resolve().parent / "lib" / "preflight.py")
+    pf = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pf)
+    rows = ["PB-INSTALL-ROLLBACK", "PB-CLI-INTENT"]
+    d = tempdir("pb245-pf-")
+    repo = d / "repo"
+    subprocess.run(["git", "init", "-q", "-b", "work", str(repo)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=s", "-c", "user.email=s@s", "commit", "-q",
+                    "--allow-empty", "-m", "one"], check=True, capture_output=True)
+    sha = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    rec = (d / "ws", "183", "20261012-200430-994926")
+    got = pf.problems(rows, nested=repo, record=rec, old_ref="0" * 40)
+    said = " | ".join(got)
+    check("preflight: a checkout with no `main`, no v1.6.0 commit and no owner record gets the three reasons",
+          len(got) == 3 and "no local `main`" in said and "lacks commit" in said and "distillation record" in said,
+          True, said[:300])
+    subprocess.run(["git", "-C", str(repo), "branch", "main"], check=True, capture_output=True)
+    (d / "ws" / ".agent" / "tasks" / "183-x" / "intent" / rec[2]).mkdir(parents=True)
+    (d / "ws" / "INTENT.md").write_text("x\n", encoding="utf-8")
+    got = pf.problems(rows, nested=repo, record=rec, old_ref=sha)
+    check("preflight: the same checkout with `main`, the commit and the record passes", got == [], True, str(got))
+    g = tempdir("pb245-pg-")
+    (g / "lib").mkdir()
+    (g / "gauntlet.sh").write_text((Path(__file__).resolve().parent / "gauntlet.sh").read_text())
+    (g / "lib" / "run_row.py").write_text("import sys, pathlib\npathlib.Path(sys.argv[2], 'ran').write_text('x')\n")
+    (g / "lib" / "preflight.py").write_text("import sys\nprint('REFUSED: stub', file=sys.stderr)\nsys.exit(2)\n")
+    (g / "selfcheck.py").write_text("import sys\nsys.exit(0)\n")
+    out = g / "out"
+    r = subprocess.run(["bash", str(g / "gauntlet.sh"), "--out", str(out), "PB-PYTHON-FLOOR"], capture_output=True,
+                       text=True, timeout=60)
+    check("gauntlet.sh: a refusing preflight runs no row, says `nothing was run` and exits 2",
+          r.returncode == 2 and "nothing was run" in r.stderr and not (out / "ran").exists(), True,
+          f"rc {r.returncode}; row ran: {(out / 'ran').exists()}; stderr {r.stderr.strip()[-120:]!r}")
 
 
 def gauntlet_missing_and_lock() -> None:
@@ -947,7 +988,8 @@ def main(argv: "list[str]") -> int:
     for s in (signal.SIGTERM, signal.SIGHUP):            # an interrupted selfcheck still runs its cleanups (K2)
         signal.signal(s, lambda signum, _f: sys.exit(128 + signum))
     for f in (freehand, names, install_env, snapshot_whole, step_timeout, step_detached, gauntlet_quarantine,
-              registry_probe, docker_timeout, gauntlet_missing_and_lock, spawn_interrupted, gauntlet_interrupted,
+              registry_probe, docker_timeout, gauntlet_preflight, gauntlet_missing_and_lock, spawn_interrupted,
+              gauntlet_interrupted,
               owner_distillation, gauntlet_windows, triage_answer, seat_answer_bound, grok_entitlement, double_signal,
               pre_exec_signal, installed_root):
         f()

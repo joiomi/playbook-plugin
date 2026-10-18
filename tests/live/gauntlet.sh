@@ -14,7 +14,8 @@
 #
 # Exit status: 0 every selected row PASS; 1 a row FAILED (any status but 0 and 3, a
 # killed row included) or a selfcheck control did not hold; 3 none failed, a row is
-# WAITING for a target that cannot run now (grok's credit, the owner's own step).
+# WAITING for a target that cannot run now (grok's credit, the owner's own step); 2 a bad
+# argument, or this checkout refused before any row ran (lib/preflight.py, task 245).
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 OUT=""
