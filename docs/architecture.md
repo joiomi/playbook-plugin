@@ -125,8 +125,10 @@ pinned. The ready line comes right before the judges start, after everything the
 config and its quorum, the prompt, the chat log). A copy that cannot be sealed while the live tree did not move reads
 the live tree, said first. No copy is possible inside a sandbox, without
 bubblewrap, for a project in a subdirectory of its repository, a linked worktree, a linked `.agent` or lane, a
-linked code root, a submodule or untracked nested repository, a `fingerprint_exclude` that hides code, an unignored
-journal, or more than 50,000 listed files / 1 GiB / 2,000 ignored entries — the review then says so first and reads
+linked code root or one outside the project or not the top of its own repository, a submodule or untracked nested
+repository, a listed special file, a scope with no commit yet or with unmerged entries, an ignored entry that
+overlaps a code root, task records git ignores, a `fingerprint_exclude` that hides code, an unignored journal, or
+more than 50,000 listed files / 1 GiB / 2,000 ignored entries — the review then says so first and reads
 the live tree under the guard below. A tree that keeps changing while its copy is made (three times) refuses the
 review before anything is spent. Tail certification still reads the live tree: the close certifies the current
 tree and discards a PASS if it moved.

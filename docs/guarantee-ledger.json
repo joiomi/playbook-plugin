@@ -9230,8 +9230,9 @@
         "codex",
         "grok"
       ],
-      "status": "verified_by_current_executable_evidence",
+      "status": "partially_evidenced",
       "missing_evidence_or_limitation": [
+        "2026-10-18 (task 242, the 1.6.5 release): the live row's clause 'a write in the user's HOME fails (~/.claude read-only): init fails, says it restores, and the project and the user's files are byte-identical' FAILS since task 221 (1.6.4) — init's shell-logger removal (`retire_shell_logger`, written to never fail) skips an unreadable ~/.claude file, removes the logger's lines from ~/.bash_profile and returns 0, leaving the old logger half-removed (live gauntlet 2026-10-18, 1 of 8 clauses). The owner, 2026-10-18 ~13:30: 'Oprește și reface tot (Recomandat)' — a failed write there is to fail and restore; its own task after the release. Until then this row is partial.",
         "scripts/init is now transactional (init_txn.py snapshots every file it may modify and, on any non-zero exit, restores the pre-init state and removes what it created), proven on the host OS by three induced-failure integration tests plus a negative control. Two boundaries remain unproved.",
         "Upgrade is a Claude skill (commands/upgrade.md), NOT scripts/init, and remains snapshot-less: it re-runs init (which now rolls itself back), but the skill's own in-place refresh (clone pull, marketplace update, plugin update) has no transactional wrapper, so a mid-upgrade failure is not proven rollback-safe here. See PB-UPGRADE-INSTALLED-COPY.",
         "Interrupt coverage, Linux: the tests' trapped SIGTERM, and live (task 184, scenario PB-INSTALL-ROLLBACK) three controlled interruptions of the re-init — a project write that fails, a read-only ~/.claude, a SIGTERM at the CLAUDE.md merge. Real power loss is not covered; Windows is not claimed since 2026-10-08.",

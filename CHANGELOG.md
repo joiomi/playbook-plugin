@@ -4,133 +4,113 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
-**Each close keeps the task's own numbers** — PHASE-B.md item 6, last part, task 235 (the owner, 2026-10-13 18:44: "În
-Faza B (Recomandat)"). Every number Phase B's exit needs came from the host's session transcripts, which it deletes
-after about 30 days; tasks 232-234 made the plugin record the facts, and now the close composes them.
-- At every successful close, after its `done` record, `<task>/numbers.json` gets one entry for that closure, composed
-  only from the plugin's records: the time of the task by kind (agent, judges, verify, owner-idle, owner-question,
-  background) and by `##` section, without the laptop's sleep, away gaps over 2 h apart; the review rounds and what each
-  found; each judge seat's runs, seconds and tokens; the recorded verify runs; the owner's prompts and options dialogs
-  with the time he took to answer; how the task closed and each flag's reason. A gap is the task's only when both its
-  lines are, so another task's time in between is never counted; a re-close adds an entry; an older close never
-  replaces a newer one. A fault or a composition past 5 s prints one line and changes nothing of the close.
-- `tasks numbers [N]` shows them (read-only; an open task as a snapshot).
-- The close's `hook=close` journal records now name their `task`.
-- Task 236 (the findings of 235's last round): the time split is linear in the journal's lines (6,000 lines took
-  13.7 s, now 0.05 s; 60,000 take 0.5 s) and checks its deadline inside; the journal is read under its directory's
-  shared lock, so a rotation cannot drop lines mid-read; each entry carries `closure_no`, so two closes in one second
-  keep two; the receipt is found fence-aware and its owner-ok / stop-rule / post-panel reasons read whole; a reopened
-  task shows a snapshot of its new life; the first prompt is the one that opened the activating turn; the close's open
-  call is this task's, of any tool. Its impl round 1: the receipt's panel line is split only at the writer's own
-  separators (the stop rule's clause kept whole, with the files no judge read; a post-panel `bound` read), and found
-  outside closed fences only; a closure is found in the journal's file order and composed under the task lock, so a
-  close, a reopen and a second close in one second stay apart; the close takes its own suspend sample to bracket its
-  last gap, and a sample more than 120 s after the close is not used (sleep long after the close no longer lands in
-  it; a suspend within those 120 s still can);
-  codex's `exec_command` is carved like Bash; `tasks numbers` shows `closure #N`.
-- Task 237 (the findings of 236's last round): the close's verdict is read at its fixed place in the receipt, so a
-  reason that names TAMPER-GUARD-DEGRADED, TAIL-CERTIFIED or FRESH no longer becomes that verdict; a closure's review
-  and verify records follow its file-order bounds; the close's own session is the one its `done` record names, and its
-  call runs to the close through a background notification; a reopen right after the close no longer leaves that
-  closure unwritten; a JSON `false` is not exit 0; a receipt with no `done` record is still the first close (and
-  `tasks numbers` agrees); an empty fingerprint in the receipt still names its verdict; a record written after the
-  close's `done`, even in its second, is late; sleep its samples prove fell before the window is not charged to it.
-  Two races within seconds of a close, and rounds shared by two lives in one second, stay stated limits in the docs.
+## [1.6.5] — 2026-10-18
 
-**Every hook-journal line names its task; the state echo's names the open gate's section; python's carry a suspend
-sample** — PHASE-B.md item 6, third part, task 234. With these the close can split a task's time by phase and drop the
-time the laptop slept (the owner, 2026-10-15: suspends are not work time) from the plugin's own journal, not the
-host's transcripts.
-- Five keys after `error` in `journal/hooks.jsonl`, in all three writers — each `null` where it is not on that line,
-  `""` where it was read and there is none: `task` (on the state echo's and the stop hook's lines the task their read
-  was for, elsewhere the session's pointer `sessions/<id>/current_state` read by the writer itself; `null` on the
-  command guard's allow line, which resolves no session — the same call's task-gate line names it), `section` (the
-  state echo's line only: the open gate's `##` heading from that call's accepted read, cut at 64 bytes; `""` when it
-  found no open gate, `null` on a read another hook overtook — a failed call reads task.md as it is then, never a
-  memory, so after `tasks work M` it names M's gate), and `susp` / `sts` / `boot` — one bracketed reading (wall,
-  MONOTONIC, BOOTTIME, MONOTONIC, wall; kept only when both brackets span at most 5 ms): CLOCK_BOOTTIME −
-  CLOCK_MONOTONIC in whole seconds, the wall time of THAT reading (pair `susp` with `sts`, not with `ts`), the boot id's
-  first 8 — taken by the python each hook already runs (the state echo's, the stop hook's, every python hook's).
-- A line may now be 2,048 bytes (1,024 before: a line with every field at its cap measured 1,122); a line past it drops
-  `detail`, `error` and `section` (`section` then `null`) and keeps every key.
-- `task-status.py --echo` prints fifteen lines (the section and the sample after its thirteen), `--fields` five (the
-  sample last), and a new `--section` two; each extra is computed apart, so a fault there never fails the lines the
-  hooks decide on.
+**Phase B, items 6 and 7: every close keeps the task's own numbers, and the judges read a fixed copy** — tasks
+231-240. Item 7 (the owner, 2026-10-17: "Copie pe aceeași cale (Recomandat)"): the judges of a panel and of a single
+review read a sealed copy of the tree mounted read-only at the project path, so the agent may write once the review
+prints its ready line; tail certification still reads the live tree. Item 6 (the owner, 2026-10-13: "În Faza B
+(Recomandat)"): every close writes `<task>/numbers.json` from the plugin's own records instead of the host's session
+transcripts, which it deletes after about 30 days, and `tasks numbers [N]` shows them; to feed it, the claude judge
+seats report their tokens, the run ledger says how each panel ended, every verify run is journaled, the owner's
+options-dialog answers reach `chat_log.md`, and every hook-journal line names its task. Also fixed: `tasks audit` on a
+host with no git (a 1.6.4 bug). The suite has ⟦W2: test count⟧ tests (5,255 at 1.6.4); CI is the same two Linux lanes.
+The guarantee ledger has 135 rows, 121 verified (133 and 120 at 1.6.4): two new rows, PB-REVIEW-COPY and
+PB-TASK-NUMBERS, and PB-INSTALL-ROLLBACK back to partially evidenced (Known limitations). The live gauntlet on this
+release: ⟦W3: PASS / WAITING / FAIL⟧.
+
+**Upgrading:** `/playbook:upgrade`, restart every Claude Code session, then re-run `/playbook:init` in each project that
+uses the plugin. Init brings the CLAUDE.md block's new bullet ("Work while a review runs — after its ready line") and
+refreshes the project's copy of `.claude/hooks/monitor-nudge.sh`, whose journal lines now name their task; `scripts/init`
+itself, its `.gitignore` block and the CLAUDE.md merge are unchanged since 1.6.4. The options-dialog hook comes with the
+plugin and needs no init step. The review copy lives under `.agent/journal/`, which init's `.gitignore` block already
+ignores; a project set up by the bare `tasks init` alone has no such block, and its reviews read the live tree and say
+so. From 1.6.3, 1.6.4's upgrade notes apply as written, its data move included (at the next `tasks audit` of a task,
+its older audit receipts move to `audit-log.md` beside it — nothing is deleted). A task activated only before 1.6.4
+has no activation record, so its closure's time is empty; one activated again since counts from then. Measured before the release, in temporary folders: ⟦W3: the window
+from 1.6.3⟧. **Going back** ⟦W3b: 1.6.3 `5a6c837` and 1.6.4 `80dc9df` on a project 1.6.5 wrote⟧.
+
+**Judges read a fixed copy of the tree, so the agent works while they run** — PHASE-B.md item 7, task 231. Measured
+before: in the 31 hours before the decision, 32 panels held the agent idle for 368.6 minutes and 11 single-judge runs
+for 30.9 — the tamper guard voided a round on any repo write while the judges read the live tree.
+- A panel and a single review (`plan-review`, `impl-review`, the post-panel judge) say first how the judges read the
+  tree. With a copy, the CLI copies what git lists — the repository and each `code_roots` repository — into
+  `<lane>/journal/review-views/`, seals it by content, freezes it read-only and prints
+  `ready: you may write the live tree now` right before the judges start; bubblewrap mounts it read-only at the
+  project path. What git ignores is shown live; the task records are never copied.
+- A write to the live tree during the review no longer voids it: the tamper guard watches the copy. What changed is
+  after the review — the close reads STALE, and tail certification takes records, tests and docs. The copy is removed
+  on every exit; one left by a review that died is swept by the next.
+- Where no copy can be made — for instance without bubblewrap, inside a sandbox, in a linked worktree, a repository
+  with no commit yet, a journal folder git does not ignore, or a tree over 50,000 listed files or 1 GiB (the full list:
+  `docs/architecture.md`, "Judges") — the review says `Judges read the LIVE tree — <why>` first and runs as before. A
+  tree that keeps changing while its copy is made is refused before anything is spent.
+- The CLAUDE.md template and the playbook skill say when the agent may write (after the ready line, never the
+  reviewed task's task.md or judge.md) and what a code change during an impl review costs. Ledger row `PB-REVIEW-COPY`.
+
+**The claude judge seats report their tokens; each panel records how it ended; each verify run is journaled** —
+PHASE-B.md item 6, first part, task 232.
+- The claude judge call runs `claude -p --output-format json` (the panel seat and every single-judge path), and its
+  spend record carries claude's own counts — `in`, `out`, `cache_read`, `cache_write`. Before, 747 of 747 claude review
+  records in this workspace said `usage: unknown`. A claude failure, an account limit and a bad model read as before.
+- A panel's `done` record in `post-panel-reviews.jsonl` carries `outcome` (`completed` / `void` / `unsaved` /
+  `incomplete`) and, for a completed round, `measures`: the verdict, the judges that succeeded of those seated, the
+  quorum and the Critical / Important findings, counted by the stop rule's own reading.
+- The close and `tasks verify` journal one `hook=verify` record per command: the command, its exit, ran or reused,
+  its seconds.
+- The single judge's "raise judge_budget_usd" notice works under JSON mode, and the panel's budget notice for claude
+  prints again.
 
 **The owner's options-dialog answers reach the chat log** — PHASE-B.md item 6, second part, task 233 (the owner,
-2026-10-10, retro 177: "capture them where the prompts are captured"). His answers in an options dialog are decisions,
-and until now no log held them — `chat_log.md` had his prompts only.
-- A new hook on `AskUserQuestion` (`dialog-log-hook` → `dialog_log.py`): after he answers, one `DIALOG` entry in the
-  same `chat_log.md` — his answers first and exact (each its JSON string literal, so none of his characters changes and
-  none is cut), then the agent's questions with their headers, flattened and cut at 300 characters, the tool call's id
-  last (a second delivery within the log's last 256 KB writes nothing). Every body line starts with a fixed prefix
-  (`Options dialog`, `A1:`, `Notes1:`, `Q1`, `<!-- dialog:`), so no line is a heading, a gate or an entry header; the
-  lock is waited for 3 s at most, the counter is replaced whole, and an entry after a fragment starts its own line. Its PreToolUse run — before the dialog shows — starts no python and writes only its hook-journal line,
-  the dialog's opening; a cancelled dialog leaves that line alone. No counter of the session is touched.
-- The chat-log hook now takes a prompt's id and appends it under ONE hold of the chat log's lock (two holds before), writes
-  the log's header there and only to an empty log (it truncated with `>` outside the lock before), keeps `set -e` there,
-  so the ids follow the file with two writers; the readers — Recent Chat, retro, merge-prep — take an entry header only
-  at a line start (a header-shaped text inside an entry is its text); Recent Chat's stop at "tasks work done" reads only
-  a dialog's answer lines; retro cuts an entry at a `---` that starts a line, and its steering pass reads only a dialog's
-  answers; `tasks log` shows `dialog`; the judges are told how to read such an entry.
+2026-10-10, retro 177: "capture them where the prompts are captured").
+- A new hook on `AskUserQuestion` writes, after he answers, one `DIALOG` entry into `chat_log.md`: his answers first
+  and exact, then the agent's questions (each cut at 300 characters). Recent Chat, retro and the judges read it;
+  `tasks log` shows `dialog`.
+- The chat-log hook writes a prompt's id and its entry under one hold of the log's lock, so two writers keep the ids
+  in order; the readers take an entry header only at a line start.
 
-**The plugin records what a task's close will need to count — first part** — PHASE-B.md item 6, task 232 (the
-owner, 2026-10-13: "În Faza B (Recomandat)"). Until now every number about a task's time, reviews and owner answers came
-from the host's session transcripts, which it deletes after about 30 days. This part records three of them in the
-plugin's own journal and run ledger; the hook side (the owner's dialog answers, the task and phase at each tool call)
-and the numbers composed at the close follow.
-- **The claude judge seats' usage.** The claude judge call asks for `claude -p --output-format json` (the panel seat
-  and the single-judge path, tail certification and the post-panel judge included; subagents stay plain text). The
-  review comes out of claude's one result object; its counts are copied into the spend record as claude reports them
-  — `in` (`input_tokens`, cache excluded), `out`, and beside them `cache_read` and `cache_write` — from `modelUsage`
-  when it names one model (a budget stop zeroes the top-level `usage` but keeps them there), else the top-level
-  `usage`. Measured before: 747 of 747 claude review records in this workspace said `usage: unknown`. A claude
-  failure reads as plain mode's did (`(FAILED — exit N)` + claude's own words as the stdout tail), so an account limit
-  is still recorded as a seat outage and a bad model still reads `MODEL_UNAVAILABLE`. Fixtures: claude 2.1.302,
-  captured verbatim (`tests/fixtures/claude-2.1.302/`).
-- **How each panel ended and what it found.** A panel's `done` record in `post-panel-reviews.jsonl` now carries
-  `outcome` (`completed` / `void` / `unsaved` / `incomplete`) and, for a completed round, `measures` — the round id,
-  the verdict, the judges that succeeded of those seated, the quorum and the Critical / Important findings the judges
-  wrote, counted by the stop rule's own reading (`stop_rule.round_findings`; `round_criticals` delegates to it). It was
-  written the same on every exit before, a tamper void and a crash included.
-- **Every verify run.** The close and `tasks verify` journal one `hook=verify` record per command — the task, the
-  command, its exit (signed), ran or reused, and the seconds it ran (0 when reused, so a sum counts it once).
-- `models_check.budget_exceeded` also reads claude's budget line as the first line of a failure block's stdout tail, in
-  plain mode's words and JSON mode's (`Reached maximum budget`): the single judge's "raise judge_budget_usd" notice
-  keeps working under JSON mode (it read plain mode's raw stdout before), and the panel's budget notice, silent for
-  claude since claude began to exit 1 on a budget stop, prints again.
-- Limits: a panel killed by SIGKILL (or an unhandled SIGTERM) still leaves its reservation without a `done` record.
+**Every hook-journal line names its task** — PHASE-B.md item 6, third part, task 234. Five keys follow `error` in
+`journal/hooks.jsonl`: `task`, `section` (the open gate's `##` heading, on the state echo's line) and a suspend sample
+(`susp` / `sts` / `boot`), so the close can split a task's time by phase and leave out the time the machine slept (the
+owner, 2026-10-15: suspends are not work time). A line may be 2,048 bytes (1,024 before). `task-status.py --echo`
+prints fifteen lines, `--fields` five, and a new `--section` two.
 
-**Judges read a fixed copy of the tree, so the agent works while they run** — PHASE-B.md item 7, task 231, the
-owner's answer of 2026-10-17 ("Copie pe aceeași cale"). Measured before: in the 31 hours before the decision, 32
-panels held the agent idle for 368.6 minutes and 11 single-judge runs for 30.9 — the tamper guard voided a round on
-any repo write while the judges read the live tree.
-- A panel and a single review (`plan-review`, `impl-review`, the post-panel judge) first say how the judges read the
-  tree. With a copy: the CLI copies what git lists — the outer repository and each `code_roots` repository, each a
-  `git clone --local --mirror` with the live config, index and listed files — into `<lane>/journal/review-views/`,
-  seals it by content (its fingerprint equals the stamp, each scope's working-tree object the snapshot's base — for
-  the post-panel judge its delta's tree — and HEAD the same; the recorded snapshot, dirty maps included, must be the
-  copy's own), freezes it read-only on disk, and — once the config, the quorum, the prompt and the chat log have been
-  read — prints `ready: you may write the live tree now` right before the judges start. bubblewrap mounts the copy
-  read-only at the project path, in a PID namespace of its own, with the project's parents pinned; what git ignores is
-  shown live; records are never copied and stay masked from the live inventory, the copies folder is hidden, and an
-  `.agent` entry made after the seal is shown only if git ignores it.
-- The guard watches the copy, the stamp is the sealed fingerprint and the snapshot the pre-spawn one — a live write
-  during the review no longer voids it; what changed is after the panel (STALE at the close: tail certification
-  takes records, tests and docs). The post-panel judge's `[file:]` checks resolve in the copy. The copy is removed
-  on every exit; one whose owner died is swept by the next review (each holds an `flock`).
-- No copy is possible inside a sandbox, without bubblewrap, for a project in a subdirectory of its repository, a
-  linked worktree, a linked `.agent`/lane/code root, a submodule or untracked nested repository, a
-  `fingerprint_exclude` that hides code, an unignored journal, or over 50,000 listed files / 1 GiB / 2,000 ignored
-  entries, a scope with no commit yet or unmerged entries, an ignored entry over a code root: the review says
-  `Judges read the LIVE tree — <why>` first and runs as before. A copy that cannot be sealed while the live tree did not
-  move reads the live tree the same way; a tree that keeps changing while its copy is made (three times) is refused
-  before anything is spent. The post-panel judge's `[file:]` checks follow absolute links into the copy.
-- The CLAUDE.md template and the playbook skill say when the agent may write (after the ready line, never the
-  reviewed task's task.md/judge.md) and what a code change during an impl review costs. Tail certification still
-  reads the live tree (the close certifies the current tree).
-- `core.tree_state_fingerprint(cfg=)`; `sandbox.ProjectView`, `view_mount_available`, `run(project_view=)`; every
-  adapter's `run_headless_judge(project_view=)`. Ledger row `PB-REVIEW-COPY`.
+**Each close keeps the task's own numbers** — PHASE-B.md item 6, last part, tasks 235-237.
+- At every successful close, after its `done` record, `<task>/numbers.json` gets one entry for that closure, composed
+  only from the plugin's records: the task's time by kind (agent, judges, verify, owner-idle, owner-question,
+  background) and by `##` section, without the machine's sleep; the review rounds and what each found; each judge
+  seat's runs, seconds and tokens; the verify runs; the owner's prompts and options dialogs with the time he took to
+  answer; how the task closed and each flag's reason. A gap counts for the task only when both its lines are the
+  task's; a re-close adds an entry, and an older close never replaces a newer one. A fault, or a composition past 5 s,
+  prints one line and changes nothing of the close.
+- `tasks numbers [N]` shows them (read-only; an open task as a snapshot). On three live sessions, against their
+  transcripts, `agent` came within 2.5 s and `owner-idle` within 2 s.
+- Tasks 236 and 237 fixed what the reviews of 235 and 236 found: the time split is linear in the journal's lines
+  (6,000 lines took 13.7 s, now 0.05 s) and reads the journal under its lock, so a rotation drops no line; the
+  receipt's reasons are read whole and its verdict at its fixed place; a closure is found in the journal's file order
+  and written under the task lock, so a close, a reopen and a second close in one second stay apart; the close's own
+  session is the one its `done` record names; codex's `exec_command` counts like Bash.
+
+**Fixed: `tasks audit` on a host with no git** — task 239. Its `rulings-append-only` check raised there, so the
+audit reported ERROR and exited 1 — a 1.6.4 bug, found by the live rows PB-RUNTIME-STDLIB and PB-PYTHON-FLOOR. Like the
+other checks it is now silent on history it cannot read, and it still reads the list.
+
+### Known limitations
+
+- A task's numbers: two races within seconds of a close are not told apart — a close whose `done` is written only
+  after a reopen and a second close in another session, and a recomposed closure (when the close's own write failed)
+  that takes a suspend from the 120 s after the close. They stay stated limits (the owner, 2026-10-18: "Limite scrise
+  (Recomandat)"). The review rounds are bounded by time, so two lives of a task in one second share their rounds. The
+  rest: `docs/enforcement-journal.md`, "A task's numbers".
+- The review copy needs bubblewrap able to mount it and `.agent/journal/` ignored by git (init's block); otherwise the
+  judges read the live tree, as before, and the agent writes nothing until they finish. Tail certification always
+  reads the live tree.
+- A panel killed by SIGKILL (or an unhandled SIGTERM) still leaves its reservation without a `done` record.
+- PB-INSTALL-ROLLBACK is partially evidenced: when `~/.claude` cannot be written, init's removal of 1.6.3's shell
+  logger skips the file there, removes the logger's lines from `~/.bash_profile` and returns 0, leaving the old logger
+  half-removed — the promise that a failed HOME write restores everything has not held since 1.6.4 (task 221). The fix
+  (a failed write there makes init fail and restore everything; the owner, 2026-10-18: "Oprește și reface tot
+  (Recomandat)") is the next task.
 
 ## [1.6.4] — 2026-10-17
 

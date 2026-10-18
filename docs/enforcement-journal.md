@@ -490,7 +490,7 @@ it equals the session's span (a test holds this over 400 built timelines).
 - Sleep is measured only between two samples of one boot. `susp` itself undercounts the kernel's suspend spans by
   the device suspend / resume time (task 234, W7).
 - Two sessions working on one task at once each count their own time.
-- Two races within seconds of a close are not told apart (the owner decides whether to build them, task 237): a close
+- Two races within seconds of a close are not told apart (stated limits, the owner, 2026-10-18, task 242): a close
   whose `done` is written only after a reopen and a second close in another session gives both closures the wrong
   life; and a recomposed closure (a write that failed) can take a suspend from the 120 s after the close into its
   last gap. A close that waits for the task lock while a reopen and a second close finish writes the second close's
