@@ -566,7 +566,14 @@ def check_rulings_append_only(project_path) -> "dict | None":
         return ({(x.date, x.words, x.holds, x.about) for x in rs},
                 {(x.date, x.words, x.holds, x.about) for x in rs if x.ended})
 
-    if git("rev-parse", "--verify", "-q", "HEAD").returncode == 0:      # a repository with commits
+    try:
+        has_commits = git("rev-parse", "--verify", "-q", "HEAD").returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        # no git to run (a bare interpreter — the live rows PB-RUNTIME-STDLIB / PB-PYTHON-FLOOR, task 239): silent on
+        # the history, as the other checks are (`_git_lines`) and as in a project with no commits; the list's own
+        # parse below needs no git
+        has_commits = False
+    if has_commits:      # a repository with commits
         log = git("log", "--full-history", "--format=%H %P%x09%s", "--", rel)
         if log.returncode != 0:
             findings.append("git cannot read the list's history: "

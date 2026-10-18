@@ -321,6 +321,36 @@ class EveryJudgeGetsTheRulingsInForce(Project):
         self.assertIn("rulings.md cannot be read", r.stdout + r.stderr)
 
 
+class TheAuditWithoutGit(Project):
+    """Task 239: on a host with no git (a bare interpreter — the live rows PB-RUNTIME-STDLIB and PB-PYTHON-FLOOR run on
+    slim images that have none), the check does not raise: like the other checks it stays silent on history it cannot
+    read, as in a project with no commits, and still reads the list itself."""
+
+    def check_without_git(self):
+        from tasks import audit
+        empty = self.d / "no-git-bin"
+        empty.mkdir()
+        old = os.environ.get("PATH")
+        os.environ["PATH"] = str(empty)
+        try:
+            return audit.check_rulings_append_only(self.d)
+        finally:
+            os.environ["PATH"] = old
+
+    def test_a_list_is_read_without_git(self):
+        self.add(WORDS1)
+        self.commit("a ruling")
+        self.assertEqual(self.check_without_git()["status"], "clean")
+
+    def test_a_broken_list_is_still_a_finding_without_git(self):
+        self.add(WORDS1)
+        self.list.write_text(self.list.read_text(encoding="utf-8") + "not a ruling line\n", encoding="utf-8")
+        self.assertEqual(self.check_without_git()["status"], "findings")
+
+    def test_no_list_and_no_git_is_not_applicable(self):
+        self.assertIsNone(self.check_without_git())
+
+
 class TheAuditCatchesAHandEdit(Project):
 
     def audit(self):
