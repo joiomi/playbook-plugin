@@ -16,9 +16,9 @@ seats report their tokens, the run ledger says how each panel ended, every verif
 options-dialog answers reach `chat_log.md`, and every hook-journal line names its task. Also fixed: `tasks audit` on a
 host with no git (a 1.6.4 bug). The suite has 5,599 tests (5,255 at 1.6.4); CI is the same two Linux lanes.
 The guarantee ledger has 135 rows, 121 verified (133 and 120 at 1.6.4): two new rows, PB-REVIEW-COPY and
-PB-TASK-NUMBERS, and PB-INSTALL-ROLLBACK back to partially evidenced (Known limitations). The live gauntlet on this
-release: 17 PASS, 5 WAITING (the grok rows: its account is out of credit), 1 FAIL (PB-INSTALL-ROLLBACK, Known
-limitations).
+PB-TASK-NUMBERS, and PB-INSTALL-ROLLBACK, verified at 1.6.4, now a known violation (Known limitations). The live
+gauntlet on this release: 17 PASS, 5 WAITING (the grok rows: its account is out of credit), 1 FAIL (PB-INSTALL-ROLLBACK,
+Known limitations). These figures were measured on this release's code; the commits after them change only text.
 
 **Upgrading:** `/playbook:upgrade`, restart every Claude Code session, then re-run `/playbook:init` in each project that
 uses the plugin. Init brings the CLAUDE.md block's new bullet ("Work while a review runs — after its ready line") and
@@ -41,7 +41,7 @@ init then brought the bullet, refreshed `monitor-nudge.sh` and removed 1.6.3's s
 `git -C <clone> checkout <commit>`, then `claude plugin marketplace update playbook-x-marketplace` and
 `claude plugin update playbook@playbook-x-marketplace` (a downgrade this way is not measured); then re-run that
 version's `/playbook:init` before any review — it takes the bullet out of CLAUDE.md (that version's
-reviews read the live tree, so the agent must not write while one runs) and puts its own `monitor-nudge.sh` back;
+reviews read the live tree, so a write while one runs voids its round) and puts its own `monitor-nudge.sh` back;
 1.6.3's also puts its shell logger back. Measured with the CLI on copies of a project 1.6.5 wrote (closures in
 `numbers.json`, the hook journal's new keys, a dialog entry, a panel record with `outcome` and `measures`, the verify
 memory): each version's `doctor`, `bootstrap`, `list`, `status`, `new`, `work`, `audit` and a close ran clean and left
@@ -56,8 +56,8 @@ for 30.9 — the tamper guard voided a round on any repo write while the judges 
   tree. With a copy, the CLI copies what git lists — the repository and each `code_roots` repository — into
   `<lane>/journal/review-views/`, seals it by content, freezes it read-only and prints
   `ready: you may write the live tree now` right before the judges start; bubblewrap mounts it read-only at the
-  project path. What git ignores is shown live; the conversation records (the chat log, the shell history, the
-  sessions) are never copied.
+  project path. What git ignores is shown live; the judges never see the conversation records (the chat log, the
+  shell history, the sessions).
 - A write to the live tree during the review no longer voids it: the tamper guard watches the copy. What changed is
   after the review — the close reads STALE, and tail certification takes records, tests and docs. The copy is removed
   on every exit; one left by a review that died is swept by the next.
@@ -126,11 +126,11 @@ other checks it is now silent on history it cannot read, and it still reads the 
   judges read the live tree, as before, and the agent writes nothing until they finish. Tail certification always
   reads the live tree.
 - A panel killed by SIGKILL (or an unhandled SIGTERM) still leaves its reservation without a `done` record.
-- PB-INSTALL-ROLLBACK is partially evidenced: when `~/.claude` cannot be written, init's removal of 1.6.3's shell
-  logger skips the file there, removes the logger's lines from `~/.bash_profile` and returns 0, leaving the old logger
-  half-removed — the promise that a failed HOME write restores everything has not held since 1.6.4 (task 221). The fix
-  (a failed write there makes init fail and restore everything; the owner, 2026-10-18: "Oprește și reface tot
-  (Recomandat)") is the next task.
+- PB-INSTALL-ROLLBACK is a known violation (the ledger's status for a reproduced contradiction): when `~/.claude`
+  cannot be written, init's removal of 1.6.3's shell logger skips the file there, removes the logger's lines from
+  `~/.bash_profile` and returns 0, leaving the old logger half-removed — the promise that a failed HOME write restores
+  everything has not held since 1.6.4 (task 221). The fix (a failed write there makes init fail and restore
+  everything; the owner, 2026-10-18: "Oprește și reface tot (Recomandat)") is the next task.
 
 ## [1.6.4] — 2026-10-17
 
