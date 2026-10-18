@@ -16,7 +16,9 @@ This helper makes init all-or-nothing:
     dir, and records which candidate dirs already existed. Project files back up
     under `<project>/.agent/backups/init-<stamp>/`, user files under
     `<home>/.playbook-init-backups/init-<stamp>/` — the two realms the task
-    splits. Prints the manifest path for init to hand back to `restore`.
+    splits. Prints the manifest path for init to hand back to `restore`. A listed
+    path it cannot look at (in a directory it may not search) stops it before it
+    creates anything, and init with it (task 243).
 
   * `restore` — called from init's EXIT trap on any non-zero exit (a `set -e`
     abort, the soft FAILED summary, or a trapped interrupt). Restores every
@@ -36,10 +38,12 @@ file — the exact idiom `claude-md-merge.py` uses, keeping ONE primitive.
 """
 from __future__ import annotations
 
+import errno
 import importlib.util
 import json
 import os
 import shutil
+import stat
 import sys
 from pathlib import Path
 
@@ -74,6 +78,21 @@ def _rel_within(path: str, base: str) -> str:
     if rel.startswith(".."):
         return os.path.basename(path)
     return rel
+
+
+def _look(path: str, kind) -> bool:
+    """`os.path.isfile` / `isdir` (`kind` is `stat.S_ISREG` / `S_ISDIR`), except that a path the OS will not let us
+    look at RAISES (task 243): `isfile` reads EACCES as "no such file", so a `~/.claude` that cannot be searched was
+    recorded as holding nothing — init then saw no old logger, and a restore would take whatever is there for a file
+    init created. Absent (ENOENT, ENOTDIR) and a link loop stay False, as with `isfile`."""
+    try:
+        return kind(os.stat(path).st_mode)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            return False
+        raise
 
 
 def _link_text(path: str) -> "str | None":
@@ -133,24 +152,30 @@ def begin() -> int:
     # Record dir pre-existence BEFORE creating any backup dir: `begin` itself
     # creates .agent/ and ~/.playbook-init-backups/, and rollback must not then
     # mistake a dir it created for one that pre-existed.
-    dir_entries = [
-        {"path": d, "realm": _realm(d, project_root), "existed": os.path.isdir(d)}
-        for d in dirs
-    ]
-    file_entries = [
-        {
-            "path": f,
-            "realm": _realm(f, project_root),
-            "existed": os.path.isfile(f),
+    # A path it cannot look at stops init here, before any change and before any backup dir exists (task 243).
+    try:
+        dir_entries = [
+            {"path": d, "realm": _realm(d, project_root), "existed": _look(d, stat.S_ISDIR)}
+            for d in dirs
+        ]
+        file_entries = [
+            {
+                "path": f,
+                "realm": _realm(f, project_root),
+                "existed": _look(f, stat.S_ISREG),
             "backup": None,
             "mode": None,
-            # task 221: a file that is a symbolic link — its link text and its target (see `_restore_linked`)
-            "link": _link_text(f),
-            "target": os.path.realpath(f) if os.path.islink(f) else None,
-            "target_existed": os.path.lexists(os.path.realpath(f)) if os.path.islink(f) else None,
-        }
-        for f in files
-    ]
+                # task 221: a file that is a symbolic link — its link text and its target (see `_restore_linked`)
+                "link": _link_text(f),
+                "target": os.path.realpath(f) if os.path.islink(f) else None,
+                "target_existed": os.path.lexists(os.path.realpath(f)) if os.path.islink(f) else None,
+            }
+            for f in files
+        ]
+    except OSError as exc:
+        print(f"ERROR:snapshot failed: cannot look at {exc.filename or '(a listed path)'}: {exc.strerror or exc}"
+              " — init changes nothing it cannot first see", file=sys.stderr)
+        return 1
 
     created_roots: "list[str]" = []
     try:

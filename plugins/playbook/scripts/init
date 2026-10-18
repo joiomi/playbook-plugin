@@ -349,12 +349,19 @@ done
 #     the file is written back as 2-space JSON, UTF-8);
 #   - in ~/.bash_profile, ~/.profile, ~/.zshenv: the line "# claude-playbook: command logging" followed by the exact
 #     line init wrote under it (and the blank line init put before it) — a block a person changed is left, said so.
+#     The rc file is edited byte for byte (its other bytes need not be UTF-8).
 # Every one of these files is in the transaction's snapshot above (TXN_FILES): it is copied to the kept user backup
 # before anything changes, and a failure restores it. An rc file or settings.json that is a symbolic link is edited
-# at its target, the link kept — and restored there (init_txn.py). Anything init cannot read or does not recognise is left as it is — never a failure.
-retire_shell_logger() {   # echoes REMOVED/KEPT<TAB>item lines; never fails
+# at its target, the link kept — and restored there (init_txn.py).
+# What init cannot finish stops it (the owner, 2026-10-18: "Oprește și reface tot (Recomandat)", task 243): it first
+# looks at and reads every file and decides each change, then makes them, stopping at the first that fails. A file it
+# cannot look at or read, a change that fails, a settings.json that is not valid JSON yet names bash-log.sh, or a crash
+# of this step is a FAILED line: init exits 1 and the EXIT trap restores everything, what this step already changed
+# included. What is not init's — another header, a block a person changed, another BASH_ENV, a link named like the
+# logger, a settings.json that is not valid JSON and does not name the logger — is left as it is, said, and no failure.
+retire_shell_logger() {   # echoes REMOVED / KEPT / FAILED<TAB>item lines
     PB_HOME="$HOME" PB_ATOMIC_PY="$ATOMIC_PY" python3 -I -c '
-import json, os
+import json, os, stat
 import importlib.util as _ilu
 _s = _ilu.spec_from_file_location("_pb_atomic_write", os.environ["PB_ATOMIC_PY"])
 _m = _ilu.module_from_spec(_s); _s.loader.exec_module(_m); atomic_write = _m.atomic_write
@@ -363,74 +370,107 @@ HEADERS = {"bash-log.sh": "# claude-playbook: project-scoped command logging (ba
            "bash-log.zsh": "# claude-playbook: project-scoped command logging (zsh)"}
 MARK = "# claude-playbook: command logging"
 LINES = ("export BASH_ENV=~/.claude/bash-log.sh", "[ -f ~/.claude/bash-log.zsh ] && source ~/.claude/bash-log.zsh")
-out = []
-for name, head in HEADERS.items():
-    p = os.path.join(home, ".claude", name)
+out, plan = [], []
+
+def why(e):
+    return (str(e).splitlines() or [""])[0]
+
+def fail(item, what):
+    out.append("FAILED\t" + item + ": " + what + " - init restores everything it changed; fix this, then run init again")
+    print("\n".join(out))
+    raise SystemExit(0)
+
+def mode_of(path, item, follow):
+    """The mode of path (lstat, or stat when follow), None when it does not exist; a path it cannot look at fails."""
     try:
-        if os.path.islink(p) or not os.path.isfile(p):
-            continue
-        with open(p, encoding="utf-8", errors="replace") as fh:
-            first = fh.readline().rstrip("\r\n")
-        if first == head:
-            os.remove(p)
-            out.append("REMOVED\t~/.claude/" + name + " (the old shell logger)")
-        else:
-            out.append("KEPT\t~/.claude/" + name + " (not the playbook logger: left as it is)")
+        return (os.stat if follow else os.lstat)(path).st_mode
+    except (FileNotFoundError, NotADirectoryError):
+        return None
     except OSError as e:
-        out.append("KEPT\t~/.claude/" + name + " (could not be read: " + str(e) + ")")
-p = os.path.realpath(os.path.join(home, ".claude", "settings.json"))   # a linked one is edited at its target
-try:
-    if os.path.isfile(p):
-        with open(p, encoding="utf-8") as fh:
-            data = json.loads(fh.read())
-        env = data.get("env") if isinstance(data, dict) else None
-        if isinstance(env, dict) and env.get("BASH_ENV") in (os.path.join(home, ".claude", "bash-log.sh"),
-                                                             "~/.claude/bash-log.sh"):
-            del env["BASH_ENV"]
-            if not env:
-                del data["env"]
-            atomic_write(p, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
-            out.append("REMOVED\t~/.claude/settings.json (BASH_ENV of the old shell logger)")
-except (OSError, ValueError) as e:
-    out.append("KEPT\t~/.claude/settings.json (could not be read: " + (str(e).splitlines() or [""])[0] + ")")
-for rc in (".bash_profile", ".profile", ".zshenv"):
-    p = os.path.join(home, rc)
+        fail(item, "could not be looked at (" + why(e) + ")")
+
+def read(path, item):
     try:
-        real = os.path.realpath(p)
-        if not os.path.isfile(real):
-            continue
-        with open(real, encoding="utf-8", newline="") as fh:
-            text = fh.read()
-        lines = text.split("\n")
-        keep, i, gone, odd = [], 0, 0, 0
-        while i < len(lines):
-            if lines[i].rstrip("\r") == MARK:
-                if i + 1 < len(lines) and lines[i + 1].rstrip("\r") in LINES:
-                    if keep and keep[-1].strip() == "":
-                        keep.pop()
-                    i += 2
-                    gone += 1
-                    continue
-                odd += 1
-            keep.append(lines[i])
-            i += 1
-        if gone:
-            mode = os.stat(real).st_mode & 0o7777
-            atomic_write(real, "\n".join(keep))
-            os.chmod(real, mode)
-            out.append("REMOVED\t~/" + rc + " (the old shell logger lines)")
-        if odd:
-            out.append("KEPT\t~/" + rc + " (an old-logger block a person changed: left as it is)")
-    except (OSError, UnicodeDecodeError) as e:
-        out.append("KEPT\t~/" + rc + " (could not be read: " + str(e) + ")")
+        with open(path, "rb") as fh:
+            return fh.read()
+    except OSError as e:
+        fail(item, "could not be read (" + why(e) + ")")
+
+# 1. look at and read everything; decide each change
+for name, head in HEADERS.items():
+    item = "~/.claude/" + name
+    p = os.path.join(home, ".claude", name)
+    m = mode_of(p, item, follow=False)
+    if m is None or not stat.S_ISREG(m):
+        continue
+    first = read(p, item).split(b"\n", 1)[0].decode("utf-8", "replace").rstrip("\r")
+    if first == head:
+        plan.append(("remove", p, None, item + " (the old shell logger)"))
+    else:
+        out.append("KEPT\t" + item + " (not the playbook logger: left as it is)")
+item = "~/.claude/settings.json"
+p = os.path.realpath(os.path.join(home, ".claude", "settings.json"))   # a linked one is edited at its target
+m = mode_of(p, item, follow=True)
+if m is not None and stat.S_ISREG(m):
+    raw = read(p, item)
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except ValueError as e:
+        if b"bash-log.sh" in raw:
+            fail(item, "is not valid JSON (" + why(e) + ") and names bash-log.sh, so init cannot take the old logger out of it")
+        data = None
+        out.append("KEPT\t" + item + " (not valid JSON: left as it is)")
+    env = data.get("env") if isinstance(data, dict) else None
+    if isinstance(env, dict) and env.get("BASH_ENV") in (os.path.join(home, ".claude", "bash-log.sh"),
+                                                         "~/.claude/bash-log.sh"):
+        del env["BASH_ENV"]
+        if not env:
+            del data["env"]
+        plan.append(("write", p, json.dumps(data, indent=2, ensure_ascii=False) + "\n", item + " (BASH_ENV of the old shell logger)"))
+for rc in (".bash_profile", ".profile", ".zshenv"):
+    item = "~/" + rc
+    real = os.path.realpath(os.path.join(home, rc))
+    m = mode_of(real, item, follow=True)
+    if m is None or not stat.S_ISREG(m):
+        continue
+    lines = read(real, item).decode("utf-8", "surrogateescape").split("\n")
+    keep, i, gone, odd = [], 0, 0, 0
+    while i < len(lines):
+        if lines[i].rstrip("\r") == MARK:
+            if i + 1 < len(lines) and lines[i + 1].rstrip("\r") in LINES:
+                if keep and keep[-1].strip() == "":
+                    keep.pop()
+                i += 2
+                gone += 1
+                continue
+            odd += 1
+        keep.append(lines[i])
+        i += 1
+    if gone:
+        plan.append(("write", real, "\n".join(keep).encode("utf-8", "surrogateescape"), item + " (the old shell logger lines)"))
+    if odd:
+        out.append("KEPT\t" + item + " (an old-logger block a person changed: left as it is)")
+# 2. make the changes, stopping at the first that fails
+for op, path, data, item in plan:
+    try:
+        if op == "remove":
+            os.remove(path)
+        else:
+            mode = stat.S_IMODE(os.stat(path).st_mode)
+            atomic_write(path, data)
+            os.chmod(path, mode)
+    except OSError as e:
+        fail(item.split(" (", 1)[0], "could not be changed (" + why(e) + ")")
+    out.append("REMOVED\t" + item)
 print("\n".join(out))
-' 2>&1 || printf 'KEPT\tthe old shell logger (could not be looked at)\n'
+' 2>&1 || printf 'FAILED\tthe old shell logger: the step that removes it stopped (exit %s) - init restores everything it changed\n' "$?"
 }
 RETIRE_RESULT=$(retire_shell_logger)
 while IFS=$'\t' read -r _what _item; do
     case "$_what" in
         REMOVED) REMOVED+=("$_item") ;;
         KEPT)    SKIPPED+=("$_item") ;;
+        FAILED)  FAILED+=("$_item") ;;
     esac
 done <<< "$RETIRE_RESULT"
 # END:retire-shell-logger

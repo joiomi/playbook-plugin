@@ -4,6 +4,20 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+**Init stops and restores everything when it cannot finish removing the old shell logger** — task 243 (the owner,
+2026-10-18: "Oprește și reface tot (Recomandat)"). Since 1.6.4 init removes the BASH_ENV shell logger an earlier
+version installed, and that step never failed: with `~/.claude` read-only it took the logger's two lines out of the rc
+file, kept BASH_ENV in `~/.claude/settings.json` and the logger file, listed them under "Skipped" and exited 0 — the
+logger half removed and the project's own changes kept (PB-INSTALL-ROLLBACK, a known violation in 1.6.5). Now the step
+first looks at and reads every file and decides each change, then makes them, stopping at the first that fails; a file
+it cannot look at or read, a change that fails, a `~/.claude/settings.json` that is not valid JSON yet names
+`bash-log.sh`, or a crash of the step is listed under "FAILED", init exits 1 and restores everything, what the step
+already changed included. A `~/.claude` that cannot be searched read as "no logger there" (`os.path.isfile` answers
+False when it may not look): the pre-init snapshot now refuses a listed path it cannot look at, before any change. An
+rc file that is not UTF-8 has the block removed byte for byte instead of being skipped. What is not init's is left
+as it is and said, as before, and a HOME with nothing to remove needs no write, so a read-only `~/.claude` there is no
+failure.
+
 ## [1.6.5] — 2026-10-18
 
 **Phase B, items 6 and 7: every close keeps the task's own numbers, and the judges read a fixed copy** — tasks
