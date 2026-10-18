@@ -245,6 +245,56 @@ def append_lifecycle(agent_dir, *, event, task, detail="", session_id="") -> Non
         _warn(exc)
 
 
+AGENT_USAGE_KEYS = ("in", "out", "cache_read", "cache_write", "thinking")
+
+
+def append_agent_usage(agent_dir, *, task="", file="", ino=0, span_from=0, span_to=0, last_id="", model="",
+                       side=False, calls=0, counts=None, unreadable=0, known=True, why="", session_id="") -> None:
+    """Append one AGENT-USAGE record and return None. Never raises (task 244, PHASE-B item 6).
+
+    The main agent's tokens over one span of one host transcript file, for one model (`scripts/agent_usage.py` reads
+    the span and writes this under its lane lock; the Stop / SessionEnd recorder and the CLI's transitions call it). The
+    owner, 2026-10-18: "Da, după 243 (Recomandat)" — the closure's numbers carry the agent's own tokens beside the judge
+    seats'. Same HARD CONTRACT and envelope as `append` (`hook="agent-usage"`, `decision="record"`,
+    `reason="agent usage"`), plus `task` (the task the span belongs to, "-" for none) and the span itself — `file` (16
+    hex of the path's sha1), `ino`, `from`, `to` (byte offsets) and `last_id` (the last call counted): the record IS the
+    read position, the next read of that file starts at its newest record's `to`. Then either the counts — `model`,
+    `side` (1 for a subagent's file or sidechain entries), `calls`, `in`, `out`, `cache_read`, `cache_write`,
+    `thinking` (a part of `out`, never added to it), `unreadable` when entries could not be read — or
+    `status: "unknown"` with `why` (a span not counted: never zero counts for it). Every field bounded, the line under
+    the 512-byte floor; no conversation text is ever passed here, only the model's name."""
+    try:
+        rec: dict = {
+            "ts": _utcnow(),
+            "session_id": _head(session_id or "", 40),
+            "hook": "agent-usage",
+            "decision": "record",
+            "reason": "agent usage",
+            "task": _head(str(task or "-"), 16),
+            "file": _head(str(file or ""), 16),
+            "ino": _cap_int(int(ino)) if _is_int(ino) else 0,
+            "from": _cap_int(int(span_from)) if _is_int(span_from) else 0,
+            "to": _cap_int(int(span_to)) if _is_int(span_to) else 0,
+            "last_id": _head(str(last_id or ""), 48),
+        }
+        if not known:
+            rec["status"] = "unknown"
+            rec["why"] = _head(why or "?", 80)
+        else:
+            rec["model"] = _head(model or "?", 40)
+            rec["side"] = 1 if side else 0
+            rec["calls"] = _cap_int(int(calls)) if _is_int(calls) else 0
+            c = counts if isinstance(counts, dict) else {}
+            for k in AGENT_USAGE_KEYS:
+                v = c.get(k)
+                rec[k] = _cap_int(v) if isinstance(v, int) and not isinstance(v, bool) else 0
+            if _is_int(unreadable) and int(unreadable) > 0:
+                rec["unreadable"] = _cap_int(int(unreadable))
+        _write_record(agent_dir, rec)
+    except Exception as exc:                # defence in depth: never propagate
+        _warn(exc)
+
+
 # --- The hook journal (task 222, PHASE-B item 2) ---------------------------------------------------------------------
 # The owner, 2026-10-16 10:26: "Istoric curat + jurnal de hook-uri". One line per run of a playbook hook, in
 # `<lane>/journal/hooks.jsonl` — the same fields, caps, line bound, lane and sink rules as the bash writer

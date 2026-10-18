@@ -1,0 +1,36 @@
+#!/bin/bash
+_PB_HJ_T0=$EPOCHREALTIME     # the hook journal's start (task 222): first, before anything else runs
+# agent-usage-hook — Stop and SessionEnd (task 244, PHASE-B item 6). Records the main agent's tokens: it reads the
+# session's host transcript (the payload's `transcript_path`, then the session dir's pointer) and its subagents' files
+# from where the journal last stopped, and appends `hook: "agent-usage"` records under the session's task
+# (agent_usage.py `record_spans`). The owner, 2026-10-18: "Da, după 243 (Recomandat)".
+#
+# A recorder, not a guard: it never decides a stop. It prints nothing on stdout (a Stop hook's stdout could carry a
+# decision) and every path exits 0; a failure only leaves the span for a later read. It records nothing for a judge's,
+# a tail-cert's or the monitor's session: task 232 counts the judges' own usage.
+if [ "${PLAYBOOK_ROLE:-}" = "monitor" ]; then exit 0; fi
+case "${PLAYBOOK_SESSION_ID:-}" in judge|tail-cert) exit 0 ;; esac
+HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
+INPUT=$(cat)
+{ source "$HOOK_DIR/gate-echo-lib.sh" && pb_hook_begin agent-usage; } 2>/dev/null || exit 0
+_pb_au_skip() {
+    PB_HJ_DECISION=skip; PB_HJ_DETAIL="not recorded: $1"
+    exit 0
+}
+PROJECT_DIR=$(find_project_root 2>/dev/null) || PROJECT_DIR=""
+[ -n "$PROJECT_DIR" ] || exit 0
+AGENT_DIR=$(resolve_agent_dir "$PROJECT_DIR" 2>/dev/null) || _pb_au_skip "the lane could not be resolved"
+[ -d "$AGENT_DIR" ] || exit 0
+SESSION_ID="$(resolve_session_id 2>/dev/null)" || SESSION_ID=""
+command -v python3 >/dev/null 2>&1 || _pb_au_skip "no python3"
+python3 -I -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null || _pb_au_skip "python < 3.10"
+[ -r "$HOOK_DIR/agent_usage.py" ] || _pb_au_skip "agent_usage.py not readable"
+export _PB_HJ_T0
+_pb_au_out=$(printf '%s' "$INPUT" | PB_AU_LANE="$AGENT_DIR" PB_AU_SESSION="$SESSION_ID" \
+    python3 -E -s "$HOOK_DIR/agent_usage.py" hook 2>/dev/null) || _pb_au_skip "the recorder stopped"
+case "$_pb_au_out" in
+    recorded*) PB_HJ_DECISION=ok ;;
+    *)         PB_HJ_DECISION=skip ;;
+esac
+PB_HJ_DETAIL="${_pb_au_out:0:160}"
+exit 0

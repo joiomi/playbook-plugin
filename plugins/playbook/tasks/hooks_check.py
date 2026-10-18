@@ -34,8 +34,8 @@ EXPECTED_HOOKS = {
     "UserPromptSubmit": ["chat-log-hook"],
     "PostToolUse": ["state-echo-hook", "task-dir-watch-hook", "dialog-log-hook"],
     "PostToolUseFailure": ["state-echo-hook", "task-dir-watch-hook"],
-    "Stop": ["stop-hook"],
-    "SessionEnd": ["session-end-hook"],
+    "Stop": ["stop-hook", "agent-usage-hook"],          # task 244: the agent's tokens, recorded at each turn's end
+    "SessionEnd": ["session-end-hook", "agent-usage-hook"],
 }
 
 _QUOTES = ("\"", "'")

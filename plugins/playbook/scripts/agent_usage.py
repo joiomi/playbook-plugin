@@ -31,13 +31,21 @@ FIFO (the numbers reader's rule).
 """
 from __future__ import annotations
 
+import errno
+import fcntl
+import glob
+import hashlib
 import json
 import os
 import stat
+import time
 
 _KEYS = (("in", "input_tokens"), ("out", "output_tokens"), ("cache_read", "cache_read_input_tokens"),
          ("cache_write", "cache_creation_input_tokens"))
 _MODEL_MAX = 80          # a model name longer than this is cut (it is the one string that leaves the reader)
+_ID_MAX = 48             # an id longer than this is carried as its hash (the record's `last_id` is capped at 48)
+FRESH_MAX = 8 * 1024 * 1024     # a file with no record is read from 0 up to this size; larger, it gets a seed
+_SCAN_MAX = 32 * 1024 * 1024    # the backward scan of the journal for a file's newest record stops here
 
 
 def _blank() -> dict:
@@ -62,6 +70,16 @@ def _counts(usage) -> "dict | None":
     t = det.get("thinking_tokens") if isinstance(det, dict) else None
     got["thinking"] = t if _whole(t) else 0
     return got
+
+
+def idkey(mid: str) -> str:
+    """The form an id is carried in: itself, or `h:` + 16 hex of its sha1 when longer than the record keeps."""
+    return mid if len(mid) <= _ID_MAX else "h:" + hashlib.sha1(mid.encode("utf-8", "surrogatepass")).hexdigest()[:16]
+
+
+def file_key(path: str) -> str:
+    """A transcript file's identity in the journal: 16 hex of its absolute path's sha1 (with the record's `ino`)."""
+    return hashlib.sha1(os.path.abspath(path).encode("utf-8", "surrogateescape")).hexdigest()[:16]
 
 
 def read_span(path: str, offset: int = 0, last_id: str = "", stop: "int | None" = None) -> dict:
@@ -125,7 +143,7 @@ def _take(raw: bytes, out: dict, seen: set, last: str) -> str:
         out["unreadable"] += 1
         return last
     mid = msg.get("id")
-    mid = mid if isinstance(mid, str) else ""
+    mid = idkey(mid) if isinstance(mid, str) else ""
     model = msg.get("model")
     model = model[:_MODEL_MAX] if isinstance(model, str) and model else "?"
     if model == "<synthetic>":
@@ -145,7 +163,211 @@ def _take(raw: bytes, out: dict, seen: set, last: str) -> str:
     return mid or last
 
 
-if __name__ == "__main__":                       # a manual read: agent_usage.py <transcript> [offset] [last_id]
+# --- recording: the journal is the read position (design v2, plan round 1) --------------------------------------------
+
+def _newest(journal: str, keys: "set[str]") -> "dict[str, dict]":
+    """Each file key's newest `agent-usage` record in `journal`, read backwards in blocks (at most `_SCAN_MAX` bytes):
+    {key: record}. A key with none is absent. Never follows a link; a journal it cannot read gives {}."""
+    found: "dict[str, dict]" = {}
+    try:
+        fd = os.open(journal, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return found
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return found
+        pos = os.lseek(fd, 0, os.SEEK_END)
+        scanned, tail = 0, b""
+        while pos > 0 and scanned < _SCAN_MAX and len(found) < len(keys):
+            n = min(1 << 16, pos)
+            pos -= n
+            os.lseek(fd, pos, os.SEEK_SET)
+            block = os.read(fd, n) + tail
+            scanned += n
+            parts = block.split(b"\n")
+            tail = parts[0] if pos > 0 else b""
+            for raw in reversed(parts[1:] if pos > 0 else parts):
+                if b'"agent-usage"' not in raw:
+                    continue
+                try:
+                    rec = json.loads(raw)
+                except ValueError:
+                    continue
+                k = rec.get("file") if isinstance(rec, dict) else None
+                if rec.get("hook") == "agent-usage" and k in keys and k not in found:
+                    found[k] = rec
+        return found
+    finally:
+        os.close(fd)
+
+
+def _lock(lane: str, wait: float):
+    """The lane's agent-usage lock (`journal/agent-usage.lock`, flock), or None when it cannot be taken in `wait`."""
+    jdir = os.path.join(lane, "journal")
+    try:
+        if os.path.islink(jdir):                # a linked journal dir would put the lock outside the lane
+            return None
+        os.makedirs(jdir, exist_ok=True)        # inside the existing lane, as `pb_journal._write_record` does
+        fd = os.open(os.path.join(jdir, "agent-usage.lock"), os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+                     0o600)
+    except OSError:
+        return None
+    end = time.monotonic() + max(wait, 0)
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except OSError as e:
+            if e.errno not in (errno.EAGAIN, errno.EACCES) or time.monotonic() >= end:
+                os.close(fd)
+                return None
+            time.sleep(0.02)
+
+
+def session_files(paths: "list[str]") -> "list[str]":
+    """The main transcripts given (the payload's, the session's pointer) and each one's subagents' files
+    (`<main without .jsonl>/subagents/agent-*.jsonl`), each once, in a stable order."""
+    out: "list[str]" = []
+    for p in paths:
+        if not p or not isinstance(p, str):
+            continue
+        p = os.path.abspath(p)
+        if p not in out:
+            out.append(p)
+        if p.endswith(".jsonl"):
+            for sub in sorted(glob.glob(glob.escape(p[:-6]) + "/subagents/agent-*.jsonl")):
+                if sub not in out and not os.path.islink(sub):
+                    out.append(sub)
+    return out
+
+
+def record_spans(lane, *, task: str, paths: "list[str]", session_id: str, pbj, lock_wait: float = 2.0,
+                 fresh_max: int = FRESH_MAX) -> dict:
+    """Read every file of the session from its newest record's `to` and append what it holds, under the lane lock.
+
+    `paths` are the main transcripts (the Stop payload's, the session dir's pointer); their subagents' files are added.
+    A file with no record (or whose inode changed) is read from 0 when at most `fresh_max` bytes, else gets a seed — a
+    record `unknown`, `from = to = size` — so no history is charged to one task. One record per model and side; a span
+    with no call writes nothing. `pbj` is the loaded `pb_journal` module. Returns {"files", "calls", "skipped"}."""
+    lane = str(lane)
+    out = {"files": 0, "calls": 0, "skipped": ""}
+    files = session_files(paths)
+    if not files:
+        out["skipped"] = "no transcript"
+        return out
+    fd = _lock(lane, lock_wait)
+    if fd is None:
+        out["skipped"] = "lock"
+        return out
+    try:
+        keys = {file_key(f): f for f in files}
+        newest = _newest(os.path.join(lane, "journal", "enforcement.jsonl"), set(keys))
+        for key, f in keys.items():
+            try:
+                st = os.lstat(f)
+            except OSError:
+                continue                       # gone (a subagent file removed): nothing to read
+            if not stat.S_ISREG(st.st_mode):
+                continue
+            prev = newest.get(key)
+            if prev and prev.get("ino") == st.st_ino:
+                start, last = int(prev.get("to") or 0), str(prev.get("last_id") or "")
+            elif st.st_size <= fresh_max:
+                start, last = 0, ""
+            else:
+                pbj.append_agent_usage(lane, task=task, file=key, ino=st.st_ino, span_from=st.st_size,
+                                       span_to=st.st_size, known=False, session_id=session_id,
+                                       why="no earlier record for this transcript: usage before now not counted")
+                continue
+            r = read_span(f, start, last)
+            out["files"] += 1
+            if r["status"] != "known":
+                continue                       # not readable now: the span stays for a later read
+            frm = 0 if r["restarted"] else start
+            side_file = "/subagents/" in f
+            wrote = False
+            for side, bucket in ((False, r["models"]), (True, r["sidechain"])):
+                for model, c in sorted(bucket.items()):
+                    if not c["calls"]:
+                        continue
+                    pbj.append_agent_usage(lane, task=task, file=key, ino=st.st_ino, span_from=frm,
+                                           span_to=r["offset"], last_id=r["last_id"], model=model,
+                                           side=side or side_file, calls=c["calls"], counts=c,
+                                           unreadable=0 if wrote else r["unreadable"], session_id=session_id)
+                    out["calls"] += c["calls"]
+                    wrote = True
+            if not wrote and r["unreadable"]:
+                pbj.append_agent_usage(lane, task=task, file=key, ino=st.st_ino, span_from=frm, span_to=r["offset"],
+                                       last_id=r["last_id"], model="?", side=side_file, calls=0, counts={},
+                                       unreadable=r["unreadable"], session_id=session_id)
+        return out
+    finally:
+        os.close(fd)
+
+
+_SESSION_RE = __import__("re").compile(r"[A-Za-z0-9._-]+")
+
+
+def _pointer(lane: str, session: str) -> str:
+    """The session dir's `transcript_path` (session-start-hook writes it, the state echo refreshes it), or ""."""
+    if not session or not _SESSION_RE.fullmatch(session) or session in (".", ".."):
+        return ""
+    path = os.path.join(lane, "sessions", session, "transcript_path")
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return ""
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return ""
+        line = os.read(fd, 4096).split(b"\n", 1)[0].strip()
+        return line.decode("utf-8", "surrogateescape") if line.startswith(b"/") else ""
+    finally:
+        os.close(fd)
+
+
+def load_journal():
+    """pb_journal beside this file, loaded by its path (the hooks' and the CLI's idiom)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_pb_journal_agent_usage",
+                                                  os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                               "pb_journal.py"))
+    if spec is None or spec.loader is None:
+        raise ImportError("pb_journal.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def hook_main(payload_text: str) -> str:
+    """The recorder (`agent-usage-hook`, Stop and SessionEnd): one line saying what it recorded or why not."""
+    try:
+        payload = json.loads(payload_text) if payload_text.strip() else {}
+    except ValueError:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    lane, session = os.environ.get("PB_AU_LANE", ""), os.environ.get("PB_AU_SESSION", "")
+    if not lane or not os.path.isdir(lane):
+        return "skipped: no lane"
+    pbj = load_journal()
+    from pathlib import Path
+    task = pbj._hj_session_task(Path(lane), session) or "-"
+    tp = payload.get("transcript_path")
+    res = record_spans(lane, task=task, paths=[tp if isinstance(tp, str) else "", _pointer(lane, session)],
+                       session_id=session, pbj=pbj, lock_wait=2.0)
+    if res["skipped"]:
+        return f"skipped: {res['skipped']}"
+    return f"recorded {res['calls']} call(s) from {res['files']} file(s) for task {task}"
+
+
+if __name__ == "__main__":
     import sys
     a = sys.argv[1:]
-    print(json.dumps(read_span(a[0], int(a[1]) if len(a) > 1 else 0, a[2] if len(a) > 2 else ""), indent=1))
+    if a[:1] == ["hook"]:
+        print(hook_main(sys.stdin.read()))
+    elif a[:1] == ["read"] and len(a) > 1:          # a manual read: agent_usage.py read <transcript> [offset] [last_id]
+        print(json.dumps(read_span(a[1], int(a[2]) if len(a) > 2 else 0, a[3] if len(a) > 3 else ""), indent=1))
+    else:
+        print("usage: agent_usage.py hook < payload | read <transcript> [offset] [last_id]", file=sys.stderr)
+        sys.exit(2)
