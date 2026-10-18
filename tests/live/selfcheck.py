@@ -91,17 +91,41 @@ def activate(d: Path) -> None:
           "tasks work 1" in " ".join(tool_results(bad)), True)
 
 
+def _without_pair_response(ev: "list[dict]") -> "list[dict]":
+    """The session with the LAST Read response inside the parallel pair's second call removed — the message that made
+    the most Read calls, its second call's window (its tool_use to its tool_result). Since task 219 the session holds
+    more Read calls than the pair, so its last Read response overall is not one of the pair's."""
+    use_at: "dict[str, tuple[int, str]]" = {}
+    result_at: "dict[str, int]" = {}
+    for i, e in enumerate(ev):
+        for c in (e.get("message") or {}).get("content") or [] if e.get("type") in ("assistant", "user") else []:
+            if isinstance(c, dict) and c.get("type") == "tool_use" and c.get("name") == "Read":
+                use_at[str(c.get("id"))] = (i, str((e.get("message") or {}).get("id")))
+            elif isinstance(c, dict) and c.get("type") == "tool_result":
+                result_at[str(c.get("tool_use_id"))] = i
+    per: "dict[str, list[str]]" = {}
+    for tid, (_i, mid) in use_at.items():
+        per.setdefault(mid, []).append(tid)
+    pair = sorted(max(per.values(), key=len, default=[]), key=lambda t: use_at[t][0])
+    if not pair:
+        return list(ev)
+    lo, hi = use_at[pair[-1]][0], result_at.get(pair[-1], len(ev))
+    inside = [i for i in range(lo, hi) if ev[i].get("subtype") == "hook_response"
+              and ev[i].get("hook_name") == "PostToolUse:Read"]
+    return [e for i, e in enumerate(ev) if not inside or i != inside[-1]]
+
+
 def echo(d: Path) -> None:
+    # Task 219 (the echo printed in full only on a change): the row asks for an echo RESPONSE per call (`line=""`)
     ev = session_events(d / "PB-HOOK-STATE-ECHO.txt")[0]
-    got, said = rows_session.parallel_echoes(ev)
+    got, said = rows_session.parallel_echoes(ev, line="")
     check("I4 parallel echoes — the real session", got, True, said)
-    reads = [i for i, e in enumerate(ev) if e.get("subtype") == "hook_response" and e.get("hook_name") == "PostToolUse:Read"]
-    bad = [e for i, e in enumerate(ev) if i != reads[-1]]
-    got, said = rows_session.parallel_echoes(bad)
-    check("I4 parallel echoes — the second Read's response removed", got, False, said)
-    post = [json.dumps(x) for x in rows_session.hook_responses(bad, "PostToolUse")]
-    check("I4 the OLD clause on that copy (it passed: 3 gate lines among all PostToolUse responses)",
-          sum("Working on task [001]" in c for c in post) >= 3, True)
+    bad = _without_pair_response(ev)
+    got, said = rows_session.parallel_echoes(bad, line="")
+    check("I4 parallel echoes — the pair's second Read response removed", got, False, said)
+    post = rows_session.hook_responses(bad, "PostToolUse")
+    check("I4 a count over the session on that copy (it passes: Read responses >= the pair's two calls)",
+          sum(1 for x in post if x.get("hook_name") == "PostToolUse:Read") >= 2, True)
 
 
 GATE = "- [ ] Freehand log — run `.claude/bin/tasks freehand log` to capture chat_log messages, then check this box"
