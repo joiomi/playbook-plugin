@@ -163,8 +163,8 @@ def begin() -> int:
                 "path": f,
                 "realm": _realm(f, project_root),
                 "existed": _look(f, stat.S_ISREG),
-            "backup": None,
-            "mode": None,
+                "backup": None,
+                "mode": None,
                 # task 221: a file that is a symbolic link — its link text and its target (see `_restore_linked`)
                 "link": _link_text(f),
                 "target": os.path.realpath(f) if os.path.islink(f) else None,

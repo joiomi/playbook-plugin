@@ -68,6 +68,29 @@ AGENT_DIR="$(resolve_agent_dir "$PROJECT_DIR")"
 # Label paths relative to the project in the created/skipped summary.
 AGENT_REL="${AGENT_DIR#"$PROJECT_DIR"/}"
 
+# ── One init at a time per HOME (task 243, impl round 1: codex) ─────────────
+# Two inits on one HOME at once could undo each other: the second planned the old logger's removal from what it saw,
+# the first then removed it, and the second — its removal finding nothing — failed and restored its own snapshot: the
+# logger back. Init holds an advisory lock on the HOME directory itself (flock on a read-only descriptor of it: no file
+# is made) from before its snapshot until it exits, its restore included; a second init waits up to 120 s, then stops
+# before any change. A host whose flock is missing, or cannot wait with a limit, runs without it and says so.
+_pb_home_lock() {
+    local t0=$SECONDS
+    if ! command -v flock >/dev/null 2>&1 || [ ! -d "$HOME" ] || ! { exec 209<"$HOME"; } 2>/dev/null; then
+        echo "init: note: no lock on this HOME (no flock, or it cannot be opened); two inits at once on it are not kept apart." >&2
+        return 0
+    fi
+    flock -w 120 209 2>/dev/null && return 0
+    if [ $(( SECONDS - t0 )) -lt 100 ]; then       # refused long before the limit: this flock cannot wait here
+        { exec 209<&-; } 2>/dev/null || true
+        echo "init: note: this host's flock cannot hold the HOME lock; two inits at once on it are not kept apart." >&2
+        return 0
+    fi
+    echo "init: another playbook init has held this HOME for 120 s; let it finish, then run init again (nothing was changed)." >&2
+    exit 1
+}
+_pb_home_lock
+
 # ── Transactional snapshot / rollback (PB-INSTALL-ROLLBACK) ─────────────────
 # Before the first mutation, snapshot every file init may modify and record
 # which dirs it may create, so ANY non-zero exit — a `set -e` abort, the soft
@@ -357,11 +380,14 @@ done
 # looks at and reads every file and decides each change, then makes them, stopping at the first that fails. A file it
 # cannot look at or read, a change that fails, a settings.json that is not valid JSON yet names bash-log.sh, or a crash
 # of this step is a FAILED line: init exits 1 and the EXIT trap restores everything, what this step already changed
-# included. What is not init's — another header, a block a person changed, another BASH_ENV, a link named like the
-# logger, a settings.json that is not valid JSON and does not name the logger — is left as it is, said, and no failure.
+# included; a file already gone when its removal comes is done (another hand took it meanwhile). What is not init's is
+# left as it is and is no failure: another header, a block a person changed and a settings.json that is not valid JSON
+# (and does not name the logger) are said under "Skipped"; a link named like the logger and another BASH_ENV are left
+# silently, as since task 221.
 retire_shell_logger() {   # echoes REMOVED / KEPT / FAILED<TAB>item lines
-    PB_HOME="$HOME" PB_ATOMIC_PY="$ATOMIC_PY" python3 -I -c '
-import json, os, stat
+    local out rc=0 last
+    out=$(PB_HOME="$HOME" PB_ATOMIC_PY="$ATOMIC_PY" python3 -I -c '
+import errno, json, os, stat
 import importlib.util as _ilu
 _s = _ilu.spec_from_file_location("_pb_atomic_write", os.environ["PB_ATOMIC_PY"])
 _m = _ilu.module_from_spec(_s); _s.loader.exec_module(_m); atomic_write = _m.atomic_write
@@ -376,7 +402,7 @@ def why(e):
     return (str(e).splitlines() or [""])[0]
 
 def fail(item, what):
-    out.append("FAILED\t" + item + ": " + what + " - init restores everything it changed; fix this, then run init again")
+    out.append("FAILED\t" + item + ": " + what + " - init stops here; fix this, then run init again")
     print("\n".join(out))
     raise SystemExit(0)
 
@@ -387,6 +413,8 @@ def mode_of(path, item, follow):
     except (FileNotFoundError, NotADirectoryError):
         return None
     except OSError as e:
+        if e.errno == errno.ELOOP:      # a link loop cannot hold the logger: absent, as the snapshot reads it
+            return None
         fail(item, "could not be looked at (" + why(e) + ")")
 
 def read(path, item, first_line=False):
@@ -454,7 +482,11 @@ for rc in (".bash_profile", ".profile", ".zshenv"):
 for op, path, data, item in plan:
     try:
         if op == "remove":
-            os.remove(path)
+            try:
+                os.remove(path)
+            except FileNotFoundError:    # already gone (another hand took it meanwhile): what was planned holds
+                out.append("KEPT\t" + item + ": already gone when init came to remove it")
+                continue
         else:
             mode = stat.S_IMODE(os.stat(path).st_mode)
             atomic_write(path, data)
@@ -463,7 +495,16 @@ for op, path, data, item in plan:
         fail(item.split(" (", 1)[0], "could not be changed (" + why(e) + ")")
     out.append("REMOVED\t" + item)
 print("\n".join(out))
-' 2>&1 || printf 'FAILED\tthe old shell logger: the step that removes it stopped (exit %s) - init restores everything it changed\n' "$?"
+' 2>&1) || rc=$?
+    if [ "$rc" -eq 0 ]; then
+        printf '%s\n' "$out"
+        return 0
+    fi
+    # a crash: its own lines, then one FAILED line carrying the last other line it printed (a traceback's last)
+    printf '%s\n' "$out" | grep -E $'^(REMOVED|KEPT|FAILED)\t' || true
+    last=$(printf '%s\n' "$out" | grep -vE $'^(REMOVED|KEPT|FAILED)\t' | grep -v '^[[:space:]]*$' | tail -n 1 | tr -d '\t')
+    printf 'FAILED\tthe old shell logger: the step that removes it stopped (exit %s%s) - init stops here; fix this, then run init again\n' \
+        "$rc" "${last:+: $last}"
 }
 RETIRE_RESULT=$(retire_shell_logger)
 while IFS=$'\t' read -r _what _item; do

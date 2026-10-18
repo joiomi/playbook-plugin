@@ -19,7 +19,10 @@ Held:
   * T7 a crash of the removal step: a failure, restored;
   * T8 `init_txn.py begin` alone refuses a listed file it cannot look at, creating nothing;
   * T9 with the transaction off, the removal step itself refuses a file it cannot look at, before it changes
-    anything (the file comes last in its order).
+    anything (the file comes last in its order);
+  * T10 two inits on one HOME at once: the second waits for the first, and the logger stays removed;
+  * T11 a file already gone when its removal comes is done, not a failure;
+  * T12 an rc file that is a link loop is absent to both looks, no failure.
 
 Every run uses a disposable HOME (empty git configs) and project — never the real ones (memory
 `fixture-s15-writes-real-home`).
@@ -32,7 +35,9 @@ import hashlib
 import os
 import stat
 import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -44,6 +49,21 @@ TXN = SCRIPTS / "init_txn.py"
 HEADER = "# claude-playbook: project-scoped command logging (bash)\n"
 BLOCK = "\n# claude-playbook: command logging\nexport BASH_ENV=~/.claude/bash-log.sh\n"
 OLD_SETTINGS = '{\n  "env": {"KEEP": "1", "BASH_ENV": "~/.claude/bash-log.sh"}\n}\n'
+
+# Where the removal step goes from looking to changing — the seam T10 and T11 inject at (a python3 shim rewrites
+# that one `python3 -I -c` call; every other call runs untouched). A step without it fails the shim loudly (rc 99).
+SEAM = "# 2. make the changes, stopping at the first that fails"
+SHIM = """#!{py}
+import os, sys
+code_at = sys.argv.index("-c") + 1 if "-c" in sys.argv else None
+if code_at is not None and "claude-playbook: command logging" in sys.argv[code_at]:
+    code = sys.argv[code_at]
+    if {seam!r} not in code:
+        sys.stderr.write("shim: the removal step has no seam\\n")
+        sys.exit(99)
+    sys.argv[code_at] = code.replace({seam!r}, open({inject!r}).read() + {seam!r}, 1)
+os.execv({py!r}, [{py!r}] + sys.argv[1:])
+"""
 
 
 def _tree(root: Path) -> "dict[str, tuple[str, int]]":
@@ -114,6 +134,26 @@ class _Case(unittest.TestCase):
         return subprocess.run([bash_or_skip(), str(INIT), "proj"], cwd=self.project, env=self.env(**env_extra),
                               capture_output=True, text=True, timeout=180)
 
+    def shim(self, name: str, inject: str) -> Path:
+        """A PATH dir whose python3 inserts `inject` (python, at top level of the removal step) before SEAM."""
+        d = self.root / name
+        d.mkdir()
+        (d / "inject.py").write_text(inject, encoding="utf-8")
+        (d / "python3").write_text(SHIM.format(py=sys.executable, seam=SEAM, inject=str(d / "inject.py")),
+                                   encoding="utf-8")
+        (d / "python3").chmod(0o755)
+        return d
+
+    def start(self, project: Path, **env_extra):
+        return subprocess.Popen([bash_or_skip(), str(INIT), project.name], cwd=project, env=self.env(**env_extra),
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    def assert_logger_gone(self):
+        self.assertFalse((self.home / ".claude" / "bash-log.sh").exists(), "the logger file stays removed")
+        settings = (self.home / ".claude" / "settings.json").read_text(encoding="utf-8")
+        self.assertNotIn("bash-log.sh", settings, "its BASH_ENV stays removed")
+        self.assertEqual((self.home / ".profile").read_text(encoding="utf-8"), "export A=1\n", "its block stays removed")
+
     def snapshot(self):
         return _tree(self.home), _tree(self.project)
 
@@ -174,12 +214,14 @@ class WhenInitCannotFinishItRestores(_Case):
         shim.mkdir()
         real = subprocess.run(["bash", "-c", "command -v python3"], capture_output=True, text=True).stdout.strip()
         (shim / "python3").write_text("#!/bin/bash\nfor a in \"$@\"; do case \"$a\" in\n"
-                                      "  *'claude-playbook: command logging'*) exit 1 ;;\nesac; done\n"
+                                      "  *'claude-playbook: command logging'*) echo 'Traceback (most recent call last):';"
+                                      " echo 'BoomError: the step died here'; exit 1 ;;\nesac; done\n"
                                       f"exec '{real}' \"$@\"\n", encoding="utf-8")
         (shim / "python3").chmod(0o755)
         before = self.snapshot()
         r = self.init(PATH=f"{shim}{os.pathsep}{os.environ.get('PATH', '')}")
         self.assertIn("FAILED:", r.stdout, r.stdout[-2500:])
+        self.assertIn("stopped (exit 1: BoomError: the step died here)", r.stdout, "the crash's last line is kept")
         self.assert_failed_and_restored(r, before, "restoring the pre-init state")
 
 
@@ -201,6 +243,46 @@ class WhenInitCannotFinishItRestores(_Case):
         self.assertTrue((self.home / ".claude" / "bash-log.sh").is_file(), "nothing changed before the look failed")
 
 
+class TwoInitsOnOneHome(_Case):
+    def test_t10_a_second_init_waits_for_the_first_and_nothing_comes_back(self):
+        # Impl round 1 (codex, Important): B looked and planned the removal; A then ran whole and removed the logger;
+        # B's unlink found it gone, failed, and its rollback restored its own snapshot — the logger back. One lock on
+        # the HOME makes A wait for B.
+        self.old_logger()
+        other = self.root / "projb"
+        other.mkdir()
+        subprocess.run(["git", "init", "-q", str(other)], check=True, env=self.env())
+        looked, go = self.root / "b-looked", self.root / "b-go"
+        shim = self.shim("shim-b", f"open({str(looked)!r}, 'w').close()\nimport time as _t\n_t0 = _t.time()\n"
+                                   f"while not os.path.exists({str(go)!r}) and _t.time() - _t0 < 90:\n"
+                                   "    _t.sleep(0.05)\n")
+        b = self.start(other, PATH=f"{shim}{os.pathsep}{os.environ.get('PATH', '')}")
+        try:
+            t0 = time.time()
+            while not looked.exists() and b.poll() is None and time.time() - t0 < 90:
+                time.sleep(0.05)
+            self.assertTrue(looked.exists(), "B reached the removal step's seam")
+            a = self.start(self.project)
+            time.sleep(3)
+            a_done_early = a.poll()
+        finally:
+            go.write_text("", encoding="utf-8")
+        b_out, b_err = b.communicate(timeout=240)
+        a_out, a_err = a.communicate(timeout=240)
+        self.assertEqual(b.returncode, 0, (b_out + b_err)[-2500:])
+        self.assertEqual(a.returncode, 0, (a_out + a_err)[-2500:])
+        self.assertIsNone(a_done_early, "A waited while B held the HOME")
+        self.assert_logger_gone()
+
+    def test_t11_a_file_already_gone_when_its_removal_comes_is_no_failure(self):
+        self.old_logger()
+        shim = self.shim("shim-gone", "for _op in plan:\n    if _op[0] == 'remove':\n        os.remove(_op[1])\n")
+        r = self.init(PATH=f"{shim}{os.pathsep}{os.environ.get('PATH', '')}")
+        self.assertEqual(r.returncode, 0, (r.stdout + r.stderr)[-2500:])
+        self.assertNotIn("FAILED", r.stdout)
+        self.assert_logger_gone()
+
+
 class WhatNeedsNoWriteStillSucceeds(_Case):
     def test_t4_a_read_only_claude_dir_with_nothing_to_remove_is_no_failure(self):
         (self.home / ".claude" / "settings.json").write_text('{\n  "env": {"KEEP": "1"}\n}\n', encoding="utf-8")
@@ -217,6 +299,14 @@ class WhatNeedsNoWriteStillSucceeds(_Case):
         self.assertEqual(r.returncode, 0, (r.stdout + r.stderr)[-2500:])
         self.assertEqual((self.home / ".claude" / "settings.json").read_text(encoding="utf-8"), text)
         self.assertIn("~/.claude/settings.json (not valid JSON", r.stdout)
+
+    def test_t12_an_rc_file_that_is_a_link_loop_is_no_failure(self):
+        # Impl round 1 (opus, sonnet): the snapshot read a link loop as absent, the removal step's look as FAILED.
+        (self.home / ".zshenv").symlink_to(self.home / ".zshenv")
+        r = self.init()
+        self.assertEqual(r.returncode, 0, (r.stdout + r.stderr)[-2500:])
+        self.assertNotIn("FAILED", r.stdout)
+        self.assertTrue((self.home / ".zshenv").is_symlink(), "the loop is left as it is")
 
     def test_t6_an_rc_file_that_is_not_utf8_loses_only_the_block(self):
         head, tail = b"export A='\xe9t\xe9'\n", b"\nalias x='\xff'\n"
