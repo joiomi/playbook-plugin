@@ -4,6 +4,18 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+**Every closure's numbers carry the main agent's own tokens** — task 244 (the owner, 2026-10-18: "Da, după 243
+(Recomandat)"). Until now `numbers.json` held each judge seat's tokens but not the agent's — on this project the larger
+cost by far (one session's transcript, deduplicated: 6,002 calls, about 3 billion cache-read tokens in 3.5 days). A new
+recorder, `agent-usage-hook` (Stop and SessionEnd), reads the session's host transcript and its subagents' files from
+where the journal last stopped and appends `agent-usage` records (one per model: calls, in, out, cache read, cache
+write, thinking as a part of out) to `enforcement.jsonl`; the CLI records too at `tasks work N` (under the task it
+leaves) and at the close (under the closing task), so a span never crosses a transition. Each call counts once (the
+host writes one entry per content block, all with the same usage); the record holds its own read position, under a
+lane lock, so two readers never count a span twice and no state lives in a session folder a close removes; a session
+begun before the recorder gets an `unknown` seed instead of its whole history. `tasks numbers` shows an `agent` line per
+model. Measured: 54-59 ms per turn's end on a real transcript.
+
 **Init stops and restores everything when it cannot finish removing the old shell logger** — task 243 (the owner,
 2026-10-18: "Oprește și reface tot (Recomandat)"). Since 1.6.4 init removes the BASH_ENV shell logger an earlier
 version installed, and that step never failed: with `~/.claude` read-only it took the logger's two lines out of the rc

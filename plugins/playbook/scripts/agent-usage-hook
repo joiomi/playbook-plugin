@@ -22,8 +22,14 @@ PROJECT_DIR=$(find_project_root 2>/dev/null) || PROJECT_DIR=""
 AGENT_DIR=$(resolve_agent_dir "$PROJECT_DIR" 2>/dev/null) || _pb_au_skip "the lane could not be resolved"
 [ -d "$AGENT_DIR" ] || exit 0
 SESSION_ID="$(resolve_session_id 2>/dev/null)" || SESSION_ID=""
-command -v python3 >/dev/null 2>&1 || _pb_au_skip "no python3"
-python3 -I -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null || _pb_au_skip "python < 3.10"
+command -v python3 >/dev/null 2>&1 || {
+    echo "playbook: no python3 on PATH — the agent's tokens are not recorded" >&2
+    _pb_au_skip "no python3"
+}
+python3 -I -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null || {
+    echo "playbook: needs python3 >= 3.10 ($(python3 --version 2>&1 | head -1)) — the agent's tokens are not recorded" >&2
+    _pb_au_skip "python < 3.10"
+}
 [ -r "$HOOK_DIR/agent_usage.py" ] || _pb_au_skip "agent_usage.py not readable"
 export _PB_HJ_T0
 _pb_au_out=$(printf '%s' "$INPUT" | PB_AU_LANE="$AGENT_DIR" PB_AU_SESSION="$SESSION_ID" \

@@ -248,7 +248,7 @@ def append_lifecycle(agent_dir, *, event, task, detail="", session_id="") -> Non
 AGENT_USAGE_KEYS = ("in", "out", "cache_read", "cache_write", "thinking")
 
 
-def append_agent_usage(agent_dir, *, task="", file="", ino=0, span_from=0, span_to=0, last_id="", model="",
+def append_agent_usage(agent_dir, *, task="", file="", ino=0, span_from=0, span_to=0, head="", last_id="", model="",
                        side=False, calls=0, counts=None, unreadable=0, known=True, why="", session_id="") -> None:
     """Append one AGENT-USAGE record and return None. Never raises (task 244, PHASE-B item 6).
 
@@ -257,7 +257,9 @@ def append_agent_usage(agent_dir, *, task="", file="", ino=0, span_from=0, span_
     owner, 2026-10-18: "Da, după 243 (Recomandat)" — the closure's numbers carry the agent's own tokens beside the judge
     seats'. Same HARD CONTRACT and envelope as `append` (`hook="agent-usage"`, `decision="record"`,
     `reason="agent usage"`), plus `task` (the task the span belongs to, "-" for none) and the span itself — `file` (16
-    hex of the path's sha1), `ino`, `from`, `to` (byte offsets) and `last_id` (the last call counted): the record IS the
+    hex of the path's sha1), `ino`, `from`, `to` (byte offsets), `head` (8 hex of the sha1 of the file's first
+    min(4096, `to`) bytes: the same file, not one put in its place under a reused inode) and `last_id` (the last call
+    counted): the record IS the
     read position, the next read of that file starts at its newest record's `to`. Then either the counts — `model`,
     `side` (1 for a subagent's file or sidechain entries), `calls`, `in`, `out`, `cache_read`, `cache_write`,
     `thinking` (a part of `out`, never added to it), `unreadable` when entries could not be read — or
@@ -275,6 +277,7 @@ def append_agent_usage(agent_dir, *, task="", file="", ino=0, span_from=0, span_
             "ino": _cap_int(int(ino)) if _is_int(ino) else 0,
             "from": _cap_int(int(span_from)) if _is_int(span_from) else 0,
             "to": _cap_int(int(span_to)) if _is_int(span_to) else 0,
+            "head": _head(str(head or ""), 8),
             "last_id": _head(str(last_id or ""), 48),
         }
         if not known:

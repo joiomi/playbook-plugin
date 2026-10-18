@@ -19718,7 +19718,7 @@
     {
       "id": "PB-TASK-NUMBERS",
       "category": "risk-and-close",
-      "statement": "At every successful close, after its `done` record, the close composes the task's numbers for that closure from the plugin's own records only (the enforcement journal, the hook journal with its archives and spools, the run ledger, chat_log.md and the receipt) and keeps them in `<task>/numbers.json` (`closures[]`, keyed by the receipt's stamp and the close's number, the closure found in the journal's file order; a re-close adds one, two closes in one second keep two), composed and written under the task lock and only while that receipt is still the task's newest; a fault, or 5 s passed (one deadline for the reading, the lock wait and the write), prints one line and changes nothing of the close. The task's time is split per host session: a gap counts only when both its lines are the task's; slept (the `susp` difference between two samples of one boot, given to the gaps overlapping their own sts interval, largest overlap first, capped; what cannot be placed is counted apart), unknown across a boot change, away (over 2 h awake), outside a turn owner-idle or background, inside a turn (a tool event proves one; a new prompt ends calls left open) owner-question or agent, with Bash and background time inside the task's review spans carved as judges and inside its recorded verify spans (less the review spans) as verify; only the close's own session (named by its `done` record, else this task's latest open call) runs to the close, its last gap bracketed by the close's own suspend sample (a sample more than 120 s after the close is not used); the time split is linear and keeps the deadline; per session the parts add up to the task's time and, with the time not the task's, to the session's span. The close's reasons are read whole from the receipt (split only at the writer's separators, found outside closed fences), its verdict at its fixed place in the writer's text; the hook journal is read under its directory's shared lock. `tasks numbers [N]` reads them and writes nothing, adding a snapshot of a reopened task's life in progress. The close's `hook=close` records name their task.",
+      "statement": "At every successful close, after its `done` record, the close composes the task's numbers for that closure from the plugin's own records only (the enforcement journal, the hook journal with its archives and spools, the run ledger, chat_log.md and the receipt) and keeps them in `<task>/numbers.json` (`closures[]`, keyed by the receipt's stamp and the close's number, the closure found in the journal's file order; a re-close adds one, two closes in one second keep two), composed and written under the task lock and only while that receipt is still the task's newest; a fault, or 5 s passed (one deadline for the reading, the lock wait and the write), prints one line and changes nothing of the close. The task's time is split per host session: a gap counts only when both its lines are the task's; slept (the `susp` difference between two samples of one boot, given to the gaps overlapping their own sts interval, largest overlap first, capped; what cannot be placed is counted apart), unknown across a boot change, away (over 2 h awake), outside a turn owner-idle or background, inside a turn (a tool event proves one; a new prompt ends calls left open) owner-question or agent, with Bash and background time inside the task's review spans carved as judges and inside its recorded verify spans (less the review spans) as verify; only the close's own session (named by its `done` record, else this task's latest open call) runs to the close, its last gap bracketed by the close's own suspend sample (a sample more than 120 s after the close is not used); the time split is linear and keeps the deadline; per session the parts add up to the task's time and, with the time not the task's, to the session's span. The close's reasons are read whole from the receipt (split only at the writer's separators, found outside closed fences), its verdict at its fixed place in the writer's text; the hook journal is read under its directory's shared lock. `tasks numbers [N]` reads them and writes nothing, adding a snapshot of a reopened task's life in progress. The close's `hook=close` records name their task. Task 244: the closure's `agent` table holds the main agent's own tokens per model (calls counted once per `message.id`, `thinking` a part of `out`), from `agent-usage` records the recorder (`agent-usage-hook`, Stop and SessionEnd) and the CLI's transitions (`tasks work N`, the close) write from the session's host transcript and its subagents' files; each record holds its own read position under a lane lock, so no span is counted twice, a file with no record over 8 MiB gets an `unknown` seed rather than its history, and a closure with no record says so (null), never zero.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/numbers.py",
@@ -19739,6 +19739,14 @@
         {
           "path": "plugins/playbook/tasks/lifecycle.py",
           "reference": "symbol:cmd_work"
+        },
+        {
+          "path": "plugins/playbook/scripts/agent_usage.py",
+          "reference": "symbol:record_spans"
+        },
+        {
+          "path": "plugins/playbook/scripts/agent-usage-hook",
+          "reference": "whole-file"
         }
       ],
       "failure_consequence": "Medium",
@@ -19942,6 +19950,56 @@
           "negative_control": null,
           "limitations": [
             "Task 237 (Q6): a real close and reopen through the CLI in a temp project."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_agent_usage.py",
+          "reference": "Boundaries.test_pieces_cut_at_every_line_boundary_sum_to_the_whole",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 244: the reader over a fixture read in two pieces at every line boundary sums to one read of the whole; checked too on 150 MB of a real transcript against an independent dedupe-by-id count (task 244's W1 check)."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_agent_usage.py",
+          "reference": "RecordingSpans.test_two_recorders_at_once_count_each_call_once",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 244: four recorders at once under the lane lock count 200 calls once."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_agent_usage.py",
+          "reference": "RecordingSpans.test_a_large_file_with_no_record_gets_a_seed_and_no_history",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 244: a file over the fresh limit with no record gets an `unknown` seed; only what comes after it is counted."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_agent_usage_hook.py",
+          "reference": "Recording.test_a_stop_records_the_sessions_calls_under_its_task_and_prints_nothing",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task 244: the real hook in a temp project records under the session's task and prints nothing on stdout."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_agent_usage_numbers.py",
+          "reference": "TheCli.test_a_switch_splits_the_calls_between_the_two_tasks",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task 244: through the real CLI, a switch splits the agent's calls between the two tasks exactly; the close's numbers show its own."
           ]
         }
       ],

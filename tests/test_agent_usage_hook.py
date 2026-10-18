@@ -136,6 +136,19 @@ class WhatItLeavesAlone(_Project):
         line = [x for x in self.hook_lines() if x.get("hook") == "agent-usage"]
         self.assertEqual(line[0]["decision"], "skip")
 
+    def test_below_the_python_floor_it_says_so_and_records_nothing(self):
+        shim = self.d / "shim39"
+        shim.mkdir()
+        real = shutil.which("python3")
+        (shim / "python3").write_text("#!/bin/bash\nfor a in \"$@\"; do case \"$a\" in *'(3,10)'*) exit 1 ;; "
+                                      "--version) echo 'Python 3.9.18'; exit 0 ;; esac; done\n"
+                                      f"exec '{real}' \"$@\"\n")
+        (shim / "python3").chmod(0o755)
+        r = self.run_hook(self.payload(), PATH=f"{shim}{os.pathsep}{os.environ.get('PATH', '')}")
+        self.assertEqual((r.returncode, r.stdout), (0, ""), r.stderr)
+        self.assertIn("needs python3 >= 3.10 (Python 3.9.18)", r.stderr)
+        self.assertEqual(self.records(), [])
+
     def test_outside_a_playbook_project_nothing_is_created(self):
         other = self.d / "plain"
         other.mkdir()

@@ -682,6 +682,7 @@ class EveryShippedInlinePythonIsIsolated(unittest.TestCase):
         "commands/init.md": 1,
         "commands/upgrade.md": 2,
         "hooks/monitor-nudge.sh": 2,
+        "scripts/agent-usage-hook": 1,     # the Python floor probe (task 244)
         "scripts/chat-log-hook": 3,        # +1: the Python floor probe (task 193, #46)
         "scripts/command-guard-hook": 1,
         "scripts/dialog-log-hook": 1,     # the Python floor probe (task 233)
@@ -707,12 +708,13 @@ class EveryShippedInlinePythonIsIsolated(unittest.TestCase):
         _, counts, inline, _ = sweep()
         self.assertEqual(inline, self.ISOLATED_INLINE_CALLS)
         self.assertEqual(counts.get("ok-inline"), sum(self.ISOLATED_INLINE_CALLS.values()))
-        self.assertEqual(sum(self.ISOLATED_INLINE_CALLS.values()), 63)   # 55 + the floor probes of tasks 192 (2), 193 (2) and 194 (2) + task 198's resolved path - task 219's one JSON writer + task 221's fallback command + task 233's floor probe
+        self.assertEqual(sum(self.ISOLATED_INLINE_CALLS.values()), 64)   # 55 + the floor probes of tasks 192 (2), 193 (2) and 194 (2) + task 198's resolved path - task 219's one JSON writer + task 221's fallback command + task 233's floor probe + task 244's floor probe
 
     # Every call that starts a FILE of the plugin's, file by file — 22 when task 180
     # isolated them (18 in the hooks and scripts, 4 that the merge skill gives the agent).
     # The same reason as above: a rule that stopped SEEING a call would find nothing wrong.
     ISOLATED_FILE_CALLS = {
+        "scripts/agent-usage-hook": 1,    # agent_usage.py (task 244)
         "scripts/chat-log-hook": 1,
         "scripts/command-guard-hook": 1,
         "scripts/dialog-log-hook": 1,     # dialog_log.py (task 233)
@@ -731,7 +733,7 @@ class EveryShippedInlinePythonIsIsolated(unittest.TestCase):
         _, counts, _, files = sweep()
         self.assertEqual(files, self.ISOLATED_FILE_CALLS)
         self.assertEqual(counts.get("ok-file"), sum(self.ISOLATED_FILE_CALLS.values()))
-        self.assertEqual(sum(self.ISOLATED_FILE_CALLS.values()), 26)   # + the state echo's task-status.py (task 219) + dialog_log.py (task 233) + the failed call's `--section` (task 234)
+        self.assertEqual(sum(self.ISOLATED_FILE_CALLS.values()), 27)   # + the state echo's task-status.py (task 219) + dialog_log.py (task 233) + the failed call's `--section` (task 234) + agent_usage.py (task 244)
 
     def test_no_shipped_python_source_starts_a_file_through_an_argv_list(self):
         # the sweep reads an argv list only for its mode flag; a list that hands the

@@ -264,9 +264,10 @@ class RecordingSpans(_Lane):
         self.main.write_bytes(lines(entry("m1"), entry("m2")))
         self.record()
         self.main.unlink()
-        self.main.write_bytes(lines(entry("n1")))
+        # LARGER than the old record's `to`: only its inode says it is another file (a shorter one restarts anyway)
+        self.main.write_bytes(lines(*[entry(f"n{i}") for i in range(5)]))
         self.record(fresh_max=10 ** 6)
-        self.assertEqual(self.total(), 3)
+        self.assertEqual(self.total(), 7)
 
     def test_an_old_pointer_path_and_the_payload_path_are_both_read(self):
         old = self.tdir / "sess-old.jsonl"

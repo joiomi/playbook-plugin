@@ -77,6 +77,28 @@ def idkey(mid: str) -> str:
     return mid if len(mid) <= _ID_MAX else "h:" + hashlib.sha1(mid.encode("utf-8", "surrogatepass")).hexdigest()[:16]
 
 
+HEAD_MAX = 4096          # the bytes of a file's start its records fingerprint (`head`)
+
+
+def head_of(path: str, n: int) -> str:
+    """8 hex of the sha1 of the file's first `n` bytes (at most HEAD_MAX), or "" when it cannot be read. A transcript
+    only grows at its end, so its start never changes: a record's `head`, taken over min(HEAD_MAX, its `to`) bytes, tells
+    the same file from one put in its place even when the system gives the new file the old inode number (Linux reuses
+    a freed inode at once — measured by task 244's test)."""
+    n = max(0, min(int(n), HEAD_MAX))
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return ""
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return ""
+        data = os.read(fd, n) if n else b""
+        return hashlib.sha1(data).hexdigest()[:8] if len(data) == n else ""
+    finally:
+        os.close(fd)
+
+
 def file_key(path: str) -> str:
     """A transcript file's identity in the journal: 16 hex of its absolute path's sha1 (with the record's `ino`)."""
     return hashlib.sha1(os.path.abspath(path).encode("utf-8", "surrogateescape")).hexdigest()[:16]
@@ -270,13 +292,17 @@ def record_spans(lane, *, task: str, paths: "list[str]", session_id: str, pbj, l
             if not stat.S_ISREG(st.st_mode):
                 continue
             prev = newest.get(key)
-            if prev and prev.get("ino") == st.st_ino:
-                start, last = int(prev.get("to") or 0), str(prev.get("last_id") or "")
+            p_to = prev.get("to") if prev else None
+            same = (prev is not None and prev.get("ino") == st.st_ino and isinstance(p_to, int)
+                    and prev.get("head") == head_of(f, min(HEAD_MAX, p_to)))
+            if same:
+                start, last = int(p_to), str(prev.get("last_id") or "")
             elif st.st_size <= fresh_max:
                 start, last = 0, ""
             else:
                 pbj.append_agent_usage(lane, task=task, file=key, ino=st.st_ino, span_from=st.st_size,
-                                       span_to=st.st_size, known=False, session_id=session_id,
+                                       span_to=st.st_size, head=head_of(f, min(HEAD_MAX, st.st_size)), known=False,
+                                       session_id=session_id,
                                        why="no earlier record for this transcript: usage before now not counted")
                 continue
             r = read_span(f, start, last)
@@ -285,20 +311,21 @@ def record_spans(lane, *, task: str, paths: "list[str]", session_id: str, pbj, l
                 continue                       # not readable now: the span stays for a later read
             frm = 0 if r["restarted"] else start
             side_file = "/subagents/" in f
+            head = head_of(f, min(HEAD_MAX, r["offset"]))
             wrote = False
             for side, bucket in ((False, r["models"]), (True, r["sidechain"])):
                 for model, c in sorted(bucket.items()):
                     if not c["calls"]:
                         continue
                     pbj.append_agent_usage(lane, task=task, file=key, ino=st.st_ino, span_from=frm,
-                                           span_to=r["offset"], last_id=r["last_id"], model=model,
+                                           span_to=r["offset"], head=head, last_id=r["last_id"], model=model,
                                            side=side or side_file, calls=c["calls"], counts=c,
                                            unreadable=0 if wrote else r["unreadable"], session_id=session_id)
                     out["calls"] += c["calls"]
                     wrote = True
             if not wrote and r["unreadable"]:
                 pbj.append_agent_usage(lane, task=task, file=key, ino=st.st_ino, span_from=frm, span_to=r["offset"],
-                                       last_id=r["last_id"], model="?", side=side_file, calls=0, counts={},
+                                       head=head, last_id=r["last_id"], model="?", side=side_file, calls=0, counts={},
                                        unreadable=r["unreadable"], session_id=session_id)
         return out
     finally:

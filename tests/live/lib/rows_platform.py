@@ -19,7 +19,8 @@ MIN_IMAGE, NEW_IMAGE, OLD_IMAGE = "python:3.10-slim", "python:3.15-slim", "pytho
 FLOOR_ENTRY_POINTS = ("tasks", "sandbox", "init", "playbook-codex", "playbook-grok", "playbook-agy", "playbook-pi",
                       "monitor-lib/launch-monitor", "command-guard-hook", "codex-user-prompt-hook",
                       "codex-stop-hook", "codex-apply-patch-hook", "session-start-hook", "session-end-hook",
-                      "stop-hook", "chat-log-hook", "task-gate-hook", "state-echo-hook", "dialog-log-hook")
+                      "stop-hook", "chat-log-hook", "task-gate-hook", "state-echo-hook", "dialog-log-hook",
+                      "agent-usage-hook")
 LAUNCHERS = FLOOR_ENTRY_POINTS[:8]           # refuse: exit 1 with the message
 HOOKS = FLOOR_ENTRY_POINTS[8:]               # a hook that cannot run lets the call through, loud (node [5])
 # The Claude hooks.json commands that do NOT check the interpreter themselves (command-guard-hook checked first;
@@ -34,7 +35,7 @@ UNCHECKED_CLAUDE_HOOKS: "dict[str, tuple]" = {
 # Hooks that ask the floor only inside a project (task 194, impl panel r1, opus: the echo is bound to `.*`, and a
 # probe before the project check started python3 at every tool call of every project). Run with no input outside a
 # project they exit 0 at once and say nothing; their floor is measured in a project by FLOOR_CLAUDE_CALLS.
-PROJECT_ONLY_HOOKS = ("task-gate-hook", "state-echo-hook")
+PROJECT_ONLY_HOOKS = ("task-gate-hook", "state-echo-hook", "agent-usage-hook")   # task 244: asks its floor in a project
 # Under 3.9 the two hooks of task 194 are also run with a real payload, in a project whose session is known and
 # has a task with an open gate, for their polarity: the enforcing gate refuses an edit it lets through on a
 # supported interpreter (a non-code file, no task needed) and lets a shell command through; the echo writes no
