@@ -25,7 +25,8 @@ after about 30 days; tasks 232-234 made the plugin record the facts, and now the
   separators (the stop rule's clause kept whole, with the files no judge read; a post-panel `bound` read), and found
   outside closed fences only; a closure is found in the journal's file order and composed under the task lock, so a
   close, a reopen and a second close in one second stay apart; the close takes its own suspend sample to bracket its
-  last gap, and a sample more than 120 s after the close is not used (sleep after the close no longer lands in it);
+  last gap, and a sample more than 120 s after the close is not used (sleep long after the close no longer lands in
+  it; a suspend within those 120 s still can);
   codex's `exec_command` is carved like Bash; `tasks numbers` shows `closure #N`.
 
 **Every hook-journal line names its task; the state echo's names the open gate's section; python's carry a suspend

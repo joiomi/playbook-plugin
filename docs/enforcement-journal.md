@@ -461,8 +461,10 @@ prompt that started it, M001, and the closure's number — without its keys that
 7. The call still open at the close — the close's own: the latest call of THIS task still open, in any session, of any
    tool — ends at the receipt's stamp; a call another session or another task left open does not run on. The close
    takes its own suspend sample as it composes, and a sample written within 120 s after the close (its PostToolUse's,
-   on a later `tasks numbers`) also brackets its last gap; a later one does not, so sleep after the close never lands
-   in it, and a sample pair wholly outside the window adds nothing to `sleep_unplaced`. A gap that crosses the window's
+   on a later `tasks numbers`) also brackets its last gap; a later one does not, so sleep long after the close does
+   not land in it. A suspend within those 120 s still can: a pair that straddles the close gives its whole `susp`
+   difference to the closing gap (task 236's impl round 2, routed to PLAN.md). A sample pair wholly outside the window
+   adds nothing to `sleep_unplaced`. A gap that crosses the window's
    start is clipped at it. Codex's shell (`exec_command`) is carved like Bash.
 
 Per session, `by_kind` + `slept` + `away` + `unknown` equals the task's time, and with the time that is not the task's
