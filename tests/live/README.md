@@ -36,7 +36,8 @@ One artifact per row, `<dir>/<ROW-ID>.txt`: the candidate commit, tool versions,
 every command with its full output and the filesystem delta it was told to watch,
 one `CLAUSE PASS|FAIL` line per clause with the observed evidence, and the last
 line `ROW <ID>: PASS|FAIL|WAITING (…)`. Exit status 0 = every selected row passed,
-1 = one failed, 3 = none failed but one is waiting for a target that cannot run now.
+1 = one failed, 3 = none failed but one is waiting for a target that cannot run now, 2 = a bad argument
+or this checkout refused before any row (`lib/preflight.py`).
 
 What it never does: copy a credential (claude and codex run under the owner's own
 account; task 109's copied homes cost a codex sign-in), touch the owner's install

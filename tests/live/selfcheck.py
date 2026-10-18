@@ -383,13 +383,19 @@ def gauntlet_preflight() -> None:
     got = pf.problems(rows, nested=repo, record=rec, old_ref="0" * 40)
     said = " | ".join(got)
     check("preflight: a checkout with no `main`, no v1.6.0 commit and no owner record gets the three reasons",
-          len(got) == 3 and "no local `main`" in said and "lacks commit" in said and "distillation record" in said,
+          len(got) == 3 and "no local `main`" in said and "does not hold commit" in said and "distillation record" in said,
           True, said[:300])
     subprocess.run(["git", "-C", str(repo), "branch", "main"], check=True, capture_output=True)
     (d / "ws" / ".agent" / "tasks" / "183-x" / "intent" / rec[2]).mkdir(parents=True)
     (d / "ws" / "INTENT.md").write_text("x\n", encoding="utf-8")
     got = pf.problems(rows, nested=repo, record=rec, old_ref=sha)
     check("preflight: the same checkout with `main`, the commit and the record passes", got == [], True, str(got))
+    tree = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD^{tree}"], capture_output=True, text=True).stdout.strip()
+    loose = subprocess.run(["git", "-C", str(repo), "-c", "user.name=s", "-c", "user.email=s@s", "commit-tree", tree,
+                            "-p", sha, "-m", "on no branch"], capture_output=True, text=True).stdout.strip()
+    got = pf.problems(rows, nested=repo, record=rec, old_ref=loose)
+    check("preflight: a commit present but on no branch or tag is refused (a bare clone would not carry it)",
+          len(got) == 1 and "does not hold commit" in got[0], True, str(got)[:200])
     g = tempdir("pb245-pg-")
     (g / "lib").mkdir()
     (g / "gauntlet.sh").write_text((Path(__file__).resolve().parent / "gauntlet.sh").read_text())
