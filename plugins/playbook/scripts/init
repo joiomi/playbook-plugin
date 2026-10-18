@@ -389,10 +389,10 @@ def mode_of(path, item, follow):
     except OSError as e:
         fail(item, "could not be looked at (" + why(e) + ")")
 
-def read(path, item):
+def read(path, item, first_line=False):
     try:
         with open(path, "rb") as fh:
-            return fh.read()
+            return fh.readline(65536) if first_line else fh.read()
     except OSError as e:
         fail(item, "could not be read (" + why(e) + ")")
 
@@ -403,7 +403,7 @@ for name, head in HEADERS.items():
     m = mode_of(p, item, follow=False)
     if m is None or not stat.S_ISREG(m):
         continue
-    first = read(p, item).split(b"\n", 1)[0].decode("utf-8", "replace").rstrip("\r")
+    first = read(p, item, first_line=True).split(b"\n", 1)[0].decode("utf-8", "replace").rstrip("\r")
     if first == head:
         plan.append(("remove", p, None, item + " (the old shell logger)"))
     else:
