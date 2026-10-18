@@ -406,7 +406,9 @@ journal, the hook journal (with its archives and spools), the run ledger, `chat_
 them in `numbers.json` in the task folder, one entry per close (`closures[]`, keyed by the receipt's stamp; a re-close
 adds one). It composes and writes under the task lock and only while that receipt is still the task's newest, so a
 close that paused before writing never replaces a later close's numbers, and no reopen or second close can come between
-the receipt it reads and the journal it reads. The close prints `numbers: <path>` (commit it with the task); a
+the receipt it reads and the journal it reads; a reopen that came before the write does not stop it (the closure is
+bounded by the reopen's `work`). It holds the task lock for that time, at most the 5 s budget, so another session's
+write to the task waits that long. The close prints `numbers: <path>` (commit it with the task); a
 fault, or 5 s passed — one deadline for the reading, the lock wait and the write — prints `numbers: not written (…)`
 and changes nothing else. `tasks numbers [N]`
 shows them and writes nothing; for a task not yet closed — a reopened one too — it adds a snapshot of the life in
@@ -418,7 +420,7 @@ journal's lines (60,000 lines in about half a second, measured).
 |---|---|
 | `closed_at` | the receipt's stamp (the close's moment) |
 | `closure_no` | which close of the task this is (its `done` record's rank); with `closed_at` it keys the entry, so two closes in one second keep two; `tasks numbers` shows it as `closure #N` |
-| `window` | UTC `start` (the first `tasks work N` after the `done` before this closure's own, else the first) and `end` (the receipt's stamp). The closure is found in the journal's file order, so a close, a reopen and a second close in one second stay apart: its `done` is the task's last one for the newest close (the first at or after the stamp for an older one), and its close records lie between its first `work` and the next `work` after its `done` |
+| `window` | UTC `start` (the first `tasks work N` after the `done` before this closure's own, else the first) and `end` (the receipt's stamp). The closure is found in the journal's file order, so a close, a reopen and a second close in one second stay apart: its `done` is the task's last one for the newest close (the first at or after the stamp for an older one), and its close, review and verify records lie between its first `work` and the next `work` after its `done` |
 | `snapshot` | true for an open task's composition (never written) |
 | `time` | the task's share of time, wall seconds summed over host sessions: `sessions`, `total`, `by_kind`, `by_section` (the state echo's `##` sections; `?` before the first), `slept`, `away`, `unknown`, `sleep_unmeasured`, `sleep_unplaced` (sleep the samples recorded that no gap could hold — outside `total`); null when the journal holds no activation record for the task |
 | `judges_wall` | the union of the task's review spans, wall seconds |
@@ -426,7 +428,7 @@ journal's lines (60,000 lines in about half a second, measured).
 | `verify` | the recorded verify runs (the close's, `tasks verify`): runs, ran, reused, failed, seconds |
 | `rounds` | panels (mode, outcome, critical, important, owner_ok — the run ledger's), post-panel runs (verdict, critical, important, owner_ok), single-judge calls and tail certifications counted one per review record (a single-judge record within 120 s of a post-panel row is that run), the runs the ledger marks failed |
 | `owner` | his prompts — the closure's first one too, logged before the `work` record that opens the window: the prompt that opened the turn in which the task was activated (a prompt that switches tasks counts for both) — the background notifications, his options dialogs answered and cancelled, their questions and answers (counted from the DIALOG entries, matched by their `<!-- dialog:<id> -->` marker), the time he took to answer, the entries' ids |
-| `close` | `freshness` (FRESH / STALE / TAIL-CERTIFIED / NO-STAMP / UNREADABLE / …), `accepted_reason`, `forced_reason`, `owner_ok`, `bound` (a post-panel PASS the close was bound to), `stop_rule`, `post_panel` (runs, last verdict, every owner-ok), the commands' pass / fail counts, `risk` — read whole from the receipt: the panel line split only where the writer puts a field (`; owner-ok: "`, `; bound to post-D6 PASS `, `; stop rule (D6): `), the receipt found outside closed fences (an unclosed fence above does not hide it); the task's `hook=close` records fill only a gap (their text is cut at 200 bytes) |
+| `close` | `freshness` (FRESH / STALE / TAIL-CERTIFIED / NO-STAMP / UNREADABLE / …, read at its fixed place in the writer's text, so a reason that names a verdict is not that verdict), `accepted_reason`, `forced_reason`, `owner_ok`, `bound` (a post-panel PASS the close was bound to), `stop_rule`, `post_panel` (runs, last verdict, every owner-ok), the commands' pass / fail counts, `risk` — read whole from the receipt: the panel line split only where the writer puts a field (`; owner-ok: "`, `; bound to post-D6 PASS `, `; stop rule (D6): `), the receipt found outside closed fences (an unclosed fence above does not hide it); the task's `hook=close` records fill only a gap (their text is cut at 200 bytes) |
 | `late_records` | the task's review / verify records written after the close (`tasks numbers` recounts them) |
 
 Example — the live check of task 235 (a scratch session: prompts, a Read, an options dialog answered after 8 s, a failed
@@ -458,12 +460,14 @@ prompt that started it, M001, and the closure's number — without its keys that
 6. The part of a gap with a Bash call open, or of a background gap, that overlaps the task's review spans (each review
    record's end minus its duration) is `judges`; overlapping its recorded verify spans, `verify` (a stretch under both
    counts once, as judges).
-7. The call still open at the close — the close's own: the latest call of THIS task still open, in any session, of any
-   tool — ends at the receipt's stamp; a call another session or another task left open does not run on. The close
+7. The close's own session is the one its `done` record names (`session_id`); there the time runs to the receipt's
+   stamp, and the close's own call (this task's last shell call with no PostToolUse) stays open through a prompt that
+   comes meanwhile (a background notification). Without such a record, the latest call of THIS task still open, in any
+   session, of any tool, ends at the stamp. A call another session or another task left open does not run on. The close
    takes its own suspend sample as it composes, and a sample written within 120 s after the close (its PostToolUse's,
    on a later `tasks numbers`) also brackets its last gap; a later one does not, so sleep long after the close does
    not land in it. A suspend within those 120 s still can: a pair that straddles the close gives its whole `susp`
-   difference to the closing gap (task 236's impl round 2, routed to PLAN.md). A sample pair wholly outside the window
+   difference to the closing gap (task 236's impl round 2; a stated limit, see below). A sample pair wholly outside the window
    adds nothing to `sleep_unplaced`. A gap that crosses the window's
    start is clipped at it. Codex's shell (`exec_command`) is carved like Bash.
 
@@ -483,6 +487,12 @@ it equals the session's span (a test holds this over 400 built timelines).
 - Sleep is measured only between two samples of one boot. `susp` itself undercounts the kernel's suspend spans by
   the device suspend / resume time (task 234, W7).
 - Two sessions working on one task at once each count their own time.
+- Two races within seconds of a close are not told apart (the owner decides whether to build them, task 237): a close
+  whose `done` is written only after a reopen and a second close in another session gives both closures the wrong
+  life; and a recomposed closure (a write that failed) can take a suspend from the 120 s after the close into its
+  last gap.
+- A reason that itself holds one of the receipt's separators (`; owner-ok: "`, `; bound to post-D6 PASS `,
+  `; stop rule (D6): `) is split there.
 - The prompt that switches from one task to another counts in both tasks' `owner`, so a sum of prompts over tasks
   counts each switch twice; the entries' `ids` tell them apart.
 - A task closed before this existed has no `numbers.json`; `tasks numbers` composes what the records hold.

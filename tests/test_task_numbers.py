@@ -896,10 +896,11 @@ class TheRoutedFindings(unittest.TestCase):
         log = TheDialogs.LOG.replace("<!-- dialog:toolu_A -->", "<!-- dialog:toolu_Aweird -->")
         self.assertEqual(numbers.dialog_counts(log, "toolu_A weird!")["id"], "M001")
 
-    def test_bound_is_displayed(self):
+    def test_bound_is_displayed(self):          # the bound as core.bound_stale_close writes it (task 237)
         text = "\n".join(numbers.format_closure({"closed_at": "x", "window": {}, "time": None,
-                                                "close": {"freshness": "STALE", "bound": "post-panel PASS z"}}))
-        self.assertIn("bound: post-panel PASS z", text)
+                                                "close": {"freshness": "STALE",
+                                                          "bound": "bound to post-D6 PASS z on tree t"}}))
+        self.assertIn("bound to post-D6 PASS z on tree t", text)
 
 
 class TheRoutedCloseFindings(_CliProject):
@@ -1303,6 +1304,117 @@ class TheRoundOneCloseFindings(_CliProject):
         finally:
             numbers.compose = orig
         self.assertEqual(seen, ["held"])
+
+
+class TheRoundThreeFindings(_Tmp):
+    """Task 237: task 236's impl round 2 (judge.md of 236, "Triage — impl round 2"), each from the writers' output."""
+
+    HEAD = TheRoundOneFindings.HEAD
+    block = TheRoundOneFindings.block
+    two_closes_in_one_second = TheRoundOneFindings.two_closes_in_one_second
+
+    def closed_project(self):
+        """TheComposition's project with the close's `done` record where a close writes it (after its close records),
+        naming the session the close ran in (`pid-1`, as `hl` writes it)."""
+        lane, td, close_t = TheComposition.project(self)
+        recs = [json.loads(x) for x in (self.jdir / "enforcement.jsonl").read_text().splitlines()]
+        at = next(i for i, r in enumerate(recs) if r.get("hook") == "close") + 1
+        recs.insert(at, {"ts": iso(close_t + 1), "hook": "tasks", "reason": "done", "task": "007",
+                         "session_id": "pid-1"})
+        self.write("enforcement.jsonl", recs)
+        return lane, td, close_t
+
+    def test_q1_a_reason_naming_a_verdict_is_not_the_verdict(self):
+        for reason in ("re-sealed after TAMPER-GUARD-DEGRADED", "was TAIL-CERTIFIED before", "the tree — FRESH since",
+                       "EXCLUDE-COVERS-CODE was fixed"):
+            with self.subTest(reason=reason):
+                got = numbers.receipt_close(self.HEAD + self.block(accepted_reason=reason))
+                self.assertEqual(got["freshness"], "STALE")
+        got = numbers.receipt_close(self.HEAD + self.block(verdict="NO-STAMP", accepted_reason="after TAIL-CERTIFIED"))
+        self.assertEqual(got["freshness"], "NO-STAMP")
+
+    def test_q3_two_same_second_lives_keep_their_own_verify_and_late_records(self):
+        lane, td, t = self.two_closes_in_one_second()
+        recs = [json.loads(x) for x in (self.jdir / "enforcement.jsonl").read_text().splitlines()]
+        verify = {"ts": iso(t), "hook": "verify", "task": "007", "rc": 0, "how": "reused", "seconds": 0}
+        recs.insert(1, dict(verify))                     # life 1's, before its close records
+        recs.insert(5, dict(verify))                     # life 2's, after the reopen, before its `done`
+        recs.append({"ts": iso(t + 5), "hook": "review", "task": "007", "kind": "single", "seat": "s", "round": 1,
+                     "duration_ms": 1000, "status": "ok"})           # written after close 2
+        self.write("enforcement.jsonl", recs)
+        second = numbers.compose(lane, td, "007", deadline=time.monotonic() + 30)
+        first = numbers.compose(lane, td, "007", deadline=time.monotonic() + 30, end=t)
+        self.assertEqual((first["verify"]["runs"], first["late_records"]), (1, 0))
+        self.assertEqual((second["verify"]["runs"], second["late_records"]), (1, 1))
+
+    def test_q4_the_closes_own_session_keeps_its_tail_against_a_newer_call(self):
+        lane, td, close_t = self.closed_project()
+        with open(self.jdir / "hooks.jsonl", "a") as f:     # another session: a newer open call on the same task
+            for rec in (hl(close_t - 20, "UserPromptSubmit", hook="chat-log", host="h-2", sid="pid-2",
+                           detail="logged M009"),
+                        hl(close_t - 5, "PreToolUse", tool="Bash", tid="other", hook="task-gate", host="h-2",
+                           sid="pid-2")):
+                f.write(json.dumps(rec) + "\n")
+        got = numbers.compose(lane, td, "007", deadline=time.monotonic() + 30)
+        self.assertEqual(got["time"]["by_kind"], {"agent": 54, "owner-idle": 55, "verify": 5})
+
+    def test_q4_a_notification_during_the_close_does_not_end_its_call(self):
+        lane, td, close_t = self.closed_project()
+        with open(self.jdir / "hooks.jsonl", "a") as f:
+            f.write(json.dumps(hl(close_t - 5, "UserPromptSubmit", hook="chat-log",
+                                  detail="not logged: a notification")) + "\n")
+        got = numbers.compose(lane, td, "007", deadline=time.monotonic() + 30)
+        self.assertEqual(got["time"]["by_kind"], {"agent": 39, "owner-idle": 55, "verify": 5})
+
+    def test_sleep_over_a_long_gap_before_the_window_stays_there(self):
+        # REJECTED (grok, Minor): placing sleep on the clipped gaps would put 40 s of this sleep in the window
+        lines = [L(-100, "PostToolUse", tid="a", susp=100, sts=T0 - 100, boot="aaaaaaaa"),
+                 L(-10, "PostToolUse", tid="b"), L(20, "PostToolUse", tid="c"),
+                 L(40, "Stop", decision="allow", susp=180, sts=T0 + 40, boot="aaaaaaaa")]
+        got = numbers.session_partition(lines, "007", T0 + 40, [], [], start=T0)
+        self.assertEqual((got["slept"], got["total"]), (0, 40))
+
+    def test_minor_a_post_panel_bound_is_shown_once(self):
+        text = "\n".join(numbers.format_closure({"closed_at": "x", "window": {}, "time": None,
+                                                "close": {"bound": "bound to post-D6 PASS r1 on tree t"}}))
+        self.assertIn("bound to post-D6 PASS r1 on tree t", text)
+        self.assertNotIn("bound: bound", text)
+
+    def test_minor_a_json_false_is_not_exit_zero(self):
+        self.assertEqual(numbers.verify_table([{"rc": False, "how": "ran", "seconds": 1}])["failed"], 1)
+
+    def test_minor_a_receipt_with_no_done_record_is_still_a_first_close(self):
+        lane, td, close_t = TheComposition.project(self)         # its journal holds no `done` record
+        self.assertEqual(numbers.compose(lane, td, "007", deadline=time.monotonic() + 30)["closure_no"], 1)
+
+    def test_minor_the_dialog_index_keeps_the_deadline(self):
+        log = "\n".join(f"line {i}" for i in range(20000))
+        with self.assertRaises(numbers.OutOfTime):
+            numbers.dialog_index(log, deadline=time.monotonic() - 1)
+
+
+class TheRoundThreeCloseFindings(_CliProject):
+    def test_q6_a_reopen_before_the_numbers_write_still_writes_the_closure(self):
+        self.cli("new", "quick", "first")
+        self.cli("work", "1")
+        self.cli("work", "done", "--force", "--reason", "one")
+        stamp = self.numbers_doc()["closures"][0]["closed_at"]
+        (self.task_dir() / "numbers.json").unlink()          # as if the close's own write had not happened yet
+        self.cli("work", "1", "--reopen")
+        path = numbers.write_closure(self.project / ".agent", self.task_dir(), "001")
+        self.assertIsNotNone(path)
+        c = self.numbers_doc()["closures"][0]
+        self.assertEqual((c["closed_at"], c["snapshot"], c["closure_no"]), (stamp, False, 1))
+
+    def test_minor_tasks_numbers_reads_the_journal_once(self):
+        self.cli("new", "quick", "first")
+        self.cli("work", "1")
+        self.cli("work", "done", "--force", "--reason", "one")
+        driver = ("from tasks import numbers\n_c = [0]\n_o = numbers.read_enforcement\n"
+                  "def _w(*a, **k):\n    _c[0] += 1\n    return _o(*a, **k)\n"
+                  "numbers.read_enforcement = _w\nimport atexit\natexit.register(lambda: print('READS', _c[0]))")
+        r = self.cli("numbers", "1", driver=driver)
+        self.assertIn("READS 1", r.stdout)
 
 
 if __name__ == "__main__":

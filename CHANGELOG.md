@@ -28,6 +28,12 @@ after about 30 days; tasks 232-234 made the plugin record the facts, and now the
   last gap, and a sample more than 120 s after the close is not used (sleep long after the close no longer lands in
   it; a suspend within those 120 s still can);
   codex's `exec_command` is carved like Bash; `tasks numbers` shows `closure #N`.
+- Task 237 (the findings of 236's last round): the close's verdict is read at its fixed place in the receipt, so a
+  reason that names TAMPER-GUARD-DEGRADED, TAIL-CERTIFIED or FRESH no longer becomes that verdict; a closure's review
+  and verify records follow its file-order bounds; the close's own session is the one its `done` record names, and its
+  call runs to the close through a background notification; a reopen right after the close no longer leaves that
+  closure unwritten; a JSON `false` is not exit 0; a receipt with no `done` record is still the first close. Two races
+  within seconds of a close stay stated limits in the docs.
 
 **Every hook-journal line names its task; the state echo's names the open gate's section; python's carry a suspend
 sample** — PHASE-B.md item 6, third part, task 234. With these the close can split a task's time by phase and drop the
