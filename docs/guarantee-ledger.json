@@ -9170,7 +9170,7 @@
           "boundary": "real-os",
           "negative_control": null,
           "limitations": [
-            "Task 243: a read-only ~/.claude over the old logger — the removal's first change fails, init exits 1 naming it, stops at that change, and the HOME and the project are byte-identical to right before (a sha256 and mode map)."
+            "Task 243: a read-only ~/.claude over the old logger — the removal's first change fails, init exits 1 naming it, stops at that change, and the HOME and the project are byte-identical to right before (a sha256 and mode map). Impl round 2 (codex): the project holds a stale `.agent/monitor/sandbox.sb`, which init deletes — now in the snapshot, so the rollback brings it back."
           ]
         },
         {
@@ -9268,7 +9268,7 @@
           "boundary": "live-platform",
           "negative_control": null,
           "limitations": [
-            "2026-10-18, candidate nested b3ee500 (task 243 after its impl round 1), run from the nested repository: a disposable HOME with the real plugin manager, 1.6.0 upgraded to the candidate; three induced failures in the re-init — a read-only project file the upgrade must change, a read-only ~/.claude over the old shell logger, a SIGTERM at the CLAUDE.md merge — each left the project and the user's files byte-identical (rc 1, 1, 143; the restore said); the control without the transaction left HOME/.claude/settings.json and HOME/.claude/bash-log.sh changed; a plain re-run recovered (one version, 1.6.5, runs; the user's content kept); the owner's own files untouched. 8 of 8 clauses (also 8 of 8 on 65b6fc7); PB-UPGRADE-INSTALLED-COPY 9 of 9 in the same run."
+            "2026-10-18, candidate nested 7e28e07 (task 243 after its last impl round), run from the nested repository: a disposable HOME with the real plugin manager, 1.6.0 upgraded to the candidate; three induced failures in the re-init — a read-only project file the upgrade must change, a read-only ~/.claude over the old shell logger, a SIGTERM at the CLAUDE.md merge — each left the project and the user's files byte-identical (rc 1, 1, 143; the restore said); the control without the transaction left HOME/.claude/settings.json and HOME/.claude/bash-log.sh changed; a plain re-run recovered (one version, 1.6.5, runs; the user's content kept); the owner's own files untouched. 8 of 8 clauses (8 of 8 also on 65b6fc7 and b3ee500); PB-UPGRADE-INSTALLED-COPY 9 of 9 in the same run."
           ]
         }
       ],
