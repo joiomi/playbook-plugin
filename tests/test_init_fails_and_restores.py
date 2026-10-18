@@ -22,7 +22,9 @@ Held:
     anything (the file comes last in its order);
   * T10 two inits on one HOME at once: the second waits for the first, and the logger stays removed;
   * T11 a file already gone when its removal comes is done, not a failure;
-  * T12 an rc file that is a link loop is absent to both looks, no failure.
+  * T12 an rc file that is a link loop is absent to both looks, no failure;
+  * T13 a settings.json with a UTF-8 BOM loses the key and keeps the BOM;
+  * T14 a wait for the HOME lock ended by a signal stops init before any change.
 
 Every run uses a disposable HOME (empty git configs) and project — never the real ones (memory
 `fixture-s15-writes-real-home`).
@@ -81,6 +83,30 @@ def _tree(root: Path) -> "dict[str, tuple[str, int]]":
             with open(p, "rb") as fh:
                 out[os.path.relpath(p, root)] = (hashlib.sha256(fh.read()).hexdigest(), os.stat(p).st_mode & 0o7777)
     return out
+
+
+def _children(pid: int, name: str) -> "list[int]":
+    """The pids whose parent is `pid` and whose command name is `name` (read from /proc — no clock involved)."""
+    out = []
+    for d in os.listdir("/proc"):
+        if not d.isdigit():
+            continue
+        try:
+            with open(f"/proc/{d}/stat", encoding="utf-8", errors="replace") as fh:
+                st = fh.read()
+        except OSError:
+            continue
+        rp = st.rfind(")")
+        if st[st.find("(") + 1:rp] == name and int(st[rp + 2:].split()[1]) == pid:
+            out.append(int(d))
+    return out
+
+
+def _until(cond, limit=90.0):
+    t0 = time.time()
+    while not cond() and time.time() - t0 < limit:
+        time.sleep(0.05)
+    return cond()
 
 
 class _Case(unittest.TestCase):
@@ -171,6 +197,9 @@ class _Case(unittest.TestCase):
 class WhenInitCannotFinishItRestores(_Case):
     def test_t1_a_read_only_claude_dir_over_the_old_logger_fails_and_restores(self):
         self.old_logger()
+        # impl round 2 (codex): init deletes a stale `.agent/monitor/sandbox.sb`; the rollback must bring it back
+        (self.project / ".agent" / "monitor").mkdir(parents=True)
+        (self.project / ".agent" / "monitor" / "sandbox.sb").write_text("(version 1)\n", encoding="utf-8")
         before = self.snapshot()
         self.lock(self.home / ".claude", stat.S_IRUSR | stat.S_IXUSR)
         r = self.init()
@@ -195,6 +224,8 @@ class WhenInitCannotFinishItRestores(_Case):
         self.lock(self.home, stat.S_IRUSR | stat.S_IXUSR)        # ~/.profile cannot be replaced; ~/.claude still can
         r = self.init()
         self.assertIn("~/.profile", r.stdout.split("FAILED:", 1)[-1], r.stdout[-2500:])
+        self.assertNotIn("Removed (installed by an earlier version", r.stdout,
+                         "what the restore puts back is not listed as removed (impl round 2, opus)")
         self.assert_failed_and_restored(r, before, "restoring the pre-init state")
         self.assertEqual((self.home / ".claude" / "settings.json").read_text(encoding="utf-8"), OLD_SETTINGS)
         self.assertTrue((self.home / ".claude" / "bash-log.sh").is_file())
@@ -262,16 +293,20 @@ class TwoInitsOnOneHome(_Case):
             while not looked.exists() and b.poll() is None and time.time() - t0 < 90:
                 time.sleep(0.05)
             self.assertTrue(looked.exists(), "B reached the removal step's seam")
-            a = self.start(self.project)
-            time.sleep(3)
-            a_done_early = a.poll()
+            # impl round 2 (opus, sonnet): no clock in the verdict — A either waits on the HOME lock (a `flock` child)
+            # or, with no lock, reaches its own seam (its marker)
+            a_looked = self.root / "a-looked"
+            shim_a = self.shim("shim-a", f"open({str(a_looked)!r}, 'w').close()\n")
+            a = self.start(self.project, PATH=f"{shim_a}{os.pathsep}{os.environ.get('PATH', '')}")
+            _until(lambda: a_looked.exists() or _children(a.pid, "flock") or a.poll() is not None)
+            a_waits = bool(_children(a.pid, "flock")) and not a_looked.exists()
         finally:
             go.write_text("", encoding="utf-8")
         b_out, b_err = b.communicate(timeout=240)
         a_out, a_err = a.communicate(timeout=240)
         self.assertEqual(b.returncode, 0, (b_out + b_err)[-2500:])
         self.assertEqual(a.returncode, 0, (a_out + a_err)[-2500:])
-        self.assertIsNone(a_done_early, "A waited while B held the HOME")
+        self.assertTrue(a_waits, "A waited on the HOME lock while B held it, before its own removal step")
         self.assert_logger_gone()
 
     def test_t11_a_file_already_gone_when_its_removal_comes_is_no_failure(self):
@@ -280,7 +315,28 @@ class TwoInitsOnOneHome(_Case):
         r = self.init(PATH=f"{shim}{os.pathsep}{os.environ.get('PATH', '')}")
         self.assertEqual(r.returncode, 0, (r.stdout + r.stderr)[-2500:])
         self.assertNotIn("FAILED", r.stdout)
+        self.assertIn("~/.claude/bash-log.sh (the old shell logger): another process removed it first", r.stdout)
         self.assert_logger_gone()
+
+    def test_t14_a_wait_for_the_home_lock_ended_by_a_signal_stops_init_before_any_change(self):
+        # impl round 2 (agy): a `flock` ended by a signal read as "this flock cannot wait", and init went on unlocked
+        self.old_logger()
+        before = self.snapshot()
+        holder = subprocess.Popen(["flock", str(self.home), "sleep", "120"], stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL, start_new_session=True)
+        try:
+            self.assertTrue(_until(lambda: bool(_children(holder.pid, "sleep"))), "the test holds the HOME lock")
+            a = self.start(self.project)
+            self.assertTrue(_until(lambda: bool(_children(a.pid, "flock")) or a.poll() is not None))
+            for pid in _children(a.pid, "flock"):
+                os.kill(pid, 15)
+            out, err = a.communicate(timeout=120)
+        finally:
+            os.killpg(holder.pid, 9)       # flock and its sleep, which holds the lock too
+            holder.wait()
+        self.assertNotEqual(a.returncode, 0, (out + err)[-2500:])
+        self.assertIn("the wait for the HOME lock was interrupted", err)
+        self.assertEqual(self.snapshot(), before, "nothing was changed")
 
 
 class WhatNeedsNoWriteStillSucceeds(_Case):
@@ -307,6 +363,16 @@ class WhatNeedsNoWriteStillSucceeds(_Case):
         self.assertEqual(r.returncode, 0, (r.stdout + r.stderr)[-2500:])
         self.assertNotIn("FAILED", r.stdout)
         self.assertTrue((self.home / ".zshenv").is_symlink(), "the loop is left as it is")
+
+    def test_t13_a_settings_file_with_a_bom_loses_the_key_and_keeps_the_bom(self):
+        # impl round 2 (opus): json.loads refused the BOM, and the text names the logger — init failed
+        (self.home / ".claude" / "settings.json").write_bytes(b"\xef\xbb\xbf" + OLD_SETTINGS.encode())
+        r = self.init()
+        self.assertEqual(r.returncode, 0, (r.stdout + r.stderr)[-2500:])
+        data = (self.home / ".claude" / "settings.json").read_bytes()
+        self.assertTrue(data.startswith(b"\xef\xbb\xbf"), "the BOM is kept")
+        self.assertNotIn(b"bash-log.sh", data)
+        self.assertIn(b'"KEEP": "1"', data)
 
     def test_t6_an_rc_file_that_is_not_utf8_loses_only_the_block(self):
         head, tail = b"export A='\xe9t\xe9'\n", b"\nalias x='\xff'\n"

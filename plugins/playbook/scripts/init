@@ -73,14 +73,21 @@ AGENT_REL="${AGENT_DIR#"$PROJECT_DIR"/}"
 # the first then removed it, and the second — its removal finding nothing — failed and restored its own snapshot: the
 # logger back. Init holds an advisory lock on the HOME directory itself (flock on a read-only descriptor of it: no file
 # is made) from before its snapshot until it exits, its restore included; a second init waits up to 120 s, then stops
-# before any change. A host whose flock is missing, or cannot wait with a limit, runs without it and says so.
+# before any change; a wait ended by a signal stops it too. A host whose flock is missing, or cannot wait with a limit,
+# runs without it and says so. Descriptor 209 is inherited by every child init starts: none may outlive init (none
+# does — init starts no background process), or it would hold the lock after init ends.
 _pb_home_lock() {
-    local t0=$SECONDS
+    local t0=$SECONDS rc=0
     if ! command -v flock >/dev/null 2>&1 || [ ! -d "$HOME" ] || ! { exec 209<"$HOME"; } 2>/dev/null; then
         echo "init: note: no lock on this HOME (no flock, or it cannot be opened); two inits at once on it are not kept apart." >&2
         return 0
     fi
-    flock -w 120 209 2>/dev/null && return 0
+    flock -w 120 209 2>/dev/null || rc=$?
+    [ "$rc" -ne 0 ] || return 0
+    if [ "$rc" -ge 128 ]; then                    # the wait was ended by a signal: not "this flock cannot wait"
+        echo "init: the wait for the HOME lock was interrupted; nothing was changed." >&2
+        exit 1
+    fi
     if [ $(( SECONDS - t0 )) -lt 100 ]; then       # refused long before the limit: this flock cannot wait here
         { exec 209<&-; } 2>/dev/null || true
         echo "init: note: this host's flock cannot hold the HOME lock; two inits at once on it are not kept apart." >&2
@@ -122,6 +129,7 @@ $PROJECT_DIR/.claude/hooks/monitor-nudge.sh
 $AGENT_DIR/monitor/CLAUDE.md
 $AGENT_DIR/monitor/MONITOR_MIND_MAP.md
 $AGENT_DIR/monitor/rules.md
+$AGENT_DIR/monitor/sandbox.sb
 $HOME/.claude/bash-log.sh
 $HOME/.claude/bash-log.zsh
 $HOME/.claude/settings.json
@@ -380,7 +388,7 @@ done
 # looks at and reads every file and decides each change, then makes them, stopping at the first that fails. A file it
 # cannot look at or read, a change that fails, a settings.json that is not valid JSON yet names bash-log.sh, or a crash
 # of this step is a FAILED line: init exits 1 and the EXIT trap restores everything, what this step already changed
-# included; a file already gone when its removal comes is done (another hand took it meanwhile). What is not init's is
+# included; a file already gone when its removal comes is done (another process removed it first). What is not init's is
 # left as it is and is no failure: another header, a block a person changed and a settings.json that is not valid JSON
 # (and does not name the logger) are said under "Skipped"; a link named like the logger and another BASH_ENV are left
 # silently, as since task 221.
@@ -402,8 +410,10 @@ def why(e):
     return (str(e).splitlines() or [""])[0]
 
 def fail(item, what):
-    out.append("FAILED\t" + item + ": " + what + " - init stops here; fix this, then run init again")
-    print("\n".join(out))
+    # the changes already made are not listed as removed: the restore puts them back
+    kept = [x for x in out if not x.startswith("REMOVED\t")]
+    kept.append("FAILED\t" + item + ": " + what + " - init stops here; fix this, then run init again")
+    print("\n".join(kept))
     raise SystemExit(0)
 
 def mode_of(path, item, follow):
@@ -441,8 +451,9 @@ p = os.path.realpath(os.path.join(home, ".claude", "settings.json"))   # a linke
 m = mode_of(p, item, follow=True)
 if m is not None and stat.S_ISREG(m):
     raw = read(p, item)
+    bom = "\ufeff" if raw.startswith(b"\xef\xbb\xbf") else ""      # kept as it was on the write
     try:
-        data = json.loads(raw.decode("utf-8"))
+        data = json.loads(raw.decode("utf-8-sig"))
     except ValueError as e:
         if b"bash-log.sh" in raw:
             fail(item, "is not valid JSON (" + why(e) + ") and names bash-log.sh, so init cannot take the old logger out of it")
@@ -454,7 +465,7 @@ if m is not None and stat.S_ISREG(m):
         del env["BASH_ENV"]
         if not env:
             del data["env"]
-        plan.append(("write", p, json.dumps(data, indent=2, ensure_ascii=False) + "\n", item + " (BASH_ENV of the old shell logger)"))
+        plan.append(("write", p, bom + json.dumps(data, indent=2, ensure_ascii=False) + "\n", item + " (BASH_ENV of the old shell logger)"))
 for rc in (".bash_profile", ".profile", ".zshenv"):
     item = "~/" + rc
     real = os.path.realpath(os.path.join(home, rc))
@@ -485,7 +496,7 @@ for op, path, data, item in plan:
             try:
                 os.remove(path)
             except FileNotFoundError:    # already gone (another hand took it meanwhile): what was planned holds
-                out.append("KEPT\t" + item + ": already gone when init came to remove it")
+                out.append("KEPT\t" + item + ": another process removed it first")
                 continue
         else:
             mode = stat.S_IMODE(os.stat(path).st_mode)

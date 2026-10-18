@@ -19,7 +19,9 @@ as it is and said, as before, and a HOME with nothing to remove needs no write, 
 failure. Two inits on one HOME at once run one after the other: init holds a lock on the HOME directory (`flock` on a
 read-only descriptor of it, no file made) from before its snapshot until it exits, and a file already gone when its
 removal comes is done, not a failure (without them, the second init's rollback brought back the logger the first had
-removed). The live row PB-INSTALL-ROLLBACK passes again (8 of 8 clauses on the fix), and the guarantee ledger has no
+removed); a wait for that lock ended by a signal stops init before any change. The stale `.agent/monitor/sandbox.sb`
+init deletes is in its snapshot now, so a rollback brings it back (until now it stayed deleted); a
+`~/.claude/settings.json` that starts with a UTF-8 BOM is read, and written back with it. The live row PB-INSTALL-ROLLBACK passes again (8 of 8 clauses on the fix), and the guarantee ledger has no
 known violation: 135 rows, 122 verified.
 
 ## [1.6.5] — 2026-10-18
