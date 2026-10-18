@@ -637,9 +637,13 @@ class TheRealReceipt(unittest.TestCase):
         return "# 007 - x\n\n## Status\ndone\n\n## Verification Receipt\n\n" + block + "\n"
 
     def test_an_accepted_reason_followed_by_a_bound_and_a_stop_rule(self):
+        # the writers' own bound and stop-rule forms (task 236's impl round 1: made-up ones passed here)
+        from tasks.stop_rule import receipt_clause
+        clause = receipt_clause({"rounds": 2, "allowed": 2, "risk": "assertive", "can": True, "changed": ["x.md"]})
         got = numbers.receipt_close(self.task(freshness={"verdict": "STALE", "round_fp": "a", "now_fp": "b",
-                                                         "accepted_reason": 'docs "only"', "bound": "post-panel PASS x",
-                                                         "stop_rule": "stop rule: no judge needed"}))
+                                                         "accepted_reason": 'docs "only"',
+                                                         "bound": "bound to post-D6 PASS r1 on tree t (unchanged since)",
+                                                         "stop_rule": clause}))
         self.assertEqual((got["freshness"], got["accepted_reason"]), ("STALE", 'docs "only"'))
 
     def test_each_verdicts_own_wording(self):
@@ -972,13 +976,15 @@ class TheMutationGaps(_Tmp):
     """Task 236's mutation pass: what the first tests did not hold apart (X3, X4, X7, X8, X9)."""
 
     def test_the_sleep_placement_keeps_the_deadline_by_itself(self):
-        # nine gaps (the gap loop checks every 2,000) and 1,500 samples after the close: only the placement can stop
+        # nine gaps (the gap loop checks every 2,000) and 1,500 samples in the 120 s after the close (the placement
+        # counts pairs, equal seconds too): only the placement can stop
         lines = big_session(10)
         end = lines[-1]["_t"]
         ahead = []
         for i in range(1500):
-            rec = hl(end + 1 + i, "PostToolUse", tool="Bash", tid=f"a{i}", susp=100, sts=end + 1 + i, boot="aaaaaaaa")
-            rec["_t"] = end + 1 + i
+            t = end + 1 + i % 100
+            rec = hl(t, "PostToolUse", tool="Bash", tid=f"a{i}", susp=100, sts=t, boot="aaaaaaaa")
+            rec["_t"] = t
             ahead.append(rec)
         with self.assertRaisesRegex(numbers.OutOfTime, "sleep placement"):
             numbers.session_partition(lines + ahead, "007", end, [], [], deadline=time.monotonic() - 1)
@@ -1077,6 +1083,226 @@ class TheMutationCloseGaps(_CliProject):
         finally:
             numbers.compose = orig
         self.assertEqual([c["closure_no"] for c in self.numbers_doc()["closures"]], [1, 2])   # X31
+
+
+class TheRoundOneFindings(_Tmp):
+    """Task 236's impl round 1 (judge.md, "Triage — impl round 1"): Y1-Y13, each from the writers' own output."""
+
+    HEAD = "# 007 - x\n\n## Status\ndone\n\n## Verification Receipt\n\n"
+
+    def block(self, ts="2026-10-18T03:00:00+03:00", post_d6="", **fresh):
+        from tasks.core import format_verify_receipt
+        fresh = dict({"verdict": "STALE", "round_fp": "a", "now_fp": "b"}, **fresh)
+        return format_verify_receipt([("verify", "x", 0, "ok")], "abc", "assertive", timestamp=ts, freshness=fresh,
+                                     post_d6=post_d6)
+
+    def test_y1_the_panel_line_split_only_at_the_writers_separators(self):
+        from tasks.stop_rule import receipt_clause
+        clause = receipt_clause({"rounds": 2, "allowed": 2, "risk": "assertive", "can": True,
+                                 "changed": ["a.md", "b.py"]})
+        accepted = 'the ruling "Not grave"; W1 routed'
+        reason = 'he said "go"; then stop rule (D6): quoted'           # Y3: the owner-ok text names a stop rule
+        got = numbers.receipt_close(self.HEAD + self.block(accepted_reason=accepted, bound=f'owner-ok: "{reason}"',
+                                                           stop_rule=clause))
+        self.assertEqual((got["accepted_reason"], got["owner_ok"], got["stop_rule"]), (accepted, reason, clause))
+
+    def test_y2_a_post_panel_bound_read_from_the_receipt(self):
+        bound = "bound to post-D6 PASS r7 on tree abc; since then only: PLAN.md"
+        got = numbers.receipt_close(self.HEAD + self.block(accepted_reason="docs", bound=bound))
+        self.assertEqual((got["accepted_reason"], got["bound"], got["owner_ok"], got["stop_rule"]),
+                         ("docs", bound, None, None))
+
+    def test_y1_post_panel_owner_oks_with_a_quoted_phrase(self):
+        from tasks.post_d6 import receipt_line
+        post = receipt_line([{"panel": "fp", "verdict": "FAIL", "owner_ok": 'first "a"; b'},
+                             {"panel": "fp", "verdict": "PASS", "owner_ok": "second"}], "fp")
+        got = numbers.receipt_close(self.HEAD + self.block(accepted_reason="x", post_d6=post))
+        self.assertEqual(got["post_panel"], {"runs": 2, "verdict": "PASS", "owner_ok": ['first "a"; b', "second"]})
+
+    def test_y9_an_unclosed_fence_above_does_not_hide_the_receipt(self):
+        text = ("# 007 - x\n\n## Status\ndone\n\n## Notes\n```text\nan example never closed\n\n"
+                "## Verification Receipt\n\n" + self.block(accepted_reason="x") + "\n")
+        got = numbers.receipt_close(text)
+        self.assertEqual((got or {}).get("stamp"), "2026-10-18T03:00:00+03:00")
+
+    def two_closes_in_one_second(self):
+        """Close 1, a reopen and close 2 in ONE second, in the order the CLI writes them (close records, then done)."""
+        lane = self.d / ".agent"
+        td = lane / "tasks" / "007-x"
+        td.mkdir(parents=True)
+        stamp = "2026-10-18T03:00:00+03:00"
+        (td / "task.md").write_text(self.HEAD.replace("done", "done", 1) + "### " + stamp
+                                    + " · risk assertive · commit abc\n- **Forced close, reason:** second\n",
+                                    encoding="utf-8")
+        t = numbers._iso_epoch(stamp)
+        self.write("enforcement.jsonl", [
+            {"ts": iso(t - 50), "hook": "tasks", "reason": "work", "task": "007"},
+            {"ts": iso(t), "hook": "close", "task": "007", "reason": "stale close owner-ok",
+             "command": 'owner-ok: "first life"'},
+            {"ts": iso(t), "hook": "tasks", "reason": "done", "task": "007"},
+            {"ts": iso(t), "hook": "tasks", "reason": "work", "task": "007"},
+            {"ts": iso(t), "hook": "tasks", "reason": "done", "task": "007"}])
+        self.write("hooks.jsonl", [hl(t - 49, "PostToolUse")])
+        return lane, td, t
+
+    def test_y5_the_newest_of_two_same_second_closes_takes_none_of_the_first(self):
+        lane, td, t = self.two_closes_in_one_second()
+        got = numbers.compose(lane, td, "007", deadline=time.monotonic() + 30)
+        self.assertEqual((got["closure_no"], got["close"].get("owner_ok"), got["close"]["forced_reason"]),
+                         (2, None, "second"))
+
+    def test_y5_the_first_of_two_same_second_closes_by_its_stamp(self):
+        lane, td, t = self.two_closes_in_one_second()
+        got = numbers.compose(lane, td, "007", deadline=time.monotonic() + 30, end=t)
+        self.assertEqual((got["closure_no"], got["close"].get("owner_ok"), got["window"]["start"]),
+                         (1, "first life", iso(t - 50)))
+
+    def test_y6_the_closes_own_sample_brackets_the_closing_gap(self):
+        lines = [L(0, "UserPromptSubmit", susp=100, sts=T0, boot="aaaaaaaa"), L(10, "PreToolUse", tool="Bash", tid="c")]
+        got = numbers.session_partition(lines, "007", T0 + 100, [], [], live=(150, T0 + 102, "aaaaaaaa"))
+        self.assertEqual((got["slept"], got["by_kind"], got["total"]), (50, {"agent": 50}, 100))
+
+    def test_y6_sleep_long_after_the_close_is_not_pulled_into_it(self):
+        lines = [L(0, "UserPromptSubmit", susp=100, sts=T0, boot="aaaaaaaa"), L(10, "PreToolUse", tool="Bash", tid="c"),
+                 L(4000, "PostToolUse", tool="Bash", tid="c", susp=3000, sts=T0 + 4000, boot="aaaaaaaa")]
+        got = numbers.session_partition(lines, "007", T0 + 100, [], [])
+        self.assertEqual((got["slept"], got["sleep_unplaced"]), (0, 0))
+
+    def test_y6_a_sample_taken_long_after_the_close_is_not_used(self):
+        lines = [L(0, "UserPromptSubmit", susp=100, sts=T0, boot="aaaaaaaa"), L(10, "PreToolUse", tool="Bash", tid="c")]
+        got = numbers.session_partition(lines, "007", T0 + 100, [], [], live=(150, T0 + 300, "aaaaaaaa"))
+        self.assertEqual((got["slept"], got["sleep_unplaced"]), (0, 0))
+
+    def test_y6_the_live_sample_is_one_reading_of_this_machine(self):
+        susp, sts, boot = numbers._live_sample()
+        self.assertIsInstance(susp, int)
+        self.assertLess(abs(sts - time.time()), 5)
+        self.assertRegex(boot, r"^[0-9a-f]{8}$")
+
+    def test_y5_a_done_the_journal_did_not_keep_falls_back_to_the_time(self):
+        lane = self.d / ".agent"
+        td = lane / "tasks" / "007-x"
+        td.mkdir(parents=True)
+        stamp = "2026-10-18T03:00:00+03:00"
+        t = numbers._iso_epoch(stamp)
+        (td / "task.md").write_text(self.HEAD + "### " + stamp + " · risk assertive · commit abc\n"
+                                    "- **Forced close, reason:** second\n", encoding="utf-8")
+        self.write("enforcement.jsonl", [                         # close 1, a reopen, close 2 whose `done` is lost
+            {"ts": iso(t - 100), "hook": "tasks", "reason": "work", "task": "007"},
+            {"ts": iso(t - 90), "hook": "tasks", "reason": "done", "task": "007"},
+            {"ts": iso(t - 80), "hook": "tasks", "reason": "work", "task": "007"},
+            {"ts": iso(t + 30), "hook": "tasks", "reason": "work", "task": "007"},           # then a reopen and
+            {"ts": iso(t + 60), "hook": "close", "task": "007", "reason": "stale close owner-ok",  # a later close's
+             "command": 'owner-ok: "a later life"'}])                                         # record (X22)
+        self.write("hooks.jsonl", [hl(t - 79, "PostToolUse")])
+        got = numbers.compose(lane, td, "007", deadline=time.monotonic() + 30)
+        self.assertEqual((got["window"]["start"], got["close"].get("owner_ok")), (iso(t - 80), None))
+
+    def test_y6_the_live_sample_reaches_the_closing_sessions_last_gap(self):
+        lane, td, close_t = TheComposition.project(self)          # its last line: the close's own open Bash call
+        before = numbers.compose(lane, td, "007", deadline=time.monotonic() + 30)
+        got = numbers.compose(lane, td, "007", deadline=time.monotonic() + 30, live=(40, close_t + 1, "aaaaaaaa"))
+        self.assertEqual((before["time"]["slept"], got["time"]["slept"]), (0, 30))
+
+    def test_x19_a_released_stop_ends_the_walk_when_the_prompt_line_is_missing(self):
+        # the next turn's prompt line never reached the journal (its hook timed out): the stop still ends the search
+        lines = [L(0, "UserPromptSubmit", detail="logged M001", task=""), L(5, "Stop", decision="allow", task=""),
+                 L(22, "PreToolUse", tool="Bash", tid="w", task=""), L(23, "PostToolUse", tool="Bash", tid="w")]
+        self.assertEqual(numbers.owner_table(lines, "007", None, start=T0 + 23)["ids"], [])
+
+    def test_y7_a_sample_pair_after_the_close_adds_no_unplaced_sleep(self):
+        lines = [L(0, "UserPromptSubmit", susp=100, sts=T0, boot="aaaaaaaa"), L(20, "Stop", decision="allow",
+                                                                                 susp=100, sts=T0 + 20, boot="aaaaaaaa"),
+                 L(30, "UserPromptSubmit", task="", susp=100, sts=T0 + 30, boot="aaaaaaaa"),
+                 L(60, "Stop", decision="allow", task="", susp=130, sts=T0 + 60, boot="aaaaaaaa")]
+        got = numbers.session_partition(lines, "007", T0 + 20, [], [])
+        self.assertEqual(got["sleep_unplaced"], 0)
+
+    def test_y8_codexs_shell_inside_a_review_span_is_judges(self):
+        got = part([L(0, "UserPromptSubmit"), L(1, "PreToolUse", tool="exec_command", tid="x"),
+                    L(11, "PostToolUse", tool="exec_command", tid="x"), L(12, "Stop", decision="allow")],
+                   reviews=[(0, 20)])
+        self.assertEqual(got["by_kind"], {"agent": 2, "judges": 10})
+
+    def test_y10_a_journal_owner_ok_cut_without_its_quote_loses_its_label(self):
+        lane, td, close_t = TheComposition.project(self)
+        recs = [json.loads(x) for x in (self.jdir / "enforcement.jsonl").read_text().splitlines()]
+        for r in recs:
+            if r.get("reason") == "stale close owner-ok":
+                r["command"] = 'owner-ok: "a long reason that the journal cut at two hundred'
+        self.write("enforcement.jsonl", recs)
+        got = numbers.compose(lane, td, "007", deadline=time.monotonic() + 30)
+        self.assertEqual(got["close"]["owner_ok"], "a long reason that the journal cut at two hundred")
+
+    def test_y12_a_turn_an_unlogged_prompt_opened_takes_no_earlier_prompt(self):
+        lines = [L(0, "UserPromptSubmit", detail="logged M001", task=""), L(3, "PostToolUse", task=""),
+                 L(20, "UserPromptSubmit", detail="not logged: a command of the user's", task=""),
+                 L(22, "PreToolUse", tool="Bash", tid="w", task=""), L(23, "PostToolUse", tool="Bash", tid="w")]
+        self.assertEqual(numbers.owner_table(lines, "007", None, start=T0 + 23)["ids"], [])
+
+    def test_y12_a_duplicate_delivery_does_not_hide_the_logged_prompt(self):
+        lines = [L(0, "UserPromptSubmit", detail="logged M001", task=""),
+                 L(0, "UserPromptSubmit", detail="not logged: a duplicate", task=""),
+                 L(2, "PreToolUse", tool="Bash", tid="w", task=""), L(3, "PostToolUse", tool="Bash", tid="w")]
+        self.assertEqual(numbers.owner_table(lines, "007", None, start=T0 + 3)["ids"], ["M001"])
+
+    def test_y13_the_closures_number_is_shown(self):
+        out = numbers.format_closure({"closed_at": "2026-10-18T03:00:00+03:00", "closure_no": 2, "window": {},
+                                      "time": None, "close": {}})
+        self.assertTrue(out[0].startswith("closure #2 2026-10-18T03:00:00+03:00"), out[0])
+
+
+class TheRoundOneCloseFindings(_CliProject):
+    def closed(self):
+        self.cli("new", "quick", "first")
+        self.cli("work", "1")
+        self.cli("work", "done", "--force", "--reason", "one")
+        return self.numbers_doc()
+
+    def test_y4_a_same_second_close_missing_from_the_file_is_composed(self):
+        doc = self.closed()
+        t = numbers._iso_epoch(doc["closures"][0]["closed_at"])
+        with open(self.journal, "a") as f:           # a reopen and a second close in that second, whose write failed
+            for reason in ("work", "done"):
+                f.write(json.dumps({"ts": iso(t), "hook": "tasks", "decision": "record", "reason": reason,
+                                    "task": "001"}) + "\n")
+        r = self.cli("numbers", "1")
+        self.assertIn("the newest close is not in numbers.json", r.stdout)
+
+    def test_y6_the_close_hands_its_own_sample_to_the_composition(self):
+        self.closed()
+        seen = []
+        orig_c, orig_s = numbers.compose, numbers._live_sample
+        numbers._live_sample = lambda: (7, 1, "abcdef01")
+
+        def probe(*a, **k):
+            seen.append(k.get("live"))
+            return orig_c(*a, **k)
+        numbers.compose = probe
+        try:
+            numbers.write_closure(self.project / ".agent", self.task_dir(), "001")
+        finally:
+            numbers.compose, numbers._live_sample = orig_c, orig_s
+        self.assertEqual(seen, [(7, 1, "abcdef01")])
+
+    def test_y5_the_closure_is_composed_under_the_task_lock(self):
+        if not shutil.which("flock"):
+            self.skipTest("no flock(1)")
+        self.closed()
+        from tasks.filelock import lock_path_for
+        seen = []
+        orig = numbers.compose
+
+        def probe(*a, **k):         # another process — a reopen in another session — tries the task's lock
+            r = subprocess.run(["flock", "-n", str(lock_path_for(self.task_dir() / "task.md")), "true"])
+            seen.append("held" if r.returncode else "free")
+            return orig(*a, **k)
+        numbers.compose = probe
+        try:
+            numbers.write_closure(self.project / ".agent", self.task_dir(), "001")
+        finally:
+            numbers.compose = orig
+        self.assertEqual(seen, ["held"])
 
 
 if __name__ == "__main__":

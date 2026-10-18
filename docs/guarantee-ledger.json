@@ -19666,7 +19666,7 @@
     {
       "id": "PB-TASK-NUMBERS",
       "category": "risk-and-close",
-      "statement": "At every successful close, after its `done` record, the close composes the task's numbers for that closure from the plugin's own records only (the enforcement journal, the hook journal with its archives and spools, the run ledger, chat_log.md and the receipt) and keeps them in `<task>/numbers.json` (`closures[]`, keyed by the receipt's stamp and the close's number; a re-close adds one, two closes in one second keep two), under the task lock and only while that receipt is still the task's newest; a fault, or 5 s passed (one deadline for the reading, the lock wait and the write), prints one line and changes nothing of the close. The task's time is split per host session: a gap counts only when both its lines are the task's; slept (the `susp` difference between two samples of one boot, given to the gaps overlapping their own sts interval, largest overlap first, capped; what cannot be placed is counted apart), unknown across a boot change, away (over 2 h awake), outside a turn owner-idle or background, inside a turn (a tool event proves one; a new prompt ends calls left open) owner-question or agent, with Bash and background time inside the task's review spans carved as judges and inside its recorded verify spans (less the review spans) as verify; only this task's latest open call runs to the close; the time split is linear and keeps the deadline; per session the parts add up to the task's time and, with the time not the task's, to the session's span. The close's reasons are read whole from the fence-aware receipt; the hook journal is read under its directory's shared lock. `tasks numbers [N]` reads them and writes nothing, adding a snapshot of a reopened task's life in progress. The close's `hook=close` records name their task.",
+      "statement": "At every successful close, after its `done` record, the close composes the task's numbers for that closure from the plugin's own records only (the enforcement journal, the hook journal with its archives and spools, the run ledger, chat_log.md and the receipt) and keeps them in `<task>/numbers.json` (`closures[]`, keyed by the receipt's stamp and the close's number, the closure found in the journal's file order; a re-close adds one, two closes in one second keep two), composed and written under the task lock and only while that receipt is still the task's newest; a fault, or 5 s passed (one deadline for the reading, the lock wait and the write), prints one line and changes nothing of the close. The task's time is split per host session: a gap counts only when both its lines are the task's; slept (the `susp` difference between two samples of one boot, given to the gaps overlapping their own sts interval, largest overlap first, capped; what cannot be placed is counted apart), unknown across a boot change, away (over 2 h awake), outside a turn owner-idle or background, inside a turn (a tool event proves one; a new prompt ends calls left open) owner-question or agent, with Bash and background time inside the task's review spans carved as judges and inside its recorded verify spans (less the review spans) as verify; only this task's latest open call runs to the close, its last gap bracketed by the close's own suspend sample (a sample more than 120 s after the close is not used); the time split is linear and keeps the deadline; per session the parts add up to the task's time and, with the time not the task's, to the session's span. The close's reasons are read whole from the receipt (split only at the writer's separators, found outside closed fences); the hook journal is read under its directory's shared lock. `tasks numbers [N]` reads them and writes nothing, adding a snapshot of a reopened task's life in progress. The close's `hook=close` records name their task.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/numbers.py",
@@ -19830,6 +19830,36 @@
           "negative_control": null,
           "limitations": [
             "Task 236 (W6): a real reopen in a temp project."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_task_numbers.py",
+          "reference": "TheRoundOneFindings.test_y1_the_panel_line_split_only_at_the_writers_separators",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 236 impl r1 (Y1): the receipt made by core.format_verify_receipt with stop_rule.receipt_clause."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_task_numbers.py",
+          "reference": "TheRoundOneFindings.test_y5_the_newest_of_two_same_second_closes_takes_none_of_the_first",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 236 impl r1 (Y5): journal records in the order the close and a reopen write them, one second."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_task_numbers.py",
+          "reference": "TheRoundOneFindings.test_y6_the_closes_own_sample_brackets_the_closing_gap",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 236 impl r1 (Y6): the live sample passed in; write_closure takes it from pb_journal.suspend_sample."
           ]
         }
       ],

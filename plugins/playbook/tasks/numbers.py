@@ -102,11 +102,10 @@ def read_hook_lines(jdir: Path, start: float, deadline: float, end: "float | Non
     gets `_t` (epoch seconds). The margin keeps the suspend samples just outside the window."""
     lo = _iso(start - margin)
     hi = _iso(end + margin) if end is not None else None
-    files: "list[tuple[int, Path]]" = []
     if Path(jdir).is_symlink():
         return []                           # the writers refuse a linked journal/ (task 222); so does the reader
     with _shared_lock(Path(jdir), deadline):
-        return _read_hook_lines_locked(Path(jdir), lo, hi, start, margin, deadline, files)
+        return _read_hook_lines_locked(Path(jdir), lo, hi, start, margin, deadline)
 
 
 def _shared_lock(jdir: Path, deadline: float):
@@ -138,8 +137,9 @@ def _shared_lock(jdir: Path, deadline: float):
     return held()
 
 
-def _read_hook_lines_locked(jdir: Path, lo: str, hi: "str | None", start: float, margin: float, deadline: float,
-                            files: "list[tuple[int, Path]]") -> "list[dict]":
+def _read_hook_lines_locked(jdir: Path, lo: str, hi: "str | None", start: float, margin: float,
+                            deadline: float) -> "list[dict]":
+    files: "list[tuple[int, Path]]" = []
     try:
         names = sorted(os.listdir(jdir))
     except OSError:
@@ -203,7 +203,7 @@ def read_enforcement(lane: Path, deadline: float) -> "list[dict]":
         if isinstance(rec, dict) and rec.get("hook") in _TASK_HOOKS:
             t = _epoch(rec.get("ts"))
             if t is not None:
-                rec["_t"] = t
+                rec["_t"], rec["_n"] = t, n         # its line: the file's order, inside one second too (Y5)
                 out.append(rec)
     return out
 
@@ -292,23 +292,43 @@ def _freshness_of(line: str) -> str:
     return next((name for token, name in _FRESHNESS if token in line), "other")
 
 
+# The panel line's fields after its verdict, in the writer's order (`core.format_verify_receipt`): `, accepted: "…"`,
+# then `; <bound>` (`owner-ok: "…"` or `bound to post-D6 PASS …`) and `; <stop rule>`. Each field may hold `;` and
+# quotes of its own (the stop rule's clause always holds a `;`), so a field runs to the next of these separators or the
+# line's end (task 236's impl round 1, Y1: opus, codex, grok). A reason that itself holds one of the separators — the
+# literal `; stop rule (D6): ` — is the one text this split cannot tell apart.
+_FIELD_SEP = re.compile(r'; (?=owner-ok: "|bound to post-D6 PASS |stop rule \(D6\): )')
+_OK_SEP = re.compile(r'; (?=owner-ok: ")')
+
+
+def _quoted(field: str, label: str) -> "str | None":
+    """`<label>"…"` → the text between the label's opening quote and the field's last quote; a field cut before its
+    closing quote (the journal's 200 bytes) keeps what is there."""
+    if not field.startswith(label + '"'):
+        return None
+    body = field[len(label) + 1:]
+    return body[:-1] if body.endswith('"') else body
+
+
 def receipt_close(task_text: str) -> "dict | None":
     """How this closure closed, from the receipt's newest `###` block (the close inserts its block at the top; the
     newest STAMP wins wherever it sits): stamp, epoch, risk, freshness (FRESH / STALE / TAIL-CERTIFIED / NO-STAMP / …),
-    the accepted and forced reasons, the owner-ok reason and the stop rule's clause (after `accepted`, `; …`), the
-    post-panel judge's line (runs, last verdict, every owner-ok), the commands' PASS / FAIL counts. The section is found
-    with core's fence-aware reader: a receipt quoted in a fence is not the receipt (task 235's last round, W3)."""
-    from tasks.core import _iter_nonfenced, _live_section_span
-    lines = task_text.split("\n")
-    span = _live_section_span(lines, "## Verification Receipt")
-    if span is None:
-        return None
-    live = {i for i, _s in _iter_nonfenced(lines)}
+    the accepted and forced reasons, the bound (`owner_ok`, or `bound` for a post-panel PASS) and the stop rule's
+    clause, the post-panel judge's line (runs, last verdict, every owner-ok), the commands' PASS / FAIL counts. A pure
+    reader, so it reads fail-OPEN as `core._latest_receipt_line` does: a closed fence hides a quoted receipt (task 235's
+    last round, W3), an unclosed fence above does not hide the real one (task 236's impl round 1, Y9: grok)."""
+    from tasks.core import _atx_h2_text, _iter_nonfenced, _physical_lines
+    lines = _physical_lines(task_text)
     blocks = []
     cur = None
-    for k in range(span[0] + 1, span[1]):
-        if k not in live:
+    started = False
+    for k, _s in _iter_nonfenced(lines, unclosed_is_live=True):
+        h2 = _atx_h2_text(lines[k])
+        if not started:
+            started = h2 == "## Verification Receipt"
             continue
+        if h2 is not None:
+            break
         ln = lines[k]
         m = _BLOCK.match(ln)
         if m:
@@ -326,32 +346,30 @@ def receipt_close(task_text: str) -> "dict | None":
     if best is None:
         return None
     out = {"stamp": best["stamp"], "epoch": best["epoch"], "risk": best["risk"], "freshness": None,
-           "accepted_reason": None, "forced_reason": None, "owner_ok": None, "stop_rule": None, "post_panel": None,
-           "commands": {"pass": 0, "fail": 0}}
+           "accepted_reason": None, "forced_reason": None, "owner_ok": None, "bound": None, "stop_rule": None,
+           "post_panel": None, "commands": {"pass": 0, "fail": 0}}
     for ln in best["lines"]:
         s = ln.strip()
         if s.startswith("- **Forced close, reason:**"):
             out["forced_reason"] = s.split(":**", 1)[1].strip()
         elif s.startswith("- **Panel tree-state:**"):
             out["freshness"] = _freshness_of(s)
-            rest = s
-            # the accepted reason ends at its closing quote before `; <owner-ok>` / `; <stop rule>` or the line's end
-            # (core.format_verify_receipt; impl r1, opus, grok)
-            m = re.search(r', accepted: "(.*?)"(?=;|$)', s)
-            if m:
-                out["accepted_reason"] = m.group(1)
-                rest = s[m.end():]
-            m = re.search(r'owner-ok: "(.*?)"(?=;|$)', rest)       # the bound's note, whole (task 235's last round, W2)
-            if m:
-                out["owner_ok"] = m.group(1)
-            m = re.search(r"(stop rule \(D6\):[^;]*)", rest)
-            if m:
-                out["stop_rule"] = m.group(1).strip()
+            head, *fields = _FIELD_SEP.split(s)
+            i = head.find(', accepted: "')
+            if i >= 0:
+                out["accepted_reason"] = _quoted(head[i + 2:], "accepted: ")
+            for f in fields:
+                if f.startswith('owner-ok: "'):
+                    out["owner_ok"] = _quoted(f, "owner-ok: ")
+                elif f.startswith("bound to post-D6 PASS "):
+                    out["bound"] = f
+                elif f.startswith("stop rule (D6): "):
+                    out["stop_rule"] = f
         elif s.startswith("- **Post-D6 single judge:**"):
-            m = re.match(r"- \*\*Post-D6 single judge:\*\* (\d+) run\(s\) after impl panel \S+ — last verdict ([A-Za-z?-]+)", s)
-            oks = re.findall(r'owner-ok: "(.*?)"(?=;|$)', s)
+            head, *oks = _OK_SEP.split(s)
+            m = re.match(r"- \*\*Post-D6 single judge:\*\* (\d+) run\(s\) after impl panel \S+ — last verdict ([A-Za-z?-]+)", head)
             out["post_panel"] = {"runs": int(m.group(1)) if m else None, "verdict": m.group(2) if m else None,
-                                 "owner_ok": oks}
+                                 "owner_ok": [_quoted(o, "owner-ok: ") for o in oks]}
         elif re.match(r"- \[PASS\]", s):
             out["commands"]["pass"] += 1
         elif re.match(r"- \[FAIL", s):          # `[FAIL(exit 1)]`
@@ -374,6 +392,8 @@ def receipt_close(task_text: str) -> "dict | None":
 
 AWAY_S = 7200               # B1's rule: a gap over 2 h is away, here judged on the awake time
 SLEEP_MIN_S = 2             # a `susp` difference under this is the samples' rounding, not sleep
+AHEAD_S = 120               # how long after the close a sample still brackets its last gap (Y6)
+_SHELL_TOOLS = ("Bash", "Shell", "run_terminal_command", "exec_command")    # exec_command: codex's (Y8, agy)
 _TASK_RE = re.compile(r"[0-9]{1,16}")
 
 
@@ -489,15 +509,22 @@ def _minus(spans: "list[tuple[float, float]]", cut: "list[tuple[float, float]]")
 
 def session_partition(lines: "list[dict]", task: str, end: float, reviews: "list[tuple[float, float]]",
                       verifies: "list[tuple[float, float]]", start: "float | None" = None,
-                      close_open: bool = True, deadline: "float | None" = None) -> dict:
+                      close_open: bool = True, deadline: "float | None" = None, live: "tuple | None" = None) -> dict:
     """Task `task`'s share of one host session's time up to `end` (see the block comment above). Returns integer
     seconds: wall (the session's span in the window), total (the task's), not_task, slept, away, unknown,
     sleep_unmeasured (the task's time no two samples of one boot bracket), sleep_unplaced (sleep the samples recorded
     that no gap could hold — counted, never dropped), by_kind and by_section (both without zeros). `close_open`: this
-    session holds the close's own call, which ends at `end` (only that session — impl r1, opus). Holds Q1:
-    sum(by_kind) + slept + away + unknown == total; total + not_task == wall."""
+    session holds the close's own call, which ends at `end` (only that session — impl r1, opus). `live`: the close's
+    own sample `(susp, sts, boot)`, taken as it composes. Holds Q1: sum(by_kind) + slept + away + unknown == total;
+    total + not_task == wall."""
     task = str(task)
-    ahead = [r for r in lines if r["_t"] > end]     # samples after the close bracket its last gap (W10, agy)
+    # samples just after the close bracket its last gap (W10, agy): the close's own (`live`) at the close, its
+    # PostToolUse's on a later recompose — both within seconds. One TAKEN later (its `sts`, the moment that counts —
+    # a spooled line is written later than it was taken) is not used: sleep after the close would be placed in its
+    # last gap (task 236's impl round 1, Y6: opus)
+    ahead = [r for r in lines if r["_t"] > end]
+    if live is not None:
+        ahead.append({"susp": live[0], "sts": live[1], "boot": live[2]})
     lines = [r for r in lines if r["_t"] <= end]
     empty = {"wall": 0, "total": 0, "not_task": 0, "slept": 0, "away": 0, "unknown": 0, "sleep_unmeasured": 0,
              "sleep_unplaced": 0, "by_kind": {}, "by_section": {}}
@@ -517,7 +544,8 @@ def session_partition(lines: "list[dict]", task: str, end: float, reviews: "list
     bracketed = [False] * n
     unplaced = 0.0
     samples = sorted(((smp[1], smp[0], smp[2], i) for i, r in enumerate(lines + ahead)
-                      if (smp := _sample(r)) is not None), key=lambda x: (x[0], x[3]))
+                      if (smp := _sample(r)) is not None and smp[1] <= end + AHEAD_S), key=lambda x: (x[0], x[3]))
+    w_lo = start if start is not None else lines[0]["_t"]
     # the gaps a [t1, t2] can overlap are found by bisect on the sorted gap ends and starts — linear overall, where a
     # scan of every gap per pair was quadratic (13.7 s on 6,000 lines — task 235's last round, W1)
     starts = [lines[k]["_t"] for k in range(n)]
@@ -546,7 +574,8 @@ def session_partition(lines: "list[dict]", task: str, end: float, reviews: "list
             left -= take
             if left <= 0:
                 break
-        unplaced += max(0.0, left)
+        if t2 > w_lo and t1 < end:      # a pair wholly outside the window is not this closure's (Y7, codex)
+            unplaced += max(0.0, left)
 
     review_u = _union(list(reviews))
     verify_u = _minus(_union(list(verifies)), review_u)     # an overlap counts once, as judges (impl r1, codex)
@@ -601,7 +630,7 @@ def session_partition(lines: "list[dict]", task: str, end: float, reviews: "list
         elif "AskUserQuestion" in tools:
             kind, carve = "owner-question", False
         else:
-            kind, carve = "agent", any(v in ("Bash", "Shell", "run_terminal_command") for v in tools)
+            kind, carve = "agent", any(v in _SHELL_TOOLS for v in tools)
         if carve and awake > 0:
             j = min(awake, _overlap(a_t, b["_t"], review_u))
             v = min(awake - j, _overlap(a_t, b["_t"], verify_u))
@@ -742,6 +771,9 @@ def owner_table(lines: "list[dict]", task: str, log_text: "str | None", start: "
             if r.get("hook") == "chat-log" and str(r.get("detail") or "").startswith("logged M"):
                 first_prompt.add(i)
                 break
+            if (r.get("hook") == "chat-log" and r.get("event") == "UserPromptSubmit"
+                    and r.get("detail") != "not logged: a duplicate"):
+                break           # a notification or a command opened the turn, not his prompt (Y12, codex)
             if act and r.get("tool_use_id") == act:
                 continue
             if r.get("event") in ("SessionStart", "SessionEnd") or (r.get("event") == "Stop"
@@ -808,10 +840,32 @@ def _failed_runs(task_dir: Path, start: float, end: float) -> int:
                and (t := _iso_epoch(r.get("ts"))) is not None and start <= t <= end)
 
 
-def compose(lane: Path, task_dir: Path, task: str, deadline: float, end: "float | None" = None) -> dict:
+def _life(trans: "list[dict]", end: float, newest: bool):
+    """(first work, done, next work's line) of the closure that ends at `end`, in the journal's FILE order — two closes
+    in one second, with a reopen between, are told apart only by it (task 236's impl round 1, Y5: codex, grok). The
+    closure's `done` is the task's last one for the newest close, else the first at or after `end` (a close writes its
+    `done` after its receipt's stamp); its life starts at the first `work` after the `done` before it. None when no
+    `done` and `work` fit (records from before the transition records, a `done` the journal failed to keep)."""
+    dones = [r for r in trans if r.get("reason") == "done"]
+    done = (dones[-1] if dones and dones[-1]["_t"] >= end else None) if newest \
+        else next((r for r in dones if r["_t"] >= end), None)
+    if done is None:
+        return None
+    prev = max((r["_n"] for r in dones if r["_n"] < done["_n"]), default=-1)
+    first = next((r for r in trans if r.get("reason") == "work" and prev < r["_n"] < done["_n"]), None)
+    if first is None:
+        return None
+    nxt = next((r["_n"] for r in trans if r.get("reason") == "work" and r["_n"] > done["_n"]), None)
+    return first, done, nxt
+
+
+def compose(lane: Path, task_dir: Path, task: str, deadline: float, end: "float | None" = None,
+            live: "tuple | None" = None) -> dict:
     """One closure of `task`, from the plugin's records only. `end` defaults to the receipt's newest stamp (a closed
-    task) or now (an open task: a snapshot). Raises OutOfTime past the deadline; the caller catches everything."""
+    task) or now (an open task: a snapshot). `live`: the close's own suspend sample (`write_closure` takes it). Raises
+    OutOfTime past the deadline; the caller catches everything."""
     task = str(task)
+    newest = end is None
     lane, task_dir = Path(lane), Path(task_dir)
     data = _read_regular(task_dir / "task.md")
     text = data.decode("utf-8", "replace") if data is not None else ""
@@ -823,20 +877,27 @@ def compose(lane: Path, task_dir: Path, task: str, deadline: float, end: "float 
         end = rc["epoch"] if rc else time.time()
     end = float(int(end))
     enf = read_enforcement(lane, deadline)
-    window = closure_window([r for r in enf if r.get("hook") == "tasks"], task, end)
-    start = window[0] if window else None
     mine = [r for r in enf if str(r.get("task", "")) == task]
+    trans = [r for r in mine if r["hook"] == "tasks" and r.get("reason") in ("work", "done")]
+    life = _life(trans, end, newest) if rc is not None else None
+    if life is not None:
+        # the closure in file order: its close records lie after its first `work` and before the next `work` after
+        # its `done` (they come seconds after the receipt, up to the lag); its number is its `done`'s rank (W4, Y5)
+        first, done, nxt = life
+        start = first["_t"]
+        closes = [r for r in mine if r["hook"] == "close" and first["_n"] < r["_n"] and (nxt is None or r["_n"] < nxt)
+                  and r["_t"] <= end + CLOSE_RECORD_LAG_S]
+        closure_no = sum(1 for r in trans if r.get("reason") == "done" and r["_n"] <= done["_n"])
+    else:
+        # no `done` to anchor on (an open task's snapshot, records from before the transition records): by time
+        window = closure_window([r for r in enf if r.get("hook") == "tasks"], task, end)
+        start = window[0] if window else None
+        nxt_t = min((r["_t"] for r in trans if r.get("reason") == "work" and r["_t"] > end), default=float("inf"))
+        upto = min(end + CLOSE_RECORD_LAG_S, nxt_t)
+        closes = [r for r in mine if r["hook"] == "close" and start is not None and start <= r["_t"] <= upto]
+        closure_no = sum(1 for r in trans if r.get("reason") == "done" and r["_t"] <= upto)
     win = task_records(enf, task, start, end) if start is not None else {h: [] for h in _TASK_HOOKS}
     reviews, verifies = win["review"], win["verify"]
-    # this close's own records come seconds after its receipt — up to the lag, and never past the task's next
-    # activation (a reopen and a second close within the lag — task 235's last round, sonnet)
-    nxt = min((r["_t"] for r in mine if r["hook"] == "tasks" and r.get("reason") == "work" and r["_t"] > end),
-              default=float("inf"))
-    upto = min(end + CLOSE_RECORD_LAG_S, nxt)
-    closes = [r for r in mine if r["hook"] == "close" and start is not None and start <= r["_t"] <= upto]
-    # the closure's number: this task's `done` records up to that bound — two closes in one second keep two entries
-    # (W4, codex; exact when written at the close, as the close writes it)
-    closure_no = sum(1 for r in mine if r["hook"] == "tasks" and r.get("reason") == "done" and r["_t"] <= upto)
     late = sum(1 for r in mine if r["hook"] in ("review", "verify") and r["_t"] > end)
     review_spans = [(r["_t"] - r["duration_ms"] / 1000.0, r["_t"]) for r in reviews
                     if isinstance(r.get("duration_ms"), (int, float)) and not isinstance(r.get("duration_ms"), bool)]
@@ -863,7 +924,7 @@ def compose(lane: Path, task_dir: Path, task: str, deadline: float, end: "float 
             if time.monotonic() > deadline:
                 raise OutOfTime("partition")
             p = session_partition(sl, task, end, review_spans, verify_spans, start=start, close_open=key == closing,
-                                  deadline=deadline)
+                                  deadline=deadline, live=live if key == closing else None)
             if not p["total"]:
                 continue
             used += 1
@@ -901,8 +962,7 @@ def compose(lane: Path, task_dir: Path, task: str, deadline: float, end: "float 
     for r in closes:
         reason, cmd = str(r.get("reason") or ""), str(r.get("command") or "")
         if reason == "stale close owner-ok" and not close.get("owner_ok"):
-            m = re.match(r'owner-ok: "(.*)"$', cmd)
-            close["owner_ok"] = m.group(1) if m else cmd
+            close["owner_ok"] = _quoted(cmd, "owner-ok: ") or cmd    # cut at 200 bytes: no closing quote (Y10, opus)
         elif reason == "stale close bound" and not close.get("bound"):
             close["bound"] = cmd
         elif reason.startswith("stale close no judge") and not close.get("stop_rule"):
@@ -929,6 +989,19 @@ def _read_doc(path: Path) -> "dict | None":
     return doc if isinstance(doc, dict) and isinstance(doc.get("closures"), list) else None
 
 
+def _live_sample() -> "tuple | None":
+    """`pb_journal.suspend_sample()` taken now, loaded like the close's other journal helper; None on any fault."""
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "_pb_journal_numbers", Path(__file__).resolve().parent.parent / "scripts" / "pb_journal.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return tuple(mod.suspend_sample())
+    except Exception:                       # noqa: BLE001 — no sample: the closing gap is unmeasured, as before
+        return None
+
+
 def write_closure(lane: Path, task_dir: Path, task: str, budget: float = BUDGET_S) -> "Path | None":
     """Compose this closure and keep it in `<task>/numbers.json` (`closures[]`, one per close, keyed by the receipt's
     stamp). Under the task lock, and only while the task's newest receipt is the one composed for — a close that paused
@@ -937,14 +1010,17 @@ def write_closure(lane: Path, task_dir: Path, task: str, budget: float = BUDGET_
     from tasks.filelock import task_lock
     task_dir = Path(task_dir)
     deadline = time.monotonic() + budget     # ONE deadline: the reading, the lock wait and the write (impl r1, codex)
-    closure = compose(lane, task_dir, task, deadline=deadline)
-    if closure.get("snapshot") or not closure.get("closed_at"):
-        return None
+    live = _live_sample()                    # the close's own sample brackets its last gap (task 236's impl r1, Y6)
     path = task_dir / FILE_NAME
     left = deadline - time.monotonic()
     if left <= 0:
         raise OutOfTime("before the lock")
+    # composed UNDER the task lock: a reopen or a second close cannot come between the receipt it reads and the
+    # journal it reads (task 236's impl round 1, Y5: codex)
     with task_lock(task_dir / "task.md", timeout=left):     # LockTimeout past it
+        closure = compose(lane, task_dir, task, deadline=deadline, live=live)
+        if closure.get("snapshot") or not closure.get("closed_at"):
+            return None
         data = _read_regular(task_dir / "task.md")
         newest = receipt_close(data.decode("utf-8", "replace")) if data is not None else None
         if not newest or newest["stamp"] != closure["closed_at"]:
@@ -989,7 +1065,7 @@ def format_closure(c: dict) -> "list[str]":
     out = []
     w = c.get("window") or {}
     head = ("snapshot up to now — not closed, nothing written" if c.get("snapshot")
-            else f"closure {c.get('closed_at')}")
+            else f"closure {'#' + str(c['closure_no']) + ' ' if c.get('closure_no') else ''}{c.get('closed_at')}")
     out.append(f"{head}  (window {w.get('start', '?')} → {w.get('end', '?')})")
     t = c.get("time")
     if t:
@@ -1066,9 +1142,15 @@ def cmd_numbers(cmd_args: "list[str]") -> None:
         data = _read_regular(d / "task.md")
         text = data.decode("utf-8", "replace") if data is not None else ""
         newest = receipt_close(text)
-        saved = {c.get("closed_at") for c in doc["closures"] if isinstance(c, dict)}
-        # the life in progress of a reopened task, or a newest close whose write failed (task 235, W6, codex)
-        if not _is_done_text(text) or (newest and newest["stamp"] not in saved):
+        saved = {(c.get("closed_at"), c.get("closure_no")) for c in doc["closures"] if isinstance(c, dict)}
+        try:            # the newest close's number: the task's count of `done` records (as compose numbers it)
+            n_done = sum(1 for r in read_enforcement(lane, time.monotonic() + BUDGET_S)
+                         if str(r.get("task", "")) == task and r["hook"] == "tasks" and r.get("reason") == "done")
+        except OutOfTime:
+            n_done = None
+        # the life in progress of a reopened task, or a newest close whose write failed — by its stamp AND its number,
+        # so a second close in the same second is not taken for the first (task 235, W6; task 236's impl r1, Y4)
+        if not _is_done_text(text) or (newest and (newest["stamp"], n_done) not in saved):
             try:
                 c = compose(lane, d, task, deadline=time.monotonic() + BUDGET_S * 4)
             except OutOfTime:
