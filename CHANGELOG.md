@@ -18,7 +18,8 @@ host with no git (a 1.6.4 bug). The suite has 5,599 tests (5,255 at 1.6.4); CI i
 The guarantee ledger has 135 rows, 121 verified (133 and 120 at 1.6.4): two new rows, PB-REVIEW-COPY and
 PB-TASK-NUMBERS, and PB-INSTALL-ROLLBACK, verified at 1.6.4, now a known violation (Known limitations). The live
 gauntlet on this release: 17 PASS, 5 WAITING (the grok rows: its account is out of credit), 1 FAIL (PB-INSTALL-ROLLBACK,
-Known limitations). These figures were measured on this release's code; the commits after them change only text.
+Known limitations). These figures were measured on this release's code; the commits after them change no plugin code
+(the release text, the ledger and its test).
 
 **Upgrading:** `/playbook:upgrade`, restart every Claude Code session, then re-run `/playbook:init` in each project that
 uses the plugin. Init brings the CLAUDE.md block's new bullet ("Work while a review runs — after its ready line") and
