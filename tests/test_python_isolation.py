@@ -721,6 +721,7 @@ class EveryShippedInlinePythonIsIsolated(unittest.TestCase):
         "scripts/gate-echo-lib.sh": 1,
         "scripts/init": 3,
         "scripts/monitor-lib/bootstrap.sh": 2,
+        "scripts/session-end-hook": 1,    # agent_usage.py, before the session dir goes (task 246)
         "scripts/session-start-hook": 1,
         "scripts/state-echo-hook": 4,      # +1: `task-status.py --echo` (task 219); +1: `--section` on a failed call (task 234)
         "scripts/stop-hook": 1,
@@ -733,7 +734,7 @@ class EveryShippedInlinePythonIsIsolated(unittest.TestCase):
         _, counts, _, files = sweep()
         self.assertEqual(files, self.ISOLATED_FILE_CALLS)
         self.assertEqual(counts.get("ok-file"), sum(self.ISOLATED_FILE_CALLS.values()))
-        self.assertEqual(sum(self.ISOLATED_FILE_CALLS.values()), 27)   # + the state echo's task-status.py (task 219) + dialog_log.py (task 233) + the failed call's `--section` (task 234) + agent_usage.py (task 244)
+        self.assertEqual(sum(self.ISOLATED_FILE_CALLS.values()), 28)   # + the state echo's task-status.py (task 219) + dialog_log.py (task 233) + the failed call's `--section` (task 234) + agent_usage.py (tasks 244, 246)
 
     def test_no_shipped_python_source_starts_a_file_through_an_argv_list(self):
         # the sweep reads an argv list only for its mode flag; a list that hands the

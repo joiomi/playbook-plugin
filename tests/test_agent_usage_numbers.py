@@ -203,6 +203,27 @@ class TheCli(_CliProject):
         a = self.closure("001")["agent"]
         self.assertEqual(a["unknown"], 1)
 
+    def test_a_busy_lock_close_whose_marker_cannot_be_written_says_so(self):
+        self.cli("new", "quick", "first")
+        self.pointer()
+        self.cli("work", "1")
+        self.say(1)
+        lock = self.project / ".agent" / "journal" / "agent-usage.lock"
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        holder = subprocess.Popen(["flock", str(lock), "sleep", "60"], stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL, start_new_session=True)
+        journal = self.project / ".agent" / "journal" / "enforcement.jsonl"
+        try:
+            time.sleep(0.3)
+            journal.chmod(0o444)
+            r = subprocess.run([sys.executable, "-m", "tasks.cli", "work", "done", "--force", "--reason", "ro"],
+                               cwd=self.project, env=self.env(), capture_output=True, text=True, timeout=120)
+        finally:
+            journal.chmod(0o644)
+            os.killpg(holder.pid, 9)
+            holder.wait()
+        self.assertIn("could not be written", r.stdout + r.stderr)
+
     def test_a_close_with_no_record_says_so(self):
         self.cli("new", "quick", "first")
         self.cli("work", "1")                          # no transcript pointer: nothing can be read

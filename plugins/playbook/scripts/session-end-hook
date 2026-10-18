@@ -54,6 +54,19 @@ fi
 INPUT=$(cat)
 SESSION_ID="$(resolve_session_id)"
 
+# Task 246 (PLAN.md "From task 244" (b)): the agent's tokens of the turn after the session's last Stop — a turn
+# interrupted (Esc, a kill) gets no Stop — are recorded here, for every end reason, before anything below can remove
+# the session dir and its transcript pointer (agent_usage.py `hook`, as the Stop recorder runs it: the task is read
+# inside the lane lock, an unresolved session records nothing). Never for a judge's, a tail-cert's or the monitor's
+# session; best-effort and bounded: it never changes what this hook does or decides.
+if [ -r "$HOOK_DIR/agent_usage.py" ] && [ "${PLAYBOOK_ROLE:-}" != "monitor" ]; then
+    case "${PLAYBOOK_SESSION_ID:-}" in
+        judge|tail-cert) ;;
+        *) printf '%s' "$INPUT" | PB_AU_LANE="$AGENT_DIR" PB_AU_SESSION="$SESSION_ID" \
+               timeout 4 python3 -E -s "$HOOK_DIR/agent_usage.py" hook >/dev/null 2>&1 || true ;;
+    esac
+fi
+
 # SessionEnd is registered with no matcher, so it fires for every reason —
 # including ones where THE SAME PROCESS KEEPS RUNNING and SessionStart fires
 # again with the same pid (`clear` certainly; interactive `/resume` reportedly).

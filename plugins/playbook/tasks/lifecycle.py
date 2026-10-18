@@ -90,10 +90,14 @@ def _record_agent_usage(agent_dir: Path, task, session_dirs) -> None:
         if res.get("skipped") == "lock":
             # impl round 2 (opus, sonnet): never a silent gap — the span up to here goes to the next reader's task,
             # so this one is marked as not counted, and said
-            pbj.append_agent_usage(agent_dir, task=str(task or "-"), known=False, session_id=sid,
-                                   why="the lane lock was busy at this transition: the span up to it was not counted here")
-            print("agent tokens: not recorded at this transition (the lane lock was busy) — marked unknown in the numbers",
-                  file=sys.stderr)
+            marked = pbj.append_agent_usage(agent_dir, task=str(task or "-"), known=False, session_id=sid,
+                                            why="the lane lock was busy at this transition: the span up to it was "
+                                                "not counted here")
+            # task 246 (the post-panel judge of 244): say what was written, never a marker that did not land
+            print("agent tokens: not recorded at this transition (the lane lock was busy) — "
+                  + ("marked unknown in the numbers" if marked else
+                     "and the unknown marker could not be written either: this closure's agent numbers miss that "
+                     "span unmarked"), file=sys.stderr)
     except Exception:
         pass
 

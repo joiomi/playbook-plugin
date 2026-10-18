@@ -481,5 +481,38 @@ class RoundTwoFixes(_Lane):
         self.assertEqual(self.records(), [])
 
 
+
+class TheWriteIsReported(_Lane):
+    """Task 246 (PLAN.md "From task 244" (f)): an append says whether it landed."""
+    def test_an_append_that_lands_says_true(self):
+        ok = self.pbj.append_agent_usage(self.lane, task="7", known=False, why="x")
+        self.assertIs(ok, True)
+
+    def test_an_append_into_a_journal_that_cannot_be_written_says_false(self):
+        (self.lane / "journal").mkdir(exist_ok=True)
+        j = self.lane / "journal" / "enforcement.jsonl"
+        j.write_text("")
+        j.chmod(0o444)
+        try:
+            (self.lane / "journal" / "probe").write_text("x")
+            with open(j, "a"):
+                self.skipTest("file permissions not enforced for this user")
+        except PermissionError:
+            pass
+        ok = self.pbj.append_agent_usage(self.lane, task="7", known=False, why="x")
+        j.chmod(0o644)
+        self.assertIs(ok, False)
+
+    def test_an_append_the_writer_skips_says_false(self):
+        # a linked journal is skipped without an error (the writer's own rule): the append must say so too
+        (self.lane / "journal").mkdir(exist_ok=True)
+        elsewhere = self.lane.parent / "elsewhere.jsonl"
+        elsewhere.write_text("")
+        (self.lane / "journal" / "enforcement.jsonl").symlink_to(elsewhere)
+        ok = self.pbj.append_agent_usage(self.lane, task="7", known=False, why="x")
+        self.assertIs(ok, False)
+        self.assertEqual(elsewhere.read_text(), "", "nothing written through the link")
+
+
 if __name__ == "__main__":
     unittest.main()

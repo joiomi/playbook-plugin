@@ -282,7 +282,7 @@ def _agent_usage_rec(*, task="", file="", ino=0, span_from=0, span_to=0, head=""
     return rec
 
 
-def append_agent_usage(agent_dir, **fields) -> None:
+def append_agent_usage(agent_dir, **fields) -> bool:
     """Append one AGENT-USAGE record and return None. Never raises (task 244, PHASE-B item 6).
 
     The main agent's tokens over one span of one host transcript file, for one model (`scripts/agent_usage.py` reads
@@ -296,11 +296,13 @@ def append_agent_usage(agent_dir, **fields) -> None:
     `model`, `side` (1 for a subagent's file or sidechain entries), `calls`, `in`, `out`, `cache_read`, `cache_write`,
     `thinking` (a part of `out`, never added to it), `unreadable` when entries could not be read — or
     `status: "unknown"` with `why` (a span not counted: never zero counts for it). Every field bounded, the line under
-    the 512-byte floor; no conversation text is ever passed here, only the model's name."""
+    the 512-byte floor; no conversation text is ever passed here, only the model's name. Returns whether the record
+    landed (task 246: the close's busy-lock line says so)."""
     try:
-        _write_record(agent_dir, _agent_usage_rec(**fields))
+        return bool(_write_record(agent_dir, _agent_usage_rec(**fields)))
     except Exception as exc:                # defence in depth: never propagate
         _warn(exc)
+        return False
 
 
 def append_agent_usage_span(agent_dir, items) -> None:
@@ -922,7 +924,7 @@ def _is_int(v) -> bool:
         return False
 
 
-def _write_record(agent_dir, rec, name="enforcement.jsonl", data=None) -> None:
+def _write_record(agent_dir, rec, name="enforcement.jsonl", data=None) -> bool:
     """Write ONE record dict as a single O_APPEND line into the lane's journal.
 
     Shared by `append`, `append_review`, `append_lifecycle` and (`name="hooks.jsonl"`, `data` its encoded line)
@@ -942,10 +944,10 @@ def _write_record(agent_dir, rec, name="enforcement.jsonl", data=None) -> None:
     symlinked `journal/` could write outside the lane. A non-regular / symlinked
     sink is silently skipped instead."""
     if not agent_dir:
-        return
+        return False
     agent_dir = Path(agent_dir)
     if not agent_dir.is_dir():              # playbook-managed lane only
-        return
+        return False
     jdir = agent_dir / "journal"
     # A symlinked `journal` DIRECTORY would let the file open below resolve
     # OUTSIDE the lane — O_NOFOLLOW on the leaf file does NOT protect an
@@ -964,18 +966,18 @@ def _write_record(agent_dir, rec, name="enforcement.jsonl", data=None) -> None:
     # model; a dirfd/openat anchor would close it fully (impl-panel round 4).
     try:
         if jdir.is_symlink():
-            return
+            return False
     except OSError:
-        return
+        return False
     try:
         jdir.mkdir(exist_ok=True)           # inside an existing lane; not `.agent`
     except OSError:
         pass                                # e.g. path is a file — the open below fails, swallowed
     try:
         if jfile.is_symlink():
-            return
+            return False
     except OSError:
-        return
+        return False
     if data is None:
         data = (json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
     # O_NONBLOCK: a FIFO with no reader fails ENXIO here rather than blocking.
@@ -991,8 +993,10 @@ def _write_record(agent_dir, rec, name="enforcement.jsonl", data=None) -> None:
     try:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):    # FIFO/device/dir/socket → not our sink
-            return
-        os.write(fd, data)                  # single append; atomic under PIPE_BUF
+            return False
+        # task 246: says whether the whole line landed (a caller that reports a gap must not claim one it
+        # could not write); every skip above returns False
+        return os.write(fd, data) == len(data)   # single append; atomic under PIPE_BUF
     finally:
         os.close(fd)
 

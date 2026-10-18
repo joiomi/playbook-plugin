@@ -166,5 +166,35 @@ class WhatItLeavesAlone(_Project):
         self.assertFalse((other / ".agent").exists())
 
 
+
+SESSION_END = HOOK.parent / "session-end-hook"
+
+
+class AtTheSessionsEnd(_Project):
+    """Task 246 (PLAN.md "From task 244" (b)): session-end-hook records the turn after the last Stop — one interrupted
+    (Esc, a kill) gets no Stop — before it removes the session dir that holds the transcript pointer."""
+    def end(self, reason="exit", **env):
+        p = {"hook_event_name": "SessionEnd", "session_id": "h1", "cwd": str(self.project),
+             "transcript_path": str(self.transcript), "reason": reason}
+        return subprocess.run(["bash", str(SESSION_END)], input=json.dumps(p), cwd=self.project, env=self.env(**env),
+                              capture_output=True, text=True, timeout=60)
+
+    def test_an_exit_records_under_the_sessions_task_then_removes_the_dir(self):
+        r = self.end("exit")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual([(x["task"], x["calls"]) for x in self.records()], [("5", 2)])
+        self.assertFalse(self.sdir.exists(), "the session dir is removed after the record")
+
+    def test_a_clear_records_too_and_keeps_the_dir(self):
+        r = self.end("clear")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual([x["calls"] for x in self.records()], [2])
+        self.assertTrue(self.sdir.exists())
+
+    def test_a_judge_session_end_records_nothing(self):
+        self.end("exit", PLAYBOOK_SESSION_ID="judge")
+        self.assertEqual(self.records(), [])
+
+
 if __name__ == "__main__":
     unittest.main()
