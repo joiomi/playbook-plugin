@@ -363,6 +363,54 @@ class ThePartition(unittest.TestCase):
                 self.assertEqual(sum(sum(v.values()) for v in got["by_section"].values()),
                                  sum(got["by_kind"].values()))
 
+    def test_the_parts_add_up_on_the_branches_the_close_adds(self):
+        """Q1 again, on what `part()` never passes (task 237's impl round 2, opus and sonnet): a window start inside the
+        session (clipped gaps, sleep shares charged by their own samples), the close's own session (`known_close`, its
+        call kept through a prompt), a live sample, and samples taken before their line was written."""
+        import random
+        events = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "SessionStart",
+                  "SessionEnd"]
+        for case in range(1500):
+            rnd = random.Random(1000 + case)
+            t, lines, open_ids = 0, [], []
+            boot, susp = "aaaaaaaa", 0
+            for k in range(rnd.randint(2, 40)):
+                t += rnd.choice([0, 1, 3, 30, 600, 5000, 9000])
+                ev = rnd.choice(events)
+                kw = {"task": rnd.choice(["007", "007", "007", "008", None]),
+                      "detail": rnd.choice(["", "not logged: a notification", "logged M001"])}
+                if ev == "PreToolUse":
+                    tid = f"t{k}"
+                    open_ids.append(tid)
+                    kw.update(tool=rnd.choice(["Bash", "Edit", "AskUserQuestion", "exec_command"]), tid=tid)
+                elif ev.startswith("PostToolUse") and open_ids and rnd.random() < 0.7:
+                    kw.update(tid=open_ids.pop(0))
+                if ev == "Stop":
+                    kw["decision"] = rnd.choice(["allow", "block"])
+                if rnd.random() < 0.3:
+                    if rnd.random() < 0.05:
+                        boot, susp = "bbbbbbbb", 0
+                    susp += rnd.choice([0, 0, 1, 50, 4000])
+                    kw.update(susp=susp, sts=T0 + t - rnd.choice([0, 0, 0, 5, 50, 700]), boot=boot)
+                kw["section"] = rnd.choice([None, "Work Plan", "Design Phase"])
+                lines.append(L(t, ev, **kw))
+            end = t + rnd.choice([0, 0, 20])
+            start = None if rnd.random() < 0.3 else T0 + rnd.randint(0, max(1, t))
+            live = ((susp + rnd.choice([0, 0, 30]), T0 + end + rnd.choice([1, 5, 200]), boot) if rnd.random() < 0.5
+                    else None)
+            got = numbers.session_partition(lines, "007", T0 + end,
+                                            [(T0 + rnd.randint(0, t + 1) + 0.37, T0 + t + 5.61)],
+                                            [(T0 + 0.75, T0 + rnd.randint(0, t + 1) + 0.5)], start=start,
+                                            close_open=rnd.random() < 0.7, known_close=rnd.random() < 0.5, live=live)
+            with self.subTest(case=case):
+                parts = sum(got["by_kind"].values()) + got["slept"] + got["away"] + got["unknown"]
+                self.assertEqual(parts, got["total"])
+                self.assertEqual(got["total"] + got["not_task"], got["wall"])
+                self.assertTrue(all(v >= 0 for v in list(got["by_kind"].values()) + [
+                    got["slept"], got["away"], got["unknown"], got["not_task"], got["sleep_unplaced"]]))
+                self.assertEqual(sum(sum(v.values()) for v in got["by_section"].values()),
+                                 sum(got["by_kind"].values()))
+
 
 # --- the side tables and the composition (W4) -------------------------------------------------------------------------
 
