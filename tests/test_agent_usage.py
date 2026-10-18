@@ -401,5 +401,85 @@ class RoundOneFixes(_Lane):
         self.assertEqual(self.total(), 1)
 
 
+
+class RoundTwoFixes(_Lane):
+    """Task 244's impl round 2 (agy, opus, sonnet)."""
+    def table(self):
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "plugins" / "playbook"))
+        from tasks import numbers
+        return numbers.agent_table([dict(r, _t=0.0, _n=n) for n, r in enumerate(self.records())])
+
+    def test_a_subagent_file_with_entries_in_both_buckets_keeps_both(self):
+        sub = self.tdir / "sess-1" / "subagents"
+        sub.mkdir(parents=True)
+        (sub / "agent-a1.jsonl").write_bytes(lines(entry("s1", side=False), entry("s2", side=True)))
+        self.main.write_bytes(b"")
+        self.record()
+        self.assertEqual(self.table()["models"]["claude-opus-5-5 (subagent)"]["calls"], 2)
+
+    def test_an_unreadable_call_written_as_several_entries_is_one_unreadable(self):
+        bad = entry("b1")
+        bad["message"]["usage"]["output_tokens"] = "lots"
+        self.main.write_bytes(lines(bad, bad, bad, entry("m1")))
+        self.record()
+        self.assertEqual(sum(r.get("unreadable", 0) for r in self.records()), 1)
+
+    def test_the_task_is_read_inside_the_lock(self):
+        import fcntl
+        self.main.write_bytes(lines(entry("m1")))
+        held = []
+
+        def task():
+            fd = os.open(str(self.lane / "journal" / "agent-usage.lock"), os.O_RDWR)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                held.append(False)
+            except OSError:
+                held.append(True)
+            finally:
+                os.close(fd)
+            return "9"
+        self.mod.record_spans(self.lane, task=task, paths=[str(self.main)], session_id="pid-1", pbj=self.pbj)
+        self.assertEqual(held, [True], "the task was asked while the lane lock was held")
+        self.assertEqual(self.records()[-1]["task"], "9")
+
+    def test_a_first_empty_read_writes_one_zero_call_record_and_no_more(self):
+        self.main.write_bytes(lines(user()))
+        self.record()
+        self.record()
+        r = self.records()
+        self.assertEqual(len(r), 1)
+        self.assertEqual(r[0]["calls"], 0)
+        self.assertEqual(r[0]["to"], self.main.stat().st_size)
+
+    def test_a_record_whose_to_is_a_boolean_is_not_a_read_position(self):
+        self.main.write_bytes(lines(entry("m1"), entry("m2")))
+        key = self.mod.file_key(str(self.main))
+        rec = {"ts": "2026-10-19T00:00:00Z", "hook": "agent-usage", "decision": "record", "reason": "agent usage",
+               "task": "7", "file": key, "ino": str(self.main.stat().st_ino), "from": 0, "to": True,
+               "head": self.mod.head_of(str(self.main), 1), "last_id": "", "model": "m", "side": 0, "calls": 0}
+        (self.lane / "journal").mkdir(exist_ok=True)
+        with open(self.lane / "journal" / "enforcement.jsonl", "a") as fh:
+            fh.write(json.dumps(rec) + "\n")
+        self.record(fresh_max=10 ** 6)
+        self.assertEqual(self.total(), 2)
+
+    def test_an_unresolved_session_records_nothing(self):
+        self.main.write_bytes(lines(entry("m1")))
+        old = {k: os.environ.get(k) for k in ("PB_AU_LANE", "PB_AU_SESSION")}
+        os.environ["PB_AU_LANE"], os.environ["PB_AU_SESSION"] = str(self.lane), ""
+        try:
+            got = self.mod.hook_main(json.dumps({"transcript_path": str(self.main)}))
+        finally:
+            for k, v in old.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        self.assertIn("skipped", got)
+        self.assertEqual(self.records(), [])
+
+
 if __name__ == "__main__":
     unittest.main()

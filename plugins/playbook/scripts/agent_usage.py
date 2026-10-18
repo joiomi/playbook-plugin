@@ -175,11 +175,11 @@ def _take(raw: bytes, out: dict, seen: set, last: str) -> str:
         return last
     if mid in seen:
         return mid
+    seen.add(mid)                    # read or not, this call is done: its other blocks are not counted (impl round 2, agy)
     counts = _counts(msg.get("usage"))
     if counts is None:
         out["unreadable"] += 1
-        return last
-    seen.add(mid)
+        return mid
     bucket = out["sidechain" if rec.get("isSidechain") is True else "models"].setdefault(model, _blank())
     bucket["calls"] += 1
     for k, v in counts.items():
@@ -271,7 +271,7 @@ def session_files(paths: "list[str]") -> "list[str]":
     return out
 
 
-def record_spans(lane, *, task: str, paths: "list[str]", session_id: str, pbj, lock_wait: float = 2.0,
+def record_spans(lane, *, task, paths: "list[str]", session_id: str, pbj, lock_wait: float = 2.0,
                  fresh_max: int = FRESH_MAX, scan_max: int = _SCAN_MAX) -> dict:
     """Read every file of the session from its newest record's `to` and append what it holds, under the lane lock.
 
@@ -280,7 +280,9 @@ def record_spans(lane, *, task: str, paths: "list[str]", session_id: str, pbj, l
     `fresh_max` bytes, else gets a seed — a record `unknown`, `from = to = size` — so no history is charged to one
     task; so does a file the journal scan could not reach back to (`scan_max`). A span's records (one per model and
     side) go in ONE append; a span with neither calls nor unreadable entries writes nothing. `pbj` is the loaded
-    `pb_journal` module. Returns {"files", "calls", "skipped"}."""
+    `pb_journal` module. `task` is the task's number, or a callable asked INSIDE the lock (impl round 2, opus: read
+    before it, a close holding the lock could leave this span after its `done`); a callable answering None — a
+    session not resolved — records nothing (impl round 2, sonnet). Returns {"files", "calls", "skipped"}."""
     lane = str(lane)
     out = {"files": 0, "calls": 0, "skipped": ""}
     files = session_files(paths)
@@ -292,6 +294,11 @@ def record_spans(lane, *, task: str, paths: "list[str]", session_id: str, pbj, l
         out["skipped"] = "lock"
         return out
     try:
+        if callable(task):
+            task = task()
+            if task is None:
+                out["skipped"] = "the session is not resolved"
+                return out
         keys = {file_key(f): f for f in files}
         newest, complete = _newest(os.path.join(lane, "journal", "enforcement.jsonl"), set(keys), scan_max)
         for key, f in keys.items():
@@ -303,7 +310,8 @@ def record_spans(lane, *, task: str, paths: "list[str]", session_id: str, pbj, l
                 continue
             prev = newest.get(key)
             p_to = prev.get("to") if prev else None
-            same = (prev is not None and str(prev.get("ino")) == str(st.st_ino) and isinstance(p_to, int)
+            same = (prev is not None and str(prev.get("ino")) == str(st.st_ino)
+                    and isinstance(p_to, int) and not isinstance(p_to, bool)
                     and prev.get("head") == head_of(f, min(HEAD_MAX, p_to)))
             if same:
                 start, last = int(p_to), str(prev.get("last_id") or "")
@@ -325,17 +333,26 @@ def record_spans(lane, *, task: str, paths: "list[str]", session_id: str, pbj, l
             span = dict(task=task, file=key, ino=st.st_ino, span_from=frm, span_to=r["offset"],
                         head=head_of(f, min(HEAD_MAX, r["offset"])), last_id=r["last_id"], session_id=session_id)
             bad = r["unreadable"] + r["bad_lines"]     # a broken assistant line is unreadable too (impl round 1, codex)
-            items = []
-            for side, bucket in ((False, r["models"]), (True, r["sidechain"])):
-                for model, c in sorted(bucket.items()):
+            merged: "dict[tuple, dict]" = {}          # per (model, final side): a subagent file's two buckets are one
+            for side, bucket in ((False, r["models"]), (True, r["sidechain"])):  # side (impl round 2, agy)
+                for model, c in bucket.items():
                     if c["calls"]:
-                        items.append(dict(span, model=model, side=side or side_file, calls=c["calls"], counts=c))
-                        out["calls"] += c["calls"]
+                        m = merged.setdefault((model, bool(side or side_file)), {k: 0 for k in c})
+                        for k, v in c.items():
+                            m[k] += v
+            items = []
+            for (model, side), c in sorted(merged.items()):
+                items.append(dict(span, model=model, side=side, calls=c["calls"], counts=c))
+                out["calls"] += c["calls"]
             if bad:
                 if items:
                     items[0]["unreadable"] = bad
                 else:
                     items.append(dict(span, model="?", side=side_file, calls=0, counts={}, unreadable=bad))
+            if not items and not same:
+                # a file's first read found no call: one zero-call record, so later scans find its position instead of
+                # searching the whole journal for it at every Stop (impl round 2, opus)
+                items.append(dict(span, model="?", side=side_file, calls=0, counts={}))
             if items:
                 pbj.append_agent_usage_span(lane, items)   # one write: the span's `to` lands with all its models
         return out
@@ -390,13 +407,20 @@ def hook_main(payload_text: str) -> str:
         return "skipped: no lane"
     pbj = load_journal()
     from pathlib import Path
-    task = pbj._hj_session_task(Path(lane), session) or "-"
+    seen_task: list = []
+
+    def task():
+        # asked inside the lane lock; None (a session not resolved) records nothing — the span stays for a reader
+        # that knows its session (a CLI transition, the close)
+        t = pbj._hj_session_task(Path(lane), session)
+        seen_task.append(t)
+        return None if t is None else (t or "-")
     tp = payload.get("transcript_path")
     res = record_spans(lane, task=task, paths=[tp if isinstance(tp, str) else "", _pointer(lane, session)],
                        session_id=session, pbj=pbj, lock_wait=2.0)
     if res["skipped"]:
         return f"skipped: {res['skipped']}"
-    return f"recorded {res['calls']} call(s) from {res['files']} file(s) for task {task}"
+    return f"recorded {res['calls']} call(s) from {res['files']} file(s) for task {(seen_task or ['-'])[0] or '-'}"
 
 
 if __name__ == "__main__":

@@ -129,7 +129,8 @@ class _CliProject(unittest.TestCase):
     def calls_by_task(self):
         out: dict = {}
         for r in self.records():
-            out[r["task"]] = out.get(r["task"], 0) + r.get("calls", 0)
+            if r.get("calls"):                     # a zero-call record is a read position (impl round 2), no calls
+                out[r["task"]] = out.get(r["task"], 0) + r["calls"]
         return out
 
     def closure(self, prefix):
@@ -179,6 +180,28 @@ class TheCli(_CliProject):
         self.say(1)
         self.cli("work", "done", "--force", "--reason", "freehand close")
         self.assertEqual(self.calls_by_task(), {"-": 2, "001": 1})
+
+    def test_a_close_that_cannot_take_the_lock_says_so_and_marks_the_gap(self):
+        self.cli("new", "quick", "first")
+        self.pointer()
+        self.cli("work", "1")
+        self.say(2)
+        lock = self.project / ".agent" / "journal" / "agent-usage.lock"
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        holder = subprocess.Popen(["flock", str(lock), "sleep", "60"], stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL, start_new_session=True)
+        try:
+            deadline = time.time() + 10
+            while not lock.exists() and time.time() < deadline:
+                time.sleep(0.05)
+            time.sleep(0.3)
+            r = self.cli("work", "done", "--force", "--reason", "lock busy")
+        finally:
+            os.killpg(holder.pid, 9)
+            holder.wait()
+        self.assertIn("agent tokens: not recorded", r.stdout + r.stderr)
+        a = self.closure("001")["agent"]
+        self.assertEqual(a["unknown"], 1)
 
     def test_a_close_with_no_record_says_so(self):
         self.cli("new", "quick", "first")

@@ -299,13 +299,13 @@ side) go in one append, so the span's `to` never lands without all of them. A fi
 8 MiB; a larger one (a session begun before the recorder was installed) gets a seed — `status: "unknown"`, `why`,
 `from` = `to` = its size — so no history is charged to one task; so does a file whose last record the backward scan of
 the journal (32 MiB at most) did not reach. A broken assistant line and an entry with no `message.id` count as
-`unreadable`, never as a call. `ino` is text (an inode number can pass the integer cap). No conversation text is written: only the model's name. Bounds: a span after the
+`unreadable`, never as a call (one unreadable per call, however many entries carry it). `ino` is text (an inode number can pass the integer cap). The task is read inside the lock; a session the hook cannot resolve records nothing (its span stays for a reader that knows the session). A file's first read that finds no call writes one zero-call record — a read position, so later scans find it. A close or `tasks work` that cannot take the lock writes an `unknown` marker for the task it leaves and says so: never a silent gap. Still not counted (bounds): a turn interrupted with no Stop and then the session's end; a brand-new file in a journal past the scan bound gets a seed. No conversation text is written: only the model's name. Bounds: a span after the
 close's own read (the rest of that turn) is not the closure's; a transcript never read again (a crash with no
 SessionEnd, never continued) keeps its unread tail; a judge's, tail-cert's or the monitor's session records nothing
 (task 232 counts the judges' usage). A real record — task 244's timing run, on a copy of a 22 MB transcript tail:
 
 ```json
-{"ts":"2026-10-18T21:06:34Z","session_id":"s1","hook":"agent-usage","decision":"record","reason":"agent usage","task":"5","file":"0d9f664dcd3e1066","ino":26667135,"from":19862178,"to":21876806,"last_id":"msg_011CgAPA3MaFGF5U4a31rEkR","model":"claude-opus-5-5","side":0,"calls":13,"in":26,"out":11836,"cache_read":7780805,"cache_write":15447,"thinking":2280}
+{"ts":"2026-10-18T22:15:53Z","session_id":"s1","hook":"agent-usage","decision":"record","reason":"agent usage","task":"5","file":"34ae6986f0647c4f","ino":"26667247","from":19862178,"to":21876806,"head":"6f5953ed","last_id":"msg_011CgAPA3MaFGF5U4a31rEkR","model":"claude-opus-5-5","side":0,"calls":13,"in":26,"out":11836,"cache_read":7780805,"cache_write":15447,"thinking":2280}
 ```
 
 ## The hook journal — `journal/hooks.jsonl` (task 222)

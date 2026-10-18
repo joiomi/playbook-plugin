@@ -83,10 +83,17 @@ def _record_agent_usage(agent_dir: Path, task, session_dirs) -> None:
         paths = [p for p in (au._pointer(str(agent_dir), Path(d).name) for d in session_dirs) if p]
         if not paths:
             return
-        au.record_spans(str(agent_dir), task=str(task or "-"), paths=paths,
-                        session_id=resolve_session_id(quiet=True) or "", pbj=_load("_pb_journal_agent_cli",
-                                                                                    "pb_journal.py"),
-                        lock_wait=5.0)
+        pbj = _load("_pb_journal_agent_cli", "pb_journal.py")
+        sid = resolve_session_id(quiet=True) or ""
+        res = au.record_spans(str(agent_dir), task=str(task or "-"), paths=paths, session_id=sid, pbj=pbj,
+                              lock_wait=5.0)
+        if res.get("skipped") == "lock":
+            # impl round 2 (opus, sonnet): never a silent gap — the span up to here goes to the next reader's task,
+            # so this one is marked as not counted, and said
+            pbj.append_agent_usage(agent_dir, task=str(task or "-"), known=False, session_id=sid,
+                                   why="the lane lock was busy at this transition: the span up to it was not counted here")
+            print("agent tokens: not recorded at this transition (the lane lock was busy) — marked unknown in the numbers",
+                  file=sys.stderr)
     except Exception:
         pass
 
