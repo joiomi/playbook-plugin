@@ -32,8 +32,10 @@ after about 30 days; tasks 232-234 made the plugin record the facts, and now the
   reason that names TAMPER-GUARD-DEGRADED, TAIL-CERTIFIED or FRESH no longer becomes that verdict; a closure's review
   and verify records follow its file-order bounds; the close's own session is the one its `done` record names, and its
   call runs to the close through a background notification; a reopen right after the close no longer leaves that
-  closure unwritten; a JSON `false` is not exit 0; a receipt with no `done` record is still the first close. Two races
-  within seconds of a close stay stated limits in the docs.
+  closure unwritten; a JSON `false` is not exit 0; a receipt with no `done` record is still the first close (and
+  `tasks numbers` agrees); an empty fingerprint in the receipt still names its verdict; a record written after the
+  close's `done`, even in its second, is late; sleep its samples prove fell before the window is not charged to it.
+  Two races within seconds of a close, and rounds shared by two lives in one second, stay stated limits in the docs.
 
 **Every hook-journal line names its task; the state echo's names the open gate's section; python's carry a suspend
 sample** — PHASE-B.md item 6, third part, task 234. With these the close can split a task's time by phase and drop the

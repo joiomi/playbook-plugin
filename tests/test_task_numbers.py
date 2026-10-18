@@ -1417,5 +1417,106 @@ class TheRoundThreeCloseFindings(_CliProject):
         self.assertIn("READS 1", r.stdout)
 
 
+class TheRoundThreeRoundOne(_Tmp):
+    """Task 237's impl round 1 (its judge.md, "Triage — impl round 1"): K2-K4 and the Minor ones."""
+
+    HEAD = TheRoundOneFindings.HEAD
+    block = TheRoundOneFindings.block
+    closed_project = TheRoundThreeFindings.closed_project
+
+    def test_k2_an_empty_fingerprint_still_names_the_verdict(self):
+        for fresh, want in (({"verdict": "TAMPER-GUARD-DEGRADED", "round_fp": "", "now_fp": "x"}, "TAMPER-GUARD-DEGRADED"),
+                            ({"verdict": "TAMPER-GUARD-DEGRADED", "round_fp": "a", "now_fp": ""}, "TAMPER-GUARD-DEGRADED"),
+                            ({"verdict": "STALE", "round_fp": "", "now_fp": "x"}, "STALE")):
+            with self.subTest(fresh=fresh):
+                got = numbers.receipt_close(self.HEAD + self.block(**fresh))
+                self.assertEqual(got["freshness"], want)
+
+    def test_k3_a_later_host_session_with_the_same_pid_is_not_the_close(self):
+        lane, td, close_t = self.closed_project()
+        with open(self.jdir / "hooks.jsonl", "a") as f:     # after a /clear: a new host session, the same pid-1
+            for rec in (hl(close_t + 30, "UserPromptSubmit", hook="chat-log", host="h-3", detail="logged M010"),
+                        hl(close_t + 31, "PostToolUse", host="h-3")):
+                f.write(json.dumps(rec) + "\n")
+        got = numbers.compose(lane, td, "007", deadline=time.monotonic() + 30)
+        self.assertEqual(got["time"]["by_kind"], {"agent": 39, "owner-idle": 55, "verify": 5})
+
+    def test_k4_a_review_written_after_the_done_in_its_second_is_late(self):
+        lane, td, close_t = self.closed_project()
+        recs = [json.loads(x) for x in (self.jdir / "enforcement.jsonl").read_text().splitlines()]
+        at = next(i for i, r in enumerate(recs) if r.get("reason") == "done")
+        recs[at]["ts"] = iso(close_t)                       # the close's `done` in its receipt's second
+        recs.insert(at + 1, {"ts": iso(close_t), "hook": "review", "task": "007", "kind": "single", "seat": "t",
+                             "round": 3, "duration_ms": 4000, "status": "ok"})
+        recs.insert(at + 2, {"ts": iso(close_t), "hook": "verify", "task": "007", "rc": 0, "how": "ran", "seconds": 3})
+        self.write("enforcement.jsonl", recs)
+        got = numbers.compose(lane, td, "007", deadline=time.monotonic() + 30)
+        self.assertEqual((list(got["seats"]), got["verify"]["runs"], got["late_records"]), (["s"], 1, 3))
+
+    def test_minor_on_the_time_path_late_stops_at_the_next_work(self):
+        lane, td, close_t = TheComposition.project(self)         # no `done`: the time path
+        with open(self.jdir / "enforcement.jsonl", "a") as f:
+            f.write(json.dumps({"ts": iso(close_t + 100), "hook": "tasks", "reason": "work", "task": "007"}) + "\n")
+            f.write(json.dumps({"ts": iso(close_t + 200), "hook": "review", "task": "007", "kind": "panel",
+                                "seat": "s", "round": 3, "duration_ms": 1000}) + "\n")
+        self.assertEqual(numbers.compose(lane, td, "007", deadline=time.monotonic() + 30)["late_records"], 1)
+
+    def test_minor_sleep_proved_before_the_window_is_not_charged_to_it(self):
+        # codex: the line at +40 carries a sample TAKEN at -10; the 80 s fell within [-100, -10], before the window
+        lines = [L(-100, "PostToolUse", tid="a", susp=100, sts=T0 - 100, boot="aaaaaaaa"),
+                 L(40, "Stop", decision="allow", susp=180, sts=T0 - 10, boot="aaaaaaaa")]
+        got = numbers.session_partition(lines, "007", T0 + 40, [], [], start=T0)
+        self.assertEqual((got["slept"], got["total"]), (0, 40))
+
+    def test_minor_sleep_the_samples_allow_inside_the_window_stays_its_rule(self):
+        # sonnet: samples at -100 and +20; the window part holds what it can (the documented rule)
+        lines = [L(-100, "PostToolUse", tid="a", susp=0, sts=T0 - 100, boot="aaaaaaaa"),
+                 L(20, "Stop", decision="allow", susp=100, sts=T0 + 20, boot="aaaaaaaa")]
+        got = numbers.session_partition(lines, "007", T0 + 20, [], [], start=T0)
+        self.assertEqual((got["slept"], got["total"]), (20, 20))
+
+
+class TheRoundThreeRoundOneClose(_CliProject):
+    def closed(self):
+        self.cli("new", "quick", "first")
+        self.cli("work", "1")
+        self.cli("work", "done", "--force", "--reason", "one")
+        return self.numbers_doc()
+
+    def test_k1_a_close_whose_done_was_lost_is_not_composed_again(self):
+        self.closed()
+        kept = [x for x in self.journal.read_text().splitlines() if '"reason":"done"' not in x]
+        self.journal.write_text("\n".join(kept) + "\n")
+        r = self.cli("numbers", "1")
+        self.assertNotIn("the newest close is not in numbers.json", r.stdout)
+
+    def test_k4_tasks_numbers_counts_a_review_after_the_done_in_its_second(self):
+        doc = self.closed()
+        t = numbers._iso_epoch(doc["closures"][0]["closed_at"])
+        with open(self.journal, "a") as f:
+            f.write(json.dumps({"ts": iso(t), "hook": "review", "decision": "record", "reason": "review spend",
+                                "task": "001", "kind": "single", "seat": "s", "round": 1, "duration_ms": 1000,
+                                "status": "ok"}) + "\n")
+        r = self.cli("numbers", "1")
+        self.assertIn("(1 review / verify record(s) written after the last close", r.stdout)
+
+    def test_k1_a_journal_read_out_of_time_claims_nothing_missing(self):
+        self.closed()
+        driver = ("from tasks import numbers\n"
+                  "def _slow(*a, **k):\n    raise numbers.OutOfTime('enforcement.jsonl')\n"
+                  "numbers.read_enforcement = _slow")
+        r = self.cli("numbers", "1", driver=driver)
+        self.assertNotIn("the newest close is not in numbers.json", r.stdout)
+        self.assertNotIn("the records took too long", r.stdout)           # no recompose was tried
+        self.assertIn("closure #1", r.stdout)
+
+    def test_minor_a_non_dict_closure_in_the_file_is_skipped(self):
+        doc = self.closed()
+        (self.task_dir() / "numbers.json").write_text(json.dumps(dict(doc, closures=doc["closures"] + ["junk"])),
+                                                      encoding="utf-8")
+        r = self.cli("numbers", "1")
+        self.assertIn("closure #1", r.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

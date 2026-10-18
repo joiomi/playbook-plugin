@@ -289,7 +289,7 @@ _BLOCK = re.compile(r"^### (\S+) · risk (\S+)")
 # reason that names a verdict is not that verdict (task 236's impl round 2, Q1: opus, sonnet).
 _VERDICT_PREFIX = (("no stamp recorded", "NO-STAMP"), ("EXCLUDE-COVERS-CODE —", "EXCLUDE-COVERS-CODE"),
                    ("n/a — the newest single-judge review ran with a", "SINGLE-TAMPER-DEGRADED"))
-_VERDICT_AT = re.compile(r"\S+ vs close (?:\S+|\(unavailable\)) — "
+_VERDICT_AT = re.compile(r"(?:\S+ )?vs close (?:\(unavailable\)|\S*) — "     # a fingerprint can be empty (K2)
                          r"(TAMPER-GUARD-DEGRADED|UNREADABLE|FRESH|STALE, but TAIL-CERTIFIED|STALE)")
 
 
@@ -562,6 +562,7 @@ def session_partition(lines: "list[dict]", task: str, end: float, reviews: "list
     # `sleep_unplaced`; across a boot change the overlapped gaps are unknown
     n = len(lines) - 1
     slept = [0.0] * n
+    alloc: "list[list[tuple[float, float, float]]]" = [[] for _ in range(n)]     # (sleep, sts1, sts2) per gap
     unknown = [False] * n
     bracketed = [False] * n
     unplaced = 0.0
@@ -593,6 +594,8 @@ def session_partition(lines: "list[dict]", task: str, end: float, reviews: "list
             room = min(o, (lines[k + 1]["_t"] - lines[k]["_t"]) - slept[k])
             take = max(0.0, min(room, left))
             slept[k] += take
+            if take > 0:
+                alloc[k].append((take, t1, t2))
             left -= take
             if left <= 0:
                 break
@@ -636,7 +639,12 @@ def session_partition(lines: "list[dict]", task: str, end: float, reviews: "list
             continue
         if not bracketed[k]:
             acc["sleep_unmeasured"] += gap
-        sl = min(slept[k], gap)      # a clipped gap keeps the sleep its part in the window can hold
+        sl = slept[k]                # never more than the gap: the placement caps each share at its room
+        if a_t > a["_t"]:
+            # a gap clipped at the window's start keeps the sleep its window part can hold, and only where each
+            # share's own samples allow it: sleep they prove fell before the window is not charged to it (task 237's
+            # impl round 1, codex)
+            sl = min(gap, sum(min(tk, max(0.0, min(s2_, b["_t"]) - max(s1_, a_t))) for tk, s1_, s2_ in alloc[k]))
         acc["slept"] += sl
         awake = gap - sl
         if awake > AWAY_S:
@@ -912,10 +920,11 @@ def compose(lane: Path, task_dir: Path, task: str, deadline: float, end: "float 
                   and r["_t"] <= end + CLOSE_RECORD_LAG_S]
         closure_no = sum(1 for r in trans if r.get("reason") == "done" and r["_n"] <= done["_n"])
         # its review / verify records too, by the same file-order bounds (task 236's impl round 2, Q3: codex)
+        # — before its `done` the closure's, after it the late ones, even inside one second (K4, codex)
         in_life = [r for r in mine if first["_n"] < r["_n"] and (nxt is None or r["_n"] < nxt)]
-        reviews = [r for r in in_life if r["hook"] == "review" and r["_t"] <= end]
-        verifies = [r for r in in_life if r["hook"] == "verify" and r["_t"] <= end]
-        late = sum(1 for r in in_life if r["hook"] in ("review", "verify") and r["_t"] > end)
+        reviews = [r for r in in_life if r["hook"] == "review" and r["_n"] < done["_n"]]
+        verifies = [r for r in in_life if r["hook"] == "verify" and r["_n"] < done["_n"]]
+        late = sum(1 for r in in_life if r["hook"] in ("review", "verify") and r["_n"] > done["_n"])
         closing_sid = str(done.get("session_id") or "")
     else:
         # no `done` to anchor on (an open task's snapshot, records from before the transition records): by time
@@ -928,7 +937,7 @@ def compose(lane: Path, task_dir: Path, task: str, deadline: float, end: "float 
         closure_no = max(1, sum(1 for r in trans if r.get("reason") == "done" and r["_t"] <= upto))
         win = task_records(enf, task, start, end) if start is not None else {h: [] for h in _TASK_HOOKS}
         reviews, verifies = win["review"], win["verify"]
-        late = sum(1 for r in mine if r["hook"] in ("review", "verify") and r["_t"] > end)
+        late = sum(1 for r in mine if r["hook"] in ("review", "verify") and end < r["_t"] < nxt_t)
         closing_sid = ""
     review_spans = [(r["_t"] - r["duration_ms"] / 1000.0, r["_t"]) for r in reviews
                     if isinstance(r.get("duration_ms"), (int, float)) and not isinstance(r.get("duration_ms"), bool)]
@@ -952,8 +961,12 @@ def compose(lane: Path, task_dir: Path, task: str, deadline: float, end: "float 
         # the close's own call ends at `end` only in the session that holds it (impl r1, opus; W9, grok): the one its
         # `done` record names (the close writes it from that session — task 236's impl round 2, Q4: codex, grok);
         # without one, this task's latest open call
-        named = [(max(r["_t"] for r in sl if r.get("session_id") == closing_sid), key) for key, sl in sessions.items()
-                 if closing_sid and any(r.get("session_id") == closing_sid for r in sl)]
+        # — by its lines up to the close only: a host session after a `/clear` keeps the same `pid-N` (K3, sonnet)
+        named = []
+        for key, sl in sessions.items():
+            seen = [r["_t"] for r in sl if closing_sid and r.get("session_id") == closing_sid and r["_t"] <= end]
+            if seen:
+                named.append((max(seen), key))
         closing = max(named)[1] if named else closing_session(sessions, task, end)
         for key, sl in sessions.items():
             if time.monotonic() > deadline:
@@ -1022,7 +1035,10 @@ def _read_doc(path: Path) -> "dict | None":
         doc = json.loads(data.decode("utf-8", "replace"))
     except ValueError:
         return None
-    return doc if isinstance(doc, dict) and isinstance(doc.get("closures"), list) else None
+    if not (isinstance(doc, dict) and isinstance(doc.get("closures"), list)):
+        return None
+    doc["closures"] = [c for c in doc["closures"] if isinstance(c, dict)]     # a stray element is skipped (agy)
+    return doc
 
 
 def _live_sample() -> "tuple | None":
@@ -1183,11 +1199,13 @@ def cmd_numbers(cmd_args: "list[str]") -> None:
             mine = [r for r in read_enforcement(lane, time.monotonic() + BUDGET_S) if str(r.get("task", "")) == task]
         except OutOfTime:
             mine = None
-        # the newest close's number: the task's count of `done` records (as compose numbers it)
-        n_done = sum(1 for r in mine if r["hook"] == "tasks" and r.get("reason") == "done") if mine is not None else None
+        # the newest close's number as compose gives it: the task's count of `done` records, at least 1 (K1, opus);
+        # unknown when the read ran out of time — then nothing is claimed missing
+        dones = [r for r in mine or () if r["hook"] == "tasks" and r.get("reason") == "done"]
+        n_done = max(1, len(dones)) if mine is not None else None
         # the life in progress of a reopened task, or a newest close whose write failed — by its stamp AND its number,
         # so a second close in the same second is not taken for the first (task 235, W6; task 236's impl r1, Y4)
-        if not _is_done_text(text) or (newest and (newest["stamp"], n_done) not in saved):
+        if not _is_done_text(text) or (newest and n_done is not None and (newest["stamp"], n_done) not in saved):
             try:
                 c = compose(lane, d, task, deadline=time.monotonic() + BUDGET_S * 4)
             except OutOfTime:
@@ -1198,8 +1216,10 @@ def cmd_numbers(cmd_args: "list[str]") -> None:
             for ln in format_closure(c):
                 print(ln)
             return
+        # written after the last close: after its `done` in file order, inside its second too (K4, codex)
         last = _iso_epoch(doc["closures"][-1].get("closed_at")) or 0
-        late = sum(1 for r in mine or () if r["hook"] in ("review", "verify") and r["_t"] > last)
+        late = sum(1 for r in mine or () if r["hook"] in ("review", "verify")
+                   and (r["_n"] > dones[-1]["_n"] if dones else r["_t"] > last))
         if late:
             print(f"  ({late} review / verify record(s) written after the last close are in no closure)")
         return
