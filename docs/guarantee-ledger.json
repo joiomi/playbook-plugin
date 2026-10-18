@@ -9205,6 +9205,16 @@
         },
         {
           "type": "executable integration",
+          "path": "tests/test_init_fails_and_restores.py",
+          "reference": "TwoInitsOnOneHome.test_t10_a_second_init_waits_for_the_first_and_nothing_comes_back",
+          "boundary": "real-os",
+          "negative_control": null,
+          "limitations": [
+            "Task 243, impl round 1 (codex, reproduced): two inits on one HOME at once — B paused at the removal step's seam, A started meanwhile — A waits for B's HOME lock, both exit 0 and the logger stays removed; without the lock B's rollback brought it back."
+          ]
+        },
+        {
+          "type": "executable integration",
           "path": "tests/test_init_rollback.py",
           "reference": "InitRollback.test_a_linked_rc_is_restored_at_its_target_and_stays_a_link",
           "boundary": "subprocess",
@@ -9258,7 +9268,7 @@
           "boundary": "live-platform",
           "negative_control": null,
           "limitations": [
-            "2026-10-18, candidate nested 65b6fc7 (task 243), run from the nested repository: a disposable HOME with the real plugin manager, 1.6.0 upgraded to the candidate; three induced failures in the re-init — a read-only project file the upgrade must change, a read-only ~/.claude over the old shell logger, a SIGTERM at the CLAUDE.md merge — each left the project and the user's files byte-identical (rc 1, 1, 143; the restore said); the control without the transaction left HOME/.claude/settings.json and HOME/.claude/bash-log.sh changed; a plain re-run recovered (one version, 1.6.5, runs; the user's content kept). 8 of 8 clauses; PB-UPGRADE-INSTALLED-COPY 9 of 9 in the same run."
+            "2026-10-18, candidate nested b3ee500 (task 243 after its impl round 1), run from the nested repository: a disposable HOME with the real plugin manager, 1.6.0 upgraded to the candidate; three induced failures in the re-init — a read-only project file the upgrade must change, a read-only ~/.claude over the old shell logger, a SIGTERM at the CLAUDE.md merge — each left the project and the user's files byte-identical (rc 1, 1, 143; the restore said); the control without the transaction left HOME/.claude/settings.json and HOME/.claude/bash-log.sh changed; a plain re-run recovered (one version, 1.6.5, runs; the user's content kept); the owner's own files untouched. 8 of 8 clauses (also 8 of 8 on 65b6fc7); PB-UPGRADE-INSTALLED-COPY 9 of 9 in the same run."
           ]
         }
       ],
@@ -9273,6 +9283,7 @@
       "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
         "2026-10-18: from task 221 (1.6.4) through 1.6.5 the live clause 'a write in the user's HOME fails (~/.claude read-only): init fails, says it restores, and the project and the user's files are byte-identical' FAILED — the shell-logger removal, written to never fail, skipped the unwritable ~/.claude files, removed the rc lines and exited 0; 1.6.5 shipped the row as a known violation (task 242). The owner, 2026-10-18 ~13:30: 'Oprește și reface tot (Recomandat)'. Task 243 made the removal look first and fail-and-restore, and the snapshot refuse a path it cannot look at; the live scenario is this row's live proof again (its limitation names the run).",
+        "Two inits on one HOME at once are kept apart by an advisory lock on the HOME directory (`flock` on a read-only descriptor, task 243): a second waits up to 120 s, then stops before any change. A host whose `flock` is missing or cannot wait runs without the lock and says so — there, two concurrent inits on one HOME are not covered.",
         "scripts/init is now transactional (init_txn.py snapshots every file it may modify and, on any non-zero exit, restores the pre-init state and removes what it created), proven on the host OS by three induced-failure integration tests plus a negative control. Two boundaries remain unproved.",
         "Upgrade is a Claude skill (commands/upgrade.md), NOT scripts/init, and remains snapshot-less: it re-runs init (which now rolls itself back), but the skill's own in-place refresh (clone pull, marketplace update, plugin update) has no transactional wrapper, so a mid-upgrade failure is not proven rollback-safe here. See PB-UPGRADE-INSTALLED-COPY.",
         "Interrupt coverage, Linux: the tests' trapped SIGTERM, and live (task 184, scenario PB-INSTALL-ROLLBACK) three controlled interruptions of the re-init — a project write that fails, a read-only ~/.claude, a SIGTERM at the CLAUDE.md merge. Real power loss is not covered; Windows is not claimed since 2026-10-08.",
