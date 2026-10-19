@@ -191,9 +191,40 @@ class AtTheSessionsEnd(_Project):
         self.assertEqual([x["calls"] for x in self.records()], [2])
         self.assertTrue(self.sdir.exists())
 
-    def test_a_judge_session_end_records_nothing(self):
+    def test_a_judge_or_tail_cert_session_end_records_nothing(self):
         self.end("exit", PLAYBOOK_SESSION_ID="judge")
+        self.end("exit", PLAYBOOK_SESSION_ID="tail-cert")
         self.assertEqual(self.records(), [])
+
+    def test_a_stop_then_the_sessions_end_count_each_call_once(self):
+        self.run_hook(self.payload())
+        self.end("exit")
+        self.assertEqual(sum(x.get("calls", 0) for x in self.records()), 2)
+
+    def test_its_journal_line_says_what_was_recorded(self):
+        self.end("exit")
+        line = [x for x in self.hook_lines() if x.get("hook") == "session-end"]
+        self.assertTrue(line and "recorded 2 call" in line[-1].get("detail", ""), line)
+
+    def test_a_busy_lock_at_the_sessions_end_leaves_an_unknown_marker_and_says_so(self):
+        # impl round 1 (codex): the turn would be lost with no trace once the dir is gone
+        lock = self.agent / "journal" / "agent-usage.lock"
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        holder = subprocess.Popen(["flock", str(lock), "sleep", "60"], stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL, start_new_session=True)
+        try:
+            import time as _time
+            _time.sleep(0.3)
+            r = self.end("exit")
+        finally:
+            os.killpg(holder.pid, 9)
+            holder.wait()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        recs = self.records()
+        self.assertEqual([(x.get("task"), x.get("status")) for x in recs], [("5", "unknown")])
+        self.assertIn("lock", recs[0].get("why", ""))
+        line = [x for x in self.hook_lines() if x.get("hook") == "session-end"]
+        self.assertIn("skipped: lock", line[-1].get("detail", ""))
 
 
 if __name__ == "__main__":

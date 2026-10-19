@@ -282,9 +282,9 @@ changes the verify's result.
 The owner, 2026-10-18: "Da, după 243 (Recomandat)" — a closure's numbers carry the main agent's own tokens beside the
 judge seats'. Only the host's session transcript holds them (one `type: "assistant"` entry per content block of an API
 call, each repeating the call's `message.usage`), and the host deletes transcripts after `cleanupPeriodDays` (30 by
-default), so they are recorded as the work goes: `scripts/agent-usage-hook` at each turn's end (Stop — not at the
-session's end, where it raced the session dir's removal; nothing is spent after the last Stop), and the CLI at its own
-transitions — `tasks work N` and `tasks freehand` under the task they leave (`-` for none), the close
+default), so they are recorded as the work goes: `scripts/agent-usage-hook` at each turn's end (Stop), `session-end-hook`
+at the session's end — first, before it removes the session dir (task 246), for the turn after the last Stop — and the
+CLI at its own transitions — `tasks work N` and `tasks freehand` under the task they leave (`-` for none), the close
 under the closing task, before its `done` record — so a recorded span never crosses a transition. Each record covers
 one span of one transcript file for one model: `task`, `file` (16 hex of the file's absolute path's sha1), `ino` and
 `head` (8 hex of the sha1 of the file's first min(4096, `to`) bytes — a transcript only grows at its end, so this tells
@@ -299,7 +299,7 @@ side) go in one append, so the span's `to` never lands without all of them. A fi
 8 MiB; a larger one (a session begun before the recorder was installed) gets a seed — `status: "unknown"`, `why`,
 `from` = `to` = its size — so no history is charged to one task; so does a file whose last record the backward scan of
 the journal (32 MiB at most) did not reach. A broken assistant line and an entry with no `message.id` count as
-`unreadable`, never as a call (one unreadable per call, however many entries carry it). `ino` is text (an inode number can pass the integer cap). The task is read inside the lock; a session the hook cannot resolve records nothing (its span stays for a reader that knows the session). A file's first read that finds no call writes one zero-call record — a read position, so later scans find it. A close or `tasks work` that cannot take the lock writes an `unknown` marker for the task it leaves and says so: never a silent gap. The session's end records too (task 246: `session-end-hook` runs the recorder before it can remove the session dir, so a turn interrupted with no Stop — Esc, a kill — is still read). Still not counted (bounds): a brand-new file in a journal past the scan bound gets a seed; a session killed so hard that no SessionEnd runs keeps its last turn until that transcript is read again. No conversation text is written: only the model's name. Bounds: a span after the
+`unreadable`, never as a call (one unreadable per call, however many entries carry it). `ino` is text (an inode number can pass the integer cap). The task is read inside the lock; a session the hook cannot resolve records nothing (its span stays for a reader that knows the session). A file's first read that finds no call writes one zero-call record — a read position, so later scans find it. A close or `tasks work` that cannot take the lock writes an `unknown` marker for the task it leaves and says so: never a silent gap. The session's end records too (task 246: `session-end-hook` runs the recorder before it can remove the session dir, so a turn interrupted with no Stop — Esc, or a session ended mid-turn — is still read; a busy lock there leaves an `unknown` marker, and the hook's journal line says what it recorded). Still not counted (bounds): a brand-new file in a journal past the scan bound gets a seed. No conversation text is written: only the model's name. Bounds: a span after the
 close's own read (the rest of that turn) is not the closure's; a transcript never read again (a crash with no
 SessionEnd, never continued) keeps its unread tail; a judge's, tail-cert's or the monitor's session records nothing
 (task 232 counts the judges' usage). A real record — task 244's timing run, on a copy of a 22 MB transcript tail:

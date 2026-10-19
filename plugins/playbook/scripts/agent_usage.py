@@ -418,6 +418,16 @@ def hook_main(payload_text: str) -> str:
     tp = payload.get("transcript_path")
     res = record_spans(lane, task=task, paths=[tp if isinstance(tp, str) else "", _pointer(lane, session)],
                        session_id=session, pbj=pbj, lock_wait=2.0)
+    if res["skipped"] == "lock" and os.environ.get("PB_AU_MARK_BUSY") == "1":
+        # task 246 (impl round 1, codex): at the session's end there is no later reader — the dir and its pointer go
+        # next — so a busy lock leaves an `unknown` marker for the session's task (a marker holds no position: the lock
+        # is not needed for it). A Stop's skip needs none: its next Stop reads the span.
+        t = pbj._hj_session_task(Path(lane), session)
+        if t is None:
+            return "skipped: lock (the session is not resolved: no marker)"
+        marked = pbj.append_agent_usage(lane, task=t or "-", known=False, session_id=session,
+                                        why="the lane lock was busy at the session's end: its last span was not counted")
+        return "skipped: lock (" + ("marked unknown" if marked else "the unknown marker could not be written") + ")"
     if res["skipped"]:
         return f"skipped: {res['skipped']}"
     return f"recorded {res['calls']} call(s) from {res['files']} file(s) for task {(seen_task or ['-'])[0] or '-'}"

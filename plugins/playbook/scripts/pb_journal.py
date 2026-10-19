@@ -283,7 +283,7 @@ def _agent_usage_rec(*, task="", file="", ino=0, span_from=0, span_to=0, head=""
 
 
 def append_agent_usage(agent_dir, **fields) -> bool:
-    """Append one AGENT-USAGE record and return None. Never raises (task 244, PHASE-B item 6).
+    """Append one AGENT-USAGE record; return whether it landed. Never raises (task 244, PHASE-B item 6).
 
     The main agent's tokens over one span of one host transcript file, for one model (`scripts/agent_usage.py` reads
     the span and writes this under its lane lock; the Stop recorder and the CLI's transitions call it). The owner,

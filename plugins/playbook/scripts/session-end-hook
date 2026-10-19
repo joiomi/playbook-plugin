@@ -55,15 +55,19 @@ INPUT=$(cat)
 SESSION_ID="$(resolve_session_id)"
 
 # Task 246 (PLAN.md "From task 244" (b)): the agent's tokens of the turn after the session's last Stop — a turn
-# interrupted (Esc, a kill) gets no Stop — are recorded here, for every end reason, before anything below can remove
-# the session dir and its transcript pointer (agent_usage.py `hook`, as the Stop recorder runs it: the task is read
-# inside the lane lock, an unresolved session records nothing). Never for a judge's, a tail-cert's or the monitor's
-# session; best-effort and bounded: it never changes what this hook does or decides.
-if [ -r "$HOOK_DIR/agent_usage.py" ] && [ "${PLAYBOOK_ROLE:-}" != "monitor" ]; then
+# interrupted (Esc, or a session ended mid-turn) gets no Stop — are recorded here, for every end reason, before
+# anything below can remove the session dir and its transcript pointer (agent_usage.py `hook`, as the Stop recorder
+# runs it: the task is read inside the lane lock, an unresolved session records nothing; a busy lock leaves an
+# `unknown` marker, since nothing reads this session after its end — PB_AU_MARK_BUSY). Its answer joins this hook's
+# journal line. Never for a judge's or a tail-cert's session (the monitor's exited at the top); bounded to 3 s of the
+# hook's 5, and best-effort: it never changes what this hook does or decides.
+if [ -r "$HOOK_DIR/agent_usage.py" ]; then
     case "${PLAYBOOK_SESSION_ID:-}" in
         judge|tail-cert) ;;
-        *) printf '%s' "$INPUT" | PB_AU_LANE="$AGENT_DIR" PB_AU_SESSION="$SESSION_ID" \
-               timeout 4 python3 -E -s "$HOOK_DIR/agent_usage.py" hook >/dev/null 2>&1 || true ;;
+        *) _pb_au_said=$(printf '%s' "$INPUT" | PB_AU_LANE="$AGENT_DIR" PB_AU_SESSION="$SESSION_ID" PB_AU_MARK_BUSY=1 \
+               timeout 3 python3 -E -s "$HOOK_DIR/agent_usage.py" hook 2>/dev/null) || _pb_au_said="the recorder stopped"
+           _pb_au_said="${_pb_au_said:0:120}"
+           pb_on_exit 'PB_HJ_DETAIL="${PB_HJ_DETAIL:+$PB_HJ_DETAIL; }agent tokens: $_pb_au_said"' ;;
     esac
 fi
 

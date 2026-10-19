@@ -213,6 +213,16 @@ class TheCli(_CliProject):
         holder = subprocess.Popen(["flock", str(lock), "sleep", "60"], stdout=subprocess.DEVNULL,
                                   stderr=subprocess.DEVNULL, start_new_session=True)
         journal = self.project / ".agent" / "journal" / "enforcement.jsonl"
+        probe = journal.with_name("probe.ro")
+        probe.write_text("")
+        probe.chmod(0o444)
+        try:
+            with open(probe, "a"):
+                os.killpg(holder.pid, 9)
+                holder.wait()
+                self.skipTest("file permissions not enforced for this user")
+        except PermissionError:
+            pass
         try:
             time.sleep(0.3)
             journal.chmod(0o444)

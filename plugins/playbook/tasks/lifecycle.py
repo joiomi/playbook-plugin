@@ -96,7 +96,7 @@ def _record_agent_usage(agent_dir: Path, task, session_dirs) -> None:
             # task 246 (the post-panel judge of 244): say what was written, never a marker that did not land
             print("agent tokens: not recorded at this transition (the lane lock was busy) — "
                   + ("marked unknown in the numbers" if marked else
-                     "and the unknown marker could not be written either: this closure's agent numbers miss that "
+                     "and the unknown marker could not be written either: this task's agent numbers miss that "
                      "span unmarked"), file=sys.stderr)
     except Exception:
         pass
