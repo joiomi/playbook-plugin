@@ -57,8 +57,9 @@ SESSION_ID="$(resolve_session_id)"
 # Task 246 (PLAN.md "From task 244" (b)): the agent's tokens of the turn after the session's last Stop — a turn
 # interrupted (Esc, or a session ended mid-turn) gets no Stop — are recorded here, for every end reason, before
 # anything below can remove the session dir and its transcript pointer (agent_usage.py `hook`, as the Stop recorder
-# runs it: the task is read inside the lane lock, an unresolved session records nothing; a busy lock leaves an
-# `unknown` marker, since nothing reads this session after its end — PB_AU_MARK_BUSY). Its answer joins this hook's
+# runs it: the task is read inside the lane lock, an unresolved session records nothing; a busy lock with something
+# unread leaves an `unknown` marker, since nothing reads this transcript after its end — a `/clear` included: the
+# SessionStart that follows points the session at the new transcript, task 247 — PB_AU_MARK_BUSY). Its answer joins this hook's
 # journal line. Never for a judge's or a tail-cert's session (the monitor's exited at the top); bounded to 3 s of the
 # hook's 5, and best-effort: it never changes what this hook does or decides.
 if [ -r "$HOOK_DIR/agent_usage.py" ]; then

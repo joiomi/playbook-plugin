@@ -309,12 +309,9 @@ def record_spans(lane, *, task, paths: "list[str]", session_id: str, pbj, lock_w
             if not stat.S_ISREG(st.st_mode):
                 continue
             prev = newest.get(key)
-            p_to = prev.get("to") if prev else None
-            same = (prev is not None and str(prev.get("ino")) == str(st.st_ino)
-                    and isinstance(p_to, int) and not isinstance(p_to, bool)
-                    and prev.get("head") == head_of(f, min(HEAD_MAX, p_to)))
+            same = _same_file(prev, f, st)
             if same:
-                start, last = int(p_to), str(prev.get("last_id") or "")
+                start, last = int(prev["to"]), str(prev.get("last_id") or "")
             elif (prev is not None or complete) and st.st_size <= fresh_max:
                 start, last = 0, ""            # a new file, or another one in its place: from its start
             else:
@@ -406,10 +403,21 @@ def paths_of(payload: dict, lane: str, session: str) -> "list[str]":
     return [tp if isinstance(tp, str) else "", _pointer(lane, session)]
 
 
+def _same_file(prev, f: str, st) -> bool:
+    """The recorder's identity check: the newest record `prev` was taken on this very file — its inode, and the hash of
+    its first min(HEAD_MAX, `to`) bytes (a transcript only grows at its end, so another file in its place differs in
+    one of them)."""
+    p_to = prev.get("to") if prev else None
+    return (prev is not None and str(prev.get("ino")) == str(st.st_ino)
+            and isinstance(p_to, int) and not isinstance(p_to, bool)
+            and prev.get("head") == head_of(f, min(HEAD_MAX, p_to)))
+
+
 def _unread(lane: str, paths: "list[str]") -> bool:
-    """Whether any of the session's files holds bytes past its newest record's `to` (or has no record) — read without
-    the lock, for the busy-lock marker only: a clean exit whose last Stop read everything is no gap (task 246's impl
-    round 2, opus)."""
+    """Whether any of the session's files holds a span the recorder would read — no record, another file in its place
+    (`_same_file`, task 247: the size alone took a replaced transcript no larger than the old `to` for read), or bytes
+    past the newest record's `to` — read without the lock, for the busy-lock marker only: a clean exit whose last Stop
+    read everything is no gap (task 246's impl round 2, opus)."""
     files = session_files(paths)
     if not files:
         return False
@@ -417,11 +425,13 @@ def _unread(lane: str, paths: "list[str]") -> bool:
     newest, _complete = _newest(os.path.join(lane, "journal", "enforcement.jsonl"), set(keys))
     for key, f in keys.items():
         try:
-            size = os.stat(f).st_size
+            st = os.lstat(f)
         except OSError:
+            continue                           # gone: nothing the recorder would read
+        if not stat.S_ISREG(st.st_mode):
             continue
-        to = (newest.get(key) or {}).get("to")
-        if not isinstance(to, int) or isinstance(to, bool) or size > to:
+        prev = newest.get(key)
+        if not _same_file(prev, f, st) or st.st_size > prev["to"]:
             return True
     return False
 
@@ -449,15 +459,14 @@ def hook_main(payload_text: str) -> str:
         return None if t is None else (t or "-")
     res = record_spans(lane, task=task, paths=paths_of(payload, lane, session), session_id=session, pbj=pbj,
                        lock_wait=2.0)
-    terminal = str(payload.get("reason") or "").lower() in ("logout", "prompt_input_exit", "other", "exit")
-    if res["skipped"] == "lock" and os.environ.get("PB_AU_MARK_BUSY") == "1" and not terminal:
-        return "skipped: lock (the session goes on: its next Stop reads the span)"
     if res["skipped"] == "lock" and os.environ.get("PB_AU_MARK_BUSY") == "1" and not _unread(lane, paths_of(payload, lane, session)):
         return "skipped: lock (nothing unread since the last record: no marker)"
     if res["skipped"] == "lock" and os.environ.get("PB_AU_MARK_BUSY") == "1":
-        # task 246 (impl round 1, codex): at the session's end there is no later reader — the dir and its pointer go
-        # next — so a busy lock leaves an `unknown` marker for the session's task (a marker holds no position: the lock
-        # is not needed for it). A Stop's skip needs none: its next Stop reads the span.
+        # task 246 (impl round 1, codex): at the session's end there is no later reader of this transcript — the dir
+        # and its pointer go next, and after a `/clear` SessionStart points the session at the new transcript, which
+        # the next Stop's payload names too (task 247: every end reason) — so a busy lock leaves an `unknown` marker
+        # for the session's task (a marker holds no position: the lock is not needed for it). A Stop's skip needs
+        # none: its next Stop reads the span.
         t = pbj._hj_session_task(Path(lane), session)
         if t is None:
             return "skipped: lock (the session is not resolved: no marker)"

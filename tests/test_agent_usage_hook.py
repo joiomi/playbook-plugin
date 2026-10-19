@@ -168,6 +168,7 @@ class WhatItLeavesAlone(_Project):
 
 
 SESSION_END = HOOK.parent / "session-end-hook"
+SESSION_START = HOOK.parent / "session-start-hook"
 
 
 class AtTheSessionsEnd(_Project):
@@ -219,14 +220,78 @@ class AtTheSessionsEnd(_Project):
         os.killpg(holder.pid, 9)
         holder.wait()
 
-    def test_a_busy_lock_at_a_clear_leaves_no_marker(self):
-        # impl round 2 (sonnet): a clear keeps the dir and its pointer — the next Stop reads the span
+    def start(self, transcript, source="clear"):
+        p = {"hook_event_name": "SessionStart", "session_id": "h2", "cwd": str(self.project),
+             "transcript_path": str(transcript), "source": source}
+        return subprocess.run(["bash", str(SESSION_START)], input=json.dumps(p), cwd=self.project, env=self.env(),
+                              capture_output=True, text=True, timeout=60)
+
+    def unknown(self):
+        return [(x.get("task"), x.get("status")) for x in self.records() if x.get("status") == "unknown"]
+
+    def test_a_busy_lock_at_a_clear_marks_the_old_transcripts_tail(self):
+        # task 247 (task 246's post-panel judge, codex): after a clear, SessionStart points the session at the new
+        # transcript and the next Stop's payload names it too — nothing reads the old one's tail again
         h = self.hold_lock()
         try:
             self.end("clear")
         finally:
             self.release(h)
-        self.assertEqual(self.records(), [])
+        new = self.transcript.with_name("h2.jsonl")
+        new.write_text(json.dumps(entry("n1")) + "\n")
+        r = self.start(new)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual((self.sdir / "transcript_path").read_text().strip(), str(new))
+        p = self.payload()
+        p.update(transcript_path=str(new), session_id="h2")
+        self.run_hook(p)
+        self.assertEqual(self.unknown(), [("5", "unknown")], self.records())
+        self.assertEqual(sum(x.get("calls", 0) for x in self.records()), 1, "the new transcript's call only")
+
+    def test_a_busy_lock_at_a_clear_with_nothing_unread_leaves_no_marker(self):
+        self.run_hook(self.payload())
+        h = self.hold_lock()
+        try:
+            self.end("clear")
+        finally:
+            self.release(h)
+        self.assertEqual(self.unknown(), [])
+
+    def busy_exit_after(self, replace):
+        self.run_hook(self.payload())                     # read to its end: the record's `to` is the file's size
+        size = self.transcript.stat().st_size
+        replace()
+        self.assertLessEqual(self.transcript.stat().st_size, size, "no larger: the size alone says nothing unread")
+        h = self.hold_lock()
+        try:
+            self.end("exit")
+        finally:
+            self.release(h)
+        return self.unknown()
+
+    def test_a_transcript_replaced_by_another_file_is_unread_at_a_busy_exit(self):
+        # task 247 (task 246's post-panel judge, codex): `_unread` compared the size only
+        def replace():
+            other = self.transcript.with_name("h1.new")
+            other.write_text(json.dumps(entry("r1")) + "\n")
+            os.replace(other, self.transcript)            # another inode and another start
+        self.assertEqual(self.busy_exit_after(replace), [("5", "unknown")])
+
+    def test_a_transcript_rewritten_in_place_is_unread_at_a_busy_exit(self):
+        def rewrite():
+            ino = self.transcript.stat().st_ino
+            with open(self.transcript, "w") as f:         # the same inode, another start
+                f.write(json.dumps(entry("r1")) + "\n")
+            self.assertEqual(self.transcript.stat().st_ino, ino)
+        self.assertEqual(self.busy_exit_after(rewrite), [("5", "unknown")])
+
+    def test_an_identical_copy_in_its_place_is_unread_at_a_busy_exit(self):
+        # the same start, another inode: the recorder reads it from 0 as another file, so it is a span to mark
+        def copy():
+            other = self.transcript.with_name("h1.new")
+            shutil.copyfile(self.transcript, other)
+            os.replace(other, self.transcript)
+        self.assertEqual(self.busy_exit_after(copy), [("5", "unknown")])
 
     def test_a_busy_lock_at_an_exit_with_nothing_unread_leaves_no_marker(self):
         # impl round 2 (opus): the usual clean exit — the last Stop read everything — is no gap
