@@ -335,6 +335,15 @@ class ThePartition(unittest.TestCase):
         self.assertEqual(got["by_kind"], {"agent": 8, "verify": 50, "owner-idle": 42})
         self.assertEqual(got["sleep_unmeasured"], 8, "only the turn before the first sample; the wait is bracketed")
 
+    def test_another_tasks_line_in_the_stamps_second_is_kept(self):
+        # task 249's impl round 2 (codex; sonnet): only a line that is NO task's is dropped there — a call that ends
+        # under another task (a switch) still ends the closure's time, as rule 1 says (the switching call is in no
+        # closure), with no virtual End charging it to this task
+        lines = [L(0, "UserPromptSubmit"), L(5, "PreToolUse", tool="Bash", tid="sw"),
+                 L(200, "PostToolUse", tool="Bash", tid="sw2", task="008")]
+        got = numbers.session_partition(lines, "007", T0 + 200, [], [], known_close=True)
+        self.assertEqual((got["total"], got["not_task"]), (5, 195), got)
+
     def test_the_tasks_own_line_in_the_stamps_second_is_kept(self):
         # only a line that is no task's is dropped there: the close's own call, started in the stamp's second, still
         # ends the wait before it as rule 4 says (the owner's, uncarved), with no virtual End in its place

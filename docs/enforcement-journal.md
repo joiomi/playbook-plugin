@@ -492,7 +492,7 @@ prompt that started it, M001, and the closure's number — without its keys that
    tool's together.
 6. The part of a gap with a Bash call open, of a background gap, or of the close's own session's last gap outside a
    turn (task 249: the close run as a background command after the turn ended; the rule holds for every close's last
-   gap outside a turn), that overlaps the task's review spans (each review record's end minus its duration) is
+   gap outside a turn where the `done` record names the close's session), that overlaps the task's review spans (each review record's end minus its duration) is
    `judges`; overlapping its recorded verify spans, `verify` (a stretch under both counts once, as judges).
 7. The close's own session is the one its `done` record names (`session_id`); there the time runs to the receipt's
    stamp, and the close's own call (this task's last shell call with no PostToolUse) stays open through a prompt that
@@ -526,11 +526,13 @@ it equals the session's span (a test holds this over 400 built timelines).
 - Sleep is measured only between two samples of one boot. `susp` itself undercounts the kernel's suspend spans by
   the device suspend / resume time (task 234, W7).
 - Two sessions working on one task at once each count their own time.
-- A close run in the background after the turn ended (task 249): only its recorded verify and review spans leave
-  `owner-idle`. What they do not cover — the close's audit, its numbers, a reused verify — stays `owner-idle`, as does
-  an owner's real wait before a close the owner typed; only the close's last gap is carved, so a prompt that comes while the
-  close still runs leaves the part before it `owner-idle`; and a close whose own call has a line in the stamp's second
-  ends its wait at that line, uncarved.
+- A close run in the background after the turn ended (task 249) leaves `owner-idle` only for its recorded verify and
+  review spans:
+  - what they do not cover — the close's audit, its numbers, a reused verify — stays `owner-idle`, as does an owner's
+    real wait before a close the owner typed;
+  - only the close's last gap is carved: a prompt that comes while the close still runs leaves the part before it
+    `owner-idle`, and the stretch from the background call's own PostToolUse to the released stop stays `agent`;
+  - a close whose own call has a line in the stamp's second ends its wait at that line, uncarved.
 - Two races within seconds of a close are not told apart (stated limits, the owner, 2026-10-18, task 242): a close
   whose `done` is written only after a reopen and a second close in another session gives both closures the wrong
   life; and a recomposed closure (a write that failed) can take a suspend from the 120 s after the close into its
