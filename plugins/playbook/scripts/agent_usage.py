@@ -441,10 +441,11 @@ _USER_TYPE = __import__("re").compile(rb'"type"\s*:\s*"user"')
 
 def _tail_may_be_a_call(path: str, start: int, size: int) -> bool:
     """Whether the half-written line after the last complete one may be a call (task 252's impl round 1, opus): one
-    the host is still writing at the session's end, or was killed writing, is never counted, so it marks — unless its
-    first 4 KiB name a user entry (`"type":"user"` sits ~120 bytes into the host's line, measured on this workspace's
-    transcript; an assistant line holds no such key, and a quote inside a JSON string is escaped). A read that fails:
-    it may be."""
+    the host is still writing at the session's end, or was killed writing, is never counted, so it marks — unless it
+    names a user entry at its TOP level, before its `"message"` object (the host writes a user entry's `"type":"user"`
+    ~120 bytes in and an assistant entry's type after its message — measured on this workspace's transcript). Only
+    there: a tool call's input inside an assistant message can be an object with that very key (its impl round 2,
+    codex, agy). A read that fails: it may be."""
     if start >= size:
         return False
     try:
@@ -457,7 +458,7 @@ def _tail_may_be_a_call(path: str, start: int, size: int) -> bool:
         return True
     finally:
         os.close(fd)
-    return not _USER_TYPE.search(head)
+    return not _USER_TYPE.search(head.split(b'"message"', 1)[0])
 
 
 def _unread(lane: str, paths: "list[str]") -> bool:

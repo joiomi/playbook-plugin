@@ -373,6 +373,32 @@ class AtTheSessionsEnd(_Project):
             self.release(h)
         self.assertEqual(self.unknown(), [("5", "unknown"), ("5", "unknown")], "the partial's marker, then the call's")
 
+    def test_a_half_written_assistant_call_whose_input_holds_a_user_type_still_marks(self):
+        # task 252's impl round 2 (codex, agy; opus, sonnet): a tool call's input can be an object with a "type": "user"
+        # key — only a TOP-LEVEL user type (before "message") makes the half-written line a user entry
+        call = {"parentUuid": "u0", "isSidechain": False,
+                "message": {"model": "claude-opus-5-5", "id": "m9", "type": "message", "role": "assistant",
+                            "content": [{"type": "tool_use", "id": "t9", "name": "Write",
+                                         "input": {"type": "user", "note": "x" * 50}}]},
+                "type": "assistant"}
+        line = json.dumps(call, separators=(",", ":")).encode()
+        cut = line.index(b'"note"')
+        self.assertIn(b'"type":"user"', line[:cut])
+        def partial():
+            with open(self.transcript, "ab") as f:
+                f.write(line[:cut])
+        self.assertEqual(self.busy_exit_after(partial, grow=True), [("5", "unknown")])
+
+    def test_a_host_shaped_user_line_cut_before_its_type_still_marks(self):
+        # its impl round 2 (sonnet): the host writes a user entry's type ~120 bytes in; cut before it, it may be anything
+        user = {"parentUuid": "u1", "isSidechain": False, "promptId": "p1", "type": "user",
+                "message": {"role": "user", "content": "hi"}}
+        line = json.dumps(user, separators=(",", ":")).encode()
+        def partial():
+            with open(self.transcript, "ab") as f:
+                f.write(line[:line.index(b'"type"')])
+        self.assertEqual(self.busy_exit_after(partial, grow=True), [("5", "unknown")])
+
     def test_a_transcript_that_is_only_a_half_written_user_entry_is_nothing_unread(self):
         self.transcript.write_text(json.dumps(self.user_entry())[:200])
         h = self.hold_lock()
