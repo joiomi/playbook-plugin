@@ -1394,7 +1394,7 @@ _pb_sink_ok() {
 # No fsync, no interpreter startup. Task 257: the append holds `journal/enforcement.lock` shared — the rotation
 # (pb_journal.rotate_enforcement; this writer never rotates) renames and compresses under the exclusive one (the
 # owner's "Lacăt la fiecare rând"); past a 1 s wait the line goes to a spool ("Bilet în cutie"), never appended
-# unlocked; a lock that is not a regular file writes nothing; no `flock` on the host: appended directly.
+# unlocked; a lock that is not a regular file writes nothing; no `flock` on the host: spooled too (plan r1, P5).
 journal_enforcement() {
     local agent_dir="$1" hook="$2" decision="$3" reason="$4"
     local session_id="${5:-}" tool="${6:-}" path="${7:-}" command="${8:-}"
@@ -1422,8 +1422,9 @@ journal_enforcement() {
     local locked=none
     if command -v flock >/dev/null 2>&1; then
         _pb_sink_ok "$jdir" "$jdir/enforcement.lock" || return 0
-        { exec 209>>"$jdir/enforcement.lock"; } 2>/dev/null || return 0
-        if flock -s -w 1 209 2>/dev/null; then locked=yes; else locked=no; fi
+        # descriptor 211: init holds its HOME lock on 209 and sources this lib (impl r1 Q12)
+        { exec 211>>"$jdir/enforcement.lock"; } 2>/dev/null || return 0
+        if flock -s -w 1 211 2>/dev/null; then locked=yes; else locked=no; fi
     fi
     # no lock to hold (no `flock` on the host), or not had in 1 s: a spool, which python takes (plan r1, P5) — an
     # unlocked append could land in a file python had already renamed and compressed
@@ -1431,7 +1432,7 @@ journal_enforcement() {
         yes) { printf '%s\n' "$line" >> "$jdir/enforcement.jsonl"; } 2>/dev/null || true ;;
         *) _pb_spool_line "$jdir" "$line" enforcement.jsonl tag ;;
     esac
-    [ "$locked" = none ] || { exec 209>&-; } 2>/dev/null || true
+    [ "$locked" = none ] || { exec 211>&-; } 2>/dev/null || true
     return 0
 }
 
@@ -1794,7 +1795,7 @@ _pb_spool_line() {
     printf -v stamp '%(%Y%m%d-%H%M%S)T' -1 2>/dev/null || return 0
     name="$journal.spool-$stamp-$$-$RANDOM$RANDOM"
     tmp="$jdir/$journal.spooling-${name#"$journal".spool-}"
-    if [ "${4:-}" = tag ] && [ "${line: -1}" = "}" ]; then line="${line%\}},\"spool\":\"$name\"}"; fi
+    if [ "${4:-}" = tag ] && [ "${line: -1}" = "}" ]; then line="${line%\}},\"spool\":\"$name.0\"}"; fi
     if ! ( set -o noclobber; printf '%s\n' "$line" > "$tmp" ) 2>/dev/null; then
         [ -L "$tmp" ] || [ ! -f "$tmp" ] || rm -f -- "$tmp" 2>/dev/null
         return 0

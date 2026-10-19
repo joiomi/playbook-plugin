@@ -87,7 +87,7 @@ class TheWritersHoldTheLock(_Tmp):
             holder.wait()
         rec = json.loads(self.spools()[0].read_text(encoding="utf-8"))
         self.assertEqual((rec["hook"], rec["reason"], rec["task"]), ("task-gate", "spooled", "7"))
-        self.assertEqual(rec["spool"], self.spools()[0].name)          # its identity through the merge (P2)
+        self.assertEqual(rec["spool"], self.spools()[0].name + ".0")   # its identity through the merge (P2, Q1)
         self.assertEqual(list(self.jdir.glob("enforcement.jsonl.spooling-*")), [])
 
     def test_the_clis_records_wait_five_seconds_a_hooks_one(self):
@@ -215,7 +215,7 @@ class TheBashWriterHoldsTheLock(_Tmp):
         self.assertEqual(self.records(), [])
         [spool] = self.spools()
         rec = json.loads(spool.read_text(encoding="utf-8"))
-        self.assertEqual((rec["reason"], rec["spool"]), ("no-flock", spool.name))
+        self.assertEqual((rec["reason"], rec["spool"]), ("no-flock", spool.name + ".0"))
         self.pbj.rotate_enforcement(self.lane)                    # python takes it
         self.assertEqual([x["reason"] for x in self.records()], ["no-flock"])
         self.assertEqual(self.spools(), [])
@@ -227,7 +227,7 @@ class TheBashWriterHoldsTheLock(_Tmp):
         finally:
             holder.wait()
         [spool] = self.spools()
-        self.assertEqual(json.loads(spool.read_text(encoding="utf-8"))["spool"], spool.name)
+        self.assertEqual(json.loads(spool.read_text(encoding="utf-8"))["spool"], spool.name + ".0")
 
     def test_a_background_child_of_the_hook_does_not_keep_the_lock(self):
         """Sonnet (plan r1): a descriptor left open would let a long-lived child hold the lock shared, and no rotation
@@ -1155,13 +1155,16 @@ class TheRollbackRecipe(TheOracle):
         arch[1].unlink()
         os.link(jb / "enforcement.jsonl", jb / f"enforcement.jsonl.archived-20261019-235959-{int(time.time()) + 9}-1")
         late = [{"ts": _iso(time.time()), "session_id": "pid-1", "hook": "task-gate", "decision": "block",
-                 "reason": f"late {i}"} for i in range(2)]
+                 "reason": f"late {i}"} for i in range(3)]
         merged_name = "enforcement.jsonl.spool-20261019-000000-1-1"
-        line = _line(dict(late[0], spool=merged_name))
+        line = _line(dict(late[0], spool=merged_name + ".0"))
         with open(jb / "enforcement.jsonl", "ab") as f:
             f.write(line)                                   # merged, then its merge killed before the unlink
         (jb / merged_name).write_bytes(line)
         self.pbj._spool_line(jb, _line(late[1]), "enforcement.jsonl", tag=True)
+        # impl r1 Q10 (sol): a writer killed before it published its spool left it whole under its writing name
+        (jb / "enforcement.jsonl.spooling-20261019-000001-999999-7").write_bytes(
+            _line(dict(late[2], spool="enforcement.jsonl.spool-20261019-000001-999999-7.0")))
         r = subprocess.run([bash_or_skip(), "-c", self.recipe()], cwd=jb, capture_output=True, text=True, timeout=60)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(sorted(p.name for p in jb.iterdir() if p.name.startswith("enforcement.jsonl")),
@@ -1175,6 +1178,228 @@ class TheRollbackRecipe(TheOracle):
         want = [canon(x) for x in (a / "journal" / "enforcement.jsonl").read_text().splitlines()] + \
                [canon(json.dumps(x)) for x in late]
         self.assertEqual(got, want)                         # every line, in order, the spooled ones last
+
+
+class ImplRoundOneFixes(_Archives):
+    """Impl round 1's findings (Q1-Q16 at the end of judge.md), each red before its fix."""
+
+    def test_q1_every_line_of_a_multi_line_spool_survives_the_reader_and_the_merge(self):
+        """agy (Critical), opus, sonnet: one id for all a spool's lines kept only its first."""
+        recs = [_position(f"{k:x}" * 16, 10 + k, self.now, task="7") for k in range(3)]
+        self.pbj._spool_line(self.jdir, b"".join(_line(r) for r in recs), "enforcement.jsonl", tag=True)
+        [spool] = self.spools()
+        ids = [json.loads(x)["spool"] for x in spool.read_text().splitlines()]
+        self.assertEqual(ids, [f"{spool.name}.{i}" for i in range(3)])
+        got = [r for r in self.read(task="7") if r["hook"] == "agent-usage"]
+        self.assertEqual([r["to"] for r in got], [10, 11, 12])
+        self.pbj.rotate_enforcement(self.lane)
+        self.assertEqual(self.spools(), [])
+        self.assertEqual([r["to"] for r in self.records() if r["hook"] == "agent-usage"], [10, 11, 12])
+        self.pbj.rotate_enforcement(self.lane)                  # nothing appended again
+        self.assertEqual(len(self.records()), 3)
+
+    def test_q2_a_spool_past_four_kib_is_still_taken(self):
+        recs = [dict(_position(f"{k:x}" * 16, k, self.now), last_id="m" * 40) for k in range(14)]
+        data = b"".join(_line(r) for r in recs)
+        self.assertGreater(len(data), 4096)
+        self.pbj._spool_line(self.jdir, data, "enforcement.jsonl", tag=True)
+        self.pbj.rotate_enforcement(self.lane)
+        self.assertEqual((len(self.records()), self.spools()), (14, []))
+
+    def test_q3_a_cli_transition_with_no_transcript_rotates(self):
+        """opus, astra, sol (reproduced): `_record_agent_usage` returned before the rotation."""
+        from tasks.lifecycle import _record_agent_usage
+        with open(self.live, "ab") as f:
+            f.write(b'{"ts":"2026-10-19T00:00:00Z","hook":"task-gate","decision":"allow","reason":"' + b"x" * 400
+                    + b'"}\n' * 1)
+            pad = (b'{"ts":"2026-10-19T00:00:00Z","hook":"task-gate","decision":"allow","reason":"' + b"x" * 400
+                   + b'"}\n')
+            f.write(pad * (21 * 1024 * 1024 // len(pad)))
+        session = self.lane / "sessions" / "pid-9"
+        session.mkdir(parents=True)                            # no transcript_path pointer in it
+        _record_agent_usage(self.lane, "7", [session])
+        self.assertEqual(len(self.archives()), 1)
+
+    def test_q4_a_gz_that_does_not_hold_the_archive_is_never_swapped_in(self):
+        import gzip
+        t = int(self.now - 3600)
+        p = self.jdir / f"enforcement.jsonl.archived-20261019-000000-{t}-1"
+        p.write_bytes(b'{"hook":"x"}\n' * 50)
+        os.utime(p, (self.now - 3600, self.now - 3600))
+        real = self.pbj._gzip_to
+
+        def short(src, tmp):
+            ok = real(src, tmp)
+            with gzip.open(tmp, "wb") as f:
+                f.write(b'{"hook":"x"}\n')               # a temporary that lost data
+            return ok
+        setattr(self.pbj, "_gzip_to", short)
+        try:
+            self.pbj.rotate_enforcement(self.lane)
+        finally:
+            setattr(self.pbj, "_gzip_to", real)
+        self.assertTrue(p.exists())
+        self.assertFalse(Path(str(p) + ".gz").exists())
+
+    def test_q4_the_gz_and_the_carry_file_are_made_durable_before_they_replace_anything(self):
+        synced = []
+        real = os.fsync
+        os.fsync = lambda fd: (synced.append(os.readlink(f"/proc/self/fd/{fd}")), real(fd))[1]
+        try:
+            self.write(_position("a" * 16, 10, self.now))
+            self.pad()
+            self.pbj.rotate_enforcement(self.lane, limit=self.LIMIT)
+            [arch] = self.archives()
+            os.utime(arch, (self.now - 3600, self.now - 3600))
+            old = self.jdir / arch.name.replace(arch.name.split("-")[-2], str(int(self.now - 3600)), 1)
+            arch.rename(old)
+            self.pbj.rotate_enforcement(self.lane, limit=self.LIMIT)
+        finally:
+            os.fsync = real
+        self.assertTrue(any(".carry-" in x for x in synced), synced)
+        self.assertTrue(any(".gz.tmp-" in x for x in synced), synced)
+
+    def test_q5_a_fifo_at_the_gz_name_hangs_nothing(self):
+        import threading
+        t = int(self.now - 3600)
+        p = self.jdir / f"enforcement.jsonl.archived-20261019-000000-{t}-1"
+        p.write_bytes(b'{"hook":"x"}\n')
+        os.utime(p, (self.now - 3600, self.now - 3600))
+        os.mkfifo(str(p) + ".gz")
+        th = threading.Thread(target=self.pbj.rotate_enforcement, args=(self.lane,), daemon=True)
+        th.start()
+        th.join(5)
+        if th.is_alive():                                       # unblock the hung open before failing
+            fd = os.open(str(p) + ".gz", os.O_WRONLY | os.O_NONBLOCK)
+            os.close(fd)
+        self.assertFalse(th.is_alive(), "the pass hung on a FIFO")
+        self.assertTrue(p.exists())
+
+    def test_q6_archives_are_read_in_their_sequence_not_their_clock(self):
+        """astra: a clock set back between two rotations named the later archive earlier."""
+        t = self.now - 3000
+        self.arch(int(t + 900), [self.rec("work", t)], tasks=["7"], pid=1)            # sequence 1, the later clock
+        self.arch(int(t + 100), [self.rec("verify run", t + 1, hook="verify")], tasks=["7"], pid=2)   # sequence 2
+        self.write(self.rec("done", t + 2))
+        self.assertEqual([r["reason"] for r in self.read()], ["work", "verify run", "done"])
+        self.assertEqual([r["reason"] for r in self.numbers.read_enforcement(self.lane, time.monotonic() + 5)],
+                         ["work", "verify run", "done"])
+
+    def test_q6_a_rotation_numbers_its_archive_one_past_the_highest(self):
+        for _ in range(3):
+            self.pad()
+            self.pbj.rotate_enforcement(self.lane, limit=self.LIMIT)
+        seqs = sorted(int(p.name.split("-")[-1]) for p in self.archives())
+        self.assertEqual(seqs, [1, 2, 3])
+
+    def test_q6_since_starts_at_the_first_archive_renamed_after_it_in_sequence(self):
+        t = self.now - 30 * 86400
+        self.arch(int(t), [self.rec("work", t, task="1")], tasks=["1"], pid=1)
+        self.arch(int(self.now - 86400), [self.rec("work", self.now - 86400, task="2")], tasks=["2"], pid=2)
+        self.arch(int(t - 86400), [self.rec("work", self.now - 3600, task="3")], tasks=["3"], pid=3)  # clock set back
+        lines = self.numbers.enforcement_lines(self.jdir, time.monotonic() + 5, since=self.now - 2 * 86400)
+        self.assertEqual([json.loads(x)["task"] for x in lines], ["2", "3"])
+
+    def test_q7_the_dashboard_says_truncated_when_the_archives_cannot_be_read(self):
+        from tasks import dashboard, numbers
+        self.write(self.rec("x", self.now, hook="review", seat="a", status="ok", kind="panel"))
+        self.arch(int(self.now - 100), [self.rec("y", self.now - 200, hook="review", seat="a", status="ok")], pid=1)
+        real = numbers.enforcement_lines
+
+        def boom(*a, **k):
+            raise numbers.OutOfTime("x")
+        numbers.enforcement_lines = boom
+        try:
+            _recs, _skipped, status = dashboard.load_review_journal(self.live, since=0)
+        finally:
+            numbers.enforcement_lines = real
+        self.assertEqual(status, "truncated")
+
+    def test_q8_a_first_rotation_during_an_unlocked_read_is_read_again(self):
+        """sol (reproduced): with no lock file yet the reader read unlocked, and a first rotation between its listing
+        and its reads left it the carry-only live file. The reader never makes the file (a dry run writes nothing);
+        when the lock appears while it reads, it reads again, locked."""
+        t = self.now - 3000
+        self.write(self.rec("work", t), self.rec("done", t + 5))
+        self.assertFalse(self.lock.exists())
+        real = self.numbers._lines_of
+        fired = []
+
+        def rotate_once(path):
+            if not fired and path.name == "enforcement.jsonl":
+                fired.append(1)                                     # the first rotation, between listing and read
+                self.pbj.rotate_enforcement(self.lane, limit=1)
+            return real(path)
+        self.numbers._lines_of = rotate_once
+        try:
+            got = self.read()
+        finally:
+            self.numbers._lines_of = real
+        self.assertTrue(fired)
+        self.assertEqual([r["reason"] for r in got], ["work", "done"])
+
+    def test_q8_a_reader_writes_nothing(self):
+        self.write(self.rec("work", self.now))
+        before = sorted(p.name for p in self.jdir.iterdir())
+        self.read()
+        self.assertEqual(sorted(p.name for p in self.jdir.iterdir()), before)
+
+    def test_q9_an_archive_grown_since_its_index_is_read(self):
+        """sol (reproduced): an older writer holding its descriptor across the rename appended after the index."""
+        t = self.now - 3000
+        p = self.arch(int(t + 100), [self.rec("work", t, task="7")], tasks=["7"], pid=1)
+        idx = Path(str(p) + ".tasks")
+        idx.write_text(json.dumps({"tasks": ["7"], "size": p.stat().st_size}))
+        with open(p, "ab") as f:
+            f.write(_line(self.rec("work", t + 5, task="9")))
+        self.write(self.rec("done", t + 10, task="9"))
+        self.assertEqual([r["reason"] for r in self.read(task="9") if r["task"] == "9"], ["work", "done"])
+
+    def test_q11_the_retro_says_when_its_read_ran_out_of_time(self):
+        import contextlib
+        import io
+        from tasks import numbers, retro
+        self.write(self.rec("work", self.now))
+        real = numbers.enforcement_lines
+
+        def slow(*a, **k):
+            raise numbers.OutOfTime("x")
+        numbers.enforcement_lines = slow
+        err = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(retro.lifecycle_records(self.live), [])
+        finally:
+            numbers.enforcement_lines = real
+        self.assertIn("transitions", err.getvalue())
+
+    def test_q13_carried_lines_do_not_go_into_the_index(self):
+        self.write(dict(_position("a" * 16, 5, self.now, task="55"), reason=CARRY, of=_iso(self.now)))
+        self.pad()
+        self.pbj.rotate_enforcement(self.lane, limit=self.LIMIT)
+        [arch] = self.archives()
+        self.assertNotIn("55", json.loads(Path(str(arch) + ".tasks").read_text())["tasks"])
+
+    def test_q14_a_pass_compresses_one_archive(self):
+        for pid in (1, 2):
+            t = int(self.now - 3600)
+            p = self.jdir / f"enforcement.jsonl.archived-20261019-000000-{t}-{pid}"
+            p.write_bytes(b'{"hook":"x"}\n')
+            os.utime(p, (self.now - 3600, self.now - 3600))
+        self.pbj.rotate_enforcement(self.lane)
+        self.assertEqual(len(list(self.jdir.glob("*.gz"))), 1)
+        self.pbj.rotate_enforcement(self.lane)
+        self.assertEqual(len(list(self.jdir.glob("*.gz"))), 2)
+
+    def test_q16_a_spool_line_whose_ts_is_not_its_first_key_is_placed_by_it(self):
+        t = self.now - 3000
+        self.write(self.rec("work", t), self.rec("work", t + 30, task="8"))
+        sid = "enforcement.jsonl.spool-20261019-000000-1-1"
+        line = json.dumps({"hook": "tasks", "decision": "record", "reason": "done", "task": "7", "ts": _iso(t + 10),
+                           "spool": sid + ".0"}, separators=(",", ":")) + "\n"
+        (self.jdir / sid).write_text(line)
+        lines = self.numbers.enforcement_lines(self.jdir, time.monotonic() + 5)
+        self.assertEqual([json.loads(x)["reason"] for x in lines], ["work", "done", "work"])
 
 
 def _epoch(ts: str) -> float:

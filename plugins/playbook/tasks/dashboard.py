@@ -242,8 +242,8 @@ def load_review_journal(path: "Path | None", cap: int = _JOURNAL_READ_CAP,
             import time
             from tasks.numbers import enforcement_lines
             raw_lines = enforcement_lines(Path(path).parent, time.monotonic() + 10, since=since)
-        except Exception:                   # noqa: BLE001 — the live file alone, as before the rotation came
-            pass
+        except Exception:                   # noqa: BLE001 — the live file alone, said as incomplete (impl r1 Q7)
+            read_status = "truncated"
     for line in raw_lines:
         if not line.strip():
             continue

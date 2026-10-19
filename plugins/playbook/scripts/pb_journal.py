@@ -575,9 +575,9 @@ def _spool_line(jdir: Path, data: bytes, journal: str, tag: bool = False) -> boo
         return False
     name = f"{journal}.spool-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}-{int.from_bytes(os.urandom(4), 'big')}"
     tmp = jdir / (f"{journal}.spooling-" + name[len(f"{journal}.spool-"):])
-    if tag:
-        data = b"".join(ln[:-1] + b',"spool":"' + name.encode() + b'"}\n' if ln.endswith(b"}") else ln + b"\n"
-                        for ln in data.split(b"\n") if ln)
+    if tag:     # each line its own id, `<name>.<index>` (impl r1 Q1: one id for a multi-line spool kept one line)
+        data = b"".join(ln[:-1] + b',"spool":"' + f"{name}.{i}".encode() + b'"}\n' if ln.endswith(b"}") else ln + b"\n"
+                        for i, ln in enumerate(x for x in data.split(b"\n") if x))
     made = landed = False
     try:
         fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
@@ -783,7 +783,7 @@ def _hj_take_spools(jdir: Path, jfile: Path) -> None:
     _take_spools(jdir, jfile, "hooks.jsonl")
 
 
-def _take_spools(jdir: Path, jfile: Path, journal: str, seen_ids: "set | None" = None) -> None:
+def _take_spools(jdir: Path, jfile: Path, journal: str, seen_ids: "set | None" = None, cap: int = 4096) -> None:
     """`_hj_take_spools` for the spools of `journal` (the hook journal's, and since task 257 the enforcement one's).
     `seen_ids` (the enforcement journal, plan r1 P2): the `spool` ids already in the journal — a spool whose lines all
     carry one of them was appended by a merge killed before its unlink, and is only unlinked now."""
@@ -801,7 +801,7 @@ def _take_spools(jdir: Path, jfile: Path, journal: str, seen_ids: "set | None" =
             # never removed for its age (post-panel judge run 4: a clock step made a live writer's look old); one whose
             # writer, the pid in its name, is gone is taken as a spool: its one write is the whole line or nothing
             m = re.search(r"-(\d{1,10})-\d+$", n)
-            if not m or os.path.isdir(f"/proc/{m.group(1)}") or not stat.S_ISREG(st.st_mode) or st.st_size > 4096:
+            if not m or os.path.isdir(f"/proc/{m.group(1)}") or not stat.S_ISREG(st.st_mode) or st.st_size > cap:
                 continue
             if st.st_size == 0:
                 f.unlink()
@@ -813,7 +813,7 @@ def _take_spools(jdir: Path, jfile: Path, journal: str, seen_ids: "set | None" =
             if stat.S_ISLNK(st.st_mode):
                 f.unlink()
                 continue
-            if not stat.S_ISREG(st.st_mode) or st.st_size > 4096:
+            if not stat.S_ISREG(st.st_mode) or st.st_size > cap:
                 continue
             data = f.read_bytes()
         else:
@@ -887,7 +887,7 @@ def _hj_compress(arch: Path) -> None:
 _EJ_LIMIT = 20971520
 _EJ_HORIZON_S = 30 * 86400
 _EJ_IDLE_S = 600
-_EJ_ARCHIVE = re.compile(r"enforcement\.jsonl\.archived-\d{8}-\d{6}-(\d{1,12})-\d+")
+_EJ_ARCHIVE = re.compile(r"enforcement\.jsonl\.archived-\d{8}-\d{6}-(\d{1,12})-(\d{1,12})")   # epoch, sequence
 _EJ_STAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 _EJ_TASK = re.compile(rb'"task":\s*"(\d{1,16})"')
 _EJ_SPOOL_ID = re.compile(rb'"spool":"(enforcement\.jsonl\.spool-[0-9A-Za-z._-]{1,80})"')
@@ -1016,8 +1016,8 @@ def _ej_positions(fd: int, start: int, size: int, found: dict, horizon: str, tas
         *whole, carry = (carry + chunk).split(b"\n")
         for raw in whole:
             m = _EJ_TASK.search(raw)
-            if m:
-                tasks.add(m.group(1).decode())
+            if m and EJ_CARRY_REASON.encode() not in raw and EJ_HORIZON_REASON.encode() not in raw:
+                tasks.add(m.group(1).decode())      # a carried line names an old task: no record of it here (Q13)
             if b'"agent-usage"' not in raw:
                 continue
             try:
@@ -1082,11 +1082,11 @@ def _ej_rotate_locked(jdir: Path, live: Path, limit: int, pre: "_Prescan | None"
             if len(line) <= 4096:
                 lines.append(line)
         tmp = jdir / f"{EJ_NAME}.carry-{os.getpid()}-{int.from_bytes(os.urandom(4), 'big')}"
-        # the last field: the rename's nanoseconds (9 digits), then the pid — two rotations in one second (a tiny
-        # limit) get two names, and the readers' (epoch, name) order is still the order they were renamed in
-        ns = time.time_ns()
-        arch = jdir / (f"{EJ_NAME}.archived-{time.strftime('%Y%m%d-%H%M%S', time.gmtime(ns // 10 ** 9))}-"
-                       f"{ns // 10 ** 9}-{ns % 10 ** 9:09d}{os.getpid()}")
+        # the last field: a sequence, one past the highest — readers order archives by it, not by the clock (impl r1
+        # Q6: a clock set back named a later archive earlier); the time stays for the idle rule and for people
+        seq = 1 + max((int(m.group(2)) for m in (_EJ_ARCHIVE.fullmatch(n[:-3] if n.endswith(".gz") else n)
+                                                  for n in os.listdir(jdir)) if m), default=0)
+        arch = jdir / f"{EJ_NAME}.archived-{time.strftime('%Y%m%d-%H%M%S', time.gmtime(now))}-{int(now)}-{seq}"
         if os.path.lexists(arch):
             return ""
         out = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
@@ -1094,6 +1094,7 @@ def _ej_rotate_locked(jdir: Path, live: Path, limit: int, pre: "_Prescan | None"
             data = b"".join(lines)
             if os.write(out, data) != len(data):
                 raise OSError("short write")
+            os.fsync(out)                   # durable before it replaces the live file (impl r1 Q4)
         except OSError:
             os.close(out)
             tmp.unlink()
@@ -1105,7 +1106,9 @@ def _ej_rotate_locked(jdir: Path, live: Path, limit: int, pre: "_Prescan | None"
         try:
             sfd = os.open(str(side), os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
             with os.fdopen(sfd, "w", encoding="utf-8") as f:
-                f.write(json.dumps({"tasks": sorted(pre.tasks)}, separators=(",", ":")) + "\n")
+                # its size too: an older writer holding its descriptor across the rename can still append (Q9)
+                f.write(json.dumps({"tasks": sorted(pre.tasks), "size": os.lstat(live).st_size},
+                                   separators=(",", ":")) + "\n")
         except OSError:
             tmp.unlink()
             return ""
@@ -1179,7 +1182,7 @@ def _ej_take_spools(jdir: Path, live: Path) -> None:
                     tail = buf[-160:]       # an id cut by the chunk's end is found with the next one
         finally:
             os.close(fd)
-    _take_spools(jdir, live, EJ_NAME, seen_ids=seen)
+    _take_spools(jdir, live, EJ_NAME, seen_ids=seen, cap=16384)     # a tagged 4 KiB span passes 4 KiB (impl r1 Q2)
 
 
 def _ej_compress_idle(jdir: Path) -> str:
@@ -1228,13 +1231,15 @@ def _ej_compress_idle(jdir: Path) -> str:
                 tmp.unlink()
                 continue
             now_st = os.lstat(p)
-            if (now_st.st_size, now_st.st_mtime_ns) != (st.st_size, st.st_mtime_ns):
-                tmp.unlink()                # written since: compressed again on a later pass
+            if (now_st.st_size, now_st.st_mtime_ns) != (st.st_size, st.st_mtime_ns) \
+                    or _gz_isize(tmp) != st.st_size % (1 << 32):
+                tmp.unlink()                # written since, or not all of it (Q4): compressed again later
                 continue
             os.link(tmp, gz)
             p.unlink()
             tmp.unlink()
             done += 1
+            break                           # one archive a pass: the recorder's lock is held (impl r1 Q14)
         except OSError:
             continue
         finally:
@@ -1243,13 +1248,21 @@ def _ej_compress_idle(jdir: Path) -> str:
 
 
 def _gz_isize(gz: Path) -> "int | None":
-    """The `.gz`'s ISIZE (its last 4 bytes: the uncompressed size mod 2^32), or None."""
+    """The `.gz`'s ISIZE (its last 4 bytes: the uncompressed size mod 2^32), or None — opened without blocking or
+    following a link, a regular file only (impl r1 Q5: a FIFO there hung the pass)."""
     try:
-        with open(gz, "rb") as f:
-            f.seek(-4, os.SEEK_END)
-            return int.from_bytes(f.read(4), "little")
+        fd = os.open(str(gz), os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0))
     except OSError:
         return None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_size < 4:
+            return None
+        return int.from_bytes(os.pread(fd, 4, st.st_size - 4), "little")
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
 
 
 def _gzip_to(src: Path, tmp: Path) -> bool:
@@ -1259,13 +1272,18 @@ def _gzip_to(src: Path, tmp: Path) -> bool:
     except OSError:
         return False
     try:
-        with os.fdopen(fd, "wb") as raw, open(src, "rb") as f, gzip.GzipFile(fileobj=raw, mode="wb",
-                                                                            compresslevel=6) as out:
-            while True:
-                chunk = f.read(1 << 20)
-                if not chunk:
-                    break
-                out.write(chunk)
+        sfd = os.open(str(src), os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(fd, "wb") as raw, os.fdopen(sfd, "rb") as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                raise OSError("not a regular file")
+            with gzip.GzipFile(fileobj=raw, mode="wb", compresslevel=6) as out:
+                while True:
+                    chunk = f.read(1 << 20)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+            raw.flush()
+            os.fsync(raw.fileno())          # durable before the archive it replaces goes (impl r1 Q4)
         return True
     except Exception:                       # noqa: BLE001
         try:

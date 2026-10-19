@@ -8,7 +8,8 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 never rotated, and three readers read it whole or scan it backwards: the close's numbers within 5 s, the agent recorder
 at each turn's end (a new transcript past its 32 MiB scan got a seed, its first turn uncounted), and the bootstrap's
 panel health. Now, like `hooks.jsonl`, past 20 MB the live file becomes an archive
-(`enforcement.jsonl.archived-<stamp>-<epoch>-<ns><pid>`, with a `.tasks` index of the task numbers it names),
+(`enforcement.jsonl.archived-<stamp>-<epoch>-<seq>`, read in its sequence, with a `.tasks` index of the task numbers
+it names and its size),
 compressed once idle for 10 minutes, every archive kept. The new live file starts with a horizon line and each
 transcript's newest read position, so the recorder reads on exactly where it stopped; positions older than 30 days are
 not carried, and a transcript begun before that horizon gets a seed instead of being counted again. Every append holds

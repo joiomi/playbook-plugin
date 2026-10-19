@@ -81,9 +81,12 @@ def _record_agent_usage(agent_dir: Path, task, session_dirs) -> None:
             return mod
         au = _load("_agent_usage_cli", "agent_usage.py")
         paths = [p for p in (au._pointer(str(agent_dir), Path(d).name) for d in session_dirs) if p]
-        if not paths:
-            return
         pbj = _load("_pb_journal_agent_cli", "pb_journal.py")
+        if not paths:
+            # task 257 (impl r1 Q3: opus, astra, sol): a CLI with no transcript (codex, a plain terminal) still keeps
+            # the enforcement journal bounded — it rotates, taking the recorder's lock itself
+            pbj.rotate_enforcement(str(agent_dir))
+            return
         sid = resolve_session_id(quiet=True) or ""
         res = au.record_spans(str(agent_dir), task=str(task or "-"), paths=paths, session_id=sid, pbj=pbj,
                               lock_wait=5.0)

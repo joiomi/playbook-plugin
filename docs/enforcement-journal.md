@@ -41,7 +41,8 @@ Every record carries these keys:
 | `reason`     | string | short fixed reason string                                     |
 
 A record that waited for the journal's lock in vain was written to a spool file and carries one more key, `spool` —
-the spool file's name, its identity when the spool is merged into the journal (task 257).
+the spool file's name and the line's index in it (`<name>.<i>`), its identity when the spool is merged into the
+journal (task 257).
 
 A reader MUST tolerate unknown future keys and unknown `hook`/`decision` values
 rather than erroring — this is a log, and the repo's format is the source of
@@ -319,12 +320,15 @@ The owner, 2026-10-19: "Da, în Faza B (Recomandat)" — `enforcement.jsonl` rot
 used for years keeps the close's read, the agent recorder's backward scan and the bootstrap's panel health bounded.
 
 **Archives.** Past 20 MB (20,971,520 bytes) the live file is renamed to
-`enforcement.jsonl.archived-<YYYYmmdd-HHMMSS>-<epoch>-<ns><pid>` — the rename's UTC time, its epoch second, then its
-nanoseconds (9 digits) and the rotating process's pid, so archives sort by (epoch, name) in the order they were
-renamed. Beside it, `<archive>.tasks` — `{"tasks": [...]}`, the task numbers its lines name (`"task":"<digits>"`) —
-lets a reader of one task's history skip the archives that hold none of it. An archive idle for 10 minutes (by the
-rename time its name records and by its mtime) is compressed to `<archive>.gz`; every archive is kept (the owner's
-"Comprimate, toate").
+`enforcement.jsonl.archived-<YYYYmmdd-HHMMSS>-<epoch>-<seq>` — the rename's UTC time and epoch second, then a
+sequence one past the highest archive's, taken under the exclusive hold: archives are read in that order, never in the
+clock's (a clock set back would name a later archive earlier). Beside it, `<archive>.tasks` —
+`{"tasks": [...], "size": N}`, the task numbers its lines name (`"task":"<digits>"`, carried lines aside) and the
+archive's size — lets a reader of one task's history skip the archives that hold none of it; an archive no longer that
+size (a writer of an older version, holding its descriptor across the rename, appended to it) is read whole. An archive
+idle for 10 minutes (by the rename time its name records and by its mtime) is compressed to `<archive>.gz`, one a pass,
+the compressed copy made durable (fsync) and checked against the archive's size before the archive goes; every archive
+is kept (the owner's "Comprimate, toate").
 
 **Who rotates.** Only python: `pb_journal.rotate_enforcement`, called by the agent recorder inside its
 `journal/agent-usage.lock` (each Stop, the session's end, the CLI's transitions) and by the CLI when there is no
@@ -352,16 +356,19 @@ decisions stay the four above — and neither is an event: every reader of event
 milliseconds, and only inside `rotate_enforcement`, under the recorder's lock — so a read position, which is written
 under that lock too, never meets an exclusive hold. The CLI's records (transitions, verify runs, review spend, close)
 wait up to 5 s for the shared lock, a hook's up to 1 s; past that the record goes to a spool,
-`enforcement.jsonl.spool-<stamp>-<pid>-<rand>` (written as `…spooling-…`), carrying its `spool` id — never an
-unlocked append. A host with no `flock` command spools every bash record. The next rotation pass merges the spools
-into the live file, once each (a spool whose id is already there is only removed). A lock file that is a link or not
+`enforcement.jsonl.spool-<stamp>-<pid>-<rand>` (written as `…spooling-…`), each line carrying its `spool` id —
+never an unlocked append. A host with no `flock` command spools every bash record. The next rotation pass merges the
+spools into the live file, once each (a spool whose ids are all there already is only removed), and takes a dead
+writer's complete `…spooling-…` file the same way. A lock file that is a link or not
 a regular file writes nothing. Measured cost: a `task-gate-hook` run that writes a record, median +2.3 ms (300
 interleaved runs; quartiles +0.7 / +1.4 ms) — about the hook journal's own lock.
 
 **Reading the whole journal** (the plugin's readers: `numbers.enforcement_lines`; an outside reader should do the
-same), holding `enforcement.lock` shared while listing and reading:
+same), holding `enforcement.lock` shared while listing and reading (with no lock file yet, the journal is read
+unlocked, and read again, locked, if the lock appears meanwhile — the first rotation makes it before its rename; a
+reader never makes it, so a dry run writes nothing):
 
-1. the archives by (epoch, name) — `X`, not `X.gz`, when both exist (a compression killed before its last step), and
+1. the archives by their sequence — `X`, not `X.gz`, when both exist (a compression killed before its last step), and
    never an archive name on the live file's inode (a rotation killed between its link and its rename);
 2. the live file;
 3. the spools;
@@ -384,7 +391,7 @@ session of the project first, so nothing writes the journal, then, in the journa
 <!-- recipe:merge:start -->
 ```bash
 set -eo pipefail
-for f in $(ls | grep -E '^enforcement\.jsonl\.archived-[0-9]{8}-[0-9]{6}-[0-9]+-[0-9]+(\.gz)?$' | sort -t- -k4,4n -k5,5); do
+for f in $(ls | grep -E '^enforcement\.jsonl\.archived-[0-9]{8}-[0-9]{6}-[0-9]+-[0-9]+(\.gz)?$' | sort -t- -k5,5n); do
   [ "$f" -ef enforcement.jsonl ] && continue          # a rotation killed half-way: the live file itself
   case "$f" in
     *.gz) [ -e "${f%.gz}" ] && continue; zcat -- "$f" ;;   # its source still there: read that
@@ -395,12 +402,15 @@ cat enforcement.jsonl >> enforcement.jsonl.all
 # every file a rotation started holds a horizon line and carries: read positions, not events
 { grep -v -e '"reason":"read position carried"' -e '"reason":"read positions horizon"' enforcement.jsonl.all || [ $? -eq 1 ]; } > enforcement.jsonl.merged
 rm enforcement.jsonl.all
-for s in $(ls | grep -E '^enforcement\.jsonl\.spool-' || true); do
-  grep -qF "\"spool\":\"$s\"" enforcement.jsonl.merged || cat -- "$s" >> enforcement.jsonl.merged
+for s in $(ls | grep -E '^enforcement\.jsonl\.spool(ing)?-' || true); do
+  [ -s "$s" ] && [ -z "$(tail -c 1 -- "$s")" ] || continue   # whole: a spool, or a dead writer's temporary
+  id=$(grep -o '"spool":"[^"]*\.' -- "$s" | head -n 1 || true)
+  if [ -n "$id" ] && grep -qF -- "$id" enforcement.jsonl.merged; then continue; fi   # merged already
+  cat -- "$s" >> enforcement.jsonl.merged
 done
 wc -l < enforcement.jsonl.merged
 mv enforcement.jsonl.merged enforcement.jsonl
-rm -f enforcement.jsonl.archived-* enforcement.jsonl.spool-*
+rm -f enforcement.jsonl.archived-* enforcement.jsonl.spool-* enforcement.jsonl.spooling-*
 ```
 <!-- recipe:merge:end -->
 

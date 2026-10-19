@@ -215,7 +215,7 @@ def read_enforcement(lane: Path, deadline: float, task: "str | None" = None) -> 
 
 # --- the enforcement journal's files (task 257) ------------------------------------------------------------------------
 
-_EJ_ARCHIVE = re.compile(r"enforcement\.jsonl\.archived-\d{8}-\d{6}-(\d{1,12})-\d+")
+_EJ_ARCHIVE = re.compile(r"enforcement\.jsonl\.archived-\d{8}-\d{6}-(\d{1,12})-(\d{1,12})")   # epoch, sequence
 _EJ_SPOOL = re.compile(r"enforcement\.jsonl\.spool-[0-9A-Za-z._-]+")
 _EJ_SPOOL_ID = re.compile(r'"spool":"(enforcement\.jsonl\.spool-[0-9A-Za-z._-]{1,80})"')
 # the rotation's own lines, told by their reason (pb_journal.EJ_CARRY_REASON / EJ_HORIZON_REASON): positions, not events
@@ -235,8 +235,22 @@ def enforcement_lines(jdir: Path, deadline: float, task: "str | None" = None,
     Kill states are read once (P4): an archive name on the live file's inode is skipped, and `X` is read, not `X.gz`,
     when both exist. A spooled line keeps its `spool` id through the merge: one line per id, placed by its `ts` after
     the ordinary lines of its second, which keep their file order (P2, P3). A link, a FIFO or an unreadable file is no
-    source."""
+    source.
+
+    A journal with no lock file yet is read unlocked; if the lock appears while it is read (the first rotation makes it
+    before its rename), it is read again, locked (impl r1 Q8: a listing made before that rename and reads made after it
+    missed the archived lines). A reader never makes the file: `tasks tag --dry-run` and the like write nothing."""
     jdir = Path(jdir)
+    lock = jdir / "enforcement.lock"
+    for _attempt in range(3):
+        had = os.path.lexists(lock)
+        got = _ej_read_once(jdir, deadline, task, since)
+        if had or not os.path.lexists(lock):
+            return got
+    return got
+
+
+def _ej_read_once(jdir: Path, deadline: float, task: "str | None", since: "float | None") -> "list[str]":
     with _ej_shared_lock(jdir, deadline):
         try:
             names = sorted(os.listdir(jdir))
@@ -248,24 +262,26 @@ def enforcement_lines(jdir: Path, deadline: float, task: "str | None" = None,
         except OSError:
             live_ino = None
         nameset = set(names)
-        picked: "list[tuple[int, str]]" = []
+        archives: "list[tuple[int, int, str]]" = []
         for n in names:
             base = n[:-3] if n.endswith(".gz") else n
             m = _EJ_ARCHIVE.fullmatch(base)
             if not m or (n.endswith(".gz") and base in nameset):
                 continue                    # not an archive; or a `.gz` whose source is still there: the source
-            epoch = int(m.group(1))
-            if since is not None and epoch < since:
-                continue
             try:
                 if not n.endswith(".gz") and live_ino is not None and os.lstat(jdir / n).st_ino == live_ino:
                     continue                # a swap killed between its link and its rename: the live file itself
             except OSError:
                 continue
-            if task is not None and not _ej_names_task(jdir / (base + ".tasks"), str(task)):
-                continue
-            picked.append((epoch, n))
-        picked.sort()
+            archives.append((int(m.group(2)), int(m.group(1)), n))
+        # in their sequence, not their clock (impl r1 Q6); `since` from the first one renamed at or after it, so an
+        # archive a clock set back named earlier still follows it
+        archives.sort()
+        if since is not None:
+            first = next((i for i, a in enumerate(archives) if a[1] >= since), len(archives))
+            archives = archives[first:]
+        picked = [(seq, n) for seq, _epoch, n in archives
+                  if task is None or _ej_names_task(jdir, n[:-3] if n.endswith(".gz") else n, str(task))]
         sources = [jdir / n for _, n in picked] + [live] + [jdir / n for n in names if _EJ_SPOOL.fullmatch(n)]
         ordinary: "list[str]" = []
         spooled: "dict[str, str]" = {}
@@ -303,27 +319,62 @@ def enforcement_lines(jdir: Path, deadline: float, task: "str | None" = None,
     return out
 
 
+_TS_ANY = re.compile(r'"ts":\s*"([^"]{20})"')
+
+
 def _ts_of(raw: str) -> str:
-    m = _TS_HEAD.match(raw.strip())
+    m = _TS_HEAD.match(raw.strip()) or _TS_ANY.search(raw)     # every writer puts it first; else anywhere (impl r1 Q16)
     return m.group(1) if m else ""
 
 
-def _ej_names_task(index: Path, task: str) -> bool:
-    """Whether an archive's `.tasks` index names `task` — True when it has no readable index (read it, to be sure)."""
-    data = _read_regular(index)
+def _ej_names_task(jdir: Path, base: str, task: str) -> bool:
+    """Whether the archive `base` (plain, or `base.gz`) may hold a record of `task`: its `.tasks` index names it, or
+    it has no readable index, or the archive is no longer the size the index recorded (impl r1 Q9: an older writer
+    holding its descriptor across the rename can append after the index was written) — then it is read."""
+    data = _read_regular(jdir / (base + ".tasks"))
     if data is None:
         return True
     try:
-        tasks = json.loads(data.decode("utf-8", "replace")).get("tasks")
+        doc = json.loads(data.decode("utf-8", "replace"))
+        tasks, size = doc.get("tasks"), doc.get("size")
     except (ValueError, AttributeError):
         return True
-    return not isinstance(tasks, list) or task in tasks
+    if not isinstance(tasks, list):
+        return True
+    if isinstance(size, int) and not isinstance(size, bool):
+        now, gz = _ej_archive_size(jdir, base)
+        if now is None or now != (size % (1 << 32) if gz else size):
+            return True
+    return task in tasks
+
+
+def _ej_archive_size(jdir: Path, base: str) -> "tuple[int | None, bool]":
+    """(size, compressed): the plain archive's size — read first, as the reader reads it when both exist — else the
+    `.gz`'s ISIZE (its uncompressed size mod 2^32); opened without blocking or following a link; (None, False) when
+    neither can be read."""
+    for name, gz in ((base, False), (base + ".gz", True)):
+        try:
+            fd = os.open(str(jdir / name), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+        except OSError:
+            continue
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                return None, False
+            if not gz:
+                return st.st_size, False
+            return (int.from_bytes(os.pread(fd, 4, st.st_size - 4), "little") if st.st_size >= 4 else None), True
+        except OSError:
+            return None, False
+        finally:
+            os.close(fd)
+    return None, False
 
 
 def _ej_shared_lock(jdir: Path, deadline: float):
     """`enforcement.lock` held SHARED while the journal is listed and read (task 257), waited for until the deadline,
-    then OutOfTime. No lock file (never written since the rotation came), or one that is not a regular file: nothing to
-    hold — read as it is."""
+    then OutOfTime. No lock file (the journal never rotated, or the writers never ran since the rotation came: see
+    `enforcement_lines`), or one that is not a regular file: nothing to hold — read as it is."""
     import contextlib
     import fcntl
 

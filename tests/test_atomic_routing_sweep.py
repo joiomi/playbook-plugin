@@ -76,7 +76,7 @@ APPROVED = {
     ("scripts/pb_journal.py", 'with os.fdopen(fd, "wb") as f:'):
         "the hook journal's spool (task 222, the owner's 'Bilet în cutie'): one line written to a NEW temporary "
         "opened O_CREAT|O_EXCL|O_NOFOLLOW, then os.link()ed to its spool name (no clobber) — never a live file",
-    ("scripts/pb_journal.py", 'with os.fdopen(fd, "wb") as raw, open(src, "rb") as f, gzip.GzipFile('):
+    ("scripts/pb_journal.py", 'with os.fdopen(fd, "wb") as raw, os.fdopen(sfd, "rb") as f:'):
         "the enforcement journal's archive compression (task 257): a NEW temporary opened O_CREAT|O_EXCL|O_NOFOLLOW, "
         "os.link()ed to its .gz name only under the exclusive lock and only when the archive is unchanged since, then "
         "the archive removed — a crash leaves the archive intact",
