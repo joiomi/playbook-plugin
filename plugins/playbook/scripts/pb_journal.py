@@ -305,8 +305,10 @@ def append_agent_usage(agent_dir, **fields) -> bool:
         return False
 
 
-def append_agent_usage_span(agent_dir, items) -> None:
-    """Append the records of ONE span (one per model and side) in one write, and return None. Never raises.
+def append_agent_usage_span(agent_dir, items) -> bool:
+    """Append the records of ONE span (one per model and side) in one write; return whether every line landed (task
+    246's impl round 2, codex / sonnet: the recorder must not say a span was recorded that the journal refused). Never
+    raises.
 
     Each record carries the span's `to`, which is the next read's start, so the records must land together: one
     `os.write` of their lines (impl round 1 of task 244, codex / opus / sonnet: appended one by one, a kill between them
@@ -315,17 +317,19 @@ def append_agent_usage_span(agent_dir, items) -> None:
     try:
         recs = [_agent_usage_rec(**f) for f in items]
         if not recs:
-            return
+            return True
         lines = [(json.dumps(r, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8") for r in recs]
         chunk: "list[bytes]" = []
+        landed = True
         for ln in lines:
             if chunk and sum(map(len, chunk)) + len(ln) > 4096:
-                _write_record(agent_dir, recs[0], data=b"".join(chunk))
+                landed = bool(_write_record(agent_dir, recs[0], data=b"".join(chunk))) and landed
                 chunk = []
             chunk.append(ln)
-        _write_record(agent_dir, recs[0], data=b"".join(chunk))
+        return bool(_write_record(agent_dir, recs[0], data=b"".join(chunk))) and landed
     except Exception as exc:                # defence in depth: never propagate
         _warn(exc)
+        return False
 
 
 # --- The hook journal (task 222, PHASE-B item 2) ---------------------------------------------------------------------

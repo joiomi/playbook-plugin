@@ -206,6 +206,60 @@ class AtTheSessionsEnd(_Project):
         line = [x for x in self.hook_lines() if x.get("hook") == "session-end"]
         self.assertTrue(line and "recorded 2 call" in line[-1].get("detail", ""), line)
 
+    def hold_lock(self):
+        lock = self.agent / "journal" / "agent-usage.lock"
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        holder = subprocess.Popen(["flock", str(lock), "sleep", "60"], stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL, start_new_session=True)
+        import time as _time
+        _time.sleep(0.3)
+        return holder
+
+    def release(self, holder):
+        os.killpg(holder.pid, 9)
+        holder.wait()
+
+    def test_a_busy_lock_at_a_clear_leaves_no_marker(self):
+        # impl round 2 (sonnet): a clear keeps the dir and its pointer — the next Stop reads the span
+        h = self.hold_lock()
+        try:
+            self.end("clear")
+        finally:
+            self.release(h)
+        self.assertEqual(self.records(), [])
+
+    def test_a_busy_lock_at_an_exit_with_nothing_unread_leaves_no_marker(self):
+        # impl round 2 (opus): the usual clean exit — the last Stop read everything — is no gap
+        self.run_hook(self.payload())
+        h = self.hold_lock()
+        try:
+            self.end("exit")
+        finally:
+            self.release(h)
+        self.assertFalse([x for x in self.records() if x.get("status") == "unknown"], self.records())
+        line = [x for x in self.hook_lines() if x.get("hook") == "session-end"]
+        self.assertIn("nothing unread", line[-1].get("detail", ""))
+
+    def test_a_journal_that_refuses_the_write_is_said_not_recorded(self):
+        # impl round 2 (codex, sonnet): the calls were counted as recorded before the append was known to land
+        j = self.agent / "journal" / "enforcement.jsonl"
+        j.parent.mkdir(parents=True, exist_ok=True)
+        j.write_text("")
+        j.chmod(0o444)                               # readable (the scan is complete), not writable: codex's case
+        try:
+            with open(j, "a"):
+                j.chmod(0o644)
+                self.skipTest("file permissions not enforced for this user")
+        except PermissionError:
+            pass
+        try:
+            self.end("exit")
+        finally:
+            j.chmod(0o644)
+        line = [x for x in self.hook_lines() if x.get("hook") == "session-end"]
+        self.assertIn("NOT written", line[-1].get("detail", ""), line)
+        self.assertNotIn("recorded 2", line[-1].get("detail", ""))
+
     def test_a_busy_lock_at_the_sessions_end_leaves_an_unknown_marker_and_says_so(self):
         # impl round 1 (codex): the turn would be lost with no trace once the dir is gone
         lock = self.agent / "journal" / "agent-usage.lock"

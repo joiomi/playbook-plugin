@@ -284,7 +284,7 @@ def record_spans(lane, *, task, paths: "list[str]", session_id: str, pbj, lock_w
     before it, a close holding the lock could leave this span after its `done`); a callable answering None — a
     session not resolved — records nothing (impl round 2, sonnet). Returns {"files", "calls", "skipped"}."""
     lane = str(lane)
-    out = {"files": 0, "calls": 0, "skipped": ""}
+    out = {"files": 0, "calls": 0, "skipped": "", "unwritten": 0}
     files = session_files(paths)
     if not files:
         out["skipped"] = "no transcript"
@@ -320,9 +320,10 @@ def record_spans(lane, *, task, paths: "list[str]", session_id: str, pbj, lock_w
             else:
                 why = ("no earlier record for this transcript: usage before now not counted" if complete or prev
                        else "the journal scan did not reach this transcript's last record: usage before now not counted")
-                pbj.append_agent_usage(lane, task=task, file=key, ino=st.st_ino, span_from=st.st_size,
-                                       span_to=st.st_size, head=head_of(f, min(HEAD_MAX, st.st_size)), known=False,
-                                       session_id=session_id, why=why)
+                if pbj.append_agent_usage(lane, task=task, file=key, ino=st.st_ino, span_from=st.st_size,
+                                          span_to=st.st_size, head=head_of(f, min(HEAD_MAX, st.st_size)), known=False,
+                                          session_id=session_id, why=why) is False:
+                    out["unwritten"] += 1
                 continue
             r = read_span(f, start, last)
             out["files"] += 1
@@ -341,9 +342,10 @@ def record_spans(lane, *, task, paths: "list[str]", session_id: str, pbj, lock_w
                         for k, v in c.items():
                             m[k] += v
             items = []
+            span_calls = 0
             for (model, side), c in sorted(merged.items()):
                 items.append(dict(span, model=model, side=side, calls=c["calls"], counts=c))
-                out["calls"] += c["calls"]
+                span_calls += c["calls"]
             if bad:
                 if items:
                     items[0]["unreadable"] = bad
@@ -354,7 +356,11 @@ def record_spans(lane, *, task, paths: "list[str]", session_id: str, pbj, lock_w
                 # searching the whole journal for it at every Stop (impl round 2, opus)
                 items.append(dict(span, model="?", side=side_file, calls=0, counts={}))
             if items:
-                pbj.append_agent_usage_span(lane, items)   # one write: the span's `to` lands with all its models
+                # one write: the span's `to` lands with all its models; a span counts as recorded only once it landed
+                if pbj.append_agent_usage_span(lane, items) is False:
+                    out["unwritten"] += 1
+                else:
+                    out["calls"] += span_calls
         return out
     finally:
         os.close(fd)
@@ -394,6 +400,32 @@ def load_journal():
     return mod
 
 
+def paths_of(payload: dict, lane: str, session: str) -> "list[str]":
+    """The session's main transcripts: the payload's `transcript_path`, then the session dir's pointer."""
+    tp = payload.get("transcript_path")
+    return [tp if isinstance(tp, str) else "", _pointer(lane, session)]
+
+
+def _unread(lane: str, paths: "list[str]") -> bool:
+    """Whether any of the session's files holds bytes past its newest record's `to` (or has no record) — read without
+    the lock, for the busy-lock marker only: a clean exit whose last Stop read everything is no gap (task 246's impl
+    round 2, opus)."""
+    files = session_files(paths)
+    if not files:
+        return False
+    keys = {file_key(f): f for f in files}
+    newest, _complete = _newest(os.path.join(lane, "journal", "enforcement.jsonl"), set(keys))
+    for key, f in keys.items():
+        try:
+            size = os.stat(f).st_size
+        except OSError:
+            continue
+        to = (newest.get(key) or {}).get("to")
+        if not isinstance(to, int) or isinstance(to, bool) or size > to:
+            return True
+    return False
+
+
 def hook_main(payload_text: str) -> str:
     """The recorder (`agent-usage-hook`, Stop): one line saying what it recorded or why not."""
     try:
@@ -415,9 +447,13 @@ def hook_main(payload_text: str) -> str:
         t = pbj._hj_session_task(Path(lane), session)
         seen_task.append(t)
         return None if t is None else (t or "-")
-    tp = payload.get("transcript_path")
-    res = record_spans(lane, task=task, paths=[tp if isinstance(tp, str) else "", _pointer(lane, session)],
-                       session_id=session, pbj=pbj, lock_wait=2.0)
+    res = record_spans(lane, task=task, paths=paths_of(payload, lane, session), session_id=session, pbj=pbj,
+                       lock_wait=2.0)
+    terminal = str(payload.get("reason") or "").lower() in ("logout", "prompt_input_exit", "other", "exit")
+    if res["skipped"] == "lock" and os.environ.get("PB_AU_MARK_BUSY") == "1" and not terminal:
+        return "skipped: lock (the session goes on: its next Stop reads the span)"
+    if res["skipped"] == "lock" and os.environ.get("PB_AU_MARK_BUSY") == "1" and not _unread(lane, paths_of(payload, lane, session)):
+        return "skipped: lock (nothing unread since the last record: no marker)"
     if res["skipped"] == "lock" and os.environ.get("PB_AU_MARK_BUSY") == "1":
         # task 246 (impl round 1, codex): at the session's end there is no later reader — the dir and its pointer go
         # next — so a busy lock leaves an `unknown` marker for the session's task (a marker holds no position: the lock
@@ -430,7 +466,10 @@ def hook_main(payload_text: str) -> str:
         return "skipped: lock (" + ("marked unknown" if marked else "the unknown marker could not be written") + ")"
     if res["skipped"]:
         return f"skipped: {res['skipped']}"
-    return f"recorded {res['calls']} call(s) from {res['files']} file(s) for task {(seen_task or ['-'])[0] or '-'}"
+    said = f"recorded {res['calls']} call(s) from {res['files']} file(s) for task {(seen_task or ['-'])[0] or '-'}"
+    if res.get("unwritten"):
+        said += f"; {res['unwritten']} span(s) NOT written (the journal refused them)"
+    return said
 
 
 if __name__ == "__main__":
