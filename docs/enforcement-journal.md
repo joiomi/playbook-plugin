@@ -490,13 +490,15 @@ prompt that started it, M001, and the closure's number — without its keys that
    call left open (an interrupted call, a cancelled dialog and a blocked command fire no PostToolUse).
 5. *Inside a turn:* `owner-question` while an options dialog is open, else `agent` — the model's time and every
    tool's together.
-6. The part of a gap with a Bash call open, or of a background gap, that overlaps the task's review spans (each review
+6. The part of a gap with a Bash call open, of a background gap, or of the close's own session's last gap outside a
+   turn (the close run as a background command after the turn ended — task 249), that overlaps the task's review spans (each review
    record's end minus its duration) is `judges`; overlapping its recorded verify spans, `verify` (a stretch under both
    counts once, as judges).
 7. The close's own session is the one its `done` record names (`session_id`); there the time runs to the receipt's
    stamp, and the close's own call (this task's last shell call with no PostToolUse) stays open through a prompt that
-   comes meanwhile (a background notification). Without such a record, the latest call of THIS task still open, in any
-   session, of any tool, ends at the stamp. A call another session or another task left open does not run on. The close
+   comes meanwhile (a background notification). A line of that session in the stamp's own second that is no task's
+   came after the close (the notification of a close run in the background) and is not the closure's (task 249).
+   Without such a record, the latest call of THIS task still open, in any session, of any tool, ends at the stamp. A call another session or another task left open does not run on. The close
    takes its own suspend sample as it composes, and a sample written within 120 s after the close (its PostToolUse's,
    on a later `tasks numbers`) also brackets its last gap; a later one does not, so sleep long after the close does
    not land in it. A suspend within those 120 s still can: a pair that straddles the close gives its whole `susp`

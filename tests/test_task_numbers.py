@@ -302,6 +302,41 @@ class ThePartition(unittest.TestCase):
                  L(10, "Stop", decision="allow")]
         self.assertEqual(part(lines)["by_kind"], {"agent": 10})
 
+    def test_the_closes_background_run_after_the_turn_is_carved_into_judges_and_verify(self):
+        # task 249: the agent ended its turn while the close ran as a background command (tasks 247 and 248, seen
+        # live: 204 s and 213 s of owner-idle while the owner slept) — the close's own verify and tail-cert spans
+        # before its stamp are the machine's; what no span covers stays the owner's
+        lines = [L(0, "UserPromptSubmit"), L(5, "PreToolUse", tool="Bash", tid="bg"),
+                 L(6, "PostToolUse", tool="Bash", tid="bg"), L(8, "Stop", decision="allow")]
+        got = numbers.session_partition(lines, "007", T0 + 200, [(T0 + 170, T0 + 195)], [(T0 + 10, T0 + 160)],
+                                        known_close=True)
+        self.assertEqual(got["by_kind"], {"agent": 8, "verify": 150, "judges": 25, "owner-idle": 17})
+        self.assertEqual((got["total"], got["wall"]), (200, 200))
+
+    def test_a_recompose_after_the_closes_notification_reads_the_same(self):
+        # task 249: the background command's notification lands in the stamp's own second with no task (the close
+        # ended it) — a recompose took the whole wait for another task's time
+        lines = [L(0, "UserPromptSubmit"), L(5, "PreToolUse", tool="Bash", tid="bg"),
+                 L(6, "PostToolUse", tool="Bash", tid="bg"), L(8, "Stop", decision="allow"),
+                 L(200, "UserPromptSubmit", detail="not logged: a notification", task="")]
+        got = numbers.session_partition(lines, "007", T0 + 200, [(T0 + 170, T0 + 195)], [(T0 + 10, T0 + 160)],
+                                        known_close=True)
+        self.assertEqual(got["by_kind"], {"agent": 8, "verify": 150, "judges": 25, "owner-idle": 17})
+        self.assertEqual((got["total"], got["not_task"]), (200, 0))
+
+    def test_the_tasks_own_line_in_the_stamps_second_is_kept(self):
+        # only a line that is no task's is dropped there: the close's own call, started in the stamp's second, still
+        # ends the wait before it as rule 4 says (the owner's, uncarved), with no virtual End in its place
+        lines = [L(0, "UserPromptSubmit"), L(8, "Stop", decision="allow"),
+                 L(200, "PreToolUse", tool="Bash", tid="close")]
+        got = numbers.session_partition(lines, "007", T0 + 200, [], [(T0 + 10, T0 + 160)], known_close=True)
+        self.assertEqual(got["by_kind"], {"agent": 8, "owner-idle": 192})
+
+    def test_an_owner_wait_a_prompt_ends_is_not_carved(self):
+        lines = [L(0, "UserPromptSubmit"), L(8, "Stop", decision="allow"), L(60, "UserPromptSubmit")]
+        got = numbers.session_partition(lines, "007", T0 + 60, [(T0 + 20, T0 + 30)], [(T0 + 10, T0 + 50)])
+        self.assertEqual(got["by_kind"], {"agent": 8, "owner-idle": 52})
+
     def test_an_open_call_at_the_close_ends_there_and_its_verify_is_carved(self):
         lines = [L(0, "UserPromptSubmit"), L(50, "PreToolUse", tool="Bash", tid="close")]
         got = part(lines, end=80, verifies=[(55, 78)])

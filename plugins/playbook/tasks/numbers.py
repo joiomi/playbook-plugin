@@ -549,6 +549,14 @@ def session_partition(lines: "list[dict]", task: str, end: float, reviews: "list
     if not lines:
         return empty
     task_of = _task_of_lines(lines)
+    if known_close:
+        # task 249: a line of the close's own session in the stamp's own second that is no task's came after the close
+        # (it ends the session's task) — the notification of the close run as a background command. It is not this
+        # closure's, and the close's virtual End stands in its place, as when the close composed its numbers; kept, a
+        # recompose read the whole wait as another task's time (tasks 247 / 248)
+        lines = [r for r in lines if r["_t"] < end or task_of(r) == task]
+        if not lines:
+            return empty
     keep = None
     if known_close:
         finished = {r.get("tool_use_id") for r in lines if r.get("event") != "PreToolUse" and r.get("tool_use_id")}
@@ -658,7 +666,10 @@ def session_partition(lines: "list[dict]", task: str, end: float, reviews: "list
             note = str(b.get("detail") or "")
             kind = ("background" if b.get("event") == "UserPromptSubmit"
                     and note.startswith("not logged: a notification") else "owner-idle")
-            carve = kind == "background"
+            # task 249: the gap up to the close's stamp in its own session (the virtual End) with the turn over is the
+            # close run as a background command — its verify and tail-cert spans are carved; the rest keeps its kind
+            # (tasks 247 / 248 counted 204 s / 213 s of it as the owner's while he slept)
+            carve = kind == "background" or bool(b.get("_virtual"))
         elif "AskUserQuestion" in tools:
             kind, carve = "owner-question", False
         else:
