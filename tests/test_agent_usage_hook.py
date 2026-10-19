@@ -7,8 +7,14 @@ appends `hook: "agent-usage"` records under the session's task (`scripts/agent_u
 Held:
   * a Stop records the session's calls under its task, prints nothing (a Stop hook's stdout could carry a decision)
     and exits 0; its hook-journal line says so;
-  * with no path in the payload the session's pointer is read; it is wired on Stop only (impl round 1, codex:
-    on SessionEnd it raced session-end-hook's removal of the session dir);
+  * with no path in the payload the session's pointer is read; the hook is wired on Stop only (impl round 1, codex:
+    on SessionEnd it raced session-end-hook's removal of the session dir) — session-end-hook runs the recorder
+    itself, first (task 246, `AtTheSessionsEnd`);
+  * at the session's end, a busy lane lock with something unread leaves an `unknown` marker, at every end reason
+    (a `/clear` too: SessionStart then points the session at the new transcript); "unread" uses the recorder's own
+    identity check and restart rule — another file in the transcript's place, the same inode with another start or
+    another size, an identical copy on a new inode, a replaced subagent file — and an empty file with no record is
+    nothing unread (task 247);
   * a session with no task records under "-";
   * a judge, tail-cert or monitor session records nothing (task 232 counts the judges' own usage);
   * a crash of the recorder exits 0, prints nothing, records nothing, and its journal line says it was skipped;
@@ -282,12 +288,30 @@ class AtTheSessionsEnd(_Project):
         self.assertEqual(self.busy_exit_after(replace), [("5", "unknown")])
 
     def test_a_transcript_rewritten_in_place_is_unread_at_a_busy_exit(self):
+        # the same inode AND the same size, another start: only `head` tells it apart (task 247's impl round 2, opus —
+        # a shorter rewrite was flagged by the size alone, so it proved nothing about `head`)
         def rewrite():
-            ino = self.transcript.stat().st_ino
-            with open(self.transcript, "w") as f:         # the same inode, another start
-                f.write(json.dumps(entry("r1")) + "\n")
-            self.assertEqual(self.transcript.stat().st_ino, ino)
+            st, old = self.transcript.stat(), self.transcript.read_bytes()
+            new = old.replace(b'"m1"', b'"x1"')
+            self.assertEqual(len(new), len(old))
+            self.assertNotEqual(new, old)
+            with open(self.transcript, "r+b") as f:
+                f.write(new)
+            st2 = self.transcript.stat()
+            self.assertEqual((st2.st_ino, st2.st_size), (st.st_ino, st.st_size))
         self.assertEqual(self.busy_exit_after(rewrite), [("5", "unknown")])
+
+    def test_a_replaced_subagent_file_is_unread_at_a_busy_exit(self):
+        # task 247's impl round 2 (sonnet): a subagent's file goes through the same check as the main transcript
+        sub = self.transcript.with_suffix("") / "subagents" / "agent-a1.jsonl"
+        sub.parent.mkdir(parents=True)
+        sub.write_text("".join(json.dumps(entry(f"s{i}")) + "\n" for i in range(3)))
+        def replace():
+            other = sub.with_name("agent-a1.new")
+            other.write_text(json.dumps(entry("s9")) + "\n")
+            os.replace(other, sub)
+        self.assertEqual(self.busy_exit_after(replace), [("5", "unknown")])
+        self.assertTrue(any(x.get("side") for x in self.records()), "the subagent file was recorded at the Stop")
 
     def test_a_transcript_cut_short_in_place_with_its_start_kept_is_unread_at_a_busy_exit(self):
         # task 247's impl round 1 (codex; opus): the same inode and first 4 KiB, a smaller size — `read_span` reads
