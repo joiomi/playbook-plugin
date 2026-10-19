@@ -1391,7 +1391,10 @@ _pb_sink_ok() {
 # created inside that existing lane, `.agent` itself is never minted here. One
 # `printf >>` append per record; single-line records under PIPE_BUF are atomic
 # against concurrent appenders (see pb_journal.py docstring for the honest bound).
-# No fsync, no locking, no interpreter startup.
+# No fsync, no interpreter startup. Task 257: the append holds `journal/enforcement.lock` shared — the rotation
+# (pb_journal.rotate_enforcement; this writer never rotates) renames and compresses under the exclusive one (the
+# owner's "Lacăt la fiecare rând"); past a 1 s wait the line goes to a spool ("Bilet în cutie"), never appended
+# unlocked; a lock that is not a regular file writes nothing; no `flock` on the host: appended directly.
 journal_enforcement() {
     local agent_dir="$1" hook="$2" decision="$3" reason="$4"
     local session_id="${5:-}" tool="${6:-}" path="${7:-}" command="${8:-}"
@@ -1416,7 +1419,19 @@ journal_enforcement() {
         line="$line,\"command\":\"$(_json_str "${head:0:200}")\""
     fi
     line="$line}"
-    printf '%s\n' "$line" >> "$jdir/enforcement.jsonl" 2>/dev/null || return 0
+    local locked=none
+    if command -v flock >/dev/null 2>&1; then
+        _pb_sink_ok "$jdir" "$jdir/enforcement.lock" || return 0
+        { exec 209>>"$jdir/enforcement.lock"; } 2>/dev/null || return 0
+        if flock -s -w 1 209 2>/dev/null; then locked=yes; else locked=no; fi
+    fi
+    # no lock to hold (no `flock` on the host), or not had in 1 s: a spool, which python takes (plan r1, P5) — an
+    # unlocked append could land in a file python had already renamed and compressed
+    case "$locked" in
+        yes) { printf '%s\n' "$line" >> "$jdir/enforcement.jsonl"; } 2>/dev/null || true ;;
+        *) _pb_spool_line "$jdir" "$line" enforcement.jsonl tag ;;
+    esac
+    [ "$locked" = none ] || { exec 209>&-; } 2>/dev/null || true
     return 0
 }
 
@@ -1768,10 +1783,18 @@ hook_journal_append() {
 # (`hooks.jsonl.spooling-…`, noclobber), then renamed in (`hooks.jsonl.spool-…`). `_pb_hj_rotate` moves spools into the
 # journal under the exclusive lock.
 _pb_hj_spool() {
-    local jdir="$1" line="$2" stamp name tmp
+    _pb_spool_line "$1" "$2" hooks.jsonl
+}
+
+# _pb_spool_line JDIR LINE JOURNAL [tag] — LINE as a spool of JDIR/JOURNAL (`<journal>.spool-…`, written as
+# `<journal>.spooling-…`); the hook journal's and, since task 257, the enforcement journal's. `tag`: the line carries
+# `"spool":"<the spool's name>"`, its identity through the merge (pb_journal._spool_line's, plan r1 P2).
+_pb_spool_line() {
+    local jdir="$1" line="$2" journal="$3" stamp name tmp
     printf -v stamp '%(%Y%m%d-%H%M%S)T' -1 2>/dev/null || return 0
-    name="hooks.jsonl.spool-$stamp-$$-$RANDOM$RANDOM"
-    tmp="$jdir/hooks.jsonl.spooling-${name#hooks.jsonl.spool-}"
+    name="$journal.spool-$stamp-$$-$RANDOM$RANDOM"
+    tmp="$jdir/$journal.spooling-${name#"$journal".spool-}"
+    if [ "${4:-}" = tag ] && [ "${line: -1}" = "}" ]; then line="${line%\}},\"spool\":\"$name\"}"; fi
     if ! ( set -o noclobber; printf '%s\n' "$line" > "$tmp" ) 2>/dev/null; then
         [ -L "$tmp" ] || [ ! -f "$tmp" ] || rm -f -- "$tmp" 2>/dev/null
         return 0

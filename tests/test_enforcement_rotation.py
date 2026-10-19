@@ -1,0 +1,764 @@
+"""The enforcement journal's rotation (task 257; the owner, 2026-10-19: "Da, în Faza B (Recomandat)").
+
+`journal/enforcement.jsonl` is rotated like `hooks.jsonl`: past 20 MB it is renamed to an archive, compressed once idle,
+every archive kept, and the new live file starts with a horizon line and each transcript's newest read position (the
+agent recorder's), so the recorder's backward scan and the close's read stay bounded for a project used for years.
+Every append holds a shared lock on `journal/enforcement.lock` (the owner's "Lacăt la fiecare rând"); past a 1 s wait a
+record goes to a spool ("Bilet în cutie"), never appended unlocked.
+
+The REAL scripts run in temp projects. Run: python3 -m unittest tests.test_enforcement_rotation
+"""
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+import shutil
+import subprocess
+import tempfile
+import time
+import unittest
+from pathlib import Path
+
+PLUGIN = Path(__file__).resolve().parent.parent / "plugins" / "playbook"
+SCRIPTS = PLUGIN / "scripts"
+
+
+def _load(name: str, file: str):
+    spec = importlib.util.spec_from_file_location(name, SCRIPTS / file)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class _Tmp(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+        self.project = self.root / "proj"
+        self.lane = self.project / ".agent"
+        (self.lane / "tasks").mkdir(parents=True)
+        self.jdir = self.lane / "journal"
+        self.live = self.jdir / "enforcement.jsonl"
+        self.lock = self.jdir / "enforcement.lock"
+        self.pbj = _load("pb_journal_t257", "pb_journal.py")
+
+    def records(self) -> "list[dict]":
+        if not self.live.exists():
+            return []
+        return [json.loads(x) for x in self.live.read_text(encoding="utf-8").splitlines() if x.strip()]
+
+    def spools(self) -> "list[Path]":
+        return sorted(self.jdir.glob("enforcement.jsonl.spool-*"))
+
+    def hold(self, seconds: float, mode: str = "-x") -> subprocess.Popen:
+        if not shutil.which("flock"):
+            self.skipTest("no flock(1)")
+        self.jdir.mkdir(exist_ok=True)
+        holder = subprocess.Popen(["flock", mode, str(self.lock), "sleep", str(seconds)])
+        time.sleep(0.2)
+        return holder
+
+
+class TheWritersHoldTheLock(_Tmp):
+    """W1: the python writer's every append to enforcement.jsonl holds `enforcement.lock` shared."""
+
+    def test_an_append_waits_while_the_lock_is_held_exclusively(self):
+        holder = self.hold(0.8)
+        try:
+            t0 = time.monotonic()
+            self.pbj.append(self.lane, "task-gate", "allow", "x")
+            waited = time.monotonic() - t0
+        finally:
+            holder.wait()
+        self.assertGreaterEqual(waited, 0.45)
+        self.assertEqual([r["reason"] for r in self.records()], ["x"])
+        self.assertEqual(self.spools(), [])
+
+    def test_past_one_second_the_record_goes_to_a_spool_never_unlocked(self):
+        holder = self.hold(1.8)
+        try:
+            self.pbj.append(self.lane, "task-gate", "block", "spooled", session_id="pid-1", task="7")
+            self.assertEqual(self.records(), [])
+            self.assertEqual(len(self.spools()), 1)
+        finally:
+            holder.wait()
+        rec = json.loads(self.spools()[0].read_text(encoding="utf-8"))
+        self.assertEqual((rec["hook"], rec["reason"], rec["task"]), ("task-gate", "spooled", "7"))
+        self.assertEqual(rec["spool"], self.spools()[0].name)          # its identity through the merge (P2)
+        self.assertEqual(list(self.jdir.glob("enforcement.jsonl.spooling-*")), [])
+
+    def test_the_clis_records_wait_five_seconds_a_hooks_one(self):
+        """Plan r1 P3: a CLI record (a transition, a verify run, a review's spend, a close) is not spooled for a hold of
+        a few seconds — a spool is placed only by its second, the file order within it lost."""
+        holder = self.hold(2.5)
+        try:
+            self.pbj.append(self.lane, "task-gate", "allow", "hook-record")
+            t0 = time.monotonic()
+            self.pbj.append_lifecycle(self.lane, event="done", task="7")
+            waited = time.monotonic() - t0
+        finally:
+            holder.wait()
+        self.assertGreater(waited, 0.8)
+        self.assertEqual([r["reason"] for r in self.records()], ["done"])
+        self.assertEqual([json.loads(p.read_text())["reason"] for p in self.spools()], ["hook-record"])
+
+    def test_a_shared_holder_does_not_stop_an_append(self):
+        holder = self.hold(1.5, "-s")
+        try:
+            t0 = time.monotonic()
+            self.pbj.append_verify(self.lane, task="7", command="true", rc=0, seconds=1.0)
+            self.assertLess(time.monotonic() - t0, 0.5)
+        finally:
+            holder.wait()
+        self.assertEqual([r["hook"] for r in self.records()], ["verify"])
+
+    def test_the_lock_file_is_made_inside_the_journal(self):
+        self.pbj.append(self.lane, "task-gate", "block", "x")
+        self.assertTrue(self.lock.is_file() and not self.lock.is_symlink())
+        self.assertEqual(len(self.records()), 1)
+
+    def test_a_linked_or_odd_lock_writes_nothing(self):
+        self.jdir.mkdir()
+        target = self.root / "elsewhere"
+        target.write_text("")
+        self.lock.symlink_to(target)
+        self.pbj.append(self.lane, "task-gate", "block", "linked")
+        self.assertEqual((self.records(), self.spools()), ([], []))
+        self.lock.unlink()
+        os.mkfifo(self.lock)
+        self.pbj.append(self.lane, "task-gate", "block", "fifo")
+        self.assertEqual((self.records(), self.spools()), ([], []))
+
+    def test_an_agent_usage_span_is_written_under_the_lock(self):
+        import fcntl
+        seen = []
+        real = os.write
+
+        def probe(fd, data):
+            if b'"agent-usage"' in bytes(data):
+                lk = os.open(str(self.lock), os.O_RDWR)
+                try:
+                    fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    seen.append("unlocked")
+                except OSError:
+                    seen.append("locked")
+                finally:
+                    os.close(lk)
+            return real(fd, data)
+        self.pbj.os.write = probe
+        try:
+            self.pbj.append_agent_usage_span(self.lane, [dict(task="7", file="ab" * 8, ino=1, span_from=0, span_to=10,
+                                                              head="0" * 8, model="m", calls=1, counts={"in": 1})])
+        finally:
+            self.pbj.os.write = real
+        self.assertEqual(seen, ["locked"])
+        self.assertEqual(len(self.records()), 1)
+
+    def test_the_hook_journal_does_not_take_the_enforcement_lock(self):
+        self.pbj._write_record(self.lane, {"hook": "x"}, name="hooks.jsonl")
+        self.assertFalse(self.lock.exists())
+        self.assertTrue((self.jdir / "hooks.jsonl").is_file())
+
+
+class TheBashWriterHoldsTheLock(_Tmp):
+    """W2: `gate-echo-lib.sh::journal_enforcement` holds the same lock shared, spools past 1 s, and appends directly
+    only where the host has no `flock` (nothing can take a spool there) — the hook journal's rules."""
+
+    def bash(self, reason: str, path_env: "str | None" = None) -> subprocess.CompletedProcess:
+        from tests._bashcheck import bash_or_skip
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("PLAYBOOK_", "PB_", "_PB_"))}
+        if path_env is not None:
+            env["PATH"] = path_env
+        return subprocess.run([bash_or_skip(), "-c", f'source "{SCRIPTS / "gate-echo-lib.sh"}"; '
+                               'journal_enforcement "$1" task-gate block "$2" pid-1', "x", str(self.lane), reason],
+                              env=env, capture_output=True, text=True, timeout=30)
+
+    def test_an_append_waits_for_the_exclusive_holder(self):
+        holder = self.hold(0.8)
+        try:
+            t0 = time.monotonic()
+            r = self.bash("waited")
+            waited = time.monotonic() - t0
+        finally:
+            holder.wait()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertGreaterEqual(waited, 0.45)
+        self.assertEqual([x["reason"] for x in self.records()], ["waited"])
+
+    def test_past_one_second_a_spool_never_unlocked(self):
+        holder = self.hold(1.8)
+        try:
+            r = self.bash("spooled")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(self.records(), [])
+            self.assertEqual(len(self.spools()), 1)
+        finally:
+            holder.wait()
+        rec = json.loads(self.spools()[0].read_text(encoding="utf-8"))
+        self.assertEqual((rec["hook"], rec["decision"], rec["reason"]), ("task-gate", "block", "spooled"))
+        self.assertEqual(list(self.jdir.glob("enforcement.jsonl.spooling-*")), [])
+
+    def test_with_no_flock_on_the_host_every_record_is_spooled(self):
+        """Plan r1 P5 (astra, sol): an unlocked append there could land after python compressed the file it held open;
+        a spool is a file of its own, which python takes."""
+        tools = self.root / "bin"
+        tools.mkdir()
+        for t in ("date", "mkdir", "mv", "rm", "cat"):
+            w = shutil.which(t)
+            if w:
+                (tools / t).symlink_to(w)
+        r = self.bash("no-flock", path_env=str(tools))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.records(), [])
+        [spool] = self.spools()
+        rec = json.loads(spool.read_text(encoding="utf-8"))
+        self.assertEqual((rec["reason"], rec["spool"]), ("no-flock", spool.name))
+        self.pbj.rotate_enforcement(self.lane)                    # python takes it
+        self.assertEqual([x["reason"] for x in self.records()], ["no-flock"])
+        self.assertEqual(self.spools(), [])
+
+    def test_a_bash_spool_carries_its_id(self):
+        holder = self.hold(1.8)
+        try:
+            self.bash("tagged")
+        finally:
+            holder.wait()
+        [spool] = self.spools()
+        self.assertEqual(json.loads(spool.read_text(encoding="utf-8"))["spool"], spool.name)
+
+    def test_a_background_child_of_the_hook_does_not_keep_the_lock(self):
+        """Sonnet (plan r1): a descriptor left open would let a long-lived child hold the lock shared, and no rotation
+        could take it exclusively again."""
+        import fcntl
+        from tests._bashcheck import bash_or_skip
+        r = subprocess.Popen([bash_or_skip(), "-c", f'source "{SCRIPTS / "gate-echo-lib.sh"}"; '
+                              'journal_enforcement "$1" task-gate block x pid-1; sleep 3 & wait', "x", str(self.lane)])
+        try:
+            time.sleep(0.8)
+            fd = os.open(str(self.lock), os.O_RDWR)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)        # raises if a child still holds it shared
+            finally:
+                os.close(fd)
+        finally:
+            r.wait()
+
+    def test_a_linked_or_odd_lock_writes_nothing(self):
+        self.jdir.mkdir()
+        target = self.root / "elsewhere"
+        target.write_text("")
+        self.lock.symlink_to(target)
+        self.assertEqual(self.bash("linked").returncode, 0)
+        self.lock.unlink()
+        os.mkfifo(self.lock)                    # a FIFO must not hang the writer (the sink rule)
+        t0 = time.monotonic()
+        self.assertEqual(self.bash("fifo").returncode, 0)
+        self.assertLess(time.monotonic() - t0, 5)
+        self.assertEqual((self.records(), self.spools()), ([], []))
+        self.assertEqual(target.read_text(), "")
+
+    def test_python_and_bash_spool_alike(self):
+        holder = self.hold(3.5)                 # both writers wait their second inside it
+        try:
+            self.bash("from-bash")
+            self.pbj.append(self.lane, "task-gate", "block", "from-python", session_id="pid-1")
+        finally:
+            holder.wait()
+        got = sorted(json.loads(p.read_text(encoding="utf-8"))["reason"] for p in self.spools())
+        self.assertEqual(got, ["from-bash", "from-python"])
+        for p in self.spools():
+            self.assertRegex(p.name, r"^enforcement\.jsonl\.spool-\d{8}-\d{6}-\d+-\d+$")
+
+
+def _iso(t: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+
+
+def _position(key: str, to: int, ts: float, task: str = "7", **extra) -> dict:
+    rec = {"ts": _iso(ts), "session_id": "pid-1", "hook": "agent-usage", "decision": "record", "reason": "agent usage",
+           "task": task, "file": key, "ino": "11", "from": 0, "to": to, "head": "abcd0123", "last_id": f"msg_{to}",
+           "model": "m", "side": 0, "calls": 1, "in": 1, "out": 1, "cache_read": 0, "cache_write": 0, "thinking": 0}
+    rec.update(extra)
+    return rec
+
+
+def _line(rec: dict) -> bytes:
+    return (json.dumps(rec, separators=(",", ":")) + "\n").encode()
+
+
+class _Journal(_Tmp):
+    LIMIT = 4096
+
+    def setUp(self):
+        super().setUp()
+        self.jdir.mkdir()
+        self.now = time.time()
+
+    def write(self, *recs: dict) -> None:
+        with open(self.live, "ab") as f:
+            for r in recs:
+                f.write(_line(r))
+
+    def pad(self, n: int = LIMIT + 1) -> None:
+        """Decision lines until the live file passes `n` bytes."""
+        i = 0
+        while not self.live.exists() or self.live.stat().st_size <= n:
+            self.write({"ts": _iso(self.now), "session_id": "pid-1", "hook": "task-gate", "decision": "allow",
+                        "reason": f"pad {i}"})
+            i += 1
+
+    def rotate(self, held: bool = False) -> str:
+        return self.pbj.rotate_enforcement(self.lane, held=held, limit=self.LIMIT)
+
+    def archives(self) -> "list[Path]":
+        """The closed files, plain or compressed (not their `.tasks` index)."""
+        return sorted(p for p in self.jdir.glob("enforcement.jsonl.archived-*") if not p.name.endswith(".tasks"))
+
+
+class TheRotation(_Journal):
+    """W3: past the limit the live file is renamed to an archive, and the new one starts with a horizon line and each
+    transcript's newest read position — the recorder's next read of every transcript is the same as before."""
+
+    def test_below_the_limit_nothing_moves(self):
+        self.write(_position("a" * 16, 10, self.now))
+        before = self.live.read_bytes()
+        self.rotate()
+        self.assertEqual(self.archives(), [])
+        self.assertEqual(self.live.read_bytes(), before)
+
+    def test_past_the_limit_the_file_is_archived_whole_and_the_positions_carried(self):
+        a, b = "a" * 16, "b" * 16
+        self.write(_position(a, 10, self.now - 50), _position(b, 20, self.now - 40, task="8"))
+        self.pad()
+        self.write(_position(a, 30, self.now - 10, last_id="msg_last"))
+        old = self.live.read_bytes()
+        self.rotate()
+        arch = self.archives()
+        self.assertEqual(len(arch), 1)
+        self.assertRegex(arch[0].name, r"^enforcement\.jsonl\.archived-\d{8}-\d{6}-\d{1,12}-\d+$")
+        self.assertEqual(arch[0].read_bytes(), old)                  # every line, byte for byte
+        recs = self.records()
+        self.assertEqual(recs[0]["decision"], "horizon")
+        self.assertEqual(recs[0]["hook"], "agent-usage")
+        carries = {r["file"]: r for r in recs[1:]}
+        self.assertEqual(set(carries), {a, b})
+        self.assertTrue(all(r["decision"] == "carry" and r["hook"] == "agent-usage" for r in recs[1:]))
+        self.assertEqual((carries[a]["to"], carries[a]["last_id"], carries[a]["ino"], carries[a]["head"]),
+                         (30, "msg_last", "11", "abcd0123"))
+        self.assertEqual((carries[b]["to"], carries[b]["task"], carries[b]["of"]), (20, "8", _iso(self.now - 40)))
+        self.assertLess(self.live.stat().st_size, self.LIMIT)
+
+    def test_a_seed_is_a_position_and_a_marker_is_not(self):
+        s = "c" * 16
+        self.write(_position(s, 99, self.now - 5, status="unknown", why="seed"),
+                   {"ts": _iso(self.now), "session_id": "pid-1", "hook": "agent-usage", "decision": "record",
+                    "reason": "agent usage", "task": "7", "status": "unknown", "why": "busy lock"})
+        self.pad()
+        self.rotate()
+        carries = [r for r in self.records() if r["decision"] == "carry"]
+        self.assertEqual([(r["file"], r["to"]) for r in carries], [(s, 99)])
+
+    def test_positions_older_than_thirty_days_are_dropped_and_the_horizon_says_so(self):
+        old, new = "d" * 16, "e" * 16
+        self.write(_position(old, 5, self.now - 31 * 86400), _position(new, 6, self.now - 29 * 86400))
+        self.pad()
+        self.rotate()
+        recs = self.records()
+        self.assertEqual([r["file"] for r in recs if r["decision"] == "carry"], [new])
+        hz = recs[0]["horizon"]
+        self.assertAlmostEqual(_epoch(hz), self.now - 30 * 86400, delta=5)
+
+    def test_a_carry_keeps_the_time_of_its_record_and_is_pruned_by_it(self):
+        k, j = "f" * 16, "9" * 16
+        self.write({"ts": _iso(self.now), "session_id": "", "hook": "agent-usage", "decision": "horizon",
+                    "reason": "x", "horizon": _iso(self.now - 40 * 86400)},
+                   dict(_position(k, 7, self.now), decision="carry", of=_iso(self.now - 31 * 86400)),
+                   dict(_position(j, 8, self.now), decision="carry", of=_iso(self.now - 2 * 86400)))
+        self.pad()
+        self.rotate()
+        carries = [r for r in self.records() if r["decision"] == "carry"]
+        self.assertEqual([(r["file"], r["of"]) for r in carries], [(j, _iso(self.now - 2 * 86400))])
+
+    def test_the_horizon_never_moves_back(self):
+        later = _iso(self.now + 86400)              # a horizon written before the clock was set back
+        self.write({"ts": _iso(self.now), "session_id": "", "hook": "agent-usage", "decision": "horizon",
+                    "reason": "x", "horizon": later})
+        self.pad()
+        self.rotate()
+        self.assertEqual(self.records()[0]["horizon"], later)
+
+    def test_a_spool_is_merged_first_and_its_position_carried(self):
+        k = "1" * 16
+        self.write(_position(k, 10, self.now - 30))
+        self.pad()
+        spool = self.jdir / "enforcement.jsonl.spool-20261019-000000-1-1"
+        spool.write_bytes(_line(_position(k, 50, self.now - 1)))
+        self.rotate()
+        self.assertFalse(spool.exists())
+        self.assertIn(b'"to":50', self.archives()[0].read_bytes())
+        self.assertEqual([r["to"] for r in self.records() if r["decision"] == "carry"], [50])
+
+    def test_lines_written_after_the_pre_scan_are_scanned_under_the_lock(self):
+        k = "2" * 16
+        self.write(_position(k, 10, self.now - 30))
+        self.pad()
+        pre = self.pbj._ej_prescan(self.live)
+        self.write(_position(k, 77, self.now))                         # lands between the pre-scan and the swap
+        self.pbj._ej_rotate_locked(self.jdir, self.live, self.LIMIT, pre)
+        self.assertEqual([r["to"] for r in self.records() if r["decision"] == "carry"], [77])
+
+    def test_a_file_replaced_since_the_pre_scan_is_not_rotated(self):
+        self.pad()
+        pre = self.pbj._ej_prescan(self.live)
+        data = self.live.read_bytes()
+        self.live.rename(self.jdir / "kept-aside")                     # kept: Linux would hand its inode out again
+        self.live.write_bytes(data)                                    # another inode, as after another rotation
+        self.pbj._ej_rotate_locked(self.jdir, self.live, self.LIMIT, pre)
+        self.assertEqual(self.archives(), [])
+
+    def test_unheld_it_takes_the_recorders_lock_and_skips_when_busy(self):
+        if not shutil.which("flock"):
+            self.skipTest("no flock(1)")
+        self.pad()
+        holder = subprocess.Popen(["flock", "-x", str(self.jdir / "agent-usage.lock"), "sleep", "1.5"])
+        try:
+            time.sleep(0.2)
+            said = self.rotate()
+            self.assertEqual(self.archives(), [])
+            self.assertIn("busy", said)
+        finally:
+            holder.wait()
+        self.rotate()
+        self.assertEqual(len(self.archives()), 1)
+
+    def test_held_it_runs_under_the_callers_lock(self):
+        import fcntl
+        self.pad()
+        fd = os.open(str(self.jdir / "agent-usage.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            self.rotate(held=True)
+        finally:
+            os.close(fd)
+        self.assertEqual(len(self.archives()), 1)
+
+    def test_a_spool_is_merged_on_any_pass_below_the_limit(self):
+        """Plan r1 P1 (agy Critical; opus, sonnet): not only inside a rotation past 20 MB."""
+        self.write({"ts": _iso(self.now - 5), "hook": "task-gate", "reason": "first"})
+        spool = self.jdir / "enforcement.jsonl.spool-20261019-000000-1-1"
+        spool.write_bytes(_line({"ts": _iso(self.now), "hook": "tasks", "reason": "done", "task": "7",
+                                 "spool": spool.name}))
+        self.rotate()
+        self.assertEqual(self.archives(), [])
+        self.assertFalse(spool.exists())
+        self.assertEqual([r["reason"] for r in self.records()], ["first", "done"])
+
+    def test_a_merge_killed_before_its_unlink_is_not_appended_twice(self):
+        """Plan r1 P2 (astra, sol, opus): the spool's id is already in the live file, so the next pass only unlinks it —
+        and two distinct events with the same bytes but different ids both stay."""
+        name = "enforcement.jsonl.spool-20261019-000000-1-1"
+        rec = {"ts": _iso(self.now), "hook": "task-gate", "decision": "allow", "reason": "same"}
+        self.write(dict(rec, spool=name))                       # appended by a merge that was then killed
+        (self.jdir / name).write_bytes(_line(dict(rec, spool=name)))
+        other = "enforcement.jsonl.spool-20261019-000000-2-2"
+        (self.jdir / other).write_bytes(_line(dict(rec, spool=other)))
+        self.rotate()
+        self.assertEqual(self.spools(), [])
+        self.assertEqual(sorted(r["spool"] for r in self.records()), [name, other])
+
+    def test_an_exclusive_hold_is_only_taken_under_the_recorders_lock(self):
+        """Plan r1 P1: a position is written under `agent-usage.lock`; every exclusive hold of the journal lock is taken
+        under it too, so a position can never meet one and be spooled (`_newest` reads only the live file)."""
+        import fcntl
+        self.pad()
+        self.lock.touch()
+        (self.jdir / "enforcement.jsonl.spool-20261019-000000-1-1").write_bytes(b'{"hook":"x"}\n')
+        seen = []
+        real = self.pbj._flock_wait
+
+        def probe(fd, mode, wait):
+            if mode == fcntl.LOCK_EX and os.fstat(fd).st_ino == os.stat(self.lock).st_ino:
+                au = os.open(str(self.jdir / "agent-usage.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+                try:
+                    fcntl.flock(au, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    seen.append("unheld")
+                except OSError:
+                    seen.append("held")
+                finally:
+                    os.close(au)
+            return real(fd, mode, wait)
+        setattr(self.pbj, "_flock_wait", probe)
+        try:
+            self.rotate()
+        finally:
+            setattr(self.pbj, "_flock_wait", real)
+        self.assertTrue(seen)
+        self.assertEqual(set(seen), {"held"})
+
+    def test_no_pre_scan_while_the_journal_cannot_be_had_exclusively(self):
+        """Plan r1 P9 (opus, sonnet): a reader holding the lock shared costs the pass nothing but a probe."""
+        self.pad()
+        calls = []
+        real = self.pbj._ej_prescan
+        setattr(self.pbj, "_ej_prescan", lambda live: calls.append(live) or real(live))
+        holder = self.hold(1.5, "-s")
+        try:
+            t0 = time.monotonic()
+            self.rotate()
+            self.assertLess(time.monotonic() - t0, 0.9)
+        finally:
+            holder.wait()
+            setattr(self.pbj, "_ej_prescan", real)
+        self.assertEqual((calls, self.archives()), ([], []))
+
+    def test_each_archive_gets_the_list_of_the_tasks_it_names(self):
+        """Plan r1 P7 (agy, opus, sol): a task's numbers read only the archives that name it."""
+        self.write({"ts": _iso(self.now), "hook": "tasks", "decision": "record", "reason": "work", "task": "7"},
+                   _position("a" * 16, 1, self.now, task="12"))
+        self.pad()
+        self.write({"ts": _iso(self.now), "hook": "verify", "decision": "record", "reason": "verify run",
+                    "task": "31"})
+        self.rotate()
+        [arch] = self.archives()
+        side = Path(str(arch) + ".tasks")
+        self.assertEqual(json.loads(side.read_text())["tasks"], ["12", "31", "7"])
+
+    def test_a_killed_swap_leaves_no_sidecar_behind(self):
+        self.write(_position("a" * 16, 10, self.now))
+        twin = self.jdir / f"enforcement.jsonl.archived-20261019-000000-{int(self.now)}-1"
+        os.link(self.live, twin)
+        Path(str(twin) + ".tasks").write_text('{"tasks":["7"]}')
+        orphan = self.jdir / "enforcement.jsonl.archived-20261019-000001-1-1.tasks"
+        orphan.write_text('{"tasks":[]}')
+        self.rotate()
+        self.assertEqual(sorted(p.name for p in self.jdir.glob("*.tasks")), [])
+
+    def test_it_never_raises(self):
+        shutil.rmtree(self.jdir)
+        self.jdir.write_text("not a directory")
+        self.assertEqual(self.rotate(), "")
+        self.assertEqual(self.pbj.rotate_enforcement(self.root / "nowhere", limit=1), "")
+
+
+class RepairAndCompression(_Journal):
+    """W4: a rotation killed half-way is repaired by the next pass; an archive is compressed only once idle — by the
+    rename time its name records and by its mtime — outside the lock, and swapped in under it only if unchanged."""
+
+    def archive(self, age: float, data: bytes = b'{"hook":"x"}\n', mtime_age: "float | None" = None,
+                pid: int = 1) -> Path:
+        t = int(self.now - age)
+        p = self.jdir / f"enforcement.jsonl.archived-{time.strftime('%Y%m%d-%H%M%S', time.gmtime(t))}-{t}-{pid}"
+        p.write_bytes(data)
+        m = self.now - (age if mtime_age is None else mtime_age)
+        os.utime(p, (m, m))
+        return p
+
+    def test_a_swap_killed_after_its_link_is_undone(self):
+        self.write(_position("a" * 16, 10, self.now))
+        twin = self.jdir / f"enforcement.jsonl.archived-20261019-000000-{int(self.now)}-1"
+        os.link(self.live, twin)                        # the link made, the rename not
+        before = self.live.read_bytes()
+        self.rotate()
+        self.assertFalse(twin.exists())
+        self.assertEqual(self.live.read_bytes(), before)
+
+    def test_a_dead_rotators_carry_file_is_removed(self):
+        self.write(_position("a" * 16, 10, self.now))
+        stale = self.jdir / "enforcement.jsonl.carry-999999-1"
+        stale.write_bytes(b"x\n")
+        self.rotate()
+        self.assertFalse(stale.exists())
+
+    def test_only_an_idle_archive_is_compressed_and_its_bytes_kept(self):
+        import gzip
+        fresh = self.archive(60)
+        named_old_written_now = self.archive(3600, mtime_age=60, pid=2)
+        idle = self.archive(3600, data=b'{"hook":"idle"}\n' * 100, pid=3)
+        self.rotate()
+        self.assertTrue(fresh.exists() and named_old_written_now.exists())
+        self.assertFalse(idle.exists())
+        with gzip.open(str(idle) + ".gz", "rb") as f:
+            self.assertEqual(f.read(), b'{"hook":"idle"}\n' * 100)
+        self.assertEqual(list(self.jdir.glob("*.gz.tmp-*")), [])
+
+    def test_an_archive_written_while_it_was_compressed_is_kept_for_later(self):
+        p = self.archive(3600)
+        real = self.pbj._gzip_to
+
+        def late(src, tmp):
+            ok = real(src, tmp)
+            with open(src, "ab") as f:
+                f.write(b'{"hook":"late"}\n')     # a host with no flock appended meanwhile
+            return ok
+        setattr(self.pbj, "_gzip_to", late)
+        try:
+            self.rotate()
+        finally:
+            setattr(self.pbj, "_gzip_to", real)
+        self.assertTrue(p.exists())
+        self.assertFalse(Path(str(p) + ".gz").exists())
+        self.assertIn(b'"late"', p.read_bytes())
+
+    def test_a_reader_holding_the_lock_keeps_the_archive_in_place(self):
+        p = self.archive(3600)
+        holder = self.hold(3.5, "-s")           # past both 1 s waits of the pass
+        try:
+            self.rotate()
+            self.assertTrue(p.exists())
+            self.assertFalse(Path(str(p) + ".gz").exists())
+            self.assertEqual(list(self.jdir.glob("*.gz.tmp-*")), [])
+        finally:
+            holder.wait()
+        self.rotate()
+        self.assertFalse(p.exists())
+        self.assertTrue(Path(str(p) + ".gz").exists())
+
+    def test_a_swap_killed_after_the_gz_link_drops_the_archive_once_older(self):
+        import gzip
+        p = self.archive(3600)
+        gz = Path(str(p) + ".gz")
+        with gzip.open(gz, "wb") as f:
+            f.write(p.read_bytes())
+        self.rotate()
+        self.assertFalse(p.exists())
+        self.assertTrue(gz.exists())
+
+    def test_a_gz_of_other_bytes_does_not_drop_the_archive(self):
+        """Plan r1 P4: the plain file goes only when the `.gz` holds as many bytes (its ISIZE) and is not older."""
+        import gzip
+        p = self.archive(3600, data=b'{"hook":"whole"}\n' * 10)
+        gz = Path(str(p) + ".gz")
+        with gzip.open(gz, "wb") as f:
+            f.write(b'{"hook":"cut"}\n')
+        self.rotate()
+        self.assertTrue(p.exists())
+
+    def test_a_dead_compressors_temporary_goes_a_live_ones_stays(self):
+        p = self.archive(60)
+        dead = self.jdir / (p.name + ".gz.tmp-999999")
+        alive = self.jdir / (p.name + f".gz.tmp-{os.getpid()}")
+        dead.write_bytes(b"x")
+        alive.write_bytes(b"x")
+        self.rotate()
+        self.assertFalse(dead.exists())
+        self.assertTrue(alive.exists())
+
+    def test_a_writer_that_opened_before_the_rename_loses_nothing(self):
+        """The hook journal's three grave findings: a line written on a descriptor held across the rename was lost to
+        an immediate compression. Here it lands in the archive, which stays uncompressed while not idle."""
+        import gzip
+        self.pad()
+        fd = os.open(str(self.live), os.O_WRONLY | os.O_APPEND)
+        try:
+            self.rotate()
+            os.write(fd, b'{"hook":"held-late"}\n')
+        finally:
+            os.close(fd)
+        arch = self.archives()[0]
+        self.rotate()                                   # a pass right away: the archive is not idle
+        self.assertTrue(arch.exists())
+        self.assertIn(b"held-late", arch.read_bytes())
+        old = int(self.now - 3600)                      # its name aged; its mtime still the late write's
+        aged = self.jdir / f"enforcement.jsonl.archived-20261019-000000-{old}-1"
+        arch.rename(aged)
+        self.rotate()
+        self.assertTrue(aged.exists())
+        os.utime(aged, (self.now - 3600, self.now - 3600))
+        self.rotate()
+        with gzip.open(str(aged) + ".gz", "rb") as f:
+            self.assertIn(b"held-late", f.read())
+
+
+class StressRealProcesses(_Journal):
+    """The stop gate after the core: real bash and python writers and a recorder writing positions, against a rotator
+    that rotates at 2 KiB and compresses at once (the 10-minute idle rule switched OFF: the lock alone must keep every
+    line). At the end every record is there exactly once — archives, live file and spools, carries aside, one line per
+    spool id — and each transcript's newest position is the recorder's last."""
+
+    BASH_WRITERS, BASH_EACH = 4, 50
+    PY_WRITERS, PY_EACH = 3, 80
+    POSITIONS, KEYS = 120, 4
+
+    def test_every_record_lands_exactly_once(self):
+        import gzip
+        import sys
+        from tests._bashcheck import bash_or_skip
+        if not shutil.which("flock"):
+            self.skipTest("no flock(1)")
+        stop = self.root / "stop"
+        boot = f"import importlib.util as u, sys\ns = u.spec_from_file_location('pbj', {str(SCRIPTS / 'pb_journal.py')!r})\n" \
+               "m = u.module_from_spec(s); s.loader.exec_module(m)\n"
+        rotator = subprocess.Popen([sys.executable, "-c", boot + (
+            f"import os, time\nm._EJ_IDLE_S = -1\n"
+            f"while not os.path.exists({str(stop)!r}):\n"
+            f"    m.rotate_enforcement({str(self.lane)!r}, limit=2048)\n")])
+        procs = []
+        for i in range(self.BASH_WRITERS):
+            procs.append(subprocess.Popen([bash_or_skip(), "-c", f'source "{SCRIPTS / "gate-echo-lib.sh"}"; '
+                                           f'for j in $(seq {self.BASH_EACH}); do '
+                                           f'journal_enforcement "$1" task-gate allow "b{i}-$j" pid-1; sleep 0.01; done',
+                                           "x", str(self.lane)]))
+        for i in range(self.PY_WRITERS):
+            procs.append(subprocess.Popen([sys.executable, "-c", boot + (
+                f"import time\nfor j in range(1, {self.PY_EACH} + 1):\n"
+                f"    m.append({str(self.lane)!r}, 'task-gate', 'allow', f'p{i}-{{j}}')\n"
+                f"    time.sleep(0.005)\n")]))
+        au = _load("agent_usage_t257", "agent_usage.py")
+        recorder = subprocess.Popen([sys.executable, "-c", boot + (
+            f"import importlib.util as u2\na = u2.spec_from_file_location('au', {str(SCRIPTS / 'agent_usage.py')!r})\n"
+            f"au = u2.module_from_spec(a); a.loader.exec_module(au)\nimport os\n"
+            f"for j in range(1, {self.POSITIONS} + 1):\n"
+            f"    fd = au._lock({str(self.lane)!r}, 5)\n"
+            f"    key = 'k' * 15 + str(j % {self.KEYS})\n"
+            f"    m.append_agent_usage_span({str(self.lane)!r}, [dict(task='7', file=key, ino=1, span_from=j - 1,"
+            f" span_to=j, head='00000000', model='m', calls=1, counts={{'in': 1}})])\n"
+            f"    m.rotate_enforcement({str(self.lane)!r}, held=True, limit=2048)\n"
+            f"    os.close(fd)\n"
+            f"    __import__('time').sleep(0.004)\n")])
+        for p in procs + [recorder]:
+            self.assertEqual(p.wait(timeout=300), 0)
+        stop.write_text("")
+        self.assertEqual(rotator.wait(timeout=60), 0)
+        self.pbj.rotate_enforcement(self.lane)                  # a last pass takes what was spooled
+        lines = []
+        for p in sorted(self.jdir.iterdir()):
+            if p.name.endswith(".gz") and "archived-" in p.name:
+                with gzip.open(p, "rb") as f:
+                    lines += f.read().splitlines()
+            elif "archived-" in p.name and not p.name.endswith((".tasks", ".gz")) or p.name == "enforcement.jsonl" \
+                    or p.name.startswith("enforcement.jsonl.spool-"):
+                lines += p.read_bytes().splitlines()
+        recs, ids = [], set()
+        for raw in lines:
+            r = json.loads(raw)
+            if r.get("decision") in ("carry", "horizon"):
+                continue
+            if r.get("spool"):
+                if r["spool"] in ids:
+                    continue
+                ids.add(r["spool"])
+            recs.append(r)
+        want = sorted([f"b{i}-{j}" for i in range(self.BASH_WRITERS) for j in range(1, self.BASH_EACH + 1)]
+                      + [f"p{i}-{j}" for i in range(self.PY_WRITERS) for j in range(1, self.PY_EACH + 1)])
+        got = sorted(r["reason"] for r in recs if r.get("hook") == "task-gate")
+        self.assertEqual(got, want)
+        self.assertEqual(sorted(r["to"] for r in recs if r.get("hook") == "agent-usage"),
+                         list(range(1, self.POSITIONS + 1)))
+        self.assertGreater(len(self.archives()), 3)               # it did rotate, many times
+        keys = {"k" * 15 + str(j % self.KEYS) for j in range(1, self.POSITIONS + 1)}
+        newest, complete = au._newest(str(self.live), keys)
+        self.assertTrue(complete)
+        last = {"k" * 15 + str(j % self.KEYS): j for j in range(1, self.POSITIONS + 1)}
+        self.assertEqual({k: r["to"] for k, r in newest.items()}, last)
+
+
+def _epoch(ts: str) -> float:
+    import calendar
+    return calendar.timegm(time.strptime(ts, "%Y-%m-%dT%H:%M:%SZ"))
+
+
+if __name__ == "__main__":
+    unittest.main()

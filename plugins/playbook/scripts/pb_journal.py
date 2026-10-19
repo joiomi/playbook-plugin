@@ -564,17 +564,28 @@ def _hj_spool(jdir: Path, data: bytes) -> None:
     """A line that could not have the shared lock goes to a spool file of its own (the owner, 2026-10-17 00:13:
     "Bilet în cutie"), written whole under a name no taker matches, then linked in without clobbering; `_hj_rotate`
     moves spools into the journal under the exclusive lock."""
+    _spool_line(jdir, data, "hooks.jsonl")
+
+
+def _spool_line(jdir: Path, data: bytes, journal: str, tag: bool = False) -> bool:
+    """`data` as a spool of `journal` (`<journal>.spool-…`, written as `<journal>.spooling-…`); whether it landed.
+    `tag` (the enforcement journal, plan r1 P2): each line carries `"spool":"<the spool's name>"`, its identity through
+    the merge — a merge killed before its unlink is not appended twice, and readers keep one line per id."""
     if jdir.is_symlink():
-        return
-    name = f"hooks.jsonl.spool-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}-{int.from_bytes(os.urandom(4), 'big')}"
-    tmp = jdir / ("hooks.jsonl.spooling-" + name[len("hooks.jsonl.spool-"):])
-    made = False
+        return False
+    name = f"{journal}.spool-{time.strftime('%Y%m%d-%H%M%S')}-{os.getpid()}-{int.from_bytes(os.urandom(4), 'big')}"
+    tmp = jdir / (f"{journal}.spooling-" + name[len(f"{journal}.spool-"):])
+    if tag:
+        data = b"".join(ln[:-1] + b',"spool":"' + name.encode() + b'"}\n' if ln.endswith(b"}") else ln + b"\n"
+                        for ln in data.split(b"\n") if ln)
+    made = landed = False
     try:
         fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
         made = True
         with os.fdopen(fd, "wb") as f:
             f.write(data)
         os.link(tmp, jdir / name)
+        landed = True
     except OSError:
         pass
     finally:
@@ -583,6 +594,7 @@ def _hj_spool(jdir: Path, data: bytes) -> None:
                 os.unlink(tmp)
             except OSError:
                 pass
+    return landed
 
 
 def hook_ms(start: str = "", fallback: float = 0.0):
@@ -768,6 +780,13 @@ def _hj_rotate(jdir: Path) -> None:
 def _hj_take_spools(jdir: Path, jfile: Path) -> None:
     """Under the exclusive lock: every spool, in name order, appended whole to the journal and removed (a link removed
     unread, one past 4 KiB not ours); a writer's temporary whose writer is gone is taken the same way."""
+    _take_spools(jdir, jfile, "hooks.jsonl")
+
+
+def _take_spools(jdir: Path, jfile: Path, journal: str, seen_ids: "set | None" = None) -> None:
+    """`_hj_take_spools` for the spools of `journal` (the hook journal's, and since task 257 the enforcement one's).
+    `seen_ids` (the enforcement journal, plan r1 P2): the `spool` ids already in the journal — a spool whose lines all
+    carry one of them was appended by a merge killed before its unlink, and is only unlinked now."""
     try:
         names = sorted(os.listdir(jdir))
     except OSError:
@@ -778,7 +797,7 @@ def _hj_take_spools(jdir: Path, jfile: Path) -> None:
             st = os.lstat(f)
         except OSError:
             continue
-        if n.startswith("hooks.jsonl.spooling-"):
+        if n.startswith(f"{journal}.spooling-"):
             # never removed for its age (post-panel judge run 4: a clock step made a live writer's look old); one whose
             # writer, the pid in its name, is gone is taken as a spool: its one write is the whole line or nothing
             m = re.search(r"-(\d{1,10})-\d+$", n)
@@ -790,7 +809,7 @@ def _hj_take_spools(jdir: Path, jfile: Path) -> None:
             data = f.read_bytes()
             if not data.endswith(b"\n"):
                 continue
-        elif n.startswith("hooks.jsonl.spool-"):
+        elif n.startswith(f"{journal}.spool-"):
             if stat.S_ISLNK(st.st_mode):
                 f.unlink()
                 continue
@@ -798,6 +817,10 @@ def _hj_take_spools(jdir: Path, jfile: Path) -> None:
                 continue
             data = f.read_bytes()
         else:
+            continue
+        ids = set(_EJ_SPOOL_ID.findall(data)) if seen_ids is not None else set()
+        if ids and ids <= seen_ids:
+            f.unlink()
             continue
         out = os.open(str(jfile), os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NONBLOCK", 0)
                       | getattr(os, "O_NOFOLLOW", 0), 0o644)
@@ -816,6 +839,8 @@ def _hj_take_spools(jdir: Path, jfile: Path) -> None:
                 return
         finally:
             os.close(out)
+        if seen_ids is not None:
+            seen_ids |= ids
         f.unlink()
 
 
@@ -847,6 +872,399 @@ def _hj_compress(arch: Path) -> None:
                     tmp.unlink()
             except OSError:
                 pass
+
+
+# --- The enforcement journal's rotation (task 257) -------------------------------------------------------------------
+# The owner, 2026-10-19: "Da, în Faza B (Recomandat)" — `enforcement.jsonl` rotates like `hooks.jsonl`: past 20 MB the
+# live file is renamed to an archive, compressed once idle, every archive kept ("Comprimate, toate"), so a project used
+# for years keeps the close's read and the agent recorder's backward scan bounded. The recorder's read positions live
+# in this journal (`agent-usage` records, scripts/agent_usage.py), so the new live file starts with a horizon line and
+# each transcript's newest position (a `carry` line): its next read is the same as before the rotation. Positions older
+# than the horizon (30 days) are not carried — a transcript the recorder finds no position for, begun before it, gets a
+# seed instead of a read from 0 (agent_usage.record_spans). The rotation runs only in python, under the recorder's
+# `agent-usage.lock` (no new position can appear meanwhile) and, for its rename and its compression's swap, the
+# enforcement lock held exclusively — every append holds it shared (`_write_record`, `journal_enforcement`).
+_EJ_LIMIT = 20971520
+_EJ_HORIZON_S = 30 * 86400
+_EJ_IDLE_S = 600
+_EJ_ARCHIVE = re.compile(r"enforcement\.jsonl\.archived-\d{8}-\d{6}-(\d{1,12})-\d+")
+_EJ_STAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
+_EJ_TASK = re.compile(rb'"task":\s*"(\d{1,16})"')
+_EJ_SPOOL_ID = re.compile(rb'"spool":"(enforcement\.jsonl\.spool-[0-9A-Za-z._-]{1,80})"')
+_EJ_CARRY_KEYS = ("task", "file", "ino", "to", "head", "last_id")
+
+
+def rotate_enforcement(lane, held: bool = False, limit: "int | None" = None) -> str:
+    """Rotate `<lane>/journal/enforcement.jsonl` when it is past `limit` (20 MB), merge its spools, repair a rotation
+    that was killed, compress the archives that are idle. `held`: the caller holds the lane's `agent-usage.lock` (the
+    recorder); else it is taken for at most 0.5 s and the pass skipped when busy — its holder rotates. Says what it did
+    ("" for nothing). Never raises."""
+    try:
+        limit = _EJ_LIMIT if limit is None else int(limit)
+        jdir = Path(lane) / "journal"
+        if jdir.is_symlink() or not jdir.is_dir():
+            return ""
+        live = jdir / EJ_NAME
+        try:
+            st = os.lstat(live)
+            big = stat.S_ISREG(st.st_mode) and st.st_size > limit
+        except OSError:
+            big = False
+        names = os.listdir(jdir)
+        pending = any(n.startswith((EJ_NAME + ".spool-", EJ_NAME + ".spooling-", EJ_NAME + ".carry-"))
+                      or ".gz.tmp-" in n and n.startswith(EJ_NAME) or _EJ_ARCHIVE.fullmatch(n) for n in names)
+        if not (big or pending):
+            return ""
+        au = None
+        if not held:
+            au = _au_lock(jdir, 0.5)
+            if au is None:
+                return "skipped: the recorder's lock is busy"
+        try:
+            if not _ej_probe(jdir):
+                return "skipped: the journal is busy"     # a reader holds it: not even the pre-scan (plan r1, P9)
+            pre = _ej_prescan(live) if big else None
+            said = _ej_rotate_locked(jdir, live, limit, pre)
+            done = _ej_compress_idle(jdir)
+            return "; ".join(x for x in (said, done) if x)
+        finally:
+            if au is not None:
+                os.close(au)
+    except Exception:                       # noqa: BLE001 — a journal's upkeep never fails its caller
+        return ""
+
+
+def _au_lock(jdir: Path, wait: float):
+    """The lane's `journal/agent-usage.lock` (the recorder's, `agent_usage._lock`) held exclusively, or None."""
+    import fcntl
+    try:
+        fd = os.open(str(jdir / "agent-usage.lock"), os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+                     | getattr(os, "O_NONBLOCK", 0), 0o600)
+    except OSError:
+        return None
+    if _flock_wait(fd, fcntl.LOCK_EX, wait):
+        return fd
+    os.close(fd)
+    return None
+
+
+def _ej_probe(jdir: Path) -> bool:
+    """Whether the enforcement lock can be had exclusively right now (taken and let go at once)."""
+    import fcntl
+    lk = _ej_lock_fd(jdir)
+    if lk is None:
+        return False
+    try:
+        return _flock_wait(lk, fcntl.LOCK_EX, 0)
+    finally:
+        os.close(lk)
+
+
+def _flock_wait(fd: int, mode: int, wait: float) -> bool:
+    import fcntl
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            fcntl.flock(fd, mode | fcntl.LOCK_NB)
+            return True
+        except OSError:
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.01)
+
+
+class _Prescan:
+    def __init__(self, ino: int, end: int, found: dict, horizon: str, tasks: set):
+        self.ino, self.end, self.found, self.horizon, self.tasks = ino, end, found, horizon, tasks
+
+
+def _ej_prescan(live: Path) -> "_Prescan | None":
+    """Each transcript's newest position in the live file up to its last complete line, and its newest horizon — read
+    before the exclusive hold (0.3-0.4 s for 20 MB, measured), under the recorder's lock."""
+    try:
+        fd = os.open(str(live), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    except OSError:
+        return None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            return None
+        found: dict = {}
+        tasks: set = set()
+        end, horizon = _ej_positions(fd, 0, st.st_size, found, "", tasks)
+        return _Prescan(st.st_ino, end, found, horizon, tasks)
+    finally:
+        os.close(fd)
+
+
+def _ej_positions(fd: int, start: int, size: int, found: dict, horizon: str, tasks: set) -> "tuple[int, str]":
+    """Read [start, size) of the open journal: each `agent-usage` line with a `file` key replaces that key's entry in
+    `found` (what `agent_usage._newest` would answer: the newest such line); a horizon line raises `horizon`; every
+    `"task":"<digits>"` goes into `tasks` (the archive's sidecar, plan r1 P7). Returns (the end of the last complete
+    line read, the horizon)."""
+    os.lseek(fd, start, os.SEEK_SET)
+    pos, carry = start, b""
+    while pos < size:
+        chunk = os.read(fd, min(1 << 20, size - pos))
+        if not chunk:
+            break
+        pos += len(chunk)
+        *whole, carry = (carry + chunk).split(b"\n")
+        for raw in whole:
+            m = _EJ_TASK.search(raw)
+            if m:
+                tasks.add(m.group(1).decode())
+            if b'"agent-usage"' not in raw:
+                continue
+            try:
+                rec = json.loads(raw)
+            except ValueError:
+                continue
+            if not isinstance(rec, dict) or rec.get("hook") != "agent-usage":
+                continue
+            if rec.get("decision") == "horizon":
+                h = rec.get("horizon")
+                if isinstance(h, str) and _EJ_STAMP.fullmatch(h) and h > horizon:
+                    horizon = h
+                continue
+            k = rec.get("file")
+            if isinstance(k, str) and k:
+                found[k] = rec
+    return pos - len(carry), horizon
+
+
+def _ej_rotate_locked(jdir: Path, live: Path, limit: int, pre: "_Prescan | None") -> str:
+    """Under the enforcement lock held exclusively (≤ 1 s, else skipped): repair, merge the spools, and with a
+    pre-scan the swap — the tail since the pre-scan scanned, the carry file written, the live file linked to its
+    archive name and the carry file renamed over it."""
+    import fcntl
+    lk = _ej_lock_fd(jdir)
+    if lk is None:
+        return ""
+    try:
+        if not _flock_wait(lk, fcntl.LOCK_EX, 0.5):
+            return "skipped: the journal is busy"
+        _ej_repair(jdir, live)
+        _ej_take_spools(jdir, live)
+        if pre is None:
+            return ""
+        try:
+            st = os.lstat(live)
+        except OSError:
+            return ""
+        if not stat.S_ISREG(st.st_mode) or st.st_ino != pre.ino or st.st_size <= limit:
+            return ""                       # rotated meanwhile, or no longer past the limit
+        fd = os.open(str(live), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+        try:
+            _, horizon = _ej_positions(fd, pre.end, st.st_size, pre.found, pre.horizon, pre.tasks)
+        finally:
+            os.close(fd)
+        now = time.time()
+        horizon = max(horizon, _utc(now - _EJ_HORIZON_S))
+        lines = [_ej_line({"ts": _utc(now), "session_id": "", "hook": "agent-usage", "decision": "horizon",
+                           "reason": "read positions older than this were not carried", "horizon": horizon})]
+        for rec in pre.found.values():
+            of = rec.get("of") if rec.get("decision") == "carry" else rec.get("ts")
+            if isinstance(of, str) and _EJ_STAMP.fullmatch(of) and of < horizon:
+                continue                    # older than the horizon: the recorder seeds such a transcript
+            c = {"ts": _utc(now), "session_id": rec.get("session_id", ""), "hook": "agent-usage",
+                 "decision": "carry", "reason": "read position"}
+            for k in _EJ_CARRY_KEYS:
+                if k in rec:
+                    c[k] = rec[k]
+            c["from"] = rec.get("to")
+            c["of"] = of
+            line = _ej_line(c)
+            if len(line) <= 4096:
+                lines.append(line)
+        tmp = jdir / f"{EJ_NAME}.carry-{os.getpid()}-{int.from_bytes(os.urandom(4), 'big')}"
+        arch = jdir / f"{EJ_NAME}.archived-{time.strftime('%Y%m%d-%H%M%S', time.gmtime(now))}-{int(now)}-{os.getpid()}"
+        if os.path.lexists(arch):
+            return ""
+        out = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
+        try:
+            data = b"".join(lines)
+            if os.write(out, data) != len(data):
+                raise OSError("short write")
+        except OSError:
+            os.close(out)
+            tmp.unlink()
+            return ""
+        os.close(out)
+        # the archive's index first (plan r1, P7): the task numbers its lines name — killed before the link, an orphan
+        # `_ej_repair` removes
+        side = Path(str(arch) + ".tasks")
+        try:
+            sfd = os.open(str(side), os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
+            with os.fdopen(sfd, "w", encoding="utf-8") as f:
+                f.write(json.dumps({"tasks": sorted(pre.tasks)}, separators=(",", ":")) + "\n")
+        except OSError:
+            tmp.unlink()
+            return ""
+        os.link(live, arch)                 # no clobber; killed after it: `_ej_repair` unlinks this name again
+        os.rename(tmp, live)                # the live name always names a whole file
+        os.utime(arch, None)                # idle counts from the rename (the hook journal's impl r2, grave)
+        return f"rotated to {arch.name} ({len(lines) - 1} position(s) carried)"
+    finally:
+        os.close(lk)
+
+
+def _ej_line(rec: dict) -> bytes:
+    return (json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+
+
+def _utc(t: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+
+
+def _ej_repair(jdir: Path, live: Path) -> None:
+    """Under the exclusive hold: an archive name on the live file's inode (a swap killed between its link and its
+    rename) is unlinked, and every carry file is a dead rotator's (a living one writes it only inside this hold); then
+    an index whose archive (plain or `.gz`) is gone — a swap killed before its link, or the name just unlinked."""
+    try:
+        live_ino = os.lstat(live).st_ino
+    except OSError:
+        live_ino = None
+    for n in sorted(os.listdir(jdir)):
+        p = jdir / n
+        try:
+            if n.startswith(EJ_NAME + ".carry-"):
+                if not p.is_symlink() and p.is_file():
+                    p.unlink()
+            elif live_ino is not None and _EJ_ARCHIVE.fullmatch(n) and os.lstat(p).st_ino == live_ino:
+                p.unlink()
+        except OSError:
+            continue
+    names = set(os.listdir(jdir))
+    for n in names:
+        if n.endswith(".tasks") and _EJ_ARCHIVE.fullmatch(n[:-6]) and n[:-6] not in names \
+                and n[:-6] + ".gz" not in names:
+            try:
+                (jdir / n).unlink()
+            except OSError:
+                pass
+
+
+def _ej_take_spools(jdir: Path, live: Path) -> None:
+    """Under the exclusive hold: the spools merged once each (plan r1, P2) — the ids already in the live file read
+    first, only when there is a spool to take."""
+    try:
+        if not any(n.startswith((EJ_NAME + ".spool-", EJ_NAME + ".spooling-")) for n in os.listdir(jdir)):
+            return
+    except OSError:
+        return
+    seen: set = set()
+    try:
+        fd = os.open(str(live), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    except OSError:
+        fd = None
+    if fd is not None:
+        try:
+            if stat.S_ISREG(os.fstat(fd).st_mode):
+                tail = b""
+                while True:
+                    chunk = os.read(fd, 1 << 20)
+                    if not chunk:
+                        break
+                    buf = tail + chunk
+                    seen.update(_EJ_SPOOL_ID.findall(buf))
+                    tail = buf[-160:]       # an id cut by the chunk's end is found with the next one
+        finally:
+            os.close(fd)
+    _take_spools(jdir, live, EJ_NAME, seen_ids=seen)
+
+
+def _ej_compress_idle(jdir: Path) -> str:
+    """Each closed archive idle for 10 minutes — by the rename time its name records and by its mtime — compressed
+    OUTSIDE the lock (the appends never wait on it), then swapped in under the exclusive hold only when the archive is
+    unchanged since; a reader holds the lock shared while it lists and reads, so it sees the archive or its `.gz`,
+    never neither. A temporary whose compressor is gone is removed. Every archive is kept."""
+    import fcntl
+    done = 0
+    now = time.time()
+    for n in sorted(os.listdir(jdir)):
+        p = jdir / n
+        if n.startswith(EJ_NAME) and ".gz.tmp-" in n:
+            m = re.search(r"\.gz\.tmp-(\d{1,10})$", n)
+            if m and not os.path.isdir(f"/proc/{m.group(1)}") and not p.is_symlink():
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
+            continue
+        m = _EJ_ARCHIVE.fullmatch(n)
+        if not m or now - int(m.group(1)) <= _EJ_IDLE_S:
+            continue
+        try:
+            st = os.lstat(p)
+        except OSError:
+            continue
+        if not stat.S_ISREG(st.st_mode) or now - st.st_mtime <= _EJ_IDLE_S:
+            continue
+        gz = jdir / (n + ".gz")
+        lk = _ej_lock_fd(jdir)
+        if lk is None:
+            return ""
+        try:
+            if os.path.lexists(gz):
+                # a swap killed after its link: the .gz is whole (linked only once written); the archive goes when it
+                # was not written after it
+                if _flock_wait(lk, fcntl.LOCK_EX, 0.2) and not gz.is_symlink() \
+                        and os.lstat(p).st_mtime <= os.lstat(gz).st_mtime and _gz_isize(gz) == st.st_size % (1 << 32):
+                    p.unlink()
+                continue
+            tmp = jdir / f"{n}.gz.tmp-{os.getpid()}"
+            if not _gzip_to(p, tmp):
+                continue
+            if not _flock_wait(lk, fcntl.LOCK_EX, 0.2):
+                tmp.unlink()
+                continue
+            now_st = os.lstat(p)
+            if (now_st.st_size, now_st.st_mtime_ns) != (st.st_size, st.st_mtime_ns):
+                tmp.unlink()                # written since: compressed again on a later pass
+                continue
+            os.link(tmp, gz)
+            p.unlink()
+            tmp.unlink()
+            done += 1
+        except OSError:
+            continue
+        finally:
+            os.close(lk)
+    return f"compressed {done} archive(s)" if done else ""
+
+
+def _gz_isize(gz: Path) -> "int | None":
+    """The `.gz`'s ISIZE (its last 4 bytes: the uncompressed size mod 2^32), or None."""
+    try:
+        with open(gz, "rb") as f:
+            f.seek(-4, os.SEEK_END)
+            return int.from_bytes(f.read(4), "little")
+    except OSError:
+        return None
+
+
+def _gzip_to(src: Path, tmp: Path) -> bool:
+    import gzip
+    try:
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
+    except OSError:
+        return False
+    try:
+        with os.fdopen(fd, "wb") as raw, open(src, "rb") as f, gzip.GzipFile(fileobj=raw, mode="wb",
+                                                                            compresslevel=6) as out:
+            while True:
+                chunk = f.read(1 << 20)
+                if not chunk:
+                    break
+                out.write(chunk)
+        return True
+    except Exception:                       # noqa: BLE001
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        return False
 
 
 # The atomic-append floor every journal line must stay under (PIPE_BUF's POSIX
@@ -984,6 +1402,64 @@ def _write_record(agent_dir, rec, name="enforcement.jsonl", data=None) -> bool:
         return False
     if data is None:
         data = (json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+    if name != EJ_NAME:
+        return _append_line(jfile, data)
+    # task 257: every append to the enforcement journal holds its lock shared — the rotation renames and compresses
+    # under the exclusive one (the owner's "Lacăt la fiecare rând", as the hook journal); past the wait, a spool
+    # ("Bilet în cutie"), never an unlocked append. A lock that cannot be had as a regular file: nothing written.
+    # The CLI's records wait longer (plan r1, P3): a spool is placed back only by its second, so a transition, a verify
+    # run, a review's spend or a close is not spooled for a hold of a few seconds (holds last milliseconds).
+    lock, got = _ej_share(jdir, 5.0 if isinstance(rec, dict) and rec.get("hook") in _CLI_HOOKS else 1.0)
+    if lock is None:
+        return False
+    try:
+        return _append_line(jfile, data) if got else _spool_line(jdir, data, EJ_NAME, tag=True)
+    finally:
+        os.close(lock)
+
+
+EJ_NAME = "enforcement.jsonl"
+EJ_LOCK = "enforcement.lock"
+_CLI_HOOKS = ("tasks", "verify", "review", "close", "adopt")
+
+
+def _ej_lock_fd(jdir: Path):
+    """The enforcement journal's lock file, opened (made inside the journal directory when missing), or None: a link,
+    a FIFO or anything else that is not a regular file is no lock."""
+    try:
+        fd = os.open(str(jdir / EJ_LOCK), os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+                     | getattr(os, "O_NONBLOCK", 0), 0o644)
+    except OSError:
+        return None
+    try:
+        if stat.S_ISREG(os.fstat(fd).st_mode):
+            return fd
+    except OSError:
+        pass
+    os.close(fd)
+    return None
+
+
+def _ej_share(jdir: Path, wait: float = 1.0):
+    """(fd, got): the enforcement lock held SHARED, waited for up to `wait` s; fd None when there is no lock file to
+    hold (then nothing is written)."""
+    import fcntl
+    fd = _ej_lock_fd(jdir)
+    if fd is None:
+        return None, False
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            return fd, True
+        except OSError:
+            if time.monotonic() >= deadline:
+                return fd, False
+            time.sleep(0.01)
+
+
+def _append_line(jfile: Path, data: bytes) -> bool:
+    """One O_APPEND write of `data` to the journal file `jfile`; whether the whole line landed."""
     # O_NONBLOCK: a FIFO with no reader fails ENXIO here rather than blocking.
     # O_NOFOLLOW: a symlinked final component fails ELOOP (no lane escape).
     # Read with getattr(…, 0): a platform without them gets no-ops (the islink
