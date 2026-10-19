@@ -27,6 +27,7 @@ import os
 import re
 import stat
 import time
+import zlib
 from datetime import datetime
 from pathlib import Path
 
@@ -311,13 +312,21 @@ def _ej_read_once(jdir: Path, deadline: float, task: "str | None", since: "float
     stamps: "list[str]" = []
     for r in ordinary:
         stamps.append(stamps[-1] if stamps and any(f'"reason":"{x}"' in r for x in _EJ_NOT_RECORDS) else _ts_of(r))
+    # each spooled line goes right after the LAST ordinary line (in file order) stamped at or before it — writers stamp
+    # before they lock, so the stamps need not be in order (the post-panel judge's J1): the spooled lines by time, the
+    # ordinary ones by stamp, one forward pass keeping the highest index seen (impl r2 R4: one walk back per line was
+    # quadratic)
+    by_stamp = sorted(range(len(stamps)), key=stamps.__getitem__)
     placed: "list[tuple[int, int, str]]" = []
+    j, last = 0, -1
     for i, raw in enumerate(sorted(spooled.values(), key=_ts_of)):
         if i % 2000 == 1999 and time.monotonic() > deadline:
             raise OutOfTime("spooled lines")
-        # after the ordinary lines of its second and before the later ones — a binary search: the stamps are in file
-        # order, near-sorted (impl r2 R4: a walk back for each line was quadratic)
-        placed.append((bisect.bisect_right(stamps, _ts_of(raw)), i, raw))
+        t = _ts_of(raw)
+        while j < len(by_stamp) and stamps[by_stamp[j]] <= t:
+            last = max(last, by_stamp[j])
+            j += 1
+        placed.append((last + 1, i, raw))
     out: "list[str]" = []
     j = 0
     for at, _i, raw in sorted(placed):
@@ -338,9 +347,11 @@ def _archive_lines(path: Path) -> "list[str]":
     if data is None:
         raise JournalIncomplete(f"cannot read {path.name}")
     if path.name.endswith(".gz"):
+        if not data:
+            raise JournalIncomplete(f"{path.name} is empty: no gzip member")     # an archive is never empty (J2)
         try:
             data = gzip.GzipFile(fileobj=io.BytesIO(data)).read()
-        except (OSError, EOFError, ValueError) as exc:
+        except (OSError, EOFError, ValueError, zlib.error) as exc:      # garbled DEFLATE raises zlib.error (J2)
             raise JournalIncomplete(f"cannot decompress {path.name}") from exc
     return data.decode("utf-8", "replace").split("\n")
 

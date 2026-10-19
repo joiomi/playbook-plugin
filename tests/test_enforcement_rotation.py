@@ -1516,6 +1516,36 @@ class ImplRoundTwoFixes(_Archives):
         self.assertEqual(len(calls), 1)
 
 
+class PostPanelJudgeFixes(_Archives):
+    """The post-panel judge's run 1 (codex, after impl round 2): J1, J2 — each red before its fix."""
+
+    def test_j1_a_spooled_line_goes_after_the_last_line_of_its_second_even_out_of_order(self):
+        """Writers stamp before they lock, so ordinary seconds can run [00, 02, 01]; a spooled 01 goes after the 01."""
+        t = self.now - 3000
+        self.write(self.rec("work", t), self.rec("verify run", t + 2, hook="verify"), self.rec("done", t + 1))
+        sid = "enforcement.jsonl.spool-20261019-000000-1-1"
+        (self.jdir / sid).write_bytes(_line(self.rec("late", t + 1, hook="verify", spool=sid + ".0")))
+        lines = self.numbers.enforcement_lines(self.jdir, time.monotonic() + 5)
+        self.assertEqual([json.loads(x)["reason"] for x in lines], ["work", "verify run", "done", "late"])
+
+    def test_j2_an_empty_or_garbled_gz_makes_the_read_incomplete(self):
+        import contextlib
+        import gzip
+        import io
+        from tasks import retro
+        t = self.now - 3000
+        p = self.arch(int(t + 100), [self.rec("work", t)], tasks=["7"], gz=True)
+        gz = Path(str(p) + ".gz")
+        self.write(self.rec("done", t + 300))
+        for data in (b"", gzip.compress(b"x" * 64)[:10] + b"\xff" * 40 + gzip.compress(b"x")[-8:]):
+            gz.write_bytes(data)
+            with self.assertRaises(self.numbers.JournalIncomplete):
+                self.read()
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(retro.lifecycle_records(self.live), [])    # said, never a crash
+
+
 def _epoch(ts: str) -> float:
     import calendar
     return calendar.timegm(time.strptime(ts, "%Y-%m-%dT%H:%M:%SZ"))
