@@ -212,8 +212,12 @@ class AtTheSessionsEnd(_Project):
         lock.parent.mkdir(parents=True, exist_ok=True)
         holder = subprocess.Popen(["flock", str(lock), "sleep", "60"], stdout=subprocess.DEVNULL,
                                   stderr=subprocess.DEVNULL, start_new_session=True)
+        # held once a take that does not wait fails (task 247's impl round 1, sonnet: a fixed 0.3 s let a slow runner
+        # give the hook the lock first)
         import time as _time
-        _time.sleep(0.3)
+        t0 = _time.time()
+        while subprocess.run(["flock", "-n", str(lock), "true"]).returncode == 0 and _time.time() - t0 < 30:
+            _time.sleep(0.05)
         return holder
 
     def release(self, holder):
@@ -285,6 +289,32 @@ class AtTheSessionsEnd(_Project):
             self.assertEqual(self.transcript.stat().st_ino, ino)
         self.assertEqual(self.busy_exit_after(rewrite), [("5", "unknown")])
 
+    def test_a_transcript_cut_short_in_place_with_its_start_kept_is_unread_at_a_busy_exit(self):
+        # task 247's impl round 1 (codex; opus): the same inode and first 4 KiB, a smaller size — `read_span` reads
+        # it again from 0, so `_unread` must not take `size <= to` for read
+        self.transcript.write_text("".join(json.dumps(entry(f"p{i}")) + "\n" for i in range(60)))
+        old = self.transcript.read_bytes()
+        self.assertGreater(len(old), 4096 + 2000)
+        def cut():
+            ino = self.transcript.stat().st_ino
+            keep = old[:old.index(b"\n", 4096) + 1]          # whole lines past the first 4 KiB
+            with open(self.transcript, "r+b") as f:
+                f.truncate(0)
+                f.write(keep + (json.dumps(entry("new1")) + "\n").encode())
+            self.assertEqual(self.transcript.stat().st_ino, ino)
+            self.assertEqual(self.transcript.read_bytes()[:4096], old[:4096])
+        self.assertEqual(self.busy_exit_after(cut), [("5", "unknown")])
+
+    def test_an_empty_transcript_with_no_record_is_nothing_unread(self):
+        # task 247's impl round 1 (sonnet): nothing to lose, no marker
+        self.transcript.write_text("")
+        h = self.hold_lock()
+        try:
+            self.end("exit")
+        finally:
+            self.release(h)
+        self.assertEqual(self.unknown(), [])
+
     def test_an_identical_copy_in_its_place_is_unread_at_a_busy_exit(self):
         # the same start, another inode: the recorder reads it from 0 as another file, so it is a span to mark
         def copy():
@@ -327,17 +357,11 @@ class AtTheSessionsEnd(_Project):
 
     def test_a_busy_lock_at_the_sessions_end_leaves_an_unknown_marker_and_says_so(self):
         # impl round 1 (codex): the turn would be lost with no trace once the dir is gone
-        lock = self.agent / "journal" / "agent-usage.lock"
-        lock.parent.mkdir(parents=True, exist_ok=True)
-        holder = subprocess.Popen(["flock", str(lock), "sleep", "60"], stdout=subprocess.DEVNULL,
-                                  stderr=subprocess.DEVNULL, start_new_session=True)
+        holder = self.hold_lock()
         try:
-            import time as _time
-            _time.sleep(0.3)
             r = self.end("exit")
         finally:
-            os.killpg(holder.pid, 9)
-            holder.wait()
+            self.release(holder)
         self.assertEqual(r.returncode, 0, r.stderr)
         recs = self.records()
         self.assertEqual([(x.get("task"), x.get("status")) for x in recs], [("5", "unknown")])
