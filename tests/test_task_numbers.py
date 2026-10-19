@@ -1300,6 +1300,15 @@ class TheRoundOneFindings(_Tmp):
                                       "time": None, "close": {}})
         self.assertTrue(out[0].startswith("closure #2 2026-10-18T03:00:00+03:00"), out[0])
 
+    def test_the_time_with_no_open_gate_is_named(self):
+        # task 248: the echo's "" section (no gate open — the time after the last tick) printed as an empty label
+        out = numbers.format_closure({"closed_at": "x", "window": {}, "close": {},
+                                      "time": {"total": 30, "sessions": 1, "by_kind": {"agent": 30},
+                                               "by_section": {"?": {"agent": 1}, "Work": {"agent": 20},
+                                                              "": {"verify": 9}}}})
+        line = next(x for x in out if x.lstrip().startswith("by section:"))
+        self.assertEqual(line, "  by section: ? 1s · Work 20s · (no open gate) 9s")
+
 
 class TheRoundOneCloseFindings(_CliProject):
     def closed(self):

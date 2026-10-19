@@ -1168,7 +1168,8 @@ def format_closure(c: dict) -> "list[str]":
         out.append(f"  time {_dur(t.get('total'))} in {t.get('sessions', 0)} session(s): " + (" · ".join(parts) or "—"))
         secs = {s: sum(d.values()) for s, d in (t.get("by_section") or {}).items()}
         if secs:
-            out.append("  by section: " + " · ".join(f"{s} {_dur(v)}" for s, v in secs.items()))
+            # "" is the echo's "no gate open" (the time after the last tick): named, not printed blank (task 248)
+            out.append("  by section: " + " · ".join(f"{s or '(no open gate)'} {_dur(v)}" for s, v in secs.items()))
     else:
         out.append("  time: no activation record in the journal for this closure")
     r = c.get("rounds") or {}

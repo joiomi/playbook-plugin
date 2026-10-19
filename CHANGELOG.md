@@ -36,6 +36,8 @@ init deletes is in its snapshot now, so a rollback brings it back (until now it 
 `~/.claude/settings.json` that starts with a UTF-8 BOM is read, and written back with it. The live row PB-INSTALL-ROLLBACK passes again (8 of 8 clauses on the fix), and the guarantee ledger has no
 known violation: 135 rows, 122 verified.
 
+**`tasks numbers` names the time when no gate was open** — task 248. The "by section" line printed that share (the time after the last tick — in task 246's closure 3m14s, 2m04s of it the close's own verify) with an empty label (`Review 44m08s ·  3m14s`); it now reads `(no open gate) 3m14s`. `numbers.json` keeps its key `""`.
+
 ## [1.6.5] — 2026-10-18
 
 **Phase B, items 6 and 7: every close keeps the task's own numbers, and the judges read a fixed copy** — tasks

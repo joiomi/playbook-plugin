@@ -394,8 +394,15 @@ def gauntlet_preflight() -> None:
     loose = subprocess.run(["git", "-C", str(repo), "-c", "user.name=s", "-c", "user.email=s@s", "commit-tree", tree,
                             "-p", sha, "-m", "on no branch"], capture_output=True, text=True).stdout.strip()
     got = pf.problems(rows, nested=repo, record=rec, old_ref=loose)
-    check("preflight: a commit present but on no branch or tag is refused (a bare clone would not carry it)",
-          len(got) == 1 and "does not hold commit" in got[0], True, str(got)[:200])
+    # task 248: the install rows' own clone chain carries a commit on no ref (both clones are from a local path, which
+    # copies the object store) — run it here, so the check and the chain cannot drift apart
+    bare, release = d / "bare", d / "release"
+    subprocess.run(["git", "clone", "-q", "--bare", str(repo), str(bare)], check=True, capture_output=True)
+    subprocess.run(["git", "clone", "-q", "-b", "main", str(bare), str(release)], check=True, capture_output=True)
+    carried = subprocess.run(["git", "-C", str(release), "cat-file", "-e", f"{loose}^{{commit}}"],
+                             capture_output=True).returncode == 0
+    check("preflight: a commit present but on no branch or tag passes, and the install rows' clone chain carries it",
+          got == [] and carried, True, f"{str(got)[:160]} carried={carried}")
     g = tempdir("pb245-pg-")
     (g / "lib").mkdir()
     (g / "gauntlet.sh").write_text((Path(__file__).resolve().parent / "gauntlet.sh").read_text())

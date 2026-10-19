@@ -102,6 +102,28 @@ def _children(pid: int, name: str) -> "list[int]":
     return out
 
 
+def _blocked_on(pids: "list[int]", path: Path) -> bool:
+    """Whether one of `pids` holds a BLOCKED flock request on `path`'s inode: a `->` line of /proc/locks, which the
+    kernel lists under the lock the request waits for. A take that began but does not wait never shows there (task
+    243's post-panel judge, codex: a `flock` child alone passed for a delayed non-blocking take; task 248)."""
+    ino = os.stat(path).st_ino
+    try:
+        with open("/proc/locks", encoding="utf-8", errors="replace") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return False
+    for line in lines:
+        f = line.split()
+        if "->" not in f:
+            continue
+        i = f.index("->")
+        # "<n>: -> FLOCK  ADVISORY  WRITE <pid> <major>:<minor>:<inode> <start> <end>"
+        if (len(f) > i + 5 and f[i + 1] == "FLOCK" and f[i + 4].isdigit() and int(f[i + 4]) in pids
+                and f[i + 5].rsplit(":", 1)[-1] == str(ino)):
+            return True
+    return False
+
+
 def _until(cond, limit=90.0):
     t0 = time.time()
     while not cond() and time.time() - t0 < limit:
@@ -293,13 +315,15 @@ class TwoInitsOnOneHome(_Case):
             while not looked.exists() and b.poll() is None and time.time() - t0 < 90:
                 time.sleep(0.05)
             self.assertTrue(looked.exists(), "B reached the removal step's seam")
-            # impl round 2 (opus, sonnet): no clock in the verdict — A either waits on the HOME lock (a `flock` child)
-            # or, with no lock, reaches its own seam (its marker)
+            # impl round 2 (opus, sonnet): no clock in the verdict — A either waits on the HOME lock or, with no lock,
+            # reaches its own seam (its marker); the wait is the kernel's own record of A's `flock` blocked on the
+            # HOME (task 248), not a `flock` child merely existing
             a_looked = self.root / "a-looked"
             shim_a = self.shim("shim-a", f"open({str(a_looked)!r}, 'w').close()\n")
             a = self.start(self.project, PATH=f"{shim_a}{os.pathsep}{os.environ.get('PATH', '')}")
-            _until(lambda: a_looked.exists() or _children(a.pid, "flock") or a.poll() is not None)
-            a_waits = bool(_children(a.pid, "flock")) and not a_looked.exists()
+            _until(lambda: a_looked.exists() or _blocked_on(_children(a.pid, "flock"), self.home)
+                   or a.poll() is not None)
+            a_waits = _blocked_on(_children(a.pid, "flock"), self.home) and not a_looked.exists()
         finally:
             go.write_text("", encoding="utf-8")
         b_out, b_err = b.communicate(timeout=240)

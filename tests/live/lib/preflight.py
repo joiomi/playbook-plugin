@@ -40,14 +40,12 @@ def problems(rows: "list[str]", nested: "Path | None" = None, record=None, old_r
             out.append(f"{', '.join(install)}: this checkout ({nested}) has no local `main` branch — the install rows "
                        "clone `-b main` from a bare clone of it (rows_install.py); run the gauntlet from the nested "
                        "repository inside the workspace, or create `main` here")
-        # reachable from a local branch or tag — a bare clone copies refs, so a commit only the reflog or a remote ref
-        # holds would not reach the release clone (impl round 2, opus / sonnet)
-        reach = subprocess.run(["git", "-C", str(nested), "for-each-ref", "--contains", old_ref, "refs/heads",
-                                "refs/tags"], capture_output=True, text=True)
-        if not git_ok("cat-file", "-e", f"{old_ref}^{{commit}}") or reach.returncode != 0 or not reach.stdout.strip():
-            out.append(f"{', '.join(install)}: this checkout ({nested}) does not hold commit {old_ref} (v1.6.0) on a "
-                       "local branch or tag — the install rows reset the release clone to it; a shallow clone may "
-                       "lack it: fetch the history")
+        # in the checkout, on a ref or not: both clones of the install rows are from a local path, which copies the
+        # object store, so a commit present here reaches the release clone (measured on git 2.54, task 248 — task
+        # 245's check also asked for a local branch or tag and refused a checkout that would have run)
+        if not git_ok("cat-file", "-e", f"{old_ref}^{{commit}}"):
+            out.append(f"{', '.join(install)}: this checkout ({nested}) does not hold commit {old_ref} (v1.6.0) — "
+                       "the install rows reset the release clone to it; a shallow clone may lack it: fetch the history")
     if "PB-CLI-INTENT" in rows:
         proj, num, rid = record if record is not None else rows_judge.OWNER_DISTILLATION
         if not sorted(proj.glob(f".agent/tasks/{num}-*/intent/{rid}")) or not (proj / "INTENT.md").is_file():
