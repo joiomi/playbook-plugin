@@ -4,6 +4,40 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+## [1.6.6] — 2026-10-19
+
+**The main agent's own tokens in every close; init fails and restores; a background close is no longer the owner's
+time** — tasks 243-253. Every closure's `numbers.json` now carries the agent's own tokens per model beside the judge
+seats' (task 244), read at each turn's end, at each CLI transition and at the session's end (task 246); a span no
+reader can count — a busy lock at the session's end, a call the host is still writing — is marked `unknown` instead of
+left as a silent gap (tasks 247, 252, 253). Init, when it cannot finish removing the old shell logger, fails and
+restores everything (task 243), which ends 1.6.5's known violation PB-INSTALL-ROLLBACK. `tasks numbers` no longer
+counts a close run in the background as the owner's idle time (task 249) and names the time outside any section (task
+248). The suite has ⟦W2: test count⟧ tests (5,599 at 1.6.5); CI is the same two Linux lanes. The guarantee ledger has
+135 rows, 122 verified (121 at 1.6.5), and no known violation. The live gauntlet on this release: ⟦W3: PASS / WAITING /
+FAIL⟧.
+
+**Upgrading:** `/playbook:upgrade`, then restart every Claude Code session. No `/playbook:init` step: what init writes
+into a project — the CLAUDE.md block, the `.gitignore` block, `.claude/hooks/monitor-nudge.sh` and the monitor's files —
+is unchanged since 1.6.5, `CLAUDE.md.template`, `claude-md-merge.py` and `commands/init.md` included; only init's own
+steps changed (task 243), and they apply the next time it runs. One exception: on a HOME where 1.6.5's init left the old
+shell logger half removed (its known violation — `~/.claude` not writable, the file listed under "Skipped"), re-run
+`/playbook:init` once `~/.claude` can be written; 1.6.6's init finishes the removal, or fails and restores everything.
+The agent's recorder comes with the plugin's
+`hooks.json` (a second Stop hook) and `session-end-hook`. The first time it reads a transcript it has
+no record of, it counts it from its start when it is at most 8 MiB — under the task active then — and otherwise marks
+what came before `unknown`. A restarted session starts a new transcript, so nothing earlier is read; a session resumed
+across the upgrade (`claude --resume`) continues its old transcript, and up to that size its earlier calls go to the
+task it is on at its first turn's end. From 1.6.4 or earlier, 1.6.5's upgrade notes apply first, its `/playbook:init`
+step included.
+
+**Measured before the release**, in temporary folders: ⟦W3: the window from 1.6.5⟧
+
+**Going back** to 1.6.5 (`a59ca13`): in the release clone the marketplace reads, `git -C <clone> checkout a59ca13`,
+then `claude plugin marketplace update playbook-x-marketplace` and `claude plugin update
+playbook@playbook-x-marketplace`; no init to undo. ⟦W3: 1.6.5's CLI on a project 1.6.6 wrote⟧ Before the next
+`/playbook:upgrade`, `git -C <clone> checkout main`: its `git pull --ff-only` refuses a detached HEAD.
+
 **Every closure's numbers carry the main agent's own tokens** — task 244 (the owner, 2026-10-18: "Da, după 243
 (Recomandat)"). Until now `numbers.json` held each judge seat's tokens but not the agent's — on this project the larger
 cost by far (one session's transcript, deduplicated: 6,002 calls, about 3 billion cache-read tokens in 3.5 days). A new
@@ -39,6 +73,21 @@ known violation: 135 rows, 122 verified.
 **`tasks numbers` names the time outside any section** — task 248. The "by section" line printed the share with no `##` section — no gate open (the time after the last tick: in task 246's closure 3m14s, 2m04s of it the close's own verify), or an open gate under no heading — with an empty label (`Review 44m08s ·  3m14s`); it now reads `(no section) 3m14s`. `numbers.json` keeps its key `""`.
 
 **A close run in the background is no longer the owner's time** — task 249. When the agent ended its turn while `tasks work done` ran as a background command, the time from that turn's end to the close's stamp counted whole as `owner-idle`, though the close's own verify and tail-cert ran then: 204 s in task 247's closure and 213 s in task 248's, while the owner slept. That gap now has its verify and review spans carved like a background wait's (the rest keeps its kind), and a recompose no longer takes the notification that ends the close's command for another task's line (its suspend sample still counts). Recomposed: 247's 204 s are verify 173 s and judges 31 s, 248's 213 s are verify 180 s and judges 33 s; the totals are unchanged.
+
+### Known limitations
+
+- The agent's tokens: `enforcement.jsonl` never rotates, and the recorder adds a record per turn per model. Measured
+  on a synthetic year at this project's pace (300 turns a day): 60 MB, the close's read about 2 s of its 5 s budget,
+  and past the 32 MiB scan bound (about six months) a new transcript's first turn gets an `unknown` seed instead of
+  its calls. Rotating it is the next task (the owner, 2026-10-19: "Da, în Faza B (Recomandat)"). A `claude` started
+  from another session's shell is counted under the outer session's task; a transcript the host rewrote in place would
+  be counted again (not observed). The rest: `docs/enforcement-journal.md`, Family 6.
+- A close run in the background: only its recorded verify and review spans leave `owner-idle`; its audit and numbers
+  time stays there.
+- A task's numbers: two races within seconds of a close are not told apart (1.6.5's stated limits, unchanged).
+- The review copy needs bubblewrap able to mount it and `.agent/journal/` ignored by git; otherwise the judges read the
+  live tree, as before. A panel killed by SIGKILL (or an unhandled SIGTERM) still leaves its reservation without a
+  `done` record.
 
 ## [1.6.5] — 2026-10-18
 
