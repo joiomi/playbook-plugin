@@ -109,7 +109,10 @@ def _blocked_on(pids: "list[int]", path: Path) -> bool:
         waits for. In a PID namespace a lock whose taker has exited (init's `flock` takes it on a descriptor and exits)
         is hidden there with its waiters (measured under bwrap --unshare-pid, task 248's impl round 1, agy);
       * the process asleep in the kernel's lock wait (`/proc/<pid>/wchan` names a `lock` … `wait` function —
-        `locks_lock_inode_wait` on 6.8) while holding a descriptor on `path` — what `flock -w … <fd>` on it is."""
+        `locks_lock_inode_wait` on 6.8) while holding a descriptor on `path` — what `flock -w … <fd>` on it is.
+    Limits (its round 2, opus / sonnet): the second record names no file, so a wait on another lock by a process that
+    also holds a descriptor on `path` would pass it (init's `flock` holds only fd 209 on the HOME); and where both are
+    hidden — a PID namespace whose `wchan` reads `0` (no kallsyms) — T10 and T14 fail after their wait, never pass."""
     st = os.stat(path)
     dev = f"{os.major(st.st_dev):02x}:{os.minor(st.st_dev):02x}:{st.st_ino}"
     try:

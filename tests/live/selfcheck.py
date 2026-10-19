@@ -411,9 +411,14 @@ def gauntlet_preflight() -> None:
         subprocess.run(["git", "clone", "-q", "-b", "main", str(b), str(r)], check=True, capture_output=True)
         return subprocess.run(["git", "-C", str(r), "cat-file", "-e", f"{loose}^{{commit}}"],
                               capture_output=True).returncode == 0
-    # the same commit once packed (impl round 1 of task 248, sonnet: the claim says loose or packed)
-    subprocess.run(["git", "-C", str(repo), "gc", "-q", "--prune=never"], check=True, capture_output=True)
-    check("preflight: that commit once packed is still carried by the chain", chain(repo, "packed"), True)
+    # the same commit once packed (impl round 1 of task 248, sonnet: the claim says loose or packed). Forced and
+    # checked (its round 2, codex / sonnet: `gc --prune=never` packs an unreachable object only with cruft packs on):
+    # `--keep-unreachable` packs the unreachable loose objects and removes their loose files
+    subprocess.run(["git", "-C", str(repo), "repack", "-q", "-a", "-d", "--keep-unreachable"], check=True,
+                   capture_output=True)
+    packed = not (repo / ".git" / "objects" / loose[:2] / loose[2:]).exists()
+    check("preflight: that commit once packed (no loose file left) is still carried by the chain",
+          packed and chain(repo, "packed"), True, f"packed={packed}")
     # a shallow checkout is cloned by fetch: only what a branch or tag reaches (impl round 1 of task 248, opus)
     subprocess.run(["git", "-C", str(repo), "config", "uploadpack.allowAnySHA1InWant", "true"], check=True,
                    capture_output=True)

@@ -1302,7 +1302,7 @@ class TheRoundOneFindings(_Tmp):
 
     def test_the_time_with_no_section_is_named(self):
         # task 248: the echo's "" section — no gate open (the time after the last tick) or an open gate under no `##`
-        # heading (its impl round 1, opus / codex) — printed as an empty label
+        # heading (its impl round 1, opus / codex) — printed as `(no section)`, not as an empty label
         out = numbers.format_closure({"closed_at": "x", "window": {}, "close": {},
                                       "time": {"total": 30, "sessions": 1, "by_kind": {"agent": 30},
                                                "by_section": {"?": {"agent": 1}, "Work": {"agent": 20},
