@@ -30,8 +30,9 @@ local `main` branch; PB-CLI-INTENT checks the owner's distillation record (task 
 in the workspace around this repository). `lib/preflight.py` checks both for the rows chosen and refuses
 before any row runs, saying why — a fresh clone elsewhere once failed three rows halfway (task 242; a
 fourth failed that run for another reason). The install rows also need v1.6.0's commit (`rows_install.OLD_REF`)
-in the checkout — on a branch or not, since both clones are from a local path and copy the object store — a
-shallow clone may lack it, and the preflight says so.
+in the checkout — on a branch or not, since both clones are from a local path and copy the object store; from a
+shallow checkout git clones by fetch, so there it must be on a local branch or tag. The preflight says when
+either fails (a shallow clone may lack the commit); it does not check a partial clone, which may lack its files.
 
 One artifact per row, `<dir>/<ROW-ID>.txt`: the candidate commit, tool versions,
 every command with its full output and the filesystem delta it was told to watch,

@@ -103,23 +103,36 @@ def _children(pid: int, name: str) -> "list[int]":
 
 
 def _blocked_on(pids: "list[int]", path: Path) -> bool:
-    """Whether one of `pids` holds a BLOCKED flock request on `path`'s inode: a `->` line of /proc/locks, which the
-    kernel lists under the lock the request waits for. A take that began but does not wait never shows there (task
-    243's post-panel judge, codex: a `flock` child alone passed for a delayed non-blocking take; task 248)."""
-    ino = os.stat(path).st_ino
+    """Whether one of `pids` is blocked in a file-lock wait on `path` — task 248 (task 243's post-panel judge, codex:
+    a `flock` child merely existing passed for a take that never waited). Two kernel records, either one:
+      * a `->` line of /proc/locks by that pid on `path`'s device and inode — the request listed under the lock it
+        waits for. In a PID namespace a lock whose taker has exited (init's `flock` takes it on a descriptor and exits)
+        is hidden there with its waiters (measured under bwrap --unshare-pid, task 248's impl round 1, agy);
+      * the process asleep in the kernel's lock wait (`/proc/<pid>/wchan` names a `lock` … `wait` function —
+        `locks_lock_inode_wait` on 6.8) while holding a descriptor on `path` — what `flock -w … <fd>` on it is."""
+    st = os.stat(path)
+    dev = f"{os.major(st.st_dev):02x}:{os.minor(st.st_dev):02x}:{st.st_ino}"
     try:
         with open("/proc/locks", encoding="utf-8", errors="replace") as fh:
-            lines = fh.read().splitlines()
+            for line in fh.read().splitlines():
+                f = line.split()
+                if "->" in f:
+                    i = f.index("->")
+                    # "<n>: -> FLOCK  ADVISORY  WRITE <pid> <major>:<minor>:<inode> <start> <end>"
+                    if (len(f) > i + 5 and f[i + 1] == "FLOCK" and f[i + 4].isdigit() and int(f[i + 4]) in pids
+                            and f[i + 5] == dev):
+                        return True
     except OSError:
-        return False
-    for line in lines:
-        f = line.split()
-        if "->" not in f:
+        pass
+    for pid in pids:
+        try:
+            with open(f"/proc/{pid}/wchan", encoding="utf-8", errors="replace") as fh:
+                wchan = fh.read().strip()
+            on_path = any(os.path.samefile(os.path.join(f"/proc/{pid}/fd", fd), path)
+                          for fd in os.listdir(f"/proc/{pid}/fd"))
+        except OSError:
             continue
-        i = f.index("->")
-        # "<n>: -> FLOCK  ADVISORY  WRITE <pid> <major>:<minor>:<inode> <start> <end>"
-        if (len(f) > i + 5 and f[i + 1] == "FLOCK" and f[i + 4].isdigit() and int(f[i + 4]) in pids
-                and f[i + 5].rsplit(":", 1)[-1] == str(ino)):
+        if "lock" in wchan and "wait" in wchan and on_path:
             return True
     return False
 
@@ -351,7 +364,9 @@ class TwoInitsOnOneHome(_Case):
         try:
             self.assertTrue(_until(lambda: bool(_children(holder.pid, "sleep"))), "the test holds the HOME lock")
             a = self.start(self.project)
-            self.assertTrue(_until(lambda: bool(_children(a.pid, "flock")) or a.poll() is not None))
+            # the signal lands on a wait the kernel records, not on a `flock` child that may not wait yet (task 248's
+            # impl round 1, sonnet)
+            self.assertTrue(_until(lambda: _blocked_on(_children(a.pid, "flock"), self.home) or a.poll() is not None))
             for pid in _children(a.pid, "flock"):
                 os.kill(pid, 15)
             out, err = a.communicate(timeout=120)

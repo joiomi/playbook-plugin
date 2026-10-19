@@ -403,6 +403,34 @@ def gauntlet_preflight() -> None:
                              capture_output=True).returncode == 0
     check("preflight: a commit present but on no branch or tag passes, and the install rows' clone chain carries it",
           got == [] and carried, True, f"{str(got)[:160]} carried={carried}")
+
+    def chain(src: Path, tag: str) -> bool:
+        """The install rows' two clones of `src`; whether the release clone holds `loose`."""
+        b, r = d / f"bare-{tag}", d / f"release-{tag}"
+        subprocess.run(["git", "clone", "-q", "--bare", str(src), str(b)], check=True, capture_output=True)
+        subprocess.run(["git", "clone", "-q", "-b", "main", str(b), str(r)], check=True, capture_output=True)
+        return subprocess.run(["git", "-C", str(r), "cat-file", "-e", f"{loose}^{{commit}}"],
+                              capture_output=True).returncode == 0
+    # the same commit once packed (impl round 1 of task 248, sonnet: the claim says loose or packed)
+    subprocess.run(["git", "-C", str(repo), "gc", "-q", "--prune=never"], check=True, capture_output=True)
+    check("preflight: that commit once packed is still carried by the chain", chain(repo, "packed"), True)
+    # a shallow checkout is cloned by fetch: only what a branch or tag reaches (impl round 1 of task 248, opus)
+    subprocess.run(["git", "-C", str(repo), "config", "uploadpack.allowAnySHA1InWant", "true"], check=True,
+                   capture_output=True)
+    shal = d / "shallow"
+    subprocess.run(["git", "-c", "protocol.file.allow=always", "clone", "-q", "--depth", "1", "-b", "main",
+                    f"file://{repo}", str(shal)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(shal), "-c", "protocol.file.allow=always", "fetch", "-q", "--depth", "1",
+                    "origin", loose], check=True, capture_output=True)
+    got = pf.problems(rows, nested=shal, record=rec, old_ref=loose)
+    carried = chain(shal, "shallow")
+    check("preflight: a shallow checkout holding the commit on no ref is refused, and the chain would not carry it",
+          len(got) == 1 and "is shallow" in got[0] and not carried, True, f"{str(got)[:160]} carried={carried}")
+    subprocess.run(["git", "-C", str(shal), "tag", "pb248-old", loose], check=True, capture_output=True)
+    got = pf.problems(rows, nested=shal, record=rec, old_ref=loose)
+    carried = chain(shal, "shallow-tagged")
+    check("preflight: the same shallow checkout with a tag on the commit passes, and the chain carries it",
+          got == [] and carried, True, f"{str(got)[:160]} carried={carried}")
     g = tempdir("pb245-pg-")
     (g / "lib").mkdir()
     (g / "gauntlet.sh").write_text((Path(__file__).resolve().parent / "gauntlet.sh").read_text())
