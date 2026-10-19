@@ -14,8 +14,8 @@ Held:
     (a `/clear` too: SessionStart then points the session at the new transcript); "unread" uses the recorder's own
     identity check and restart rule — another file in the transcript's place, the same inode with another start or
     another size, an identical copy on a new inode, a replaced subagent file — and an empty file with no record is
-    nothing unread (task 247); "another size" is the end of the last COMPLETE line, so a half-written last line, or a
-    file that is only one, is nothing unread until it ends (task 252);
+    nothing unread (task 247); "another size" is the end of the last COMPLETE line, and a half-written last line marks
+    unless it names a user entry — it may be a call no reader will count (task 252 and its impl round 1);
   * a session with no task records under "-";
   * a judge, tail-cert or monitor session records nothing (task 232 counts the judges' own usage);
   * a crash of the recorder exits 0, prints nothing, records nothing, and its journal line says it was skipped;
@@ -341,15 +341,29 @@ class AtTheSessionsEnd(_Project):
             self.release(h)
         self.assertEqual(self.unknown(), [])
 
-    def test_a_half_written_last_line_is_nothing_unread_until_it_is_complete(self):
-        # task 252 (PLAN.md "From task 247" (a), opus): `read_span` stops at the last newline, so a host killed mid-write
-        # leaves bytes past `to` that no reader counts — no marker for them; once the line ends, it is a call to mark
+    def user_entry(self):
+        return {"type": "user", "isSidechain": False, "timestamp": "2026-10-19T00:00:00Z",
+                "message": {"role": "user", "content": [{"type": "tool_result", "content": "x" * 300}]}}
+
+    def test_a_half_written_user_entry_is_nothing_unread(self):
+        # task 252 (PLAN.md "From task 247" (a), opus): `read_span` stops at the last newline; a half-written line that
+        # names a user entry and no assistant is no call, so it marks nothing (a long tool result is the usual one)
         def partial():
             with open(self.transcript, "ab") as f:
-                f.write(json.dumps(entry("p1")).encode()[:40])          # no newline: the host stopped mid-line
+                f.write(json.dumps(self.user_entry()).encode()[:200])   # no newline: the host stopped mid-line
         self.assertEqual(self.busy_exit_after(partial, grow=True), [])
+
+    def test_a_half_written_assistant_entry_still_marks_and_so_does_it_finished(self):
+        # its impl round 1 (opus): a call the host is still writing at the session's end, or was killed writing, is
+        # never counted — it marks, as a silent gap must not happen; finished, it is an unread call that marks too
+        line = json.dumps(entry("p1")).encode()
+        def partial():
+            with open(self.transcript, "ab") as f:
+                f.write(line[:120])                                      # past `"assistant"`, before the usage
+        self.assertIn(b'"assistant"', line[:120])
+        self.assertEqual(self.busy_exit_after(partial, grow=True), [("5", "unknown")])
         with open(self.transcript, "ab") as f:
-            f.write(json.dumps(entry("p1")).encode()[40:] + b"\n")
+            f.write(line[120:] + b"\n")
         self.sdir.mkdir(parents=True, exist_ok=True)       # the exit above removed it: a resumed session, task 5
         (self.sdir / "current_state").write_text("5\n")
         h = self.hold_lock()
@@ -357,16 +371,25 @@ class AtTheSessionsEnd(_Project):
             self.end("exit")
         finally:
             self.release(h)
-        self.assertEqual(self.unknown(), [("5", "unknown")])
+        self.assertEqual(self.unknown(), [("5", "unknown"), ("5", "unknown")], "the partial's marker, then the call's")
 
-    def test_a_transcript_that_is_only_a_partial_line_is_nothing_unread(self):
-        self.transcript.write_text(json.dumps(entry("q1"))[:30])
+    def test_a_transcript_that_is_only_a_half_written_user_entry_is_nothing_unread(self):
+        self.transcript.write_text(json.dumps(self.user_entry())[:200])
         h = self.hold_lock()
         try:
             self.end("exit")
         finally:
             self.release(h)
         self.assertEqual(self.unknown(), [])
+
+    def test_a_half_written_line_past_one_block_reads_back_to_the_last_newline(self):
+        # its impl round 1 (opus, agy): `_complete_end` reads back in 64 KiB blocks — a last line longer than one
+        def partial():
+            big = dict(self.user_entry())
+            big["message"] = {"role": "user", "content": [{"type": "tool_result", "content": "y" * 70000}]}
+            with open(self.transcript, "ab") as f:
+                f.write(json.dumps(big).encode()[:69000])
+        self.assertEqual(self.busy_exit_after(partial, grow=True), [])
 
     def test_an_identical_copy_in_its_place_is_unread_at_a_busy_exit(self):
         # the same start, another inode: the recorder reads it from 0 as another file, so it is a span to mark

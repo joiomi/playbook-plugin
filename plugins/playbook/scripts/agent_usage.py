@@ -436,12 +436,37 @@ def _complete_end(path: str, size: int) -> int:
         os.close(fd)
 
 
+_USER_TYPE = __import__("re").compile(rb'"type"\s*:\s*"user"')
+
+
+def _tail_may_be_a_call(path: str, start: int, size: int) -> bool:
+    """Whether the half-written line after the last complete one may be a call (task 252's impl round 1, opus): one
+    the host is still writing at the session's end, or was killed writing, is never counted, so it marks — unless its
+    first 4 KiB name a user entry (`"type":"user"` sits ~120 bytes into the host's line, measured on this workspace's
+    transcript; an assistant line holds no such key, and a quote inside a JSON string is escaped). A read that fails:
+    it may be."""
+    if start >= size:
+        return False
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return True
+    try:
+        head = os.pread(fd, min(4096, size - start), start)
+    except OSError:
+        return True
+    finally:
+        os.close(fd)
+    return not _USER_TYPE.search(head)
+
+
 def _unread(lane: str, paths: "list[str]") -> bool:
     """Whether any of the session's files holds a span the recorder would read — no record (a file with no complete
     line excepted: nothing to lose), another file in its place (`_same_file`, task 247: the size alone took a replaced
-    transcript no larger than the old `to` for read), or a last complete line ending elsewhere than the newest
-    record's `to` (past it: new lines; below it: `read_span` reads the file again from 0 — task 247's impl round 1,
-    codex; the end of the last COMPLETE line, not the size, since a half-written one is no reader's — task 252) — read
+    transcript no larger than the old `to` for read), a last complete line ending elsewhere than the newest record's
+    `to` (past it: new lines; below it, for a file the recorder read, a restart — task 247's impl round 1, codex; the
+    last COMPLETE line, not the size, as `read_span` stops there — task 252), or a half-written last line that may be a
+    call (`_tail_may_be_a_call`: a silent gap is worse than a marker — its impl round 1, opus) — read
     without the lock, for the busy-lock marker only: a clean exit whose last Stop read everything is no gap (task 246's
     impl round 2, opus)."""
     files = session_files(paths)
@@ -458,6 +483,8 @@ def _unread(lane: str, paths: "list[str]") -> bool:
             continue
         prev = newest.get(key)
         end = _complete_end(f, st.st_size)
+        if _tail_may_be_a_call(f, end, st.st_size):
+            return True
         if prev is None and end == 0:
             continue
         if not _same_file(prev, f, st) or end != prev["to"]:
