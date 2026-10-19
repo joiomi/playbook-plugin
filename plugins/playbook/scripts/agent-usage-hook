@@ -24,6 +24,10 @@ PROJECT_DIR=$(find_project_root 2>/dev/null) || PROJECT_DIR=""
 [ -n "$PROJECT_DIR" ] || exit 0
 AGENT_DIR=$(resolve_agent_dir "$PROJECT_DIR" 2>/dev/null) || _pb_au_skip "the lane could not be resolved"
 [ -d "$AGENT_DIR" ] || exit 0
+# a fresh multi-user clone (per-user lanes, no .agent/current_user, no root tasks/): the lane is unresolvable and the
+# root answer would mint root-lane state — the recorder's lock made `journal/` there (task 255's gauntlet,
+# PB-LANE-RESOLUTION; task 256). Like the stop hook and pb_journal, it writes nothing; session-end-hook exits earlier.
+[ -z "$(lanes_without_marker "$PROJECT_DIR")" ] || _pb_au_skip "per-user lanes but no .agent/current_user: the lane is unresolvable"
 SESSION_ID="$(resolve_session_id 2>/dev/null)" || SESSION_ID=""
 command -v python3 >/dev/null 2>&1 || {
     echo "playbook: no python3 on PATH — the agent's tokens are not recorded" >&2

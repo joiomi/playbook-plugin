@@ -498,5 +498,32 @@ class AtTheSessionsEnd(_Project):
         self.assertIn("skipped: lock", line[-1].get("detail", ""))
 
 
+class OnAFreshMultiUserClone(_Project):
+    """Task 256 (task 255's gauntlet, PB-LANE-RESOLUTION): per-user lanes, no `.agent/current_user`, no root
+    `.agent/tasks` — the lane is unresolvable, and the recorder wrote `journal/` at the ROOT; like the stop hook and
+    `pb_journal`, it writes nothing there."""
+    def setUp(self):
+        super().setUp()
+        shutil.rmtree(self.agent / "tasks")
+        shutil.rmtree(self.agent / "sessions")
+        (self.agent / "alice" / "tasks").mkdir(parents=True)
+
+    def assert_no_root_journal(self):
+        self.assertFalse((self.agent / "journal").exists(), sorted(p.name for p in self.agent.iterdir()))
+
+    def test_the_stop_recorder_writes_nothing_at_the_root(self):
+        r = self.run_hook(self.payload())
+        self.assertEqual((r.returncode, r.stdout), (0, ""), r.stderr)
+        self.assert_no_root_journal()
+
+    def test_the_sessions_end_records_nothing_at_the_root(self):
+        p = {"hook_event_name": "SessionEnd", "session_id": "h1", "cwd": str(self.project),
+             "transcript_path": str(self.transcript), "reason": "exit"}
+        r = subprocess.run(["bash", str(SESSION_END)], input=json.dumps(p), cwd=self.project, env=self.env(),
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assert_no_root_journal()
+
+
 if __name__ == "__main__":
     unittest.main()
