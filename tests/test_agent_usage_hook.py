@@ -509,7 +509,9 @@ class OnAFreshMultiUserClone(_Project):
         (self.agent / "alice" / "tasks").mkdir(parents=True)
 
     def assert_no_root_journal(self):
-        self.assertFalse((self.agent / "journal").exists(), sorted(p.name for p in self.agent.iterdir()))
+        # nothing at the root but the lane that was there: no journal/, lock, sessions/ or tasks/ (its impl round 1,
+        # sonnet: the ledger row says no root state, not only no journal)
+        self.assertEqual(sorted(p.name for p in self.agent.iterdir()), ["alice"])
 
     def test_the_stop_recorder_writes_nothing_at_the_root(self):
         r = self.run_hook(self.payload())
