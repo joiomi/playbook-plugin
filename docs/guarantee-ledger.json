@@ -18833,7 +18833,7 @@
     {
       "id": "PB-ENFORCEMENT-JOURNAL",
       "category": "hook-payload-and-paths",
-      "statement": "The enforcement hooks append a best-effort, log-only record of each decision to the lane-resolved .agent/<lane>/journal/enforcement.jsonl (root lane: .agent/journal/enforcement.jsonl). The `decision` field is one of {allow, block, record, session-walk}: task-gate writes allow or block (its Bash task-dir refusal too, from task 110 until task 197 removed it), command-guard writes block, and allow for an acknowledged command (`ack-irreversible-task:<rule>`, `ack-operator-env:<rule>` — task 110), stop/batch-close write block, and the close path writes a `record` (hook=\"close\", decision=\"record\", reason=\"verify contract\") logging the verify bar that close ran — a forensic record, not a gate allow/block. state-echo and task-gate write `session-walk` on an unresolved session id — what the resolver's walk read, capped per day (task 192, docs/enforcement-journal.md Family 3). A journal write failure never changes any enforcement decision, the journal is never created outside an existing playbook-managed lane, and neither writer writes into a linked `journal/` directory, through a linked journal file or into one that is not a regular file (the bash writer since task 192: before it a FIFO there hung the gate past its timeout, and a link received the record — measured). BOUND: the bash writer checks the file and then writes it, so a process that swaps it for a FIFO between the two can still hang the writing hook (the single judge after task 192's round 2 did, by a timed swap); pb_journal.py opens it non-blocking and without following a link, so its own residual is a swap of the directory. A Phase B input (PLAN.md).",
+      "statement": "The enforcement hooks append a best-effort, log-only record of each decision to the lane-resolved .agent/<lane>/journal/enforcement.jsonl (root lane: .agent/journal/enforcement.jsonl). The `decision` field is one of {allow, block, record, session-walk}: task-gate writes allow or block (its Bash task-dir refusal too, from task 110 until task 197 removed it), command-guard writes block, and allow for an acknowledged command (`ack-irreversible-task:<rule>`, `ack-operator-env:<rule>` — task 110), stop/batch-close write block, and the close path writes a `record` (hook=\"close\", decision=\"record\", reason=\"verify contract\") logging the verify bar that close ran — a forensic record, not a gate allow/block. state-echo and task-gate write `session-walk` on an unresolved session id — what the resolver's walk read, capped per day (task 192, docs/enforcement-journal.md Family 3). A journal write failure never changes any enforcement decision, the journal is never created outside an existing playbook-managed lane, and neither writer writes into a linked `journal/` directory, through a linked journal file or into one that is not a regular file (the bash writer since task 192: before it a FIFO there hung the gate past its timeout, and a link received the record — measured). BOUND: the bash writer checks the file and then writes it, so a process that swaps it for a FIFO between the two can still hang the writing hook (the single judge after task 192's round 2 did, by a timed swap); pb_journal.py opens it non-blocking and without following a link, so its own residual is a swap of the directory. A Phase B input (PLAN.md). Since task 257 (the owner, 2026-10-19: \"Da, în Faza B (Recomandat)\") every append holds `journal/enforcement.lock` shared, in pb_journal.py and the bash writer alike; past a wait — 1 s for a hook's record, 5 s for the CLI's (transitions, verify runs, review spend, close) — the record goes to a spool carrying its `spool` id, never an unlocked append, and a host with no `flock` spools every bash record. The journal rotates past 20 MB: `pb_journal.rotate_enforcement` (python only, under the recorder's `agent-usage.lock`, which every exclusive hold of the journal lock is taken under, so a read position is never spooled) renames it to an archive with a `.tasks` index of the task numbers it names, compresses it once idle outside the lock and swaps the `.gz` in under the lock held exclusively, keeps every archive, merges the spools once each, repairs a rotation killed half-way, and starts the new file with a horizon record and each transcript's newest read position (`record`s told by their reason, `read positions horizon` / `read position carried` — never events); every line written is then in the archives, the live file or the spools exactly once (docs/enforcement-journal.md, \"Rotation\").",
       "owner": [
         {
           "path": "plugins/playbook/scripts/pb_journal.py",
@@ -18874,6 +18874,18 @@
         {
           "path": "docs/enforcement-journal.md",
           "reference": "section:Family 3 — session walks (`decision` = `session-walk`, task 192)"
+        },
+        {
+          "path": "plugins/playbook/scripts/pb_journal.py",
+          "reference": "symbol:rotate_enforcement"
+        },
+        {
+          "path": "plugins/playbook/scripts/pb_journal.py",
+          "reference": "symbol:_write_record"
+        },
+        {
+          "path": "docs/enforcement-journal.md",
+          "reference": "section:Rotation — archives, carried positions, the lock (task 257)"
         }
       ],
       "failure_consequence": "Medium",
@@ -18997,6 +19009,62 @@
           },
           "limitations": [
             "The real task-gate hook as a subprocess with a FIFO or a link at enforcement.jsonl and at the walk counter: it refuses within 4 s and the link's target is unchanged; red on nested `b80e199` (two 60 s hangs, three writes through). A swap of the file between the check and the write is not closed — the BOUND in the statement."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_enforcement_rotation.py",
+          "reference": "TheWritersHoldTheLock.test_past_one_second_the_record_goes_to_a_spool_never_unlocked",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_enforcement_rotation.py",
+            "reference": "TheWritersHoldTheLock.test_a_shared_holder_does_not_stop_an_append"
+          },
+          "limitations": [
+            "A real `flock -x` holder as a subprocess against the python writer in-process: it waits, then spools past 1 s (5 s for the CLI's records — `test_the_clis_records_wait_five_seconds_a_hooks_one`). Mutant M1 (no lock) turns 4 tests red (task 257 W9)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_enforcement_rotation.py",
+          "reference": "TheBashWriterHoldsTheLock.test_past_one_second_a_spool_never_unlocked",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_enforcement_rotation.py",
+            "reference": "TheBashWriterHoldsTheLock.test_an_append_waits_for_the_exclusive_holder"
+          },
+          "limitations": [
+            "The real `journal_enforcement` sourced in bash; with no `flock` on PATH every record is spooled and python merges it (`test_with_no_flock_on_the_host_every_record_is_spooled`). Measured cost: a `task-gate-hook` run that writes a record, median +2.3 ms over 300 interleaved runs (quartiles +0.7 / +1.4 ms)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_enforcement_rotation.py",
+          "reference": "StressRealProcesses.test_every_record_lands_exactly_once",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Real bash and python writers and a recorder against a rotator at 2 KiB with the 10-minute idle rule switched off (the lock alone keeps every line): 8-10 rotations per run, every record exactly once. Appends with no pause between them postpone a rotation (the lock stays shared): measured, never a loss."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_enforcement_rotation.py",
+          "reference": "TheOracle.test_rotated_answers_as_unrotated",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "12 random journals, rotated at random points at 2-9 KB (15-69 archives, one task over up to 12 files) with spooled records: numbers' records per task, the retro's transitions, the dashboard's reviews and the recorder's newest positions equal the unrotated journal's; mutant M4 (the live file read first) turns it red."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_enforcement_rotation.py",
+          "reference": "TheRollbackRecipe.test_the_recipe_gives_every_line_back",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The merge recipe read from the doc and run by bash on a rotated journal with every kill state gives every line back, carries and horizons out."
           ]
         }
       ],
@@ -19718,7 +19786,7 @@
     {
       "id": "PB-TASK-NUMBERS",
       "category": "risk-and-close",
-      "statement": "At every successful close, after its `done` record, the close composes the task's numbers for that closure from the plugin's own records only (the enforcement journal, the hook journal with its archives and spools, the run ledger, chat_log.md and the receipt) and keeps them in `<task>/numbers.json` (`closures[]`, keyed by the receipt's stamp and the close's number, the closure found in the journal's file order; a re-close adds one, two closes in one second keep two), composed and written under the task lock and only while that receipt is still the task's newest; a fault, or 5 s passed (one deadline for the reading, the lock wait and the write), prints one line and changes nothing of the close. The task's time is split per host session: a gap counts only when both its lines are the task's; slept (the `susp` difference between two samples of one boot, given to the gaps overlapping their own sts interval, largest overlap first, capped; what cannot be placed is counted apart), unknown across a boot change, away (over 2 h awake), outside a turn owner-idle or background, inside a turn (a tool event proves one; a new prompt ends calls left open) owner-question or agent, with Bash and background time inside the task's review spans carved as judges and inside its recorded verify spans (less the review spans) as verify; only the close's own session (named by its `done` record, else this task's latest open call) runs to the close, its last gap bracketed by the close's own suspend sample (a sample more than 120 s after the close is not used); the time split is linear and keeps the deadline; per session the parts add up to the task's time and, with the time not the task's, to the session's span. The close's reasons are read whole from the receipt (split only at the writer's separators, found outside closed fences), its verdict at its fixed place in the writer's text; the hook journal is read under its directory's shared lock. `tasks numbers [N]` reads them and writes nothing, adding a snapshot of a reopened task's life in progress. The close's `hook=close` records name their task. Task 244: the closure's `agent` table holds the main agent's own tokens per model (calls counted once per `message.id`, `thinking` a part of `out`), from `agent-usage` records the recorder (`agent-usage-hook`, at each turn's end) and the CLI's transitions (`tasks work N`, the close) write from the session's host transcript and its subagents' files; each record holds its own read position under a lane lock, a span's records written in one append, so no span is counted twice or half, a file with no record over 8 MiB gets an `unknown` seed rather than its history, and a closure with no record says so (null), never zero.",
+      "statement": "At every successful close, after its `done` record, the close composes the task's numbers for that closure from the plugin's own records only (the enforcement journal and the hook journal, each with its archives and spools — since task 257 only the enforcement archives whose `.tasks` index names the task, or that have none — the run ledger, chat_log.md and the receipt) and keeps them in `<task>/numbers.json` (`closures[]`, keyed by the receipt's stamp and the close's number, the closure found in the journal's order over its files; a re-close adds one, two closes in one second keep two), composed and written under the task lock and only while that receipt is still the task's newest; a fault, or 5 s passed (one deadline for the reading, the lock wait and the write), prints one line and changes nothing of the close. The task's time is split per host session: a gap counts only when both its lines are the task's; slept (the `susp` difference between two samples of one boot, given to the gaps overlapping their own sts interval, largest overlap first, capped; what cannot be placed is counted apart), unknown across a boot change, away (over 2 h awake), outside a turn owner-idle or background, inside a turn (a tool event proves one; a new prompt ends calls left open) owner-question or agent, with Bash and background time inside the task's review spans carved as judges and inside its recorded verify spans (less the review spans) as verify; only the close's own session (named by its `done` record, else this task's latest open call) runs to the close, its last gap bracketed by the close's own suspend sample (a sample more than 120 s after the close is not used); the time split is linear and keeps the deadline; per session the parts add up to the task's time and, with the time not the task's, to the session's span. The close's reasons are read whole from the receipt (split only at the writer's separators, found outside closed fences), its verdict at its fixed place in the writer's text; the hook journal is read under its directory's shared lock. `tasks numbers [N]` reads them and writes nothing, adding a snapshot of a reopened task's life in progress. The close's `hook=close` records name their task. Task 244: the closure's `agent` table holds the main agent's own tokens per model (calls counted once per `message.id`, `thinking` a part of `out`), from `agent-usage` records the recorder (`agent-usage-hook`, at each turn's end) and the CLI's transitions (`tasks work N`, the close) write from the session's host transcript and its subagents' files; each record holds its own read position under a lane lock, a span's records written in one append, so no span is counted twice or half, a file with no record over 8 MiB gets an `unknown` seed rather than its history, and a closure with no record says so (null), never zero.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/numbers.py",
@@ -19747,6 +19815,10 @@
         {
           "path": "plugins/playbook/scripts/agent-usage-hook",
           "reference": "whole-file"
+        },
+        {
+          "path": "plugins/playbook/tasks/numbers.py",
+          "reference": "symbol:enforcement_lines"
         }
       ],
       "failure_consequence": "Medium",
@@ -20000,6 +20072,19 @@
           "negative_control": null,
           "limitations": [
             "Task 244: through the real CLI, a switch splits the agent's calls between the two tasks exactly; the close's numbers show its own."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_enforcement_rotation.py",
+          "reference": "TheNumbersReader.test_an_archive_whose_index_leaves_the_task_out_is_not_read_one_without_an_index_is",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_enforcement_rotation.py",
+            "reference": "TheNumbersReader.test_archives_then_live_in_order_carries_and_horizon_left_out"
+          },
+          "limitations": [
+            "The close's read with 10 compressed archives: 0.13 s for a task in the live file, 0.76 s for one begun in the oldest (task 257 W10, this repo's laptop)."
           ]
         }
       ],

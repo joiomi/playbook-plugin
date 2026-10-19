@@ -4,6 +4,29 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+**The enforcement journal rotates** — task 257 (the owner, 2026-10-19: "Da, în Faza B (Recomandat)"). `enforcement.jsonl`
+never rotated, and three readers read it whole or scan it backwards: the close's numbers within 5 s, the agent recorder
+at each turn's end (a new transcript past its 32 MiB scan got a seed, its first turn uncounted), and the bootstrap's
+panel health. Now, like `hooks.jsonl`, past 20 MB the live file becomes an archive
+(`enforcement.jsonl.archived-<stamp>-<epoch>-<ns><pid>`, with a `.tasks` index of the task numbers it names),
+compressed once idle for 10 minutes, every archive kept. The new live file starts with a horizon line and each
+transcript's newest read position, so the recorder reads on exactly where it stopped; positions older than 30 days are
+not carried, and a transcript begun before that horizon gets a seed instead of being counted again. Every append holds
+`journal/enforcement.lock` shared, the rotation exclusively (the owner's "Lacăt la fiecare rând"); a record that cannot
+have it goes to a spool carrying its own id, merged once by the next pass. The close's numbers read only the archives
+whose index names the task; the retro reads all of them; the dashboard those since its window's baseline. Measured on
+this repo's laptop: rotating 20 MB 0.36 s, compressing it 0.22 s, a pass with nothing to do 150 µs; the recorder's scan
+for a transcript 7 ms after a rotation (206 ms on an unrotated 20 MB file); the close's read with 10 compressed
+archives 0.13 s for a task in the live file, 0.76 s for one begun in the oldest; a hook run that writes a record, median
++2.3 ms for the lock. Proven by an oracle — random journals rotated at random points answer every reader exactly as
+unrotated (12 seeds, up to 69 archives, one task over 12 files) — and a stress run of real bash and python writers
+against a rotator at 2 KiB with compression immediate (every record exactly once). Known limits: appends with no pause
+between them postpone a rotation (never a loss); a reopen in the same second as a close whose record waited over 5 s
+for the lock may be read first; a transcript resumed after 30 days idle gets a seed for its first turn back. Going
+back: 1.6.6 reads only the live file — its recorder takes the carried positions as ordinary records (no transcript is
+read twice), and its numbers show a carry or horizon line inside a closure as an `agent ?` row with zero calls; to make
+one file again before going back, `docs/enforcement-journal.md`, "Going back to one file" (tested).
+
 ## [1.6.6] — 2026-10-19
 
 **The main agent's own tokens in every close; init fails and restores; a background close is no longer the owner's

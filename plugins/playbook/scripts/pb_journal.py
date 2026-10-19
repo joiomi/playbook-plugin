@@ -892,6 +892,10 @@ _EJ_STAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 _EJ_TASK = re.compile(rb'"task":\s*"(\d{1,16})"')
 _EJ_SPOOL_ID = re.compile(rb'"spool":"(enforcement\.jsonl\.spool-[0-9A-Za-z._-]{1,80})"')
 _EJ_CARRY_KEYS = ("task", "file", "ino", "to", "head", "last_id")
+# the rotation's own two lines are `record`s told by their reason (the journal's decisions stay the ratified four —
+# PB-ENFORCEMENT-JOURNAL): read positions, never events
+EJ_CARRY_REASON = "read position carried"
+EJ_HORIZON_REASON = "read positions horizon"
 
 
 def rotate_enforcement(lane, held: bool = False, limit: "int | None" = None) -> str:
@@ -1022,7 +1026,7 @@ def _ej_positions(fd: int, start: int, size: int, found: dict, horizon: str, tas
                 continue
             if not isinstance(rec, dict) or rec.get("hook") != "agent-usage":
                 continue
-            if rec.get("decision") == "horizon":
+            if rec.get("reason") == EJ_HORIZON_REASON:
                 h = rec.get("horizon")
                 if isinstance(h, str) and _EJ_STAMP.fullmatch(h) and h > horizon:
                     horizon = h
@@ -1061,14 +1065,14 @@ def _ej_rotate_locked(jdir: Path, live: Path, limit: int, pre: "_Prescan | None"
             os.close(fd)
         now = time.time()
         horizon = max(horizon, _utc(now - _EJ_HORIZON_S))
-        lines = [_ej_line({"ts": _utc(now), "session_id": "", "hook": "agent-usage", "decision": "horizon",
-                           "reason": "read positions older than this were not carried", "horizon": horizon})]
+        lines = [_ej_line({"ts": _utc(now), "session_id": "", "hook": "agent-usage", "decision": "record",
+                           "reason": EJ_HORIZON_REASON, "horizon": horizon})]
         for rec in pre.found.values():
-            of = rec.get("of") if rec.get("decision") == "carry" else rec.get("ts")
+            of = rec.get("of") if rec.get("reason") == EJ_CARRY_REASON else rec.get("ts")
             if isinstance(of, str) and _EJ_STAMP.fullmatch(of) and of < horizon:
                 continue                    # older than the horizon: the recorder seeds such a transcript
             c = {"ts": _utc(now), "session_id": rec.get("session_id", ""), "hook": "agent-usage",
-                 "decision": "carry", "reason": "read position"}
+                 "decision": "record", "reason": EJ_CARRY_REASON}
             for k in _EJ_CARRY_KEYS:
                 if k in rec:
                     c[k] = rec[k]
@@ -1078,7 +1082,11 @@ def _ej_rotate_locked(jdir: Path, live: Path, limit: int, pre: "_Prescan | None"
             if len(line) <= 4096:
                 lines.append(line)
         tmp = jdir / f"{EJ_NAME}.carry-{os.getpid()}-{int.from_bytes(os.urandom(4), 'big')}"
-        arch = jdir / f"{EJ_NAME}.archived-{time.strftime('%Y%m%d-%H%M%S', time.gmtime(now))}-{int(now)}-{os.getpid()}"
+        # the last field: the rename's nanoseconds (9 digits), then the pid — two rotations in one second (a tiny
+        # limit) get two names, and the readers' (epoch, name) order is still the order they were renamed in
+        ns = time.time_ns()
+        arch = jdir / (f"{EJ_NAME}.archived-{time.strftime('%Y%m%d-%H%M%S', time.gmtime(ns // 10 ** 9))}-"
+                       f"{ns // 10 ** 9}-{ns % 10 ** 9:09d}{os.getpid()}")
         if os.path.lexists(arch):
             return ""
         out = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)

@@ -273,6 +273,9 @@ class TheBashWriterHoldsTheLock(_Tmp):
             self.assertRegex(p.name, r"^enforcement\.jsonl\.spool-\d{8}-\d{6}-\d+-\d+$")
 
 
+CARRY, HZ = "read position carried", "read positions horizon"     # the rotation's two reasons
+
+
 def _iso(t: float) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
 
@@ -341,11 +344,11 @@ class TheRotation(_Journal):
         self.assertRegex(arch[0].name, r"^enforcement\.jsonl\.archived-\d{8}-\d{6}-\d{1,12}-\d+$")
         self.assertEqual(arch[0].read_bytes(), old)                  # every line, byte for byte
         recs = self.records()
-        self.assertEqual(recs[0]["decision"], "horizon")
+        self.assertEqual((recs[0]["decision"], recs[0]["reason"]), ("record", HZ))
         self.assertEqual(recs[0]["hook"], "agent-usage")
         carries = {r["file"]: r for r in recs[1:]}
         self.assertEqual(set(carries), {a, b})
-        self.assertTrue(all(r["decision"] == "carry" and r["hook"] == "agent-usage" for r in recs[1:]))
+        self.assertTrue(all(r["decision"] == "record" and r["reason"] == CARRY and r["hook"] == "agent-usage" for r in recs[1:]))
         self.assertEqual((carries[a]["to"], carries[a]["last_id"], carries[a]["ino"], carries[a]["head"]),
                          (30, "msg_last", "11", "abcd0123"))
         self.assertEqual((carries[b]["to"], carries[b]["task"], carries[b]["of"]), (20, "8", _iso(self.now - 40)))
@@ -358,7 +361,7 @@ class TheRotation(_Journal):
                     "reason": "agent usage", "task": "7", "status": "unknown", "why": "busy lock"})
         self.pad()
         self.rotate()
-        carries = [r for r in self.records() if r["decision"] == "carry"]
+        carries = [r for r in self.records() if r.get("reason") == CARRY]
         self.assertEqual([(r["file"], r["to"]) for r in carries], [(s, 99)])
 
     def test_positions_older_than_thirty_days_are_dropped_and_the_horizon_says_so(self):
@@ -367,25 +370,25 @@ class TheRotation(_Journal):
         self.pad()
         self.rotate()
         recs = self.records()
-        self.assertEqual([r["file"] for r in recs if r["decision"] == "carry"], [new])
+        self.assertEqual([r["file"] for r in recs if r.get("reason") == CARRY], [new])
         hz = recs[0]["horizon"]
         self.assertAlmostEqual(_epoch(hz), self.now - 30 * 86400, delta=5)
 
     def test_a_carry_keeps_the_time_of_its_record_and_is_pruned_by_it(self):
         k, j = "f" * 16, "9" * 16
-        self.write({"ts": _iso(self.now), "session_id": "", "hook": "agent-usage", "decision": "horizon",
-                    "reason": "x", "horizon": _iso(self.now - 40 * 86400)},
-                   dict(_position(k, 7, self.now), decision="carry", of=_iso(self.now - 31 * 86400)),
-                   dict(_position(j, 8, self.now), decision="carry", of=_iso(self.now - 2 * 86400)))
+        self.write({"ts": _iso(self.now), "session_id": "", "hook": "agent-usage", "decision": "record",
+                    "reason": HZ, "horizon": _iso(self.now - 40 * 86400)},
+                   dict(_position(k, 7, self.now), reason=CARRY, of=_iso(self.now - 31 * 86400)),
+                   dict(_position(j, 8, self.now), reason=CARRY, of=_iso(self.now - 2 * 86400)))
         self.pad()
         self.rotate()
-        carries = [r for r in self.records() if r["decision"] == "carry"]
+        carries = [r for r in self.records() if r.get("reason") == CARRY]
         self.assertEqual([(r["file"], r["of"]) for r in carries], [(j, _iso(self.now - 2 * 86400))])
 
     def test_the_horizon_never_moves_back(self):
         later = _iso(self.now + 86400)              # a horizon written before the clock was set back
-        self.write({"ts": _iso(self.now), "session_id": "", "hook": "agent-usage", "decision": "horizon",
-                    "reason": "x", "horizon": later})
+        self.write({"ts": _iso(self.now), "session_id": "", "hook": "agent-usage", "decision": "record",
+                    "reason": HZ, "horizon": later})
         self.pad()
         self.rotate()
         self.assertEqual(self.records()[0]["horizon"], later)
@@ -399,7 +402,7 @@ class TheRotation(_Journal):
         self.rotate()
         self.assertFalse(spool.exists())
         self.assertIn(b'"to":50', self.archives()[0].read_bytes())
-        self.assertEqual([r["to"] for r in self.records() if r["decision"] == "carry"], [50])
+        self.assertEqual([r["to"] for r in self.records() if r.get("reason") == CARRY], [50])
 
     def test_lines_written_after_the_pre_scan_are_scanned_under_the_lock(self):
         k = "2" * 16
@@ -408,7 +411,7 @@ class TheRotation(_Journal):
         pre = self.pbj._ej_prescan(self.live)
         self.write(_position(k, 77, self.now))                         # lands between the pre-scan and the swap
         self.pbj._ej_rotate_locked(self.jdir, self.live, self.LIMIT, pre)
-        self.assertEqual([r["to"] for r in self.records() if r["decision"] == "carry"], [77])
+        self.assertEqual([r["to"] for r in self.records() if r.get("reason") == CARRY], [77])
 
     def test_a_file_replaced_since_the_pre_scan_is_not_rotated(self):
         self.pad()
@@ -616,6 +619,19 @@ class RepairAndCompression(_Journal):
         self.assertFalse(p.exists())
         self.assertTrue(Path(str(p) + ".gz").exists())
 
+    def test_the_compression_itself_waits_for_a_reader_between_the_probe_and_the_swap(self):
+        """W9's mutant M6: the pass's probe let go of the lock at once — a reader can take it before the compression's
+        swap, which must then hold back on its own exclusive try."""
+        p = self.archive(3600)
+        holder = self.hold(1.5, "-s")
+        try:
+            self.pbj._ej_compress_idle(self.jdir)
+            self.assertTrue(p.exists())
+            self.assertFalse(Path(str(p) + ".gz").exists())
+            self.assertEqual(list(self.jdir.glob("*.gz.tmp-*")), [])
+        finally:
+            holder.wait()
+
     def test_a_swap_killed_after_the_gz_link_drops_the_archive_once_older(self):
         import gzip
         p = self.archive(3600)
@@ -734,7 +750,7 @@ class StressRealProcesses(_Journal):
         recs, ids = [], set()
         for raw in lines:
             r = json.loads(raw)
-            if r.get("decision") in ("carry", "horizon"):
+            if r.get("reason") in (CARRY, HZ):
                 continue
             if r.get("spool"):
                 if r["spool"] in ids:
@@ -794,7 +810,7 @@ class TheRecorderAcrossARotation(_AULane):
         self.record(task="8")
         self.assertEqual(len(self.archives()), 1)                 # rotated inside the recorder's lock
         live = self.records()
-        self.assertEqual([r["decision"] for r in live], ["horizon", "carry", "record"])
+        self.assertEqual([r["reason"] for r in live], [HZ, CARRY, "agent usage"])
         self.assertEqual((live[-1]["calls"], live[-1]["from"], live[-1]["task"]), (1, first["to"], "8"))
 
     def test_a_pruned_transcript_begun_before_the_horizon_is_seeded_never_read_again(self):
@@ -809,7 +825,7 @@ class TheRecorderAcrossARotation(_AULane):
         with open(self.main, "ab") as f:
             f.write(_lines(self.stamped("m3", self.now)))
         self.record(task="8")
-        live_recs = [r for r in self.records() if r["decision"] != "horizon"]
+        live_recs = [r for r in self.records() if r.get("reason") != HZ]
         self.assertEqual(len(live_recs), 1)
         self.assertEqual(live_recs[0].get("status"), "unknown")
         self.assertIn("horizon", live_recs[0]["why"])
@@ -824,7 +840,7 @@ class TheRecorderAcrossARotation(_AULane):
         self.assertEqual(len(self.archives()), 1)
         self.main.write_bytes(_lines(self.stamped("m1", self.now), self.stamped("m2", self.now)))
         self.record()
-        mine = [r for r in self.records() if r.get("decision") == "record"]
+        mine = [r for r in self.records() if r.get("reason") == "agent usage"]
         self.assertEqual(sum(r["calls"] for r in mine), 2)
 
     def test_a_transcript_with_no_first_stamp_is_read_from_its_start(self):
@@ -839,7 +855,7 @@ class TheRecorderAcrossARotation(_AULane):
             del e["timestamp"]
         self.main.write_bytes(_lines({"type": "mode", "mode": "x"}, *bare))
         self.record()
-        self.assertEqual(sum(r["calls"] for r in self.records() if r.get("decision") == "record"
+        self.assertEqual(sum(r["calls"] for r in self.records() if r.get("reason") == "agent usage"
                              and r["file"] == self.mod.file_key(str(self.main))), 2)
 
     def test_with_no_transcript_the_cli_still_rotates(self):
@@ -890,8 +906,8 @@ class TheNumbersReader(_Archives):
         t = self.now - 3000
         self.arch(int(t + 100), [self.rec("new", t), self.rec("work", t + 10)], tasks=["7"], gz=True)
         self.arch(int(t + 200), [self.rec("verify run", t + 150, hook="verify")], tasks=["7"])
-        self.write({"ts": _iso(t + 201), "hook": "agent-usage", "decision": "horizon", "horizon": _iso(t)},
-                   dict(_position("a" * 16, 5, t + 201), decision="carry", of=_iso(t + 5)),
+        self.write({"ts": _iso(t + 201), "hook": "agent-usage", "decision": "record", "reason": HZ, "horizon": _iso(t)},
+                   dict(_position("a" * 16, 5, t + 201), reason=CARRY, of=_iso(t + 5)),
                    self.rec("done", t + 300))
         got = self.read()
         self.assertEqual([r["reason"] for r in got], ["new", "work", "verify run", "done"])
@@ -953,7 +969,7 @@ class RetroAndDashboard(_Archives):
         self.arch(int(t + 100), [self.rec("new", t, task="3", detail="build x"), self.rec("work", t + 5, task="3")],
                   tasks=["3"], gz=True)
         self.arch(int(t + 200), [self.rec("done", t + 150, task="3")], tasks=["3"], pid=2)
-        self.write({"ts": _iso(t + 201), "hook": "agent-usage", "decision": "horizon", "horizon": _iso(t)},
+        self.write({"ts": _iso(t + 201), "hook": "agent-usage", "decision": "record", "reason": HZ, "horizon": _iso(t)},
                    self.rec("work", t + 300, task="4"))
         got = [(e, task) for _s, e, task, _d in lifecycle_records(transition_journal(self.lane))]
         self.assertEqual(got, [("new", "3"), ("work", "3"), ("done", "3"), ("work", "4")])
@@ -970,6 +986,195 @@ class RetroAndDashboard(_Archives):
         self.assertEqual((len(recs), skipped, status), (3, 0, "ok"))
         lines = dashboard.panel_health_lines(self.project, now=datetime.fromtimestamp(self.now, timezone.utc))
         self.assertIn("reviews: 3 judge runs", lines[2])
+
+
+class TheOracle(unittest.TestCase):
+    """W8: one stream of records written twice — to a lane that never rotates and to one that rotates at random points
+    with a tiny limit, some records spooled. Every reader must answer the same: numbers' records per task (compose's
+    only input from this journal), the retro's transitions, the dashboard's review records, and the recorder's newest
+    position per transcript — the transcripts whose position the horizon pruned aside (plan r1, P12), checked apart."""
+
+    SEEDS = 12
+
+    def setUp(self):
+        import sys
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+        self.pbj = _load("pb_journal_oracle", "pb_journal.py")
+        self.au = _load("agent_usage_oracle", "agent_usage.py")
+        sys.path.insert(0, str(PLUGIN))
+        self.addCleanup(sys.path.remove, str(PLUGIN))
+        from tasks import dashboard, numbers, retro
+        self.numbers, self.retro, self.dashboard = numbers, retro, dashboard
+
+    def stream(self, rnd) -> "list[dict]":
+        now = time.time()
+        t = now - 3 * 86400
+        recs = []
+        for k in range(2):                                     # positions the horizon will prune
+            recs.append(_position(f"{k:x}" * 16, 50 + k, now - (40 + k) * 86400, task="1"))
+        tos = {f"k{k:015d}": 0 for k in range(6)}
+        open_tasks: "list[str]" = []
+        made = 0
+        while len(recs) < 900:
+            t += rnd.choice((0, 0, 1, 2, 5, 30))
+            roll = rnd.random()
+            if roll < 0.06 and made < 9:
+                made += 1
+                task = str(made)
+                recs += [{"ts": _iso(t), "session_id": "pid-1", "hook": "tasks", "decision": "record", "reason": "new",
+                          "task": task, "detail": "build x"},
+                         {"ts": _iso(t), "session_id": "pid-1", "hook": "tasks", "decision": "record",
+                          "reason": "work", "task": task}]
+                open_tasks.append(task)
+            elif roll < 0.10 and open_tasks:
+                task = open_tasks.pop(rnd.randrange(len(open_tasks)))
+                recs += [{"ts": _iso(t), "session_id": "pid-1", "hook": "close", "decision": "record",
+                          "reason": "verify contract", "task": task},
+                         {"ts": _iso(t), "session_id": "pid-1", "hook": "tasks", "decision": "record",
+                          "reason": "done", "task": task}]
+                if rnd.random() < 0.4:                         # reopened later
+                    open_tasks.append(task)
+                    t += 1
+                    recs.append({"ts": _iso(t), "session_id": "pid-1", "hook": "tasks", "decision": "record",
+                                 "reason": "work", "task": task})
+            elif roll < 0.35 and open_tasks:
+                task = rnd.choice(open_tasks)
+                kind = rnd.random()
+                if kind < 0.3:
+                    recs.append({"ts": _iso(t), "session_id": "pid-1", "hook": "verify", "decision": "record",
+                                 "reason": "verify run", "task": task, "rc": 0, "how": "ran", "seconds": 3.0})
+                elif kind < 0.6:
+                    recs.append({"ts": _iso(t), "session_id": "pid-1", "hook": "review", "decision": "record",
+                                 "reason": "review spend", "kind": "panel", "seat": rnd.choice(("a", "b")),
+                                 "task": task, "round": 1, "duration_ms": 1000, "status": "ok",
+                                 "usage": {"status": "unknown"}})
+                else:
+                    key = rnd.choice(sorted(tos))
+                    tos[key] += rnd.randint(1, 900)
+                    recs.append(_position(key, tos[key], t, task=task))
+            else:
+                recs.append({"ts": _iso(t), "session_id": "pid-1", "hook": "task-gate", "decision": "allow",
+                             "reason": "x" * rnd.randint(10, 120)})
+        return recs
+
+    def lane(self, name: str) -> Path:
+        p = self.root / name / ".agent"
+        (p / "journal").mkdir(parents=True)
+        return p
+
+    def test_rotated_answers_as_unrotated(self):
+        import random
+        for seed in range(self.SEEDS):
+            with self.subTest(seed=seed):
+                rnd = random.Random(seed)
+                recs = self.stream(rnd)
+                a, b = self.lane(f"a{seed}"), self.lane(f"b{seed}")
+                limit = rnd.choice((2048, 4096, 9000))
+                seconds = {}
+                for r in recs:
+                    seconds[r["ts"]] = seconds.get(r["ts"], 0) + 1
+                for i, r in enumerate(recs):
+                    self.pbj._write_record(a, r)
+                    if seconds[r["ts"]] == 1 and r["hook"] != "agent-usage" and rnd.random() < 0.1:
+                        self.pbj._spool_line(b / "journal", _line(r), "enforcement.jsonl", tag=True)
+                    else:
+                        self.pbj._write_record(b, r)
+                    if rnd.random() < 0.08:
+                        self.pbj.rotate_enforcement(b, limit=limit)
+                self.pbj.rotate_enforcement(b, limit=limit)
+                self.assertTrue(list((b / "journal").glob("enforcement.jsonl.archived-*")), "it rotated")
+                self.compare(a, b, recs)
+
+    def compare(self, a: Path, b: Path, recs: "list[dict]") -> None:
+        def strip(rs):
+            return [{k: v for k, v in r.items() if k not in ("_n", "spool")} for r in rs]
+        far = time.monotonic() + 60
+        tasks = sorted({r["task"] for r in recs if r.get("task")})
+        for task in tasks:
+            ra = [r for r in self.numbers.read_enforcement(a, far) if str(r.get("task")) == task]
+            rb = [r for r in self.numbers.read_enforcement(b, far, task=task) if str(r.get("task")) == task]
+            self.assertEqual(strip(rb), strip(ra), f"task {task}")
+        self.assertEqual(self.retro.lifecycle_records(b / "journal" / "enforcement.jsonl"),
+                         self.retro.lifecycle_records(a / "journal" / "enforcement.jsonl"))
+        since = time.time() - 2 * 86400
+        da = [r for r in self.dashboard.load_review_journal(a / "journal" / "enforcement.jsonl")[0]
+              if r["ts"].timestamp() >= since]
+        db = [r for r in self.dashboard.load_review_journal(b / "journal" / "enforcement.jsonl", since=since)[0]
+              if r["ts"].timestamp() >= since]
+        self.assertEqual(db, da)
+        keys = {r["file"] for r in recs if r.get("hook") == "agent-usage"}
+        na, _ = self.au._newest(str(a / "journal" / "enforcement.jsonl"), keys)
+        nb, complete = self.au._newest(str(b / "journal" / "enforcement.jsonl"), keys)
+        self.assertTrue(complete)
+        pruned = {k for k, r in na.items() if r["ts"] < _iso(time.time() - 30 * 86400)}
+        self.assertEqual(len(pruned), 2)
+        self.assertEqual(set(nb), set(na) - pruned)
+        for k in nb:
+            self.assertEqual({f: nb[k][f] for f in ("to", "ino", "head", "last_id")},
+                             {f: na[k][f] for f in ("to", "ino", "head", "last_id")}, k)
+
+
+class TheRollbackRecipe(TheOracle):
+    """W11: the rollback's merge recipe — read from docs/enforcement-journal.md between its markers, so the text a user
+    runs is the text tested — gives one file back with every line of the rotated journal, the carries and the horizon
+    out, even with each kill state present (an `X.gz` beside `X`, an archive name on the live file's inode, a spool
+    already merged and one not yet)."""
+
+    def recipe(self) -> str:
+        doc = (PLUGIN.parent.parent / "docs" / "enforcement-journal.md").read_text(encoding="utf-8")
+        block = doc.split("<!-- recipe:merge:start -->", 1)[1].split("<!-- recipe:merge:end -->", 1)[0]
+        return block.split("```bash", 1)[1].split("```", 1)[0]
+
+    def test_rotated_answers_as_unrotated(self):           # (the oracle runs once, in its own class)
+        pass
+
+    def test_the_recipe_gives_every_line_back(self):
+        import gzip
+        import random
+        from tests._bashcheck import bash_or_skip
+        rnd = random.Random(7)
+        recs = self.stream(rnd)
+        a, b = self.lane("a"), self.lane("b")
+        seconds = {}
+        for r in recs:
+            seconds[r["ts"]] = seconds.get(r["ts"], 0) + 1
+        for r in recs:
+            self.pbj._write_record(a, r)
+            self.pbj._write_record(b, r)
+            if rnd.random() < 0.05:
+                self.pbj.rotate_enforcement(b, limit=4096)
+        jb = b / "journal"
+        arch = sorted(p for p in jb.glob("enforcement.jsonl.archived-*") if not p.name.endswith((".tasks", ".gz")))
+        self.assertGreater(len(arch), 3)
+        with gzip.open(str(arch[0]) + ".gz", "wb") as f:   # a compression killed before it removed its source
+            f.write(arch[0].read_bytes())
+        with gzip.open(str(arch[1]) + ".gz", "wb") as f:   # a finished one
+            f.write(arch[1].read_bytes())
+        arch[1].unlink()
+        os.link(jb / "enforcement.jsonl", jb / f"enforcement.jsonl.archived-20261019-235959-{int(time.time()) + 9}-1")
+        late = [{"ts": _iso(time.time()), "session_id": "pid-1", "hook": "task-gate", "decision": "block",
+                 "reason": f"late {i}"} for i in range(2)]
+        merged_name = "enforcement.jsonl.spool-20261019-000000-1-1"
+        line = _line(dict(late[0], spool=merged_name))
+        with open(jb / "enforcement.jsonl", "ab") as f:
+            f.write(line)                                   # merged, then its merge killed before the unlink
+        (jb / merged_name).write_bytes(line)
+        self.pbj._spool_line(jb, _line(late[1]), "enforcement.jsonl", tag=True)
+        r = subprocess.run([bash_or_skip(), "-c", self.recipe()], cwd=jb, capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(sorted(p.name for p in jb.iterdir() if p.name.startswith("enforcement.jsonl")),
+                         ["enforcement.jsonl"])
+
+        def canon(raw):
+            d = json.loads(raw)
+            d.pop("spool", None)
+            return json.dumps(d, sort_keys=True)
+        got = [canon(x) for x in (jb / "enforcement.jsonl").read_text().splitlines()]
+        want = [canon(x) for x in (a / "journal" / "enforcement.jsonl").read_text().splitlines()] + \
+               [canon(json.dumps(x)) for x in late]
+        self.assertEqual(got, want)                         # every line, in order, the spooled ones last
 
 
 def _epoch(ts: str) -> float:

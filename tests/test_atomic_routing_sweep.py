@@ -76,6 +76,14 @@ APPROVED = {
     ("scripts/pb_journal.py", 'with os.fdopen(fd, "wb") as f:'):
         "the hook journal's spool (task 222, the owner's 'Bilet în cutie'): one line written to a NEW temporary "
         "opened O_CREAT|O_EXCL|O_NOFOLLOW, then os.link()ed to its spool name (no clobber) — never a live file",
+    ("scripts/pb_journal.py", 'with os.fdopen(fd, "wb") as raw, open(src, "rb") as f, gzip.GzipFile('):
+        "the enforcement journal's archive compression (task 257): a NEW temporary opened O_CREAT|O_EXCL|O_NOFOLLOW, "
+        "os.link()ed to its .gz name only under the exclusive lock and only when the archive is unchanged since, then "
+        "the archive removed — a crash leaves the archive intact",
+    ("scripts/pb_journal.py", 'with os.fdopen(sfd, "w", encoding="utf-8") as f:'):
+        "an enforcement archive's .tasks index (task 257): a NEW file opened O_CREAT|O_EXCL|O_NOFOLLOW inside the "
+        "rotation's exclusive hold, before the archive is linked; one torn or missing makes a reader read that "
+        "archive whole (an index that cannot be read names every task) — never a live file",
     ("scripts/gate-batch-check.py", "marker.write_text(str(tools_now)"):
         "hook-time advisory counter (the consecutive-batch marker); a torn value only "
         "loses one advisory, never a decision (documented exception: hook-time writers)",

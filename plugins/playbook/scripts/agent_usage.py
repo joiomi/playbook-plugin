@@ -406,7 +406,7 @@ def _horizon(journal: str) -> str:
     except ValueError:
         return ""
     h = rec.get("horizon") if isinstance(rec, dict) and rec.get("hook") == "agent-usage" \
-        and rec.get("decision") == "horizon" else None
+        and rec.get("reason") == "read positions horizon" else None
     return h if isinstance(h, str) and _HORIZON_STAMP.fullmatch(h) else ""
 
 

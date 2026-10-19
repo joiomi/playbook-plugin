@@ -9,7 +9,8 @@ review spend after the fact.
 
 **Hard contract (every writer):** a journal write failure NEVER changes or
 breaks any decision or review. Each record is a single `O_APPEND` write of one
-line, with no `fsync` and no locking; POSIX makes an append of at most
+line, with no `fsync`, holding `journal/enforcement.lock` shared since task 257 (the rotation's lock —
+[below](#rotation--archives-carried-positions-the-lock-task-257)); POSIX makes an append of at most
 `PIPE_BUF` bytes atomic against concurrent appenders, so lines from separate
 processes (parallel panel seats, multi-lane) do not interleave while a record
 stays under that bound (≥512 bytes everywhere; 4096 on Linux). String fields are
@@ -38,6 +39,9 @@ Every record carries these keys:
 | `hook`       | string | which surface emitted it (see below)                          |
 | `decision`   | string | one of `allow` \| `block` \| `record` \| `session-walk`        |
 | `reason`     | string | short fixed reason string                                     |
+
+A record that waited for the journal's lock in vain was written to a spool file and carries one more key, `spool` —
+the spool file's name, its identity when the spool is merged into the journal (task 257).
 
 A reader MUST tolerate unknown future keys and unknown `hook`/`decision` values
 rather than erroring — this is a log, and the repo's format is the source of
@@ -298,7 +302,8 @@ readers never count one span and a read stopped before its append is read again;
 side) go in one append, so the span's `to` never lands without all of them. A file with no record is read from 0 up to
 8 MiB; a larger one (a session begun before the recorder was installed) gets a seed — `status: "unknown"`, `why`,
 `from` = `to` = the end of its last complete line (task 253: not inside a half-written one) — so no history is charged to one task; so does a file whose last record the backward scan of
-the journal (32 MiB at most) did not reach. A broken assistant line and an entry with no `message.id` count as
+the journal (32 MiB at most) did not reach (since task 257 the live file stays near 20 MB, and its rotation carries
+every position newer than the horizon into the next one — [Rotation](#rotation--archives-carried-positions-the-lock-task-257)). A broken assistant line and an entry with no `message.id` count as
 `unreadable`, never as a call (one unreadable per call, however many entries carry it). `ino` is text (an inode number can pass the integer cap). The task is read inside the lock; a session the hook cannot resolve records nothing (its span stays for a reader that knows the session). A file's first read that finds no call writes one zero-call record — a read position, so later scans find it. A close or `tasks work` that cannot take the lock writes an `unknown` marker for the task it leaves and says so: never a silent gap. The session's end records too (task 246: `session-end-hook` runs the recorder before it can remove the session dir, so a turn interrupted with no Stop — Esc, or a session ended mid-turn — is still read; a busy lock there leaves an `unknown` marker when something is unread — at every end reason, a `/clear` included, since the SessionStart that follows points the session at the new transcript and no later reader names the old one; a transcript replaced in place (another inode or first 4 KiB), or whose last complete line ends elsewhere than its newest record's `to`, counts as unread, by the recorder's own identity check and restart rule (tasks 247, 252: the recorder stops at the last newline); a half-written last line counts as unread unless it names a user entry at its top level (before its `"message":` key — a tool call's input can hold the same type, a top-level value can read "message") — it may be a call the host is still writing, or was killed writing, which no reader will count (task 252); a file with no record whose only line is such a user entry does not; the marker errs toward `unknown`, never toward a hidden gap: it is decided without the lock, so a holder recording the same span at that moment both counts and marks it; a journal scan that did not reach a transcript's record counts it as unread — and the hook's journal line says what it recorded, or that the journal refused a span). Still not counted (bounds): a brand-new file in a journal past the scan bound gets a seed; a recorder that its 3 s limit kills after taking the lock leaves only the hook's journal line; a `claude` started from another session's shell is counted under the outer session's task (as at Stop); a transcript resumed later (`claude --resume`) after a busy-lock end is read on from its last record, so that end's `unknown` marker overstates the loss (task 247). The host gives SessionEnd hooks the largest timeout they declare (5 s here; 1.5 s only when none declares one — measured in Claude Code's own code, task 246). No conversation text is written: only the model's name. Bounds: a span after the
 close's own read (the rest of that turn) is not the closure's; a transcript never read again (a crash with no
 SessionEnd, never continued) keeps its unread tail; a judge's, tail-cert's or the monitor's session records nothing, and nor does a fresh multi-user clone (per-user lanes, no `.agent/current_user`: the lane is unresolvable, so nothing is written at the root — task 256)
@@ -307,6 +312,100 @@ SessionEnd, never continued) keeps its unread tail; a judge's, tail-cert's or th
 ```json
 {"ts":"2026-10-18T22:15:53Z","session_id":"s1","hook":"agent-usage","decision":"record","reason":"agent usage","task":"5","file":"34ae6986f0647c4f","ino":"26667247","from":19862178,"to":21876806,"head":"6f5953ed","last_id":"msg_011CgAPA3MaFGF5U4a31rEkR","model":"claude-opus-5-5","side":0,"calls":13,"in":26,"out":11836,"cache_read":7780805,"cache_write":15447,"thinking":2280}
 ```
+
+## Rotation — archives, carried positions, the lock (task 257)
+
+The owner, 2026-10-19: "Da, în Faza B (Recomandat)" — `enforcement.jsonl` rotates like `hooks.jsonl`, so a project
+used for years keeps the close's read, the agent recorder's backward scan and the bootstrap's panel health bounded.
+
+**Archives.** Past 20 MB (20,971,520 bytes) the live file is renamed to
+`enforcement.jsonl.archived-<YYYYmmdd-HHMMSS>-<epoch>-<ns><pid>` — the rename's UTC time, its epoch second, then its
+nanoseconds (9 digits) and the rotating process's pid, so archives sort by (epoch, name) in the order they were
+renamed. Beside it, `<archive>.tasks` — `{"tasks": [...]}`, the task numbers its lines name (`"task":"<digits>"`) —
+lets a reader of one task's history skip the archives that hold none of it. An archive idle for 10 minutes (by the
+rename time its name records and by its mtime) is compressed to `<archive>.gz`; every archive is kept (the owner's
+"Comprimate, toate").
+
+**Who rotates.** Only python: `pb_journal.rotate_enforcement`, called by the agent recorder inside its
+`journal/agent-usage.lock` (each Stop, the session's end, the CLI's transitions) and by the CLI when there is no
+transcript to read. A pass with nothing to do costs ~150 µs (measured); rotating a 20 MB file 0.36 s, compressing it
+0.22 s (this repo's laptop, a Ryzen 7 5800H). The bash writer never rotates.
+
+**The new live file** starts with one horizon line and one carry line per transcript the recorder read (Family 6's
+read positions), so its next read of every transcript is the same as before the rotation:
+
+```json
+{"ts":"2026-10-19T12:21:08Z","session_id":"","hook":"agent-usage","decision":"record","reason":"read positions horizon","horizon":"2026-09-19T12:21:08Z"}
+{"ts":"2026-10-19T12:21:08Z","session_id":"pid-1","hook":"agent-usage","decision":"record","reason":"read position carried","task":"7","file":"34ae6986f0647c4f","ino":"26667247","to":21876806,"head":"6f5953ed","last_id":"msg_011CgAPA3MaFGF5U4a31rEkR","from":21876806,"of":"2026-10-18T22:15:53Z"}
+```
+
+A carry keeps the position's `file`, `ino`, `to`, `head`, `last_id` and `task`, with `from` = `to` and `of` = the time
+of the record it carries. Positions older than the horizon (30 days before the rotation; a horizon never moves back)
+are not carried: a transcript the recorder then finds no position for, whose first top-level `timestamp` is earlier
+than the horizon plus a day, gets a seed (`why` names the horizon) — never a read from its start, which would count it
+twice. A transcript whose first stamp is unknown is read from its start as before (a new session's first turns count).
+Both are `record`s told by their `reason` (`read positions horizon`, `read position carried`) — the journal's
+decisions stay the four above — and neither is an event: every reader of events skips them.
+
+**The lock.** Every append holds `journal/enforcement.lock` shared (python `_write_record`, bash
+`journal_enforcement`); the rotation's swap, its spool merge and a compression's swap hold it exclusively, for
+milliseconds, and only inside `rotate_enforcement`, under the recorder's lock — so a read position, which is written
+under that lock too, never meets an exclusive hold. The CLI's records (transitions, verify runs, review spend, close)
+wait up to 5 s for the shared lock, a hook's up to 1 s; past that the record goes to a spool,
+`enforcement.jsonl.spool-<stamp>-<pid>-<rand>` (written as `…spooling-…`), carrying its `spool` id — never an
+unlocked append. A host with no `flock` command spools every bash record. The next rotation pass merges the spools
+into the live file, once each (a spool whose id is already there is only removed). A lock file that is a link or not
+a regular file writes nothing. Measured cost: a `task-gate-hook` run that writes a record, median +2.3 ms (300
+interleaved runs; quartiles +0.7 / +1.4 ms) — about the hook journal's own lock.
+
+**Reading the whole journal** (the plugin's readers: `numbers.enforcement_lines`; an outside reader should do the
+same), holding `enforcement.lock` shared while listing and reading:
+
+1. the archives by (epoch, name) — `X`, not `X.gz`, when both exist (a compression killed before its last step), and
+   never an archive name on the live file's inode (a rotation killed between its link and its rename);
+2. the live file;
+3. the spools;
+4. one line per `spool` id, a spooled line placed by its `ts` after the ordinary lines of its second; carry and
+   horizon lines skipped.
+
+A task's numbers read only the archives whose `.tasks` names the task (or that have none) — 0.13 s for a task in the
+live file, 0.76 s for one begun in the oldest of 10 compressed archives (200 MB of history; measured). The retro
+reads every archive; the dashboard and the bootstrap's panel health those renamed since their window's baseline began.
+
+**Bounds.** Appends with no pause between them (not seen in use: a hook writes a line or two a second at most) keep the
+lock shared and postpone the rotation — never a loss. A reopen inside the same second as a close whose `done` waited
+over 5 s for the lock may be read before it. A transcript resumed after 30 days idle gets a seed: its first turn after
+the pause is not counted.
+
+**Going back to one file** (a downgrade to 1.6.6, whose readers read only the live file). Close every Claude Code
+session of the project first, so nothing writes the journal, then, in the journal directory (`.agent/journal`, or
+`.agent/<user>/journal` in a multi-user repo):
+
+<!-- recipe:merge:start -->
+```bash
+set -eo pipefail
+for f in $(ls | grep -E '^enforcement\.jsonl\.archived-[0-9]{8}-[0-9]{6}-[0-9]+-[0-9]+(\.gz)?$' | sort -t- -k4,4n -k5,5); do
+  [ "$f" -ef enforcement.jsonl ] && continue          # a rotation killed half-way: the live file itself
+  case "$f" in
+    *.gz) [ -e "${f%.gz}" ] && continue; zcat -- "$f" ;;   # its source still there: read that
+    *) cat -- "$f" ;;
+  esac
+done > enforcement.jsonl.all
+cat enforcement.jsonl >> enforcement.jsonl.all
+# every file a rotation started holds a horizon line and carries: read positions, not events
+{ grep -v -e '"reason":"read position carried"' -e '"reason":"read positions horizon"' enforcement.jsonl.all || [ $? -eq 1 ]; } > enforcement.jsonl.merged
+rm enforcement.jsonl.all
+for s in $(ls | grep -E '^enforcement\.jsonl\.spool-' || true); do
+  grep -qF "\"spool\":\"$s\"" enforcement.jsonl.merged || cat -- "$s" >> enforcement.jsonl.merged
+done
+wc -l < enforcement.jsonl.merged
+mv enforcement.jsonl.merged enforcement.jsonl
+rm -f enforcement.jsonl.archived-* enforcement.jsonl.spool-*
+```
+<!-- recipe:merge:end -->
+
+Every line comes back (the rotation never deletes one), the carries and the horizon go, and the spooled lines come
+last. Tested on rotated journals with each kill state (`tests/test_enforcement_rotation.py`, `TheRollbackRecipe`).
 
 ## The hook journal — `journal/hooks.jsonl` (task 222)
 

@@ -205,7 +205,7 @@ def read_enforcement(lane: Path, deadline: float, task: "str | None" = None) -> 
         except ValueError:
             continue
         if isinstance(rec, dict) and rec.get("hook") in _TASK_HOOKS + (_AGENT_HOOK,) \
-                and rec.get("decision") not in _EJ_NOT_RECORDS:
+                and rec.get("reason") not in _EJ_NOT_RECORDS:
             t = _epoch(rec.get("ts"))
             if t is not None:
                 rec["_t"], rec["_n"] = t, n         # its line: the journal's order, inside one second too (Y5)
@@ -218,7 +218,8 @@ def read_enforcement(lane: Path, deadline: float, task: "str | None" = None) -> 
 _EJ_ARCHIVE = re.compile(r"enforcement\.jsonl\.archived-\d{8}-\d{6}-(\d{1,12})-\d+")
 _EJ_SPOOL = re.compile(r"enforcement\.jsonl\.spool-[0-9A-Za-z._-]+")
 _EJ_SPOOL_ID = re.compile(r'"spool":"(enforcement\.jsonl\.spool-[0-9A-Za-z._-]{1,80})"')
-_EJ_NOT_RECORDS = ("carry", "horizon")      # the rotation's own lines: read positions, not events
+# the rotation's own lines, told by their reason (pb_journal.EJ_CARRY_REASON / EJ_HORIZON_REASON): positions, not events
+_EJ_NOT_RECORDS = ("read position carried", "read positions horizon")
 
 
 def enforcement_lines(jdir: Path, deadline: float, task: "str | None" = None,
