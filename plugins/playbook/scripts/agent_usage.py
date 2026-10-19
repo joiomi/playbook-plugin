@@ -413,12 +413,37 @@ def _same_file(prev, f: str, st) -> bool:
             and prev.get("head") == head_of(f, min(HEAD_MAX, p_to)))
 
 
+def _complete_end(path: str, size: int) -> int:
+    """Where `read_span` would stop in a file of `size` bytes: just past its last newline, 0 when it has none — a host
+    killed mid-write leaves a last line no reader counts (task 252, PLAN.md "From task 247" (a)). On a read error, the
+    size: as before, the side of marking."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return size
+    try:
+        pos = size
+        while pos > 0:
+            n = min(1 << 16, pos)
+            pos -= n
+            i = os.pread(fd, n, pos).rfind(b"\n")
+            if i >= 0:
+                return pos + i + 1
+        return 0
+    except OSError:
+        return size
+    finally:
+        os.close(fd)
+
+
 def _unread(lane: str, paths: "list[str]") -> bool:
-    """Whether any of the session's files holds a span the recorder would read — no record (an empty file excepted:
-    nothing to lose), another file in its place (`_same_file`, task 247: the size alone took a replaced transcript no
-    larger than the old `to` for read), or a size other than the newest record's `to` (past it: new bytes; below it:
-    `read_span` reads the file again from 0 — task 247's impl round 1, codex) — read without the lock, for the
-    busy-lock marker only: a clean exit whose last Stop read everything is no gap (task 246's impl round 2, opus)."""
+    """Whether any of the session's files holds a span the recorder would read — no record (a file with no complete
+    line excepted: nothing to lose), another file in its place (`_same_file`, task 247: the size alone took a replaced
+    transcript no larger than the old `to` for read), or a last complete line ending elsewhere than the newest
+    record's `to` (past it: new lines; below it: `read_span` reads the file again from 0 — task 247's impl round 1,
+    codex; the end of the last COMPLETE line, not the size, since a half-written one is no reader's — task 252) — read
+    without the lock, for the busy-lock marker only: a clean exit whose last Stop read everything is no gap (task 246's
+    impl round 2, opus)."""
     files = session_files(paths)
     if not files:
         return False
@@ -432,9 +457,10 @@ def _unread(lane: str, paths: "list[str]") -> bool:
         if not stat.S_ISREG(st.st_mode):
             continue
         prev = newest.get(key)
-        if prev is None and st.st_size == 0:
+        end = _complete_end(f, st.st_size)
+        if prev is None and end == 0:
             continue
-        if not _same_file(prev, f, st) or st.st_size != prev["to"]:
+        if not _same_file(prev, f, st) or end != prev["to"]:
             return True
     return False
 

@@ -14,7 +14,8 @@ Held:
     (a `/clear` too: SessionStart then points the session at the new transcript); "unread" uses the recorder's own
     identity check and restart rule — another file in the transcript's place, the same inode with another start or
     another size, an identical copy on a new inode, a replaced subagent file — and an empty file with no record is
-    nothing unread (task 247);
+    nothing unread (task 247); "another size" is the end of the last COMPLETE line, so a half-written last line, or a
+    file that is only one, is nothing unread until it ends (task 252);
   * a session with no task records under "-";
   * a judge, tail-cert or monitor session records nothing (task 232 counts the judges' own usage);
   * a crash of the recorder exits 0, prints nothing, records nothing, and its journal line says it was skipped;
@@ -267,11 +268,12 @@ class AtTheSessionsEnd(_Project):
             self.release(h)
         self.assertEqual(self.unknown(), [])
 
-    def busy_exit_after(self, replace):
+    def busy_exit_after(self, replace, grow=False):
         self.run_hook(self.payload())                     # read to its end: the record's `to` is the file's size
         size = self.transcript.stat().st_size
         replace()
-        self.assertLessEqual(self.transcript.stat().st_size, size, "no larger: the size alone says nothing unread")
+        if not grow:
+            self.assertLessEqual(self.transcript.stat().st_size, size, "no larger: the size alone says nothing unread")
         h = self.hold_lock()
         try:
             self.end("exit")
@@ -332,6 +334,33 @@ class AtTheSessionsEnd(_Project):
     def test_an_empty_transcript_with_no_record_is_nothing_unread(self):
         # task 247's impl round 1 (sonnet): nothing to lose, no marker
         self.transcript.write_text("")
+        h = self.hold_lock()
+        try:
+            self.end("exit")
+        finally:
+            self.release(h)
+        self.assertEqual(self.unknown(), [])
+
+    def test_a_half_written_last_line_is_nothing_unread_until_it_is_complete(self):
+        # task 252 (PLAN.md "From task 247" (a), opus): `read_span` stops at the last newline, so a host killed mid-write
+        # leaves bytes past `to` that no reader counts — no marker for them; once the line ends, it is a call to mark
+        def partial():
+            with open(self.transcript, "ab") as f:
+                f.write(json.dumps(entry("p1")).encode()[:40])          # no newline: the host stopped mid-line
+        self.assertEqual(self.busy_exit_after(partial, grow=True), [])
+        with open(self.transcript, "ab") as f:
+            f.write(json.dumps(entry("p1")).encode()[40:] + b"\n")
+        self.sdir.mkdir(parents=True, exist_ok=True)       # the exit above removed it: a resumed session, task 5
+        (self.sdir / "current_state").write_text("5\n")
+        h = self.hold_lock()
+        try:
+            self.end("exit")
+        finally:
+            self.release(h)
+        self.assertEqual(self.unknown(), [("5", "unknown")])
+
+    def test_a_transcript_that_is_only_a_partial_line_is_nothing_unread(self):
+        self.transcript.write_text(json.dumps(entry("q1"))[:30])
         h = self.hold_lock()
         try:
             self.end("exit")
