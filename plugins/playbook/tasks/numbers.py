@@ -185,13 +185,15 @@ _TASK_HOOKS = ("review", "verify", "tasks", "close")
 _AGENT_HOOK = "agent-usage"        # task 244: the main agent's tokens, read beside `_TASK_HOOKS`, never one of them
 
 
-def read_enforcement(lane: Path, deadline: float) -> "list[dict]":
+def read_enforcement(lane: Path, deadline: float, task: "str | None" = None) -> "list[dict]":
     """The enforcement journal's review / verify / tasks / close records, and the agent's `agent-usage` ones (task
-    244), with `_t`. A linked `journal/` is not read (the writers refuse it; task 235's last round, grok)."""
+    244), with `_t`. A linked `journal/` is not read (the writers refuse it; task 235's last round, grok). Since task
+    257 the journal rotates: `enforcement_lines` gives the lines of the archives `task` needs, the live file and the
+    spools, in order; `_n` is a line's place in that order. The rotation's carry and horizon lines are no records."""
     out = []
     if (Path(lane) / "journal").is_symlink():
         return out
-    for n, raw in enumerate(_lines_of(lane / "journal" / "enforcement.jsonl")):
+    for n, raw in enumerate(enforcement_lines(Path(lane) / "journal", deadline, task=task)):
         if n % 2000 == 0 and time.monotonic() > deadline:
             raise OutOfTime("enforcement.jsonl")
         raw = raw.strip()
@@ -202,12 +204,150 @@ def read_enforcement(lane: Path, deadline: float) -> "list[dict]":
             rec = json.loads(raw)
         except ValueError:
             continue
-        if isinstance(rec, dict) and rec.get("hook") in _TASK_HOOKS + (_AGENT_HOOK,):
+        if isinstance(rec, dict) and rec.get("hook") in _TASK_HOOKS + (_AGENT_HOOK,) \
+                and rec.get("decision") not in _EJ_NOT_RECORDS:
             t = _epoch(rec.get("ts"))
             if t is not None:
-                rec["_t"], rec["_n"] = t, n         # its line: the file's order, inside one second too (Y5)
+                rec["_t"], rec["_n"] = t, n         # its line: the journal's order, inside one second too (Y5)
                 out.append(rec)
     return out
+
+
+# --- the enforcement journal's files (task 257) ------------------------------------------------------------------------
+
+_EJ_ARCHIVE = re.compile(r"enforcement\.jsonl\.archived-\d{8}-\d{6}-(\d{1,12})-\d+")
+_EJ_SPOOL = re.compile(r"enforcement\.jsonl\.spool-[0-9A-Za-z._-]+")
+_EJ_SPOOL_ID = re.compile(r'"spool":"(enforcement\.jsonl\.spool-[0-9A-Za-z._-]{1,80})"')
+_EJ_NOT_RECORDS = ("carry", "horizon")      # the rotation's own lines: read positions, not events
+
+
+def enforcement_lines(jdir: Path, deadline: float, task: "str | None" = None,
+                      since: "float | None" = None) -> "list[str]":
+    """The enforcement journal's lines, in order, while its lock is held shared (the rotation renames and compresses
+    under the exclusive one, so a listing and its reads see one state; waited for until `deadline`, then OutOfTime):
+
+      * the archives, by the rename time their names record — only those renamed at or after `since` (an archive holds
+        only lines older than its rename), and with `task` only those whose `.tasks` index names it or that have none
+        (plan r1 of task 257, P7: every record of the task, other tasks' history unread);
+      * then the live file, then the spools.
+
+    Kill states are read once (P4): an archive name on the live file's inode is skipped, and `X` is read, not `X.gz`,
+    when both exist. A spooled line keeps its `spool` id through the merge: one line per id, placed by its `ts` after
+    the ordinary lines of its second, which keep their file order (P2, P3). A link, a FIFO or an unreadable file is no
+    source."""
+    jdir = Path(jdir)
+    with _ej_shared_lock(jdir, deadline):
+        try:
+            names = sorted(os.listdir(jdir))
+        except OSError:
+            return []
+        live = jdir / "enforcement.jsonl"
+        try:
+            live_ino = os.lstat(live).st_ino
+        except OSError:
+            live_ino = None
+        nameset = set(names)
+        picked: "list[tuple[int, str]]" = []
+        for n in names:
+            base = n[:-3] if n.endswith(".gz") else n
+            m = _EJ_ARCHIVE.fullmatch(base)
+            if not m or (n.endswith(".gz") and base in nameset):
+                continue                    # not an archive; or a `.gz` whose source is still there: the source
+            epoch = int(m.group(1))
+            if since is not None and epoch < since:
+                continue
+            try:
+                if not n.endswith(".gz") and live_ino is not None and os.lstat(jdir / n).st_ino == live_ino:
+                    continue                # a swap killed between its link and its rename: the live file itself
+            except OSError:
+                continue
+            if task is not None and not _ej_names_task(jdir / (base + ".tasks"), str(task)):
+                continue
+            picked.append((epoch, n))
+        picked.sort()
+        sources = [jdir / n for _, n in picked] + [live] + [jdir / n for n in names if _EJ_SPOOL.fullmatch(n)]
+        ordinary: "list[str]" = []
+        spooled: "dict[str, str]" = {}
+        for path in sources:
+            if time.monotonic() > deadline:
+                raise OutOfTime(str(path))
+            for k, raw in enumerate(_lines_of(path)):
+                if k % 2000 == 1999 and time.monotonic() > deadline:
+                    raise OutOfTime(str(path))
+                if not raw.strip():
+                    continue
+                m = _EJ_SPOOL_ID.search(raw) if '"spool":"' in raw else None
+                if m:
+                    spooled.setdefault(m.group(1), raw)
+                else:
+                    ordinary.append(raw)
+    if not spooled:
+        return ordinary
+    stamps = [_ts_of(r) for r in ordinary]
+    placed: "list[tuple[int, int, str]]" = []
+    for i, raw in enumerate(sorted(spooled.values(), key=_ts_of)):
+        t = _ts_of(raw)
+        # after the last ordinary line of its second or earlier (stamps are in file order, near-sorted)
+        at = len(stamps)
+        while at > 0 and stamps[at - 1] > t:
+            at -= 1
+        placed.append((at, i, raw))
+    out: "list[str]" = []
+    j = 0
+    for at, _i, raw in sorted(placed):
+        out.extend(ordinary[j:at])
+        j = max(j, at)
+        out.append(raw)
+    out.extend(ordinary[j:])
+    return out
+
+
+def _ts_of(raw: str) -> str:
+    m = _TS_HEAD.match(raw.strip())
+    return m.group(1) if m else ""
+
+
+def _ej_names_task(index: Path, task: str) -> bool:
+    """Whether an archive's `.tasks` index names `task` — True when it has no readable index (read it, to be sure)."""
+    data = _read_regular(index)
+    if data is None:
+        return True
+    try:
+        tasks = json.loads(data.decode("utf-8", "replace")).get("tasks")
+    except (ValueError, AttributeError):
+        return True
+    return not isinstance(tasks, list) or task in tasks
+
+
+def _ej_shared_lock(jdir: Path, deadline: float):
+    """`enforcement.lock` held SHARED while the journal is listed and read (task 257), waited for until the deadline,
+    then OutOfTime. No lock file (never written since the rotation came), or one that is not a regular file: nothing to
+    hold — read as it is."""
+    import contextlib
+    import fcntl
+
+    @contextlib.contextmanager
+    def held():
+        try:
+            fd = os.open(str(jdir / "enforcement.lock"), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                         | getattr(os, "O_NONBLOCK", 0))
+        except OSError:
+            yield
+            return
+        try:
+            if stat.S_ISREG(os.fstat(fd).st_mode):
+                while True:
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                        break
+                    except OSError:
+                        if time.monotonic() > deadline:
+                            raise OutOfTime("the enforcement journal is being rotated")
+                        time.sleep(0.02)
+            yield
+        finally:
+            os.close(fd)
+    return held()
 
 
 def task_records(records: "list[dict]", task: str, start: float, end: float) -> "dict[str, list[dict]]":
@@ -960,7 +1100,7 @@ def compose(lane: Path, task_dir: Path, task: str, deadline: float, end: "float 
     if end is None:
         end = rc["epoch"] if rc else time.time()
     end = float(int(end))
-    enf = read_enforcement(lane, deadline)
+    enf = read_enforcement(lane, deadline, task=task)     # task 257: the archives that name this task
     mine = [r for r in enf if str(r.get("task", "")) == task]
     trans = [r for r in mine if r["hook"] == "tasks" and r.get("reason") in ("work", "done")]
     life = _life(trans, end, newest) if rc is not None else None
@@ -1266,7 +1406,8 @@ def cmd_numbers(cmd_args: "list[str]") -> None:
         newest = receipt_close(text)
         saved = {(c.get("closed_at"), c.get("closure_no")) for c in doc["closures"] if isinstance(c, dict)}
         try:            # read once: the newest close's number and the late records both come from it (Minor, agy)
-            mine = [r for r in read_enforcement(lane, time.monotonic() + BUDGET_S) if str(r.get("task", "")) == task]
+            mine = [r for r in read_enforcement(lane, time.monotonic() + BUDGET_S, task=task)
+                    if str(r.get("task", "")) == task]
         except OutOfTime:
             mine = None
         # the newest close's number as compose gives it: the task's count of `done` records, at least 1 (K1, opus);

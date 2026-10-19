@@ -755,6 +755,223 @@ class StressRealProcesses(_Journal):
         self.assertEqual({k: r["to"] for k, r in newest.items()}, last)
 
 
+from tests.test_agent_usage import _Lane as _AULane, entry as _entry, lines as _lines  # noqa: E402
+
+
+class TheRecorderAcrossARotation(_AULane):
+    """W5: the recorder rotates inside its own lock, continues every transcript from its carried position, seeds a
+    transcript whose position the horizon pruned — only on a positive old first stamp (plan r1, P6) — and the CLI's
+    transitions rotate even with no transcript to read."""
+
+    def setUp(self):
+        super().setUp()
+        setattr(self.pbj, "_EJ_LIMIT", 4096)
+        self.jdir = self.lane / "journal"
+        self.now = time.time()
+
+    def pad(self):
+        live = self.jdir / "enforcement.jsonl"
+        self.jdir.mkdir(exist_ok=True)
+        with open(live, "ab") as f:
+            while f.tell() <= 4200:
+                f.write(_line({"ts": _iso(self.now), "hook": "task-gate", "decision": "allow", "reason": "pad"}))
+
+    def archives(self):
+        return sorted(p for p in self.jdir.glob("enforcement.jsonl.archived-*") if not p.name.endswith(".tasks"))
+
+    def stamped(self, mid: str, t: float) -> dict:
+        e = _entry(mid)
+        e["timestamp"] = _iso(t)
+        return e
+
+    def test_a_recorded_transcript_continues_from_its_carried_position(self):
+        self.main.write_bytes(_lines(_entry("m1"), _entry("m2")))
+        self.record()
+        first = self.records()[-1]
+        self.pad()
+        with open(self.main, "ab") as f:
+            f.write(_lines(_entry("m3")))
+        self.record(task="8")
+        self.assertEqual(len(self.archives()), 1)                 # rotated inside the recorder's lock
+        live = self.records()
+        self.assertEqual([r["decision"] for r in live], ["horizon", "carry", "record"])
+        self.assertEqual((live[-1]["calls"], live[-1]["from"], live[-1]["task"]), (1, first["to"], "8"))
+
+    def test_a_pruned_transcript_begun_before_the_horizon_is_seeded_never_read_again(self):
+        old = self.now - 40 * 86400
+        self.main.write_bytes(_lines(self.stamped("m1", old), self.stamped("m2", old)))
+        self.record()
+        live = self.jdir / "enforcement.jsonl"
+        rec = json.loads(live.read_text().splitlines()[-1])
+        rec["ts"] = _iso(self.now - 31 * 86400)                    # its position is now older than the horizon
+        live.write_text(json.dumps(rec) + "\n")
+        self.pad()
+        with open(self.main, "ab") as f:
+            f.write(_lines(self.stamped("m3", self.now)))
+        self.record(task="8")
+        live_recs = [r for r in self.records() if r["decision"] != "horizon"]
+        self.assertEqual(len(live_recs), 1)
+        self.assertEqual(live_recs[0].get("status"), "unknown")
+        self.assertIn("horizon", live_recs[0]["why"])
+        self.assertEqual(live_recs[0]["to"], self.main.stat().st_size)
+
+    def test_a_transcript_begun_after_the_horizon_is_read_from_its_start(self):
+        other = self.tdir / "sess-0.jsonl"
+        other.write_bytes(_lines(_entry("o1")))
+        self.record(paths=[other])
+        self.pad()
+        self.record(paths=[other])                                 # rotates: the live file now has a horizon
+        self.assertEqual(len(self.archives()), 1)
+        self.main.write_bytes(_lines(self.stamped("m1", self.now), self.stamped("m2", self.now)))
+        self.record()
+        mine = [r for r in self.records() if r.get("decision") == "record"]
+        self.assertEqual(sum(r["calls"] for r in mine), 2)
+
+    def test_a_transcript_with_no_first_stamp_is_read_from_its_start(self):
+        """Plan r1 P6 (opus, sonnet, agy): unknown is not old — a new session's first turns are counted."""
+        other = self.tdir / "sess-0.jsonl"
+        other.write_bytes(_lines(_entry("o1")))
+        self.record(paths=[other])
+        self.pad()
+        self.record(paths=[other])
+        bare = [_entry("m1"), _entry("m2")]
+        for e in bare:
+            del e["timestamp"]
+        self.main.write_bytes(_lines({"type": "mode", "mode": "x"}, *bare))
+        self.record()
+        self.assertEqual(sum(r["calls"] for r in self.records() if r.get("decision") == "record"
+                             and r["file"] == self.mod.file_key(str(self.main))), 2)
+
+    def test_with_no_transcript_the_cli_still_rotates(self):
+        self.pad()
+        res = self.mod.record_spans(self.lane, task="7", paths=[], session_id="pid-1", pbj=self.pbj)
+        self.assertEqual(res["skipped"], "no transcript")
+        self.assertEqual(len(self.archives()), 1)
+
+
+class _Archives(_Journal):
+    """A journal with hand-made archives, and the tasks package importable."""
+
+    def setUp(self):
+        super().setUp()
+        import sys
+        sys.path.insert(0, str(PLUGIN))
+        self.addCleanup(sys.path.remove, str(PLUGIN))
+        from tasks import numbers
+        self.numbers = numbers
+
+    def rec(self, reason: str, t: float, task: str = "7", hook: str = "tasks", **extra) -> dict:
+        return dict({"ts": _iso(t), "session_id": "pid-1", "hook": hook, "decision": "record", "reason": reason,
+                     "task": task}, **extra)
+
+    def arch(self, name_epoch: int, recs, tasks=None, gz=False, pid=1) -> Path:
+        import gzip
+        p = self.jdir / f"enforcement.jsonl.archived-{time.strftime('%Y%m%d-%H%M%S', time.gmtime(name_epoch))}" \
+                        f"-{name_epoch}-{pid}"
+        data = b"".join(_line(r) for r in recs)
+        if gz:
+            with gzip.open(str(p) + ".gz", "wb") as f:
+                f.write(data)
+        else:
+            p.write_bytes(data)
+        if tasks is not None:
+            Path(str(p) + ".tasks").write_text(json.dumps({"tasks": tasks}))
+        return p
+
+    def read(self, task="7", deadline=5.0):
+        return self.numbers.read_enforcement(self.lane, time.monotonic() + deadline, task=task)
+
+
+class TheNumbersReader(_Archives):
+    """W6: `numbers.read_enforcement` reads the archives a task needs — the ones whose `.tasks` index names it, or with
+    none — then the live file and the spools, each line once, in order (plan r1, P2-P4, P7)."""
+
+    def test_archives_then_live_in_order_carries_and_horizon_left_out(self):
+        t = self.now - 3000
+        self.arch(int(t + 100), [self.rec("new", t), self.rec("work", t + 10)], tasks=["7"], gz=True)
+        self.arch(int(t + 200), [self.rec("verify run", t + 150, hook="verify")], tasks=["7"])
+        self.write({"ts": _iso(t + 201), "hook": "agent-usage", "decision": "horizon", "horizon": _iso(t)},
+                   dict(_position("a" * 16, 5, t + 201), decision="carry", of=_iso(t + 5)),
+                   self.rec("done", t + 300))
+        got = self.read()
+        self.assertEqual([r["reason"] for r in got], ["new", "work", "verify run", "done"])
+        self.assertEqual([r["_n"] for r in got], sorted(r["_n"] for r in got))
+
+    def test_an_archive_whose_index_leaves_the_task_out_is_not_read_one_without_an_index_is(self):
+        t = self.now - 3000
+        self.arch(int(t + 100), [self.rec("work", t, task="7")], tasks=["9"])        # says: not task 7's
+        self.arch(int(t + 200), [self.rec("work", t + 150, task="7")], tasks=None, pid=2)
+        self.write(self.rec("done", t + 300))
+        self.assertEqual([r["_t"] for r in self.read()], [int(t + 150), int(t + 300)])
+
+    def test_kill_states_are_read_once(self):
+        """Plan r1 P4: an archive name on the live file's inode, and `X` beside `X.gz`."""
+        import gzip
+        t = self.now - 3000
+        x = self.arch(int(t + 100), [self.rec("work", t)], tasks=["7"])
+        with gzip.open(str(x) + ".gz", "wb") as f:
+            f.write(x.read_bytes())
+        self.write(self.rec("done", t + 300))
+        os.link(self.live, self.jdir / f"enforcement.jsonl.archived-20261019-000000-{int(t + 400)}-9")
+        self.assertEqual([r["reason"] for r in self.read()], ["work", "done"])
+
+    def test_one_line_per_spool_id_placed_by_its_second(self):
+        t = self.now - 3000
+        sid = "enforcement.jsonl.spool-20261019-000000-1-1"
+        self.write(self.rec("work", t), self.rec("verify run", t + 20, hook="verify"),
+                   self.rec("done", t + 10, spool=sid),                # merged late, out of file order
+                   self.rec("work", t + 30))
+        (self.jdir / sid).write_bytes(_line(self.rec("done", t + 10, spool=sid)))     # its merge killed before the unlink
+        other = "enforcement.jsonl.spool-20261019-000001-2-2"
+        (self.jdir / other).write_bytes(_line(self.rec("verify run", t + 20, hook="verify", spool=other)))
+        got = [(r["reason"], r["_t"] - int(t)) for r in self.read()]
+        self.assertEqual(got, [("work", 0), ("done", 10), ("verify run", 20), ("verify run", 20), ("work", 30)])
+
+    def test_a_rotation_in_progress_makes_the_reader_wait_then_give_up(self):
+        self.write(self.rec("work", self.now))
+        holder = self.hold(2.5)
+        try:
+            with self.assertRaises(self.numbers.OutOfTime):
+                self.read(deadline=0.5)
+        finally:
+            holder.wait()
+        self.assertEqual(len(self.read()), 1)
+
+
+class RetroAndDashboard(_Archives):
+    """W7: the retro reads every transition, archived or live; the dashboard and the bootstrap's panel health read the
+    archives renamed since their window's baseline began (plan r1, P11)."""
+
+    def review(self, t: float, seat: str = "claude:opus") -> dict:
+        return {"ts": _iso(t), "session_id": "pid-1", "hook": "review", "decision": "record", "reason": "review spend",
+                "kind": "panel", "seat": seat, "task": "7", "round": 1, "duration_ms": 60000, "status": "ok",
+                "usage": {"status": "unknown"}}
+
+    def test_the_retro_reads_the_transitions_of_every_archive(self):
+        from tasks.retro import lifecycle_records, transition_journal
+        t = self.now - 9000
+        self.arch(int(t + 100), [self.rec("new", t, task="3", detail="build x"), self.rec("work", t + 5, task="3")],
+                  tasks=["3"], gz=True)
+        self.arch(int(t + 200), [self.rec("done", t + 150, task="3")], tasks=["3"], pid=2)
+        self.write({"ts": _iso(t + 201), "hook": "agent-usage", "decision": "horizon", "horizon": _iso(t)},
+                   self.rec("work", t + 300, task="4"))
+        got = [(e, task) for _s, e, task, _d in lifecycle_records(transition_journal(self.lane))]
+        self.assertEqual(got, [("new", "3"), ("work", "3"), ("done", "3"), ("work", "4")])
+
+    def test_the_dashboard_reads_the_archives_its_window_needs(self):
+        from datetime import datetime, timezone
+        from tasks import dashboard
+        old = self.now - 60 * 86400
+        self.arch(int(old + 100), [self.review(old)], pid=1)                      # before window + baseline
+        self.arch(int(self.now - 86400), [self.review(self.now - 2 * 86400), self.review(self.now - 2 * 86400 + 5)],
+                  pid=2)
+        self.write(self.review(self.now - 60))
+        recs, skipped, status = dashboard.load_review_journal(self.live, since=self.now - 44 * 86400)
+        self.assertEqual((len(recs), skipped, status), (3, 0, "ok"))
+        lines = dashboard.panel_health_lines(self.project, now=datetime.fromtimestamp(self.now, timezone.utc))
+        self.assertIn("reviews: 3 judge runs", lines[2])
+
+
 def _epoch(ts: str) -> float:
     import calendar
     return calendar.timegm(time.strptime(ts, "%Y-%m-%dT%H:%M:%SZ"))

@@ -5,7 +5,6 @@ for project-level retrospective analysis.
 """
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 
@@ -269,25 +268,20 @@ def lifecycle_records(journal_path: "Path | None") -> "list[tuple[str, str, str,
     and a line is not an event (a skipped `&&` branch, a heredoc or a grep naming `tasks work 5` ran nothing).
 
     A journal that is missing, a link or not a regular file reads as no records (opened without following a link,
-    non-blocking: a FIFO there must not hang a reader); a line that is not such a record is skipped."""
+    non-blocking: a FIFO there must not hang a reader); a line that is not such a record is skipped. Since task 257
+    the journal rotates: every archive is read too, then the live file and the spools, in the journal's order
+    (`numbers.enforcement_lines`); a linked `journal/` is not read."""
     import json as _json
-    import stat as _stat
-    if journal_path is None:
+    import time as _time
+    from tasks.numbers import OutOfTime, enforcement_lines
+    if journal_path is None or Path(journal_path).parent.is_symlink():
         return []
     try:
-        fd = os.open(journal_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    except OSError:
+        lines = [raw for raw in enforcement_lines(Path(journal_path).parent, _time.monotonic() + 60)
+                 if '"tasks"' in raw]
+    except (OSError, OutOfTime):
         return []
     out = []
-    try:
-        if not _stat.S_ISREG(os.fstat(fd).st_mode):
-            return []
-        with os.fdopen(fd, "rb", closefd=False) as fh:
-            lines = [raw.decode("utf-8", "replace") for raw in fh if b'"tasks"' in raw]   # line by line (r1)
-    except OSError:
-        return []
-    finally:
-        os.close(fd)
     for line in lines:
         try:
             rec = _json.loads(line)

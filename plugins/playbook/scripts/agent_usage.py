@@ -287,6 +287,7 @@ def record_spans(lane, *, task, paths: "list[str]", session_id: str, pbj, lock_w
     out = {"files": 0, "calls": 0, "skipped": "", "unwritten": 0}
     files = session_files(paths)
     if not files:
+        _rotate(pbj, lane, held=False)          # a CLI transition with no transcript (codex) still keeps it bounded
         out["skipped"] = "no transcript"
         return out
     fd = _lock(lane, lock_wait)
@@ -294,13 +295,17 @@ def record_spans(lane, *, task, paths: "list[str]", session_id: str, pbj, lock_w
         out["skipped"] = "lock"
         return out
     try:
+        # task 257: the journal rotates here, under this lock — no position can be added while it is carried
+        _rotate(pbj, lane, held=True)
         if callable(task):
             task = task()
             if task is None:
                 out["skipped"] = "the session is not resolved"
                 return out
         keys = {file_key(f): f for f in files}
-        newest, complete = _newest(os.path.join(lane, "journal", "enforcement.jsonl"), set(keys), scan_max)
+        journal = os.path.join(lane, "journal", "enforcement.jsonl")
+        newest, complete = _newest(journal, set(keys), scan_max)
+        horizon = _horizon(journal)
         for key, f in keys.items():
             try:
                 st = os.lstat(f)
@@ -310,12 +315,18 @@ def record_spans(lane, *, task, paths: "list[str]", session_id: str, pbj, lock_w
                 continue
             prev = newest.get(key)
             same = _same_file(prev, f, st)
+            # task 257: a rotation carries only positions newer than its horizon; a transcript with none, begun before
+            # it (a positive stamp: unknown is not old — plan r1, P6), may have had one: seeded, never read again
+            pruned = (prev is None and complete and bool(horizon) and st.st_size <= fresh_max
+                      and _begun_before(f, horizon))
             if same:
                 start, last = int(prev["to"]), str(prev.get("last_id") or "")
-            elif (prev is not None or complete) and st.st_size <= fresh_max:
+            elif (prev is not None or complete) and st.st_size <= fresh_max and not pruned:
                 start, last = 0, ""            # a new file, or another one in its place: from its start
             else:
-                why = ("no earlier record for this transcript: usage before now not counted" if complete or prev
+                why = (f"begun before the journal's horizon ({horizon}), its read position not carried: usage since "
+                       "its last record not counted" if pruned else
+                       "no earlier record for this transcript: usage before now not counted" if complete or prev
                        else "the journal scan did not reach this transcript's last record: usage before now not counted")
                 # at the last complete line, where `read_span` stops: a seed inside a half-written line left it
                 # uncounted once it ended, and read as unread at every busy end (task 253)
@@ -364,6 +375,73 @@ def record_spans(lane, *, task, paths: "list[str]", session_id: str, pbj, lock_w
         return out
     finally:
         os.close(fd)
+
+
+def _rotate(pbj, lane: str, held: bool) -> None:
+    """`pb_journal.rotate_enforcement` (task 257), which never raises; a pb_journal without it (an older copy) skips."""
+    rot = getattr(pbj, "rotate_enforcement", None)
+    if callable(rot):
+        rot(lane, held=held)
+
+
+_HORIZON_STAMP = __import__("re").compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
+
+
+def _horizon(journal: str) -> str:
+    """The rotated journal's horizon — its first line, written by the rotation (task 257) — or "" (never rotated)."""
+    try:
+        fd = os.open(journal, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return ""
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return ""
+        first = os.read(fd, 4096).split(b"\n", 1)[0]
+    except OSError:
+        return ""
+    finally:
+        os.close(fd)
+    try:
+        rec = json.loads(first)
+    except ValueError:
+        return ""
+    h = rec.get("horizon") if isinstance(rec, dict) and rec.get("hook") == "agent-usage" \
+        and rec.get("decision") == "horizon" else None
+    return h if isinstance(h, str) and _HORIZON_STAMP.fullmatch(h) else ""
+
+
+def _begun_before(path: str, horizon: str) -> bool:
+    """Whether the transcript's first stamp — the first top-level `timestamp` among its lines in its first 1 MiB — is
+    earlier than the horizon plus a day (a clock step's margin). Unknown: False (plan r1, P6: a seed only on proof)."""
+    import calendar
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return False
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return False
+        head = os.read(fd, 1 << 20)
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+    try:
+        bound = calendar.timegm(time.strptime(horizon, "%Y-%m-%dT%H:%M:%SZ")) + 86400
+    except ValueError:
+        return False
+    for raw in head.split(b"\n")[:-1]:              # complete lines only
+        try:
+            rec = json.loads(raw)
+        except ValueError:
+            continue
+        ts = rec.get("timestamp") if isinstance(rec, dict) else None
+        if isinstance(ts, str) and _HORIZON_STAMP.fullmatch(ts[:19] + "Z"):
+            try:
+                return calendar.timegm(time.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S")) < bound
+            except ValueError:
+                return False
+    return False
 
 
 _SESSION_RE = __import__("re").compile(r"[A-Za-z0-9._-]+")

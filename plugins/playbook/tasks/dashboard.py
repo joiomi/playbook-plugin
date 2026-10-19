@@ -217,14 +217,18 @@ def load_review_records(path: "Path | None") -> "tuple[list[dict], int]":
     return records, skipped
 
 
-def load_review_journal(path: "Path | None", cap: int = _JOURNAL_READ_CAP) -> "tuple[list[dict], int, str]":
+def load_review_journal(path: "Path | None", cap: int = _JOURNAL_READ_CAP,
+                        since: "float | None" = None) -> "tuple[list[dict], int, str]":
     """Every `hook == "review"` record in the journal, normalised to
     {ts, seat, kind, task, status, duration_ms|None}. Returns (records, skipped,
     status) — status ∈ {ok, missing, unreadable, truncated, unresolved} so the
     render can tell "no spend" from "could not read" (impl-panel codex#4). A line
     that is not JSON, not an object, not a review record, or lacks a parseable
     `ts`/`seat`/`status` is skipped and COUNTED, never raised on. Numbers are
-    never imputed: a missing/invalid duration stays None."""
+    never imputed: a missing/invalid duration stays None. Since task 257 the
+    journal rotates: once it has archives or spools, the archives renamed at or
+    after `since` (epoch seconds; all when None), the live file and the spools are
+    read in order (`numbers.enforcement_lines`)."""
     out: "list[dict]" = []
     skipped = 0
     if path is None:
@@ -233,6 +237,13 @@ def load_review_journal(path: "Path | None", cap: int = _JOURNAL_READ_CAP) -> "t
     if text is None:
         return out, 0, read_status
     raw_lines = text.splitlines()
+    if read_status == "ok" and _rotated(Path(path).parent):
+        try:
+            import time
+            from tasks.numbers import enforcement_lines
+            raw_lines = enforcement_lines(Path(path).parent, time.monotonic() + 10, since=since)
+        except Exception:                   # noqa: BLE001 — the live file alone, as before the rotation came
+            pass
     for line in raw_lines:
         if not line.strip():
             continue
@@ -262,6 +273,14 @@ def load_review_journal(path: "Path | None", cap: int = _JOURNAL_READ_CAP) -> "t
             "duration_ms": dur,
         })
     return out, skipped, read_status
+
+
+def _rotated(jdir: Path) -> bool:
+    """Whether the enforcement journal has archives or spools beside its live file (task 257)."""
+    try:
+        return any(n.startswith(("enforcement.jsonl.archived-", "enforcement.jsonl.spool-")) for n in os.listdir(jdir))
+    except OSError:
+        return False
 
 
 def other_lane_journals(project_path: Path, resolved: "Path | None") -> "list[str]":
@@ -1312,8 +1331,9 @@ def build_dashboard(project_path: Path, *, now: "datetime | None" = None,
     p = Path(project_path)
     panel = panel_seats(p)
     jp = journal_path(p)
-    records, skipped, jstatus = load_review_journal(jp)
     win_start, win_label = window_bounds(now, panel_changed_at(p))
+    # the window and the drift baseline before it (task 257: only the archives renamed since then are read)
+    records, skipped, jstatus = load_review_journal(jp, since=(win_start - timedelta(days=BASELINE_DAYS)).timestamp())
     cur = seat_stats(_window(records, win_start, now))
     knobs = review_knobs(p)
     hooks = hooks_health(p)
@@ -1433,8 +1453,9 @@ def panel_health_lines(project_path: Path, *, now: "datetime | None" = None) -> 
     now = now or datetime.now(timezone.utc)
     p = Path(project_path)
     panel = panel_seats(p)
-    records, _skipped, jstatus = load_review_journal(journal_path(p))
     win_start, win_label = window_bounds(now, panel_changed_at(p))
+    records, _skipped, jstatus = load_review_journal(journal_path(p),
+                                                     since=(win_start - timedelta(days=BASELINE_DAYS)).timestamp())
     cur = seat_stats(_window(records, win_start, now))
     bench = _exams_with_fallback(p)
     drift = drift_triggers(records, now, panel, start=win_start)
