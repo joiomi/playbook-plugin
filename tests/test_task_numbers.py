@@ -574,6 +574,34 @@ class TheComposition(_Tmp):
         self.assertEqual(got["time"]["sessions"], 2)
         self.assertEqual(got["time"]["by_kind"]["agent"], 39 + 10)          # h-2: 10 s, not 90
 
+    def test_a_close_run_in_the_background_is_carved_through_compose(self):
+        """Task 251 (PLAN.md "From task 249" (a), sonnet): the compose-level wiring of task 249 — the `done` record
+        names the session (`known_close`), the gap after the released stop has the close's verify and tail-cert spans
+        carved, and the command's notification in the stamp's own second (no task) is not the closure's."""
+        lane = self.d / ".agent"
+        td = lane / "tasks" / "007-x"
+        td.mkdir(parents=True)
+        (td / "task.md").write_text(TheReceipt.TASK.replace("2026-10-18T00:34:11+03:00", "2026-10-17T21:01:40+03:00"),
+                                    encoding="utf-8")
+        close_t = numbers._epoch("2026-10-17T18:01:40Z")
+        self.write("enforcement.jsonl", [
+            {"ts": iso(close_t - 100), "session_id": "pid-1", "hook": "tasks", "reason": "work", "task": "007"},
+            {"ts": iso(close_t - 30), "hook": "verify", "task": "007", "rc": 0, "how": "ran", "seconds": 60},
+            {"ts": iso(close_t), "hook": "review", "task": "007", "kind": "tail-cert", "seat": "s", "round": 3,
+             "duration_ms": 25000, "status": "ok"},
+            {"ts": iso(close_t), "session_id": "pid-1", "hook": "tasks", "reason": "done", "task": "007"}])
+        self.write("hooks.jsonl", [
+            hl(close_t - 99, "UserPromptSubmit", hook="chat-log", detail="logged M001"),
+            hl(close_t - 95, "PreToolUse", tool="Bash", tid="bg", hook="task-gate"),
+            hl(close_t - 94, "PostToolUse", tool="Bash", tid="bg"),
+            hl(close_t - 92, "Stop", hook="stop", decision="allow"),
+            hl(close_t, "UserPromptSubmit", hook="chat-log", detail="not logged: a notification", task="")])
+        t = numbers.compose(lane, td, "007", deadline=time.monotonic() + 30)["time"]
+        # the session runs from its first line (close-99): 7 s of the turn; the 92 s after the stop: verify
+        # [close-90, close-30] = 60, judges [close-25, close] = 25, the rest (2 + 5) the owner's
+        self.assertEqual(t["by_kind"], {"agent": 7, "verify": 60, "judges": 25, "owner-idle": 7}, t)
+        self.assertEqual((t["total"], t["sessions"]), (99, 1))
+
     def test_failed_runs_and_unplaced_sleep_reach_the_closure(self):
         lane, td, close_t = self.project()
         (td / "post-panel-reviews.jsonl").write_text(
