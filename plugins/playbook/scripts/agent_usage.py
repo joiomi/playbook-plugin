@@ -277,7 +277,7 @@ def record_spans(lane, *, task, paths: "list[str]", session_id: str, pbj, lock_w
 
     `paths` are the main transcripts (the Stop payload's, the session dir's pointer); their subagents' files are added.
     A file with no record (or another file in its place: inode or `head` differ) is read from 0 when at most
-    `fresh_max` bytes, else gets a seed — a record `unknown`, `from = to = size` — so no history is charged to one
+    `fresh_max` bytes, else gets a seed — a record `unknown`, `from = to =` the end of its last complete line (task 253) — so no history is charged to one
     task; so does a file the journal scan could not reach back to (`scan_max`). A span's records (one per model and
     side) go in ONE append; a span with neither calls nor unreadable entries writes nothing. `pbj` is the loaded
     `pb_journal` module. `task` is the task's number, or a callable asked INSIDE the lock (impl round 2, opus: read
@@ -317,8 +317,11 @@ def record_spans(lane, *, task, paths: "list[str]", session_id: str, pbj, lock_w
             else:
                 why = ("no earlier record for this transcript: usage before now not counted" if complete or prev
                        else "the journal scan did not reach this transcript's last record: usage before now not counted")
-                if pbj.append_agent_usage(lane, task=task, file=key, ino=st.st_ino, span_from=st.st_size,
-                                          span_to=st.st_size, head=head_of(f, min(HEAD_MAX, st.st_size)), known=False,
+                # at the last complete line, where `read_span` stops: a seed inside a half-written line left it
+                # uncounted once it ended, and read as unread at every busy end (task 253)
+                at = _complete_end(f, st.st_size)
+                if pbj.append_agent_usage(lane, task=task, file=key, ino=st.st_ino, span_from=at, span_to=at,
+                                          head=head_of(f, min(HEAD_MAX, at)), known=False,
                                           session_id=session_id, why=why) is False:
                     out["unwritten"] += 1
                 continue
@@ -437,12 +440,14 @@ def _complete_end(path: str, size: int) -> int:
 
 
 _USER_TYPE = __import__("re").compile(rb'"type"\s*:\s*"user"')
+_MESSAGE_KEY = __import__("re").compile(rb'"message"\s*:')     # the KEY, not a value "message" (task 253)
 
 
 def _tail_may_be_a_call(path: str, start: int, size: int) -> bool:
     """Whether the half-written line after the last complete one may be a call (task 252's impl round 1, opus): one
     the host is still writing at the session's end, or was killed writing, is never counted, so it marks — unless it
-    names a user entry at its TOP level, before its `"message"` object (the host writes a user entry's `"type":"user"`
+    names a user entry at its TOP level, before its `"message":` key (a value "message" — a branch so named — is no
+    key: task 253) (the host writes a user entry's `"type":"user"`
     ~120 bytes in and an assistant entry's type after its message — measured on this workspace's transcript). Only
     there: a tool call's input inside an assistant message can be an object with that very key (its impl round 2,
     codex, agy). A read that fails: it may be."""
@@ -458,7 +463,7 @@ def _tail_may_be_a_call(path: str, start: int, size: int) -> bool:
         return True
     finally:
         os.close(fd)
-    return not _USER_TYPE.search(head.split(b'"message"', 1)[0])
+    return not _USER_TYPE.search(_MESSAGE_KEY.split(head, 1)[0])
 
 
 def _unread(lane: str, paths: "list[str]") -> bool:

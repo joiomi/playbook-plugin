@@ -399,6 +399,32 @@ class AtTheSessionsEnd(_Project):
                 f.write(line[:line.index(b'"type"')])
         self.assertEqual(self.busy_exit_after(partial, grow=True), [("5", "unknown")])
 
+    def test_a_half_written_user_line_with_a_message_value_before_its_type_is_a_user_entry(self):
+        # task 253 (PLAN.md "From task 252" (b), the post-panel judge of 252): the top-level part ends at the "message"
+        # KEY — a top-level value "message" (a branch so named) did not hide the user type
+        user = {"parentUuid": "u2", "isSidechain": False, "gitBranch": "message", "promptId": "p2", "type": "user",
+                "message": {"role": "user", "content": "z" * 300}}
+        line = json.dumps(user, separators=(",", ":")).encode()
+        def partial():
+            with open(self.transcript, "ab") as f:
+                f.write(line[:line.index(b'"content"')])
+        self.assertEqual(self.busy_exit_after(partial, grow=True), [])
+
+    def test_a_seeded_transcript_ending_mid_line_is_nothing_unread_while_unchanged(self):
+        # task 253 (PLAN.md "From task 252" (a)): the seed's `to` is the last complete line, so the unchanged file
+        # matches it (a seed at `size` read as unread at every busy end)
+        one = (json.dumps(self.user_entry()) + "\n").encode()            # past FRESH_MAX (8 MiB): the Stop seeds
+        self.transcript.write_bytes(one * (8 * 1024 * 1024 // len(one) + 2) + one[:100])
+        r = self.run_hook(self.payload())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual([x.get("status") for x in self.records()], ["unknown"], "a seed")
+        h = self.hold_lock()
+        try:
+            self.end("exit")
+        finally:
+            self.release(h)
+        self.assertEqual(self.unknown(), [("5", "unknown")], "the seed only, no busy-end marker")
+
     def test_a_transcript_that_is_only_a_half_written_user_entry_is_nothing_unread(self):
         self.transcript.write_text(json.dumps(self.user_entry())[:200])
         h = self.hold_lock()

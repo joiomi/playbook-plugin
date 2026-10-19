@@ -267,6 +267,20 @@ class RecordingSpans(_Lane):
         self.record(fresh_max=100)
         self.assertEqual(self.total(), 1, "only what came after the seed")
 
+    def test_a_seed_taken_mid_write_sits_at_the_last_complete_line(self):
+        # task 253 (PLAN.md "From task 252" (a), sonnet / codex): a seed at `size` fell inside a half-written line, which
+        # the next read would then never count; at the last newline, the line is counted once it ends
+        whole = lines(*[entry(f"old{i}") for i in range(20)])
+        tail = lines(entry("new1"))
+        self.main.write_bytes(whole + tail[:50])                         # the host stopped mid-line
+        self.record(fresh_max=100)
+        r = self.records()
+        self.assertEqual((r[0]["status"], r[0]["from"], r[0]["to"]), ("unknown", len(whole), len(whole)))
+        with open(self.main, "ab") as fh:
+            fh.write(tail[50:])
+        self.record(fresh_max=100)
+        self.assertEqual(self.total(), 1, "the finished line, counted once")
+
     def test_a_replaced_file_is_a_new_file(self):
         self.main.write_bytes(lines(entry("m1"), entry("m2")))
         self.record()
