@@ -491,14 +491,16 @@ prompt that started it, M001, and the closure's number — without its keys that
 5. *Inside a turn:* `owner-question` while an options dialog is open, else `agent` — the model's time and every
    tool's together.
 6. The part of a gap with a Bash call open, of a background gap, or of the close's own session's last gap outside a
-   turn (the close run as a background command after the turn ended — task 249), that overlaps the task's review spans (each review
-   record's end minus its duration) is `judges`; overlapping its recorded verify spans, `verify` (a stretch under both
-   counts once, as judges).
+   turn (task 249: the close run as a background command after the turn ended; the rule holds for every close's last
+   gap outside a turn), that overlaps the task's review spans (each review record's end minus its duration) is
+   `judges`; overlapping its recorded verify spans, `verify` (a stretch under both counts once, as judges).
 7. The close's own session is the one its `done` record names (`session_id`); there the time runs to the receipt's
    stamp, and the close's own call (this task's last shell call with no PostToolUse) stays open through a prompt that
    comes meanwhile (a background notification). A line of that session in the stamp's own second that is no task's
-   came after the close (the notification of a close run in the background) and is not the closure's (task 249).
-   Without such a record, the latest call of THIS task still open, in any session, of any tool, ends at the stamp. A call another session or another task left open does not run on. The close
+   came after the close (the notification of a close run in the background) and is not the closure's, though its
+   suspend sample still brackets the last gap (task 249). Without such a record, the latest call of THIS task still
+   open, in any session, of any tool, ends at the stamp. A call another session or another task left open does not
+   run on. The close
    takes its own suspend sample as it composes, and a sample written within 120 s after the close (its PostToolUse's,
    on a later `tasks numbers`) also brackets its last gap; a later one does not, so sleep long after the close does
    not land in it. A suspend within those 120 s still can: a pair that straddles the close gives its whole `susp`
@@ -524,6 +526,11 @@ it equals the session's span (a test holds this over 400 built timelines).
 - Sleep is measured only between two samples of one boot. `susp` itself undercounts the kernel's suspend spans by
   the device suspend / resume time (task 234, W7).
 - Two sessions working on one task at once each count their own time.
+- A close run in the background after the turn ended (task 249): only its recorded verify and review spans leave
+  `owner-idle`. What they do not cover — the close's audit, its numbers, a reused verify — stays `owner-idle`, as does
+  an owner's real wait before a close the owner typed; only the close's last gap is carved, so a prompt that comes while the
+  close still runs leaves the part before it `owner-idle`; and a close whose own call has a line in the stamp's second
+  ends its wait at that line, uncarved.
 - Two races within seconds of a close are not told apart (stated limits, the owner, 2026-10-18, task 242): a close
   whose `done` is written only after a reopen and a second close in another session gives both closures the wrong
   life; and a recomposed closure (a write that failed) can take a suspend from the 120 s after the close into its

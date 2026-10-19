@@ -324,6 +324,17 @@ class ThePartition(unittest.TestCase):
         self.assertEqual(got["by_kind"], {"agent": 8, "verify": 150, "judges": 25, "owner-idle": 17})
         self.assertEqual((got["total"], got["not_task"]), (200, 0))
 
+    def test_the_dropped_notifications_suspend_sample_still_brackets_the_wait(self):
+        # task 249's impl round 1 (sonnet): the line dropped at the stamp may carry the only sample that closes the
+        # close's wait — the machine slept 100 s of it: `slept`, never verify / judges / owner-idle
+        lines = [L(0, "UserPromptSubmit"), L(8, "Stop", decision="allow", susp=0, sts=T0 + 8, boot="aaaaaaaa"),
+                 L(200, "UserPromptSubmit", detail="not logged: a notification", task="", susp=100, sts=T0 + 200,
+                   boot="aaaaaaaa")]
+        got = numbers.session_partition(lines, "007", T0 + 200, [], [(T0 + 10, T0 + 60)], known_close=True)
+        self.assertEqual(got["slept"], 100, got)
+        self.assertEqual(got["by_kind"], {"agent": 8, "verify": 50, "owner-idle": 42})
+        self.assertEqual(got["sleep_unmeasured"], 8, "only the turn before the first sample; the wait is bracketed")
+
     def test_the_tasks_own_line_in_the_stamps_second_is_kept(self):
         # only a line that is no task's is dropped there: the close's own call, started in the stamp's second, still
         # ends the wait before it as rule 4 says (the owner's, uncarved), with no virtual End in its place

@@ -554,7 +554,9 @@ def session_partition(lines: "list[dict]", task: str, end: float, reviews: "list
         # (it ends the session's task) — the notification of the close run as a background command. It is not this
         # closure's, and the close's virtual End stands in its place, as when the close composed its numbers; kept, a
         # recompose read the whole wait as another task's time (tasks 247 / 248)
+        after = [r for r in lines if r["_t"] >= end and task_of(r) != task]
         lines = [r for r in lines if r["_t"] < end or task_of(r) == task]
+        ahead.extend(after)     # their suspend samples still bracket that wait (its impl round 1, sonnet)
         if not lines:
             return empty
     keep = None
