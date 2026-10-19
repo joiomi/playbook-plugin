@@ -11,12 +11,11 @@ time** — tasks 243-256. Every closure's `numbers.json` now carries the agent's
 seats' (task 244), read at each turn's end, at each CLI transition and at the session's end (task 246); when the lane
 lock is busy at the session's end, what is left unread there — a call the host is still writing included — is marked
 `unknown` instead of left as a silent gap (tasks 247, 252, 253). Init, when it cannot finish removing the old shell
-logger, fails and
-restores everything (task 243), which ends 1.6.5's known violation PB-INSTALL-ROLLBACK. `tasks numbers` no longer
-counts a close run in the background as the owner's idle time (task 249) and names the time outside any section (task
-248). The suite has 5,706 tests (5,599 at 1.6.5); CI is the same two Linux lanes. The guarantee ledger has
-135 rows, 122 verified (121 at 1.6.5), and no known violation. The live gauntlet on this release: 18 PASS, 5 WAITING
-(the grok rows: its account is out of credit), 0 FAIL.
+logger, fails and restores everything (task 243), which ends 1.6.5's known violation PB-INSTALL-ROLLBACK. `tasks
+numbers` no longer counts a close run in the background as the owner's idle time (task 249) and names the time outside
+any section (task 248). The suite has 5,706 tests (5,599 at 1.6.5); CI is the same two Linux lanes. The guarantee
+ledger has 135 rows, 122 verified (121 at 1.6.5), and no known violation. The live gauntlet on this release: 18 PASS,
+5 WAITING (the grok rows: its account is out of credit), 0 FAIL.
 
 **Upgrading:** `/playbook:upgrade`, then restart every Claude Code session. No `/playbook:init` step: what init writes
 into a project — the CLAUDE.md block, the `.gitignore` block, `.claude/hooks/monitor-nudge.sh` and the monitor's files —
@@ -24,30 +23,29 @@ is unchanged since 1.6.5, `CLAUDE.md.template`, `claude-md-merge.py` and `comman
 steps changed (task 243), and they apply the next time it runs. One exception: on a HOME where 1.6.5's init left the old
 shell logger half removed (its known violation — `~/.claude` not writable, the file listed under "Skipped"), re-run
 `/playbook:init` once `~/.claude` can be written; 1.6.6's init finishes the removal, or fails and restores everything.
-The agent's recorder comes with the plugin's
-`hooks.json` (a second Stop hook) and `session-end-hook`. The first time it reads a transcript it has
-no record of, it counts it from its start when it is at most 8 MiB — under the task active then — and otherwise marks
-what came before `unknown`. A restarted session starts a new transcript, so nothing earlier is read; a session resumed
-across the upgrade (`claude --resume`) continues its old transcript, and up to that size its earlier calls go to the
-task it is on at its first turn's end. From 1.6.4 or earlier, 1.6.5's upgrade notes apply first, its `/playbook:init`
-step included.
+The agent's recorder comes with the plugin's `hooks.json` (a second Stop hook) and `session-end-hook`. The first time it
+reads a transcript it has no record of, it counts it from its start when it is at most 8 MiB — under the task active
+then — and otherwise marks what came before `unknown`. A restarted session starts a new transcript, so nothing earlier
+is read; a session resumed across the upgrade (`claude --resume`) continues its old transcript, and up to that size its
+earlier calls go to the task active at the recorder's first read of it (a turn's end, or a CLI transition). From 1.6.4
+or earlier, 1.6.5's upgrade notes apply first, its `/playbook:init` step included.
 
-**Measured before the release**, in temporary folders: on a project 1.6.5's `/playbook:init` set up, with a task
-1.6.5 left in flight and no init since, 1.6.6's `doctor` (14 of 14 checks), `bootstrap`, `new`, `work`, `verify` and a
-close ran clean; the recorder, run as the Stop hook on a transcript, put its calls under the task, each counted once,
-and the closure's `numbers.json` carries them; `session-end-hook` recorded before it removed the session dir. A real
-headless session on this release (a small model, five tool calls) closed a task whose `agent` counts equal an
-independent count of its transcript between the call that ran `tasks work` and the one that ran the close.
+**Measured before the release**, in temporary folders: on a project 1.6.5's `/playbook:init` set up, with a task 1.6.5
+left in flight and no init since, 1.6.6's `doctor` (14 of 14 checks), `bootstrap`, `new`, `work`, `verify` and a close
+ran clean; the recorder, run as the Stop hook on a transcript, put its calls under the task, each counted once, and the
+closure's `numbers.json` carries them; `session-end-hook` recorded before it removed the session dir. A real headless
+session on this release (a small model, five tool calls) closed a task whose `agent` counts equal an independent count
+of its transcript between the two transitions.
 
 **Going back** to 1.6.5 (`a59ca13`): in the release clone the marketplace reads, `git -C <clone> checkout a59ca13`,
 then `claude plugin marketplace update playbook-x-marketplace` and `claude plugin update
-playbook@playbook-x-marketplace`, then restart every Claude Code session (a running one keeps the copy it started
-with) and check that `claude plugin list` says 1.6.5; no init to undo. Measured on a copy of a project 1.6.6 wrote:
-1.6.5's `doctor`, `bootstrap`, `list`,
-`status` and `numbers` ran clean and left `numbers.json` untouched (1.6.5 shows the closure without its `agent` line,
-and records no tokens). Coming back to 1.6.6 after that, the recorder goes on from its last read position: the calls
-made while 1.6.5 ran are counted once, under the task active at its first read. Before the next
-`/playbook:upgrade`, `git -C <clone> checkout main`: its `git pull --ff-only` refuses a detached HEAD.
+playbook@playbook-x-marketplace` (a downgrade this way is not measured), then restart every Claude Code session (a
+running one keeps the copy it started with) and check that `claude plugin list` says 1.6.5; no init to undo. Measured
+on a copy of a project 1.6.6 wrote: 1.6.5's `doctor`, `bootstrap`, `list`, `status` and `numbers` ran clean and left
+`numbers.json` untouched (1.6.5 shows the closure without its `agent` line, and records no tokens). Coming back to
+1.6.6 after that, the recorder goes on from its last read position: the calls made while 1.6.5 ran are counted once,
+under the task active at its first read. Before the next `/playbook:upgrade`, `git -C <clone> checkout main`: its `git
+pull --ff-only` refuses a detached HEAD.
 
 **Every closure's numbers carry the main agent's own tokens** — task 244 (the owner, 2026-10-18: "Da, după 243
 (Recomandat)"). Until now `numbers.json` held each judge seat's tokens but not the agent's — on this project the larger
@@ -99,16 +97,18 @@ judges 33 s; the totals are unchanged.
 
 ### Known limitations
 
-- The agent's tokens: `enforcement.jsonl` never rotates, and the recorder adds a record per turn per model. Measured
-  on a synthetic year at this project's pace (300 turns a day): 60 MB, the close's read about 2 s of its 5 s budget,
-  and past the 32 MiB scan bound (about six months) a new transcript's first turn gets an `unknown` seed instead of
-  its calls. Rotating it is the next task (the owner, 2026-10-19: "Da, în Faza B (Recomandat)"). A `claude` started
-  from another session's shell is counted under the outer session's task; a transcript the host rewrote in place would
-  be counted again (not observed); with the lane lock free at the session's end, a call the host is still writing then
-  is neither counted nor marked (a host killed mid-write); the call that runs a transition (`tasks work N`, the close)
-  is charged to the
-  span where the host wrote it, and the host writes a call holding parallel tool uses after its tools ran, so that
-  call can land after the transition (seen on a real session). The rest: `docs/enforcement-journal.md`, Family 6.
+- `enforcement.jsonl` never rotates, and the recorder adds a record per turn per model. Measured on a synthetic year at
+  this project's pace (300 turns a day): 60 MB, the close's read about 2 s of its 5 s budget, and past the 32 MiB scan
+  bound (about six months) a new transcript's first turn gets an `unknown` seed instead of its calls. Rotating it is
+  the next task (the owner, 2026-10-19: "Da, în Faza B (Recomandat)").
+- With the lane lock free at the session's end, a call the host is still writing then is neither counted nor marked (a
+  host killed mid-write).
+- The call that runs a transition (`tasks work N`, the close) is charged to the span where the host wrote it, and the
+  host writes a call holding parallel tool uses after its tools ran, so that call can land after the transition (seen
+  on a real session).
+- A `claude` started from another session's shell is counted under the outer session's task. A transcript the host
+  rewrote in place, or an old conversation the host copied into a new file (a fork), would be counted again (neither
+  observed). The rest: `docs/enforcement-journal.md`, Family 6.
 - A close run in the background: only its recorded verify and review spans leave `owner-idle`; its audit and numbers
   time stays there.
 - A task's numbers: two races within seconds of a close are not told apart (1.6.5's stated limits, unchanged).
