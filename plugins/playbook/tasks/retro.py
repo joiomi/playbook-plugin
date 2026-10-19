@@ -282,8 +282,8 @@ def lifecycle_records(journal_path: "Path | None") -> "list[tuple[str, str, str,
     except (OSError, OutOfTime):
         import sys as _sys
         # said, never a silent empty list (impl r1 Q11, opus)
-        print("tasks: the task transitions could not all be read within 60 s (the enforcement journal and its "
-              "archives) — none are used this time", file=_sys.stderr)
+        print("tasks: the task transitions could not all be read (the enforcement journal and its archives: not "
+              "within 60 s, or an archive unreadable) — none are used this time", file=_sys.stderr)
         return []
     out = []
     for line in lines:

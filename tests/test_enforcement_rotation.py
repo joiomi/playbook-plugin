@@ -1402,6 +1402,120 @@ class ImplRoundOneFixes(_Archives):
         self.assertEqual([json.loads(x)["reason"] for x in lines], ["work", "done", "work"])
 
 
+class ImplRoundTwoFixes(_Archives):
+    """Impl round 2's findings (R1-R7 at the end of judge.md), each red before its fix."""
+
+    def idle_twin(self) -> Path:
+        self.write(self.rec("work", self.now))
+        t = int(self.now - 3600)
+        twin = self.jdir / f"enforcement.jsonl.archived-20261019-000000-{t}-1"
+        os.link(self.live, twin)                               # a rotation killed between its link and its rename
+        os.utime(self.live, (self.now - 3600, self.now - 3600))
+        return twin
+
+    def test_r1_an_archive_on_the_live_inode_is_never_compressed(self):
+        """sol: a repair that could not run, then a compression, turned the live file's twin into a `.gz`."""
+        twin = self.idle_twin()
+        self.pbj._ej_compress_idle(self.jdir)
+        self.assertFalse(Path(str(twin) + ".gz").exists())
+
+    def test_r1_no_compression_after_a_repair_that_could_not_run(self):
+        t = int(self.now - 3600)
+        p = self.jdir / f"enforcement.jsonl.archived-20261019-000000-{t}-1"
+        p.write_bytes(b'{"hook":"x"}\n')
+        os.utime(p, (self.now - 3600, self.now - 3600))
+        real = self.pbj._ej_rotate_locked
+        setattr(self.pbj, "_ej_rotate_locked", lambda *a: "skipped: the journal is busy")
+        try:
+            self.pbj.rotate_enforcement(self.lane)
+        finally:
+            setattr(self.pbj, "_ej_rotate_locked", real)
+        self.assertFalse(Path(str(p) + ".gz").exists())
+
+    def test_r2_the_carry_wording_inside_a_record_keeps_its_task_in_the_index(self):
+        """astra, sol (reproduced): a verify run whose command printed the wording lost its task."""
+        self.write(self.rec("verify run", self.now, hook="verify", task="61",
+                            command="printf 'read position carried'"))
+        self.pad()
+        self.pbj.rotate_enforcement(self.lane, limit=self.LIMIT)
+        [arch] = self.archives()
+        self.assertIn("61", json.loads(Path(str(arch) + ".tasks").read_text())["tasks"])
+
+    def corrupt(self) -> Path:
+        import gzip
+        t = self.now - 3000
+        p = self.arch(int(t + 100), [self.rec("work", t + i) for i in range(200)], tasks=["7"], gz=True)
+        gz = Path(str(p) + ".gz")
+        data = gzip.compress(b"".join(_line(self.rec("work", t + i)) for i in range(200)))
+        gz.write_bytes(data[: len(data) // 2])                  # cut: a disk that lost its tail
+        self.write(self.rec("done", t + 300))
+        return gz
+
+    def test_r3_a_cut_archive_makes_the_read_incomplete_not_empty(self):
+        """astra, sol (reproduced), opus: an unreadable `.gz` read as no lines, and every reader said nothing."""
+        self.corrupt()
+        with self.assertRaises(self.numbers.JournalIncomplete):
+            self.read()
+        self.assertTrue(issubclass(self.numbers.JournalIncomplete, self.numbers.OutOfTime))
+
+    def test_r3_the_dashboard_and_the_retro_say_so(self):
+        import contextlib
+        import io
+        from tasks import dashboard, retro
+        self.corrupt()
+        self.write(self.rec("x", self.now, hook="review", seat="a", status="ok", kind="panel"))
+        self.assertEqual(dashboard.load_review_journal(self.live, since=0)[2], "truncated")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(retro.lifecycle_records(self.live), [])
+        self.assertIn("could not", err.getvalue())
+
+    def test_r4_many_spooled_lines_are_placed_in_bounded_time(self):
+        """opus: one walk back per spooled line was quadratic, and the deadline was never checked there."""
+        t0 = self.now - 50000
+        with open(self.live, "wb") as f:
+            for i in range(20000):
+                f.write(_line(self.rec("work", t0 + i, task="7")))
+                f.write(_line(self.rec("verify run", t0 + i, hook="verify", task="7",
+                                       spool=f"enforcement.jsonl.spool-20261019-000000-1-1.{i}")))
+        t = time.monotonic()
+        lines = self.numbers.enforcement_lines(self.jdir, time.monotonic() + 30)
+        self.assertLess(time.monotonic() - t, 3.0)
+        self.assertEqual(len(lines), 40000)
+        self.assertEqual([json.loads(x)["reason"] for x in lines[:4]], ["work", "verify run", "work", "verify run"])
+
+    def test_r6_a_spool_that_cannot_be_taken_does_not_read_the_live_file(self):
+        self.write(self.rec("work", self.now))
+        (self.jdir / "enforcement.jsonl.spooling-20261019-000000-999999-1").write_bytes(b'{"hook":"x"')   # no newline
+        opened = []
+        real = os.open
+
+        def spy(path, *a, **k):
+            opened.append(str(path))
+            return real(path, *a, **k)
+        os.open = spy
+        try:
+            self.pbj._ej_take_spools(self.jdir, self.live)
+        finally:
+            os.open = real
+        self.assertNotIn(str(self.live), opened)
+
+    def test_r7_a_compression_that_failed_waits_the_idle_time_again(self):
+        t = int(self.now - 3600)
+        p = self.jdir / f"enforcement.jsonl.archived-20261019-000000-{t}-1"
+        p.write_bytes(b'{"hook":"x"}\n')
+        os.utime(p, (self.now - 3600, self.now - 3600))
+        calls = []
+        real = self.pbj._gzip_to
+        setattr(self.pbj, "_gzip_to", lambda src, tmp: calls.append(src) or False)    # a full disk
+        try:
+            self.pbj.rotate_enforcement(self.lane)
+            self.pbj.rotate_enforcement(self.lane)
+        finally:
+            setattr(self.pbj, "_gzip_to", real)
+        self.assertEqual(len(calls), 1)
+
+
 def _epoch(ts: str) -> float:
     import calendar
     return calendar.timegm(time.strptime(ts, "%Y-%m-%dT%H:%M:%SZ"))

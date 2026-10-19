@@ -929,6 +929,8 @@ def rotate_enforcement(lane, held: bool = False, limit: "int | None" = None) -> 
                 return "skipped: the journal is busy"     # a reader holds it: not even the pre-scan (plan r1, P9)
             pre = _ej_prescan(live) if big else None
             said = _ej_rotate_locked(jdir, live, limit, pre)
+            if said.startswith("skipped"):
+                return said                 # no repair ran: an archive twin of the live file may still be there (R1)
             done = _ej_compress_idle(jdir)
             return "; ".join(x for x in (said, done) if x)
         finally:
@@ -1015,15 +1017,19 @@ def _ej_positions(fd: int, start: int, size: int, found: dict, horizon: str, tas
         pos += len(chunk)
         *whole, carry = (carry + chunk).split(b"\n")
         for raw in whole:
+            rec = None
+            if b'"agent-usage"' in raw:
+                try:
+                    rec = json.loads(raw)
+                except ValueError:
+                    rec = None
+            ours = isinstance(rec, dict) and rec.get("hook") == "agent-usage" \
+                and rec.get("reason") in (EJ_CARRY_REASON, EJ_HORIZON_REASON)
             m = _EJ_TASK.search(raw)
-            if m and EJ_CARRY_REASON.encode() not in raw and EJ_HORIZON_REASON.encode() not in raw:
-                tasks.add(m.group(1).decode())      # a carried line names an old task: no record of it here (Q13)
-            if b'"agent-usage"' not in raw:
-                continue
-            try:
-                rec = json.loads(raw)
-            except ValueError:
-                continue
+            if m and not ours:
+                # a carried line names an old task, no record of it here (Q13) — told by its parsed hook and reason,
+                # never by its wording, which a command can print (impl r2 R2)
+                tasks.add(m.group(1).decode())
             if not isinstance(rec, dict) or rec.get("hook") != "agent-usage":
                 continue
             if rec.get("reason") == EJ_HORIZON_REASON:
@@ -1160,9 +1166,13 @@ def _ej_take_spools(jdir: Path, live: Path) -> None:
     """Under the exclusive hold: the spools merged once each (plan r1, P2) — the ids already in the live file read
     first, only when there is a spool to take."""
     try:
-        if not any(n.startswith((EJ_NAME + ".spool-", EJ_NAME + ".spooling-")) for n in os.listdir(jdir)):
-            return
+        names = [n for n in os.listdir(jdir) if n.startswith((EJ_NAME + ".spool-", EJ_NAME + ".spooling-"))]
     except OSError:
+        return
+    if not names:
+        return
+    if not any(_ej_takeable(jdir / n) for n in names):
+        _take_spools(jdir, live, EJ_NAME, seen_ids=set(), cap=16384)    # links removed; the live file not read (R6)
         return
     seen: set = set()
     try:
@@ -1185,6 +1195,30 @@ def _ej_take_spools(jdir: Path, live: Path) -> None:
     _take_spools(jdir, live, EJ_NAME, seen_ids=seen, cap=16384)     # a tagged 4 KiB span passes 4 KiB (impl r1 Q2)
 
 
+def _ej_takeable(p: Path) -> bool:
+    """Whether `_take_spools` would take this spool: a regular file of at most 16 KiB — a writer's temporary only once
+    its writer (the pid in its name) is gone and its line is whole."""
+    try:
+        st = os.lstat(p)
+    except OSError:
+        return False
+    if not stat.S_ISREG(st.st_mode) or st.st_size > 16384:
+        return False
+    if ".spooling-" in p.name:
+        m = re.search(r"-(\d{1,10})-\d+$", p.name)
+        if not m or os.path.isdir(f"/proc/{m.group(1)}") or st.st_size == 0:
+            return False
+        try:
+            fd = os.open(str(p), os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0))
+        except OSError:
+            return False
+        try:
+            return os.pread(fd, 1, st.st_size - 1) == b"\n"
+        finally:
+            os.close(fd)
+    return True
+
+
 def _ej_compress_idle(jdir: Path) -> str:
     """Each closed archive idle for 10 minutes — by the rename time its name records and by its mtime — compressed
     OUTSIDE the lock (the appends never wait on it), then swapped in under the exclusive hold only when the archive is
@@ -1193,6 +1227,10 @@ def _ej_compress_idle(jdir: Path) -> str:
     import fcntl
     done = 0
     now = time.time()
+    try:
+        live_ino = os.lstat(jdir / EJ_NAME).st_ino
+    except OSError:
+        live_ino = None
     for n in sorted(os.listdir(jdir)):
         p = jdir / n
         if n.startswith(EJ_NAME) and ".gz.tmp-" in n:
@@ -1210,8 +1248,8 @@ def _ej_compress_idle(jdir: Path) -> str:
             st = os.lstat(p)
         except OSError:
             continue
-        if not stat.S_ISREG(st.st_mode) or now - st.st_mtime <= _EJ_IDLE_S:
-            continue
+        if not stat.S_ISREG(st.st_mode) or now - st.st_mtime <= _EJ_IDLE_S or st.st_ino == live_ino:
+            continue                        # the live file's twin (a rotation killed half-way): never (impl r2 R1)
         gz = jdir / (n + ".gz")
         lk = _ej_lock_fd(jdir)
         if lk is None:
@@ -1226,14 +1264,18 @@ def _ej_compress_idle(jdir: Path) -> str:
                 continue
             tmp = jdir / f"{n}.gz.tmp-{os.getpid()}"
             if not _gzip_to(p, tmp):
+                os.utime(p, None)           # failed (a full disk): tried again after the idle time (impl r2 R7)
                 continue
             if not _flock_wait(lk, fcntl.LOCK_EX, 0.2):
                 tmp.unlink()
                 continue
             now_st = os.lstat(p)
-            if (now_st.st_size, now_st.st_mtime_ns) != (st.st_size, st.st_mtime_ns) \
-                    or _gz_isize(tmp) != st.st_size % (1 << 32):
-                tmp.unlink()                # written since, or not all of it (Q4): compressed again later
+            if (now_st.st_size, now_st.st_mtime_ns) != (st.st_size, st.st_mtime_ns):
+                tmp.unlink()                # written since: compressed again later
+                continue
+            if _gz_isize(tmp) != st.st_size % (1 << 32):
+                tmp.unlink()                # not all of it (Q4): after the idle time again (R7)
+                os.utime(p, None)
                 continue
             os.link(tmp, gz)
             p.unlink()
@@ -1272,7 +1314,11 @@ def _gzip_to(src: Path, tmp: Path) -> bool:
     except OSError:
         return False
     try:
-        sfd = os.open(str(src), os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            sfd = os.open(str(src), os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0))
+        except OSError:
+            os.close(fd)                    # not leaked (impl r2 R5)
+            raise
         with os.fdopen(fd, "wb") as raw, os.fdopen(sfd, "rb") as f:
             if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
                 raise OSError("not a regular file")

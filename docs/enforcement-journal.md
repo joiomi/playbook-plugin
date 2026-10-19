@@ -375,6 +375,10 @@ reader never makes it, so a dry run writes nothing):
 4. one line per `spool` id, a spooled line placed by its `ts` after the ordinary lines of its second; carry and
    horizon lines skipped.
 
+A chosen archive that cannot be read whole (a `.gz` cut short, a file gone) makes the read incomplete, never empty:
+`numbers.JournalIncomplete` — the close then writes no numbers and says `numbers: not written (JournalIncomplete)`, the
+dashboard says `truncated`, the retro says so on stderr.
+
 A task's numbers read only the archives whose `.tasks` names the task (or that have none) — 0.13 s for a task in the
 live file, 0.76 s for one begun in the oldest of 10 compressed archives (200 MB of history; measured). The retro
 reads every archive; the dashboard and the bootstrap's panel health those renamed since their window's baseline began.
@@ -382,7 +386,8 @@ reads every archive; the dashboard and the bootstrap's panel health those rename
 **Bounds.** Appends with no pause between them (not seen in use: a hook writes a line or two a second at most) keep the
 lock shared and postpone the rotation — never a loss. A reopen inside the same second as a close whose `done` waited
 over 5 s for the lock may be read before it. A transcript resumed after 30 days idle gets a seed: its first turn after
-the pause is not counted.
+the pause is not counted; so would a resumed or forked transcript that begins with copied old entries (not seen here:
+no message id shared between the 300 newest transcripts, 2026-10-19).
 
 **Going back to one file** (a downgrade to 1.6.6, whose readers read only the live file). Close every Claude Code
 session of the project first, so nothing writes the journal, then, in the journal directory (`.agent/journal`, or

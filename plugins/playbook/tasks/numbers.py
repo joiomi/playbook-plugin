@@ -37,6 +37,11 @@ class OutOfTime(Exception):
     """The composition ran past its time budget (the close must not wait on it)."""
 
 
+class JournalIncomplete(OutOfTime):
+    """An enforcement archive the read chose could not be read whole (task 257, impl r2 R3): what would come of it is
+    incomplete, so nothing is composed from it — said, never incomplete numbers."""
+
+
 # --- reading ----------------------------------------------------------------------------------------------------------
 
 _ARCHIVE = re.compile(r"hooks\.jsonl\.archived-\d{8}-\d{6}-(\d{1,12})-\d+(\.gz)?")
@@ -282,13 +287,14 @@ def _ej_read_once(jdir: Path, deadline: float, task: "str | None", since: "float
             archives = archives[first:]
         picked = [(seq, n) for seq, _epoch, n in archives
                   if task is None or _ej_names_task(jdir, n[:-3] if n.endswith(".gz") else n, str(task))]
-        sources = [jdir / n for _, n in picked] + [live] + [jdir / n for n in names if _EJ_SPOOL.fullmatch(n)]
+        sources = [(jdir / n, True) for _, n in picked] + [(live, False)] + \
+            [(jdir / n, False) for n in names if _EJ_SPOOL.fullmatch(n)]
         ordinary: "list[str]" = []
         spooled: "dict[str, str]" = {}
-        for path in sources:
+        for path, archive in sources:
             if time.monotonic() > deadline:
                 raise OutOfTime(str(path))
-            for k, raw in enumerate(_lines_of(path)):
+            for k, raw in enumerate(_archive_lines(path) if archive else _lines_of(path)):
                 if k % 2000 == 1999 and time.monotonic() > deadline:
                     raise OutOfTime(str(path))
                 if not raw.strip():
@@ -300,15 +306,18 @@ def _ej_read_once(jdir: Path, deadline: float, task: "str | None", since: "float
                     ordinary.append(raw)
     if not spooled:
         return ordinary
-    stamps = [_ts_of(r) for r in ordinary]
+    # the rotation's own lines carry the rotation's time, not their place's: each takes the stamp before it, so the
+    # search sees the events' order
+    stamps: "list[str]" = []
+    for r in ordinary:
+        stamps.append(stamps[-1] if stamps and any(f'"reason":"{x}"' in r for x in _EJ_NOT_RECORDS) else _ts_of(r))
     placed: "list[tuple[int, int, str]]" = []
     for i, raw in enumerate(sorted(spooled.values(), key=_ts_of)):
-        t = _ts_of(raw)
-        # after the last ordinary line of its second or earlier (stamps are in file order, near-sorted)
-        at = len(stamps)
-        while at > 0 and stamps[at - 1] > t:
-            at -= 1
-        placed.append((at, i, raw))
+        if i % 2000 == 1999 and time.monotonic() > deadline:
+            raise OutOfTime("spooled lines")
+        # after the ordinary lines of its second and before the later ones — a binary search: the stamps are in file
+        # order, near-sorted (impl r2 R4: a walk back for each line was quadratic)
+        placed.append((bisect.bisect_right(stamps, _ts_of(raw)), i, raw))
     out: "list[str]" = []
     j = 0
     for at, _i, raw in sorted(placed):
@@ -320,6 +329,20 @@ def _ej_read_once(jdir: Path, deadline: float, task: "str | None", since: "float
 
 
 _TS_ANY = re.compile(r'"ts":\s*"([^"]{20})"')
+
+
+def _archive_lines(path: Path) -> "list[str]":
+    """An archive's lines, or JournalIncomplete when it cannot be read whole (a `.gz` cut or not gzip, a file that is
+    gone or not regular) — never no lines for an archive that was there."""
+    data = _read_regular(path)
+    if data is None:
+        raise JournalIncomplete(f"cannot read {path.name}")
+    if path.name.endswith(".gz"):
+        try:
+            data = gzip.GzipFile(fileobj=io.BytesIO(data)).read()
+        except (OSError, EOFError, ValueError) as exc:
+            raise JournalIncomplete(f"cannot decompress {path.name}") from exc
+    return data.decode("utf-8", "replace").split("\n")
 
 
 def _ts_of(raw: str) -> str:
