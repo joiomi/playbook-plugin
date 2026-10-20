@@ -71,7 +71,7 @@ def _load_pb_journal():
 
 def _journal_review_spend(project_path, *, kind, seat, task, round_no,
                           duration_ms, status, usage=None, session_id="",
-                          error=""):
+                          error="", soft_cut=""):
     """Best-effort review-spend record. NEVER raises; a failure is swallowed so a
     review is unaffected. `usage=None` → the explicit `{"status":"unknown"}`
     marker (numbers are never fabricated)."""
@@ -85,7 +85,7 @@ def _journal_review_spend(project_path, *, kind, seat, task, round_no,
             agent_dir, session_id=sid, seat=seat or "",
             task=(str(task) if task else "-"), round_no=round_no,
             kind=kind, duration_ms=duration_ms, status=status, usage=usage,
-            error=error)
+            error=error, soft_cut=soft_cut or "")
     except Exception:
         pass
 
@@ -1935,14 +1935,19 @@ def _cmd_panel_review(cmd_args):
             steer = time_budget_instruction(soft_timeout_secs, timeout_secs)
             prompt = (steer + "\n\n" + extra_prompt) if steer else extra_prompt
 
-        # Single attempt only — never restart a long-running judge. The
-        # hard timeout is hang safety alone (None = no kill at all).
+        # One conversation per seat — never restart a long-running judge. agy's
+        # turn may be cut at the soft deadline and resumed inside the same hard
+        # budget (task 261); the hard timeout is hang safety alone (None = no kill at all).
         # `_t0` wall clock brackets the subprocess for the spend record (task
         # 042); every return path reports its own elapsed + timed-out flag.
         _t0 = time.monotonic()
         _seat_began[label] = _seat_outage.now()
         try:
             adapter = adapter_cls(session_id="judge", project_root=project_path)
+            # task 261: the soft deadline reaches the call only where the adapter acts on it (agy is cut there
+            # and resumed); every other adapter, and every test double, keeps exactly the call it had
+            _soft = ({"soft_timeout_secs": soft_timeout_secs}
+                     if getattr(adapter_cls, "supports_soft_deadline", False) is True else {})
             output = adapter.run_headless_judge(
                 prompt=prompt,
                 model=variant,
@@ -1951,6 +1956,7 @@ def _cmd_panel_review(cmd_args):
                 timeout_secs=timeout_secs,
                 budget_usd=panel_budget,
                 project_view=_pview,
+                **_soft,
             )
             return label, output, int((time.monotonic() - _t0) * 1000), False
         except subprocess.TimeoutExpired as expired:
@@ -1970,12 +1976,18 @@ def _cmd_panel_review(cmd_args):
             _to_usage = _pu(raw)
             raw = _salvage(provider_name, raw.strip())
             marker = f"(timed out after hard {hard_timeout_label})"
+            _cid = getattr(expired, "agy_conversation", None)
+            if isinstance(_cid, str) and _cid:
+                # task 261: its trail stays in agy's conversation; a person can resume it by hand
+                marker = (f"(timed out after hard {hard_timeout_label} — agy conversation `{_cid}`, "
+                          f"resumable by hand with `agy --conversation {_cid}`)")
+            _cut = "timed-out" if getattr(expired, "agy_soft_cut", False) is True else None
             if raw:
                 return label, _JO(
                     f"{marker}\n\n**INCOMPLETE** — killed mid-response; the "
                     f"findings below may be cut off and reached no conclusion:"
-                    f"\n\n{raw}", usage=_to_usage), _dur, True
-            return label, _JO(marker, usage=_to_usage), _dur, True
+                    f"\n\n{raw}", usage=_to_usage, soft_cut=_cut), _dur, True
+            return label, _JO(marker, usage=_to_usage, soft_cut=_cut), _dur, True
         except Exception as e:
             return label, f"(error: {e})", int((time.monotonic() - _t0) * 1000), False
 
@@ -2079,7 +2091,8 @@ def _cmd_panel_review(cmd_args):
             _spend_pending.append((_seat_with_effort(_cls.binary_name(), _var),
                                    _dur_ms, _st_now,
                                    _parse_judge_usage(output),
-                                   _judge_error(output, _st_now)))
+                                   _judge_error(output, _st_now),
+                                   getattr(output, "soft_cut", None) or ""))
 
     _tamper_full = _detect_tamper_full(_ctx_root, _ctx_task, _tamper_before)
     if _view is not None and not _view.matches(_fp_before, _view_cfg):
@@ -2108,11 +2121,11 @@ def _cmd_panel_review(cmd_args):
     # Clean tree: NOW emit the per-seat spend records (best-effort — fully
     # swallowed inside the helper, so they never affect the review; and past the
     # tamper banner, so they can never suppress it). One line per seat.
-    for _lbl, _dms, _st, _usg, _err in _spend_pending:
+    for _lbl, _dms, _st, _usg, _err, _cut in _spend_pending:
         _journal_review_spend(
             project_path, kind="panel", seat=_lbl,
             task=(task_num if task_file else None), round_no=_spend_round,
-            duration_ms=_dms, status=_st, usage=_usg, error=_err)
+            duration_ms=_dms, status=_st, usage=_usg, error=_err, soft_cut=_cut)
 
     # Classify each judge as succeeded vs failed — a failed judge must NOT
     # read as a clean empty review (T139) or a successful one. Shared
@@ -3281,6 +3294,11 @@ def _cmd_single_review(cmd, cmd_args):
                               f"saved ({_save_err}).")
         else:
             saved_note = " The judge produced no output before the kill."
+        _to_cid = getattr(expired, "agy_conversation", None) if expired is not None else None
+        if isinstance(_to_cid, str) and _to_cid:
+            # task 261: its trail stays in agy's conversation; a person can resume it by hand
+            saved_note += (f" agy conversation `{_to_cid}`, resumable by hand with "
+                           f"`agy --conversation {_to_cid}`.")
         print(
             f"\n{review_label} hit hard timeout after {review_timeout_label} "
             f"({review_soft_hard_label}). Raise the hard kill with --timeout, "
@@ -3303,7 +3321,9 @@ def _cmd_single_review(cmd, cmd_args):
                 task=task_num, round_no=_spend_round,
                 duration_ms=int((time.monotonic() - _spend_t0) * 1000),
                 status="timeout", usage=_to_usage,
-                error=_judge_error("", "timeout", timeout_label=review_timeout_label))
+                error=_judge_error("", "timeout", timeout_label=review_timeout_label),
+                soft_cut=("timed-out" if expired is not None
+                          and getattr(expired, "agy_soft_cut", False) is True else ""))
         # Task 108: a judge killed at its hard timeout SPENT its budget — the
         # post-D6 run counts (verdict TIMEOUT); only a run with no spend is released.
         if _pd6_rid and (task_file.parent, _pd6_rid) in _PD6_PENDING:
@@ -3507,58 +3527,37 @@ def _cmd_single_review(cmd, cmd_args):
         if extra_prompt:
             prompt += f"\n\nAdditional steering from the user:\n{extra_prompt}"
 
-        # The whole invocation is the adapter's (task 111, agy 1.2.17) — the same
-        # `judge_invocation` the panel seat uses, so the two cannot drift: the
+        # The whole call is the adapter's (task 111, agy 1.2.17; task 261) — the same
+        # `run_judge_turns` the panel seat uses, so the two cannot drift: the
         # prompt is ONE NDJSON line on stdin (no `-p/--print`, no argv size cap),
-        # the model pin is honoured, `--mode plan`, `--print-timeout` in step with
-        # the review's hard timeout (omitted when unlimited), and the no-web line
-        # (this path never enables web search). Bypass
+        # the model pin is honoured, `--mode plan`, `--print-timeout` at the soft
+        # deadline when one sits below the hard timeout (the cut turn resumed in the
+        # same conversation), else at the hard one (omitted when unlimited), and the
+        # no-web line (this path never enables web search). Bypass
         # (--dangerously-skip-permissions) prepended by sandbox; the read-only
         # project bind — not plan mode — is what stops a write.
         from provider.adapters.antigravity import (
-            AntigravityAdapter, _KILL_GRACE_SECS as _AGY_KILL_GRACE,
-            judge_env as _agy_judge_env, pinned_model_id as _agy_pinned_id)
+            AntigravityAdapter, judge_env as _agy_judge_env, pinned_model_id as _agy_pinned_id)
+        _agy = AntigravityAdapter("judge", project_path)
         try:
-            inv = AntigravityAdapter("judge", project_path).judge_invocation(
-                prompt, model, context=system_context, web_search=False,
-                timeout_secs=review_timeout)
+            _agy.judge_invocation(prompt, model, context=system_context, web_search=False,
+                                  timeout_secs=review_timeout)        # a bad pin fails pre-spawn
             _agy_expected = _agy_pinned_id(model)
         except ValueError as e:  # bad <base>:<effort> pin — fail pre-spawn
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
-        agy_args = inv.argv
-        agy_env = _agy_judge_env(os.environ, "judge")   # API-key variables dropped
-
         from provider import sandbox as _sandbox
-        from provider import usage as _agy_usage
         print(f"Running {review_label} (agy) on {task_path}...", flush=True)
-        _agy_t0 = time.monotonic()
         try:
-            result = _sandbox.run(
-                "agy", agy_args,
-                project_root=project_path,
+            # agy's own timeout (exit 0, `status: SUCCESS`, PARTIAL text) and the killer
+            # both arrive as TimeoutExpired: bail exactly like a killed judge
+            result, _agy_resumed = _agy.run_judge_turns(
+                prompt, model, context=system_context, web_search=False,
+                timeout_secs=review_timeout, soft_timeout_secs=review_soft_timeout,
                 project_view=_pview,     # task 231: the review's fixed copy at the project path
-                project_writable=False,   # judge is read-only — cannot mutate repo/task.md
-                env=agy_env,
-                input=inv.stdin,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                # the killer sits above agy's own --print-timeout, so agy can hand
-                # back its partial text first (plan panel P6)
-                timeout=(None if review_timeout is None
-                         else review_timeout + _AGY_KILL_GRACE),
-            )
+                env=_agy_judge_env(os.environ, "judge"))   # API-key variables dropped
         except subprocess.TimeoutExpired as _expired:
             _bail_review_timeout(_expired)
-        # agy's own timeout exits 0 with `status: SUCCESS` and PARTIAL text: its
-        # stderr line or the wall clock says so — bail exactly like a killed judge.
-        if _agy_usage.agy_timed_out(result.stderr, review_timeout,
-                                    time.monotonic() - _agy_t0, result.stdout):
-            _bail_review_timeout(subprocess.TimeoutExpired(
-                ["agy", *agy_args], review_timeout,
-                output=result.stdout, stderr=result.stderr))
 
     elif backend == "grok":
         if not shutil.which("grok"):
@@ -3709,6 +3708,7 @@ def _cmd_single_review(cmd, cmd_args):
     # recognized envelope with no review text becomes a FAILED result (never a
     # saved review, never a clean seat); unrecognized stdout stays verbatim.
     _spend_usage = None
+    _spend_cut = ""       # task 261: agy's turn cut at the soft deadline and resumed
     if backend in ("codex", "grok", "antigravity", "claude"):
         from provider.usage import (
             agy_judge_output, claude_judge_output, extract_codex, extract_grok, judge_output_from_result)
@@ -3717,6 +3717,10 @@ def _cmd_single_review(cmd, cmd_args):
             # call, a model other than the pin → FAILED; a named cause first.
             _jo = agy_judge_output(result, _sandbox.format_judge_output,
                                    expected_model=_agy_expected, web_search=False)
+            # task 261: a turn resumed after the soft deadline — its own evidence checked, its note first
+            from provider.adapters.antigravity import finish_resumed as _agy_finish
+            _jo = _agy_finish(_jo, result, _agy_resumed, review_soft_timeout)
+            _spend_cut = getattr(_jo, "soft_cut", None) or ""
         elif backend == "claude":
             # task 232: claude's failure keeps plain mode's shape (its words as the stdout tail)
             _jo = claude_judge_output(result, _sandbox.format_judge_output)
@@ -3764,7 +3768,8 @@ def _cmd_single_review(cmd, cmd_args):
         status=_judge_status(_sandbox.format_judge_output(result)),
         usage=_spend_usage if _spend_usage is not None else _parse_judge_usage(output),
         error=_judge_error(_sandbox.format_judge_output(result),
-                           _judge_status(_sandbox.format_judge_output(result))))
+                           _judge_status(_sandbox.format_judge_output(result))),
+        soft_cut=_spend_cut)
     # Budget exhaustion arrives as exit-0 stdout (task 012 L3): detect it
     # BEFORE saving so it never overwrites a prior good review, tell the
     # user how to raise the cap, and exit nonzero — it's not a review.

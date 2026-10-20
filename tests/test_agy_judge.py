@@ -1793,7 +1793,15 @@ class ReviewRunner(unittest.TestCase):
         self.assertEqual(r["usage"], known("success-tools"))
 
     def test_single_judge_print_timeout_and_killer(self):
+        # task 261: with the default soft deadline (900 s) below the hard one, agy's own limit is the soft
+        # deadline (a cut turn is resumed); the killer still sits 30 s above agy's own limit
         self._single(_cp(fx("success-pong.stdout")), extra=("--timeout", "1500"))
+        _agent, args, kw = self.calls[0]
+        self.assertEqual(args[args.index("--print-timeout") + 1], "900s")
+        self.assertEqual(kw["timeout"], 930)
+        # with no soft deadline, agy's own limit is the hard timeout, as before task 261
+        self.calls.clear()
+        self._single(_cp(fx("success-pong.stdout")), extra=("--timeout", "1500", "--soft-timeout", "0"))
         _agent, args, kw = self.calls[0]
         self.assertEqual(args[args.index("--print-timeout") + 1], "1500s")
         self.assertEqual(kw["timeout"], 1530)

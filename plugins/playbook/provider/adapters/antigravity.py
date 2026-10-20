@@ -112,6 +112,96 @@ _API_KEY_ENV = ("GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTI
 # partial text first (it then exits 0 — provider.usage.agy_timed_out catches that).
 _KILL_GRACE_SECS = 30
 
+# A turn cut at the soft deadline is resumed only with at least this long left before the hard limit: the
+# resumed turn re-reads the conversation and writes the review (8-10 s on a small one, measured 2026-10-20).
+_RESUME_MIN_SECS = 60
+
+
+def _text(raw) -> str:
+    """A subprocess stream as text (TimeoutExpired carries bytes or str, or None)."""
+    if isinstance(raw, bytes):
+        return raw.decode("utf-8", errors="replace")
+    return raw if isinstance(raw, str) else ""
+
+
+def _complete_events(stdout: str) -> str:
+    """`stdout`'s lines that are whole JSON objects, each ending in a newline. A turn the killer stopped can end
+    in a cut line, and the parser reads a stream only when every line is an event."""
+    kept = []
+    for line in stdout.split("\n"):
+        if not line.strip():
+            continue
+        try:
+            if isinstance(json.loads(line), dict):
+                kept.append(line + "\n")
+        except ValueError:
+            continue
+    return "".join(kept)
+
+
+def _conversation_id(stdout: str) -> Optional[str]:
+    """The conversation id of agy's first `init` event (its first line, measured on 1.4.3), or None."""
+    for line in stdout.split("\n"):
+        if not line.strip():
+            continue
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            return None
+        if isinstance(ev, dict) and ev.get("event") == "init":
+            cid = ev.get("conversation_id")
+            # only an id that can be one argv element: no option, no path, no space
+            return cid if isinstance(cid, str) and re.fullmatch(r"[A-Za-z0-9-]{1,100}", cid) and not cid.startswith("-") else None
+    return None
+
+
+def _without_print_timeout(argv: list) -> list:
+    """`argv` without its `--print-timeout <value>` pair."""
+    out, skip = [], False
+    for a in argv:
+        if skip:
+            skip = False
+        elif a == "--print-timeout":
+            skip = True
+        else:
+            out.append(a)
+    return out
+
+
+def _timed_out(cmd: list, timeout, stdout: str, stderr: str, conversation: Optional[str], *,
+               soft_cut: bool = False) -> subprocess.TimeoutExpired:
+    """The `TimeoutExpired` the callers' timeout paths take, naming agy's conversation when it is known, and
+    saying whether the turn had been cut at the soft deadline (the seat's spend record carries it)."""
+    exc = subprocess.TimeoutExpired(cmd, timeout, output=stdout, stderr=stderr)
+    exc.agy_conversation = conversation   # type: ignore[attr-defined]
+    exc.agy_soft_cut = soft_cut           # type: ignore[attr-defined]
+    return exc
+
+
+def finish_resumed(out, result, conversation: Optional[str], soft_timeout_secs: "int | None"):
+    """The parsed seat text of a call whose turn was cut at the soft deadline and resumed (`run_judge_turns`
+    returned a conversation id); any other call's text is returned as it is. In order:
+      * a seat that already failed keeps its marker first;
+      * a resumed call whose own stream does not stand as its evidence (`agy_resume_problem`) fails;
+      * an answered seat's text gets one line first, saying it was written after the soft deadline.
+    Its usage is kept, and `soft_cut` says the turn was resumed."""
+    if not conversation:
+        return out
+    from provider.usage import JudgeOutput
+    from tasks.core import human_duration
+    usage, text = getattr(out, "usage", None), str(out)
+    problem = getattr(result, "agy_resume_problem", None)
+    if text.lstrip().startswith("("):
+        return JudgeOutput(text, usage=usage, soft_cut="resumed")
+    if problem:
+        return JudgeOutput(f"(FAILED — {problem})\n\n[the resumed call's text, not this seat's review]\n{text}",
+                           usage=usage, soft_cut="resumed")
+    soft = f" (~{human_duration(soft_timeout_secs)})" if soft_timeout_secs else ""
+    note = (f"**Soft deadline:** agy reached its soft deadline{soft} mid-turn; the findings below were written "
+            f"in a resumed turn of the same conversation (`{conversation}`), told to call no tool and to say what "
+            "it did not check.")
+    return JudgeOutput(f"{note}\n\n{text}", usage=usage, soft_cut="resumed")
+
 
 def validate_model_id(model: str) -> str:
     """An agy judge pin → the model id handed to agy's model flag, or ValueError.
@@ -237,6 +327,113 @@ class AntigravityAdapter(ProviderAdapter):
             argv += ["--print-timeout", f"{timeout_secs}s"]
         return Invocation(argv, stdin=inv.stdin)
 
+    # Task 261: agy has no clock, so a soft deadline in the prompt did nothing for it. Where the review has a soft
+    # deadline below a finite hard one, the judge call is cut at the soft deadline and resumed (`run_judge_turns`).
+    # The panel passes `soft_timeout_secs` only to an adapter that says so here.
+    supports_soft_deadline = True
+
+    def _judge_call(self, argv: list, stdin: Optional[str], timeout_secs: "int | None", *, project_view, env):
+        """One sandboxed agy judge call → (CompletedProcess, elapsed seconds). The subprocess killer sits above
+        agy's own `--print-timeout`, so agy can return first; unlimited stays unlimited (no arithmetic on None),
+        and sandbox.run then skips its process-group killer. encoding="utf-8" guards the decode against a
+        non-UTF-8 locale codec, and errors="replace" keeps a stray byte from failing the call: both paths
+        decode the same way (the single judge always did). Raises `subprocess.TimeoutExpired` when the killer
+        fired."""
+        from provider import sandbox as _sandbox
+        run_timeout = None if timeout_secs is None else timeout_secs + _KILL_GRACE_SECS
+        t0 = time.monotonic()
+        try:
+            result = _sandbox.run(
+                "agy", argv,
+                project_root=self._project_root,
+                project_writable=False,   # judge is read-only — cannot mutate repo/task.md
+                project_view=project_view,   # task 231: the review's fixed copy, mounted at the project path
+                env=env,
+                input=stdin,
+                capture_output=True, text=True, timeout=run_timeout, encoding="utf-8", errors="replace",
+            )
+        except subprocess.TimeoutExpired as expired:
+            expired.agy_elapsed = time.monotonic() - t0     # type: ignore[attr-defined]  # reaping included
+            raise
+        return result, time.monotonic() - t0
+
+    def run_judge_turns(self, prompt: str, model: Optional[str], *, context: str, web_search: bool,
+                        timeout_secs: "int | None", soft_timeout_secs: "int | None" = None,
+                        project_view=None, env=None) -> "tuple[subprocess.CompletedProcess, Optional[str]]":
+        """The judge call, cut at the soft deadline and resumed (task 261) → (result, resumed conversation id).
+
+        With a finite hard limit and a soft deadline below it, the first call gets `--print-timeout <soft>`. A
+        turn cut there is resumed in the same conversation (`--conversation <id>`, the id from its first `init`
+        event) with `soft_deadline_resume_instruction` under the time left before the hard limit, if at least
+        `_RESUME_MIN_SECS` remain; agy still holds everything the turn read (measured on 1.4.3). The result's
+        stdout is the cut turn's complete event lines followed by the resumed stream, its stderr and exit status
+        the resumed call's: the last `result` is the review and the whole call's usage (agy's resumed `result`
+        holds the conversation's running total), and the parser's web-tool and model rules see both turns.
+
+        Anything else is today's single call, unchanged. A call that times out — the single call, a cut turn
+        that cannot be resumed, or its resume — raises `subprocess.TimeoutExpired` as before, carrying
+        `agy_conversation` when the conversation id is known, so the seat's record can name it."""
+        from provider import usage as _usage
+        if env is None:
+            env = judge_env(os.environ, self._session_id)
+        hard = timeout_secs
+        # the cut only where its resume has room: under _RESUME_MIN_SECS + the killer's grace between the two,
+        # cutting would lose time the single call had (plan r1 P4)
+        soft = (soft_timeout_secs if soft_timeout_secs is not None and hard is not None
+                and 0 < soft_timeout_secs and hard - soft_timeout_secs >= _RESUME_MIN_SECS + _KILL_GRACE_SECS
+                else None)
+        first = soft if soft is not None else hard
+        inv = self.judge_invocation(prompt, model, context=context, web_search=web_search, timeout_secs=first)
+        result = None
+        try:
+            result, elapsed = self._judge_call(inv.argv, inv.stdin, first, project_view=project_view, env=env)
+            cut = _usage.agy_timed_out(result.stderr, first, elapsed, result.stdout)
+            out1, err1 = result.stdout or "", result.stderr or ""
+        except subprocess.TimeoutExpired as expired:
+            if soft is None:
+                raise
+            # the killer, not agy, stopped the cut turn: its conversation can still be resumed. The time it took is
+            # measured (`_judge_call`), reaping included, so the resume never runs past the hard limit + the grace
+            elapsed, cut = max(float(getattr(expired, "agy_elapsed", 0.0)), float(soft + _KILL_GRACE_SECS)), True
+            out1, err1 = _text(expired.stdout or expired.output), _text(expired.stderr)
+        if not cut and result is not None:
+            return result, None
+        conversation = _conversation_id(out1)
+        if soft is None or hard is None:
+            raise _timed_out(["agy", *inv.argv], first or 0, out1, err1, conversation)
+        left = int(hard - elapsed)
+        if conversation is None or left < _RESUME_MIN_SECS:
+            raise _timed_out(["agy", *inv.argv], soft, out1, err1, conversation, soft_cut=True)
+        from tasks.template import soft_deadline_resume_instruction
+        argv2 = ["--conversation", conversation] + _without_print_timeout(inv.argv) + ["--print-timeout", f"{left}s"]
+        stdin2 = json.dumps({"event": "user", "message": {"role": "user",
+                             "content": soft_deadline_resume_instruction(soft)}}) + "\n"
+        head = _complete_events(out1)
+        # what agy said in the cut turn stays (an `AGY_ERROR:` there still fails the seat); only the line saying
+        # the turn was cut goes (plan r1 P1)
+        err_head = _usage.agy_stderr_without_timeout(err1)
+        try:
+            result2, elapsed2 = self._judge_call(argv2, stdin2, left, project_view=project_view, env=env)
+        except subprocess.TimeoutExpired as expired:
+            raise _timed_out(["agy", *argv2], left, head + _text(expired.stdout or expired.output),
+                             err_head + _text(expired.stderr), conversation, soft_cut=True)
+        out2, err2 = result2.stdout or "", result2.stderr or ""
+        # the resumed call's own timeout signals only: the cut turn's stderr always carries agy's timeout line
+        if _usage.agy_timed_out(err2, left, elapsed2, out2):
+            raise _timed_out(["agy", *argv2], left, head + out2, err_head + err2, conversation, soft_cut=True)
+        last = _usage._agy_last_result(out2)
+        if (result2.returncode != 0 or last is None or last.get("status") != "SUCCESS") \
+                and _usage.agy_failure_cause(out2, err2) is None:
+            # the resume failed without a cause agy names (a lost conversation, say): the seat timed out at its
+            # soft deadline, as before, and its record names the conversation (plan r1, opus Minor)
+            raise _timed_out(["agy", *argv2], left, head + out2, err_head + err2, conversation, soft_cut=True)
+        combined = subprocess.CompletedProcess(["agy", *argv2], result2.returncode, stdout=head + out2,
+                                               stderr=err_head + err2)
+        # the resumed call stands on its own evidence, not on what the cut turn's events supply (plan r1 P2)
+        combined.agy_resume_problem = _usage.agy_resumed_stream_problem(   # type: ignore[attr-defined]
+            out2, conversation, pinned_model_id(model))
+        return combined, conversation
+
     def run_headless_judge(
         self,
         prompt: str,
@@ -247,40 +444,24 @@ class AntigravityAdapter(ProviderAdapter):
         timeout_secs: "int | None",
         budget_usd: str,
         project_view=None,
+        soft_timeout_secs: "int | None" = None,
     ) -> str:
         import shutil
         if not shutil.which(self.binary_name()):
             return f"(error: {self.binary_name()} not found on PATH)"
-        inv = self.judge_invocation(prompt, model, context=system_context,
-                                    web_search=web_search, timeout_secs=timeout_secs)
-        env = judge_env(os.environ, self._session_id)
         from provider import sandbox as _sandbox
         from provider import usage as _usage
-        # encoding="utf-8" guards the stdout decode against a non-UTF-8 locale
-        # codec. The subprocess killer sits above agy's own
-        # --print-timeout; unlimited stays unlimited (no arithmetic on None), and
-        # sandbox.run then skips its process-group killer.
-        run_timeout = None if timeout_secs is None else timeout_secs + _KILL_GRACE_SECS
-        t0 = time.monotonic()
-        result = _sandbox.run(
-            "agy", inv.argv,
-            project_root=self._project_root,
-            project_writable=False,   # judge is read-only — cannot mutate repo/task.md
-            project_view=project_view,   # task 231: the review's fixed copy, mounted at the project path
-            env=env,
-            input=inv.stdin,
-            capture_output=True, text=True, timeout=run_timeout, encoding="utf-8",
-        )
-        elapsed = time.monotonic() - t0
-        # agy's own timeout exits 0 with `status: SUCCESS` and PARTIAL text: hand it
-        # to the callers' timeout paths (marker first, partial text salvaged, journal
-        # `timeout`) exactly like a judge the killer stopped.
-        if _usage.agy_timed_out(result.stderr, timeout_secs, elapsed, result.stdout):
-            raise subprocess.TimeoutExpired(
-                ["agy", *inv.argv], timeout_secs or 0, output=result.stdout, stderr=result.stderr)
-        return _usage.agy_judge_output(
+        # agy's own timeout exits 0 with `status: SUCCESS` and PARTIAL text: `run_judge_turns` hands it to the
+        # callers' timeout paths (marker first, partial text salvaged, journal `timeout`) exactly like a judge
+        # the killer stopped — after resuming a turn cut at the soft deadline, when it can.
+        result, resumed = self.run_judge_turns(
+            prompt, model, context=system_context, web_search=web_search, timeout_secs=timeout_secs,
+            soft_timeout_secs=soft_timeout_secs, project_view=project_view,
+            env=judge_env(os.environ, self._session_id))
+        out = _usage.agy_judge_output(
             result, _sandbox.format_judge_output,
             expected_model=pinned_model_id(model), web_search=web_search)
+        return finish_resumed(out, result, resumed, soft_timeout_secs)
 
     # ── Identity ─────────────────────────────────────────────────────────────
 

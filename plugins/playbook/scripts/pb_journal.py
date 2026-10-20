@@ -115,7 +115,7 @@ def append(agent_dir, hook, decision, reason, session_id="",
 
 def append_review(agent_dir, *, session_id="", seat="", task="", round_no=0,
                   kind="", duration_ms=None, status="", usage=None,
-                  error="") -> None:
+                  error="", soft_cut="") -> None:
     """Append one REVIEW-SPEND record and return None. Never raises.
 
     Same HARD CONTRACT as `append`: a write failure must NEVER change or break a
@@ -138,6 +138,10 @@ def append_review(agent_dir, *, session_id="", seat="", task="", round_no=0,
                         redacted) and cut to the byte budget the rest of the
                         record leaves under the 512-byte atomic floor; omitted
                         when that budget is under 8 bytes.
+      * `soft_cut`    — task 261, agy seats only: "resumed" when its turn was cut at
+                        the soft deadline and the review written in the resumed turn,
+                        "timed-out" when the cut turn could not be resumed; omitted
+                        otherwise.
       * `usage`       — token usage WHERE the CLI reports it, else the explicit
                         marker `{"status":"unknown"}`. Numbers are NEVER fabricated:
                         codex/grok/agy judge seats carry the CLI's own per-call counts
@@ -174,6 +178,8 @@ def append_review(agent_dir, *, session_id="", seat="", task="", round_no=0,
         if status:
             rec["status"] = _head(status, 16)
         rec["usage"] = _normalize_usage(usage)
+        if soft_cut in ("resumed", "timed-out"):
+            rec["soft_cut"] = soft_cut       # task 261: agy's turn cut at the soft deadline — resumed, or not
         if error and status and status != "ok":
             _err = _fit_error(rec, error)
             if _err:

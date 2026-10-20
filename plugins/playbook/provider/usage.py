@@ -45,10 +45,14 @@ class JudgeOutput(str):
     ``tasks.review._parse_judge_usage`` honours ``.usage`` first. Any str operation
     yields a plain str (usage None) — timeout/error strings never carry a number."""
     usage: Optional[dict]
+    # task 261: "resumed" when agy's turn was cut at the soft deadline and its review written in the resumed
+    # turn, "timed-out" when the cut turn could not be resumed; None otherwise. The seat's spend record carries it.
+    soft_cut: Optional[str]
 
-    def __new__(cls, text: str, usage: Optional[dict] = None):
+    def __new__(cls, text: str, usage: Optional[dict] = None, soft_cut: Optional[str] = None):
         obj = super().__new__(cls, text)
         obj.usage = usage if _valid_known(usage) else None
+        obj.soft_cut = soft_cut if soft_cut in ("resumed", "timed-out") else None
         return obj
 
 
@@ -347,6 +351,39 @@ def agy_print_timed_out(stderr) -> bool:
     return isinstance(stderr, str) and bool(_AGY_PRINT_TIMEOUT_RE.search(stderr))
 
 
+def agy_stderr_without_timeout(stderr) -> str:
+    """`stderr` without agy's own print-timeout line(s) — a cut turn's stderr kept for the resumed call's result
+    (task 261, plan r1 P1): an `AGY_ERROR:` or `error:` line agy wrote before the cut still fails the seat, while
+    the timeout line that only says the turn was cut is not read as the resumed call's own timeout."""
+    if not isinstance(stderr, str):
+        return ""
+    return "".join(ln for ln in stderr.splitlines(keepends=True)
+                   if not _AGY_PRINT_TIMEOUT_RE.search(ln))
+
+
+def agy_resumed_stream_problem(stdout, conversation: str, expected_model: Optional[str]) -> Optional[str]:
+    """Why the RESUMED call's own stream does not stand as its own evidence (task 261, plan r1 P2), or None. It
+    must open with an `init` naming the same conversation (and the pinned model, when pinned) and end with a
+    `result`: once streams are combined, the cut turn's events must not supply what the resumed call lacks."""
+    events = _agy_events(stdout or "", lenient_tail=False) if isinstance(stdout, str) else None
+    if not events:
+        return "the resumed agy call returned no stream-json events"
+    inits = [ev for ev in events if ev.get("event") == "init"]
+    if not inits:
+        return "the resumed agy call's stream has no init event"
+    if inits[0].get("conversation_id") != conversation:
+        return f"the resumed agy call answered another conversation ({inits[0].get('conversation_id')!r})"
+    if expected_model:
+        init = inits[0].get("init")
+        model = init.get("model") if isinstance(init, dict) else None
+        if model != expected_model:
+            return (f"the resumed agy call ran model {model!r}, not the pinned {expected_model!r}" if model else
+                    f"the resumed agy call did not report its model (pinned: {expected_model!r})")
+    if not any(ev.get("event") == "result" for ev in events):
+        return "the resumed agy call's stream has no result event"
+    return None
+
+
 def _agy_last_result(stdout):
     """The stream's last `result` object, or None (no stream, or no result event)."""
     events = _agy_events(stdout or "", lenient_tail=True) if isinstance(stdout, str) else None
@@ -480,6 +517,20 @@ def agy_stream_model(raw) -> Optional[str]:
             model = init.get("model") if isinstance(init, dict) else None
             return model if isinstance(model, str) and model else None
     return None
+
+
+def agy_stream_models(raw) -> list:
+    """The model each `init` event names, in stream order (None where one names none). A turn resumed after
+    agy's soft deadline (task 261) is a second agy process with its own `init`, so a judge call's stream can
+    hold two; [] when the stdout is not the agy stream or has no `init`."""
+    events = _agy_events(raw or "", lenient_tail=True) if isinstance(raw, str) else None
+    models = []
+    for ev in events or []:
+        if ev.get("event") == "init":
+            init = ev.get("init")
+            model = init.get("model") if isinstance(init, dict) else None
+            models.append(model if isinstance(model, str) and model else None)
+    return models
 
 
 # Tools that reach the network. agy's tool list (the `init` event, 1.2.17) names its
@@ -663,7 +714,9 @@ def agy_judge_output(result, format_judge_output, *, expected_model: Optional[st
          FAILED seat — agy has no flag to switch those tools off, and a judge that
          browsed did not review under the conditions the caller set;
       4. on a PINNED seat the stream must name the pinned model: another model, or
-         no `init.model` at all, is a FAILED seat (fail closed — impl panel r1);
+         no `init.model` at all, is a FAILED seat (fail closed — impl panel r1). EVERY
+         `init` must name it: a turn resumed after the soft deadline is a second agy
+         process with its own `init` (task 261);
       5. any FAILED call whose cause agy names (`agy_failure_cause`) gets that cause
          as its FIRST line — `(FAILED — agy quota exhausted: …)` — ahead of the
          standard block, so judge.md, the spend record's `error` and a quota-aware
@@ -707,7 +760,9 @@ def agy_judge_output(result, format_judge_output, *, expected_model: Optional[st
                 f"for this review)\n\n[text written with web access, not this seat's review]\n{text}",
                 usage=usage)
     if not failed and expected_model:
-        ran = agy_stream_model(result.stdout)
+        # every `init` must name the pin: a resumed turn (task 261) is a second process with its own
+        models = agy_stream_models(result.stdout)
+        ran = next((m for m in models if m != expected_model), expected_model) if models else None
         if ran != expected_model:
             said = (f"agy ran model {ran!r}, not the pinned {expected_model!r}" if ran else
                     f"agy did not report the model it ran (pinned: {expected_model!r})")

@@ -314,6 +314,25 @@ def _depth_budget_clause(soft_timeout_secs: "int | None") -> str:
     )
 
 
+def soft_deadline_resume_instruction(soft_timeout_secs: int) -> str:
+    """The message of a judge turn resumed after its soft deadline (task 261).
+
+    agy has no clock, so `time_budget_instruction` alone did nothing for it: its turn is cut at the soft deadline
+    (`--print-timeout`) and the same conversation resumed with this message. It still holds everything the turn
+    read, so it can write its findings now. It must not start new work: the time left is what remains before the
+    hard limit.
+    """
+    from tasks.core import human_duration
+
+    return (
+        f"TIME IS UP — the soft deadline (~{human_duration(soft_timeout_secs)}) has passed and your turn was "
+        "stopped. Do NOT call any tool. Write your final review now, from everything you have already read and "
+        "grounded, in exactly the output format the review instructions in my first message asked for. Say "
+        "plainly which parts you did not get to check. A shorter fully-grounded report beats a longer "
+        "incomplete one."
+    )
+
+
 def time_budget_instruction(
     soft_timeout_secs: "int | None" = None,
     hard_timeout_secs: "int | None" = None,
