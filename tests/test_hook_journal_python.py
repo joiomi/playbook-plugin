@@ -817,6 +817,32 @@ class TheCompressionProtocol(_Rotating):
         finally:
             holder.wait()
 
+    def test_a_repair_without_its_lock_waits_the_idle_time_again(self):
+        """The post-panel judge's run 2 (Minor): the backoff covers a repair whose lock is not had too."""
+        if not shutil.which("flock"):
+            self.skipTest("no flock(1)")
+        self.journal.parent.mkdir()
+        data = b'{"hook":"old"}\n' * 50
+        x = self.idle(data)
+        with gzip.open(str(x) + ".gz", "wb") as f:
+            f.write(data)
+        holders, real = [], self.pbj._gz_holds
+
+        def a_reader_comes(gz, arch):       # after the claim's hold, before the repair's: a reader takes the lock
+            holders.append(subprocess.Popen(["flock", "-s", str(self.journal.parent), "sleep", "2.5"]))
+            time.sleep(0.2)
+            return real(gz, arch)
+        self.pbj._gz_holds = a_reader_comes
+        try:
+            self.rotate()
+            self.assertEqual(len(holders), 1)
+            self.assertTrue(x.exists())
+            self.assertGreater(x.stat().st_mtime, time.time() - 60)
+        finally:
+            self.pbj._gz_holds = real
+            for h in holders:
+                h.wait()
+
     def test_one_compression_a_pass(self):
         self.journal.parent.mkdir()
         self.idle(pid=1)

@@ -995,6 +995,41 @@ class TheBashCompressionProtocol(_Project):
         self.assertTrue(x.exists())
         self.assertGreater(x.stat().st_mtime, time.time() - 60)
 
+    def test_a_fifo_at_the_claims_name_hangs_nothing(self):
+        """The post-panel judge's run 2 (sol, reproduced): noclobber still OPENS an existing FIFO, so a FIFO at
+        `X.gz.tmp-<the hook's pid>` hung the claim while the rotation held the journal directory exclusively — the
+        hook stalled past the host's limit, and a guard's decision with it. The claim now never opens an existing
+        entry (a fresh `mktemp` file, then `mv -n` to its name)."""
+        x = self.idle()
+        script = ('_PB_HJ_T0=$EPOCHREALTIME\nsource "$1"\npb_hook_begin t\nINPUT=""\n'
+                  f'mkfifo "{x}.gz.tmp-$$"\n' + self.in_lane("exit 0"))
+        t0 = time.monotonic()
+        try:
+            r = subprocess.run([bash_or_skip(), "-c", script, "_", str(LIB)], cwd=str(self.proj),
+                               env=self.env(PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1"), capture_output=True, timeout=15)
+        except subprocess.TimeoutExpired:
+            self.fail("the hook hung on a FIFO at its claim's name")
+        self.assertEqual(r.returncode, 0)
+        self.assertLess(time.monotonic() - t0, 10)
+        self.assertTrue(x.exists())
+
+    def test_a_repair_without_its_lock_waits_the_idle_time_again(self):
+        """The post-panel judge's run 2 (Minor): the backoff covers a repair whose lock is not had too."""
+        data = b'{"hook":"old"}\n' * 50
+        x = self.idle(data)
+        with gzip.open(str(x) + ".gz", "wb") as f:
+            f.write(data)
+        jdir = self.lane / "journal"
+        real = shutil.which("gzip")
+        # the holder lets go of gzip's output: on it, `cmp` would wait for the holder's end, and the lock with it
+        reader = self.tools(gzip=(f'if [ "$1" = "-dc" ]; then (flock -s "{jdir}" sleep 3 </dev/null >/dev/null 2>&1 &)'
+                                  f'; sleep 0.3; fi\n'
+                                  f'exec {real} "$@"'))
+        self.rotate(PATH=reader)
+        self.assertTrue(x.exists())
+        self.assertGreater(x.stat().st_mtime, time.time() - 60)
+        time.sleep(3)
+
     def test_a_pair_that_cannot_be_repaired_does_not_starve_the_next_archive(self):
         stuck = self.idle(pid=1)
         with gzip.open(str(stuck) + ".gz", "wb") as f:

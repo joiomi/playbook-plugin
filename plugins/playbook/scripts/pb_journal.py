@@ -1323,7 +1323,10 @@ def _compress_archive(arch: Path, take, claimed: bool = False) -> str:
                     return ""
                 arch.unlink()
                 return "repaired"
-            return take(repair) or ""
+            done = take(repair)
+            if done is None:
+                os.utime(arch, None)        # the lock not had: after the idle time again (post-panel run 2, Minor)
+            return done or ""
         if os.path.lexists(tmp) and not claimed:
             return ""
         if not _gzip_to(arch, tmp):

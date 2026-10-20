@@ -32,7 +32,10 @@ one file again before going back, `docs/enforcement-journal.md`, "Going back to 
 hook journal (`hooks.jsonl`) now shares the enforcement journal's compression:
 - the gzip runs after the rotation's lock is let go, one archive a pass, so no hook waits on it (an append during a
   28 MB compression waited 635 ms before, 0 ms after);
-- one compressor per archive, and a killed one's temporary is removed;
+- one compressor per archive, and a killed one's temporary is removed. The bash hook claims an archive by moving a
+  fresh `mktemp` file in with `mv -n`, so nothing already at the claim's name is opened (a FIFO there hung the hook
+  while it held the directory's lock);
+- a check that fails, or a lock not had (on a repair too), waits the idle time again before the next try;
 - the compressed copy is fsynced and must decompress to exactly the closed file's bytes;
 - the `.gz` and the directory are fsynced before the closed file is removed, and any failure keeps it;
 - a closed file left beside its `.gz` by a killed compression is repaired once the `.gz` holds it exactly.
