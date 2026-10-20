@@ -36,6 +36,7 @@ import unittest
 from pathlib import Path
 
 HOOK = Path(__file__).resolve().parent.parent / "plugins" / "playbook" / "scripts" / "agent-usage-hook"
+RECORDER = HOOK.parent / "agent_usage.py"
 
 
 def entry(mid, model="claude-opus-5-5", out=50):
@@ -517,6 +518,18 @@ class OnAFreshMultiUserClone(_Project):
         r = self.run_hook(self.payload())
         self.assertEqual((r.returncode, r.stdout), (0, ""), r.stderr)
         self.assert_no_root_journal()
+
+    def test_the_recorder_itself_refuses_the_root_lane(self):
+        """PLAN.md "From task 256" (its impl round 1, opus): `agent_usage.py hook` wrote to whatever lane it was given,
+        and its lock made `journal/` — a caller that skipped the hook's `lanes_without_marker` check would bring the
+        root `journal/` back. The recorder now refuses that lane itself, at a Stop and at the session's end."""
+        for busy in ("", "1"):
+            r = subprocess.run(["python3", "-I", str(RECORDER), "hook"], input=json.dumps(self.payload()),
+                               env=self.env(PB_AU_LANE=str(self.agent), PB_AU_SESSION="h1", PB_AU_MARK_BUSY=busy),
+                               capture_output=True, text=True, timeout=60)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("skipped", r.stdout)
+            self.assert_no_root_journal()
 
     def test_the_sessions_end_records_nothing_at_the_root(self):
         p = {"hook_event_name": "SessionEnd", "session_id": "h1", "cwd": str(self.project),

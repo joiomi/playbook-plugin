@@ -575,6 +575,43 @@ class RepairAndCompression(_Journal):
         self.rotate()
         self.assertFalse(stale.exists())
 
+    def test_a_repair_without_its_lock_is_taken_again_after_the_idle_time(self):
+        """PLAN.md "From task 259" (e) (task 263): the backoff of a repair whose lock was not had touched `X` alone, so
+        `X` was newer than its `.gz` and `_compress_archive` never repaired the pair again — the enforcement journal's
+        archive beside the `.gz` that holds it, for good."""
+        import gzip
+        if not shutil.which("flock"):
+            self.skipTest("no flock(1)")
+        data = b'{"hook":"x"}\n' * 100
+        p = self.archive(3600, data=data)
+        gz = Path(str(p) + ".gz")
+        with gzip.open(str(gz), "wb") as f:
+            f.write(data)
+        os.utime(gz, ns=(p.stat().st_atime_ns, p.stat().st_mtime_ns))
+        real = self.pbj._gz_holds
+        holders = []
+
+        def check_then_a_reader(g, src):
+            ok = real(g, src)
+            holders.append(subprocess.Popen(["flock", "-s", str(self.lock), "sleep", "1.5"]))
+            time.sleep(0.3)
+            return ok
+        setattr(self.pbj, "_gz_holds", check_then_a_reader)
+        try:
+            self.rotate()
+        finally:
+            setattr(self.pbj, "_gz_holds", real)
+            for h in holders:
+                h.wait()
+        self.assertTrue(holders)
+        self.assertTrue(p.exists())                                 # the lock not had: kept
+        for q in (p, gz):                                           # the idle time passes: both age alike
+            st = os.stat(q)
+            os.utime(q, ns=(st.st_atime_ns, st.st_mtime_ns - 1200 * 10**9))
+        self.rotate()
+        self.assertFalse(p.exists())
+        self.assertTrue(gz.exists())
+
     def test_only_an_idle_archive_is_compressed_and_its_bytes_kept(self):
         import gzip
         fresh = self.archive(60)

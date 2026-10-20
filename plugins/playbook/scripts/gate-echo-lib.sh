@@ -2034,7 +2034,9 @@ _pb_hj_rotate() {
 # no `.gz` there; `mv -n` to `.gz`, `sync` of the `.gz` and the directory, and only then the archive removed. An archive
 # beside a `.gz` that decompresses to exactly it, and is not newer, is removed the same way (a compression killed before
 # its last step). Any failure — a missing tool, a gzip, cmp or sync that fails, a lock not had — keeps the archive and
-# removes the temporary; a `.gz` that did not hold the archive touches it, so the next try waits the idle time again.
+# removes the temporary. A failed gzip or check, or a lock not had, touches the archive, so the next try waits the idle
+# time again; a repair whose lock was not had touches the `.gz` after it, so the archive is not newer and the pair is
+# taken again (task 263). A `.gz` that does not hold the archive leaves the archive newer: never taken again.
 # Returns 0 when it compressed or repaired, 1 otherwise.
 _pb_hj_compress() {
     local arch="$1" jdir="$2" tmp="$1.gz.tmp-$$" before rc=1
@@ -2044,12 +2046,15 @@ _pb_hj_compress() {
     if [ -e "$arch.gz" ] || [ -L "$arch.gz" ]; then
         [ -f "$arch.gz" ] && [ ! -L "$arch.gz" ] && [ ! "$arch" -nt "$arch.gz" ] || return 1
         if ! _pb_hj_holds "$arch.gz" "$arch"; then
-            touch -c -- "$arch" 2>/dev/null              # not re-checked before the idle time again (impl r1 I4)
+            touch -c -- "$arch" 2>/dev/null              # newer than its `.gz`: never taken again (impl r1 I4)
             return 1
         fi
         { exec 207<"$jdir"; } 2>/dev/null || return 1
         if ! flock -w 1 207 2>/dev/null; then
-            touch -c -- "$arch" 2>/dev/null              # the lock not had: after the idle time again
+            # the lock not had: after the idle time again, and the `.gz` given the archive's very times (`-r`; never
+            # through a link) so the archive is not newer and the pair is taken again (task 263; PLAN.md "From task
+            # 259" (e)) — not a second "now": a file's clock ticks coarsely, so two "now"s may differ either way
+            touch -c -- "$arch" 2>/dev/null && touch -c -h -r "$arch" -- "$arch.gz" 2>/dev/null
         elif [ "$(stat -c '%s %y' -- "$arch" 2>/dev/null)" = "$before" ] && sync -- "$arch.gz" "$jdir" 2>/dev/null; then
             rm -f -- "$arch" 2>/dev/null && rc=0
         fi

@@ -4,6 +4,17 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+**Small repairs to the journals and the recorder** — task 263 (the owner, 2026-10-20: "Reparațiile mici din PLAN"):
+- a closed journal file whose repair could not take its lock stayed for good beside the `.gz` that holds it (both
+  journals): the backoff touched the closed file alone, which made it newer than its `.gz`, and a newer one is never
+  taken again. The `.gz` is now given the closed file's very times (not a second "now": a file's clock ticks coarsely),
+  so the repair lands once the lock is free and the idle time has passed
+  (PLAN.md "From task 259" (e));
+- the agent-usage recorder itself refuses the root lane of a fresh multi-user clone, not only the hooks that call it
+  (PLAN.md "From task 256");
+- the side-by-side writers test counts spooled lines too and says how many were lost (it counted 1207 of 1208 once
+  under the full suite's load: PLAN.md "From task 261" (c)).
+
 **A seat recorded out of credit is asked before it is skipped** — task 262 (the owner, 2026-10-20: "Agy + doar
 judecătorul lipsă (Recomandat)"). On 2026-10-20 opus was skipped for a weekly limit of an account the owner had left
 the day before. A panel now probes a seat whose outage has a reset time (claude, codex, agy) with one tiny judge call

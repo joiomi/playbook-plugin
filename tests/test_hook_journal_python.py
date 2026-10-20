@@ -705,6 +705,44 @@ class TheCompressionProtocol(_Rotating):
         self.assertTrue(Path(str(later) + ".gz").exists())
         self.assertTrue(stuck.exists())
 
+    def test_a_repair_without_its_lock_is_taken_again_after_the_idle_time(self):
+        """PLAN.md "From task 259" (e) (the post-panel judge's run 3, codex Minor; measured on a copy): the backoff of a
+        repair whose lock was not had touched `X` alone, so `X` was then newer than its `.gz`, and neither the claim nor
+        `_compress_archive` took the pair again — a plain archive beside the `.gz` that holds it, for good."""
+        if not shutil.which("flock"):
+            self.skipTest("no flock(1)")
+        self.journal.parent.mkdir()
+        x = self.idle(b'{"hook":"old"}\n' * 50)
+        gz = Path(str(x) + ".gz")
+        with gzip.open(str(gz), "wb") as f:
+            f.write(x.read_bytes())
+        os.utime(gz, ns=(x.stat().st_atime_ns, x.stat().st_mtime_ns))
+        real = self.pbj._gz_holds
+        holders = []
+
+        def check_then_a_reader(g, src):
+            ok = real(g, src)
+            holders.append(subprocess.Popen(["flock", "-s", str(self.journal.parent), "sleep", "2.5"]))
+            time.sleep(0.3)
+            return ok
+        setattr(self.pbj, "_gz_holds", check_then_a_reader)
+        try:
+            self.rotate()
+        finally:
+            setattr(self.pbj, "_gz_holds", real)
+            for h in holders:
+                h.wait()
+        self.assertTrue(holders)
+        self.assertTrue(x.exists())                                 # the lock not had: kept
+        self.assertGreater(x.stat().st_mtime, time.time() - 60)     # and tried again only after the idle time
+        self.assertLessEqual(x.stat().st_mtime_ns, gz.stat().st_mtime_ns)
+        for p in (x, gz):                                           # the idle time passes: both age alike
+            st = os.stat(p)
+            os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns - 1200 * 10**9))
+        self.rotate()
+        self.assertFalse(x.exists())
+        self.assertTrue(gz.exists())
+
     def test_the_claim_is_made_while_the_rotation_holds_the_lock(self):
         """The post-panel judge's run 1 (Minor): the claim's temporary exists before the gzip, AND it is made while the
         rotation holds the journal directory exclusively."""

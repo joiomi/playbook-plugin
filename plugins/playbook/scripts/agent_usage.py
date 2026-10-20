@@ -588,6 +588,11 @@ def hook_main(payload_text: str) -> str:
     if not lane or not os.path.isdir(lane):
         return "skipped: no lane"
     pbj = load_journal()
+    root = os.path.normpath(lane)
+    if os.path.basename(root) == ".agent" and pbj.resolve_lane_dir(os.path.dirname(root)) is None:
+        # the root lane of a fresh multi-user clone (lanes, no `.agent/current_user`): whatever is written there makes
+        # a phantom lane — refused here too, not only by the hooks' `lanes_without_marker` (PLAN.md "From task 256")
+        return "skipped: per-user lanes but no .agent/current_user: the lane is unresolvable"
     from pathlib import Path
     seen_task: list = []
 

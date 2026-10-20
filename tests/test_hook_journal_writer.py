@@ -573,8 +573,12 @@ class SideBySide(_Project):
         for p in procs:
             self.assertEqual(p.wait(timeout=120), 0)
         recs = self.lines()
-        self.assertEqual(len(recs), 8 * 151)
-        self.assertEqual(len({r["detail"] for r in recs if r["detail"]}), 8 * 150)
+        # a writer that waited its 1 s for the lock under load spools its line, never appends it unlocked: such a line
+        # is kept, not lost (PLAN.md "From task 261" (c): 1207 of 1208 once, under the full suite's parallel load)
+        spooled = [rec for f in sorted((self.lane / "journal").glob("hooks.jsonl.spool-*")) for rec in self.lines(f)]
+        self.assertEqual(len(recs) + len(spooled), 8 * 151,
+                         f"{len(recs)} in hooks.jsonl and {len(spooled)} spooled: {8 * 151 - len(recs) - len(spooled)} lost")
+        self.assertEqual(len({r["detail"] for r in recs + spooled if r["detail"]}), 8 * 150)
 
 
 @_needs("flock")
@@ -1040,6 +1044,30 @@ class TheBashCompressionProtocol(_Project):
         self.rotate()
         self.assertTrue(Path(str(later) + ".gz").exists())
         self.assertTrue(stuck.exists())
+
+    def test_a_repair_without_its_lock_is_taken_again_after_the_idle_time(self):
+        """PLAN.md "From task 259" (e) (the post-panel judge's run 3, codex Minor): the backoff touched `X` alone, so `X`
+        was newer than its `.gz` and the claim never took the pair again — the plain archive stayed for good."""
+        data = b'{"hook":"old"}\n' * 50
+        x = self.idle(data)
+        gz = Path(str(x) + ".gz")
+        with gzip.open(str(gz), "wb") as f:
+            f.write(data)
+        os.utime(gz, ns=(x.stat().st_atime_ns, x.stat().st_mtime_ns))
+        jdir = self.lane / "journal"
+        real = shutil.which("gzip")
+        reader = self.tools(gzip=(f'if [ "$1" = "-dc" ]; then (flock -s "{jdir}" sleep 3 </dev/null >/dev/null 2>&1 &)'
+                                  f'; sleep 0.3; fi\n'
+                                  f'exec {real} "$@"'))
+        self.rotate(PATH=reader)
+        self.assertTrue(x.exists())                                 # the lock not had: kept
+        time.sleep(3)                                               # the reader lets go
+        for p in (x, gz):                                           # the idle time passes: both age alike
+            st = os.stat(p)
+            os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns - 1200 * 10**9))
+        self.rotate()
+        self.assertFalse(x.exists())
+        self.assertTrue(gz.exists())
 
     def test_the_claim_is_made_inside_the_rotations_hold(self):
         """Impl r1 I3 (sol): the temporary exists before gzip starts — made under the rotation's hold."""

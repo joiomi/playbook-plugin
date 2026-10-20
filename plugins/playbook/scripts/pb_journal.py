@@ -1304,8 +1304,11 @@ def _compress_archive(arch: Path, take, claimed: bool = False) -> str:
       * An archive beside a `.gz` (a compression killed before its last step) is removed only when the `.gz`
         decompresses to exactly its bytes and it is not newer, the `.gz` and the directory fsynced first.
       * Anything else — a gzip that failed, a `.gz` that does not hold the archive, a lock not had, a sync that failed —
-        keeps the archive and discards the temporary; a `.gz` that did not hold the archive refreshes its mtime, so the
-        next try waits the idle time again.
+        keeps the archive and discards the temporary. A failed gzip or check, or a lock not had, refreshes the
+        archive's mtime, so the next try waits the idle time again; a repair whose lock was not had refreshes the `.gz`
+        after it, so the archive is not newer and the pair is taken again (task 263). A `.gz` that does not hold the
+        archive leaves the archive newer than it, and the pair is never taken again (a reader reads the archive), so
+        it cannot keep later archives waiting.
 
     Readers hold the lock shared while they list and read: they see the archive or its `.gz`, never neither."""
     gz = Path(str(arch) + ".gz")
@@ -1319,7 +1322,7 @@ def _compress_archive(arch: Path, take, claimed: bool = False) -> str:
             if gz.is_symlink() or st.st_mtime > os.lstat(gz).st_mtime:
                 return ""
             if not _gz_holds(gz, arch):
-                os.utime(arch, None)        # not re-checked before the idle time again (impl r1 I4)
+                os.utime(arch, None)        # newer than its `.gz` from now: never taken again (impl r1 I4; run 1)
                 return ""
 
             def repair():
@@ -1331,7 +1334,13 @@ def _compress_archive(arch: Path, take, claimed: bool = False) -> str:
                 return "repaired"
             done = take(repair)
             if done is None:
-                os.utime(arch, None)        # the lock not had: after the idle time again (post-panel run 2, Minor)
+                # the lock not had: after the idle time again (post-panel run 2, Minor) — and the `.gz` given the
+                # archive's new times, so the archive is not newer and the pair is taken again (task 263; PLAN.md
+                # "From task 259" (e): touched alone, the archive stayed beside the `.gz` that holds it for good).
+                # The very times, not a second "now": a file's clock ticks coarsely, so two "now"s may differ either way
+                os.utime(arch, None)
+                a = os.lstat(arch)
+                os.utime(gz, ns=(a.st_atime_ns, a.st_mtime_ns), follow_symlinks=False)
             return done or ""
         if os.path.lexists(tmp) and not claimed:
             return ""

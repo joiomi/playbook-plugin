@@ -5600,6 +5600,10 @@
         {
           "path": "plugins/playbook/scripts/gate-echo-lib.sh",
           "reference": "function:agent_dir_writable"
+        },
+        {
+          "path": "plugins/playbook/scripts/agent_usage.py",
+          "reference": "symbol:hook_main"
         }
       ],
       "failure_consequence": "Critical",
@@ -5693,6 +5697,19 @@
           "negative_control": null,
           "limitations": [
             "Real headless claude sessions: in a two-lane repository with the marker, the session's task, chat log and journal land in its lane and nothing at the root, and `tasks list` reads that lane only; on a fresh clone with no marker nothing of a lane is written at the root, the session is told the marker is missing, and the state echo's empty per-session directory is recorded as the bound."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_agent_usage_hook.py",
+          "reference": "OnAFreshMultiUserClone.test_the_recorder_itself_refuses_the_root_lane",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_agent_usage_hook.py",
+            "reference": "Recording.test_a_stop_records_the_sessions_calls_under_its_task_and_prints_nothing"
+          },
+          "limitations": [
+            "Task 263 (PLAN.md \"From task 256\"): `agent_usage.py hook` run directly with the root `.agent` of a fresh multi-user clone as its lane, at a Stop and at the session's end (`PB_AU_MARK_BUSY=1`): \"skipped\", and nothing at the root but the lane that was there. Watched red: it recorded 2 calls and made `journal/` at the root."
           ]
         }
       ],
@@ -19066,6 +19083,16 @@
           "limitations": [
             "The merge recipe read from the doc and run by bash on a rotated journal with every kill state gives every line back, carries and horizons out."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_enforcement_rotation.py",
+          "reference": "RepairAndCompression.test_a_repair_without_its_lock_is_taken_again_after_the_idle_time",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Task 263 (PLAN.md \"From task 259\" (e)): the enforcement journal's `_compress_archive` with a real `flock -s` reader on its lock file after the `.gz` check; watched red before the fix."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -19290,7 +19317,8 @@
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": [
-            "8 writers × 150 lines: 1,208 whole lines."
+            "8 writers × 150 lines: 1,208 whole lines.",
+            "Since task 263 (PLAN.md \"From task 261\" (c)) it counts the lines in `hooks.jsonl` and in its spool files, and says how many were lost: a writer that waited its 1 s for the lock under load spools its line (1207 of 1208 seen once). Shown with the lock held 3 s: 168 written, 152 in hooks.jsonl, 16 spooled, 0 lost (task 263's evidence/spool_count_demo.out)."
           ]
         },
         {
@@ -19793,6 +19821,32 @@
           "limitations": [
             "The real bash lib with stand-in gzip / sync on PATH for each failure branch; mutants M6-M9 each red. Measured: an append during a 28 MB compression waited 635 ms before task 259, 0 ms after (python)."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_hook_journal_python.py",
+          "reference": "TheCompressionProtocol.test_a_repair_without_its_lock_is_taken_again_after_the_idle_time",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_hook_journal_python.py",
+            "reference": "TheCompressionProtocol.test_a_pair_that_cannot_be_repaired_does_not_starve_the_next_archive"
+          },
+          "limitations": [
+            "Task 263 (PLAN.md \"From task 259\" (e)): a real `flock -s` reader takes the lock after the `.gz` check, so the repair's lock is not had; both files are then aged alike and the next pass repairs the pair. Watched red: the archive's mtime was newer than its `.gz`'s and the pair stayed."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_hook_journal_writer.py",
+          "reference": "TheBashCompressionProtocol.test_a_repair_without_its_lock_is_taken_again_after_the_idle_time",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_hook_journal_writer.py",
+            "reference": "TheBashCompressionProtocol.test_a_pair_that_cannot_be_repaired_does_not_starve_the_next_archive"
+          },
+          "limitations": [
+            "Task 263: the real bash lib, a stand-in gzip that starts a `flock -s` reader at `-dc`; watched red with the old `touch -c -- \"$arch\"` alone, and with a `.gz` touched a tick before the archive."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -19808,7 +19862,8 @@
         "A live headless claude session (task 222 W4: Claude Code 2.1.301, haiku, the tree plugin) wrote 30 lines for its 30 hook runs, each tool call's line carrying the transcript's tool_use_id and the subagent's lines its agent_id; it is in the task record, not a gauntlet scenario. Codex's and grok's payloads are crafted only.",
         "Not recorded: a hook the host kills at its time limit (no exit trap runs); the monitor's own session (its hooks exit first); a review's session and a nested run (by design); a hook that finds no playbook project.",
         "The duration starts at the hook's first line (bash's start and a BASH_ENV file are not in it) and includes the shell log's lock wait; where a BASH_ENV file sets a DEBUG trap, `error` names that trap; the bash writers check and then append, so a FIFO swapped in between the two can hang one run; task-dir-watch's tool_use_id is read by pattern (a host whose payload put a nested object with the same key after the id could mislabel it); monitor-nudge.sh's line appears once `/playbook:init` copies the new script into the project, and it does not rotate the file itself.",
-        "Post-panel judge run 5 (task 222), stated by the owner's 00:45 rule (only coincidences of the same kind left): on a host without flock(1) the bash writers append without the lock while codex's python hooks still rotate with fcntl, so a forward clock step while a bash append is paused can still lose that line; a crash between publishing a spool and removing its temporary records that line twice."
+        "Post-panel judge run 5 (task 222), stated by the owner's 00:45 rule (only coincidences of the same kind left): on a host without flock(1) the bash writers append without the lock while codex's python hooks still rotate with fcntl, so a forward clock step while a bash append is paused can still lose that line; a crash between publishing a spool and removing its temporary records that line twice.",
+        "2026-10-21 (task 263): a repair whose lock was not had touched the closed file alone, so it became newer than its `.gz` and the pair was never taken again — a closed file beside the `.gz` that holds it, for good (nothing lost: the reader reads the closed file). The `.gz` is now given the closed file's very times (not a second \"now\": a file's clock ticks coarsely, and two of them may differ either way). A `.gz` that does not hold its closed file still leaves the pair for good, by design (it would otherwise be chosen every pass)."
       ],
       "follow_up_phases": [
         8
