@@ -153,8 +153,9 @@ def _read_hook_lines_locked(jdir: Path, lo: str, hi: "str | None", start: float,
     nameset = set(names)
     for name in names:
         m = _ARCHIVE.fullmatch(name)
-        if name.endswith(".gz") and name[:-3] in nameset:
-            continue                    # task 259: `X` beside its `.gz` (a compression killed late) is read once
+        if name.endswith(".gz") and name[:-3] in nameset and _is_regular(jdir / name[:-3]):
+            continue                    # task 259: `X` beside its `.gz` (a compression killed late) is read once —
+            #                             only a regular `X`; a link there hides nothing (impl r1 I2)
         if m and int(m.group(1)) >= start - margin:
             files.append((int(m.group(1)), jdir / name))
     files.sort(key=lambda f: f[0])
@@ -285,10 +286,13 @@ def _ej_read_once(jdir: Path, deadline: float, task: "str | None", since: "float
         for n in names:
             base = n[:-3] if n.endswith(".gz") else n
             m = _EJ_ARCHIVE.fullmatch(base)
-            if not m or (n.endswith(".gz") and base in nameset):
-                continue                    # not an archive; or a `.gz` whose source is still there: the source
+            if not m or (n.endswith(".gz") and base in nameset and _is_regular(jdir / base)):
+                continue                    # not an archive; or a `.gz` whose regular source is still there: the source
             try:
-                if not n.endswith(".gz") and live_ino is not None and os.lstat(jdir / n).st_ino == live_ino:
+                st = os.lstat(jdir / n)
+                if not stat.S_ISREG(st.st_mode):
+                    continue                # a link or anything not regular at an archive's name: not ours (task 259)
+                if not n.endswith(".gz") and live_ino is not None and st.st_ino == live_ino:
                     continue                # a swap killed between its link and its rename: the live file itself
             except OSError:
                 continue
@@ -370,6 +374,13 @@ def _archive_lines(path: Path) -> "list[str]":
         # an archive was the live file past 20 MB: empty, plain or decompressed, it lost its lines (task 259, J3)
         raise JournalIncomplete(f"{path.name} holds no lines")
     return data.decode("utf-8", "replace").split("\n")
+
+
+def _is_regular(path: Path) -> bool:
+    try:
+        return stat.S_ISREG(os.lstat(path).st_mode)
+    except OSError:
+        return False
 
 
 def _ts_of(raw: str) -> str:

@@ -955,6 +955,58 @@ class TheBashCompressionProtocol(_Project):
         self.rotate()
         self.assertEqual(len(list((self.lane / "journal").glob("*.gz"))), 1)
 
+    def test_a_bad_crc_with_a_whole_payload_keeps_the_archive(self):
+        """Impl r1 I1 (astra, sol; agy's unfinished run reproduced it): `gzip -dc | cmp -s` took only cmp's status —
+        gzip writes the whole payload, then fails on the CRC. Both pipelines now want both statuses 0."""
+        real = shutil.which("gzip")
+        bad = self.tools(gzip=(f'if [ "$1" = "-c" ]; then {real} "$@" | python3 -c "import sys; d=sys.stdin.buffer.read();'
+                               f' sys.stdout.buffer.write(d[:-8] + bytes(4) + d[-4:])"; else exec {real} "$@"; fi'))
+        x = self.idle()
+        self.rotate(PATH=bad)                                   # the swap: its temporary has a bad CRC
+        self.assertTrue(x.exists())
+        self.assertFalse(Path(str(x) + ".gz").exists())
+        data = b'{"hook":"old"}\n' * 200
+        y = self.idle(data, pid=8)
+        good = gzip.compress(data)
+        Path(str(y) + ".gz").write_bytes(good[:-8] + bytes(4) + good[-4:])
+        self.rotate()                                           # the repair: the .gz beside it has a bad CRC
+        self.assertTrue(y.exists())
+
+    def test_the_swaps_own_lock_not_had_keeps_the_archive_and_waits(self):
+        """Impl r1 O1 (opus): a reader takes the lock while the gzip runs, so only the swap's `flock -w 1` can fail.
+        I4: the archive's mtime is refreshed, so the next try waits the idle time."""
+        jdir = self.lane / "journal"
+        real = shutil.which("gzip")
+        reader = self.tools(gzip=(f'if [ "$1" = "-c" ]; then (flock -s "{jdir}" sleep 3 &) ; sleep 0.3; fi\n'
+                                  f'exec {real} "$@"'))
+        x = self.idle()
+        self.rotate(PATH=reader)
+        self.assertTrue(x.exists())
+        self.assertEqual(list(jdir.glob("*.gz*")), [])
+        self.assertGreater(x.stat().st_mtime, time.time() - 60)
+        time.sleep(3)
+
+    def test_a_failed_repair_check_waits_the_idle_time_again(self):
+        x = self.idle()
+        with gzip.open(str(x) + ".gz", "wb") as f:
+            f.write(b'{"hook":"other"}\n')
+        os.utime(str(x) + ".gz", None)
+        self.rotate()
+        self.assertTrue(x.exists())
+        self.assertGreater(x.stat().st_mtime, time.time() - 60)
+
+    def test_the_claim_is_made_inside_the_rotations_hold(self):
+        """Impl r1 I3 (sol): the temporary exists before gzip starts — made under the rotation's hold."""
+        log = self.root / "first-stat.log"
+        x = self.idle()
+        # the compressor's first `stat -c '%s %y'` (its "before") runs after the hold is let go and before any gzip:
+        # the temporary must already be there (a redirect would make one only at the gzip itself)
+        spy = self.tools(stat=(f'if [ "$1" = "-c" ] && [ "$2" = "%s %y" ] && [ ! -e "{log}" ]; then '
+                               f'ls "{x}".gz.tmp-* > "{log}" 2>/dev/null || : > "{log}"; fi\n'
+                               f'exec {shutil.which("stat")} "$@"'))
+        self.rotate(PATH=spy)
+        self.assertTrue(log.exists() and log.read_text().strip(), "no temporary existed before the gzip")
+
 
 if __name__ == "__main__":
     unittest.main()

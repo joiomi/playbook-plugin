@@ -72,6 +72,10 @@ APPROVED = {
     ("scripts/pb_journal.py", 'with os.fdopen(fd, "wb") as f:'):
         "the hook journal's spool (task 222, the owner's 'Bilet în cutie'): one line written to a NEW temporary "
         "opened O_CREAT|O_EXCL|O_NOFOLLOW, then os.link()ed to its spool name (no clobber) — never a live file",
+    ("scripts/pb_journal.py", 'fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NONBLOCK", 0)'):
+        "the compression temporary `<archive>.gz.tmp-<pid>` (task 259, impl r1 I3): this process's own name, made empty "
+        "by its claim under the rotation's exclusive hold and truncated here before the gzip — never a live file; "
+        "O_NOFOLLOW and a regular-file check, fsynced, and only linked to its .gz once checked whole",
     ("scripts/pb_journal.py", 'with os.fdopen(fd, "wb") as raw, os.fdopen(sfd, "rb") as f:'):
         "both journals' archive compression (task 257; the hook journal's since task 259, `_compress_archive`): a NEW "
         "temporary opened O_CREAT|O_EXCL|O_NOFOLLOW and fsynced, checked to decompress to exactly the archive, "

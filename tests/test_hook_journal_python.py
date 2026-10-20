@@ -540,10 +540,8 @@ class ThePythonWriter(_Tmp):
             holder.wait()
 
 
-class TheRotationLeftovers(_Tmp):
-    """Task 259 (the owner, 2026-10-19 17:10: "Repar ce a rămas (Recomandat)"): the enforcement journal's protections in
-    the hook journal's python rotator — `X` beside `X.gz` repaired, one compressor per archive, and the gzip outside
-    the exclusive hold, fsynced and checked whole before the `.gz` and the directory are fsynced and the archive goes."""
+class _Rotating(_Tmp):
+    """Helpers for task 259's rotation tests (impl r1 I5: shared, so no class runs another's tests)."""
 
     def rotate(self):
         os.environ["PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK"] = "1"
@@ -558,6 +556,12 @@ class TheRotationLeftovers(_Tmp):
         p.write_bytes(data)
         os.utime(p, (t, t))
         return p
+
+
+class TheRotationLeftovers(_Rotating):
+    """Task 259 (the owner, 2026-10-19 17:10: "Repar ce a rămas (Recomandat)"): the enforcement journal's protections in
+    the hook journal's python rotator — `X` beside `X.gz` repaired, one compressor per archive, and the gzip outside
+    the exclusive hold, fsynced and checked whole before the `.gz` and the directory are fsynced and the archive goes."""
 
     def test_x_beside_its_gz_is_repaired_once_the_gz_holds_it(self):
         self.journal.parent.mkdir()
@@ -624,12 +628,78 @@ class TheRotationLeftovers(_Tmp):
         self.assertTrue(Path(str(x) + ".gz").exists())
 
 
-class TheCompressionProtocol(TheRotationLeftovers):
+class TheCompressionProtocol(_Rotating):
     """Task 259's plan r1 (P2-P5): every branch of `_compress_archive` that keeps the archive, and the order of the
     durable steps before it is removed."""
 
-    def test_rotation_leftovers_tests_run_once(self):      # (the parent's tests run in their own class)
-        pass
+    def test_the_swaps_own_lock_not_had_keeps_the_archive(self):
+        """Impl r1 O1 (opus): a reader takes the lock WHILE the gzip runs, so the pass's own lock was had and only the
+        swap's can fail — the archive stays, no `.gz`, no temporary."""
+        if not shutil.which("flock"):
+            self.skipTest("no flock(1)")
+        self.journal.parent.mkdir()
+        x = self.idle(b'{"hook":"old"}\n' * 50)
+        real = self.pbj._gzip_to
+        holders = []
+
+        def gzip_then_a_reader(src, tmp):
+            ok = real(src, tmp)
+            holders.append(subprocess.Popen(["flock", "-s", str(self.journal.parent), "sleep", "2.5"]))
+            time.sleep(0.3)
+            return ok
+        setattr(self.pbj, "_gzip_to", gzip_then_a_reader)
+        try:
+            self.rotate()
+        finally:
+            setattr(self.pbj, "_gzip_to", real)
+            for h in holders:
+                h.wait()
+        self.assertTrue(holders)
+        self.assertTrue(x.exists())
+        self.assertEqual(list(self.journal.parent.glob("*.gz*")), [])
+        self.assertGreater(x.stat().st_mtime, time.time() - 60)     # I4: the next try waits the idle time again
+
+    def test_the_claim_is_made_inside_the_rotations_hold(self):
+        """Impl r1 I3 (sol): the claim scanned for other temporaries, then `_gzip_to` made this one — two rotators
+        could both pass in between. The temporary now exists before the gzip starts, made under the hold."""
+        self.journal.parent.mkdir()
+        self.idle(b'{"hook":"old"}\n' * 50)
+        seen = []
+        real = self.pbj._gzip_to
+        setattr(self.pbj, "_gzip_to", lambda src, tmp, **k: (seen.append(tmp.exists()), real(src, tmp, **k))[1])
+        try:
+            self.rotate()
+        finally:
+            setattr(self.pbj, "_gzip_to", real)
+        self.assertEqual(seen, [True])
+
+    def test_a_failed_repair_check_waits_the_idle_time_again(self):
+        """Impl r1 I4 (sol, sonnet, opus): a `.gz` that does not hold `X` was re-checked on every pass."""
+        self.journal.parent.mkdir()
+        x = self.idle(b'{"hook":"old"}\n' * 50)
+        with gzip.open(str(x) + ".gz", "wb") as f:
+            f.write(b'{"hook":"other"}\n')
+        os.utime(str(x) + ".gz", None)
+        calls = []
+        real = self.pbj._gz_holds
+        setattr(self.pbj, "_gz_holds", lambda gz, src: (calls.append(gz), real(gz, src))[1])
+        try:
+            self.rotate()
+            self.rotate()
+        finally:
+            setattr(self.pbj, "_gz_holds", real)
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(x.exists())
+
+    def test_a_gz_with_a_bad_crc_beside_x_keeps_x(self):
+        """Impl r1 I1's class in python: a whole payload with a bad CRC — gzip reads every byte, then fails."""
+        self.journal.parent.mkdir()
+        data = b'{"hook":"old"}\n' * 200
+        x = self.idle(data)
+        good = gzip.compress(data)
+        Path(str(x) + ".gz").write_bytes(good[:-8] + b"\0\0\0\0" + good[-4:])    # CRC zeroed, ISIZE kept
+        self.rotate()
+        self.assertTrue(x.exists())
 
     def test_the_gz_and_the_directory_are_fsynced_before_the_archive_goes(self):
         self.journal.parent.mkdir()

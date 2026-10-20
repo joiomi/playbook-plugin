@@ -770,13 +770,12 @@ def _hj_rotate(jdir: Path) -> None:
                     st = os.lstat(arch)
                 except OSError:
                     continue
-                if stat.S_ISREG(st.st_mode) and now - st.st_mtime > 600:
-                    todo.append(arch)
+                if stat.S_ISREG(st.st_mode) and now - st.st_mtime > 600 and not todo and _hj_claim(arch):
+                    todo.append(arch)       # one a pass, claimed under this hold (impl r1 I3)
         finally:
             os.close(fd)
         for arch in todo:
-            if _hj_compress(arch):          # outside the exclusive hold (task 259): no append waits on a gzip
-                break                       # one a pass (plan r1)
+            _hj_compress(arch)          # outside the exclusive hold (task 259): no append waits on a gzip
     except Exception:
         return
 
@@ -850,8 +849,26 @@ def _take_spools(jdir: Path, jfile: Path, journal: str, seen_ids: "set | None" =
 
 def _hj_compress(arch: Path) -> str:
     """A closed, idle hook-journal archive compressed beside it, or repaired (task 259): `_compress_archive`'s protocol
-    under the journal directory's lock held exclusively, waited for up to 1 s."""
-    return _compress_archive(arch, lambda fn: _hj_locked(arch.parent, fn, 1.0))
+    under the journal directory's lock held exclusively, waited for up to 1 s. Claimed when `_hj_claim` made this
+    process's temporary under the rotation's hold."""
+    claimed = os.path.lexists(f"{arch}.gz.tmp-{os.getpid()}") or os.path.lexists(Path(str(arch) + ".gz"))
+    return _compress_archive(arch, lambda fn: _hj_locked(arch.parent, fn, 1.0), claimed=claimed)
+
+
+def _hj_claim(arch: Path) -> bool:
+    """Under the rotation's exclusive hold: this process takes `arch` — no other living compressor's temporary, and
+    (when it has no `.gz` to be repaired against) its own temporary made now, so a second rotator cannot pass the same
+    check before it exists (task 259, impl r1 I3)."""
+    if not _compress_claim(arch):
+        return False
+    if os.path.lexists(Path(str(arch) + ".gz")):
+        return True
+    try:
+        os.close(os.open(f"{arch}.gz.tmp-{os.getpid()}", os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                         | getattr(os, "O_NOFOLLOW", 0), 0o644))
+        return True
+    except OSError:
+        return False
 
 
 def _hj_locked(jdir: Path, fn, wait: float):
@@ -1261,7 +1278,7 @@ def _ej_locked(jdir: Path, fn, wait: float):
         os.close(lk)
 
 
-def _compress_archive(arch: Path, take) -> str:
+def _compress_archive(arch: Path, take, claimed: bool = False) -> str:
     """Compress the closed, idle archive `arch` beside it, or repair it — task 257's rotation and task 259's plan r1,
     one protocol for both journals. `take(fn)` runs `fn` under the journal's exclusive lock and returns its result, or
     None when the lock was not had. Says what it did: "compressed", "repaired" or "".
@@ -1283,10 +1300,14 @@ def _compress_archive(arch: Path, take) -> str:
     tmp = Path(f"{arch}.gz.tmp-{os.getpid()}")
     try:
         st = os.lstat(arch)
-        if not stat.S_ISREG(st.st_mode) or not _compress_claim(arch):
+        # `claimed`: the caller made the claim, and this temporary, under its exclusive hold (impl r1 I3)
+        if not stat.S_ISREG(st.st_mode) or not (claimed or _compress_claim(arch)):
             return ""
         if os.path.lexists(gz):
-            if gz.is_symlink() or st.st_mtime > os.lstat(gz).st_mtime or not _gz_holds(gz, arch):
+            if gz.is_symlink() or st.st_mtime > os.lstat(gz).st_mtime:
+                return ""
+            if not _gz_holds(gz, arch):
+                os.utime(arch, None)        # not re-checked before the idle time again (impl r1 I4)
                 return ""
 
             def repair():
@@ -1297,7 +1318,7 @@ def _compress_archive(arch: Path, take) -> str:
                 arch.unlink()
                 return "repaired"
             return take(repair) or ""
-        if os.path.lexists(tmp):
+        if os.path.lexists(tmp) and not claimed:
             return ""
         if not _gzip_to(arch, tmp):
             os.utime(arch, None)            # failed (a full disk): tried again after the idle time
@@ -1315,7 +1336,10 @@ def _compress_archive(arch: Path, take) -> str:
                 return ""                   # both stay: a reader reads the archive, a later pass repairs it
             arch.unlink()
             return "compressed"
-        return take(swap) or ""
+        done = take(swap)
+        if done is None:
+            os.utime(arch, None)            # the lock not had: after the idle time again (impl r1 I4)
+        return done or ""
     except Exception:                       # noqa: BLE001 — the archive stays as it is
         return ""
     finally:
@@ -1411,9 +1435,15 @@ def _gz_isize(gz: Path) -> "int | None":
 
 
 def _gzip_to(src: Path, tmp: Path) -> bool:
+    """gzip `src` into this process's temporary `tmp` (its name ends in our pid; the claim may have made it empty under
+    the rotation's hold — task 259, impl r1 I3), flushed and fsynced; whether it was written whole."""
     import gzip
     try:
-        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NONBLOCK", 0)
+                     | getattr(os, "O_NOFOLLOW", 0), 0o644)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            os.close(fd)
+            return False
     except OSError:
         return False
     try:

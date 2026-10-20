@@ -1595,6 +1595,26 @@ class TheLeftovers(_Archives):
         with self.assertRaises(self.numbers.JournalIncomplete):
             self.numbers.read_hook_lines(self.jdir, t, time.monotonic() + 5, end=t + 10)
 
+    def test_i2_a_gz_beside_an_x_that_is_no_file_is_read(self):
+        """Impl r1 I2 (astra, sol): any entry named `X` hid `X.gz`, and then `X` itself was skipped as a link."""
+        t = self.now - 600
+        rec = {"ts": _iso(t), "hook": "state-echo", "session_id": "pid-1"}
+        x = self.hook_archive([rec], gz=True)
+        target = self.root / "elsewhere"
+        target.write_text("")
+        x.symlink_to(target)                                        # a link where the plain archive would be
+        got = self.numbers.read_hook_lines(self.jdir, t, time.monotonic() + 5, end=t + 10)
+        self.assertEqual(len(got), 1)
+
+    def test_i2_the_enforcement_reader_reads_a_gz_beside_a_linked_x(self):
+        t = self.now - 3000
+        p = self.arch(int(t + 100), [self.rec("work", t)], tasks=["7"], gz=True)
+        target = self.root / "elsewhere-ej"
+        target.write_text("")
+        p.symlink_to(target)
+        self.write(self.rec("done", t + 10))
+        self.assertEqual([r["reason"] for r in self.read()], ["work", "done"])
+
     def test_w4_the_retro_reads_the_archives_once_while_nothing_changes(self):
         """D4 (sonnet's R9 of task 257) with plan r1 P7: keyed by the directory and every file's size and mtime; a
         failure is never kept; each caller gets its own copy."""

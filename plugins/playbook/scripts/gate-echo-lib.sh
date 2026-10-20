@@ -2014,7 +2014,8 @@ _pb_hj_rotate() {
                 mt=$(stat -c %Y -- "$a" 2>/dev/null) || continue
                 case "$mt" in ''|*[!0-9]*) continue ;; esac
                 [ $(( now - mt )) -gt 600 ] || continue
-                todo+=("$a")
+                # one a pass, claimed under this hold so a second rotator cannot pass the same check (impl r1 I3)
+                if _pb_hj_claim "$a"; then todo+=("$a"); break; fi
             done
         fi
     fi
@@ -2036,21 +2037,16 @@ _pb_hj_rotate() {
 # removes the temporary; a `.gz` that did not hold the archive touches it, so the next try waits the idle time again.
 # Returns 0 when it compressed or repaired, 1 otherwise.
 _pb_hj_compress() {
-    local arch="$1" jdir="$2" tmp="$1.gz.tmp-$$" t pid before rc=1
+    local arch="$1" jdir="$2" tmp="$1.gz.tmp-$$" before rc=1
     command -v gzip >/dev/null 2>&1 && command -v sync >/dev/null 2>&1 && command -v cmp >/dev/null 2>&1 \
-        && command -v flock >/dev/null 2>&1 || return 1
-    for t in "$arch".gz.tmp-*; do
-        { [ -e "$t" ] || [ -L "$t" ]; } || continue
-        pid="${t##*.gz.tmp-}"
-        case "$pid" in ''|*[!0-9]*) continue ;; esac
-        [ "$pid" = "$$" ] && continue
-        [ -d "/proc/$pid" ] && return 1                  # another compressor is at it
-        [ -L "$t" ] || rm -f -- "$t" 2>/dev/null
-    done
-    before=$(stat -c '%s %y' -- "$arch" 2>/dev/null) || return 1
+        && command -v flock >/dev/null 2>&1 || { [ -L "$tmp" ] || rm -f -- "$tmp" 2>/dev/null; return 1; }
+    before=$(stat -c '%s %y' -- "$arch" 2>/dev/null) || { [ -L "$tmp" ] || rm -f -- "$tmp" 2>/dev/null; return 1; }
     if [ -e "$arch.gz" ] || [ -L "$arch.gz" ]; then
         [ -f "$arch.gz" ] && [ ! -L "$arch.gz" ] && [ ! "$arch" -nt "$arch.gz" ] || return 1
-        { gzip -dc -- "$arch.gz" 2>/dev/null | cmp -s - "$arch"; } || return 1
+        if ! _pb_hj_holds "$arch.gz" "$arch"; then
+            touch -c -- "$arch" 2>/dev/null              # not re-checked before the idle time again (impl r1 I4)
+            return 1
+        fi
         { exec 207<"$jdir"; } 2>/dev/null || return 1
         if flock -w 1 207 2>/dev/null && [ "$(stat -c '%s %y' -- "$arch" 2>/dev/null)" = "$before" ] \
            && sync -- "$arch.gz" "$jdir" 2>/dev/null; then
@@ -2059,25 +2055,56 @@ _pb_hj_compress() {
         { exec 207<&-; } 2>/dev/null || true
         return "$rc"
     fi
-    if [ -e "$tmp" ] || [ -L "$tmp" ]; then return 1; fi
-    if ! ( set -o noclobber; gzip -c -- "$arch" > "$tmp" ) 2>/dev/null || ! sync -- "$tmp" 2>/dev/null; then
+    # the temporary is ours: the claim made it under the rotation's hold (impl r1 I3)
+    if [ -L "$tmp" ] || ! [ -f "$tmp" ] || ! { gzip -c -- "$arch" >| "$tmp"; } 2>/dev/null \
+       || ! sync -- "$tmp" 2>/dev/null; then
         [ -L "$tmp" ] || rm -f -- "$tmp" 2>/dev/null
         touch -c -- "$arch" 2>/dev/null
         return 1
     fi
-    if ! { gzip -dc -- "$tmp" 2>/dev/null | cmp -s - "$arch"; }; then
+    if ! _pb_hj_holds "$tmp" "$arch"; then
         rm -f -- "$tmp" 2>/dev/null                    # written since, or not all of it: after the idle time again
         touch -c -- "$arch" 2>/dev/null
         return 1
     fi
     if { exec 207<"$jdir"; } 2>/dev/null; then
-        if flock -w 1 207 2>/dev/null && [ "$(stat -c '%s %y' -- "$arch" 2>/dev/null)" = "$before" ] \
-           && [ ! -e "$arch.gz" ] && [ ! -L "$arch.gz" ] && mv -n -- "$tmp" "$arch.gz" 2>/dev/null \
-           && [ -f "$arch.gz" ] && [ ! -e "$tmp" ] && sync -- "$arch.gz" "$jdir" 2>/dev/null; then
-            rm -f -- "$arch" 2>/dev/null && rc=0
+        if flock -w 1 207 2>/dev/null; then
+            if [ "$(stat -c '%s %y' -- "$arch" 2>/dev/null)" = "$before" ] \
+               && [ ! -e "$arch.gz" ] && [ ! -L "$arch.gz" ] && mv -n -- "$tmp" "$arch.gz" 2>/dev/null \
+               && [ -f "$arch.gz" ] && [ ! -e "$tmp" ] && sync -- "$arch.gz" "$jdir" 2>/dev/null; then
+                rm -f -- "$arch" 2>/dev/null && rc=0
+            fi
+        else
+            touch -c -- "$arch" 2>/dev/null          # the lock not had: after the idle time again (impl r1 I4)
         fi
         { exec 207<&-; } 2>/dev/null || true
     fi
     [ -L "$tmp" ] || rm -f -- "$tmp" 2>/dev/null
     return "$rc"
+}
+
+# _pb_hj_claim ARCHIVE — under the rotation's exclusive hold: this run takes ARCHIVE. Another living compressor's
+# temporary leaves it; a dead one's is removed; with no `.gz` to repair against, this run's own temporary is made now
+# (noclobber), so a second rotator cannot pass the same check before it exists (task 259, impl r1 I3).
+_pb_hj_claim() {
+    local arch="$1" t pid
+    for t in "$arch".gz.tmp-*; do
+        { [ -e "$t" ] || [ -L "$t" ]; } || continue
+        pid="${t##*.gz.tmp-}"
+        case "$pid" in ''|*[!0-9]*) continue ;; esac
+        [ "$pid" = "$$" ] && continue
+        [ -d "/proc/$pid" ] && return 1                  # another compressor is at it
+        [ -L "$t" ] || rm -f -- "$t" 2>/dev/null
+    done
+    if [ -e "$arch.gz" ] || [ -L "$arch.gz" ]; then return 0; fi
+    ( set -o noclobber; : > "$arch.gz.tmp-$$" ) 2>/dev/null
+}
+
+# _pb_hj_holds GZ FILE — GZ decompresses to exactly FILE's bytes: BOTH gzip and cmp succeed (impl r1 I1 — without
+# `pipefail` a pipeline is its last command's status, and gzip fails a bad CRC only after writing the whole payload).
+_pb_hj_holds() {
+    local ps
+    gzip -dc -- "$1" 2>/dev/null | cmp -s - "$2"
+    ps=("${PIPESTATUS[@]}")
+    [ "${ps[0]}" = 0 ] && [ "${ps[1]}" = 0 ]
 }

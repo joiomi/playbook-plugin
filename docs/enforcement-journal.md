@@ -533,15 +533,17 @@ meanwhile, the closed file stays uncompressed. Since task 259 the compression fo
 protocol (`pb_journal._compress_archive`, bash `_pb_hj_compress`):
 - it runs after the rotation's hold is let go, one archive a pass, so no append waits on a gzip (measured: an append
   during a 28 MB compression waited 635 ms before, 0 ms after);
-- one compressor per archive: another living hook's `….gz.tmp-<pid>` leaves it alone, and a killed one's is removed;
+- one compressor per archive, claimed under the rotation's exclusive hold (the compressor's own `….gz.tmp-<pid>` is
+  made there): another living hook's temporary leaves it alone, and a killed one's is removed;
 - the temporary is made durable (fsync, bash `sync`) and must decompress to exactly the closed file's bytes (bash
-  `gzip -dc | cmp -s`); under the lock held exclusively (python ≤ 1 s, bash `flock -w 1` — whole seconds, since a
+  `gzip -dc | cmp -s` with BOTH statuses 0: gzip fails a bad CRC only after writing the whole payload); under the
+  lock held exclusively (python ≤ 1 s, bash `flock -w 1` — whole seconds, since a
   fraction fails under a decimal-comma locale) the closed file must be unchanged and have no `.gz` yet; the `.gz` and
   the directory are fsynced, and only then is the closed file removed;
 - a closed file beside a `.gz` that decompresses to exactly it, and is not newer, is removed the same way (a compression
   killed before its last step);
 - any failure — a missing `gzip`, `sync` or `cmp`, one that fails, a lock not had — keeps the closed file and removes
-  the temporary.
+  the temporary; a failed check or a lock not had refreshes its mtime, so the next try waits the idle time again.
 
 A spool merged into the journal by a merge killed before it removed the spool is merged again: one more copy of that
 line on disk. The reader drops exact duplicate lines, so no number changes; a line has no spool id (its 18 keys are
