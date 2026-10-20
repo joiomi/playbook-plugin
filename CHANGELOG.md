@@ -4,6 +4,13 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+**A seat recorded out of credit is asked before it is skipped** — task 262 (the owner, 2026-10-20: "Agy + doar
+judecătorul lipsă (Recomandat)"). On 2026-10-20 opus was skipped for a weekly limit of an account the owner had left
+the day before. A panel now probes a seat whose outage has a reset time (claude, codex, agy) with one tiny judge call
+through its own CLI and account: an answer clears the record and seats it; an answer out of credit, or a failure, keeps
+it out, and the panel says what the probe saw. An outage with no reset time (grok's 402) is not probed. A panel the D6
+round cap refuses spends no probe.
+
 **The agy judge keeps its vote at the soft deadline** — task 261 (the owner, 2026-10-20: "pai vezi sa il rezolvi pe agy
 inainte sa mai pornesti paneluri. e important!"). agy has no clock, so the soft deadline in the judge's prompt did nothing
 for it: 6 of its 38 runs between 2026-10-18 and the evening of 10-20 reached the 1,200 s hard limit, each holding its

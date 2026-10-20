@@ -472,10 +472,28 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
         self.assertIn("Recorded codex:gpt-5.5 as out of credit", out)
         record = json.loads(so._record(self.d / ".agent").read_text(encoding="utf-8"))
         self.assertEqual(list(record), ["codex:gpt-5.5"])
+        # task 262: a recorded seat whose outage has a reset time is asked first. While it still answers out of
+        # credit it stays out, and only the probe is spent
+        self.calls.clear()
+        code, out, _ = self._panel(models, self._judge(outage=("gpt-5.5",)), codex_available=True)
+        self.assertEqual(self.calls.count("gpt-5.5"), 1, "only the probe may call a seat still out of credit")
+        self.assertIn("Probed codex:gpt-5.5: the probe answered out of credit again.", out)
+        self.assertIn("Skipped out of credit: codex:gpt-5.5", out)
+        self.assertIn("codex:gpt-5.5", json.loads(so._record(self.d / ".agent").read_text(encoding="utf-8")))
+        # a third impl round on one task is past the D6 cap, which refuses before any probe (task 262); this test
+        # is about the probe, so the earlier rounds are taken off the record
+        judge_md = self.d / ".agent" / "tasks" / "042-demo" / "judge.md"
+        self.calls.clear()
+        code, out, err = self._panel(models, self._judge(), codex_available=True)
+        self.assertIn("D6 round cap", err)
+        self.assertNotIn("gpt-5.5", self.calls, "a probe was spent on a panel the round cap refuses")
+        judge_md.unlink()
+        # … and once it answers (the account switched, the limit reset early), it is cleared and seated
         self.calls.clear()
         code, out, _ = self._panel(models, self._judge(), codex_available=True)
-        self.assertNotIn("gpt-5.5", self.calls, "a seat out of credit was called again")
-        self.assertIn("Skipped out of credit: codex:gpt-5.5", out)
+        self.assertEqual(self.calls.count("gpt-5.5"), 2, "the probe, then the seat's review")
+        self.assertIn("Seated codex:gpt-5.5", out)
+        self.assertEqual(so.current_outages(self.d / ".agent", NOW + dt.timedelta(minutes=5)), {})
 
     def test_a_codex_workspace_out_of_credits_is_recorded_then_skipped(self):     # task 203, #34
         models = self.CLAUDE[:2] + ("codex:gpt-5.5",)
@@ -553,8 +571,10 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
         self.assertEqual(list(record), ["claude:claude-fable-5"])
         self.assertEqual(record["claude:claude-fable-5"]["until"], "2026-10-13T18:00+03:00")
         self.calls.clear()
-        code, out, _ = self._panel(self.CLAUDE, self._judge())
-        self.assertNotIn("claude-fable-5", self.calls, "a claude seat at its limit was called again")
+        # task 262: still at its limit, the probe says so and the seat stays out
+        code, out, _ = self._panel(self.CLAUDE, self._judge(outage=("fable",), outage_text=CLAUDE_LIMIT))
+        self.assertEqual(self.calls.count("claude-fable-5"), 1, "only the probe may call a seat at its limit")
+        self.assertIn("Probed claude:claude-fable-5: the probe answered out of credit again.", out)
         self.assertIn("Skipped out of credit: claude:claude-fable-5", out)
         # impl panel r1 (opus): this outage lasts days, and the owner may switch accounts
         # the same hour — the way to clear it must be on the line, not only in the docs.
@@ -567,11 +587,31 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
         # before spending — and names the command that clears a recorded seat.
         code, out, _ = self._panel(self.CLAUDE, self._judge(outage=("fable", "haiku"), outage_text=CLAUDE_LIMIT))
         self.calls.clear()
-        code, out, err = self._panel(self.CLAUDE, self._judge())
+        # task 262: both are asked first and still answer at their limit, so the panel refuses — the two probes
+        # are all it spent
+        code, out, err = self._panel(self.CLAUDE, self._judge(outage=("fable", "haiku"), outage_text=CLAUDE_LIMIT))
         self.assertEqual(code, 1)
-        self.assertEqual(self.calls, [], "a judge was called although the panel could not reach its quorum")
-        self.assertIn("nothing was spent", err)
+        self.assertEqual(sorted(self.calls), ["claude-fable-5", "claude-haiku-4-5"],
+                         "a review was called although the panel could not reach its quorum")
+        self.assertIn("nothing was spent but the probes", err)
         self.assertIn("tasks models enable <seat>", err)
+
+    def test_a_probe_that_fails_another_way_keeps_the_seat_out(self):
+        # task 262: only a real answer clears a record; a failed probe says what it saw
+        code, out, _ = self._panel(self.CLAUDE, self._judge(outage=("fable",), outage_text=CLAUDE_LIMIT))
+        self.calls.clear()
+        code, out, _ = self._panel(self.CLAUDE, self._judge(fail=("fable",)))
+        self.assertEqual(self.calls.count("claude-fable-5"), 1)
+        self.assertIn("Skipped out of credit: claude:claude-fable-5", out)
+        self.assertIn("probe", next(ln for ln in out.splitlines() if "claude:claude-fable-5" in ln and "probe" in ln))
+        self.assertIn("claude:claude-fable-5", json.loads(so._record(self.d / ".agent").read_text(encoding="utf-8")))
+
+    def test_an_outage_with_no_reset_time_is_not_probed(self):
+        # task 262: grok's 402 and a codex workspace out of credits wait for a top-up and the owner's enable
+        so.record_outage(self.d / ".agent", "claude:claude-fable-5", {"reason": "r", "until": None})
+        code, out, _ = self._panel(self.CLAUDE, self._judge())
+        self.assertNotIn("claude-fable-5", self.calls)
+        self.assertIn("Skipped out of credit: claude:claude-fable-5", out)
 
     def test_a_claude_seat_quoting_the_event_is_not_recorded(self):
         # post-D6 run 1 (codex): a claude seat's stdout is the review text; a line
