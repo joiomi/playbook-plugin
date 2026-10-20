@@ -375,6 +375,64 @@ class TheImplRound1Findings(_Adapter):
         self.assertTrue(str(out).startswith(NOTE), str(out)[:120])
 
 
+class TheImplRound2Findings(_Adapter):
+    """Task 261's impl round 2 (the last panel round): each finding as a test, red before its fix."""
+
+    def _error_result(self, stream: str, error: str = "the model failed") -> str:
+        out = []
+        for ln in stream.split("\n"):
+            if '"event":"result"' in ln or '"event": "result"' in ln:
+                ev = json.loads(ln); ev["result"]["status"] = "ERROR"; ev["result"]["error"] = error
+                ln = json.dumps(ev)
+            out.append(ln)
+        return "\n".join(out)
+
+    def test_a_stray_line_does_not_hide_the_cut_turns_error_result(self):
+        # astra, sol (reproduced): the error checks read the raw stream, which the parser rejects whole. With no
+        # error text only the result's status can say it, so both forms are tested (mutant M23)
+        for error in ("the model failed", ""):
+            with self.subTest(error=error):
+                cut = _cp("agy: a warning on stdout\n" + self._error_result(fx("resume-cut.stdout"), error), 0,
+                          fx("resume-cut.stderr"))
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    self._run([cut, self._answer()], clock=(0.0, 905.0, 905.0, 920.0))
+
+    def test_a_resumed_result_naming_another_conversation_fails_the_seat(self):
+        # sol (reproduced): only the init's id was checked, not the result's
+        other = []
+        for ln in fx("resume-answer.stdout").split("\n"):
+            if '"event":"result"' in ln or '"event": "result"' in ln:
+                ev = json.loads(ln); ev["result"]["conversation_id"] = "00000000-0000-4000-8000-000000000000"
+                ln = json.dumps(ev)
+            other.append(ln)
+        out, _ = self._run([self._cut(), _cp("\n".join(other), 0, "")], clock=(0.0, 905.0, 905.0, 920.0))
+        self.assertTrue(str(out).startswith("(FAILED — the resumed agy call's result names another conversation"),
+                        str(out)[:160])
+
+    def test_a_seat_stopped_at_the_soft_deadline_says_so(self):
+        # opus, sonnet: a cut turn that is not resumed stopped near the soft deadline, not the hard one
+        with self.assertRaises(subprocess.TimeoutExpired) as cm:
+            self._run([self._cut()], clock=(0.0, 1141.0))
+        self.assertIs(getattr(cm.exception, "agy_resumed"), False)
+        killed2 = subprocess.TimeoutExpired(["agy"], 325, output="", stderr="")
+        with self.assertRaises(subprocess.TimeoutExpired) as cm:
+            self._run([self._cut(), killed2], clock=(0.0, 905.0, 905.0, 1235.0))
+        self.assertIs(getattr(cm.exception, "agy_resumed"), True)
+
+    def test_a_zero_usage_resume_keeps_the_cut_turns_usage(self):
+        # opus, sonnet: the resume's own result says zero, the cut turn's is known
+        zero = []
+        for ln in fx("resume-answer.stdout").split("\n"):
+            if '"event":"result"' in ln or '"event": "result"' in ln:
+                ev = json.loads(ln); ev["result"]["usage"] = {"input_tokens": 0, "output_tokens": 0}
+                ev["result"]["response"] = ""
+                ln = json.dumps(ev)
+            zero.append(ln)
+        with self.assertRaises(subprocess.TimeoutExpired) as cm:
+            self._run([self._cut(), _cp("\n".join(zero), 0, fx("resume-cut.stderr"))], clock=(0.0, 905.0, 905.0, 1200.0))
+        self.assertEqual(getattr(cm.exception, "agy_usage", None), usage.extract_agy(fx("resume-cut.stdout"))[1])
+
+
 class _Project(unittest.TestCase):
     """Helpers only: a project with task 042 and an agy panel, the real review runner, `sandbox.run` scripted."""
 
@@ -449,6 +507,14 @@ class ThePanelSeat(_Project):
         self.assertEqual(r.get("soft_cut"), "timed-out")
         self.assertEqual(r["usage"]["status"], "known")            # impl r1 (opus): the cut turn's usage is kept
         self.assertIn(f"agy conversation `{CID}`, resumable by hand with `agy --conversation {CID}`", judge)
+
+    def test_a_seat_not_resumed_says_it_stopped_at_the_soft_deadline(self):
+        # impl r2 (opus, sonnet): its marker named the hard limit, though it stopped near the soft one
+        cut = _cp(fx("resume-cut.stdout"), 0, fx("resume-cut.stderr") + "error: Individual quota reached.\n")
+        calls, recs, judge = self._panel([cut], "--timeout", "1200", "--soft-timeout", "900")
+        self.assertEqual(len(calls), 1)
+        self.assertIn("(timed out at the soft deadline", judge)
+        self.assertEqual(recs[0]["status"], "timeout")
 
     def test_a_resume_the_killer_stops_mid_line_keeps_the_cut_turns_usage(self):
         # impl r1 (opus): the strict read of a cut stream finds no usage, while the cut turn's is known

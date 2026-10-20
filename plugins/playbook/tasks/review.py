@@ -1978,11 +1978,17 @@ def _cmd_panel_review(cmd_args):
                 _to_usage = getattr(expired, "agy_usage", None)   # task 261: a cut turn's known usage
             raw = _salvage(provider_name, raw.strip())
             marker = f"(timed out after hard {hard_timeout_label})"
+            # task 261: a cut turn that was never resumed stopped near the soft deadline, not the hard one
+            _at = (f"at the soft deadline ({format_timeout_label(soft_timeout_secs)})"
+                   if getattr(expired, "agy_soft_cut", False) is True and getattr(expired, "agy_resumed", True) is False
+                   else f"after hard {hard_timeout_label}")
             _cid = getattr(expired, "agy_conversation", None)
             if isinstance(_cid, str) and _cid:
                 # task 261: its trail stays in agy's conversation; a person can resume it by hand
-                marker = (f"(timed out after hard {hard_timeout_label} — agy conversation `{_cid}`, "
+                marker = (f"(timed out {_at} — agy conversation `{_cid}`, "
                           f"resumable by hand with `agy --conversation {_cid}`)")
+            elif _at != f"after hard {hard_timeout_label}":
+                marker = f"(timed out {_at})"
             _cut = "timed-out" if getattr(expired, "agy_soft_cut", False) is True else None
             if raw:
                 return label, _JO(
@@ -3309,8 +3315,12 @@ def _cmd_single_review(cmd, cmd_args):
             # task 261: its trail stays in agy's conversation; a person can resume it by hand
             saved_note += (f" agy conversation `{_to_cid}`, resumable by hand with "
                            f"`agy --conversation {_to_cid}`.")
+        _soft_stop = (expired is not None and getattr(expired, "agy_soft_cut", False) is True
+                      and getattr(expired, "agy_resumed", True) is False)   # task 261: stopped near the soft deadline
         print(
-            f"\n{review_label} hit hard timeout after {review_timeout_label} "
+            (f"\n{review_label} stopped at its soft deadline ({format_timeout_label(review_soft_timeout)}) and could "
+             "not be resumed. " if _soft_stop else "")
+            + f"\n{review_label} hit hard timeout after {review_timeout_label} "
             f"({review_soft_hard_label}). Raise the hard kill with --timeout, "
             "PLAYBOOK_REVIEW_TIMEOUT_SECS, or .agent/config.json "
             "review_timeout_secs; move the soft deadline with --soft-timeout "

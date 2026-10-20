@@ -379,8 +379,13 @@ def agy_resumed_stream_problem(stdout, conversation: str, expected_model: Option
         if model != expected_model:
             return (f"the resumed agy call ran model {model!r}, not the pinned {expected_model!r}" if model else
                     f"the resumed agy call did not report its model (pinned: {expected_model!r})")
-    if not any(ev.get("event") == "result" for ev in events):
+    results = [ev.get("result") for ev in events if ev.get("event") == "result"]
+    if not results:
         return "the resumed agy call's stream has no result event"
+    last = results[-1]
+    if isinstance(last, dict) and last.get("conversation_id") not in (None, conversation):
+        # the review is the last result's: it must be this conversation's too (impl r2, sol)
+        return f"the resumed agy call's result names another conversation ({last.get('conversation_id')!r})"
     return None
 
 

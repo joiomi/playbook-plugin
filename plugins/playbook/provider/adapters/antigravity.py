@@ -171,16 +171,21 @@ def _without_print_timeout(argv: list) -> list:
 
 
 def _timed_out(cmd: list, timeout, stdout: str, stderr: str, conversation: Optional[str], *,
-               soft_cut: bool = False) -> subprocess.TimeoutExpired:
+               soft_cut: bool = False, resumed: bool = False, fallback: str = "") -> subprocess.TimeoutExpired:
     """The `TimeoutExpired` the callers' timeout paths take, naming agy's conversation when it is known, saying
     whether the turn had been cut at the soft deadline (the seat's spend record carries it), and carrying the
     usage of the stream's last complete `result` — a resume the killer stopped leaves a cut stream whose strict
-    read finds none, while the cut turn's own usage is known (impl r1)."""
+    read finds none, while the cut turn's own usage is known (impl r1). `resumed` says the timeout is the
+    resume's (it ended near the hard limit), not a cut turn's that was never resumed (near the soft one, impl
+    r2); `fallback` is the cut turn's stream, read when the combined one gives no usage (a zero-usage resume)."""
     from provider import usage as _usage
     exc = subprocess.TimeoutExpired(cmd, timeout, output=stdout, stderr=stderr)
     exc.agy_conversation = conversation   # type: ignore[attr-defined]
     exc.agy_soft_cut = soft_cut           # type: ignore[attr-defined]
-    exc.agy_usage = _usage.parse_usage(_complete_events(stdout or "")) if soft_cut else None   # type: ignore[attr-defined]
+    exc.agy_resumed = resumed             # type: ignore[attr-defined]
+    exc.agy_usage = ((_usage.parse_usage(_complete_events(stdout or ""))
+                      or _usage.parse_usage(_complete_events(fallback or "")))
+                     if soft_cut else None)   # type: ignore[attr-defined]
     return exc
 
 
@@ -418,10 +423,13 @@ class AntigravityAdapter(ProviderAdapter):
         # a cut turn in which agy stated an error — a non-zero exit, a result that is not SUCCESS, an `error:` or
         # `AGY_ERROR:` line, a response step in ERROR — is not resumed: a good resume would mask it, so it times
         # out as before (impl r1: sol, astra)
-        last1 = _usage._agy_last_result(out1)
+        # read on the cut turn's EVENTS: a stray line before the stream would make the parser reject the raw
+        # stdout whole, and with it these checks, while the cleaned stream joins the resume (impl r2: astra, sol)
+        norm1 = _complete_events(out1)
+        last1 = _usage._agy_last_result(norm1)
         if ((result is not None and result.returncode != 0)
                 or (last1 is not None and last1.get("status") != "SUCCESS")
-                or _usage.agy_error_statement(out1, _usage.agy_stderr_without_timeout(err1))):
+                or _usage.agy_error_statement(norm1, _usage.agy_stderr_without_timeout(err1))):
             raise _timed_out(["agy", *inv.argv], soft, out1, err1, conversation, soft_cut=True)
         from tasks.template import soft_deadline_resume_instruction
         argv2 = ["--conversation", conversation] + _without_print_timeout(inv.argv) + ["--print-timeout", f"{left}s"]
@@ -437,18 +445,21 @@ class AntigravityAdapter(ProviderAdapter):
             result2, elapsed2 = self._judge_call(argv2, stdin2, left, project_view=project_view, env=env)
         except subprocess.TimeoutExpired as expired:
             raise _timed_out(["agy", *argv2], left, head + _text(expired.stdout or expired.output),
-                             err_head + _text(expired.stderr), conversation, soft_cut=True)
+                             err_head + _text(expired.stderr), conversation, soft_cut=True, resumed=True,
+                             fallback=head)
         out2, err2 = result2.stdout or "", result2.stderr or ""
         # the resumed call's own timeout signals only: the cut turn's stderr always carries agy's timeout line
         if _usage.agy_timed_out(err2, left, elapsed2, out2):
-            raise _timed_out(["agy", *argv2], left, head + out2, err_head + err2, conversation, soft_cut=True)
+            raise _timed_out(["agy", *argv2], left, head + out2, err_head + err2, conversation, soft_cut=True,
+                             resumed=True, fallback=head)
         last = _usage._agy_last_result(out2)
         if (result2.returncode != 0 or last is None or last.get("status") != "SUCCESS") \
                 and _usage.agy_failure_cause(out2, err2) is None and _usage.agy_error_statement(out2, err2) is None:
             # the resume failed and agy said nothing about why: the seat timed out at its soft deadline, as before,
             # and its record names the conversation (plan r1, opus Minor). When agy says why, the parser fails the
             # seat with agy's words instead (impl r1, opus)
-            raise _timed_out(["agy", *argv2], left, head + out2, err_head + err2, conversation, soft_cut=True)
+            raise _timed_out(["agy", *argv2], left, head + out2, err_head + err2, conversation, soft_cut=True,
+                             resumed=True, fallback=head)
         combined = subprocess.CompletedProcess(["agy", *argv2], result2.returncode, stdout=head + out2,
                                                stderr=err_head + err2)
         # the resumed call stands on its own evidence, not on what the cut turn's events supply (plan r1 P2)
