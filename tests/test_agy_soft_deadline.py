@@ -77,6 +77,8 @@ class EveryInitNamesThePin(unittest.TestCase):
 
 
 FIX_1217 = _HERE / "fixtures" / "agy-1.2.17"
+# the note playbook writes first in a resumed review: marked as playbook's, since judge.md quotes the judge's text (impl r1)
+NOTE = "**[playbook] Soft deadline:**"
 CID = json.loads(fx("resume-cut.stdout").split("\n", 1)[0])["conversation_id"]
 
 
@@ -162,7 +164,7 @@ class TheSoftDeadline(_Adapter):
         self.assertEqual(len(msg), 1)
         self.assertTrue(msg[0]["message"]["content"].startswith("TIME IS UP"))
         self.assertIn("Do NOT call any tool", msg[0]["message"]["content"])
-        self.assertTrue(str(out).startswith("**Soft deadline:**"), str(out)[:120])
+        self.assertTrue(str(out).startswith(NOTE), str(out)[:120])
         self.assertIn(CID, str(out).split("\n", 1)[0])
         self.assertIn("13", str(out))
         self.assertEqual(out.usage, usage.extract_agy(fx("resume-answer.stdout"))[1])
@@ -173,7 +175,7 @@ class TheSoftDeadline(_Adapter):
         out, calls = self._run([self._answer()])
         self.assertEqual(len(calls), 1)
         self.assertEqual(self._flag(calls[0]["argv"], "--print-timeout"), "900s")
-        self.assertFalse(str(out).startswith("**Soft deadline:**"))
+        self.assertFalse(str(out).startswith(NOTE))
         self.assertIn("13", str(out))
 
     def test_without_a_soft_deadline_below_the_hard_one_the_call_is_todays(self):
@@ -212,7 +214,7 @@ class TheSoftDeadline(_Adapter):
         out, calls = self._run([killed, self._answer()], clock=(0.0, 935.0, 935.0, 940.0))
         self.assertEqual(len(calls), 2)
         self.assertEqual(self._flag(calls[1]["argv"], "--print-timeout"), "265s")   # 1200 − 935 measured, reaping included
-        self.assertTrue(str(out).startswith("**Soft deadline:**"), str(out)[:160])
+        self.assertTrue(str(out).startswith(NOTE), str(out)[:160])
 
     def test_a_killer_stop_without_a_soft_deadline_is_todays_timeout(self):
         killed = subprocess.TimeoutExpired(["agy"], 1230, output=fx("resume-cut.stdout"), stderr="")
@@ -242,14 +244,15 @@ class ThePlanPanelsFindings(_Adapter):
         # P1: the cut turn's stderr holds the timeout line AND an AGY_ERROR line (constructed from the two captures)
         quota_err = (FIX_1217 / "quota-exhausted.stderr").read_text(encoding="utf-8")
         cut = _cp(fx("resume-cut.stdout"), 0, fx("resume-cut.stderr") + quota_err)
-        out, _ = self._two(self._answer(), first=cut)
-        self.assertTrue(str(out).startswith("(FAILED"), str(out)[:160])
-        self.assertIn("quota", str(out).split("\n", 1)[0].lower())
-        self.assertNotIn("**Soft deadline:**", str(out).split("\n", 1)[0])
+        # impl r1 (sol, astra): a cut turn in which agy stated an error is not resumed at all — it times out, as
+        # the same output does without the cut, so no answered seat can rest on it
+        with self.assertRaises(subprocess.TimeoutExpired) as cm:
+            self._run([cut, self._answer()], clock=(0.0, 905.0, 905.0, 920.0))
+        self.assertIs(getattr(cm.exception, "agy_soft_cut"), True)
 
     def test_the_cut_turns_own_timeout_line_does_not_time_out_the_answered_resume(self):
         out, _ = self._two(self._answer())
-        self.assertTrue(str(out).startswith("**Soft deadline:**"), str(out)[:120])
+        self.assertTrue(str(out).startswith(NOTE), str(out)[:120])
 
     def test_a_resumed_call_without_its_own_init_fails_the_seat(self):
         # P2: the cut turn's init must not stand in for the resumed call's
@@ -270,14 +273,14 @@ class ThePlanPanelsFindings(_Adapter):
         self.assertTrue(str(out).startswith("(FAILED — agy ran model 'gemini-3.8-pro-high'"), str(out)[:160])
         self.assertEqual(out.soft_cut, "resumed")
 
-    def test_a_resume_that_fails_without_a_named_cause_is_the_soft_deadlines_timeout(self):
-        # opus's Minor: a lost conversation, say — the seat timed out, and its record names the conversation
+    def test_a_resume_that_fails_saying_why_fails_the_seat_with_agys_words(self):
+        # impl r1 (opus): a resume that fails with agy's own statement is a failure with its words, not a timeout
         lost = _cp('{"event":"init","conversation_id":"' + CID + '","init":{"model":"' + PIN + '"}}\n', 1,
                    "error: conversation not found\n")
-        with self.assertRaises(subprocess.TimeoutExpired) as cm:
-            self._two(lost)
-        self.assertEqual(getattr(cm.exception, "agy_conversation"), CID)
-        self.assertIs(getattr(cm.exception, "agy_soft_cut"), True)
+        out, _ = self._two(lost)
+        self.assertTrue(str(out).startswith("(FAILED"), str(out)[:160])
+        self.assertIn("conversation not found", str(out).split("\n", 1)[0])
+        self.assertEqual(out.soft_cut, "resumed")
 
     def test_a_resumed_call_with_no_result_is_the_soft_deadlines_timeout(self):
         head = fx("resume-answer.stdout").split("\n")
@@ -303,7 +306,7 @@ class TheLiveReviewsFindings(_Adapter):
         ans = fx("resume-answer.stdout").replace('"response":"I have read', '"response":"(1) Findings: I have read')
         self.assertIn('"(1) Findings', ans)
         out, _ = self._run([self._cut(), _cp(ans, 0, "")], clock=(0.0, 905.0, 905.0, 920.0))
-        self.assertTrue(str(out).startswith("**Soft deadline:**"), str(out)[:120])
+        self.assertTrue(str(out).startswith(NOTE), str(out)[:120])
 
     def test_a_killer_stop_with_no_soft_deadline_still_names_the_conversation(self):
         killed = subprocess.TimeoutExpired(["agy"], 1230, output=fx("resume-cut.stdout"), stderr="")
@@ -315,6 +318,61 @@ class TheLiveReviewsFindings(_Adapter):
         cut = _cp("agy: a warning on stdout\n" + fx("resume-cut.stdout"), 0, fx("resume-cut.stderr"))
         _, calls = self._run([cut, self._answer()], clock=(0.0, 905.0, 905.0, 920.0))
         self.assertEqual(calls[1]["argv"][:2], ["--conversation", CID])
+
+
+class TheImplRound1Findings(_Adapter):
+    """Task 261's impl round 1: each finding as a test, red before its fix."""
+
+    AGY_429 = ('AGY_ERROR: {"short_error":"RESOURCE_EXHAUSTED (code 429): Too many requests",'
+               '"status":"RESOURCE_EXHAUSTED"}\n')
+
+    def _two(self, second, first=None):
+        return self._run([first or self._cut(), second], clock=(0.0, 905.0, 905.0, 920.0))
+
+    def test_the_resumes_error_line_is_not_glued_to_a_cut_log_line(self):
+        # sol (reproduced): the killed turn's stderr ended mid-line, and the resume's AGY_ERROR joined that line
+        cut = _cp(fx("resume-cut.stdout"), 0, fx("resume-cut.stderr") + "agy: a log line cut off")
+        out, _ = self._two(_cp(fx("resume-answer.stdout"), 0, self.AGY_429), first=cut)
+        self.assertTrue(str(out).startswith("(FAILED"), str(out)[:160])
+
+    def test_a_cut_turn_that_ended_in_an_error_result_is_not_resumed(self):
+        # sol (constructed): an ERROR result in the cut turn, with agy's timeout line, must not be masked by a resume
+        lines = []
+        for ln in fx("resume-cut.stdout").split("\n"):
+            if '"event":"result"' in ln or '"event": "result"' in ln:
+                ev = json.loads(ln); ev["result"]["status"] = "ERROR"; ev["result"]["error"] = "the model failed"
+                ln = json.dumps(ev)
+            lines.append(ln)
+        with self.assertRaises(subprocess.TimeoutExpired) as cm:
+            _, calls = self._run([_cp("\n".join(lines), 3, fx("resume-cut.stderr"))], clock=(0.0, 905.0))
+        self.assertIs(getattr(cm.exception, "agy_soft_cut"), True)
+
+    def test_a_cut_turn_in_which_agy_stated_an_error_is_not_resumed(self):
+        # astra (reproduced): a plain `error:` line before the cut, then a good resume, hid the error
+        cut = _cp(fx("resume-cut.stdout"), 0, fx("resume-cut.stderr") + "error: Individual quota reached.\n")
+        with self.assertRaises(subprocess.TimeoutExpired):
+            self._run([cut], clock=(0.0, 905.0))
+
+    def test_a_resume_failing_with_an_unnamed_statement_fails_with_agys_words(self):
+        out, _ = self._two(_cp('{"event":"init","conversation_id":"' + CID + '","init":{"model":"' + PIN + '"}}\n',
+                               1, self.AGY_429))
+        self.assertTrue(str(out).startswith("(FAILED"), str(out)[:160])
+        self.assertIn("RESOURCE_EXHAUSTED", str(out).split("\n", 1)[0])
+
+    def test_the_killer_stopping_the_resume_times_out_naming_the_conversation_with_the_cut_turns_usage(self):
+        # opus: no test drove call 2's TimeoutExpired; its usage was then recorded unknown
+        killed2 = subprocess.TimeoutExpired(["agy"], 325, output='{"event":"init","conversation_id":"' + CID + '"', stderr="")
+        with self.assertRaises(subprocess.TimeoutExpired) as cm:
+            self._run([self._cut(), killed2], clock=(0.0, 905.0, 905.0, 1235.0))
+        self.assertEqual(getattr(cm.exception, "agy_conversation"), CID)
+        self.assertIs(getattr(cm.exception, "agy_soft_cut"), True)
+        self.assertEqual(getattr(cm.exception, "agy_usage", None), usage.extract_agy(fx("resume-cut.stdout"))[1])
+
+    def test_a_stray_json_line_in_the_cut_turn_does_not_fail_the_resumed_seat(self):
+        # sonnet, agy: a JSON object that is not an event would void the combined stream
+        cut = _cp('{"note":"not an event"}\n' + fx("resume-cut.stdout"), 0, fx("resume-cut.stderr"))
+        out, _ = self._two(self._answer(), first=cut)
+        self.assertTrue(str(out).startswith(NOTE), str(out)[:120])
 
 
 class _Project(unittest.TestCase):
@@ -377,7 +435,7 @@ class ThePanelSeat(_Project):
         self.assertEqual(r.get("soft_cut"), "resumed")
         self.assertEqual(r["usage"], {"status": "known", **{k: v for k, v in
                                       usage.extract_agy(fx("resume-answer.stdout"))[1].items()}})
-        self.assertIn("**Soft deadline:**", judge)
+        self.assertIn(NOTE, judge)
         self.assertIn("PANEL VERDICT: PASS", judge)
 
     def test_a_seat_whose_resume_times_out_names_the_conversation_and_counts_as_timed_out(self):
@@ -389,7 +447,20 @@ class ThePanelSeat(_Project):
         (r,) = recs
         self.assertEqual(r["status"], "timeout")
         self.assertEqual(r.get("soft_cut"), "timed-out")
+        self.assertEqual(r["usage"]["status"], "known")            # impl r1 (opus): the cut turn's usage is kept
         self.assertIn(f"agy conversation `{CID}`, resumable by hand with `agy --conversation {CID}`", judge)
+
+    def test_a_resume_the_killer_stops_mid_line_keeps_the_cut_turns_usage(self):
+        # impl r1 (opus): the strict read of a cut stream finds no usage, while the cut turn's is known
+        killed2 = subprocess.TimeoutExpired(["agy"], 325, output='{"event":"init","conversation_id":"' + CID + '"',
+                                            stderr="")
+        calls, recs, judge = self._panel(
+            [_cp(fx("resume-cut.stdout"), 0, fx("resume-cut.stderr")), killed2],
+            "--timeout", "1200", "--soft-timeout", "900")
+        (r,) = recs
+        self.assertEqual((r["status"], r.get("soft_cut")), ("timeout", "timed-out"))
+        want = usage.extract_agy(fx("resume-cut.stdout"))[1]
+        self.assertEqual(r["usage"], {"status": "known", **want})
 
     def test_the_soft_deadline_reaches_only_an_adapter_that_acts_on_it(self):
         answer = _cp(fx("resume-answer.stdout"), 0, fx("resume-answer.stderr"))
@@ -430,7 +501,7 @@ class TheSingleJudge(_Project):
         (r,) = recs
         self.assertEqual((r["kind"], r["status"], r.get("soft_cut")), ("single", "ok", "resumed"))
         log = (self.agent / "tasks" / "042-demo" / "judge-agy.log").read_text(encoding="utf-8")
-        self.assertIn("**Soft deadline:**", log)
+        self.assertIn(NOTE, log)
 
     def test_a_single_judge_whose_resume_times_out_names_the_conversation(self):
         again = _cp(fx("resume-cut.stdout"), 0, fx("resume-cut.stderr"))
@@ -441,6 +512,9 @@ class TheSingleJudge(_Project):
         (r,) = recs
         self.assertEqual((r["status"], r.get("soft_cut")), ("timeout", "timed-out"))
         self.assertIn(f"agy --conversation {CID}", err)
+        # impl r1 (sol): the trail is kept where it can be — the partial log (the journal masks a token-shaped id)
+        part = (self.agent / "tasks" / "042-demo" / "judge-agy.partial.log").read_text(encoding="utf-8")
+        self.assertIn(f"agy --conversation {CID}", part)
 
 
 if __name__ == "__main__":

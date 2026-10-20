@@ -12,12 +12,12 @@ panel 20 minutes and losing its vote. Now, for agy only (panel seat and single j
 - the cut turn is resumed in the same conversation (`--conversation <id>`), told that time is up, to call no tool and to
   write its findings now, from what it has read. Measured live: a 150 s cut and an 18 s resume gave a review in the
   usual form;
-- the review opens with a `**Soft deadline:**` line and counts as the seat's answer;
+- the review opens with a `**[playbook] Soft deadline:**` line and counts as the seat's answer;
 - the seat's spend record says `soft_cut: resumed`, or `timed-out` when the resume did not land. Its marker then names
   the conversation, which a person can resume by hand.
 
-The cut turn's errors still fail the seat, every `init` must name the pinned model, and the resumed call must stand on
-its own stream. One answered agy run in 128 had ended between soft and hard; it would now be cut too.
+A cut turn in which agy stated an error is not resumed, a resume that fails saying why fails with agy's words, every
+`init` must name the pinned model, and the resumed call must stand on its own stream. One answered agy run in 128 had ended between soft and hard; it would now be cut too.
 
 **The enforcement journal rotates** — task 257 (the owner, 2026-10-19: "Da, în Faza B (Recomandat)"). `enforcement.jsonl`
 never rotated, and three readers read it whole or scan it backwards: the close's numbers within 5 s, the agent recorder

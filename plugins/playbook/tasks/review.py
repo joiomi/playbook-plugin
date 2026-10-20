@@ -1974,6 +1974,8 @@ def _cmd_panel_review(cmd_args):
             # A usage frame the CLI already wrote before the kill is real spend
             # (round 3): parse it STRICTLY from the partial stdout and carry it.
             _to_usage = _pu(raw)
+            if _to_usage is None:
+                _to_usage = getattr(expired, "agy_usage", None)   # task 261: a cut turn's known usage
             raw = _salvage(provider_name, raw.strip())
             marker = f"(timed out after hard {hard_timeout_label})"
             _cid = getattr(expired, "agy_conversation", None)
@@ -3272,11 +3274,19 @@ def _cmd_single_review(cmd, cmd_args):
                 raw = raw.decode("utf-8", errors="replace")
             from provider.usage import parse_usage as _pu, salvage_text as _salvage
             _to_usage = _pu(raw)                        # a written usage frame is real spend (round 3)
+            if _to_usage is None:
+                _to_usage = getattr(expired, "agy_usage", None)   # task 261: a cut turn's known usage
             partial = _salvage(backend, raw.strip())   # codex frames → message text (task 056)
         saved_note = ""
-        if partial:
+        _to_cid = getattr(expired, "agy_conversation", None) if expired is not None else None
+        if not (isinstance(_to_cid, str) and _to_cid):
+            _to_cid = None
+        if partial or _to_cid:
             partial_log = task_file.parent / (
                 _judge_log_name(backend).removesuffix(".log") + ".partial.log")
+            # task 261: an agy seat's trail stays in its conversation — the log names it, text or none
+            _trail = (f"# agy conversation `{_to_cid}`, resumable by hand with "
+                      f"`agy --conversation {_to_cid}`.\n" if _to_cid else "")
             try:
                 atomic_write(
                     partial_log,
@@ -3285,17 +3295,17 @@ def _cmd_single_review(cmd, cmd_args):
                     f"# This is what it had written by then. It is NOT a finished "
                     f"review: findings may be cut off and it reached no conclusion.\n"
                     f"# The previous complete review, if any, is untouched in "
-                    f"{_judge_log_name(backend)}.\n\n{partial}\n",
+                    f"{_judge_log_name(backend)}.\n{_trail}\n{partial}\n",
                 )
-                saved_note = (f" Partial output ({len(partial)} chars) saved to "
-                              f"{partial_log.relative_to(project_path)}.")
+                saved_note = ((f" Partial output ({len(partial)} chars) saved to " if partial else
+                               " The judge produced no output before the kill; its conversation is named in ")
+                              + f"{partial_log.relative_to(project_path)}.")
             except OSError as _save_err:
                 saved_note = (f" Partial output ({len(partial)} chars) could NOT be "
                               f"saved ({_save_err}).")
-        else:
+        if not partial and not saved_note:
             saved_note = " The judge produced no output before the kill."
-        _to_cid = getattr(expired, "agy_conversation", None) if expired is not None else None
-        if isinstance(_to_cid, str) and _to_cid:
+        if _to_cid:
             # task 261: its trail stays in agy's conversation; a person can resume it by hand
             saved_note += (f" agy conversation `{_to_cid}`, resumable by hand with "
                            f"`agy --conversation {_to_cid}`.")
@@ -3321,6 +3331,8 @@ def _cmd_single_review(cmd, cmd_args):
                 task=task_num, round_no=_spend_round,
                 duration_ms=int((time.monotonic() - _spend_t0) * 1000),
                 status="timeout", usage=_to_usage,
+                # (the conversation id stays out of `error`: the journal masks a token-shaped string; the
+                # partial log and the message name it — task 261)
                 error=_judge_error("", "timeout", timeout_label=review_timeout_label),
                 soft_cut=("timed-out" if expired is not None
                           and getattr(expired, "agy_soft_cut", False) is True else ""))

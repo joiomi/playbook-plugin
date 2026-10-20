@@ -25,10 +25,10 @@ Two JSON files, both under `.agent/` in your project and hand-editable: `config.
   - its call gets `--print-timeout <soft>`;
   - a turn cut there is resumed in the same conversation (`agy --conversation <id>`), told that time is up, to call no tool and to write its findings now in the review's format, from everything it has read;
   - the resume runs under the time left before the hard limit, if at least 60 s are left;
-  - the review it writes opens with a `**Soft deadline:**` line and counts as the seat's answer, its usage counted once (agy's resumed result holds the conversation's running total);
+  - the review it writes opens with a `**[playbook] Soft deadline:**` line (playbook's, not the judge's) and counts as the seat's answer, its usage counted once (agy's resumed result holds the conversation's running total);
   - the seat's spend record says `soft_cut: resumed`.
 
-  A resume that times out, or fails with no cause agy names, makes the seat time out as before. Its record then says `soft_cut: timed-out`, and its marker names the conversation, which a person can resume by hand.
+  A cut turn in which agy stated an error (a non-zero exit, a result that is not SUCCESS, an `error:` or `AGY_ERROR:` line, a response step in ERROR) is not resumed: it times out, as the same output does without the cut. A resume that fails saying why fails the seat with agy's words. A resume that times out, or fails saying nothing, makes the seat time out as before. Its record then says `soft_cut: timed-out`, keeping the cut turn's usage, and its marker names the conversation, which a person can resume by hand.
 
   The cost: an agy run that would have finished between soft and hard on its own is cut too. That was 1 of 128 answered runs between 2026-10-14 and 10-20, and 0 of the 34 since 10-18, the longest of which took 769 s.
 

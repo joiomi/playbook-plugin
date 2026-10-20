@@ -125,17 +125,19 @@ def _text(raw) -> str:
 
 
 def _complete_events(stdout: str) -> str:
-    """`stdout`'s lines that are whole JSON objects, each ending in a newline. A turn the killer stopped can end
-    in a cut line, and the parser reads a stream only when every line is an event."""
+    """`stdout`'s lines that are whole agy events (JSON objects with a string `event`), each ending in a newline.
+    A turn the killer stopped can end in a cut line, and the parser reads a stream only when every line is one."""
     kept = []
     for line in stdout.split("\n"):
         if not line.strip():
             continue
         try:
-            if isinstance(json.loads(line), dict):
-                kept.append(line + "\n")
+            ev = json.loads(line)
         except ValueError:
             continue
+        # only an event: a JSON object of any other shape would void the parser's strict read (impl r1)
+        if isinstance(ev, dict) and isinstance(ev.get("event"), str):
+            kept.append(line + "\n")
     return "".join(kept)
 
 
@@ -170,11 +172,15 @@ def _without_print_timeout(argv: list) -> list:
 
 def _timed_out(cmd: list, timeout, stdout: str, stderr: str, conversation: Optional[str], *,
                soft_cut: bool = False) -> subprocess.TimeoutExpired:
-    """The `TimeoutExpired` the callers' timeout paths take, naming agy's conversation when it is known, and
-    saying whether the turn had been cut at the soft deadline (the seat's spend record carries it)."""
+    """The `TimeoutExpired` the callers' timeout paths take, naming agy's conversation when it is known, saying
+    whether the turn had been cut at the soft deadline (the seat's spend record carries it), and carrying the
+    usage of the stream's last complete `result` — a resume the killer stopped leaves a cut stream whose strict
+    read finds none, while the cut turn's own usage is known (impl r1)."""
+    from provider import usage as _usage
     exc = subprocess.TimeoutExpired(cmd, timeout, output=stdout, stderr=stderr)
     exc.agy_conversation = conversation   # type: ignore[attr-defined]
     exc.agy_soft_cut = soft_cut           # type: ignore[attr-defined]
+    exc.agy_usage = _usage.parse_usage(_complete_events(stdout or "")) if soft_cut else None   # type: ignore[attr-defined]
     return exc
 
 
@@ -199,7 +205,7 @@ def finish_resumed(out, result, conversation: Optional[str], soft_timeout_secs: 
         return JudgeOutput(f"(FAILED — {problem})\n\n[the resumed call's text, not this seat's review]\n{text}",
                            usage=usage, soft_cut="resumed")
     soft = f" (~{human_duration(soft_timeout_secs)})" if soft_timeout_secs else ""
-    note = (f"**Soft deadline:** agy reached its soft deadline{soft} mid-turn; the findings below were written "
+    note = (f"**[playbook] Soft deadline:** agy reached its soft deadline{soft} mid-turn; the findings below were written "
             f"in a resumed turn of the same conversation (`{conversation}`), told to call no tool and to say what "
             "it did not check.")
     return JudgeOutput(f"{note}\n\n{text}", usage=usage, soft_cut="resumed")
@@ -409,6 +415,14 @@ class AntigravityAdapter(ProviderAdapter):
         left = int(hard - elapsed)
         if conversation is None or left < _RESUME_MIN_SECS:
             raise _timed_out(["agy", *inv.argv], soft, out1, err1, conversation, soft_cut=True)
+        # a cut turn in which agy stated an error — a non-zero exit, a result that is not SUCCESS, an `error:` or
+        # `AGY_ERROR:` line, a response step in ERROR — is not resumed: a good resume would mask it, so it times
+        # out as before (impl r1: sol, astra)
+        last1 = _usage._agy_last_result(out1)
+        if ((result is not None and result.returncode != 0)
+                or (last1 is not None and last1.get("status") != "SUCCESS")
+                or _usage.agy_error_statement(out1, _usage.agy_stderr_without_timeout(err1))):
+            raise _timed_out(["agy", *inv.argv], soft, out1, err1, conversation, soft_cut=True)
         from tasks.template import soft_deadline_resume_instruction
         argv2 = ["--conversation", conversation] + _without_print_timeout(inv.argv) + ["--print-timeout", f"{left}s"]
         stdin2 = json.dumps({"event": "user", "message": {"role": "user",
@@ -417,6 +431,8 @@ class AntigravityAdapter(ProviderAdapter):
         # what agy said in the cut turn stays (an `AGY_ERROR:` there still fails the seat); only the line saying
         # the turn was cut goes (plan r1 P1)
         err_head = _usage.agy_stderr_without_timeout(err1)
+        if err_head and not err_head.endswith("\n"):
+            err_head += "\n"   # a killed turn's last log line must not swallow the resume's first line (impl r1, sol)
         try:
             result2, elapsed2 = self._judge_call(argv2, stdin2, left, project_view=project_view, env=env)
         except subprocess.TimeoutExpired as expired:
@@ -428,9 +444,10 @@ class AntigravityAdapter(ProviderAdapter):
             raise _timed_out(["agy", *argv2], left, head + out2, err_head + err2, conversation, soft_cut=True)
         last = _usage._agy_last_result(out2)
         if (result2.returncode != 0 or last is None or last.get("status") != "SUCCESS") \
-                and _usage.agy_failure_cause(out2, err2) is None:
-            # the resume failed without a cause agy names (a lost conversation, say): the seat timed out at its
-            # soft deadline, as before, and its record names the conversation (plan r1, opus Minor)
+                and _usage.agy_failure_cause(out2, err2) is None and _usage.agy_error_statement(out2, err2) is None:
+            # the resume failed and agy said nothing about why: the seat timed out at its soft deadline, as before,
+            # and its record names the conversation (plan r1, opus Minor). When agy says why, the parser fails the
+            # seat with agy's words instead (impl r1, opus)
             raise _timed_out(["agy", *argv2], left, head + out2, err_head + err2, conversation, soft_cut=True)
         combined = subprocess.CompletedProcess(["agy", *argv2], result2.returncode, stdout=head + out2,
                                                stderr=err_head + err2)
