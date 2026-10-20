@@ -4,6 +4,15 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+**agy's soft-deadline note is playbook's own line; a soft stop never claims the hard one** — task 264 (the owner,
+2026-10-20: "Reparațiile mici din PLAN"):
+- the `**[playbook] Soft deadline:**` note rode inside the judge's quoted text, where a judge could write the same words.
+  It is now carried beside the review and written by the CLI: unquoted in the seat's block in judge.md, and for the
+  single judge before its review, in its log's header (`[soft deadline] …`) and as the line before its quoted findings.
+  A judge's own copy of the words stays quoted (PLAN.md "From task 261" (b));
+- a single judge stopped at its soft deadline and not resumed said both that and "hit hard timeout after …"; its
+  message, partial log and spend record now say only where it stopped (PLAN.md "From task 261" (d)).
+
 **Small repairs to the journals and the recorder** — task 263 (the owner, 2026-10-20: "Reparațiile mici din PLAN"):
 - a closed journal file whose repair could not take its lock stayed for good beside the `.gz` that holds it (both
   journals): the backoff touched the closed file alone, which made it newer than its `.gz`, and a newer one is never
@@ -39,7 +48,8 @@ panel 20 minutes and losing its vote. Now, for agy only (panel seat and single j
 - the cut turn is resumed in the same conversation (`--conversation <id>`), told that time is up, to call no tool and to
   write its findings now, from what it has read. Measured live: a 150 s cut and an 18 s resume gave a review in the
   usual form;
-- the review opens with a `**[playbook] Soft deadline:**` line and counts as the seat's answer;
+- the review counts as the seat's answer, and a `**[playbook] Soft deadline:**` line says so — playbook's own line,
+  written apart from the judge's quoted text (task 264);
 - the seat's spend record says `soft_cut: resumed`, or `timed-out` when the resume did not land. Its marker then names
   the conversation, which a person can resume by hand.
 

@@ -48,11 +48,16 @@ class JudgeOutput(str):
     # task 261: "resumed" when agy's turn was cut at the soft deadline and its review written in the resumed
     # turn, "timed-out" when the cut turn could not be resumed; None otherwise. The seat's spend record carries it.
     soft_cut: Optional[str]
+    # task 264: playbook's own line about the call (agy's soft deadline), written by the CLI apart from the judge's
+    # quoted text — a judge could write the same words inside its review (PLAN.md "From task 261" (b))
+    note: Optional[str]
 
-    def __new__(cls, text: str, usage: Optional[dict] = None, soft_cut: Optional[str] = None):
+    def __new__(cls, text: str, usage: Optional[dict] = None, soft_cut: Optional[str] = None,
+                note: Optional[str] = None):
         obj = super().__new__(cls, text)
         obj.usage = usage if _valid_known(usage) else None
         obj.soft_cut = soft_cut if soft_cut in ("resumed", "timed-out") else None
+        obj.note = " ".join(note.split()) if isinstance(note, str) and note.strip() else None
         return obj
 
 

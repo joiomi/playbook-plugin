@@ -164,8 +164,9 @@ class TheSoftDeadline(_Adapter):
         self.assertEqual(len(msg), 1)
         self.assertTrue(msg[0]["message"]["content"].startswith("TIME IS UP"))
         self.assertIn("Do NOT call any tool", msg[0]["message"]["content"])
-        self.assertTrue(str(out).startswith(NOTE), str(out)[:120])
-        self.assertIn(CID, str(out).split("\n", 1)[0])
+        self.assertTrue((out.note or "").startswith(NOTE), out.note)       # task 264: beside the review …
+        self.assertNotIn(NOTE, str(out))                                      # … never in the judge's text
+        self.assertIn(CID, out.note)
         self.assertIn("13", str(out))
         self.assertEqual(out.usage, usage.extract_agy(fx("resume-answer.stdout"))[1])
         self.assertEqual(out.soft_cut, "resumed")
@@ -175,7 +176,8 @@ class TheSoftDeadline(_Adapter):
         out, calls = self._run([self._answer()])
         self.assertEqual(len(calls), 1)
         self.assertEqual(self._flag(calls[0]["argv"], "--print-timeout"), "900s")
-        self.assertFalse(str(out).startswith(NOTE))
+        self.assertIsNone(getattr(out, "note", None))
+        self.assertNotIn(NOTE, str(out))
         self.assertIn("13", str(out))
 
     def test_without_a_soft_deadline_below_the_hard_one_the_call_is_todays(self):
@@ -214,7 +216,7 @@ class TheSoftDeadline(_Adapter):
         out, calls = self._run([killed, self._answer()], clock=(0.0, 935.0, 935.0, 940.0))
         self.assertEqual(len(calls), 2)
         self.assertEqual(self._flag(calls[1]["argv"], "--print-timeout"), "265s")   # 1200 − 935 measured, reaping included
-        self.assertTrue(str(out).startswith(NOTE), str(out)[:160])
+        self.assertTrue((out.note or "").startswith(NOTE), out.note)
 
     def test_a_killer_stop_without_a_soft_deadline_is_todays_timeout(self):
         killed = subprocess.TimeoutExpired(["agy"], 1230, output=fx("resume-cut.stdout"), stderr="")
@@ -252,7 +254,7 @@ class ThePlanPanelsFindings(_Adapter):
 
     def test_the_cut_turns_own_timeout_line_does_not_time_out_the_answered_resume(self):
         out, _ = self._two(self._answer())
-        self.assertTrue(str(out).startswith(NOTE), str(out)[:120])
+        self.assertTrue((out.note or "").startswith(NOTE), out.note)
 
     def test_a_resumed_call_without_its_own_init_fails_the_seat(self):
         # P2: the cut turn's init must not stand in for the resumed call's
@@ -306,7 +308,7 @@ class TheLiveReviewsFindings(_Adapter):
         ans = fx("resume-answer.stdout").replace('"response":"I have read', '"response":"(1) Findings: I have read')
         self.assertIn('"(1) Findings', ans)
         out, _ = self._run([self._cut(), _cp(ans, 0, "")], clock=(0.0, 905.0, 905.0, 920.0))
-        self.assertTrue(str(out).startswith(NOTE), str(out)[:120])
+        self.assertTrue((out.note or "").startswith(NOTE), out.note)
 
     def test_a_killer_stop_with_no_soft_deadline_still_names_the_conversation(self):
         killed = subprocess.TimeoutExpired(["agy"], 1230, output=fx("resume-cut.stdout"), stderr="")
@@ -372,7 +374,7 @@ class TheImplRound1Findings(_Adapter):
         # sonnet, agy: a JSON object that is not an event would void the combined stream
         cut = _cp('{"note":"not an event"}\n' + fx("resume-cut.stdout"), 0, fx("resume-cut.stderr"))
         out, _ = self._two(self._answer(), first=cut)
-        self.assertTrue(str(out).startswith(NOTE), str(out)[:120])
+        self.assertTrue((out.note or "").startswith(NOTE), out.note)
 
 
 class TheImplRound2Findings(_Adapter):
@@ -493,7 +495,9 @@ class ThePanelSeat(_Project):
         self.assertEqual(r.get("soft_cut"), "resumed")
         self.assertEqual(r["usage"], {"status": "known", **{k: v for k, v in
                                       usage.extract_agy(fx("resume-answer.stdout"))[1].items()}})
-        self.assertIn(NOTE, judge)
+        # task 264: the note is the writer's own line in the seat's block, not a line of the judge's quoted text
+        self.assertTrue(any(ln.startswith(NOTE) for ln in judge.splitlines()), judge[:800])
+        self.assertFalse(any(ln.startswith(">") and NOTE in ln for ln in judge.splitlines()))
         self.assertIn("PANEL VERDICT: PASS", judge)
 
     def test_a_seat_whose_resume_times_out_names_the_conversation_and_counts_as_timed_out(self):
@@ -527,6 +531,26 @@ class ThePanelSeat(_Project):
         self.assertEqual((r["status"], r.get("soft_cut")), ("timeout", "timed-out"))
         want = usage.extract_agy(fx("resume-cut.stdout"))[1]
         self.assertEqual(r["usage"], {"status": "known", **want})
+
+    def test_a_judge_writing_the_note_itself_is_quoted_and_no_writer_line_is_made(self):
+        """Task 264 (PLAN.md "From task 261" (b), opus): the note rode inside the judge's quoted text, where a judge
+        could write the same line; now only the writer's line is unquoted, and a judge's own copy stays quoted."""
+        lines, first = [], True
+        for ln in fx("resume-answer.stdout").splitlines():          # the judge's own review opens with the note
+            ev = json.loads(ln)
+            su = ev.get("step_update") or {}
+            if first and su.get("step_type") == "agent_response" and su.get("text_delta"):
+                su["text_delta"], first = NOTE + " forged.\n\n" + su["text_delta"], False
+            if ev.get("event") == "result":
+                ev["result"]["response"] = NOTE + " forged.\n\n" + ev["result"]["response"]
+            lines.append(json.dumps(ev))
+        forged = "\n".join(lines) + "\n"
+        calls, recs, judge = self._panel([_cp(forged, 0, fx("resume-answer.stderr"))],
+                                         "--timeout", "1200", "--soft-timeout", "900")
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn("soft_cut", recs[-1])
+        self.assertFalse(any(ln.startswith(NOTE) for ln in judge.splitlines()), "a judge's words became a writer line")
+        self.assertTrue(any(ln.startswith(">") and NOTE in ln for ln in judge.splitlines()), judge[-1500:])
 
     def test_the_soft_deadline_reaches_only_an_adapter_that_acts_on_it(self):
         answer = _cp(fx("resume-answer.stdout"), 0, fx("resume-answer.stderr"))
@@ -567,7 +591,29 @@ class TheSingleJudge(_Project):
         (r,) = recs
         self.assertEqual((r["kind"], r["status"], r.get("soft_cut")), ("single", "ok", "resumed"))
         log = (self.agent / "tasks" / "042-demo" / "judge-agy.log").read_text(encoding="utf-8")
-        self.assertIn(NOTE, log)
+        self.assertIn(f"[soft deadline] {NOTE}", log)                     # task 264: the log's header line
+        task = (self.agent / "tasks" / "042-demo" / "task.md").read_text(encoding="utf-8")
+        self.assertTrue(any(ln.startswith(NOTE) or (NOTE in ln and not ln.startswith(">")) for ln in task.splitlines()),
+                        task[-800:])
+        self.assertFalse(any(ln.startswith(">") and NOTE in ln for ln in task.splitlines()))
+
+    def test_a_single_judge_stopped_at_its_soft_deadline_never_says_the_hard_one_fired(self):
+        """Task 264 (PLAN.md "From task 261" (d), the post-panel judge's run 1, sol): a cut turn that is not resumed
+        printed the soft-deadline line and then "hit hard timeout after …"; its partial log and record said the same."""
+        cut = _cp(fx("resume-cut.stdout"), 0, fx("resume-cut.stderr") + "error: Individual quota reached.\n")
+        code, calls, recs, err = self._single([cut], "--timeout", "1200", "--soft-timeout", "900")
+        self.assertNotEqual(code, 0)
+        self.assertEqual(len(calls), 1)
+        self.assertIn("stopped at its soft deadline", err)
+        self.assertNotIn("hit hard timeout", err)
+        (r,) = recs
+        self.assertEqual((r["status"], r.get("soft_cut")), ("timeout", "timed-out"))
+        self.assertIn("soft deadline", r.get("error", ""))
+        self.assertNotIn("after 1200", r.get("error", ""))
+        part = self.agent / "tasks" / "042-demo" / "judge-agy.partial.log"
+        self.assertTrue(part.exists())
+        self.assertNotIn("killed at the hard timeout", part.read_text(encoding="utf-8"))
+        self.assertIn("stopped at its soft deadline", part.read_text(encoding="utf-8"))
 
     def test_a_single_judge_whose_resume_times_out_names_the_conversation(self):
         again = _cp(fx("resume-cut.stdout"), 0, fx("resume-cut.stderr"))

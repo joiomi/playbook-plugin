@@ -324,7 +324,12 @@ def _judge_block_lines(label: str, text: str, failed: bool) -> "list[str]":
     (task 200, #3) — no line of it can be a heading, a header field, a bar or triage to a reader of judge.md."""
     from tasks.core import quote_judge_text
     bar = "═" * 60
-    return [bar, f"  JUDGE: {label}{'  [FAILED]' if failed else ''}", bar + "\n", quote_judge_text(text), "\n\n"]
+    # task 264: playbook's own line about the call (agy's soft deadline) is the writer's, above the quoted text
+    note = getattr(text, "note", None)
+    head = [bar, f"  JUDGE: {label}{'  [FAILED]' if failed else ''}", bar + "\n"]
+    if isinstance(note, str) and note:
+        head.append(_one_line(note) + "\n")
+    return head + [quote_judge_text(text), "\n\n"]
 
 
 def _panel_triage_frame() -> list[str]:
@@ -3392,6 +3397,11 @@ def _cmd_single_review(cmd, cmd_args):
                 _to_usage = getattr(expired, "agy_usage", None)   # task 261: a cut turn's known usage
             partial = _salvage(backend, raw.strip())   # codex frames → message text (task 056)
         saved_note = ""
+        _soft_stop = (expired is not None and getattr(expired, "agy_soft_cut", False) is True
+                      and getattr(expired, "agy_resumed", True) is False)   # task 261: stopped near the soft deadline
+        # task 264 (PLAN.md "From task 261" (d)): a seat stopped at its soft deadline never says the hard one fired
+        _stopped = (f"stopped at its soft deadline ({format_timeout_label(review_soft_timeout)}) and could not be "
+                    "resumed" if _soft_stop else f"hit hard timeout after {review_timeout_label}")
         _to_cid = getattr(expired, "agy_conversation", None) if expired is not None else None
         if not (isinstance(_to_cid, str) and _to_cid):
             _to_cid = None
@@ -3404,9 +3414,10 @@ def _cmd_single_review(cmd, cmd_args):
             try:
                 atomic_write(
                     partial_log,
-                    f"# INCOMPLETE {review_label} — the judge was killed at the hard "
-                    f"timeout ({review_timeout_label}) mid-response.\n"
-                    f"# This is what it had written by then. It is NOT a finished "
+                    (f"# INCOMPLETE {review_label} — the judge {_stopped}.\n" if _soft_stop else
+                     f"# INCOMPLETE {review_label} — the judge was killed at the hard "
+                     f"timeout ({review_timeout_label}) mid-response.\n")
+                    + f"# This is what it had written by then. It is NOT a finished "
                     f"review: findings may be cut off and it reached no conclusion.\n"
                     f"# The previous complete review, if any, is untouched in "
                     f"{_judge_log_name(backend)}.\n{_trail}\n{partial}\n",
@@ -3423,12 +3434,8 @@ def _cmd_single_review(cmd, cmd_args):
             # task 261: its trail stays in agy's conversation; a person can resume it by hand
             saved_note += (f" agy conversation `{_to_cid}`, resumable by hand with "
                            f"`agy --conversation {_to_cid}`.")
-        _soft_stop = (expired is not None and getattr(expired, "agy_soft_cut", False) is True
-                      and getattr(expired, "agy_resumed", True) is False)   # task 261: stopped near the soft deadline
         print(
-            (f"\n{review_label} stopped at its soft deadline ({format_timeout_label(review_soft_timeout)}) and could "
-             "not be resumed. " if _soft_stop else "")
-            + f"\n{review_label} hit hard timeout after {review_timeout_label} "
+            f"\n{review_label} {_stopped} "
             f"({review_soft_hard_label}). Raise the hard kill with --timeout, "
             "PLAYBOOK_REVIEW_TIMEOUT_SECS, or .agent/config.json "
             "review_timeout_secs; move the soft deadline with --soft-timeout "
@@ -3451,7 +3458,8 @@ def _cmd_single_review(cmd, cmd_args):
                 status="timeout", usage=_to_usage,
                 # (the conversation id stays out of `error`: the journal masks a token-shaped string; the
                 # partial log and the message name it — task 261)
-                error=_judge_error("", "timeout", timeout_label=review_timeout_label),
+                error=(f"stopped at the soft deadline ({format_timeout_label(review_soft_timeout)}), not resumed"
+                       if _soft_stop else _judge_error("", "timeout", timeout_label=review_timeout_label)),
                 soft_cut=("timed-out" if expired is not None
                           and getattr(expired, "agy_soft_cut", False) is True else ""))
         # Task 108: a judge killed at its hard timeout SPENT its budget — the
@@ -3839,6 +3847,7 @@ def _cmd_single_review(cmd, cmd_args):
     # saved review, never a clean seat); unrecognized stdout stays verbatim.
     _spend_usage = None
     _spend_cut = ""       # task 261: agy's turn cut at the soft deadline and resumed
+    _soft_note = ""       # task 264: playbook's line about it, written apart from the judge's text
     if backend in ("codex", "grok", "antigravity", "claude"):
         from provider.usage import (
             agy_judge_output, claude_judge_output, extract_codex, extract_grok, judge_output_from_result)
@@ -3851,6 +3860,7 @@ def _cmd_single_review(cmd, cmd_args):
             from provider.adapters.antigravity import finish_resumed as _agy_finish
             _jo = _agy_finish(_jo, result, _agy_resumed, review_soft_timeout)
             _spend_cut = getattr(_jo, "soft_cut", None) or ""
+            _soft_note = getattr(_jo, "note", None) or ""
         elif backend == "claude":
             # task 232: claude's failure keeps plain mode's shape (its words as the stdout tail)
             _jo = claude_judge_output(result, _sandbox.format_judge_output)
@@ -3875,6 +3885,8 @@ def _cmd_single_review(cmd, cmd_args):
     # Clean tree: stream the judge's output for the operator (best-effort — a
     # closed sink must not crash a completed review).
     try:
+        if _soft_note:
+            print(_one_line(_soft_note), flush=True)
         if result.stdout:
             print(result.stdout, end="", flush=True)
         if result.stderr:
@@ -3963,7 +3975,9 @@ def _cmd_single_review(cmd, cmd_args):
                        # Task 059: the tamper-guard receipt rides with the log so a
                        # kept-but-degraded review stays visibly unverified after
                        # the terminal output is gone.
-                       + f"[tamper guard] {_tamper_receipt}\n\n")
+                       + f"[tamper guard] {_tamper_receipt}\n"
+                       # task 264: agy's soft deadline, playbook's line beside the judge's text
+                       + (f"[soft deadline] {_one_line(_soft_note)}\n" if _soft_note else "") + "\n")
         # Best-effort: a rogue that returns 0 but deleted/locked the task dir
         # must not crash this write BEFORE the tamper hard-stop below (codex:terra
         # round-5 Critical) — the judge output was already streamed to stdout, so
@@ -4074,6 +4088,8 @@ def _cmd_single_review(cmd, cmd_args):
         _findings_text = saved_review_text
         # The receipt goes on as the CLI's own line, apart from the judge's quoted text (II-3).
         _receipt = f"**Tamper guard: {_tamper_receipt}**" if _tamper_changes["cautions"] else ""
+        if _soft_note:              # task 264: the CLI's line too, never inside the judge's quoted text
+            _receipt = (_receipt + " " if _receipt else "") + _one_line(_soft_note)
         refusal = _write_review_findings(task_file, review_mode, _findings_text, receipt=_receipt)
         if refusal is None:
             print(f"Findings written to {task_file.relative_to(project_path)} "

@@ -213,7 +213,8 @@ def finish_resumed(out, result, conversation: Optional[str], soft_timeout_secs: 
     note = (f"**[playbook] Soft deadline:** agy reached its soft deadline{soft} mid-turn; the findings below were written "
             f"in a resumed turn of the same conversation (`{conversation}`), told to call no tool and to say what "
             "it did not check.")
-    return JudgeOutput(f"{note}\n\n{text}", usage=usage, soft_cut="resumed")
+    # the note is playbook's: carried beside the review, which stays the judge's own text (task 264)
+    return JudgeOutput(text, usage=usage, soft_cut="resumed", note=note)
 
 
 def validate_model_id(model: str) -> str:
