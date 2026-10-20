@@ -339,3 +339,28 @@ def clear_outage(agent_dir: Path, spec: str,
     _record(agent_dir).parent.mkdir(parents=True, exist_ok=True)
     rewrite(_record(agent_dir), _t)
     return bool(found)
+
+
+def clear_if_unchanged(agent_dir: Path, spec: str, observed: dict, at: _dt.datetime) -> str:
+    """A panel's probe answered (task 262): `spec`'s entry is removed only while it is still the one the probe saw
+    (`observed`), and the clear's time is the probe's START (`at`), so a failure of a call begun while the probe ran is
+    still news to `record_outage` (task 262's impl round 1, astra and sol: the clear took whatever entry was there when
+    the probe answered, a newer one another panel had recorded too, and its own later time). Says what it did:
+    "cleared"; "gone" — no entry there (the owner's enable, a reset), the time left as a clear's; "newer" — the seat
+    was recorded again meanwhile: that entry stands and nothing is written."""
+    from tasks.atomic import rewrite
+    said = []
+
+    def _t(text: str) -> "str | None":
+        data = _load(text)
+        if spec in data and data[spec] != observed:
+            said.append("newer")
+            return None
+        said.append("cleared" if data.pop(spec, None) is not None else "gone")
+        cleared = _cleared(text, at)
+        cleared[spec] = max(cleared.get(spec, at), at)      # the latest clear stands, as `clear_outage`'s
+        return _dump(data, cleared)
+
+    _record(agent_dir).parent.mkdir(parents=True, exist_ok=True)
+    rewrite(_record(agent_dir), _t)
+    return said[-1] if said else "newer"

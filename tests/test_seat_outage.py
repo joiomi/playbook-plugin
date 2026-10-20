@@ -424,7 +424,7 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
         R._PB_JOURNAL_LOADED = False
         _pin_clock(self)
 
-    def _panel(self, models, judge, codex_available=False):
+    def _panel(self, models, judge, codex_available=False, real_tamper_guard=False):
         import contextlib
         import io
         from unittest import mock
@@ -432,12 +432,16 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
         from provider.adapters.codex import CodexAdapter
         out, err, code = io.StringIO(), io.StringIO(), None
         old = os.getcwd()
-        with mock.patch.object(ClaudeAdapter, "is_available", classmethod(lambda cls: True)), \
-                mock.patch.object(CodexAdapter, "is_available", classmethod(lambda cls: codex_available)), \
-                mock.patch.object(ClaudeAdapter, "run_headless_judge", judge), \
-                mock.patch.object(CodexAdapter, "run_headless_judge", judge), \
-                mock.patch.object(self.R, "_detect_tamper_full",
-                                  lambda pp, t, b: {"mutations": [], "cautions": [], "degraded": False}):
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(ClaudeAdapter, "is_available", classmethod(lambda cls: True)))
+            stack.enter_context(mock.patch.object(CodexAdapter, "is_available",
+                                                  classmethod(lambda cls: codex_available)))
+            stack.enter_context(mock.patch.object(ClaudeAdapter, "run_headless_judge", judge))
+            stack.enter_context(mock.patch.object(CodexAdapter, "run_headless_judge", judge))
+            if not real_tamper_guard:
+                stack.enter_context(mock.patch.object(
+                    self.R, "_detect_tamper_full",
+                    lambda pp, t, b: {"mutations": [], "cautions": [], "degraded": False}))
             os.chdir(self.d)
             try:
                 with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -612,6 +616,175 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
         code, out, _ = self._panel(self.CLAUDE, self._judge())
         self.assertNotIn("claude-fable-5", self.calls)
         self.assertIn("Skipped out of credit: claude:claude-fable-5", out)
+
+    # task 262's impl round 1
+
+    UNTIL = (NOW + dt.timedelta(days=2)).isoformat(timespec="minutes")
+
+    def _record(self, *seats, until=UNTIL, reason="weekly limit"):
+        for s in seats:
+            so.record_outage(self.d / ".agent", s, {"reason": reason, "until": until})
+
+    def _spend(self, kind="probe"):
+        p = self.d / ".agent" / "journal" / "enforcement.jsonl"
+        recs = [json.loads(x) for x in p.read_text(encoding="utf-8").splitlines()] if p.exists() else []
+        return [r for r in recs if r.get("hook") == "review" and r.get("kind") == kind]
+
+    def test_a_probe_that_raises_keeps_the_seat_out_and_the_panel_runs(self):
+        """agy's Critical, sol: `subprocess` was not imported where the probe caught its timeout, so any exception
+        from the seat's adapter raised NameError and stopped the whole panel."""
+        for exc, said in ((subprocess.TimeoutExpired(["claude"], 120), "the probe timed out"),
+                          (OSError("no such file"), "the probe could not run (OSError)")):
+            with self.subTest(exc=type(exc).__name__):
+                self._record("claude:claude-fable-5")
+                self.calls.clear()
+                inner = self._judge()
+
+                def judge(adapter, prompt, model, system_context, _exc=exc, **kw):
+                    if "fable" in model:
+                        self.calls.append(model)
+                        raise _exc
+                    return inner(adapter, prompt, model, system_context, **kw)
+                code, out, err = self._panel(self.CLAUDE, judge)
+                self.assertIn(f"Probed claude:claude-fable-5: {said}.", out, err)
+                self.assertIn("Skipped out of credit: claude:claude-fable-5", out)
+                self.assertEqual(self.calls.count("claude-fable-5"), 1)
+                self.assertIn("claude-opus-5-5", self.calls, "the panel did not go on to its live seats")
+                (self.d / ".agent" / "tasks" / "042-demo" / "judge.md").unlink(missing_ok=True)
+
+    def test_the_probe_reads_nothing_of_the_project(self):
+        """Opus (Important) and sol: the probe ran in the project — a claude seat read its CLAUDE.md and memory under
+        a $0.5 budget, and a contained seat's writable project was the owner's. It runs in a throwaway folder now."""
+        self._record("claude:claude-fable-5")
+        roots = []
+        inner = self._judge()
+
+        def judge(adapter, prompt, model, system_context, **kw):
+            if "fable" in model and "availability check" in prompt:
+                roots.append(Path(adapter.project_root))
+            return inner(adapter, prompt, model, system_context, **kw)
+        self._panel(self.CLAUDE, judge)
+        self.assertEqual(len(roots), 1)
+        self.assertNotEqual(roots[0].resolve(), self.d.resolve())
+        self.assertNotIn(self.d.resolve(), roots[0].resolve().parents)
+        self.assertFalse(roots[0].exists(), "the probe's folder was left behind")
+
+    def test_a_probe_that_writes_the_project_voids_the_panel_before_any_review(self):
+        """Sol (Important): the probe ran before the panel's tamper snapshot, so without an OS sandbox a probe's write
+        became the snapshot's baseline. The tree is now snapshotted before the probes and checked after each one."""
+        self._record("claude:claude-fable-5")
+        inner = self._judge()
+
+        def judge(adapter, prompt, model, system_context, **kw):
+            if "fable" in model and "availability check" in prompt:
+                (self.d / "MIND_MAP.md").write_text("# Mind Map\n[1] changed by a probe\n", encoding="utf-8")
+            return inner(adapter, prompt, model, system_context, **kw)
+        code, out, err = self._panel(self.CLAUDE, judge, real_tamper_guard=True)
+        self.assertEqual(code, 1, out + err)
+        self.assertIn("TAMPER DETECTED", err)
+        self.assertEqual(self.calls, ["claude-fable-5"], "a review was called after a probe changed the project")
+        self.assertIn("claude:claude-fable-5", so.current_outages(self.d / ".agent"),
+                      "a probe that changed the project cleared its seat's record")
+        self.assertEqual(self._spend(), [], "a tamper stop records no spend")
+
+    def test_a_newer_outage_recorded_while_the_probe_ran_stands(self):
+        """Astra and sol (Important): the probe's clear removed whatever entry was there when it answered —
+        a newer outage another panel recorded meanwhile too."""
+        self._record("claude:claude-fable-5")
+        inner = self._judge()
+
+        def judge(adapter, prompt, model, system_context, **kw):
+            if "fable" in model and "availability check" in prompt:
+                self._record("claude:claude-fable-5", reason="newer limit")     # another panel, meanwhile
+            return inner(adapter, prompt, model, system_context, **kw)
+        code, out, _ = self._panel(self.CLAUDE, judge)
+        self.assertEqual(so.current_outages(self.d / ".agent")["claude:claude-fable-5"]["reason"], "newer limit")
+        self.assertIn("Skipped out of credit: claude:claude-fable-5", out)
+        self.assertEqual(self.calls.count("claude-fable-5"), 1, "the seat was seated over a newer outage")
+
+    def test_a_failure_of_a_call_begun_during_the_probe_is_still_recorded(self):
+        """Astra and sol (Important): the clear took its time when the probe had answered, so a call begun while the
+        probe ran, failing out of credit, was taken for news from before the clear. The clear's time is the probe's
+        start now. The clock steps one second per reading, so the order is exact."""
+        import itertools
+        import types
+        from unittest import mock
+        ticks = itertools.count()
+
+        class _Stepping(dt.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                at = NOW + dt.timedelta(seconds=next(ticks))
+                return at if tz is None else at.astimezone(tz)
+        patcher = mock.patch.object(so, "_dt", types.SimpleNamespace(datetime=_Stepping, timedelta=dt.timedelta,
+                                                                       timezone=dt.timezone))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self._record("claude:claude-fable-5")
+        began = []
+        inner = self._judge()
+
+        def judge(adapter, prompt, model, system_context, **kw):
+            if "fable" in model and "availability check" in prompt:
+                began.append(so.now())          # another panel's call of this seat begins while the probe runs
+            return inner(adapter, prompt, model, system_context, **kw)
+        self._panel(self.CLAUDE, judge)
+        self.assertTrue(so.record_outage(self.d / ".agent", "claude:claude-fable-5",
+                                         {"reason": "r", "until": self.UNTIL}, started=began[0]),
+                        "a failure of a call begun while the probe ran was dropped as older than the clear")
+
+    def test_each_probe_is_a_spend_record(self):
+        """Sol (Important), opus and astra: a probe is a paid call, and it left no spend record."""
+        self._record("claude:claude-fable-5", "claude:claude-haiku-4-5")
+        code, out, _ = self._panel(self.CLAUDE, self._judge(outage=("haiku",), outage_text=CLAUDE_LIMIT))
+        got = sorted((r["seat"], r["status"]) for r in self._spend())
+        self.assertEqual(got, [("claude:claude-fable-5:high", "ok"), ("claude:claude-haiku-4-5:high", "fail")])
+        self.assertEqual({r["task"] for r in self._spend()}, {"042"})
+
+    def test_a_seat_that_answers_its_probe_is_cleared_and_seated(self):
+        """Sonnet (Minor): the claude seat's own clear-and-seat path."""
+        self._record("claude:claude-fable-5")
+        code, out, _ = self._panel(self.CLAUDE, self._judge())
+        self.assertIn("Seated claude:claude-fable-5", out)
+        self.assertEqual(self.calls.count("claude-fable-5"), 2, "the probe, then the seat's review")
+        self.assertEqual(so.current_outages(self.d / ".agent"), {})
+
+    def test_no_probe_when_the_round_history_cannot_be_read(self):
+        """Opus (Minor), astra: a cap peek that raised probed as usual, and the locked check then refused with
+        "Nothing was spent"."""
+        from unittest import mock
+        from tasks import stop_rule
+        self._record("claude:claude-fable-5")
+
+        def unreadable(*a, **k):
+            raise stop_rule.RoundsUnreadable("judge.md is unreadable")
+        with mock.patch.object(stop_rule, "impl_rounds", unreadable):
+            code, out, err = self._panel(self.CLAUDE, self._judge())
+        self.assertEqual(code, 2, out + err)
+        self.assertEqual(self.calls, [])
+        self.assertIn("Nothing was spent", err)
+
+    def test_no_probe_when_the_quorum_cannot_be_reached_even_if_every_probe_answers(self):
+        """Opus (Minor): the probes ran although the panel would refuse whatever they answered."""
+        self._record("claude:claude-fable-5")
+        self._record("claude:claude-haiku-4-5", "claude:claude-sonnet-5", until=None)
+        code, out, err = self._panel(self.CLAUDE, self._judge())
+        self.assertEqual(code, 1, out + err)
+        self.assertEqual(self.calls, [])
+        self.assertIn("nothing was spent.", err)
+
+    def test_a_refused_reservation_after_the_probes_says_they_ran(self):
+        """Astra and sol (Important): a reservation refused after the probes (another review of the task under way)
+        said nothing of them."""
+        from unittest import mock
+        from tasks import post_d6
+        self._record("claude:claude-fable-5")
+        with mock.patch.object(post_d6, "reserve_panel", lambda *a, **k: (False, None)), \
+                mock.patch.object(post_d6, "panel_refusal", lambda tf: "Refused: another review of this task runs."):
+            code, out, err = self._panel(self.CLAUDE, self._judge())
+        self.assertEqual(code, 2, out + err)
+        self.assertEqual(self.calls, ["claude-fable-5"])
+        self.assertIn("1 probe of a recorded seat ran before this refusal", err)
 
     def test_a_claude_seat_quoting_the_event_is_not_recorded(self):
         # post-D6 run 1 (codex): a claude seat's stdout is the review text; a line

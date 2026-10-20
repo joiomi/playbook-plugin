@@ -75,27 +75,42 @@ _OUTAGE_PROBE_PROMPT = ("This is a short availability check of a review seat, no
                         "Reply with the single word OK. Do not use any tool.")
 
 
-def _probe_recorded_seat(adapter_cls, variant, project_path, label):
-    """One tiny judge call through the seat's own adapter → (answered, what it saw). Answered means a reply that
-    is neither a failure (`judge_failed`) nor an outage (`seat_outage.classify_outage`) — the seat's own CLI,
-    account and sandbox answered. Never raises: a probe that cannot run says so and the seat stays out."""
+def _probe_recorded_seat(adapter_cls, variant, label):
+    """One tiny judge call through the seat's own adapter → (answered, what it saw, its output, its spend status).
+    Answered means a reply that is neither a failure (`judge_failed`) nor an outage (`seat_outage.classify_outage`) —
+    the seat's own CLI, account and sandbox answered. It runs in a throwaway folder, as `tasks models check`'s probes
+    do: it reads nothing of the project — no CLAUDE.md or memory for a claude seat under its $0.5 budget — and a
+    contained seat's writable project is that folder (impl round 1: opus, sol). Never raises: a probe that cannot run
+    says so and the seat stays out."""
+    import subprocess
+    import tempfile
     from tasks import seat_outage as _so
     from tasks.models_check import CLAUDE_PROBE_BUDGET_USD, PROBE_TIMEOUT_SECS, judge_failed
     try:
-        out = adapter_cls(session_id="judge", project_root=project_path).run_headless_judge(
-            prompt=_OUTAGE_PROBE_PROMPT, model=variant, system_context="", web_search=False,
-            timeout_secs=PROBE_TIMEOUT_SECS, budget_usd=CLAUDE_PROBE_BUDGET_USD)
+        with tempfile.TemporaryDirectory(prefix="playbook-outage-probe-") as _td:
+            out = adapter_cls(session_id="judge", project_root=Path(_td)).run_headless_judge(
+                prompt=_OUTAGE_PROBE_PROMPT, model=variant, system_context="", web_search=False,
+                timeout_secs=PROBE_TIMEOUT_SECS, budget_usd=CLAUDE_PROBE_BUDGET_USD)
     except subprocess.TimeoutExpired:
-        return False, "the probe timed out"
+        return False, "the probe timed out", None, "timeout"
     except Exception as e:                      # noqa: BLE001 — a probe never fails the review
-        return False, f"the probe could not run ({type(e).__name__})"
+        return False, f"the probe could not run ({type(e).__name__})", None, "dnf"
     text = str(out or "")
+    status = _judge_status(out)
     if _so.classify_outage(text, provider=label.split(":", 1)[0]):
-        return False, "the probe answered out of credit again"
+        return False, "the probe answered out of credit again", out, "fail" if status == "ok" else status
     if judge_failed(text) or not text.strip():
         first = text.strip().splitlines()[0][:160] if text.strip() else "no output"
-        return False, f"the probe failed: {first}"
-    return True, "answered"
+        return False, f"the probe failed: {first}", out, "fail" if status == "ok" else status
+    return True, "answered", out, status
+
+
+def _print_probes_spent(n: int) -> None:
+    """A refusal after the probes says they ran — another review of the task under way, or the round cap reached
+    while they ran (task 262's impl round 1, astra and sol): its own "Nothing was spent" holds for the panel only."""
+    if n:
+        print(f"  ({n} probe{'s' if n != 1 else ''} of {'a recorded seat' if n == 1 else 'recorded seats'} ran "
+              "before this refusal.)", file=sys.stderr, flush=True)
 
 
 def _journal_review_spend(project_path, *, kind, seat, task, round_no,
@@ -1898,18 +1913,29 @@ def _cmd_panel_review(cmd_args):
     _seat_began: dict = {}
     _outages = _seat_outage.current_outages(resolve_agent_dir(project_path))
     _probed = 0
+    from tasks.core import resolve_panel_quorum
+    _need = resolve_panel_quorum(project_path, requested_seats)
     # task 262: no probe for a panel the D6 round cap will refuse anyway — a read-only look now; the locked check
-    # at the reservation below still decides (a probe is a spend, and the refusal promises nothing was spent)
-    _cap_refuses = False
+    # at the reservation below still decides (a probe is a spend, and the refusal promises nothing was spent). A
+    # peek that cannot read the rounds probes nothing either: the locked check then refuses (impl r1: opus, astra).
+    _no_probes = False
     if _outages and task_file and review_mode == "impl" and not owner_ok_flag:
         try:
             from tasks import stop_rule as _sr262
             from tasks.core import extract_risk as _er262, load_config as _lc262
-            _cap_refuses = not _sr262.panel_decision(
+            _no_probes = not _sr262.panel_decision(
                 _er262(task_file), _sr262.impl_rounds(task_file.parent),
                 _sr262.resolve_rounds(_lc262(project_path)), task=task_num)[0]
-        except Exception:   # noqa: BLE001 — the locked check decides; without a peek, probe as usual
-            _cap_refuses = False
+        except Exception:   # noqa: BLE001 — the locked check decides
+            _no_probes = True
+    if _outages and not _no_probes:
+        # … and none for a panel that misses its quorum whatever the probes answer (impl r1, opus)
+        _can = sum(1 for _c, _v in judges
+                   if (_o := _outages.get(f"{_c.binary_name()}:{_v}" if _v else _c.binary_name())) is None
+                   or _o.get("until"))
+        _no_probes = bool(requested_seats) and _can < _need
+    _probe_spend = []
+    _probe_before = None
     if _outages:
         _live = []
         for _cls, _variant in judges:
@@ -1918,20 +1944,38 @@ def _cmd_panel_review(cmd_args):
             if _o is None:
                 _live.append((_cls, _variant))
                 continue
-            if _o.get("until") and not _cap_refuses:
+            if _o.get("until") and not _no_probes:
                 # task 262: an outage with a reset time is an account's state, and the owner may have switched
-                # accounts since — ask the seat once; one with no reset time waits for a top-up and `enable`
+                # accounts since — ask the seat once; one with no reset time waits for a top-up and `enable`.
+                # The project is snapshotted before the first probe and checked after each one, before its answer
+                # is acted on: the panel's own tamper snapshot is taken later (impl r1, sol)
+                if _probe_before is None:
+                    _probe_before = _snapshot_repo_state(project_path, task_file)
                 _probed += 1
-                _ok, _why = _probe_recorded_seat(_cls, _variant, project_path, _lbl)
+                _p_t0, _p_m0 = _seat_outage.now(), time.monotonic()
+                _ok, _why, _p_out, _p_st = _probe_recorded_seat(_cls, _variant, _lbl)
+                _probe_spend.append((_seat_with_effort(_cls.binary_name(), _variant),
+                                     int((time.monotonic() - _p_m0) * 1000), _p_st,
+                                     _parse_judge_usage(_p_out), _judge_error(_p_out, _p_st)
+                                     if _p_out is not None else _why))
+                _p_tamper = _detect_tamper_full(project_path, task_file, _probe_before)
+                if _p_tamper["mutations"]:
+                    print("\n" + _tamper_banner(_p_tamper["mutations"]), file=sys.stderr, flush=True)
+                    print(f"  (the project changed while {_lbl} answered a probe, before any review was called)",
+                          file=sys.stderr, flush=True)
+                    sys.exit(1)
                 if _ok:
                     try:
-                        _seat_outage.clear_outage(resolve_agent_dir(project_path), _lbl)
+                        _said = _seat_outage.clear_if_unchanged(resolve_agent_dir(project_path), _lbl, _o, _p_t0)
                     except Exception as _e:   # noqa: BLE001 — the seat answered; seat it either way
                         print(f"  ⚠ could not clear {_lbl}'s outage ({_e})", file=sys.stderr, flush=True)
-                    print(f"  Seated {_lbl}: it answered a probe, so its recorded outage "
-                          f"({_o.get('reason', '?')}) no longer holds — cleared.", flush=True)
-                    _live.append((_cls, _variant))
-                    continue
+                        _said = "cleared"
+                    if _said != "newer":
+                        print(f"  Seated {_lbl}: it answered a probe, so its recorded outage "
+                              f"({_o.get('reason', '?')}) no longer holds — cleared.", flush=True)
+                        _live.append((_cls, _variant))
+                        continue
+                    _why = "it answered, but another panel recorded it out of credit again meanwhile"
                 print(f"  Probed {_lbl}: {_why}.", flush=True)
             # The command that clears it is on every line: a reset can be days away
             # and the account behind the seat may change the same hour (task 158).
@@ -1940,8 +1984,11 @@ def _cmd_panel_review(cmd_args):
                       else f"until cleared with `tasks models enable {_lbl}`")
             print(f"  Skipped out of credit: {_lbl} — {_o.get('reason', '?')} ({_until})", flush=True)
         judges = _live
-    from tasks.core import resolve_panel_quorum
-    _need = resolve_panel_quorum(project_path, requested_seats)
+    # each probe is a paid call: a spend record of its own (impl r1: sol, opus, astra) — written once the probes are
+    # past the tamper check, as every seat's (a tamper stop records no spend)
+    for _lbl, _dms, _st, _usg, _err in _probe_spend:
+        _journal_review_spend(project_path, kind="probe", seat=_lbl, task=(task_num if task_file else None),
+                              round_no=0, duration_ms=_dms, status=_st, usage=_usg, error=_err)
     # (with no seat left only because no CLI is installed, the error below says so)
     if requested_seats and len(judges) < _need and (judges or _outages):
         print(f"Error: only {len(judges)} of the {requested_seats} requested seats can run, and the "
@@ -2111,9 +2158,11 @@ def _cmd_panel_review(cmd_args):
                 gate=_gate209, record=_rec209)
         except _pd6p.PanelRefused as _refused:
             print(str(_refused), file=sys.stderr, flush=True)
+            _print_probes_spent(_probed)
             sys.exit(2)
         if not _ok_p:
             print(_pd6p.panel_refusal(task_file), file=sys.stderr, flush=True)
+            _print_probes_spent(_probed)
             sys.exit(2)
         _PD6_PANEL_PENDING.append((task_file.parent, _prid))
     # Task 231: with a copy, the guard watches the copy (the live tree may change on purpose) and the stamp is the

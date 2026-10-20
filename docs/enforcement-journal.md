@@ -83,7 +83,7 @@ Additional fields:
 
 | key           | type          | meaning                                                            |
 |---------------|---------------|--------------------------------------------------------------------|
-| `kind`        | string        | `panel` \| `single` \| `tail-cert` \| `intent` (one per `tasks intent` extraction; `round` 0; left out of `tasks dashboard`'s per-seat stats and drift advice, which measure reviews) |
+| `kind`        | string        | `panel` \| `single` \| `tail-cert` \| `intent` (one per `tasks intent` extraction; `round` 0; left out of `tasks dashboard`'s per-seat stats and drift advice, which measure reviews) \| `probe` (task 262: a panel's one-word call of a seat recorded out of credit, before it is skipped or seated; `round` 0; left out of the dashboard's per-seat stats too; `tasks numbers` counts it under its seat) |
 | `seat`        | string        | the judge spec as `model:effort` (e.g. `claude:opus:high`, `codex:gpt-5.6-terra:medium`; an agy id carries its effort: `agy:gemini-3.8-flash-high`) |
 | `task`        | string        | task number (`"042"`) or `"-"` for a taskless / `--prompt` review  |
 | `round`       | int           | review iteration (see the round note below); `0` = unknown         |

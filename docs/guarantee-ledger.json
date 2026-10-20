@@ -22386,7 +22386,7 @@
     {
       "id": "PB-PANEL-SEAT-OUTAGE",
       "category": "judges-and-reviews",
-      "statement": "A panel seat whose provider says the account is out of credit — grok's `402 Payment Required … usage balance exhausted`, codex's `You've hit your usage limit … try again at <time>` or `Your workspace is out of credits` (no time: until cleared — task 203), agy's quota stop, claude's `You've hit your weekly limit · resets <time>` — is recorded in the lane's `journal/seat-outages.json` (machine-local and gitignored, written under a lock) — read from the provider's own error — its stderr tail, and its structured error events on stdout for the CLIs whose stdout is an event stream (codex, grok, agy), and for claude — whose stdout is the judge's review — its limit line only when that line is the WHOLE stdout — not from output the judge quoted — until the reset time the message gives, or until `tasks models enable <seat>` when it gives none, and later panels skip it with one line naming it. The panel's quorum is resolved against the REQUESTED seats (the configured panel or the --models selection, counted before any seat is skipped), in the preflight and in the verdict: when fewer seats can run than the quorum, the panel fails before any judge is called.",
+      "statement": "A panel seat whose provider says the account is out of credit — grok's `402 Payment Required … usage balance exhausted`, codex's `You've hit your usage limit … try again at <time>` or `Your workspace is out of credits` (no time: until cleared — task 203), agy's quota stop, claude's `You've hit your weekly limit · resets <time>` — is recorded in the lane's `journal/seat-outages.json` (machine-local and gitignored, written under a lock) — read from the provider's own error — its stderr tail, and its structured error events on stdout for the CLIs whose stdout is an event stream (codex, grok, agy), and for claude — whose stdout is the judge's review — its limit line only when that line is the WHOLE stdout — not from output the judge quoted — until the reset time the message gives, or until `tasks models enable <seat>` when it gives none, and later panels skip it with one line naming it — except that a seat whose outage has a reset time is first asked once (task 262): one one-word judge call through its own adapter, run from a throwaway folder, that is cleared and seated when it answers with neither a failure nor an outage, its entry removed only while it is still the one the probe saw and its clear dated at the probe's start; the project is snapshotted before the first probe and checked after each one, and a change voids the panel before any review is called; each probe is a `probe` spend record; no seat is probed for a panel the D6 round cap refuses (or whose rounds cannot be read), or one that misses its quorum whatever the probes answer. The panel's quorum is resolved against the REQUESTED seats (the configured panel or the --models selection, counted before any seat is skipped), in the preflight and in the verdict: when fewer seats can run than the quorum, the panel fails before any review is called (the probes above are its only spend, and the refusal says so).",
       "owner": [
         {
           "path": "plugins/playbook/tasks/seat_outage.py",
@@ -22403,6 +22403,14 @@
         {
           "path": "plugins/playbook/tasks/models_check.py",
           "reference": "symbol:cli_models"
+        },
+        {
+          "path": "plugins/playbook/tasks/seat_outage.py",
+          "reference": "symbol:clear_if_unchanged"
+        },
+        {
+          "path": "plugins/playbook/tasks/review.py",
+          "reference": "symbol:_probe_recorded_seat"
         }
       ],
       "failure_consequence": "High",
@@ -22652,6 +22660,122 @@
           "limitations": [
             "Task 203 r1 (codex): an exit-0 codex stream, turned into its failure text by the real `usage.judge_output_from_result`; the review's words in it (the malformed-output head's excerpt, the partial text after an error) are never read as the provider's."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_seat_outage.py",
+          "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_a_seat_that_answers_its_probe_is_cleared_and_seated",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_seat_outage.py",
+            "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_a_probe_that_fails_another_way_keeps_the_seat_out"
+          },
+          "limitations": [
+            "cmd_panel_review in-process, the judges faked at the adapter; seat_outage's clock pinned. Task 262: the probe, then the seat's review; the record emptied."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_seat_outage.py",
+          "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_an_outage_with_no_reset_time_is_not_probed",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "cmd_panel_review in-process, the judges faked at the adapter; seat_outage's clock pinned. Task 262."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_seat_outage.py",
+          "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_a_probe_that_raises_keeps_the_seat_out_and_the_panel_runs",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "cmd_panel_review in-process, the judges faked at the adapter; seat_outage's clock pinned. Task 262's impl round 1 (agy's Critical, sol): watched red, `NameError: name 'subprocess' is not defined`."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_seat_outage.py",
+          "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_the_probe_reads_nothing_of_the_project",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "cmd_panel_review in-process, the judges faked at the adapter; seat_outage's clock pinned. Task 262's impl round 1 (opus, sol): the probe's adapter is given a throwaway folder, gone afterwards."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_seat_outage.py",
+          "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_a_probe_that_writes_the_project_voids_the_panel_before_any_review",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_seat_outage.py",
+            "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_a_seat_that_answers_its_probe_is_cleared_and_seated"
+          },
+          "limitations": [
+            "cmd_panel_review in-process, the judges faked at the adapter, the REAL tamper guard (git status and hashes of a throwaway repository). Task 262's impl round 1 (sol): watched red — the probe's write was the panel's baseline."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_seat_outage.py",
+          "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_a_newer_outage_recorded_while_the_probe_ran_stands",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "cmd_panel_review in-process, the judges faked at the adapter; seat_outage's clock pinned. Task 262's impl round 1 (astra, sol)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_seat_outage.py",
+          "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_a_failure_of_a_call_begun_during_the_probe_is_still_recorded",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "cmd_panel_review in-process, the judges faked at the adapter; seat_outage's clock steps one second per reading. Task 262's impl round 1 (astra, sol)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_seat_outage.py",
+          "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_each_probe_is_a_spend_record",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "cmd_panel_review in-process, the judges faked at the adapter; seat_outage's clock pinned. Task 262's impl round 1 (sol, opus, astra)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_seat_outage.py",
+          "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_no_probe_when_the_round_history_cannot_be_read",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "cmd_panel_review in-process, the judges faked at the adapter; seat_outage's clock pinned. `stop_rule.impl_rounds` made to raise. Task 262's impl round 1 (opus, astra)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_seat_outage.py",
+          "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_no_probe_when_the_quorum_cannot_be_reached_even_if_every_probe_answers",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "cmd_panel_review in-process, the judges faked at the adapter; seat_outage's clock pinned. Task 262's impl round 1 (opus)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_seat_outage.py",
+          "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_a_refused_reservation_after_the_probes_says_they_ran",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "cmd_panel_review in-process, the judges faked at the adapter; seat_outage's clock pinned. `post_d6.reserve_panel` made to refuse. Task 262's impl round 1 (astra, sol)."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -22669,7 +22793,8 @@
         "Requiring the quorum of the requested panel means a panel with seats whose CLI is not installed now fails instead of shrinking — name reachable seats with --models.",
         "A late failure recorded after `tasks models enable` cleared the seat (two panels started before the clear) disables it again; parked (task 149 impl panel r1, codex-high).",
         "2026-10-09 (task 158): claude's account limit is recognised from ONE captured wording (`You've hit your weekly limit · resets Oct 13, 6pm (Europe/Bucharest)`); a reset without a date is read as the nearest such clock time (not captured live), a dated reset takes the year that puts it nearest to now (`ClaudeAccountLimit.test_a_date_just_behind_us_across_new_year_is_last_years`), a named zone the host cannot resolve as local time, and a reset it cannot read as an outage with no end. The panel tests pin seat_outage's clock: with the real clock one of them failed every day from 19:33 to 01:33 local time.",
-        "2026-10-09 (task 158, impl panel r1): a recorded outage is tied to the SEAT, not to the account behind it — after the owner switches accounts the seat stays skipped until its reset unless it is cleared; every skipped-seat line and the quorum refusal now print the clearing command (`tasks models enable <seat>`)."
+        "2026-10-09 (task 158, impl panel r1): a recorded outage is tied to the SEAT, not to the account behind it — after the owner switches accounts the seat stays skipped until its reset unless it is cleared; every skipped-seat line and the quorum refusal now print the clearing command (`tasks models enable <seat>`). Since task 262 a seat whose outage has a reset time is asked first (below).",
+        "2026-10-21 (task 262): the probe answers for the seat's CLI and account, not for a review: any reply that is neither a failure nor an outage clears it. Probes run one after another before the panel starts, each up to `PROBE_TIMEOUT_SECS` (120 s), a claude one under the models check's $0.5 budget. Only a change the tamper guard calls a mutation voids the panel; a degraded guard during the probes is not reported there (the panel's own guard runs later). The D6 cap and the quorum are read before the probes and decided after them under the reservation's lock, so a round that completes, or another review of the task that starts, while they run refuses this panel after its probes — the refusal then says they ran. An outage with no reset time (grok's 402, a codex workspace out of credits) is never probed."
       ],
       "follow_up_phases": [
         8

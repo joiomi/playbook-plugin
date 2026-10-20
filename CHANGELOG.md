@@ -9,7 +9,16 @@ judecătorul lipsă (Recomandat)"). On 2026-10-20 opus was skipped for a weekly 
 the day before. A panel now probes a seat whose outage has a reset time (claude, codex, agy) with one tiny judge call
 through its own CLI and account: an answer clears the record and seats it; an answer out of credit, or a failure, keeps
 it out, and the panel says what the probe saw. An outage with no reset time (grok's 402) is not probed. A panel the D6
-round cap refuses spends no probe.
+round cap refuses spends no probe. Its impl round 1 made the probe safe:
+- it runs from a throwaway folder, so a claude seat reads none of the project's CLAUDE.md or memory under its $0.5 budget;
+- the project is snapshotted before the first probe and checked after each one: a change voids the panel before any
+  review is called, as the tamper guard voids a review (a probe ran before the panel's own snapshot);
+- its clear removes only the entry the probe saw and is dated at the probe's start, so a newer outage recorded by
+  another panel meanwhile stands, and a failure of a call begun during the probe is still recorded;
+- each probe is a spend record of kind `probe` (`tasks numbers` counts it under its seat);
+- no probe is spent when the round history cannot be read or the quorum cannot be reached whatever the probes answer,
+  and a refusal that comes after them says they ran;
+- a probe that raised (a timeout, a missing binary) stopped the whole panel with `NameError`; it now keeps its seat out.
 
 **The agy judge keeps its vote at the soft deadline** — task 261 (the owner, 2026-10-20: "pai vezi sa il rezolvi pe agy
 inainte sa mai pornesti paneluri. e important!"). agy has no clock, so the soft deadline in the judge's prompt did nothing

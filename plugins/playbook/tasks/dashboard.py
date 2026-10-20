@@ -313,10 +313,11 @@ def seat_stats(records: "list[dict]") -> "dict[str, dict]":
 
     A `tasks intent` extraction (kind "intent", task 120) is a judge call but not a
     review — a short prompt over one evidence file — so it stays out: mixed in, its
-    durations would skew the seat's median and raise false drift advice."""
+    durations would skew the seat's median and raise false drift advice. Nor does a panel's probe of a seat recorded
+    out of credit (kind "probe", task 262): one word asked, one answered."""
     by: "dict[str, dict]" = {}
     for r in records:
-        if r.get("kind") == "intent":
+        if r.get("kind") in ("intent", "probe"):
             continue
         s = by.setdefault(r["seat"], {"runs": 0, "ok": 0, "timeout": 0, "durations": []})
         s["runs"] += 1
