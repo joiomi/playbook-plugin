@@ -691,6 +691,46 @@ class TheCompressionProtocol(_Rotating):
         self.assertEqual(len(calls), 1)
         self.assertTrue(x.exists())
 
+    def test_a_pair_that_cannot_be_repaired_does_not_starve_the_next_archive(self):
+        """The post-panel judge's run 1 (sol): a failed repair touches `X`, so `X` is newer than its `.gz` and failed the
+        repair's check on every pass — and, chosen first every pass, kept every later archive uncompressed."""
+        self.journal.parent.mkdir()
+        stuck = self.idle(b'{"hook":"old"}\n' * 50, pid=1)
+        with gzip.open(str(stuck) + ".gz", "wb") as f:
+            f.write(b'{"hook":"other"}\n')
+        t = int(time.time()) - 1200
+        os.utime(str(stuck) + ".gz", (t - 60, t - 60))          # older than `X`: the pair can never be repaired
+        later = self.idle(b'{"hook":"later"}\n' * 50, pid=2)
+        self.rotate()
+        self.assertTrue(Path(str(later) + ".gz").exists())
+        self.assertTrue(stuck.exists())
+
+    def test_the_claim_is_made_while_the_rotation_holds_the_lock(self):
+        """The post-panel judge's run 1 (Minor): the claim's temporary exists before the gzip, AND it is made while the
+        rotation holds the journal directory exclusively."""
+        import fcntl
+        self.journal.parent.mkdir()
+        self.idle(b'{"hook":"old"}\n' * 50)
+        seen = []
+        real = self.pbj._hj_claim
+
+        def probe(arch):
+            fd = os.open(str(self.journal.parent), os.O_RDONLY)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                seen.append("free")
+            except OSError:
+                seen.append("held")
+            finally:
+                os.close(fd)
+            return real(arch)
+        setattr(self.pbj, "_hj_claim", probe)
+        try:
+            self.rotate()
+        finally:
+            setattr(self.pbj, "_hj_claim", real)
+        self.assertEqual(seen, ["held"])
+
     def test_a_gz_with_a_bad_crc_beside_x_keeps_x(self):
         """Impl r1 I1's class in python: a whole payload with a bad CRC — gzip reads every byte, then fails."""
         self.journal.parent.mkdir()

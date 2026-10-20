@@ -861,8 +861,14 @@ def _hj_claim(arch: Path) -> bool:
     check before it exists (task 259, impl r1 I3)."""
     if not _compress_claim(arch):
         return False
-    if os.path.lexists(Path(str(arch) + ".gz")):
-        return True
+    gz = Path(str(arch) + ".gz")
+    if os.path.lexists(gz):
+        # a pair whose `X` is newer than its `.gz` can never be repaired (a failed check touched it): never chosen, so
+        # it cannot keep later archives waiting (the post-panel judge's run 1, sol); a reader reads `X`
+        try:
+            return os.lstat(arch).st_mtime <= os.lstat(gz).st_mtime
+        except OSError:
+            return False
     try:
         os.close(os.open(f"{arch}.gz.tmp-{os.getpid()}", os.O_WRONLY | os.O_CREAT | os.O_EXCL
                          | getattr(os, "O_NOFOLLOW", 0), 0o644))

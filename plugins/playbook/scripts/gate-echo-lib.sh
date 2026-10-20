@@ -2096,7 +2096,13 @@ _pb_hj_claim() {
         [ -d "/proc/$pid" ] && return 1                  # another compressor is at it
         [ -L "$t" ] || rm -f -- "$t" 2>/dev/null
     done
-    if [ -e "$arch.gz" ] || [ -L "$arch.gz" ]; then return 0; fi
+    if [ -e "$arch.gz" ] || [ -L "$arch.gz" ]; then
+        # an `X` newer than its `.gz` can never be repaired: never chosen, so later archives do not wait on it. An
+        # explicit status: this runs from the hook's EXIT trap, where a bare `return` gives the status of the command
+        # before the trap (bash's manual), not of the test above it
+        if [ "$arch" -nt "$arch.gz" ]; then return 1; fi
+        return 0
+    fi
     ( set -o noclobber; : > "$arch.gz.tmp-$$" ) 2>/dev/null
 }
 

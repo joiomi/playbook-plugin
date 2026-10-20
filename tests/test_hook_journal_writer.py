@@ -995,6 +995,17 @@ class TheBashCompressionProtocol(_Project):
         self.assertTrue(x.exists())
         self.assertGreater(x.stat().st_mtime, time.time() - 60)
 
+    def test_a_pair_that_cannot_be_repaired_does_not_starve_the_next_archive(self):
+        stuck = self.idle(pid=1)
+        with gzip.open(str(stuck) + ".gz", "wb") as f:
+            f.write(b'{"hook":"other"}\n')
+        t = int(time.time()) - 1200
+        os.utime(str(stuck) + ".gz", (t - 60, t - 60))
+        later = self.idle(b'{"hook":"later"}\n' * 50, pid=2)
+        self.rotate()
+        self.assertTrue(Path(str(later) + ".gz").exists())
+        self.assertTrue(stuck.exists())
+
     def test_the_claim_is_made_inside_the_rotations_hold(self):
         """Impl r1 I3 (sol): the temporary exists before gzip starts — made under the rotation's hold."""
         log = self.root / "first-stat.log"
