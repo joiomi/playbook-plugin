@@ -1,7 +1,7 @@
 """Task 261: agy's soft deadline is its `--print-timeout`, and a cut turn is resumed.
 
-agy has no clock, so the soft deadline in the prompt did nothing for it: six of its 25 runs between 2026-10-18 and
-10-20 ran into the 1,200 s hard limit, each holding its panel 20 minutes and losing its vote. Now its first call is
+agy has no clock, so the soft deadline in the prompt did nothing for it: six of its 38 runs between 2026-10-18 and
+the evening of 10-20 ran into the 1,200 s hard limit, each holding its panel 20 minutes and losing its vote. Now its first call is
 cut at the soft deadline and the same conversation is resumed (`--conversation <id>`) with "time is up: write your
 findings now, call no tool", inside the time left before the hard limit.
 
@@ -294,6 +294,27 @@ class ThePlanPanelsFindings(_Adapter):
                 _, calls = self._run(answers, clock=clock, soft=soft)
                 self.assertEqual(len(calls), n)
                 self.assertEqual(self._flag(calls[0]["argv"], "--print-timeout"), want)
+
+
+class TheLiveReviewsFindings(_Adapter):
+    """W6's live run: agy, reviewing this code through the real path, found these (2026-10-20 ~23:59)."""
+
+    def test_a_review_that_opens_with_a_parenthesis_is_an_answer_not_a_failure(self):
+        ans = fx("resume-answer.stdout").replace('"response":"I have read', '"response":"(1) Findings: I have read')
+        self.assertIn('"(1) Findings', ans)
+        out, _ = self._run([self._cut(), _cp(ans, 0, "")], clock=(0.0, 905.0, 905.0, 920.0))
+        self.assertTrue(str(out).startswith("**Soft deadline:**"), str(out)[:120])
+
+    def test_a_killer_stop_with_no_soft_deadline_still_names_the_conversation(self):
+        killed = subprocess.TimeoutExpired(["agy"], 1230, output=fx("resume-cut.stdout"), stderr="")
+        with self.assertRaises(subprocess.TimeoutExpired) as cm:
+            self._run([killed], soft=None)
+        self.assertEqual(getattr(cm.exception, "agy_conversation", None), CID)
+
+    def test_a_stray_line_before_init_does_not_lose_the_conversation(self):
+        cut = _cp("agy: a warning on stdout\n" + fx("resume-cut.stdout"), 0, fx("resume-cut.stderr"))
+        _, calls = self._run([cut, self._answer()], clock=(0.0, 905.0, 905.0, 920.0))
+        self.assertEqual(calls[1]["argv"][:2], ["--conversation", CID])
 
 
 class _Project(unittest.TestCase):

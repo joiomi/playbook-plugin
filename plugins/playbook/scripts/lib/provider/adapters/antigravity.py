@@ -147,7 +147,7 @@ def _conversation_id(stdout: str) -> Optional[str]:
         try:
             ev = json.loads(line)
         except ValueError:
-            return None
+            continue        # a stray line before the stream (W6's live review, agy) does not lose the id
         if isinstance(ev, dict) and ev.get("event") == "init":
             cid = ev.get("conversation_id")
             # only an id that can be one argv element: no option, no path, no space
@@ -189,9 +189,11 @@ def finish_resumed(out, result, conversation: Optional[str], soft_timeout_secs: 
         return out
     from provider.usage import JudgeOutput
     from tasks.core import human_duration
+    from tasks.models_check import judge_failed
     usage, text = getattr(out, "usage", None), str(out)
     problem = getattr(result, "agy_resume_problem", None)
-    if text.lstrip().startswith("("):
+    # the panel's own failure predicate: a review may open with "(1) …" (W6's live review, agy)
+    if judge_failed(text):
         return JudgeOutput(text, usage=usage, soft_cut="resumed")
     if problem:
         return JudgeOutput(f"(FAILED — {problem})\n\n[the resumed call's text, not this seat's review]\n{text}",
@@ -391,7 +393,10 @@ class AntigravityAdapter(ProviderAdapter):
             out1, err1 = result.stdout or "", result.stderr or ""
         except subprocess.TimeoutExpired as expired:
             if soft is None:
-                raise
+                # today's timeout, now naming the conversation too (W6's live review, agy)
+                _out = _text(expired.stdout or expired.output)
+                raise _timed_out(list(expired.cmd) if isinstance(expired.cmd, (list, tuple)) else [str(expired.cmd)],
+                                 expired.timeout, _out, _text(expired.stderr), _conversation_id(_out))
             # the killer, not agy, stopped the cut turn: its conversation can still be resumed. The time it took is
             # measured (`_judge_call`), reaping included, so the resume never runs past the hard limit + the grace
             elapsed, cut = max(float(getattr(expired, "agy_elapsed", 0.0)), float(soft + _KILL_GRACE_SECS)), True
