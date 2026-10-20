@@ -908,7 +908,8 @@ class TheBashCompressionProtocol(_Project):
         self.rotate(PATH=logged)
         self.assertFalse(x.exists())
         calls = log.read_text().splitlines()
-        self.assertTrue(any(f"{x}.gz" in c and str(self.lane / "journal") in c for c in calls), calls)
+        # the directory as an argument of its own (W5's mutant M8: it is also a substring of the `.gz`'s path)
+        self.assertTrue(any({f"{x}.gz", str(self.lane / "journal")} <= set(c.split(" ")) for c in calls), calls)
 
     def test_x_beside_a_whole_gz_is_repaired_and_a_garbled_one_keeps_it(self):
         data = b'{"hook":"old"}\n' * 200

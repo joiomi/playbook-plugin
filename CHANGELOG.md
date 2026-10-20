@@ -28,6 +28,21 @@ back: 1.6.6 reads only the live file — its recorder takes the carried position
 read twice), and its numbers show a carry or horizon line inside a closure as an `agent ?` row with zero calls; to make
 one file again before going back, `docs/enforcement-journal.md`, "Going back to one file" (tested).
 
+**Both journals compress the same careful way** — task 259 (the owner, 2026-10-19: "Repar ce a rămas (Recomandat)"). The
+hook journal (`hooks.jsonl`) now shares the enforcement journal's compression:
+- the gzip runs after the rotation's lock is let go, one archive a pass, so no hook waits on it (an append during a
+  28 MB compression waited 635 ms before, 0 ms after);
+- one compressor per archive, and a killed one's temporary is removed;
+- the compressed copy is fsynced and must decompress to exactly the closed file's bytes;
+- the `.gz` and the directory are fsynced before the closed file is removed, and any failure keeps it;
+- a closed file left beside its `.gz` by a killed compression is repaired once the `.gz` holds it exactly.
+
+Both journals' archives get the full content check: before, a `.gz` with a garbled body and an intact size footer could
+pass. An empty archive, and a cut hook-journal `.gz`, now make the read incomplete (`JournalIncomplete`: the close says
+`numbers: not written (JournalIncomplete)`) instead of short. The retro reads the archives once per command. Known
+limit: a spool merged by a merge killed before it removed the spool is merged again, one more line on disk, which the
+reader drops as an exact duplicate.
+
 ## [1.6.6] — 2026-10-19
 
 **The main agent's own tokens in every close; init fails and restores; a background close is no longer the owner's

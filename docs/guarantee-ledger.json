@@ -19094,7 +19094,7 @@
     {
       "id": "PB-HOOK-JOURNAL",
       "category": "providers-and-hooks",
-      "statement": "Every run of a playbook hook that finds a playbook project appends ONE line to the lane's `journal/hooks.jsonl` — Claude's and grok's eight bash hooks, the project's `monitor-nudge.sh`, codex's three python hooks and `command_guard.py` (Claude's and grok's through command-guard-hook's `exec`, codex's directly) — with the keys ts (UTC, at exit), hook, event, tool, tool_use_id (the host's id of the tool call), session_id (playbook's), host_session_id, agent_id (a subagent's), decision (allow/block/context/ok/skip/error), detail, ms (from the hook's first line), exit, error, task (on the state echo's and the stop hook's lines the task their read was for, elsewhere the session's pointer read by the writer itself; \"\" where the session is known and has none; null where the writer does not know the session — the command guard's allow line, which resolves no session (the same call's task-gate line names it), monitor-nudge without PLAYBOOK_SESSION_ID — or the pointer the writer reads is a link or not a regular file; the state echo and the stop hook follow a linked pointer and name the task they acted on), section (on the state echo's line only: the open gate's `##` heading from that call's accepted read, \"\" when it found none, null on a read another hook overtook; a failed call reads task.md as it is then, never a memory), susp / sts / boot (one bracketed reading — wall, MONOTONIC, BOOTTIME, MONOTONIC, wall — kept only when both brackets span at most 5 ms: CLOCK_BOOTTIME − CLOCK_MONOTONIC in whole seconds, the wall time of that reading, the boot id's first 8), and no command, path or prompt; the one text from a file is that heading, cut at 64 bytes. null means not on this line, \"\" means read and none. The bash runner keeps the hook's exit status exactly and gives each exit action the hook's own status as `$?` (a blocked stop leaves no turn-end mark); a failing write or action changes nothing. The ids come from the normalizer's frame (v4) where the hook reads it, so a key nested in a tool's input or response cannot stand in for them; elsewhere `tool_use_id` is the last match in the payload's last 4 KiB. Each line is one append of at most 2,048 bytes (a line past it drops detail, error and section — section null — and keeps every key), so writers side by side tear none, made under a shared lock on the journal directory that renaming and compressing take exclusively (the owner, 2026-10-16 22:21), so no line is in flight while a closed file is compressed; the lock is taken before the duration, and past a 1 s wait the line goes to a spool file that the next exclusive holder moves into the journal — never an unlocked append (the owner, 2026-10-17 00:13), a dead writer's temporary taken the same way and a living one's never removed, the directory made before the lock; nothing is written in the fresh-clone shape, with an invalid marker, into a lane that is a link or not writable, through a linked `journal/`, or into a `hooks.jsonl` that is a link or not a regular file. About one run in 32 looks at the journal directory under a lock taken without waiting: past 20 MB, after a second look, the file is renamed to `hooks.jsonl.archived-<stamp>-<epoch>-<pid>` (the name records the rename time, written by the rename itself); a closed file is compressed beside it only 10 minutes after the rename its name records and after its last write, and never when its name records no rename time (a hook that opened it before the rename can still append), and every archive is kept (the owner, 2026-10-16 18:04); the python writer rotates the same way, and both take the duration after that work. No line is written for a review's session (judge, tail-cert) or a nested run (PLAYBOOK_HOOK_NESTED=1, codex's Stop calling the stop hook); the pattern reads the event, session and agent only in the payload's head (before its first tool input, within 4 KiB); a python error is named by its type.",
+      "statement": "Every run of a playbook hook that finds a playbook project appends ONE line to the lane's `journal/hooks.jsonl` — Claude's and grok's eight bash hooks, the project's `monitor-nudge.sh`, codex's three python hooks and `command_guard.py` (Claude's and grok's through command-guard-hook's `exec`, codex's directly) — with the keys ts (UTC, at exit), hook, event, tool, tool_use_id (the host's id of the tool call), session_id (playbook's), host_session_id, agent_id (a subagent's), decision (allow/block/context/ok/skip/error), detail, ms (from the hook's first line), exit, error, task (on the state echo's and the stop hook's lines the task their read was for, elsewhere the session's pointer read by the writer itself; \"\" where the session is known and has none; null where the writer does not know the session — the command guard's allow line, which resolves no session (the same call's task-gate line names it), monitor-nudge without PLAYBOOK_SESSION_ID — or the pointer the writer reads is a link or not a regular file; the state echo and the stop hook follow a linked pointer and name the task they acted on), section (on the state echo's line only: the open gate's `##` heading from that call's accepted read, \"\" when it found none, null on a read another hook overtook; a failed call reads task.md as it is then, never a memory), susp / sts / boot (one bracketed reading — wall, MONOTONIC, BOOTTIME, MONOTONIC, wall — kept only when both brackets span at most 5 ms: CLOCK_BOOTTIME − CLOCK_MONOTONIC in whole seconds, the wall time of that reading, the boot id's first 8), and no command, path or prompt; the one text from a file is that heading, cut at 64 bytes. null means not on this line, \"\" means read and none. The bash runner keeps the hook's exit status exactly and gives each exit action the hook's own status as `$?` (a blocked stop leaves no turn-end mark); a failing write or action changes nothing. The ids come from the normalizer's frame (v4) where the hook reads it, so a key nested in a tool's input or response cannot stand in for them; elsewhere `tool_use_id` is the last match in the payload's last 4 KiB. Each line is one append of at most 2,048 bytes (a line past it drops detail, error and section — section null — and keeps every key), so writers side by side tear none, made under a shared lock on the journal directory that renaming and compressing take exclusively (the owner, 2026-10-16 22:21), so no line is in flight while a closed file is compressed; the lock is taken before the duration, and past a 1 s wait the line goes to a spool file that the next exclusive holder moves into the journal — never an unlocked append (the owner, 2026-10-17 00:13), a dead writer's temporary taken the same way and a living one's never removed, the directory made before the lock; nothing is written in the fresh-clone shape, with an invalid marker, into a lane that is a link or not writable, through a linked `journal/`, or into a `hooks.jsonl` that is a link or not a regular file. About one run in 32 looks at the journal directory under a lock taken without waiting: past 20 MB, after a second look, the file is renamed to `hooks.jsonl.archived-<stamp>-<epoch>-<pid>` (the name records the rename time, written by the rename itself); a closed file is compressed beside it only 10 minutes after the rename its name records and after its last write, and never when its name records no rename time (a hook that opened it before the rename can still append), and every archive is kept (the owner, 2026-10-16 18:04); since task 259 the compression runs after the rotation's hold is let go, one archive a pass and one compressor per archive, its temporary fsynced and checked to decompress to exactly the closed file's bytes, and under the lock held exclusively (python ≤ 1 s, bash `flock -w 1`) the `.gz` and the directory are fsynced before the closed file is removed — any failure keeps it, and a closed file beside a `.gz` that holds it exactly is removed the same way; the python writer rotates the same way, and both take the duration after that work. No line is written for a review's session (judge, tail-cert) or a nested run (PLAYBOOK_HOOK_NESTED=1, codex's Stop calling the stop hook); the pattern reads the event, session and agent only in the payload's head (before its first tool input, within 4 KiB); a python error is named by its type.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/gate-echo-lib.sh",
@@ -19127,6 +19127,14 @@
         {
           "path": "plugins/playbook/scripts/task-status.py",
           "reference": "symbol:_head_section"
+        },
+        {
+          "path": "plugins/playbook/scripts/pb_journal.py",
+          "reference": "symbol:_compress_archive"
+        },
+        {
+          "path": "plugins/playbook/scripts/gate-echo-lib.sh",
+          "reference": "function:_pb_hj_compress"
         }
       ],
       "failure_consequence": "Medium",
@@ -19758,6 +19766,32 @@
           "negative_control": null,
           "limitations": [
             "A scripted clock: a 2 s delay or a wall jump inside the bracket is retried; three bad tries give null (impl r1, codex)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_hook_journal_python.py",
+          "reference": "TheCompressionProtocol.test_the_gz_and_the_directory_are_fsynced_before_the_archive_goes",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_hook_journal_python.py",
+            "reference": "TheCompressionProtocol.test_a_failed_directory_fsync_keeps_the_archive"
+          },
+          "limitations": [
+            "Task 259's mutants M1-M5 (no content check, the gzip back in the hold, no directory fsync, no claim, no repair) each turn a test of this class or TheRotationLeftovers red."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_hook_journal_writer.py",
+          "reference": "TheBashCompressionProtocol.test_the_gzip_runs_outside_the_exclusive_hold",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_hook_journal_writer.py",
+            "reference": "TheBashCompressionProtocol.test_a_short_gzip_keeps_the_archive"
+          },
+          "limitations": [
+            "The real bash lib with stand-in gzip / sync on PATH for each failure branch; mutants M6-M9 each red. Measured: an append during a 28 MB compression waited 635 ms before task 259, 0 ms after (python)."
           ]
         }
       ],

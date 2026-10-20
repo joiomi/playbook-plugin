@@ -327,7 +327,8 @@ clock's (a clock set back would name a later archive earlier). Beside it, `<arch
 archive's size — lets a reader of one task's history skip the archives that hold none of it; an archive no longer that
 size (a writer of an older version, holding its descriptor across the rename, appended to it) is read whole. An archive
 idle for 10 minutes (by the rename time its name records and by its mtime) is compressed to `<archive>.gz`, one a pass,
-the compressed copy made durable (fsync) and checked against the archive's size before the archive goes; every archive
+the compressed copy made durable (fsync) and checked to decompress to exactly the archive's bytes, and the `.gz` and the
+directory fsynced before the archive goes (task 259, the protocol the hook journal shares); every archive
 is kept (the owner's "Comprimate, toate").
 
 **Who rotates.** Only python: `pb_journal.rotate_enforcement`, called by the agent recorder inside its
@@ -375,7 +376,8 @@ reader never makes it, so a dry run writes nothing):
 4. one line per `spool` id, a spooled line placed by its `ts` after the ordinary lines of its second; carry and
    horizon lines skipped.
 
-A chosen archive that cannot be read whole (a `.gz` cut short, a file gone) makes the read incomplete, never empty:
+A chosen archive that cannot be read whole (a `.gz` cut short, a file gone, an empty one — task 259) makes the read
+incomplete, never empty:
 `numbers.JournalIncomplete` — the close then writes no numbers and says `numbers: not written (JournalIncomplete)`, the
 dashboard says `truncated`, the retro says so on stderr.
 
@@ -527,7 +529,24 @@ rename time is never compressed
 it, and a line written after `gzip` had read it would have gone with the uncompressed copy (impl panel round 1; the
 hosts stop a hook after at most a minute). The uncompressed copy is removed only once the compressed one is in place,
 and every archive is kept — no hook deletes a journal file. Without `gzip`, on a failure, or if the hook is killed
-meanwhile, the closed file stays uncompressed. A line written while another hook renames the file lands in the
+meanwhile, the closed file stays uncompressed. Since task 259 the compression follows the enforcement journal's
+protocol (`pb_journal._compress_archive`, bash `_pb_hj_compress`):
+- it runs after the rotation's hold is let go, one archive a pass, so no append waits on a gzip (measured: an append
+  during a 28 MB compression waited 635 ms before, 0 ms after);
+- one compressor per archive: another living hook's `….gz.tmp-<pid>` leaves it alone, and a killed one's is removed;
+- the temporary is made durable (fsync, bash `sync`) and must decompress to exactly the closed file's bytes (bash
+  `gzip -dc | cmp -s`); under the lock held exclusively (python ≤ 1 s, bash `flock -w 1` — whole seconds, since a
+  fraction fails under a decimal-comma locale) the closed file must be unchanged and have no `.gz` yet; the `.gz` and
+  the directory are fsynced, and only then is the closed file removed;
+- a closed file beside a `.gz` that decompresses to exactly it, and is not newer, is removed the same way (a compression
+  killed before its last step);
+- any failure — a missing `gzip`, `sync` or `cmp`, one that fails, a lock not had — keeps the closed file and removes
+  the temporary.
+
+A spool merged into the journal by a merge killed before it removed the spool is merged again: one more copy of that
+line on disk. The reader drops exact duplicate lines, so no number changes; a line has no spool id (its 18 keys are
+fixed). The reader reads a closed file, not its `.gz`, when both exist, and a regular archive it cannot read whole (a
+`.gz` cut or garbled, an empty one) makes the read incomplete (`numbers.JournalIncomplete`), never short. A line written while another hook renames the file lands in the
 closed file or the new one. That work runs before the duration is taken, so a run that rotated says so in its `ms`.
 
 **Not recorded:** a hook the host kills at its time limit (it runs no exit trap); the monitor's own session
