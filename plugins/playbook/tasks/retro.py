@@ -5,6 +5,7 @@ for project-level retrospective analysis.
 """
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -276,8 +277,13 @@ def lifecycle_records(journal_path: "Path | None") -> "list[tuple[str, str, str,
     from tasks.numbers import OutOfTime, enforcement_lines
     if journal_path is None or Path(journal_path).parent.is_symlink():
         return []
+    jdir = Path(journal_path).parent
+    key = _journal_key(jdir)
+    hit = _LIFECYCLE_MEMO.get(key) if key is not None else None
+    if hit is not None:
+        return list(hit)                # one retro calls this more than once (task 259, sonnet's R9): read once
     try:
-        lines = [raw for raw in enforcement_lines(Path(journal_path).parent, _time.monotonic() + 60)
+        lines = [raw for raw in enforcement_lines(jdir, _time.monotonic() + 60)
                  if '"tasks"' in raw]
     except (OSError, OutOfTime):
         import sys as _sys
@@ -300,7 +306,26 @@ def lifecycle_records(journal_path: "Path | None") -> "list[tuple[str, str, str,
             continue
         detail = rec.get("detail")
         out.append((ts[:10] + " " + ts[11:19], event, task, detail if isinstance(detail, str) else ""))
+    if key is not None:
+        _LIFECYCLE_MEMO[key] = tuple(out)   # never a failed read (it returned above); callers get copies
     return out
+
+
+_LIFECYCLE_MEMO: "dict[tuple, tuple]" = {}
+
+
+def _journal_key(jdir: Path) -> "tuple | None":
+    """The memo's key: the resolved journal directory and every `enforcement.jsonl*` name in it with its size and
+    mtime_ns (archives, `.gz`, `.tasks`, spools and the live file) — any change reads again. None: no memo."""
+    try:
+        files = []
+        for n in sorted(os.listdir(jdir)):
+            if n.startswith("enforcement.jsonl"):
+                st = os.lstat(jdir / n)
+                files.append((n, st.st_size, st.st_mtime_ns))
+        return (str(jdir.resolve()), tuple(files))
+    except OSError:
+        return None
 
 
 _GENERATED_RE = re.compile(r"^<!-- retro-generated: (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?: UTC)?) -->$", re.M)

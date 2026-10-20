@@ -1546,6 +1546,101 @@ class PostPanelJudgeFixes(_Archives):
                 self.assertEqual(retro.lifecycle_records(self.live), [])    # said, never a crash
 
 
+class TheLeftovers(_Archives):
+    """Task 259 (the owner, 2026-10-19 17:10: "Repar ce a rămas (Recomandat)"): what task 257 routed to PLAN.md."""
+
+    def test_w2_a_gz_with_a_garbled_body_and_a_whole_footer_keeps_the_enforcement_archive(self):
+        """Plan r1 P5 (sol): the repair now checks the `.gz` decompresses to exactly the archive, not its ISIZE."""
+        import gzip
+        t = int(self.now - 3600)
+        data = b'{"hook":"x"}\n' * 200
+        p = self.jdir / f"enforcement.jsonl.archived-20261019-000000-{t}-1"
+        p.write_bytes(data)
+        os.utime(p, (self.now - 3600, self.now - 3600))
+        good = gzip.compress(data)
+        Path(str(p) + ".gz").write_bytes(good[:10] + bytes(len(good) - 18) + good[-8:])
+        self.pbj.rotate_enforcement(self.lane)
+        self.assertTrue(p.exists())
+
+    def hook_archive(self, lines, age=3600, pid=1, gz=False):
+        import gzip
+        t = int(self.now - age)
+        p = self.jdir / f"hooks.jsonl.archived-20261019-000000-{t}-{pid}"
+        data = "".join(json.dumps(x) + "\n" for x in lines).encode()
+        if gz:
+            with gzip.open(str(p) + ".gz", "wb") as f:
+                f.write(data)
+        else:
+            p.write_bytes(data)
+        return p
+
+    def test_w4_the_hook_reader_reads_x_not_its_gz_and_a_cut_archive_is_said(self):
+        """D3 and plan r1 P8: one read when both forms exist; a `.gz` that cannot be read whole raises."""
+        t = self.now - 600
+        rec = {"ts": _iso(t), "hook": "state-echo", "session_id": "pid-1"}
+        x = self.hook_archive([rec])
+        self.hook_archive([rec], gz=True)                           # the same file, compressed
+        read = []
+        real = self.numbers._archive_lines
+        self.numbers._archive_lines = lambda path: (read.append(path.name), real(path))[1]
+        try:
+            got = self.numbers.read_hook_lines(self.jdir, t, time.monotonic() + 5, end=t + 10)
+        finally:
+            self.numbers._archive_lines = real
+        self.assertEqual(read, [x.name])
+        self.assertEqual(len(got), 1)
+        x.unlink()
+        gz = Path(str(x) + ".gz")
+        gz.write_bytes(gz.read_bytes()[:20])
+        with self.assertRaises(self.numbers.JournalIncomplete):
+            self.numbers.read_hook_lines(self.jdir, t, time.monotonic() + 5, end=t + 10)
+
+    def test_w4_the_retro_reads_the_archives_once_while_nothing_changes(self):
+        """D4 (sonnet's R9 of task 257) with plan r1 P7: keyed by the directory and every file's size and mtime; a
+        failure is never kept; each caller gets its own copy."""
+        from tasks import retro
+        t = self.now - 3000
+        self.arch(int(t + 100), [self.rec("work", t)], tasks=["7"])
+        self.write(self.rec("done", t + 10))
+        read = []
+        real = self.numbers._archive_lines
+        self.numbers._archive_lines = lambda path: (read.append(path.name), real(path))[1]
+        try:
+            first = retro.lifecycle_records(self.live)
+            first.append("mine")
+            second = retro.lifecycle_records(self.live)
+            self.assertEqual(len(read), 1)
+            self.assertNotIn("mine", second)
+            self.write(self.rec("work", t + 20, task="8"))          # the live file changed: read again
+            third = retro.lifecycle_records(self.live)
+            self.assertEqual(len(read), 2)
+            self.assertEqual(len(third), 3)
+        finally:
+            self.numbers._archive_lines = real
+
+    def test_w1_an_empty_archive_makes_the_read_incomplete(self):
+        """The post-panel judge's run 2 of task 257 (J3): a plain archive cut to zero bytes read as no lines."""
+        import gzip
+        t = self.now - 3000
+        p = self.arch(int(t + 100), [self.rec("work", t)], tasks=["7"])
+        self.write(self.rec("done", t + 300))
+        p.write_bytes(b"")
+        with self.assertRaises(self.numbers.JournalIncomplete):
+            self.read()
+        p.unlink()
+        with gzip.open(str(p) + ".gz", "wb") as f:
+            f.write(b"")                                         # a whole gzip member holding nothing
+        with self.assertRaises(self.numbers.JournalIncomplete):
+            self.read()
+        import contextlib
+        import io
+        from tasks import retro
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(retro.lifecycle_records(self.live), [])     # plan r1 P9: the retro says so
+        self.assertIn("could not all be read", err.getvalue())
+
+
 def _epoch(ts: str) -> float:
     import calendar
     return calendar.timegm(time.strptime(ts, "%Y-%m-%dT%H:%M:%SZ"))

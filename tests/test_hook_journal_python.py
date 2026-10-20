@@ -540,6 +540,183 @@ class ThePythonWriter(_Tmp):
             holder.wait()
 
 
+class TheRotationLeftovers(_Tmp):
+    """Task 259 (the owner, 2026-10-19 17:10: "Repar ce a rămas (Recomandat)"): the enforcement journal's protections in
+    the hook journal's python rotator — `X` beside `X.gz` repaired, one compressor per archive, and the gzip outside
+    the exclusive hold, fsynced and checked whole before the `.gz` and the directory are fsynced and the archive goes."""
+
+    def rotate(self):
+        os.environ["PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK"] = "1"
+        try:
+            self.pbj._hj_rotate(self.journal.parent)
+        finally:
+            del os.environ["PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK"]
+
+    def idle(self, data=b'{"hook":"old"}\n', pid=7):
+        t = int(time.time()) - 1200
+        p = self.journal.parent / f"hooks.jsonl.archived-20261016-000000-{t}-{pid}"
+        p.write_bytes(data)
+        os.utime(p, (t, t))
+        return p
+
+    def test_x_beside_its_gz_is_repaired_once_the_gz_holds_it(self):
+        self.journal.parent.mkdir()
+        x = self.idle(b'{"hook":"old"}\n' * 20)
+        with gzip.open(str(x) + ".gz", "wb") as f:
+            f.write(x.read_bytes())
+        self.rotate()
+        self.assertFalse(x.exists())
+        y = self.idle(b'{"hook":"old"}\n' * 20, pid=8)
+        with gzip.open(str(y) + ".gz", "wb") as f:
+            f.write(b'{"hook":"old"}\n')                     # a short .gz: the archive stays
+        self.rotate()
+        self.assertTrue(y.exists())
+
+    def test_a_short_gz_never_replaces_the_archive_and_the_next_try_waits(self):
+        self.journal.parent.mkdir()
+        x = self.idle(b'{"hook":"old"}\n' * 50)
+        calls = []
+        real = self.pbj._gzip_to
+
+        def short(src, tmp):
+            calls.append(src)
+            ok = real(src, tmp)
+            with gzip.open(tmp, "wb") as f:
+                f.write(b'{"hook":"old"}\n')
+            return ok
+        setattr(self.pbj, "_gzip_to", short)
+        try:
+            self.rotate()
+            self.rotate()
+        finally:
+            setattr(self.pbj, "_gzip_to", real)
+        self.assertTrue(x.exists())
+        self.assertFalse(Path(str(x) + ".gz").exists())
+        self.assertEqual(len(calls), 1)                         # the failure pushed the next try past the idle time
+
+    def test_the_gzip_runs_outside_the_exclusive_hold_and_is_fsynced(self):
+        import fcntl
+        self.journal.parent.mkdir()
+        x = self.idle(b'{"hook":"old"}\n' * 50)
+        held, synced = [], []
+        real, real_sync = self.pbj._gzip_to, os.fsync
+
+        def probe(src, tmp):
+            fd = os.open(str(self.journal.parent), os.O_RDONLY)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)  # an append's lock: free while the gzip runs
+                held.append("free")
+            except OSError:
+                held.append("held")
+            finally:
+                os.close(fd)
+            return real(src, tmp)
+        setattr(self.pbj, "_gzip_to", probe)
+        os.fsync = lambda fd: (synced.append(os.readlink(f"/proc/self/fd/{fd}")), real_sync(fd))[1]
+        try:
+            self.rotate()
+        finally:
+            setattr(self.pbj, "_gzip_to", real)
+            os.fsync = real_sync
+        self.assertEqual(held, ["free"])
+        self.assertTrue(any(".gz.tmp-" in x for x in synced), synced)
+        self.assertFalse(x.exists())
+        self.assertTrue(Path(str(x) + ".gz").exists())
+
+
+class TheCompressionProtocol(TheRotationLeftovers):
+    """Task 259's plan r1 (P2-P5): every branch of `_compress_archive` that keeps the archive, and the order of the
+    durable steps before it is removed."""
+
+    def test_rotation_leftovers_tests_run_once(self):      # (the parent's tests run in their own class)
+        pass
+
+    def test_the_gz_and_the_directory_are_fsynced_before_the_archive_goes(self):
+        self.journal.parent.mkdir()
+        x = self.idle(b'{"hook":"old"}\n' * 50)
+        events = []
+        real_sync, real_unlink = os.fsync, Path.unlink
+        os.fsync = lambda fd: (events.append(("fsync", os.readlink(f"/proc/self/fd/{fd}"))), real_sync(fd))[1]
+
+        def unlink(path, *a, **k):
+            events.append(("unlink", str(path)))
+            return real_unlink(path, *a, **k)
+        Path.unlink = unlink
+        try:
+            self.rotate()
+        finally:
+            os.fsync, Path.unlink = real_sync, real_unlink
+        gone = events.index(("unlink", str(x)))
+        before = [e[1] for e in events[:gone] if e[0] == "fsync"]
+        self.assertIn(str(x) + ".gz", before)
+        self.assertIn(str(self.journal.parent), before)
+
+    def test_a_failed_directory_fsync_keeps_the_archive(self):
+        self.journal.parent.mkdir()
+        x = self.idle(b'{"hook":"old"}\n' * 50)
+        real = os.fsync
+
+        def fail_dir(fd):
+            if os.path.isdir(f"/proc/self/fd/{fd}"):
+                raise OSError(5, "I/O error")
+            return real(fd)
+        os.fsync = fail_dir
+        try:
+            self.rotate()
+        finally:
+            os.fsync = real
+        self.assertTrue(x.exists())
+
+    def test_a_gz_with_a_garbled_body_and_a_whole_footer_keeps_the_archive(self):
+        """sol (plan r1 P5): the ISIZE check alone would have let it remove a good archive."""
+        self.journal.parent.mkdir()
+        data = b'{"hook":"old"}\n' * 200
+        x = self.idle(data)
+        good = gzip.compress(data)
+        bad = good[:10] + bytes(len(good) - 18) + good[-8:]   # header and footer whole, body zeroed
+        Path(str(x) + ".gz").write_bytes(bad)
+        self.rotate()
+        self.assertTrue(x.exists())
+
+    def test_one_compressor_per_archive(self):
+        self.journal.parent.mkdir()
+        x = self.idle(b'{"hook":"old"}\n' * 50)
+        other = Path(f"{x}.gz.tmp-{os.getppid()}")             # a living process's
+        other.write_bytes(b"partial")
+        self.rotate()
+        self.assertTrue(x.exists() and other.exists())
+        other.unlink()
+        dead = Path(f"{x}.gz.tmp-999999")                     # a dead one's: removed, and the archive compressed
+        dead.write_bytes(b"partial")
+        self.rotate()
+        self.assertFalse(dead.exists())
+        self.assertFalse(x.exists())
+        self.assertTrue(Path(str(x) + ".gz").exists())
+
+    def test_a_lock_not_had_keeps_the_archive_and_leaves_no_temporary(self):
+        if not shutil.which("flock"):
+            self.skipTest("no flock(1)")
+        self.journal.parent.mkdir()
+        x = self.idle(b'{"hook":"old"}\n' * 50)
+        holder = subprocess.Popen(["flock", "-s", str(self.journal.parent), "sleep", "2.5"])   # a reader
+        try:
+            time.sleep(0.2)
+            self.rotate()
+            self.assertTrue(x.exists())
+            self.assertEqual(list(self.journal.parent.glob("*.gz*")), [])
+        finally:
+            holder.wait()
+
+    def test_one_compression_a_pass(self):
+        self.journal.parent.mkdir()
+        self.idle(pid=1)
+        self.idle(pid=2)
+        self.rotate()
+        self.assertEqual(len(list(self.journal.parent.glob("*.gz"))), 1)
+        self.rotate()
+        self.assertEqual(len(list(self.journal.parent.glob("*.gz"))), 2)
+
+
 class TheGuard(_Tmp):
     def guard(self, payload, *, scripts=SCRIPTS, wrapper=True, **env):
         argv = [bash_or_skip(), str(scripts / "command-guard-hook")] if wrapper else \

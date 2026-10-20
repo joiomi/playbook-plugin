@@ -150,18 +150,31 @@ def _read_hook_lines_locked(jdir: Path, lo: str, hi: "str | None", start: float,
         names = sorted(os.listdir(jdir))
     except OSError:
         return []
+    nameset = set(names)
     for name in names:
         m = _ARCHIVE.fullmatch(name)
+        if name.endswith(".gz") and name[:-3] in nameset:
+            continue                    # task 259: `X` beside its `.gz` (a compression killed late) is read once
         if m and int(m.group(1)) >= start - margin:
             files.append((int(m.group(1)), jdir / name))
     files.sort(key=lambda f: f[0])
-    paths = [p for _, p in files] + [jdir / "hooks.jsonl"] + [jdir / n for n in names if _SPOOL.fullmatch(n)]
+    paths = [(p, True) for _, p in files] + [(jdir / "hooks.jsonl", False)] + \
+        [(jdir / n, False) for n in names if _SPOOL.fullmatch(n)]
     seen: "set[str]" = set()
     out: "list[dict]" = []
-    for path in paths:
+    for path, archive in paths:
         if time.monotonic() > deadline:
             raise OutOfTime(str(path))
-        for n, raw in enumerate(_lines_of(path)):
+        # a regular archive that cannot be read whole makes the read incomplete, never short (task 259, plan r1 P8);
+        # a link, a FIFO or anything not regular there is no archive of ours and stays skipped (task 235)
+        if archive:
+            try:
+                archive = stat.S_ISREG(os.lstat(path).st_mode)
+            except OSError:
+                archive = False
+            if not archive:
+                continue
+        for n, raw in enumerate(_archive_lines(path) if archive else _lines_of(path)):
             if n % 2000 == 1999 and time.monotonic() > deadline:
                 raise OutOfTime(str(path))      # checked inside a file too (impl r1, codex)
             raw = raw.strip()
@@ -353,6 +366,9 @@ def _archive_lines(path: Path) -> "list[str]":
             data = gzip.GzipFile(fileobj=io.BytesIO(data)).read()
         except (OSError, EOFError, ValueError, zlib.error) as exc:      # garbled DEFLATE raises zlib.error (J2)
             raise JournalIncomplete(f"cannot decompress {path.name}") from exc
+    if not data:
+        # an archive was the live file past 20 MB: empty, plain or decompressed, it lost its lines (task 259, J3)
+        raise JournalIncomplete(f"{path.name} holds no lines")
     return data.decode("utf-8", "replace").split("\n")
 
 

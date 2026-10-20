@@ -841,5 +841,119 @@ class Rotation(_Project):
         self.assertEqual(list((self.lane / "journal").glob("*.tmp*")), [])
 
 
+
+@_needs("flock")
+@_needs("gzip")
+class TheBashCompressionProtocol(_Project):
+    """Task 259's plan r1 (P1-P5) in bash: `_pb_hj_compress` gzips OUTSIDE the journal directory's exclusive hold, into
+    a temporary made durable (`sync`), checks it whole (`gzip -dc | cmp -s`), and under `flock -w 1` (whole seconds:
+    `-w 0.2` fails under a decimal-comma locale) links it to `.gz`, syncs the `.gz` and the directory, then removes
+    the archive; any failure keeps the archive; one compressor per archive; `X` beside a whole `.gz` is repaired."""
+
+    def idle(self, data=b'{"hook":"old"}\n' * 50, pid=7):
+        (self.lane / "journal").mkdir(exist_ok=True)
+        t = int(time.time()) - 1200
+        p = self.lane / "journal" / f"hooks.jsonl.archived-20261016-000000-{t}-{pid}"
+        p.write_bytes(data)
+        os.utime(p, (t, t))
+        return p
+
+    def tools(self, **scripts):
+        """A directory of stand-ins put first on PATH: name -> sh body."""
+        d = self.root / "tools"
+        d.mkdir(exist_ok=True)
+        for name, body in scripts.items():
+            (d / name).write_text("#!/bin/sh\n" + body + "\n")
+            (d / name).chmod(0o755)
+        return f"{d}:{os.environ['PATH']}"
+
+    def rotate(self, background=False, **extra):
+        if background:
+            script = ('_PB_HJ_T0=$EPOCHREALTIME\nsource "$1"\npb_hook_begin t\nINPUT=""\n' + self.in_lane("exit 0"))
+            return subprocess.Popen([bash_or_skip(), "-c", script, "_", str(LIB)], cwd=str(self.proj),
+                                    env=self.env(PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1", **extra),
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        return self.run_hook(self.in_lane("exit 0"), PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1", **extra)
+
+    def test_the_gzip_runs_outside_the_exclusive_hold(self):
+        x = self.idle()
+        slow = self.tools(gzip=f'sleep 2\nexec {shutil.which("gzip")} "$@"')
+        p = self.rotate(background=True, PATH=slow)
+        try:
+            time.sleep(1.0)                                    # the gzip is running
+            r = subprocess.run(["flock", "-n", "-s", str(self.lane / "journal"), "true"])
+            self.assertEqual(r.returncode, 0, "an append's shared lock was refused during the gzip")
+        finally:
+            p.wait(timeout=60)
+        self.assertFalse(x.exists())
+        self.assertTrue(Path(str(x) + ".gz").exists())
+
+    def test_a_short_gzip_keeps_the_archive(self):
+        x = self.idle()
+        short = self.tools(gzip=f'{shutil.which("gzip")} "$@" | head -c 40')
+        self.rotate(PATH=short)
+        self.assertTrue(x.exists())
+        self.assertFalse(Path(str(x) + ".gz").exists())
+        self.assertEqual(list((self.lane / "journal").glob("*.gz.tmp-*")), [])
+
+    def test_a_failing_sync_keeps_the_archive(self):
+        x = self.idle()
+        self.rotate(PATH=self.tools(sync="exit 1"))
+        self.assertTrue(x.exists())
+
+    def test_the_gz_and_the_directory_are_synced_before_the_archive_goes(self):
+        x = self.idle()
+        log = self.root / "sync.log"
+        logged = self.tools(sync=f'printf "%s\\n" "$*" >> "{log}"\nexec {shutil.which("sync")} "$@"')
+        self.rotate(PATH=logged)
+        self.assertFalse(x.exists())
+        calls = log.read_text().splitlines()
+        self.assertTrue(any(f"{x}.gz" in c and str(self.lane / "journal") in c for c in calls), calls)
+
+    def test_x_beside_a_whole_gz_is_repaired_and_a_garbled_one_keeps_it(self):
+        data = b'{"hook":"old"}\n' * 200
+        x = self.idle(data)
+        with gzip.open(str(x) + ".gz", "wb") as f:
+            f.write(data)
+        os.utime(str(x) + ".gz", None)
+        self.rotate()
+        self.assertFalse(x.exists())
+        y = self.idle(data, pid=8)
+        good = gzip.compress(data)
+        Path(str(y) + ".gz").write_bytes(good[:10] + bytes(len(good) - 18) + good[-8:])
+        self.rotate()
+        self.assertTrue(y.exists())
+
+    def test_one_compressor_per_archive(self):
+        x = self.idle()
+        living = Path(f"{x}.gz.tmp-{os.getppid()}")
+        living.write_bytes(b"partial")
+        self.rotate()
+        self.assertTrue(x.exists() and living.exists())
+        living.unlink()
+        dead = Path(f"{x}.gz.tmp-999999")
+        dead.write_bytes(b"partial")
+        self.rotate()
+        self.assertFalse(dead.exists())
+        self.assertFalse(x.exists())
+
+    def test_a_lock_not_had_keeps_the_archive_and_leaves_no_temporary(self):
+        x = self.idle()
+        holder = subprocess.Popen(["flock", "-s", str(self.lane / "journal"), "sleep", "3"])   # a reader
+        try:
+            time.sleep(0.2)
+            self.rotate()
+            self.assertTrue(x.exists())
+            self.assertEqual(list((self.lane / "journal").glob("*.gz*")), [])
+        finally:
+            holder.wait()
+
+    def test_one_compression_a_pass(self):
+        self.idle(pid=1)
+        self.idle(pid=2)
+        self.rotate()
+        self.assertEqual(len(list((self.lane / "journal").glob("*.gz"))), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

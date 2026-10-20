@@ -1936,10 +1936,12 @@ _pb_hj_text() {
 # too); and a closed file is compressed (`gzip`) only once it is idle — 10 minutes after the rename its name records
 # AND after its last write (a name with no rename time: never) — because a hook that opened the file before the rename can still append to it, and a line written after gzip
 # read it would go with the uncompressed copy (impl panel r1, codex, grok, opus — reproduced). Every archive is kept.
-# No `flock`, no `gzip`, a failure, a kill: the closed file stays as it is.
+# Since task 259 the compression runs after the hold is let go, one archive a pass (`_pb_hj_compress`: no append waits
+# on a gzip). No `flock`, no `gzip`, a failure, a kill: the closed file stays as it is.
 _pb_hj_rotate() {
     local jdir="$1" hfile="$2" every="${PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK:-32}" size stamp arch a now mt big=false idle=false
     local spool=false sz
+    local -a todo=()
     [[ "$every" =~ ^[0-9]{1,4}$ ]] && [ "$((10#$every))" -ge 1 ] && [ "$((10#$every))" -le 1000 ] || every=32
     [ $(( RANDOM % 10#$every )) -eq 0 ] || return 0
     if [ -f "$hfile" ] && [ ! -L "$hfile" ]; then
@@ -2012,23 +2014,70 @@ _pb_hj_rotate() {
                 mt=$(stat -c %Y -- "$a" 2>/dev/null) || continue
                 case "$mt" in ''|*[!0-9]*) continue ;; esac
                 [ $(( now - mt )) -gt 600 ] || continue
-                _pb_hj_compress "$a"
+                todo+=("$a")
             done
         fi
     fi
     { exec 207<&-; } 2>/dev/null || true
+    # task 259: compressed OUTSIDE the exclusive hold (no append waits on a gzip), one a pass
+    for a in "${todo[@]}"; do
+        _pb_hj_compress "$a" "$jdir" && break
+    done
     return 0
 }
 
+# _pb_hj_compress ARCHIVE JDIR — task 259 (plan r1), pb_journal._compress_archive's protocol in bash. One compressor
+# per archive (another living process's `ARCHIVE.gz.tmp-<pid>` leaves it alone; a dead one's is removed). The gzip runs
+# outside the exclusive hold into a temporary made durable (`sync -- tmp`) and checked whole (`gzip -dc | cmp -s`);
+# under `flock -w 1` (whole seconds: a fraction fails under a decimal-comma locale) the archive must be unchanged and
+# no `.gz` there; `mv -n` to `.gz`, `sync` of the `.gz` and the directory, and only then the archive removed. An archive
+# beside a `.gz` that decompresses to exactly it, and is not newer, is removed the same way (a compression killed before
+# its last step). Any failure — a missing tool, a gzip, cmp or sync that fails, a lock not had — keeps the archive and
+# removes the temporary; a `.gz` that did not hold the archive touches it, so the next try waits the idle time again.
+# Returns 0 when it compressed or repaired, 1 otherwise.
 _pb_hj_compress() {
-    local arch="$1" tmp="$1.gz.tmp-$$"
-    command -v gzip >/dev/null 2>&1 || return 0
-    if [ -e "$arch.gz" ] || [ -L "$arch.gz" ] || [ -e "$tmp" ] || [ -L "$tmp" ]; then return 0; fi
-    if ( set -o noclobber; gzip -c -- "$arch" > "$tmp" ) 2>/dev/null \
-       && mv -n -- "$tmp" "$arch.gz" 2>/dev/null && [ -f "$arch.gz" ] && [ ! -e "$tmp" ]; then
-        rm -f -- "$arch" 2>/dev/null
-    elif [ -f "$tmp" ] && [ ! -L "$tmp" ]; then
-        rm -f -- "$tmp" 2>/dev/null
+    local arch="$1" jdir="$2" tmp="$1.gz.tmp-$$" t pid before rc=1
+    command -v gzip >/dev/null 2>&1 && command -v sync >/dev/null 2>&1 && command -v cmp >/dev/null 2>&1 \
+        && command -v flock >/dev/null 2>&1 || return 1
+    for t in "$arch".gz.tmp-*; do
+        { [ -e "$t" ] || [ -L "$t" ]; } || continue
+        pid="${t##*.gz.tmp-}"
+        case "$pid" in ''|*[!0-9]*) continue ;; esac
+        [ "$pid" = "$$" ] && continue
+        [ -d "/proc/$pid" ] && return 1                  # another compressor is at it
+        [ -L "$t" ] || rm -f -- "$t" 2>/dev/null
+    done
+    before=$(stat -c '%s %y' -- "$arch" 2>/dev/null) || return 1
+    if [ -e "$arch.gz" ] || [ -L "$arch.gz" ]; then
+        [ -f "$arch.gz" ] && [ ! -L "$arch.gz" ] && [ ! "$arch" -nt "$arch.gz" ] || return 1
+        { gzip -dc -- "$arch.gz" 2>/dev/null | cmp -s - "$arch"; } || return 1
+        { exec 207<"$jdir"; } 2>/dev/null || return 1
+        if flock -w 1 207 2>/dev/null && [ "$(stat -c '%s %y' -- "$arch" 2>/dev/null)" = "$before" ] \
+           && sync -- "$arch.gz" "$jdir" 2>/dev/null; then
+            rm -f -- "$arch" 2>/dev/null && rc=0
+        fi
+        { exec 207<&-; } 2>/dev/null || true
+        return "$rc"
     fi
-    return 0
+    if [ -e "$tmp" ] || [ -L "$tmp" ]; then return 1; fi
+    if ! ( set -o noclobber; gzip -c -- "$arch" > "$tmp" ) 2>/dev/null || ! sync -- "$tmp" 2>/dev/null; then
+        [ -L "$tmp" ] || rm -f -- "$tmp" 2>/dev/null
+        touch -c -- "$arch" 2>/dev/null
+        return 1
+    fi
+    if ! { gzip -dc -- "$tmp" 2>/dev/null | cmp -s - "$arch"; }; then
+        rm -f -- "$tmp" 2>/dev/null                    # written since, or not all of it: after the idle time again
+        touch -c -- "$arch" 2>/dev/null
+        return 1
+    fi
+    if { exec 207<"$jdir"; } 2>/dev/null; then
+        if flock -w 1 207 2>/dev/null && [ "$(stat -c '%s %y' -- "$arch" 2>/dev/null)" = "$before" ] \
+           && [ ! -e "$arch.gz" ] && [ ! -L "$arch.gz" ] && mv -n -- "$tmp" "$arch.gz" 2>/dev/null \
+           && [ -f "$arch.gz" ] && [ ! -e "$tmp" ] && sync -- "$arch.gz" "$jdir" 2>/dev/null; then
+            rm -f -- "$arch" 2>/dev/null && rc=0
+        fi
+        { exec 207<&-; } 2>/dev/null || true
+    fi
+    [ -L "$tmp" ] || rm -f -- "$tmp" 2>/dev/null
+    return "$rc"
 }

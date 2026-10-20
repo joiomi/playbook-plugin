@@ -751,6 +751,7 @@ def _hj_rotate(jdir: Path) -> None:
             except OSError:
                 return
             _hj_take_spools(jdir, jfile)           # first, into the live file: this hold is exclusive
+            todo: "list[Path]" = []
             if big:
                 st = os.lstat(jfile)
                 if stat.S_ISREG(st.st_mode) and st.st_size > _HJ_LIMIT:
@@ -770,9 +771,12 @@ def _hj_rotate(jdir: Path) -> None:
                 except OSError:
                     continue
                 if stat.S_ISREG(st.st_mode) and now - st.st_mtime > 600:
-                    _hj_compress(arch)
+                    todo.append(arch)
         finally:
             os.close(fd)
+        for arch in todo:
+            if _hj_compress(arch):          # outside the exclusive hold (task 259): no append waits on a gzip
+                break                       # one a pass (plan r1)
     except Exception:
         return
 
@@ -844,34 +848,23 @@ def _take_spools(jdir: Path, jfile: Path, journal: str, seen_ids: "set | None" =
         f.unlink()
 
 
-def _hj_compress(arch: Path) -> None:
-    import gzip
-    gz = Path(str(arch) + ".gz")
-    tmp = Path(f"{arch}.gz.tmp-{os.getpid()}")
-    if os.path.lexists(gz) or os.path.lexists(tmp):
-        return
-    made = False
+def _hj_compress(arch: Path) -> str:
+    """A closed, idle hook-journal archive compressed beside it, or repaired (task 259): `_compress_archive`'s protocol
+    under the journal directory's lock held exclusively, waited for up to 1 s."""
+    return _compress_archive(arch, lambda fn: _hj_locked(arch.parent, fn, 1.0))
+
+
+def _hj_locked(jdir: Path, fn, wait: float):
+    """`fn()` under the journal directory's lock held exclusively (waited for up to `wait` s); its result, or None."""
+    import fcntl
     try:
-        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
-        made = True
-        with os.fdopen(fd, "wb") as raw, open(arch, "rb") as src, gzip.GzipFile(fileobj=raw, mode="wb",
-                                                                               compresslevel=6) as out:
-            while True:
-                chunk = src.read(1 << 20)
-                if not chunk:
-                    break
-                out.write(chunk)
-        os.link(tmp, gz)
-        os.unlink(tmp)
-        made = False
-        os.unlink(arch)
-    except Exception:
-        if made:
-            try:
-                if not tmp.is_symlink():
-                    tmp.unlink()
-            except OSError:
-                pass
+        fd = os.open(str(jdir), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    except OSError:
+        return None
+    try:
+        return fn() if _flock_wait(fd, fcntl.LOCK_EX, wait) else None
+    finally:
+        os.close(fd)
 
 
 # --- The enforcement journal's rotation (task 257) -------------------------------------------------------------------
@@ -1223,8 +1216,8 @@ def _ej_compress_idle(jdir: Path) -> str:
     """Each closed archive idle for 10 minutes — by the rename time its name records and by its mtime — compressed
     OUTSIDE the lock (the appends never wait on it), then swapped in under the exclusive hold only when the archive is
     unchanged since; a reader holds the lock shared while it lists and reads, so it sees the archive or its `.gz`,
-    never neither. A temporary whose compressor is gone is removed. Every archive is kept."""
-    import fcntl
+    never neither. A temporary whose compressor is gone is removed. Every archive is kept. The protocol is
+    `_compress_archive`'s (task 259), shared with the hook journal."""
     done = 0
     now = time.time()
     try:
@@ -1250,43 +1243,153 @@ def _ej_compress_idle(jdir: Path) -> str:
             continue
         if not stat.S_ISREG(st.st_mode) or now - st.st_mtime <= _EJ_IDLE_S or st.st_ino == live_ino:
             continue                        # the live file's twin (a rotation killed half-way): never (impl r2 R1)
-        gz = jdir / (n + ".gz")
-        lk = _ej_lock_fd(jdir)
-        if lk is None:
-            return ""
-        try:
-            if os.path.lexists(gz):
-                # a swap killed after its link: the .gz is whole (linked only once written); the archive goes when it
-                # was not written after it
-                if _flock_wait(lk, fcntl.LOCK_EX, 0.2) and not gz.is_symlink() \
-                        and os.lstat(p).st_mtime <= os.lstat(gz).st_mtime and _gz_isize(gz) == st.st_size % (1 << 32):
-                    p.unlink()
-                continue
-            tmp = jdir / f"{n}.gz.tmp-{os.getpid()}"
-            if not _gzip_to(p, tmp):
-                os.utime(p, None)           # failed (a full disk): tried again after the idle time (impl r2 R7)
-                continue
-            if not _flock_wait(lk, fcntl.LOCK_EX, 0.2):
-                tmp.unlink()
-                continue
-            now_st = os.lstat(p)
-            if (now_st.st_size, now_st.st_mtime_ns) != (st.st_size, st.st_mtime_ns):
-                tmp.unlink()                # written since: compressed again later
-                continue
-            if _gz_isize(tmp) != st.st_size % (1 << 32):
-                tmp.unlink()                # not all of it (Q4): after the idle time again (R7)
-                os.utime(p, None)
-                continue
-            os.link(tmp, gz)
-            p.unlink()
-            tmp.unlink()
+        if _compress_archive(p, lambda fn: _ej_locked(jdir, fn, 0.2)):
             done += 1
             break                           # one archive a pass: the recorder's lock is held (impl r1 Q14)
-        except OSError:
-            continue
-        finally:
-            os.close(lk)
     return f"compressed {done} archive(s)" if done else ""
+
+
+def _ej_locked(jdir: Path, fn, wait: float):
+    """`fn()` under the enforcement lock held exclusively (waited for up to `wait` s); its result, or None."""
+    import fcntl
+    lk = _ej_lock_fd(jdir)
+    if lk is None:
+        return None
+    try:
+        return fn() if _flock_wait(lk, fcntl.LOCK_EX, wait) else None
+    finally:
+        os.close(lk)
+
+
+def _compress_archive(arch: Path, take) -> str:
+    """Compress the closed, idle archive `arch` beside it, or repair it — task 257's rotation and task 259's plan r1,
+    one protocol for both journals. `take(fn)` runs `fn` under the journal's exclusive lock and returns its result, or
+    None when the lock was not had. Says what it did: "compressed", "repaired" or "".
+
+      * One compressor per archive: another living process's `<arch>.gz.tmp-<pid>` leaves this archive to it; a dead
+        one's temporary is removed (a hook killed mid-gzip left it).
+      * The gzip runs OUTSIDE the hold — no append waits on it — into a temporary made durable (fsync), and is checked
+        before the hold: it decompresses to exactly the archive's bytes (gzip checks its CRC too).
+      * Under the hold: the archive unchanged since (size, mtime_ns) and no `.gz` yet; the temporary linked to
+        `<arch>.gz`, the `.gz` and the directory fsynced, and only then the archive removed.
+      * An archive beside a `.gz` (a compression killed before its last step) is removed only when the `.gz`
+        decompresses to exactly its bytes and it is not newer, the `.gz` and the directory fsynced first.
+      * Anything else — a gzip that failed, a `.gz` that does not hold the archive, a lock not had, a sync that failed —
+        keeps the archive and discards the temporary; a `.gz` that did not hold the archive refreshes its mtime, so the
+        next try waits the idle time again.
+
+    Readers hold the lock shared while they list and read: they see the archive or its `.gz`, never neither."""
+    gz = Path(str(arch) + ".gz")
+    tmp = Path(f"{arch}.gz.tmp-{os.getpid()}")
+    try:
+        st = os.lstat(arch)
+        if not stat.S_ISREG(st.st_mode) or not _compress_claim(arch):
+            return ""
+        if os.path.lexists(gz):
+            if gz.is_symlink() or st.st_mtime > os.lstat(gz).st_mtime or not _gz_holds(gz, arch):
+                return ""
+
+            def repair():
+                now_st = os.lstat(arch)
+                if (now_st.st_size, now_st.st_mtime_ns) != (st.st_size, st.st_mtime_ns) \
+                        or not _fsync_paths(gz, arch.parent):
+                    return ""
+                arch.unlink()
+                return "repaired"
+            return take(repair) or ""
+        if os.path.lexists(tmp):
+            return ""
+        if not _gzip_to(arch, tmp):
+            os.utime(arch, None)            # failed (a full disk): tried again after the idle time
+            return ""
+        if not _gz_holds(tmp, arch):
+            os.utime(arch, None)            # written since, or not all of it: after the idle time again
+            return ""
+
+        def swap():
+            now_st = os.lstat(arch)
+            if (now_st.st_size, now_st.st_mtime_ns) != (st.st_size, st.st_mtime_ns) or os.path.lexists(gz):
+                return ""                   # written since, or another compressor won
+            os.link(tmp, gz)                # no clobber
+            if not _fsync_paths(gz, arch.parent):
+                return ""                   # both stay: a reader reads the archive, a later pass repairs it
+            arch.unlink()
+            return "compressed"
+        return take(swap) or ""
+    except Exception:                       # noqa: BLE001 — the archive stays as it is
+        return ""
+    finally:
+        try:
+            if os.path.lexists(tmp) and not tmp.is_symlink():
+                tmp.unlink()
+        except OSError:
+            pass
+
+
+def _compress_claim(arch: Path) -> bool:
+    """Whether this process may compress `arch`: no other LIVING process's temporary is there; a dead one's is
+    removed (task 259, plan r1 P2: with the gzip out of the hold, nothing else serialises compressors)."""
+    prefix = arch.name + ".gz.tmp-"
+    for n in os.listdir(arch.parent):
+        if not n.startswith(prefix):
+            continue
+        pid = n[len(prefix):]
+        if not pid.isdigit() or pid == str(os.getpid()):
+            continue
+        if os.path.isdir(f"/proc/{pid}"):
+            return False
+        p = arch.parent / n
+        if not p.is_symlink():
+            try:
+                p.unlink()
+            except OSError:
+                pass
+    return True
+
+
+def _gz_holds(gz: Path, src: Path) -> bool:
+    """Whether `gz` decompresses to exactly `src`'s bytes — streamed and compared, gzip checking its CRC as it ends;
+    both opened without blocking or following a link, regular files only. Any fault: False."""
+    import gzip
+    try:
+        gfd = os.open(str(gz), os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return False
+    try:
+        sfd = os.open(str(src), os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        os.close(gfd)
+        return False
+    try:
+        with os.fdopen(gfd, "rb") as g, os.fdopen(sfd, "rb") as f:
+            if not (stat.S_ISREG(os.fstat(g.fileno()).st_mode) and stat.S_ISREG(os.fstat(f.fileno()).st_mode)):
+                return False
+            with gzip.GzipFile(fileobj=g, mode="rb") as z:
+                while True:
+                    a = z.read(1 << 20)
+                    b = f.read(len(a)) if a else f.read(1)
+                    if a != b:
+                        return False
+                    if not a:
+                        return True
+    except Exception:                       # noqa: BLE001 — a cut or garbled gzip (EOFError, zlib.error, OSError)
+        return False
+
+
+def _fsync_paths(*paths: Path) -> bool:
+    """fsync each path (a file or a directory); whether every one succeeded."""
+    for p in paths:
+        try:
+            fd = os.open(str(p), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        except OSError:
+            return False
+        try:
+            os.fsync(fd)
+        except OSError:
+            return False
+        finally:
+            os.close(fd)
+    return True
 
 
 def _gz_isize(gz: Path) -> "int | None":
