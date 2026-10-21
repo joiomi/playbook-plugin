@@ -1,6 +1,6 @@
 {
   "audited_commit": "5d5692c791aea3a2b2c47a079e99a95d660864e9",
-  "version": "1.6.7",
+  "version": "1.6.8",
   "date": "2026-10-21",
   "covered_paths": [
     "plugins/playbook/commands",

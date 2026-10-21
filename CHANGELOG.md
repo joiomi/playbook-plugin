@@ -4,16 +4,47 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+## [1.6.8] — 2026-10-21
+
+**A judge seat out of credit with no reset time comes back by itself** — task 276 (the owner, 2026-10-21: "nu vreau sa
+mai fiu eu nevoit sa repornesc judecatorii"). It lifts 1.6.7's known limitation of the same name. The suite has
+⟦TESTS⟧ tests (5,907 at 1.6.7); CI is the same two Linux lanes. The guarantee ledger has 135 rows, 122
+verified — the same counts as 1.6.7 — and no known violation. The live gauntlet on this release: ⟦GAUNTLET⟧.
+
+**Upgrading:** `/playbook:upgrade`, then restart every Claude Code session. ⟦INIT⟧ `hooks.json` is unchanged since
+1.6.6. Nothing to migrate: a seat's outage entry in `<lane>/journal/seat-outages.json` gains `tried` and `last_tried`
+the first time a panel tries the seat again.
+
+**Measured before the release**, in temporary folders: ⟦WINDOW⟧
+
+**Going back** to 1.6.7 (`fa164b8`): in the release clone the marketplace reads, `git -C <clone> checkout fa164b8`, then
+`claude plugin marketplace update playbook-x-marketplace` and `claude plugin update playbook@playbook-x-marketplace`,
+then restart every Claude Code session and check that `claude plugin list` says 1.6.7. ⟦WAYBACK⟧ Before the next
+`/playbook:upgrade`, `git -C <clone> checkout main`.
+
 **A judge seat out of credit with no reset time comes back by itself** — task 276. A seat whose provider said the
 account is out of credit without a reset time (grok's 402, a codex workspace out of credits) was skipped until
 `tasks models enable`. Every panel now tries it again, beside the other seats: a refusal for credit under 60 s that
 reports no tokens counts as a skip and leaves no review record, no `judge.md` section and no place in the verdict's
-counts (the record counts the try); a review removes the record and the panel prints `Back: <seat> …`, unless a
-newer outage of the seat was recorded meanwhile; any other failure is a failed seat, and the outage stays. When the
-other seats alone cannot reach the quorum, the seats tried again go first: the panel waits for them at most 60 s and
-starts the rest only if the quorum can still be reached, else it is refused with no round (`refused` in the run
-ledger, which `tasks numbers` does not count as a round). Outages with a reset time are unchanged. The record's
-`since` is written to the second, and entries may carry `tried` and `last_tried`; 1.6.7 reads the same outages.
+counts (the record counts the try); a review — or a call that worked at least 60 s and reported tokens before its
+timeout — removes the record and the panel prints `Back: <seat> …`, unless a newer record or refusal of the seat came
+after that call began; any other failure is a failed seat, and the outage stays; an older call's failure landing after
+newer evidence changes nothing but the count of tries. When the other seats alone cannot reach the quorum, the seats
+tried again go first: the panel waits for them at most 60 s and starts the rest only if the quorum can still be
+reached, else it is refused with no round (`refused` in the run ledger, which `tasks numbers` does not count as a
+round). Outages with a reset time are unchanged. The record's times are written in full, and entries may carry
+`tried` and `last_tried`; 1.6.7 reads the same outages.
+
+### Known limitations
+
+- A record and a refusal of the same seat are ordered by when they were written, not by when their calls began: two
+  panels a few seconds apart can drop the later call's reset time, so the seat is tried once more before it (the next
+  refusal records it again).
+- A provider's credit error inside a call that hit its timeout is not read (the output starts with playbook's timeout
+  line); such a call that also reported tokens counts as the account answering, and its reset time is lost until the
+  next refusal.
+- When too few seats can answer and a seat tried again is still working at the first wait, the panel lets it finish
+  before refusing, and that review is not kept (this needs two outages with a reset time and two without at once).
 
 ## [1.6.7] — 2026-10-21
 
