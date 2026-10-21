@@ -321,13 +321,21 @@ def record_outage(agent_dir: Path, spec: str, outage: dict,
         if started is not None and at is not None and _aware(started, now) <= at:
             return None
         data = {k: v for k, v in _load(text).items() if _is_current(v, now)}
-        entry = {"reason": outage["reason"], "until": outage.get("until"),
-                 "since": now.isoformat(timespec="seconds")}
+        # full precision (impl r1, codex): `clear_answered` compares these with a call's start, which has it
+        entry = {"reason": outage["reason"], "until": outage.get("until"), "since": now.isoformat()}
         old = data.get(spec)
         if retried:
             tries = old.get("tried") if old else 0
             entry["tried"] = (tries if isinstance(tries, int) and not isinstance(tries, bool) and tries > 0 else 0) + 1
-            entry["last_tried"] = _aware(started or now, now).isoformat(timespec="seconds")
+            began = _aware(started or now, now)
+            last = _parse_at(old.get("last_tried"), now) if old else None
+            if old and last is not None and last > began:
+                # impl r1 (opus, codex): an OLDER call's refusal landing after a newer one only counts the try —
+                # the newer refusal's time, reset and reason stay, or a later answer could clear newer evidence
+                newer: dict = dict(old)
+                entry.update({k: newer[k] for k in ("reason", "until", "last_tried") if k in newer})
+            else:
+                entry["last_tried"] = began.isoformat()
             if old and isinstance(old.get("since"), str):
                 entry["since"] = old["since"]
         data[spec] = entry
@@ -337,42 +345,47 @@ def record_outage(agent_dir: Path, spec: str, outage: dict,
     return rewrite(_record(agent_dir), _t) is not None
 
 
+def _parse_at(raw, now: _dt.datetime) -> "_dt.datetime | None":
+    """An entry's ISO time, zone-aware; None when absent or unreadable."""
+    if not isinstance(raw, str):
+        return None
+    try:
+        return _aware(_dt.datetime.fromisoformat(raw), now)
+    except ValueError:
+        return None
+
+
 def clear_answered(agent_dir: Path, spec: str, started: _dt.datetime,
-                   now: Optional[_dt.datetime] = None) -> bool:
+                   now: Optional[_dt.datetime] = None) -> str:
     """A panel's new try of a seat recorded out of credit was ANSWERED (task 276): the account works again.
     Remove the entry only if no newer evidence is in it: it was recorded (`since`) and last refused
     (`last_tried`, a parallel panel's later try) no later than this call began — a newer record or refusal
     stays (plan panel, codex: a refusal keeps the old `since`, so `since` alone let an older answer remove it).
     The clear is dated at the call's START, not now: a failure of a call that began after it is news and is
-    recorded (`record_outage`). True if an entry was removed."""
+    recorded (`record_outage`). Returns `removed`, `kept` (newer evidence is in the entry) or `absent` (nothing
+    was recorded — the owner's `enable` or another panel's answer came first)."""
     from tasks.atomic import rewrite
     now = now or _dt.datetime.now().astimezone()
     begun = _aware(started, now)
     found = []
 
-    def _seen(entry: dict, key: str) -> "_dt.datetime | None":
-        raw = entry.get(key)
-        if not isinstance(raw, str):
-            return None
-        try:
-            return _aware(_dt.datetime.fromisoformat(raw), now)
-        except ValueError:
-            return None                               # unreadable: the answer is the newer fact
-
     def _t(text: str) -> str:
         data = _load(text)
         entry = data.get(spec)
         if entry is not None:
-            newer = [at for at in (_seen(entry, "since"), _seen(entry, "last_tried")) if at is not None and at > begun]
+            # an unreadable time is no evidence: the answer is the newer fact
+            newer = [at for at in (_parse_at(entry.get("since"), now), _parse_at(entry.get("last_tried"), now))
+                     if at is not None and at > begun]
+            found.append("kept" if newer else "removed")
             if not newer:
-                found.append(data.pop(spec))
+                data.pop(spec)
         cleared = _cleared(text, now)
         cleared[spec] = max(cleared.get(spec, begun), begun)
         return _dump(data, cleared)
 
     _record(agent_dir).parent.mkdir(parents=True, exist_ok=True)
     rewrite(_record(agent_dir), _t)
-    return bool(found)
+    return found[-1] if found else "absent"
 
 
 def clear_outage(agent_dir: Path, spec: str,

@@ -453,14 +453,14 @@ class RetrySeatsRecord(unittest.TestCase):
     def test_an_answer_removes_the_entry_it_was_made_under(self):              # S2
         so.record_outage(self.agent, "grok:x", self.OUT, NOW)
         call = NOW + dt.timedelta(hours=1)
-        self.assertTrue(so.clear_answered(self.agent, "grok:x", call))
+        self.assertEqual(so.clear_answered(self.agent, "grok:x", call), "removed")
         self.assertEqual(so.current_outages(self.agent, call + dt.timedelta(minutes=9)), {})
 
     def test_a_newer_outage_than_the_answered_call_stays(self):                 # S7
         # a parallel panel recorded the seat out of credit after this panel's call to it began
         call = NOW + dt.timedelta(hours=1)
         so.record_outage(self.agent, "grok:x", self.OUT, call + 30 * self.SEC)
-        self.assertFalse(so.clear_answered(self.agent, "grok:x", call))
+        self.assertEqual(so.clear_answered(self.agent, "grok:x", call), "kept")
         self.assertEqual(list(so.current_outages(self.agent, call + dt.timedelta(minutes=9))), ["grok:x"])
 
     def test_a_newer_refusal_than_the_answered_call_stays(self):                # S7, the other order
@@ -470,8 +470,31 @@ class RetrySeatsRecord(unittest.TestCase):
         a = NOW + dt.timedelta(hours=1)
         b = a + 20 * self.SEC
         so.record_outage(self.agent, "grok:x", self.OUT, b + 4 * self.SEC, started=b, retried=True)
-        self.assertFalse(so.clear_answered(self.agent, "grok:x", a))
+        self.assertEqual(so.clear_answered(self.agent, "grok:x", a), "kept")
         self.assertEqual(list(so.current_outages(self.agent, b + dt.timedelta(minutes=9))), ["grok:x"])
+
+    def test_an_older_refusal_finishing_later_keeps_the_newer_evidence(self):   # impl r1 (opus, codex)
+        # B's call began after A's and was noted first, with a reset time; A's older refusal lands later
+        so.record_outage(self.agent, "codex:y", self.OUT, NOW)
+        a, b = NOW + dt.timedelta(hours=1), NOW + dt.timedelta(hours=1, seconds=40)
+        so.record_outage(self.agent, "codex:y", so.classify_outage(CODEX, b), b + 2 * self.SEC, started=b, retried=True)
+        so.record_outage(self.agent, "codex:y", self.OUT, b + 9 * self.SEC, started=a, retried=True)
+        entry = self._data()["codex:y"]
+        self.assertEqual(entry["last_tried"], b.isoformat())               # never moved back
+        self.assertEqual(entry["until"], "2026-10-07T19:33+03:00")          # the newer refusal's reset stays
+        self.assertEqual(entry["tried"], 2)
+        # an answer from a call that began between the two refusals is older than B's: the entry stays
+        self.assertEqual(so.clear_answered(self.agent, "codex:y", a + 20 * self.SEC), "kept")
+
+    def test_the_order_holds_below_a_second(self):                              # impl r1 (codex)
+        so.record_outage(self.agent, "grok:x", self.OUT, NOW)
+        refusal = NOW + dt.timedelta(hours=1, microseconds=900000)
+        answer = NOW + dt.timedelta(hours=1, microseconds=100000)
+        so.record_outage(self.agent, "grok:x", self.OUT, refusal + 3 * self.SEC, started=refusal, retried=True)
+        self.assertEqual(so.clear_answered(self.agent, "grok:x", answer), "kept")
+
+    def test_an_answer_for_an_entry_already_gone_says_so(self):                # impl r1 (opus)
+        self.assertEqual(so.clear_answered(self.agent, "grok:x", NOW), "absent")
 
     def test_a_refusal_after_the_owners_enable_during_the_call_is_not_recorded(self):   # S15
         so.record_outage(self.agent, "grok:x", self.OUT, NOW)
@@ -802,6 +825,11 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
         rows = [json.loads(ln) for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()]
         return [r.get("seat") for r in rows if r.get("hook") == "review"]
 
+    def _review_rounds(self):
+        p = self.d / ".agent" / "journal" / "enforcement.jsonl"
+        rows = [json.loads(ln) for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()] if p.exists() else []
+        return [r.get("round") for r in rows if r.get("hook") == "review"]
+
     def _runs(self):
         p = self.d / ".agent" / "tasks" / "042-demo" / "post-panel-reviews.jsonl"
         return [json.loads(ln) for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()] if p.exists() else []
@@ -809,11 +837,13 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
     def _entry(self, seat):
         return json.loads(so._record(self.d / ".agent").read_text(encoding="utf-8")).get(seat)
 
-    def _rare_judge(self, still_working=(), refuse=(), fail=(), usage_refuse=(), slow_refuse=()):
+    def _rare_judge(self, still_working=(), refuse=(), fail=(), usage_refuse=(), slow_refuse=(), quick_timeout=(),
+                    late_timeout=(), reset_refuse=()):
         """Fake judges for the rare case (task 276): `still_working` seats take longer than the panel's first
         wait (shortened by `_short_wait`) and then answer a review; `refuse` seats refuse for credit at once
         (a free refusal); `usage_refuse` seats refuse for credit with tokens reported; `fail` seats fail at once
-        for another reason; every other seat answers a review."""
+        for another reason; `quick_timeout` seats hit their hard timeout at once, `late_timeout` seats after more
+        than the first wait; `reset_refuse` seats refuse naming a reset time; every other seat answers a review."""
         import time as _time
         from provider.usage import JudgeOutput
         calls = self.calls
@@ -825,6 +855,13 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
             if any(m in model for m in slow_refuse):
                 _time.sleep(0.4)
                 return CODEX_CREDITS
+            if any(m in model for m in quick_timeout):
+                raise subprocess.TimeoutExpired(cmd=model, timeout=1, output="")
+            if any(m in model for m in late_timeout):
+                _time.sleep(0.4)
+                raise subprocess.TimeoutExpired(cmd=model, timeout=1, output="")
+            if any(m in model for m in reset_refuse):
+                return CODEX
             if any(m in model for m in refuse):
                 return CODEX_CREDITS
             if any(m in model for m in usage_refuse):
@@ -832,7 +869,7 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
             if any(m in model for m in fail):
                 return "(FAILED — exit 1)\nTraceback: something else broke"
             if any(m in model for m in still_working):
-                _time.sleep(0.6)
+                _time.sleep(1.5)
             return "1. **Note** — fine.\n"
         return judge
 
@@ -909,14 +946,14 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
             with lock:
                 starts.setdefault(model, _time.monotonic())
             if "gpt-5.5" in model:
-                _time.sleep(0.8)
+                _time.sleep(1.5)
                 return CODEX_CREDITS
             return "1. **Note** — fine.\n"
 
         self._panel(models, judge, codex_available=True)
         self.assertIn("gpt-5.5", starts, "the seat was not tried again")
         first = min(starts.values())
-        late = {m: round(t - first, 2) for m, t in starts.items() if t - first > 0.5}
+        late = {m: round(t - first, 2) for m, t in starts.items() if t - first > 1.0}
         self.assertEqual(late, {}, "a seat waited for the retried one")
 
     def test_the_rare_case_tries_the_retry_seats_first_and_refuses_without_a_round(self):   # S4 + S11
@@ -945,10 +982,10 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
                          sorted(["claude:claude-opus-5-5:high", "claude:claude-sonnet-5:high", "codex:gpt-5.5"]))
         self.assertIsNone(self._entry("codex:gpt-5.5"))
         self.assertIn("Back: codex:gpt-5.5", out)
-        # the live seats start at the first wait's end, not when the working seat's review ends (0.6 s)
+        # the live seats start at the first wait's end (0.25 s), not when the working seat's review ends (1.5 s)
         t0 = min(self.starts.values())
         live = {m: round(self.starts[m] - t0, 2) for m in ("claude-opus-5-5", "claude-sonnet-5")}
-        self.assertTrue(all(0.2 <= d < 0.5 for d in live.values()), live)
+        self.assertTrue(all(0.2 <= d < 1.2 for d in live.values()), live)
 
     def test_the_rare_case_refuses_when_too_few_come_back(self):                   # S6 + S11
         models, live = self._rare_setup(skipped=(1, 3))
@@ -957,7 +994,8 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
         self.assertEqual(code, 1, out + err)
         self.assertEqual(sorted(self.calls), ["gpt-5.4", "gpt-5.5"], "the live seat was started")
         self.assertFalse((self.d / ".agent" / "tasks" / "042-demo" / "judge.md").exists())
-        self.assertEqual(self._review_seats(), ["codex:gpt-5.5"], "the working seat's run is not recorded")
+        self.assertEqual(self._review_seats(), ["codex:gpt-5.5"], "the working seat's run must be recorded")
+        self.assertEqual(self._review_rounds(), [0], "a refused panel's spend took the next round's number")
         self.assertEqual(self._refused_rounds(), [])
         self.assertIsNone(self._entry("codex:gpt-5.5"), "the seat that came back keeps its outage")
         self.assertEqual(self._entry("codex:gpt-5.4")["tried"], 1)
@@ -970,6 +1008,52 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
         self.assertEqual(code, 1, out + err)
         self.assertEqual(sorted(self.calls), ["gpt-5.4", "gpt-5.5"], "the live seats were started")
         self.assertEqual(self._entry("codex:gpt-5.5")["tried"], 1, "a failure of another kind removed the outage")
+        self.assertIn("failed otherwise: codex:gpt-5.5", err)                 # impl r1 (agy)
+
+    def test_a_timeout_before_the_first_wait_is_a_failed_try(self):             # impl r1 (codex, opus, sonnet)
+        models = self.CLAUDE[:3] + ("codex:gpt-5.5",)
+        self._out("codex:gpt-5.5")
+        self._short_wait()
+        code, out, err = self._panel(models, self._rare_judge(quick_timeout=("gpt-5.5",)), codex_available=True)
+        self.assertIn("3/4 judges succeeded, quorum 3", self._judge_md())
+        self.assertNotIn("Back: codex:gpt-5.5", out)
+        self.assertEqual(self._entry("codex:gpt-5.5")["tried"], 1, "a hang under the first wait cleared the outage")
+
+    def test_a_timeout_after_real_work_is_back(self):
+        models = self.CLAUDE[:3] + ("codex:gpt-5.5",)
+        self._out("codex:gpt-5.5")
+        self._short_wait()
+        code, out, err = self._panel(models, self._rare_judge(late_timeout=("gpt-5.5",)), codex_available=True)
+        self.assertIn("Back: codex:gpt-5.5", out)
+        self.assertIsNone(self._entry("codex:gpt-5.5"))
+
+    def test_a_retried_refusal_naming_a_reset_time_is_skipped_until_then(self):   # S3, through the panel (agy)
+        models = self.CLAUDE[:3] + ("codex:gpt-5.5",)
+        self._out("codex:gpt-5.5")
+        code, out, err = self._panel(models, self._rare_judge(reset_refuse=("gpt-5.5",)), codex_available=True)
+        line = next(ln for ln in out.splitlines() if "Still out of credit: codex:gpt-5.5" in ln)
+        self.assertIn("later panels skip it until 2026-10-07T19:33+03:00", line)
+        self.assertEqual(self._entry("codex:gpt-5.5")["until"], "2026-10-07T19:33+03:00")
+        self.calls.clear()
+        code, out, err = self._panel(models, self._judge(), codex_available=True)
+        self.assertNotIn("gpt-5.5", self.calls)
+        self.assertIn("Skipped out of credit: codex:gpt-5.5", out)
+
+    def test_a_retried_refusal_after_the_owners_enable_says_it_was_not_recorded(self):   # impl r1 (sonnet)
+        models = self.CLAUDE[:3] + ("codex:gpt-5.5",)
+        self._out("codex:gpt-5.5")
+        agent = self.d / ".agent"
+
+        def judge(adapter, prompt, model, system_context, **kw):
+            self.calls.append(model)
+            if "gpt-5.5" in model:
+                so.clear_outage(agent, "codex:gpt-5.5", NOW + dt.timedelta(minutes=2))   # his enable, mid-call
+                return CODEX_CREDITS
+            return "1. **Note** — fine.\n"
+
+        code, out, err = self._panel(models, judge, codex_available=True)
+        self.assertIn("not recorded; the next panel calls it", out)
+        self.assertIsNone(self._entry("codex:gpt-5.5"))
 
     def test_a_credit_refusal_that_cost_tokens_is_a_failed_run(self):              # S14
         models = self.CLAUDE[:3] + ("codex:gpt-5.5",)

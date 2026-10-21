@@ -2133,12 +2133,16 @@ def _cmd_panel_review(cmd_args):
             if _o is not None and dur_ms < _RETRY_FIRST_TRY_SECS * 1000 and not _spent:
                 _refused[label] = (_o, dur_ms)
                 print(f"  Still out of credit: {label} (since {_retry[label].get('since', '?')}; refused in "
-                      f"{dur_ms / 1000:.0f} s) — the next panel tries it again.", flush=True)
+                      f"{dur_ms / 1000:.0f} s) — "
+                      + (f"later panels skip it until {_o['until']}." if _o.get("until")
+                         else "the next panel tries it again."), flush=True)
                 return
-            if _o is not None or (_failed_now and not timed_out):
-                _tried_failed[label] = _o
-            else:
+            # an answer: a usable review, or a timeout after the first wait's worth of work (impl r1, codex: a
+            # hang or a short hard limit proves nothing about the account)
+            if _o is None and (not _failed_now or (timed_out and dur_ms >= _RETRY_FIRST_TRY_SECS * 1000)):
                 _answered.setdefault(label, _seat_began.get(label))
+            else:
+                _tried_failed[label] = _o
         results[label] = output
         print(f"  [{label}] done", flush=True)
         # Seat carries model:effort (not the display `label`, which omits
@@ -2215,41 +2219,46 @@ def _cmd_panel_review(cmd_args):
             if _o is None:          # a failure of another kind: the outage it was tried under stays as it is
                 _o = {"reason": _retry[_lbl].get("reason", "?"), "until": _retry[_lbl].get("until")}
             try:
-                _seat_outage.record_outage(_ad, _lbl, _o, started=_seat_began.get(_lbl), retried=True)
+                if not _seat_outage.record_outage(_ad, _lbl, _o, started=_seat_began.get(_lbl), retried=True):
+                    print(f"  {_lbl} answered out of credit ({_o.get('reason', '?')}), but it was enabled "
+                          "(`tasks models enable`) after this call to it began — not recorded; the next panel "
+                          "calls it.", flush=True)
             except Exception as _e:   # noqa: BLE001 — never fail the review on it
                 print(f"  ⚠ could not note {_lbl}'s try ({_e})", file=sys.stderr, flush=True)
         for _lbl, _at in sorted(_answered.items()):
             try:
-                if _seat_outage.clear_answered(_ad, _lbl, _at or _seat_outage.now()):
-                    print(f"  Back: {_lbl} answered (out of credit since {_retry[_lbl].get('since', '?')}); "
-                          "its record is removed.", flush=True)
-                else:
-                    print(f"  {_lbl} answered, but a newer outage of it was recorded meanwhile; that one stays.",
-                          flush=True)
+                _how = _seat_outage.clear_answered(_ad, _lbl, _at or _seat_outage.now())
+                _since = _retry[_lbl].get("since", "?")
+                print({"removed": f"  Back: {_lbl} answered (out of credit since {_since}); its record is removed.",
+                       "kept": f"  {_lbl} answered, but a newer outage of it was recorded meanwhile; that one stays.",
+                       }.get(_how, f"  Back: {_lbl} answered (out of credit since {_since}); its record was already "
+                                   "removed (`tasks models enable`, or another panel)."), flush=True)
             except Exception as _e:   # noqa: BLE001
                 print(f"  ⚠ could not clear {_lbl}'s outage ({_e})", file=sys.stderr, flush=True)
 
-    def _emit_spend():
+    def _emit_spend(round_no):
         # Clean tree: NOW emit the per-seat spend records (best-effort — fully
         # swallowed inside the helper, so they never affect the review; and past the
         # tamper banner, so they can never suppress it). One line per seat.
         for _lbl, _dms, _st, _usg, _err, _cut in _spend_pending:
             _journal_review_spend(
                 project_path, kind="panel", seat=_lbl,
-                task=(task_num if task_file else None), round_no=_spend_round,
+                task=(task_num if task_file else None), round_no=round_no,
                 duration_ms=_dms, status=_st, usage=_usg, error=_err, soft_cut=_cut)
 
     _tamper_full = _tamper_stop()
     if _possible is not None and _possible < _need:
-        # The rare case, refused: no round is written; the run ledger says `refused` (no round in `tasks numbers`).
-        _emit_spend()
+        # The rare case, refused: no round is written; the run ledger says `refused` (no round in `tasks numbers`),
+        # and its spend carries round 0, the journal's "unknown" — never the number the next real round takes.
+        _emit_spend(0)
         _note_retries()
         _still = ", ".join(sorted(_refused)) or "none"
         _back = ", ".join(sorted(_answered)) or "none"
+        _other = ", ".join(sorted(_tried_failed)) or "none"
         print(f"Error: only {_possible} of the {requested_seats} requested seats can answer, and the quorum is "
               f"{_need} — the panel would fail. The seats with no reset time were tried first (still out of "
-              f"credit: {_still}; back: {_back}); the other seats were not called. Run it again later, or run a "
-              "smaller panel with --models.", file=sys.stderr, flush=True)
+              f"credit: {_still}; back: {_back}; failed otherwise: {_other}); the other seats were not called. "
+              "Run it again later, or run a smaller panel with --models.", file=sys.stderr, flush=True)
         if _prid:
             _PD6_PANEL_ENDED[_prid] = {"outcome": "refused"}
         sys.exit(1)
@@ -2257,7 +2266,7 @@ def _cmd_panel_review(cmd_args):
     if _tamper_cautions:
         print("\n" + _degraded_notice(_tamper_cautions), file=sys.stderr, flush=True)
 
-    _emit_spend()
+    _emit_spend(_spend_round)
     _note_retries()
 
     # Classify each judge as succeeded vs failed — a failed judge must NOT
