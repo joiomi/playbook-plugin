@@ -1484,6 +1484,15 @@ def cmd_work(cmd_args):
                           "recorded in the receipt; consider re-running "
                           "`tasks panel-review <N> --mode impl` on a healthy git.",
                           flush=True)
+                # Task 281 (PHASE-B 9b part 2): the red receipt's state of each contract row — advisory, after the
+                # close is written; a fault is one line and never changes the close (plan panel: sonnet, a budget).
+                try:
+                    from tasks.red import close_report as _red_report
+                    for _ln in _red_report(Path(project_path), task_file):
+                        print(_ln, flush=True)
+                except (Exception, SystemExit) as _rexc:  # noqa: BLE001 — never changes the close
+                    print(f"red receipt (advisory — this close does not wait for it): not read "
+                          f"({type(_rexc).__name__}: {_rexc})", flush=True)
             # Remove session dirs that reference this task.
             # PLAYBOOK_SESSION_ID is not set when called from Bash tool, so scan all sessions.
             # Intentional partial delete: only sessions pointing at prev_task are removed;
@@ -1876,11 +1885,18 @@ def cmd_work(cmd_args):
                                           _pointer_tmp, session_state)
         except BaseException:
             # an activation that does not happen (refused, interrupted, failed) keeps no base it wrote — and never one
-            # another session wrote since (impl rounds 2 and 3, sonnet and agy)
+            # another session wrote since (impl rounds 2 and 3, sonnet and agy). A task whose status left `pending`
+            # began (an interrupt after the claim, another session's activation): its base stays (task 280's
+            # post-panel run). An unreadable status removes it — no base fails closed, `tasks red` asks for --base.
             if _base_bytes is not None:
+                try:
+                    from tasks.core import _extract_status as _es281
+                    _began = _es281(task_file) in ("in_progress", "blocked", "done")   # never "unknown"/"error"
+                except Exception:               # noqa: BLE001
+                    _began = False
                 _bp = task_file.parent / "base.json"
                 try:
-                    if _bp.read_bytes() == _base_bytes:
+                    if not _began and _bp.read_bytes() == _base_bytes:
                         _bp.unlink()
                 except OSError:
                     pass

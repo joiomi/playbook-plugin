@@ -376,6 +376,8 @@ def _writes_nothing(cmd: str, cmd_args: list) -> bool:
     """An invocation documented to write nothing, so it skips the session GC."""
     if cmd in ("merge-doctor", "guide", "numbers"):
         return True
+    if "--check" in cmd_args and cmd == "red":      # task 281 (plan panel: codex): the check prints, never writes
+        return True
     return cmd in ("compact", "prepare-merge", "tag") and "--dry-run" in cmd_args
 
 

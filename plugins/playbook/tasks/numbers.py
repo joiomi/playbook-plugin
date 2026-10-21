@@ -1511,6 +1511,13 @@ def cmd_numbers(cmd_args: "list[str]") -> None:
         raise SystemExit(2)
     task = d.name.split("-", 1)[0]
     print(f"Task {task} — {d.name}")
+    try:                    # task 281: the test contract's state, read live (never written into numbers.json)
+        from tasks.red import numbers_line
+        _contract_line = numbers_line(Path(project), d)
+        if _contract_line:
+            print("  " + _contract_line)
+    except (Exception, SystemExit) as exc:      # noqa: BLE001 — the numbers stand without it
+        print(f"  contract: not read ({type(exc).__name__})")
     doc = _read_doc(d / FILE_NAME)
     if doc and doc["closures"]:
         for c in doc["closures"]:

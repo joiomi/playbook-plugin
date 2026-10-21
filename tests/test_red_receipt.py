@@ -646,9 +646,15 @@ class RoundOne(Project):
         self.assertEqual((dst / "code" / "tests" / "test_a.py").read_text(encoding="utf-8"), "frozen\n")
         self.assertFalse((dst / "code" / "src.py").exists())
         self.assertFalse((dst / ".agent").exists())
-        d1 = red._digest_copy(src, {}, ["code"])
-        (src / "code" / "tests" / "test_a.py").write_text("edited\n", encoding="utf-8")
-        self.assertNotEqual(red._digest_copy(src, {}, ["code"]), d1)
+        # the digest of the laid tests is read from the frozen "now" tree (task 281: the same from a run and a check)
+        from tasks.post_d6 import worktree_tree_why
+        scopes = {"code": self.code}
+        t1, _ = worktree_tree_why(self.code, [":(exclude).agent"])
+        d1 = red._digest_trees(scopes, {"code": t1}, {}, [])
+        (self.code / "tests" / "test_old.py").write_text("edited\n", encoding="utf-8")
+        self.assertEqual(red._digest_trees(scopes, {"code": t1}, {}, []), d1)    # the frozen tree, not the live file
+        t2, _ = worktree_tree_why(self.code, [":(exclude).agent"])
+        self.assertNotEqual(red._digest_trees(scopes, {"code": t2}, {}, []), d1)
 
     def test_the_base_is_captured_before_the_activation_is_published(self):
         # row 36 (codex I): nothing can act as this task's session before its base exists
