@@ -303,7 +303,9 @@ def claude_judge_output(result, format_judge_output) -> JudgeOutput:
         # claude limit only when it is the whole stdout tail (task 269, PLAN.md "From task 232") — sought in every line
         # of every `errors` entry (its impl round 1: agy, opus, sonnet). `result` is not searched apart: with `errors`
         # empty, `extract_claude` already gave `result` as the error; beside `errors`, it may be a partial review — a
-        # quoted line there would be a false outage (task 269's round 2, task 270)
+        # quoted line there would be a false outage (task 269's round 2, task 270). Residual, accepted: an error object
+        # whose `errors` is empty and whose `result` is a partial review quoting the line on a line of its own would
+        # still count — a shape never captured (task 272)
         lines = [ln.strip() for e in errors for ln in str(e).splitlines()]
         hit = [ln for ln in lines if CLAUDE_LIMIT_LINE.match(ln)]
         if hit:

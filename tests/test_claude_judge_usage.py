@@ -206,7 +206,7 @@ class ClaudeJudgeOutput(unittest.TestCase):
                 self.assertTrue(judge_failed(out), out)
                 self.assertIn("max_tokens", out)
 
-    def test_the_limit_line_in_result_or_inside_one_entry_is_found(self):
+    def test_the_limit_line_in_an_error_result_or_after_a_newline_is_found(self):
         """Task 269's impl round 1 (agy, opus, sonnet Minor): the limit beside a generic error in `result`, or inside one
         `errors` entry after a newline, reached the outage rule as part of a several-line tail."""
         # (task 270: `result` is claude's words only when `errors` is empty, as `extract_claude` chooses)
