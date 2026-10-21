@@ -19077,16 +19077,6 @@
         {
           "type": "executable integration",
           "path": "tests/test_enforcement_rotation.py",
-          "reference": "TheRollbackRecipe.test_the_recipe_gives_every_line_back",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "The merge recipe read from the doc and run by bash on a rotated journal with every kill state gives every line back, carries and horizons out."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_enforcement_rotation.py",
           "reference": "RepairAndCompression.test_a_repair_without_its_lock_is_taken_again_after_the_idle_time",
           "boundary": "subprocess",
           "negative_control": null,
