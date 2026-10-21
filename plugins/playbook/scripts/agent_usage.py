@@ -286,7 +286,11 @@ def record_spans(lane, *, task, paths: "list[str]", session_id: str, pbj, lock_w
     before it, a close holding the lock could leave this span after its `done`); a callable answering None — a
     session not resolved — records nothing (impl round 2, sonnet). Returns {"files", "calls", "skipped"}."""
     lane = str(lane)
-    out = {"files": 0, "calls": 0, "skipped": "", "unwritten": 0}
+    # `reached`: per file of the session, where this read left it recorded — the offset its read (or seed) stands at,
+    # None when it is not recorded (not readable now, its end not readable, or the journal refused its span). The
+    # session's end decides its marker on it (task 265's impl round 2: a span with no call writes no record, so the
+    # journal's newest `to` can lie behind what was read)
+    out = {"files": 0, "calls": 0, "skipped": "", "unwritten": 0, "reached": {}}
     files = session_files(paths)
     if not files:
         _rotate(pbj, lane, held=False)          # a CLI transition with no transcript (codex) still keeps it bounded
@@ -333,15 +337,18 @@ def record_spans(lane, *, task, paths: "list[str]", session_id: str, pbj, lock_w
                 # at the last complete line, where `read_span` stops: a seed inside a half-written line left it
                 # uncounted once it ended, and read as unread at every busy end (task 253)
                 at = _complete_end(f, st.st_size)
+                out["reached"][f] = at
                 if at is None:
                     continue                   # its end not readable now: no seed at a guess, the next read seeds
                 if pbj.append_agent_usage(lane, task=task, file=key, ino=st.st_ino, span_from=at, span_to=at,
                                           head=head_of(f, min(HEAD_MAX, at)), known=False,
                                           session_id=session_id, why=why) is False:
                     out["unwritten"] += 1
+                    out["reached"][f] = None
                 continue
             r = read_span(f, start, last)
             out["files"] += 1
+            out["reached"][f] = None
             if r["status"] != "known":
                 continue                       # not readable now: the span stays for a later read
             frm = 0 if r["restarted"] else start
@@ -374,8 +381,9 @@ def record_spans(lane, *, task, paths: "list[str]", session_id: str, pbj, lock_w
                 # one write: the span's `to` lands with all its models; a span counts as recorded only once it landed
                 if pbj.append_agent_usage_span(lane, items) is False:
                     out["unwritten"] += 1
-                else:
-                    out["calls"] += span_calls
+                    continue
+                out["calls"] += span_calls
+            out["reached"][f] = r["offset"]
         return out
     finally:
         os.close(fd)
@@ -549,6 +557,29 @@ def _tail_may_be_a_call(path: str, start: int, size: int) -> bool:
     return not _USER_TYPE.search(_MESSAGE_KEY.split(head, 1)[0])
 
 
+def _left_unread(paths: "list[str]", reached: "dict[str, int | None]") -> bool:
+    """After a read with the lock had (task 265): whether a file of the session holds what that read did not record —
+    a file it did not record (not readable, its span refused, its end not readable: None), lines completed since
+    (the last complete line now past where it stopped), or a half-written last line that may be a call. A file the
+    read never reached (gone, not a regular file) is skipped, as `record_spans` skips it."""
+    for f in session_files(paths):
+        if f not in reached:
+            continue
+        got = reached[f]
+        if got is None:
+            return True
+        try:
+            st = os.lstat(f)
+        except OSError:
+            continue
+        if not stat.S_ISREG(st.st_mode):
+            continue
+        end = _complete_end(f, st.st_size)
+        if end is None or end != got or _tail_may_be_a_call(f, end, st.st_size):
+            return True
+    return False
+
+
 def _unread(lane: str, paths: "list[str]") -> bool:
     """Whether any of the session's files holds a span the recorder would read — no record (a file with no complete
     line excepted: nothing to lose), another file in its place (`_same_file`, task 247: the size alone took a replaced
@@ -628,13 +659,15 @@ def hook_main(payload_text: str) -> str:
     said = f"recorded {res['calls']} call(s) from {res['files']} file(s) for task {(seen_task or ['-'])[0] or '-'}"
     if res.get("unwritten"):
         said += f"; {res['unwritten']} span(s) NOT written (the journal refused them)"
-    if os.environ.get("PB_AU_MARK_BUSY") == "1" and seen_task and seen_task[0] is not None and _unread(lane, paths):
+    if (os.environ.get("PB_AU_MARK_BUSY") == "1" and seen_task and seen_task[0] is not None
+            and _left_unread(paths, res.get("reached") or {})):
         # task 265 (PLAN.md "From task 255" (a)): at the session's end no later reader comes, and a last line the host
         # is still writing (or was killed writing) that may be a call is never counted — marked, as at a busy lock.
-        # Decided by `_unread` against the newest records, not by the tail alone: a call the host finished after the
-        # read let the lock go, and a span the journal refused, are unread too (its impl round 1: opus, sonnet)
+        # Decided against what THIS read reached, not the tail alone (impl round 1: a call finished after the read let
+        # the lock go, a span the journal refused) nor the journal's newest `to` (impl round 2: a span with no call
+        # writes no record, and every normal end — a prompt, an `/exit` entry — read as unread)
         marked = pbj.append_agent_usage(lane, task=seen_task[0] or "-", known=False, session_id=session,
-                                        why="unread at the session's end (a half-written or late call, or a span the journal refused): not counted")
+                                        why="unread at session end (half-written or late call, or refused span): not counted")
         said += ("; marked unknown (unread at the end)" if marked
                  else "; the unknown marker for a half-written call could not be written")
     return said

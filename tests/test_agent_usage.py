@@ -532,6 +532,29 @@ class RoundTwoFixes(_Lane):
         self.assertEqual(self.total(), 1, said)
         self.assertEqual([r.get("status") for r in self.records() if r.get("status") == "unknown"], ["unknown"], said)
 
+    def test_a_free_lock_end_after_complete_lines_with_no_call_marks_nothing(self):
+        """Task 265's impl round 2 (opus, sonnet Important): a span with no call writes no record, so the newest `to`
+        stays behind what the read reached — and the end check against it marked `unknown` at almost every normal end
+        (a prompt, a `/exit` entry after the last call). The end is now decided against what this read reached."""
+        self.main.write_bytes(lines(entry("m1")))
+        self._hook({"transcript_path": str(self.main)}, PB_AU_MARK_BUSY="")       # a Stop
+        with open(self.main, "ab") as fh:
+            fh.write(lines(user("/exit"), user("bye")))
+        said = self._hook({"transcript_path": str(self.main)})                    # the session's end
+        self.assertEqual(self.total(), 1, said)
+        self.assertEqual([r for r in self.records() if r.get("status") == "unknown"], [], said)
+
+    def test_a_free_lock_end_after_a_span_the_journal_refused_marks_it(self):
+        """Task 265's impl round 1 (opus Minor): a span the journal refused at the session's end is a gap no later
+        reader fills — marked, as what the read did not record."""
+        from unittest import mock
+        self.main.write_bytes(lines(entry("m1")))
+        refuse = mock.patch.object(self.pbj, "append_agent_usage_span", lambda lane, items: False)
+        with mock.patch.object(self.mod, "load_journal", lambda: self.pbj), refuse:
+            said = self._hook({"transcript_path": str(self.main)})
+        self.assertIn("NOT written", said)
+        self.assertEqual([r.get("status") for r in self.records() if r.get("status") == "unknown"], ["unknown"], said)
+
     def test_a_free_lock_end_after_a_clean_read_marks_nothing(self):
         self.main.write_bytes(lines(entry("m1"), entry("m2")))
         said = self._hook({"transcript_path": str(self.main)})
