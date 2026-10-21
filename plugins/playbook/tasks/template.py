@@ -987,7 +987,7 @@ Tasks CLI:
     tasks recall <id|words>    fetch a mind-map node (main+overflow) by id, or locate by keyword
     tasks ruling add|end|list  the project's owner rulings, written once: add (--permanent | --until "<what ends it>") "<his exact words>"
     tasks verify [<N>]         run the verify contract as the close does; a green run of the same code is not run again at the close
-                               (stage the change first — a code_roots repo: commit it — and edit nothing but the task records until the close)
+                               (stage the change first, each code_roots repo committed; a later edit outside the task's records means the close runs it again)
     tasks numbers [N]          read-only: a task's own numbers per close (time by kind and section, rounds, seats, verify, the owner) — an open task's as a snapshot
     tasks compact <N>          move <!-- archive:start/end --> narrative to task-archive.md"""
 
@@ -1160,7 +1160,7 @@ Commands:
                       add (--permanent | --until "<what ends it>") "<his exact words>"; end <N> "<why>"
   verify [<N>]        Run the verify contract as the close does (task N's risk, or the active task's);
                       a green run is remembered, and a close of the same code does not run it again
-                      (stage the change first — a code_roots repo: commit it — and edit nothing but the task records until the close)
+                      (stage the change first, each code_roots repo committed; a later edit outside the task's records means the close runs it again)
   numbers [N]         Read-only: the task's own numbers per close, kept in its numbers.json (time by kind
                       and section without sleep, rounds, seats, verify, the owner); an open task's as a snapshot
   list [--pending]    List all tasks with status

@@ -623,5 +623,40 @@ class TheRunRecords(Project):
         self.assertEqual([r[2] for r in out], [0])
 
 
+class TheTeachingSites(unittest.TestCase):
+    """Task 273 (PLAN.md "From task 272" (a); its impl round 1, agy and sonnet): every place that tells the agent about
+    `tasks verify` says to stage the change before it — a `git add` or a code-root commit after the run changes the key,
+    so the close runs the contract again — and none asks for "no edit until the close", which the gates' own order (the
+    map after Verify, review fixes after it) cannot keep (its impl round 1, opus and sonnet)."""
+
+    def sites(self):
+        from tasks.template import cli_reference, usage_text
+        yield "CLAUDE.md.template", (_PLAYBOOK / "scripts" / "CLAUDE.md.template").read_text(encoding="utf-8")
+        yield "cli_reference", cli_reference()
+        yield "usage_text", usage_text()
+        yield "docs/cli.md", (_HERE.parent / "docs" / "cli.md").read_text(encoding="utf-8")
+
+    @staticmethod
+    def entry(text):
+        """The `tasks verify` entry that says to stage: its line, with the usage lines' continuation lines above it."""
+        lines = text.splitlines()
+        for i, ln in enumerate(lines):
+            if "stage the change" in ln:
+                j = i
+                while j > 0 and "verify [<N>]" not in lines[j] and "tasks verify" not in lines[j]:
+                    j -= 1
+                return " ".join(lines[j:i + 1])
+        return ""
+
+    def test_each_says_to_stage_first_and_what_a_later_edit_costs(self):
+        for name, text in self.sites():
+            line = self.entry(text)
+            with self.subTest(site=name):
+                self.assertIn("verify", line)
+                self.assertIn("stage the change", line)
+                self.assertIn("code_roots", line)
+                self.assertRegex(line, r"later edit|edit that has to come later")
+                self.assertNotIn("edit nothing", line)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
