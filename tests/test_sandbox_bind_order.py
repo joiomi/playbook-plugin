@@ -54,6 +54,16 @@ class BindOrder(unittest.TestCase):
                         "/tmp rw bind must come BEFORE the project bind, or a "
                         "/tmp-resident project is re-exposed writable")
 
+    def test_the_broad_writable_roots_are_the_writable_binds_before_the_project(self):
+        """Task 262's impl round 3 (sol): the outage probe's exposure check reads `broad_writable_roots()`, so it must be
+        exactly what the sandbox binds writable whatever the project, in its order."""
+        from provider.sandbox import broad_writable_roots
+        proj = str(Path(tempfile.mkdtemp()).resolve())
+        argv = self._argv(proj)
+        end = bind_index(argv, proj)
+        rw = [argv[i + 1] for i in range(end) if argv[i] == "--bind" and argv[i + 1] == argv[i + 2]]
+        self.assertEqual(rw, [str(p) for p in broad_writable_roots()])
+
     def test_project_is_ro_bound_in_judge_mode(self):
         proj = str(Path(tempfile.mkdtemp()).resolve())
         argv = self._argv(proj, writable=False)

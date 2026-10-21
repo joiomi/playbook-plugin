@@ -423,6 +423,13 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
         R._PB_JOURNAL_MOD = None
         R._PB_JOURNAL_LOADED = False
         _pin_clock(self)
+        # the project lives under /tmp, which every sandbox leaves writable: the probe would never run here (task
+        # 262's impl round 3) — its exposure check reads a place that covers none of it, unless a test says otherwise
+        self._writable = [Path(self._tmp.name) / "rw"]
+        from unittest import mock
+        roots = mock.patch("provider.sandbox.broad_writable_roots", lambda home=None: list(self._writable))
+        roots.start()
+        self.addCleanup(roots.stop)
 
     def _panel(self, models, judge, codex_available=False, real_tamper_guard=False):
         import contextlib
@@ -748,6 +755,54 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
         self.assertIn("Seated claude:claude-fable-5", out)
         self.assertEqual(self.calls.count("claude-fable-5"), 2, "the probe, then the seat's review")
         self.assertEqual(so.current_outages(self.d / ".agent"), {})
+
+    def test_no_probe_when_the_project_lies_where_every_sandbox_leaves_writing_open(self):
+        """Task 262's impl round 3 (sol, Important): the probe runs in a throwaway folder, so the sandbox binds and
+        guards that folder, not the project — a project under /tmp (or an agent's home state) was writable to it, its
+        `.git/hooks` included, and the tamper check reads HEAD and porcelain only. Such a project is not probed."""
+        self._writable = [self.d.parent]
+        self._record("claude:claude-fable-5")
+        code, out, _ = self._panel(self.CLAUDE, self._judge())
+        self.assertEqual(self.calls.count("claude-fable-5"), 0, out)
+        self.assertIn("Skipped out of credit: claude:claude-fable-5", out)
+        said = next((ln for ln in out.splitlines() if "Not probed" in ln), "")
+        self.assertIn(str(self.d.resolve()), said)
+        self.assertIn(str(self.d.parent.resolve()), said)
+        self.assertIn("claude:claude-fable-5", so.current_outages(self.d / ".agent"))
+        self.assertEqual(self._spend(), [])
+
+    def test_no_probe_when_a_git_source_lies_where_every_sandbox_leaves_writing_open(self):
+        """Task 262's impl round 3 (sol): the project's git sources — here `core.hooksPath` — are guarded by a judge's
+        sandbox, not by the probe's; one under a writable place could plant a hook the host runs at its next commit."""
+        rw = Path(self._tmp.name) / "rw"
+        (rw / "hooks").mkdir(parents=True)
+        subprocess.run(["git", "config", "core.hooksPath", str(rw / "hooks")], cwd=self.d, check=True)
+        self._record("claude:claude-fable-5")
+        code, out, _ = self._panel(self.CLAUDE, self._judge())
+        self.assertEqual(self.calls.count("claude-fable-5"), 0, out)
+        self.assertIn(str((rw / "hooks").resolve()), next((ln for ln in out.splitlines() if "Not probed" in ln), ""))
+        self.assertIn("claude:claude-fable-5", so.current_outages(self.d / ".agent"))
+
+    def test_no_probe_when_git_cannot_say_where_its_sources_are(self):
+        """Task 262's impl round 3 (sol): what git could not answer cannot be shown to lie outside — not probed."""
+        from unittest import mock
+        self._record("claude:claude-fable-5")
+        with mock.patch("provider.sandbox._git_sources", lambda p: ([], [], [], [str(self.d.resolve())])):
+            code, out, _ = self._panel(self.CLAUDE, self._judge())
+        self.assertEqual(self.calls.count("claude-fable-5"), 0, out)
+        self.assertIn("Not probed", out)
+
+    def test_no_probe_when_the_containment_check_raises(self):
+        """Task 262's impl round 3: a check that cannot run is not a pass — the seat is not probed."""
+        from unittest import mock
+
+        def boom(p):
+            raise OSError("no git")
+        self._record("claude:claude-fable-5")
+        with mock.patch("provider.sandbox._git_paths_to_protect", boom):
+            code, out, _ = self._panel(self.CLAUDE, self._judge())
+        self.assertEqual(self.calls.count("claude-fable-5"), 0, out)
+        self.assertIn("containment could not be checked (OSError)", out)
 
     def test_no_probe_when_the_round_history_cannot_be_read(self):
         """Opus (Minor), astra: a cap peek that raised probed as usual, and the locked check then refused with

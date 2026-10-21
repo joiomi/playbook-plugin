@@ -105,6 +105,31 @@ def _probe_recorded_seat(adapter_cls, variant, label):
     return True, "answered", out, status
 
 
+def _probe_exposes(project_path) -> str:
+    """Why an outage probe would be less contained than a judge here, or "" (task 262's impl round 3, sol). The probe
+    runs in a throwaway folder, so its sandbox binds and guards that folder: the project, its git metadata and the
+    places git takes its hooks and settings from stay read-only only through the sandbox's read-only root — not under
+    what every agent's sandbox leaves writable (`sandbox.broad_writable_roots`: /tmp, the agents' home state), and not
+    where git could not be asked. There no seat is probed: it stays out until its reset or `tasks models enable`, as
+    before task 262. What cannot be checked is not probed."""
+    try:
+        from provider import sandbox as _sb
+        project = Path(project_path).resolve()
+        sources, absent, links, unanswered = _sb._git_sources(project)
+        if unanswered:
+            return f"git could not say where {unanswered[0]} takes its hooks and settings from"
+        places = [project, *(Path(p) for p in _sb._git_paths_to_protect(project)),
+                  *(Path(p) for p in (*sources, *absent, *links))]
+        roots = [Path(r).resolve() for r in _sb.broad_writable_roots()]
+        for place in places:
+            for root in roots:
+                if _sb._covers(root, place.resolve()):
+                    return f"{place.resolve()} lies under {root}, which every agent's sandbox leaves writable"
+        return ""
+    except Exception as e:                      # noqa: BLE001 — what cannot be checked is not probed
+        return f"the probe's containment could not be checked ({type(e).__name__})"
+
+
 def _print_probes_spent(n: int) -> None:
     """A refusal after the probes says they ran — another review of the task under way, or the round cap reached
     while they ran (task 262's impl round 1, astra and sol): its own "Nothing was spent" holds for the panel only."""
@@ -1941,6 +1966,7 @@ def _cmd_panel_review(cmd_args):
         _no_probes = bool(requested_seats) and _can < _need
     _probe_spend = []
     _probe_before = None
+    _exposed = None
     if _outages:
         _live = []
         for _cls, _variant in judges:
@@ -1949,6 +1975,12 @@ def _cmd_panel_review(cmd_args):
             if _o is None:
                 _live.append((_cls, _variant))
                 continue
+            if _o.get("until") and not _no_probes and _exposed is None:
+                # task 262's impl round 3 (sol): the probe's sandbox guards its throwaway folder, not the project
+                _exposed = _probe_exposes(project_path)
+                if _exposed:
+                    print(f"  Not probed: {_exposed} — a seat recorded out of credit stays out here.", flush=True)
+                    _no_probes = True
             if _o.get("until") and not _no_probes:
                 # task 262: an outage with a reset time is an account's state, and the owner may have switched
                 # accounts since — ask the seat once; one with no reset time waits for a top-up and `enable`.
