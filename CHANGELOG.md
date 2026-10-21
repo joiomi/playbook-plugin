@@ -73,8 +73,9 @@ it out, and the panel says what the probe saw. An outage with no reset time (gro
 round cap refuses spends no probe. Its impl round 1 made the probe safe:
 - it runs from a throwaway folder, so a claude seat reads none of the project's CLAUDE.md or memory under its $0.5 budget;
   since that folder is all its sandbox guards, no seat is probed where the project, its git metadata or its git
-  sources lie under what every sandbox leaves writable (`/tmp`, the agents' home state) or git cannot be asked —
-  the seat stays out as before (its impl round 3, sol);
+  sources lie under what every sandbox leaves writable (`/tmp`, the agents' home state), git cannot be asked, or a
+  git source file has another hard-link name this user could write through — the seat stays out as before (its
+  impl round 3 and post-panel run 1, sol);
 - the project is snapshotted before the first probe and checked after each one: a change voids the panel before any
   review is called, as the tamper guard voids a review (a probe ran before the panel's own snapshot);
 - its clear removes only the entry the probe saw and is dated at the probe's start, so a newer outage recorded by

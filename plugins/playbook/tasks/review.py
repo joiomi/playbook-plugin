@@ -110,14 +110,22 @@ def _probe_exposes(project_path) -> str:
     runs in a throwaway folder, so its sandbox binds and guards that folder: the project, its git metadata and the
     places git takes its hooks and settings from stay read-only only through the sandbox's read-only root — not under
     what every agent's sandbox leaves writable (`sandbox.broad_writable_roots`: /tmp, the agents' home state), and not
-    where git could not be asked. There no seat is probed: it stays out until its reset or `tasks models enable`, as
-    before task 262. What cannot be checked is not probed."""
+    where git could not be asked, and not a source file with another hard-link name this user could write through —
+    a read-only bind on one name keeps no other name read-only, so a judge's sandbox refuses it too (`build_bwrap_argv`;
+    the post-panel judge's run 1, sol). There no seat is probed: it stays out until its reset or `tasks models enable`,
+    as before task 262. What cannot be checked is not probed."""
     try:
         from provider import sandbox as _sb
         project = Path(project_path).resolve()
         sources, absent, links, unanswered = _sb._git_sources(project)
         if unanswered:
             return f"git could not say where {unanswered[0]} takes its hooks and settings from"
+        for source in dict.fromkeys(str(Path(s).resolve()) for s in sources):
+            info = os.stat(source)
+            if (os.path.isfile(source) and info.st_nlink > 1
+                    and (info.st_uid == os.geteuid() or os.access(source, os.W_OK))):
+                return (f"git takes hooks or settings from {source}, which has {info.st_nlink} hard links — "
+                        "another name for it may be writable")
         places = [project, *(Path(p) for p in _sb._git_paths_to_protect(project)),
                   *(Path(p) for p in (*sources, *absent, *links))]
         roots = [Path(r).resolve() for r in _sb.broad_writable_roots()]
