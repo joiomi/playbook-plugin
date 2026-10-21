@@ -1222,6 +1222,74 @@ class TheRollbackRecipe(TheOracle):
         self.assertEqual(got, want)                         # every line, in order, the spooled ones last
 
 
+    @staticmethod
+    def steps(script: str) -> "list[str]":
+        """The recipe's top-level statements, a `for`/`if`/`case`/`while` block as one: the places a run can stop."""
+        out, cur, depth = [], [], 0
+        for ln in script.strip("\n").splitlines():
+            if not cur and (not ln.strip() or ln.lstrip().startswith("#")):
+                continue
+            cur.append(ln)
+            word = ln.strip().split(" ", 1)[0].rstrip(";")
+            if not ln.startswith((" ", "\t")) and word in ("for", "if", "while", "case"):
+                depth += 1
+            if not ln.startswith((" ", "\t")) and word in ("done", "fi", "esac"):
+                depth -= 1
+            if depth == 0:
+                out.append("\n".join(cur))
+                cur = []
+        if cur:
+            out.append("\n".join(cur))
+        return out
+
+    def test_a_run_stopped_after_any_step_and_run_again_gives_the_same_file(self):
+        """Task 275's R1 (sol, Important, reproduced): stopped between moving the merged file over the live one and
+        removing the archives, a second run merged those archives again — every archived line twice. Stopped after any
+        top-level step and run again, the recipe must leave what one whole run leaves."""
+        import random
+        import shutil
+        from tests._bashcheck import bash_or_skip
+        bash = bash_or_skip()
+        rnd = random.Random(11)
+        b = self.lane("b")
+        for r in self.stream(rnd)[:400]:
+            self.pbj._write_record(b, r)
+            if rnd.random() < 0.05:
+                self.pbj.rotate_enforcement(b, limit=4096)
+        self.pbj._spool_line(b / "journal", _line({"ts": _iso(time.time()), "session_id": "pid-1", "hook": "task-gate",
+                                                   "decision": "block", "reason": "late"}), "enforcement.jsonl", tag=True)
+        src = b / "journal"
+        self.assertGreater(len(list(src.glob("enforcement.jsonl.archived-*"))), 2)
+        recipe = self.recipe()
+        steps = self.steps(recipe)
+        self.assertGreater(len(steps), 3)
+
+        def run(d, script):
+            return subprocess.run([bash, "-c", script], cwd=d, capture_output=True, text=True, timeout=60)
+
+        whole = Path(tempfile.mkdtemp(dir=self.root)) / "j"
+        shutil.copytree(src, whole)
+        self.assertEqual(run(whole, recipe).returncode, 0)
+        want = (whole / "enforcement.jsonl").read_text()
+        for k in range(1, len(steps)):
+            with self.subTest(stopped_after=steps[k - 1].splitlines()[0][:60]):
+                d = Path(tempfile.mkdtemp(dir=self.root)) / "j"
+                shutil.copytree(src, d)
+                run(d, "\n".join(steps[:k]))               # stopped there (a step may fail on its own: set -e)
+                r = run(d, recipe)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertEqual((d / "enforcement.jsonl").read_text(), want)
+                self.assertEqual(sorted(p.name for p in d.iterdir() if p.name.startswith("enforcement.jsonl")),
+                                 ["enforcement.jsonl"])
+        # … and stopped inside its build: a partial `.merging` (and `.all`) left, which the next run writes anew
+        d = Path(tempfile.mkdtemp(dir=self.root)) / "j"
+        shutil.copytree(src, d)
+        (d / "enforcement.jsonl.all").write_text(want[: len(want) // 3])
+        (d / "enforcement.jsonl.merging").write_text(want[: len(want) // 2])
+        r = run(d, recipe)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual((d / "enforcement.jsonl").read_text(), want)
+
 class ImplRoundOneFixes(_Archives):
     """Impl round 1's findings (Q1-Q16 at the end of judge.md), each red before its fix."""
 

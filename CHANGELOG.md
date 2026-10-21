@@ -15,40 +15,44 @@ instead of losing its vote at the hard limit (task 261; its note is playbook's o
 cut off mid-review is a failed seat, not a whole review, and its account-limit line is found among several error lines
 (tasks 269, 270, 272). The agent's recorder marks what a session's end left unread with the lane lock free too, a
 subagent file that appeared late included (tasks 265, 268). The CLAUDE.md block tells the agent the order that lets the
-close reuse a green verify — stage the change before `tasks verify` (tasks 272-274). The suite has 5,909 tests (5,706 at
-1.6.6); CI is the same two Linux lanes. The guarantee ledger has 135 rows, 122 verified, as at 1.6.6, and no known
-violation. The live gauntlet on this release: 18 PASS, 5 WAITING (the grok rows: its account is out of credit), 0 FAIL.
+close reuse a green verify — stage the change before `tasks verify` (tasks 273, 274). The suite has 5,909 tests (5,706
+at 1.6.6); CI is the same two Linux lanes. The guarantee ledger has 135 rows, 122 verified — the same counts as 1.6.6 —
+and no known violation. The live gauntlet on this release: 18 PASS, 5 WAITING (the grok rows: its account is out of
+credit), 0 FAIL.
 
 **Upgrading:** `/playbook:upgrade`, then restart every Claude Code session, then `/playbook:init` in each project: the
 CLAUDE.md block's verify sentence changed (task 273), and init rewrites the block in place: on a project 1.6.6 set up it
 changed that one line and nothing else (measured; its backups go to `.agent/backups/`, as in 1.6.6). `hooks.json` is
-unchanged since 1.6.6. The first hook run on an `enforcement.jsonl` over 20 MB rotates it (0.36 s for 20 MB, measured in
-task 257). From 1.6.5 or earlier, 1.6.6's upgrade notes apply first.
+unchanged since 1.6.6. After the upgrade, the agent recorder (at a turn's end or a session's end) or a `tasks`
+transition rotates an `enforcement.jsonl` over 20 MB (0.36 s for 20 MB, measured in task 257). From 1.6.5 or earlier,
+1.6.6's upgrade notes apply first.
 
 **Measured before the release**, in temporary folders: on a project 1.6.6's `/playbook:init` set up, with a task 1.6.6
 left in flight, 1.6.7's `doctor` (14 of 14 checks), `bootstrap` and `status` ran clean; its close, with the project's
 `enforcement.jsonl` filled past 21 MB, rotated the journal on its own append — one archive and its index, a live file of
-274 bytes, no line lost (43,002 lines before, 43,007 after: the close's own records and the horizon line) — and wrote
+274 bytes, no line lost (43,002 lines before, 43,006 after: the close's own records and the horizon line) — and wrote
 the closure's `numbers.json`. 1.6.7's `/playbook:init` then changed one line of the project: the CLAUDE.md block's
 verify sentence.
 
 **Going back** to 1.6.6 (`88074a1`): in the release clone the marketplace reads, `git -C <clone> checkout 88074a1`, then
-`claude plugin marketplace update playbook-x-marketplace` and `claude plugin update playbook@playbook-x-marketplace`,
-then restart every Claude Code session and check that `claude plugin list` says 1.6.6. 1.6.6 reads only the live
-`enforcement.jsonl`: its recorder takes the carried positions as ordinary records, and its numbers miss what the
-archives hold; to make one file again first, `docs/enforcement-journal.md`, "Going back to one file". Measured on a copy
-of a project 1.6.7 rotated and set up: 1.6.6's `doctor`, `bootstrap`, `list`, `status` and `numbers` ran clean and left
-`numbers.json` untouched; 1.6.6's `/playbook:init` puts the old verify sentence back (the block is init's); the recipe
-made one file of 43,005 lines — every line of the archive and the live file but the carries and the horizon — which
-1.6.6's `numbers` read; back on 1.6.7, `doctor`, `numbers` and `/playbook:init` (the new sentence again) ran clean.
-Before the next `/playbook:upgrade`, `git -C <clone> checkout main`.
+`claude plugin marketplace update playbook-x-marketplace` and `claude plugin update playbook@playbook-x-marketplace` (a
+downgrade this way is not measured), then restart every Claude Code session and check that `claude plugin list` says
+1.6.6. 1.6.6 reads only the live `enforcement.jsonl`: its recorder takes the carried positions as ordinary records, and
+its numbers miss what the archives hold; to make one file again first, `docs/enforcement-journal.md`, "Going back to one
+file". Measured on a copy of a project 1.6.7 rotated and set up: 1.6.6's `doctor`, `bootstrap`, `list`, `status` and
+`numbers` ran clean and left `numbers.json` untouched; 1.6.6's `/playbook:init` puts the old verify sentence back (the
+block is init's); the recipe made one file of 43,005 lines — every line of the archive and the live file but the carries
+and the horizon — which 1.6.6's `numbers` read. 1.6.6's agent recorder, on a journal 1.6.7 rotated, read on from the
+carried position: six calls written, six counted across the archive and the live file, none twice. Back on 1.6.7,
+`doctor`, `numbers` and `/playbook:init` (the new sentence again) ran clean. Before the next `/playbook:upgrade`, `git
+-C <clone> checkout main`.
 
-**The order that lets the close reuse a green verify** — task 273 (the owner, 2026-10-20: "Reparațiile mici din
-PLAN"): the CLAUDE.md template, `tasks verify`'s usage lines and docs/cli.md now say to stage the change before
-`tasks verify` (in each `code_roots` repository, commit it and stage its gitlink where the outer repository tracks
-one) — a `git add` of the change or a code-root commit after the run changes the key, and so does any later edit
-outside the task's own records (a mind-map update, a doc, a review fix); then the close runs the contract again (PLAN.md "From task 272": 5 of 91 runs were reused over this repository's 30 closures
-with numbers).
+**The order that lets the close reuse a green verify** — task 273 (the owner, 2026-10-20: "Reparațiile mici din PLAN"):
+the CLAUDE.md template, `tasks verify`'s usage lines and docs/cli.md now say to stage the change before `tasks verify`
+(in each `code_roots` repository, commit it and stage its gitlink where the outer repository tracks one) — a `git add`
+of the change or a code-root commit after the run changes the key, and so does any later edit outside the task's own
+records (a mind-map update, a doc, a review fix); then the close runs the contract again (PLAN.md "From task 272": 5 of
+91 runs were reused over this repository's 30 closures with numbers).
 
 **A claude judge cut off is a failed seat; its account limit is found among several errors** — task 269 (PLAN.md "From
 task 232"): a `subtype: success` result whose `terminal_reason` is not `completed`, or whose `stop_reason` is
@@ -86,10 +90,10 @@ took the lock (PLAN.md "From task 265" (a), (d), (f); "From task 266" (a)-(c)).
 
 **agy's soft-deadline note is playbook's own line; a soft stop never claims the hard one** — task 264 (the owner,
 2026-10-20: "Reparațiile mici din PLAN"):
-- the `**[playbook] Soft deadline:**` note rode inside the judge's quoted text, where a judge could write the same words.
-  It is now carried beside the review and written by the CLI: unquoted in the seat's block in judge.md, and for the
-  single judge before its review, in its log's header (`[soft deadline] …`) and as the line before its quoted findings.
-  A judge's own copy of the words stays quoted (PLAN.md "From task 261" (b));
+- the `**[playbook] Soft deadline:**` note rode inside the judge's quoted text, where a judge could write the same
+  words. It is now carried beside the review and written by the CLI: unquoted in the seat's block in judge.md, and for
+  the single judge before its review, in its log's header (`[soft deadline] …`) and as the line before its quoted
+  findings. A judge's own copy of the words stays quoted (PLAN.md "From task 261" (b));
 - a single judge stopped at its soft deadline and not resumed said both that and "hit hard timeout after …"; its
   message, partial log and spend record now say only where it stopped (PLAN.md "From task 261" (d)).
 
@@ -105,9 +109,9 @@ took the lock (PLAN.md "From task 265" (a), (d), (f); "From task 266" (a)-(c)).
   under the full suite's load: PLAN.md "From task 261" (c)).
 
 **The agy judge keeps its vote at the soft deadline** — task 261 (the owner, 2026-10-20: "pai vezi sa il rezolvi pe agy
-inainte sa mai pornesti paneluri. e important!"). agy has no clock, so the soft deadline in the judge's prompt did nothing
-for it: 6 of its 38 runs between 2026-10-18 and the evening of 10-20 reached the 1,200 s hard limit, each holding its
-panel 20 minutes and losing its vote. Now, for agy only (panel seat and single judge):
+inainte sa mai pornesti paneluri. e important!"). agy has no clock, so the soft deadline in the judge's prompt did
+nothing for it: 6 of its 38 runs between 2026-10-18 and the evening of 10-20 reached the 1,200 s hard limit, each
+holding its panel 20 minutes and losing its vote. Now, for agy only (panel seat and single judge):
 - its call is cut at the soft deadline (`--print-timeout`, when that sits at least 90 s below the hard one);
 - the cut turn is resumed in the same conversation (`--conversation <id>`), told that time is up, to call no tool and to
   write its findings now, from what it has read. Measured live: a 150 s cut and an 18 s resume gave a review in the
@@ -118,29 +122,28 @@ panel 20 minutes and losing its vote. Now, for agy only (panel seat and single j
   the conversation, which a person can resume by hand.
 
 A cut turn in which agy stated an error is not resumed, a resume that fails saying why fails with agy's words, every
-`init` must name the pinned model, and the resumed call must stand on its own stream. One answered agy run in 126 (2026-10-14 to the evening of 10-20) had ended between soft and hard; it
-would now be cut too.
+`init` must name the pinned model, and the resumed call must stand on its own stream. One answered agy run in 126
+(2026-10-14 to the evening of 10-20) had ended between soft and hard; it would now be cut too.
 
-**The enforcement journal rotates** — task 257 (the owner, 2026-10-19: "Da, în Faza B (Recomandat)"). `enforcement.jsonl`
-never rotated, and three readers read it whole or scan it backwards: the close's numbers within 5 s, the agent recorder
-at each turn's end (a new transcript past its 32 MiB scan got a seed, its first turn uncounted), and the bootstrap's
-panel health. Now, like `hooks.jsonl`, past 20 MB the live file becomes an archive
-(`enforcement.jsonl.archived-<stamp>-<epoch>-<seq>`, read in its sequence, with a `.tasks` index of the task numbers
-it names and its size),
-compressed once idle for 10 minutes, every archive kept. The new live file starts with a horizon line and each
-transcript's newest read position, so the recorder reads on exactly where it stopped; positions older than 30 days are
-not carried, and a transcript begun before that horizon gets a seed instead of being counted again. Every append holds
-`journal/enforcement.lock` shared, the rotation exclusively (the owner's "Lacăt la fiecare rând"); a record that cannot
-have it goes to a spool carrying its own id, merged once by the next pass. The close's numbers read only the archives
-whose index names the task; the retro reads all of them; the dashboard those since its window's baseline. Measured on
-this repo's laptop: rotating 20 MB 0.36 s, compressing it 0.22 s, a pass with nothing to do 150 µs; the recorder's scan
-for a transcript 7 ms after a rotation (206 ms on an unrotated 20 MB file); the close's read with 10 compressed
-archives 0.13 s for a task in the live file, 0.76 s for one begun in the oldest; a hook run that writes a record, median
-+2.3 ms for the lock. Proven by an oracle — random journals rotated at random points answer every reader exactly as
-unrotated (12 seeds, up to 69 archives, one task over 12 files) — and a stress run of real bash and python writers
-against a rotator at 2 KiB with compression immediate (every record exactly once). Known limits: appends with no pause
-between them postpone a rotation (never a loss); a reopen in the same second as a close whose record waited over 5 s
-for the lock may be read first; a transcript resumed after 30 days idle gets a seed for its first turn back. Going
+**The enforcement journal rotates** — task 257 (the owner, 2026-10-19: "Da, în Faza B (Recomandat)").
+`enforcement.jsonl` never rotated, and three readers read it whole or scan it backwards: the close's numbers within 5 s,
+the agent recorder at each turn's end (a new transcript past its 32 MiB scan got a seed, its first turn uncounted), and
+the bootstrap's panel health. Now, like `hooks.jsonl`, past 20 MB the live file becomes an archive
+(`enforcement.jsonl.archived-<stamp>-<epoch>-<seq>`, read in its sequence, with a `.tasks` index of the task numbers it
+names and its size), compressed once idle for 10 minutes, every archive kept. The new live file starts with a horizon
+line and each transcript's newest read position, so the recorder reads on exactly where it stopped; positions older than
+30 days are not carried, and a transcript begun before that horizon gets a seed instead of being counted again. Every
+append holds `journal/enforcement.lock` shared, the rotation exclusively (the owner's "Lacăt la fiecare rând"); a record
+that cannot have it goes to a spool carrying its own id, merged once by the next pass. The close's numbers read only the
+archives whose index names the task; the retro reads all of them; the dashboard those since its window's baseline.
+Measured on this repo's laptop: rotating 20 MB 0.36 s, compressing it 0.22 s, a pass with nothing to do 150 µs; the
+recorder's scan for a transcript 7 ms after a rotation (206 ms on an unrotated 20 MB file); the close's read with 10
+compressed archives 0.13 s for a task in the live file, 0.76 s for one begun in the oldest; a hook run that writes a
+record, median +2.3 ms for the lock. Proven by an oracle — random journals rotated at random points answer every reader
+exactly as unrotated (12 seeds, up to 69 archives, one task over 12 files) — and a stress run of real bash and python
+writers against a rotator at 2 KiB with compression immediate (every record exactly once). Known limits: appends with no
+pause between them postpone a rotation (never a loss); a reopen in the same second as a close whose record waited over 5
+s for the lock may be read first; a transcript resumed after 30 days idle gets a seed for its first turn back. Going
 back: 1.6.6 reads only the live file — its recorder takes the carried positions as ordinary records (no transcript is
 read twice), and its numbers show a carry or horizon line inside a closure as an `agent ?` row with zero calls; to make
 one file again before going back, `docs/enforcement-journal.md`, "Going back to one file" (tested).
@@ -165,6 +168,8 @@ reader drops as an exact duplicate.
 
 ### Known limitations
 
+- With the lane lock free at a session's end, a transcript the host rewrote in place to the same length after the
+  last read is not marked unread (the check keeps byte offsets only; never observed).
 - A seat recorded out of credit with no reset time — a codex workspace out of credits, grok's 402 — stays skipped until
   `tasks models enable <seat>`, even after it has recovered (one with a reset time comes back by itself then). A check
   of such a seat before a panel, run inside the judges' own sandbox, is planned; task 262's version, which ran outside
