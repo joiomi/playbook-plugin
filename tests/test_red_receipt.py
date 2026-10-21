@@ -575,6 +575,202 @@ class TheRun(Project):
         self.assertEqual(last, "y" * 200)
 
 
+class RoundOne(Project):
+    """Impl round 1's findings (task 280), each red before its fix."""
+
+    def test_a_linked_base_folder_is_never_written_through(self):
+        # row 32 (GRAVE, codex Critical): the base's `tests` is a link to a real folder; the working tree made it a
+        # directory — the overlay must replace the link inside the copy, never write or unlink through it
+        outside = Path(tempfile.mkdtemp(prefix="pb280-shared-", dir="/var/tmp"))
+        self.addCleanup(shutil.rmtree, outside, True)
+        (outside / "keep.txt").write_text("real\n", encoding="utf-8")
+        (outside / "test_old.py").write_text("real test\n", encoding="utf-8")
+        shutil.rmtree(self.code / "tests")
+        os.symlink(str(outside), self.code / "tests")
+        self.g("add", "-A", cwd=self.code)
+        self.g("commit", "-qm", "tests is a link", cwd=self.code)
+        self.new_task()
+        (self.code / "tests").unlink()
+        (self.code / "tests").mkdir()
+        (self.code / "tests" / "__init__.py").write_text("", encoding="utf-8")
+        (self.code / "tests" / "test_old.py").write_text("print('new')\n", encoding="utf-8")
+        self.set_contract([("1", "normal", "one", "`test -f code/tests/__init__.py`")])
+        r = self.cli("red")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertEqual(sorted(p.name for p in outside.iterdir()), ["keep.txt", "test_old.py"])
+        self.assertEqual((outside / "test_old.py").read_text(encoding="utf-8"), "real test\n")
+        self.assertEqual(self.receipt_lines()[0]["status"], "green")      # the base copy got the directory
+
+    def test_a_live_project_under_tmp_is_not_writable_from_a_row(self):
+        # row 33 (GRAVE, agy + codex): this project lives under /tmp, which the containment keeps writable
+        if not shutil.which("bwrap"):
+            self.skipTest("bubblewrap is not installed")
+        from provider import sandbox
+        if sandbox.is_sandboxed():
+            self.skipTest("already inside a sandbox: a nested one cannot start")
+        self.assertTrue(str(self.d).startswith("/tmp/"), self.d)
+        self.new_task()
+        target = self.code / "src.py"
+        before = target.read_text(encoding="utf-8")
+        self.set_contract([("1", "hostile", "a write to the live project", f"`echo gone > {target}; exit 3`")])
+        self.cli("red")
+        self.assertEqual(target.read_text(encoding="utf-8"), before)
+        line = self.receipt_lines()[0]
+        self.assertTrue(line["contained"])
+
+    def test_each_side_and_row_gets_a_fresh_home_and_copy(self):
+        # row 34 (codex I): a marker one side leaves must not make the other side pass
+        self.new_task()
+        cmd = '`if test -e "$HOME/seen" \\|\\| test -e seen; then exit 0; else touch "$HOME/seen" seen; exit 1; fi`'
+        self.set_contract([("1", "hostile", "marker", cmd), ("2", "hostile", "marker again", cmd)])
+        self.cli("red")
+        lines = self.receipt_lines()
+        self.assertEqual([(x["status"], x["now"]["status"], x["verdict"]) for x in lines],
+                         [("red", "red", "broken"), ("red", "red", "broken")])
+
+    def test_the_overlay_and_digest_come_from_the_frozen_copy(self):
+        # row 35 (codex I): the tests laid over the base are the ones the "now" copy holds, never the live files
+        from tasks import red
+        src = self.d / "frozen"
+        dst = self.d / "basecopy"
+        (src / "code" / "tests").mkdir(parents=True)
+        (src / "code" / "tests" / "test_a.py").write_text("frozen\n", encoding="utf-8")
+        (src / "code" / "src.py").write_text("code\n", encoding="utf-8")
+        (src / ".agent" / "tests").mkdir(parents=True)
+        (src / ".agent" / "tests" / "test_x.py").write_text("record\n", encoding="utf-8")
+        dst.mkdir()
+        n = red._overlay_from_copy(src, dst, {}, ["code"])
+        self.assertEqual(n, 1)
+        self.assertEqual((dst / "code" / "tests" / "test_a.py").read_text(encoding="utf-8"), "frozen\n")
+        self.assertFalse((dst / "code" / "src.py").exists())
+        self.assertFalse((dst / ".agent").exists())
+        d1 = red._digest_copy(src, {}, ["code"])
+        (src / "code" / "tests" / "test_a.py").write_text("edited\n", encoding="utf-8")
+        self.assertNotEqual(red._digest_copy(src, {}, ["code"]), d1)
+
+    def test_the_base_is_captured_before_the_activation_is_published(self):
+        # row 36 (codex I): nothing can act as this task's session before its base exists
+        from unittest import mock
+        from tasks import lifecycle
+        self.new_task(activate=False)
+        seen = []
+        real = lifecycle._activate_status_then_publish
+
+        def spy(task_file, *a, **k):
+            seen.append((Path(task_file).parent / "base.json").exists())
+            return real(task_file, *a, **k)
+        env = {k: v for k, v in self.env().items()}
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(lifecycle, "_activate_status_then_publish",
+                                                                              spy):
+            cwd = os.getcwd()
+            os.chdir(self.d)
+            try:
+                lifecycle.cmd_work(["1"])
+            finally:
+                os.chdir(cwd)
+        self.assertEqual(seen, [True])
+
+    def test_sigterm_cleans_up_like_an_interrupt(self):
+        # row 37 (opus I)
+        self.new_task()
+        tag = f"pb280long{os.getpid()}x{time.time_ns()}"          # made at run time: no other command line holds it
+        self.set_contract([("1", "normal", "quick", "`exit 1`"),
+                           ("2", "normal", "long", f"`bash -c 'exec -a {tag} sleep 30'`")])
+        before = self.task_md.read_bytes()
+        p = subprocess.Popen([sys.executable, "-m", "tasks.cli", "red"], cwd=self.d, env=self.env(),
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        copy = None
+        for line in p.stdout:
+            m = re.search(r"base copy: (\S+)", line)
+            if m:
+                copy = Path(m.group(1))
+            if "row 1" in line:
+                break
+        time.sleep(1)
+        p.send_signal(signal.SIGTERM)
+        p.communicate(timeout=60)
+        self.assertIsNotNone(copy)
+        self.assertFalse(copy.exists())
+        self.assertEqual(self.task_md.read_bytes(), before)
+        time.sleep(0.5)
+        left = subprocess.run(["pgrep", "-f", tag], capture_output=True, text=True).stdout.strip()
+        self.assertEqual(left, "", "the row's process outlived the run")
+
+    def test_a_row_the_command_guard_blocks_is_refused(self):
+        # row 38 (sonnet I): a row's command meets the agent's destructive-command interlock
+        self.new_task()
+        marker = self.d / "ran.txt"
+        self.set_contract([("1", "hostile", "a force push", f"`touch {marker} && git push --force origin main`")])
+        r = self.cli("red")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        line = self.receipt_lines()[0]
+        self.assertEqual(line["status"], "refused")
+        self.assertIn("command guard", line["why"])
+        self.assertFalse(marker.exists())
+
+    def test_red_links_bring_an_ignored_dependency_folder(self):
+        # row 39 (opus I): an ignored dependency folder (node_modules, .venv) is in neither copy unless named
+        (self.code / ".gitignore").write_text("deps/\n", encoding="utf-8")
+        (self.code / "deps").mkdir()
+        (self.code / "deps" / "dep.py").write_text("VALUE = 2\n", encoding="utf-8")
+        self.g("add", "-A", cwd=self.code)
+        self.g("commit", "-qm", "ignore deps", cwd=self.code)
+        self.new_task()
+        self.change_code()
+        (self.code / "tests" / "test_dep.py").write_text(
+            "import sys, unittest\nsys.path.insert(0, 'deps')\nimport dep, src\n\n\nclass D(unittest.TestCase):\n"
+            "    def test_dep(self):\n        self.assertEqual(src.f(), dep.VALUE)\n", encoding="utf-8")
+        self.set_contract([("1", "normal", "uses a dependency", "`tests.test_dep`")])
+        self.cli("red")
+        self.assertEqual(self.receipt_lines()[-1]["verdict"], "broken")      # no dependency in either copy
+        self.config(red_links=["code/deps"])
+        self.cli("red")
+        self.assertEqual(self.receipt_lines()[-1]["verdict"], "proved")
+
+    def test_a_child_that_holds_the_pipe_cannot_hang_the_run(self):
+        # row 40 (sonnet Minor): a daemonized child keeps stdout open after its row is killed
+        self.config(red_timeout=2)
+        self.new_task()
+        tag = f"pb280daemon{os.getpid()}x{time.time_ns()}"        # made at run time: no other command line holds it
+        self.set_contract([("1", "hostile", "a daemon", f"`setsid bash -c 'exec -a {tag} sleep 60' & exit 1`")])
+        self.addCleanup(subprocess.run, ["pkill", "-f", tag], capture_output=True)
+        t0 = time.monotonic()
+        r = self.cli("red", timeout=120)
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertLess(time.monotonic() - t0, 60)
+
+    def test_an_unclosed_fence_in_the_receipt_is_refused_cleanly(self):
+        # row 41 (agy Minor): the section writer's ValueError is a refusal, not a traceback
+        self.new_task()
+        self.set_contract([("1", "normal", "one", "`exit 1`")])
+        text = self.task_md.read_text(encoding="utf-8")
+        self.task_md.write_text(text.replace("## Plan Review\n", "## Red receipt\n```\n\n## Plan Review\n", 1),
+                                encoding="utf-8")
+        r = self.cli("red")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("Refused", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_an_escaped_pipe_is_a_pipe_in_the_cell(self):
+        # row 42 (found by mutant N12): a shell `||` is written `\|\|` in the table, and runs as `||`
+        from tasks import red
+        rows, _ = red.parse_contract(_contract([("1", "normal", "or", "`false 0 \\|\\| exit 0`")]))
+        self.assertEqual(rows[0]["test"], "`false 0 || exit 0`")
+        self.new_task()
+        self.set_contract([("1", "normal", "or", "`false 0 \\|\\| exit 0`")])
+        self.cli("red")
+        line = self.receipt_lines()[0]
+        self.assertEqual((line["status"], line["now"]["status"]), ("green", "green"), line)
+
+    def test_the_cli_own_git_calls_ignore_git_dir(self):
+        # row 41 (agy Minor): `red._git` runs in the named repository whatever GIT_DIR the caller has
+        from tasks import red
+        with __import__("unittest").mock.patch.dict(os.environ, {"GIT_DIR": "/nonexistent", "GIT_WORK_TREE": "/x"}):
+            r = red._git(self.code, ["rev-parse", "HEAD"])
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.strip(), self.head(self.code))
+
+
 class TheText(unittest.TestCase):
     def test_the_template_and_guide_name_tasks_red(self):
         # row 20

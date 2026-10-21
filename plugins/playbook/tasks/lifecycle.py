@@ -1860,6 +1860,13 @@ def cmd_work(cmd_args):
             _first_activation = _es280(task_file) == "pending"
         except Exception:                           # noqa: BLE001 — no base is the safe side
             _first_activation = False
+        # the base is captured BEFORE the activation is published (impl round 1, codex): no session can act as
+        # this task — nor edit its code — before its start is recorded. Best-effort: a failure is one line.
+        try:
+            from tasks.red import record_base
+            _wrote, _base_note = record_base(Path(project_path), task_file.parent, task_num, _first_activation)
+        except Exception as _base_err:              # noqa: BLE001 — the activation goes on
+            _base_note = f"note: no base recorded for this task ({_base_err.__class__.__name__}: {_base_err})"
         _activate_status_then_publish(task_file, task_num, _resume_target, _reopen_target,
                                       _pointer_tmp, session_state)
         _record_transition(agent_dir, "work", task_num)
@@ -1881,15 +1888,9 @@ def cmd_work(cmd_args):
     # activated" and is never a liveness signal. Deleting sessions by that
     # mtime is what task 027 fixed; don't reintroduce it.
 
-    # Task 280 (PHASE-B.md item 9b): where the task began — each scope's HEAD and working tree, written once at its
-    # first activation, for `tasks red`. Best-effort: a failure is one line, never a refused activation.
-    try:
-        from tasks.red import record_base
-        _wrote, _note = record_base(Path(project_path), task_file.parent, task_num, _first_activation)
-    except Exception as _base_err:                  # noqa: BLE001 — the activation has already happened
-        _note = f"note: no base recorded for this task ({_base_err.__class__.__name__}: {_base_err})"
-    if _note:
-        print(_note, flush=True)
+    # Task 280 (PHASE-B.md item 9b): where the task began — recorded above, before the activation was published.
+    if _base_note:
+        print(_base_note, flush=True)
 
     # Workflow rules — deferred from bootstrap to task activation
     from tasks.template import workflow_briefing

@@ -49,6 +49,7 @@ HONORED_KEYS = frozenset({
     "merge_verify",               # core.py / merge-verify.py
     "panel_quorum",               # core.py:430
     "panel_required_for",         # core.py:1140
+    "red_links",                  # red.py _links (task 280, impl round 1)
     "red_run",                    # red.py resolve (task 280)
     "red_tests",                  # red.py _is_test_path (task 280)
     "red_timeout",                # red.py cmd_red (task 280)

@@ -17,6 +17,9 @@ receipt yet (part 2, with `tasks numbers` and light's contract).
 - A task not `pending` at its activation (begun before) gets no base, and a failed first capture is final; `tasks red`
   then needs `--base [<scope>=]<commit>`. A collected base tree falls back to its commit only when the base was clean.
 - A one-word command in a test cell reads as a test id (white space marks a command): write `false 0`, not `false`.
+- Each row's command first meets the destructive-command check the agent's own shell meets; a blocked row never runs.
+- Each side of each row runs in a fresh copy and a fresh HOME; under the containment `/tmp` is private, so a live
+  project under `/tmp` cannot be reached. `red_links` gives the copies ignored dependency folders (`node_modules`).
 - Without bubblewrap a row runs uncontained, as `tasks verify` runs the project's command; the receipt says so.
 
 **The test contract: tests first, as the specification** — task 278 (PHASE-B.md item 9a; the owner, 2026-10-21:

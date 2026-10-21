@@ -56,11 +56,17 @@ def _now() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
+_GIT_OVERRIDES = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_COMMON_DIR",
+                  "GIT_NAMESPACE", "GIT_ALTERNATE_OBJECT_DIRECTORIES")
+
+
 def _git(repo: Path, args: "list[str]", *, text: bool = True, timeout: float = 120):
+    """git in `repo` — whatever repository a caller's GIT_DIR / GIT_WORK_TREE names (impl round 1, agy)."""
+    env = {k: v for k, v in os.environ.items() if k not in _GIT_OVERRIDES}
     if text:
         return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, encoding="utf-8",
-                              errors="replace", timeout=timeout)
-    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, timeout=timeout)
+                              errors="replace", timeout=timeout, env=env)
+    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, timeout=timeout, env=env)
 
 
 # ---------------------------------------------------------------------------- the base
@@ -144,12 +150,13 @@ def _load_base(task_dir: Path) -> "dict | None":
 # ---------------------------------------------------------------------------- the contract
 
 def _cells(line: str) -> "list[str]":
+    """A table line's cells; `\\|` is a `|` inside a cell (markdown's escape — a shell `||` is written `\\|\\|`)."""
     inner = line.strip()
     if inner.startswith("|"):
         inner = inner[1:]
-    if inner.endswith("|"):
+    if inner.endswith("|") and not inner.endswith("\\|"):
         inner = inner[:-1]
-    return [c.strip() for c in inner.split("|")]
+    return [c.strip().replace("\\|", "|") for c in re.split(r"(?<!\\)\|", inner)]
 
 
 def parse_contract(text: str) -> "tuple[list[dict] | None, str]":
@@ -243,35 +250,93 @@ def _extract(repo: Path, treeish: str, dest: Path, exclude: "list[str]") -> None
                 target = (dest / m.name).resolve()
                 if target != root and root not in target.parents:
                     raise RuntimeError(f"git archive member outside the copy: {m.name}")
-            tar.extractall(dest)                        # noqa: S202 — each member checked above
+            if hasattr(tarfile, "fully_trusted_filter"):   # each member was checked above; git's links are kept
+                tar.extractall(dest, filter="fully_trusted")
+            else:
+                tar.extractall(dest)                    # noqa: S202 — each member checked above
 
 
-def _overlay_tests(repo: Path, dest: Path, cfg: dict) -> int:
-    """Copy the working tree's test files (tracked or untracked, not ignored) over the base copy; a link stays a
-    link. Returns how many were laid."""
-    r = _git(repo, ["ls-files", "-co", "--exclude-standard", "-z"], text=False)
-    if r.returncode != 0:
-        raise RuntimeError("git ls-files failed in " + str(repo))
+def _scope_of(rel: str, scope_names: "list[str]") -> "tuple[str, str]":
+    """(scope, path inside it) for a path of the project copy: the longest scope name it lies under, else ""."""
+    best = ""
+    for name in scope_names:
+        if name and (rel == name or rel.startswith(name + "/")) and len(name) > len(best):
+            best = name
+    return best, (rel[len(best) + 1:] if best else rel)
+
+
+def _excluded(rel_in_scope: str, exclude: "list[str]") -> bool:
+    for spec in exclude:
+        if spec.startswith(":(exclude)"):
+            p = spec[len(":(exclude)"):].strip("/")
+            if p and (rel_in_scope == p or rel_in_scope.startswith(p + "/")):
+                return True
+    return False
+
+
+def _place(dst_root: Path, rel: str) -> Path:
+    """The path `rel` inside `dst_root`, every ancestor a real directory of the copy: a link or a file in the way is
+    removed (it is the copy's own entry) — so nothing is ever written THROUGH a link the base had (impl round 1,
+    codex Critical). The leaf is cleared too."""
+    parts = rel.split("/")
+    cur = dst_root
+    for comp in parts[:-1]:
+        cur = cur / comp
+        if cur.is_symlink() or (cur.exists() and not cur.is_dir()):
+            cur.unlink()
+        if not cur.exists():
+            cur.mkdir()
+    leaf = cur / parts[-1]
+    if leaf.is_symlink() or leaf.is_file():
+        leaf.unlink()
+    elif leaf.is_dir():
+        shutil.rmtree(leaf)
+    return leaf
+
+
+def _test_files(root: Path, cfg: dict, scope_names: "list[str]", exclude: "list[str]") -> "list[str]":
+    """The test files of a frozen copy, as paths from its root, sorted (a link counts by itself, never entered)."""
+    out = []
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        here = Path(dirpath)
+        names = list(filenames) + [d for d in dirnames if (here / d).is_symlink()]
+        for name in names:
+            rel = (here / name).relative_to(root).as_posix()
+            scope, inner = _scope_of(rel, scope_names)
+            if _excluded(inner, exclude) or not _is_test_path(inner, cfg):
+                continue
+            out.append(rel)
+    return sorted(out)
+
+
+def _overlay_from_copy(src_root: Path, dst_root: Path, cfg: dict, scope_names: "list[str]",
+                       exclude: "list[str] | None" = None) -> int:
+    """Lay the test files of the frozen "now" copy over the base copy — the same snapshot the "now" side runs, so a
+    test edited during the run cannot be one thing on each side (impl round 1, codex). Returns how many were laid."""
+    ex = list(exclude) if exclude else [":(exclude).agent"]
     n = 0
-    for raw in r.stdout.split(b"\0"):
-        if not raw:
-            continue
-        rel = raw.decode("utf-8", "surrogateescape")
-        if not _is_test_path(rel, cfg):
-            continue
-        src = repo / rel
-        if not (src.is_symlink() or src.is_file()):
-            continue                                    # deleted in the working tree: the base's copy stays
-        dst = dest / rel
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        if dst.is_symlink() or dst.exists():
-            dst.unlink()
+    for rel in _test_files(src_root, cfg, scope_names, ex):
+        src = src_root / rel
+        dst = _place(dst_root, rel)
         if src.is_symlink():
             os.symlink(os.readlink(src), dst)
         else:
             shutil.copy2(src, dst)
         n += 1
     return n
+
+
+def _digest_copy(root: Path, cfg: dict, scope_names: "list[str]", exclude: "list[str] | None" = None) -> str:
+    """A digest of the test files laid over the base, read from the frozen copy (a path, then its bytes or a link's
+    target)."""
+    ex = list(exclude) if exclude else [":(exclude).agent"]
+    h = hashlib.sha256()
+    for rel in _test_files(root, cfg, scope_names, ex):
+        p = root / rel
+        h.update(rel.encode("utf-8", "surrogateescape") + b"\0")
+        h.update(os.readlink(p).encode("utf-8", "surrogateescape") if p.is_symlink() else p.read_bytes())
+        h.update(b"\0")
+    return h.hexdigest()[:16]
 
 
 def _tree_exists(repo: Path, tree: str) -> bool:
@@ -345,9 +410,32 @@ def _containment() -> "tuple[bool, str]":
     return True, ""
 
 
-def _argv(bash: str, cmd: str, root: Path, home: Path, contained: bool) -> "list[str]":
+def _argv(bash: str, cmd: str, root: Path, home: Path, contained: bool, private_tmp: bool = False,
+          ro_links: "list[tuple[str, str]] | None" = None) -> "list[str]":
+    """The row's argv. Contained: the judges' bubblewrap launch, plus `--die-with-parent` (a killed run takes its row
+    with it, impl round 1 opus), a private `/tmp` when the run's folder is not under it (a live project under `/tmp`
+    must not be writable from a row — impl round 1, agy and codex, GRAVE), and each `red_links` folder bound read-only
+    into the copy."""
     if not contained:
         return [bash, "-c", cmd]
+    argv = _launcher_argv(bash, cmd, root, home)
+    argv.insert(1, "--die-with-parent")
+    if private_tmp:
+        for i in range(len(argv) - 2):
+            if argv[i:i + 3] == ["--bind", "/tmp", "/tmp"]:
+                argv[i + 3:i + 3] = ["--tmpfs", "/tmp"]
+                break
+        else:
+            raise RuntimeError("the sandbox's argv has no `--bind /tmp /tmp` to make private")
+    tail = len(argv) - 3                                # the target: bash -c <cmd>
+    extra = []
+    for real, inside in ro_links or []:
+        extra += ["--ro-bind", real, inside]
+    argv[tail:tail] = extra
+    return argv
+
+
+def _launcher_argv(bash: str, cmd: str, root: Path, home: Path) -> "list[str]":
     from provider import sandbox as _sb
     # the launcher prepares an agent's home subpaths under $HOME: built with the row's throwaway HOME, so nothing is
     # made in the caller's home (a row has no agent)
@@ -368,10 +456,10 @@ def _argv(bash: str, cmd: str, root: Path, home: Path, contained: bool) -> "list
             print(said, file=sys.stderr, flush=True)
 
 
-def _run_row(cmd: str, root: Path, home: Path, ceiling: Path, timeout: float,
-             contained: bool) -> "dict":
-    """One command in one copy: {status, exit, seconds, last}. Its own process group: a timeout or an interrupt
-    kills the group."""
+def _run_row(cmd: str, root: Path, home: Path, ceiling: Path, timeout: float, contained: bool,
+             private_tmp: bool = False, ro_links: "list[tuple[str, str]] | None" = None) -> "dict":
+    """One command in one copy: {status, exit, seconds, last, error}. Its own process group: a timeout or an
+    interrupt kills the group; a child that left the group and holds the output open cannot hang the run."""
     from tasks.bash_resolver import resolve_bash
     bash, _how = resolve_bash()
     if not bash:
@@ -379,8 +467,9 @@ def _run_row(cmd: str, root: Path, home: Path, ceiling: Path, timeout: float,
                 "error": ""}
     env = _row_env(dict(os.environ), home, ceiling, caged=contained or os.environ.get("PLAYBOOK_SANDBOXED") == "1")
     t0 = time.monotonic()
-    p = subprocess.Popen(_argv(bash, cmd, root, home, contained), cwd=str(root), env=env, stdin=subprocess.DEVNULL,
-                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+    p = subprocess.Popen(_argv(bash, cmd, root, home, contained, private_tmp, ro_links), cwd=str(root), env=env,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                         start_new_session=True)
     try:
         out, _ = p.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -388,7 +477,13 @@ def _run_row(cmd: str, root: Path, home: Path, ceiling: Path, timeout: float,
             os.killpg(p.pid, signal.SIGKILL)
         except OSError:
             pass
-        out, _ = p.communicate()
+        try:
+            out, _ = p.communicate(timeout=5)
+        except subprocess.TimeoutExpired:            # a child outside the group keeps the pipe (impl round 1, sonnet)
+            if p.stdout is not None:
+                p.stdout.close()
+            p.wait()
+            out = b"(a child of the row kept its output open after the time-out; the output was cut)"
         return {"status": "timeout", "exit": None, "seconds": round(time.monotonic() - t0, 2),
                 "last": _last_line(out or b""), "error": _first_error(out or b"")}
     except BaseException:
@@ -406,7 +501,7 @@ def _run_row(cmd: str, root: Path, home: Path, ceiling: Path, timeout: float,
 
 def verdict(base: str, now: str) -> str:
     """What a row's two sides prove (plan panel P5)."""
-    for s in ("unrunnable", "launch failed", "timeout"):
+    for s in ("refused", "unrunnable", "launch failed", "timeout"):
         if s in (base, now):
             return s
     if now == "green":
@@ -446,8 +541,8 @@ def _section(run: str, at: str, base_line: str, contained: str, results: "list[d
             "| # | Kind | Test | On the base | Now | Verdict | On the base, its first error (or last line) |",
             "|---|------|------|-------------|-----|---------|---------------------------------------------|"]
     for r in results:
-        if r["status"] == "unrunnable":
-            sides, last = ("unrunnable", "—"), r.get("why", "")
+        if r["status"] in ("unrunnable", "refused"):
+            sides, last = (r["status"], "—"), r.get("why", "")
         else:
             sides, last = (_side(r), _side(r["now"])), r.get("error") or r.get("last", "")
         head.append(f"| {_cell(r['row'])} | {_cell(r['kind'])} | {r['test'].replace('|', chr(92) + '|')} | "
@@ -538,23 +633,87 @@ def _plan_base(scopes: "dict[str, Path]", base: "dict | None", flags: "dict[str,
     return plan
 
 
-def _tests_digest(scopes: "dict[str, Path]", cfg: dict) -> str:
-    """A digest of the test files laid over the base (each scope's path and bytes, a link by its target)."""
-    h = hashlib.sha256()
-    for name, repo in sorted(scopes.items()):
-        r = _git(repo, ["ls-files", "-co", "--exclude-standard", "-z"], text=False)
-        for raw in sorted(x for x in r.stdout.split(b"\0") if x):
-            rel = raw.decode("utf-8", "surrogateescape")
-            if not _is_test_path(rel, cfg):
-                continue
-            src = repo / rel
-            h.update(f"{name}/{rel}\0".encode("utf-8", "surrogateescape"))
-            try:
-                h.update(os.readlink(src).encode() if src.is_symlink() else src.read_bytes())
-            except OSError:
-                h.update(b"<gone>")
-            h.update(b"\0")
-    return h.hexdigest()[:16]
+_GUARD = None
+
+
+def _guard(cmd: str, cfg: dict) -> "tuple[bool, str]":
+    """The destructive-command interlock the agent's own shell meets, for a row's command (impl round 1, sonnet):
+    the config's `command_guard: false` and `dangerous_commands`, the operator's PLAYBOOK_ALLOW_DANGEROUS. A guard
+    that cannot load or judge refuses (fails closed)."""
+    global _GUARD
+    if cfg.get("command_guard") is False:
+        return True, ""
+    if os.environ.get("PLAYBOOK_ALLOW_DANGEROUS", "").strip().lower() in ("1", "true", "yes", "on"):
+        return True, ""
+    try:
+        if _GUARD is None:
+            import importlib.util
+            path = Path(__file__).resolve().parent.parent / "scripts" / "command_guard.py"
+            spec = importlib.util.spec_from_file_location("_pb_red_command_guard", path)
+            if spec is None or spec.loader is None:
+                raise ImportError(str(path))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            _GUARD = mod
+        verdict, name, why = _GUARD.classify_command(cmd, cfg.get("dangerous_commands"))
+    except Exception as e:                              # noqa: BLE001 — fail closed
+        return False, f"the command guard could not judge it ({e.__class__.__name__}: {e}) — refused"
+    if verdict == "block":
+        return False, f"the command guard blocks it: {name} — {why}"
+    return True, ""
+
+
+def _run_parent() -> "str | None":
+    """Where the run's folder goes: /var/tmp when it can, so a row's `/tmp` can be private (impl round 1, GRAVE)."""
+    vt = "/var/tmp"
+    return vt if os.path.isdir(vt) and os.access(vt, os.W_OK | os.X_OK) else None
+
+
+def _links(project: Path, cfg: dict) -> "tuple[list[tuple[str, str]], list[str]]":
+    """`red_links`: project-relative folders the copies get from the real tree (an ignored `node_modules`, `.venv`)
+    — ([(real path, path in the copy)], notes)."""
+    raw = cfg.get("red_links")
+    out, notes = [], []
+    if not isinstance(raw, list):
+        return out, notes
+    for rel in raw:
+        if not isinstance(rel, str) or not rel.strip() or rel.startswith("/") or ".." in Path(rel).parts:
+            notes.append(f"red_links entry {rel!r} skipped (a project-relative path with no `..`)")
+            continue
+        real = (project / rel).resolve()
+        if not real.exists():
+            notes.append(f"red_links {rel} does not exist in the project")
+            continue
+        out.append((str(real), rel.strip("/")))
+    return out, notes
+
+
+def _prepare_links(copy: Path, links: "list[tuple[str, str]]", contained: bool, notes: "list[str]") -> None:
+    """Contained: an empty folder where each link is bound read-only. Uncontained: a link to the real folder."""
+    for real, rel in links:
+        at = copy / rel
+        if at.exists() or at.is_symlink():
+            notes.append(f"red_links {rel}: the copy already has it — the copy's own is used")
+            continue
+        at.parent.mkdir(parents=True, exist_ok=True)
+        if contained:
+            at.mkdir()
+        else:
+            os.symlink(real, at)
+
+
+def _side_run(command: str, pristine: Path, work: Path, home: Path, ceiling: Path, timeout: float, contained: bool,
+              private_tmp: bool, links: "list[tuple[str, str]]", ready: "set[str]") -> "dict":
+    """One side of one row in a fresh copy of `pristine` and a fresh HOME (impl round 1, codex: a side's writes must
+    not reach the other side, nor the next row)."""
+    shutil.copytree(pristine, work, symlinks=True)
+    home.mkdir(parents=True)
+    try:
+        ro = [(real, str(work / rel)) for real, rel in links if rel in ready] if contained else None
+        return _run_row(command, work, home, ceiling, timeout, contained, private_tmp, ro)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+        shutil.rmtree(home, ignore_errors=True)
 
 
 def cmd_red(cmd_args: "list[str]") -> None:
@@ -615,36 +774,58 @@ def cmd_red(cmd_args: "list[str]") -> None:
         f"{n or '(project)'} {e['commit'][:7]}" + (f" (tree {e['tree'][:7]})" if e["used"] == "tree" else
                                                    f" ({e.get('why', 'commit')})")
         for n, e in plan.items())
-    tests_sha = _tests_digest(scopes, cfg)
-    tmp = Path(tempfile.mkdtemp(prefix="pb-red-"))
+    links, link_notes = _links(project, cfg)
+    tmp = Path(tempfile.mkdtemp(prefix="pb-red-", dir=_run_parent()))
+    private_tmp = contained and not str(tmp.resolve()).startswith("/tmp/")
     results: "list[dict]" = []
+    old_handlers = {}
+
+    def _stop(signum, _frame):                          # SIGTERM / SIGHUP take the interrupt's path (impl round 1)
+        raise KeyboardInterrupt(f"signal {signum}")
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        try:
+            old_handlers[sig] = signal.signal(sig, _stop)
+        except (ValueError, OSError):
+            pass
     try:
-        broot, nroot, home = tmp / "base", tmp / "now", tmp / "home"
-        home.mkdir()
-        laid = 0
+        bprist, nprist = tmp / "pristine-base", tmp / "pristine-now"
         for name, repo in scopes.items():
             e = plan[name]
-            _extract(repo, e["tree"] if e["used"] == "tree" else e["commit"], broot / name if name else broot,
+            _extract(repo, e["tree"] if e["used"] == "tree" else e["commit"], bprist / name if name else bprist,
                      exclude)
-            laid += _overlay_tests(repo, broot / name if name else broot, cfg)
-            _extract(repo, now_tree[name], nroot / name if name else nroot, exclude)
-        print(f"tasks red — task {d.name}, run {run}; base copy: {broot}", flush=True)
-        print(f"  on the base: {base_line}; {laid} test file(s) from the working tree laid over it; "
-              + ("contained" if contained else f"UNCONTAINED ({why_not})"), flush=True)
-        for row in rows:
+            _extract(repo, now_tree[name], nprist / name if name else nprist, exclude)
+        laid = _overlay_from_copy(nprist, bprist, cfg, list(scopes), exclude)
+        tests_sha = _digest_copy(nprist, cfg, list(scopes), exclude)
+        ready: "set[str]" = set()
+        for copy in (bprist, nprist):
+            before = len(link_notes)
+            _prepare_links(copy, links, contained, link_notes)
+            if len(link_notes) == before:
+                ready |= {rel for _real, rel in links}
+        print(f"tasks red — task {d.name}, run {run}; base copy: {bprist}", flush=True)
+        print(f"  on the base: {base_line}; {laid} test file(s) from the working state laid over it; "
+              + ("contained" + ("" if private_tmp else " (the run's folder is under /tmp: /tmp stays shared)")
+                 if contained else f"UNCONTAINED ({why_not})"), flush=True)
+        for note in link_notes:
+            print("  note: " + note, flush=True)
+        for k, row in enumerate(rows, 1):
             cmds, why = resolve(row["test"], cfg)
             rec = {"at": _now(), "run": run, "task": d.name, "row": row["row"], "kind": row["kind"],
                    "row_sha": hashlib.sha256(row["line"].encode("utf-8")).hexdigest()[:16], "test": row["test"],
-                   "base": plan, "now_tree": now_tree, "tests_sha": tests_sha, "contained": contained}
-            if not cmds:
-                rec.update({"status": "unrunnable", "why": why, "exit": None, "seconds": 0.0, "last": "", "error": "",
-                            "command": "", "now": {"status": "unrunnable", "exit": None, "seconds": 0.0, "last": "",
-                                                   "error": ""},
-                            "verdict": "unrunnable"})
+                   "base": plan, "now_tree": now_tree, "tests_sha": tests_sha, "contained": contained,
+                   "private_tmp": private_tmp}
+            command = (" && ".join(f"( {c} )" for c in cmds) if len(cmds) > 1 else cmds[0]) if cmds else ""
+            ok, guard_why = _guard(command, cfg) if cmds else (True, "")
+            if not cmds or not ok:
+                status = "unrunnable" if not cmds else "refused"
+                why = why if not cmds else guard_why
+                empty = {"status": status, "exit": None, "seconds": 0.0, "last": "", "error": ""}
+                rec.update(dict(empty, why=why, command=command, now=dict(empty), verdict=status))
             else:
-                command = " && ".join(f"( {c} )" for c in cmds) if len(cmds) > 1 else cmds[0]
-                b = _run_row(command, broot, home, tmp, timeout, contained)
-                n = _run_row(command, nroot, home, tmp, timeout, contained)
+                b = _side_run(command, bprist, tmp / "rows" / f"{k}-base", tmp / "homes" / f"{k}-base", tmp,
+                              timeout, contained, private_tmp, links, ready)
+                n = _side_run(command, nprist, tmp / "rows" / f"{k}-now", tmp / "homes" / f"{k}-now", tmp,
+                              timeout, contained, private_tmp, links, ready)
                 rec.update(b)
                 rec.update({"command": command, "now": n, "verdict": verdict(b["status"], n["status"])})
             _append(task_file, rec)
@@ -660,8 +841,13 @@ def cmd_red(cmd_args: "list[str]") -> None:
         print("  interrupted: the rows that ended are in " + RECEIPT_NAME + "; task.md was not written.",
               file=sys.stderr, flush=True)
         raise SystemExit(130)
-    except RuntimeError as e:
+    except (RuntimeError, ValueError, tarfile.TarError) as e:
         print(f"Refused: {e}. The rows that ended are in {RECEIPT_NAME}; task.md was not written.", file=sys.stderr)
         raise SystemExit(1)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+        for sig, h in old_handlers.items():
+            try:
+                signal.signal(sig, h)
+            except (ValueError, OSError):
+                pass
