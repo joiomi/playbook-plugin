@@ -23,6 +23,8 @@ receipt yet (part 2, with `tasks numbers` and light's contract).
 - Copies are written by `read-tree` + `checkout-index` (not `git archive`), each named test runs on its own, and
   `bwrap`/`bash` are taken by absolute path. An editable install still resolves to the live package (the base
   then reads `already true`, never a false `proved`).
+- A repository with no commit yet gets a base from its working tree (a project started from zero). The section lists
+  the rows not proved; every row is in the jsonl.
 - Without bubblewrap a row runs uncontained, as `tasks verify` runs the project's command; the receipt says so.
 
 **The test contract: tests first, as the specification** — task 278 (PHASE-B.md item 9a; the owner, 2026-10-21:

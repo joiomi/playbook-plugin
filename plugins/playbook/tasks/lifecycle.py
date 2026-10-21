@@ -1865,17 +1865,23 @@ def cmd_work(cmd_args):
         try:
             from tasks.red import record_base
             _wrote, _base_note = record_base(Path(project_path), task_file.parent, task_num, _first_activation)
+            # the file this call wrote, by its bytes (an inode number is reused at once on Linux): only that one is
+            # removed if the activation does not happen
+            _base_bytes = (task_file.parent / "base.json").read_bytes() if _wrote else None
         except Exception as _base_err:              # noqa: BLE001 — the activation goes on
-            _wrote = False
+            _wrote, _base_bytes = False, None
             _base_note = f"note: no base recorded for this task ({_base_err.__class__.__name__}: {_base_err})"
         try:
             _activate_status_then_publish(task_file, task_num, _resume_target, _reopen_target,
                                           _pointer_tmp, session_state)
-        except SystemExit:
-            # a refused activation keeps no base it wrote (impl round 2, sonnet): the task did not start here
-            if _wrote:
+        except BaseException:
+            # an activation that does not happen (refused, interrupted, failed) keeps no base it wrote — and never one
+            # another session wrote since (impl rounds 2 and 3, sonnet and agy)
+            if _base_bytes is not None:
+                _bp = task_file.parent / "base.json"
                 try:
-                    (task_file.parent / "base.json").unlink()
+                    if _bp.read_bytes() == _base_bytes:
+                        _bp.unlink()
                 except OSError:
                     pass
             raise

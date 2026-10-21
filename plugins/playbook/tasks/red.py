@@ -35,7 +35,6 @@ import shutil
 import signal
 import subprocess
 import sys
-import tarfile
 import tempfile
 import time
 from datetime import datetime
@@ -87,17 +86,30 @@ def _capture(project_path: Path) -> "tuple[dict | None, str, list[str]]":
             head = _git(repo, ["rev-parse", "--verify", "-q", "HEAD^{commit}"])
         except (OSError, subprocess.SubprocessError) as e:
             return None, f"git could not run in {where} ({e.__class__.__name__})", exclude
-        if head.returncode != 0 or not head.stdout.strip():
-            return None, f"{where} has no git commit", exclude
-        commit = head.stdout.strip()
+        if name:
+            # a code root must be its own repository: a folder of the project's own repository is read through it
+            # (the base would be the project's tree, not the folder's)
+            top = _git(repo, ["rev-parse", "--show-toplevel"])
+            if top.returncode != 0 or os.path.realpath(top.stdout.strip()) != os.path.realpath(repo):
+                return None, f"{where} is not its own git repository", exclude
+        commit = head.stdout.strip() if head.returncode == 0 else ""
+        if not commit:
+            # an unborn repository (no commit yet — the first task of a project started from zero, impl round 3,
+            # opus): its base is its working tree alone; anything that is not a work tree is a failure
+            wt = _git(repo, ["rev-parse", "--is-inside-work-tree"])
+            if wt.returncode != 0 or wt.stdout.strip() != "true":
+                return None, f"{where} is not a git work tree", exclude
         tree, why = worktree_tree_why(repo, exclude)
-        entry: "dict" = {"commit": commit, "tree": tree}
-        if tree:
+        entry: "dict" = {"commit": commit or None, "tree": tree}
+        if tree and commit:
             ct = _git(repo, ["rev-parse", "--verify", "-q", f"{commit}^{{tree}}"])
             entry["clean"] = ct.returncode == 0 and ct.stdout.strip() == tree
         else:
-            entry["tree_error"] = why or "unknown"
             entry["clean"] = False
+            if not tree:
+                entry["tree_error"] = why or "unknown"
+                if not commit:
+                    return None, f"{where} has no commit and its working tree cannot be read ({why})", exclude
         scopes[name] = entry
     return scopes, "", exclude
 
@@ -234,18 +246,39 @@ def _is_test_path(rel: str, cfg: dict) -> bool:
     return any(fnmatch.fnmatchcase(parts[-1], g) for g in DEFAULT_TEST_NAMES)
 
 
+def _safe_parts(rel: str) -> "list[str]":
+    """`rel`'s parts, each a plain name: a `..`, `.`, empty or absolute part is refused — no name, however it is
+    spelled, reaches outside the copy (impl round 3, from codex's run: a `code_roots` name with backslashes, rewritten
+    by my old normalization into `../../…`, made the unpack overwrite a folder outside the copy — GRAVE)."""
+    if rel.startswith("/"):
+        raise RuntimeError(f"refused path {rel!r}: absolute")
+    parts = rel.split("/") if rel else []
+    for p in parts:
+        if p in ("", ".", ".."):
+            raise RuntimeError(f"refused path {rel!r}: it holds {p!r} — every part must be a plain name")
+    return parts
+
+
+def _inside(root: Path, target: Path) -> bool:
+    a, b = os.path.normpath(os.path.abspath(root)), os.path.normpath(os.path.abspath(target))
+    return b == a or b.startswith(a + os.sep)
+
+
 def _real_dir(root: Path, rel: str) -> Path:
-    """`root/rel` as a real directory of the copy: each ancestor and the folder itself, when a link or a file stands
-    there (the outer tree's own entry), is replaced — a scope is never written THROUGH a link (impl round 2, codex
-    Critical, GRAVE)."""
+    """`root/rel` as a real directory of the copy: the root first, then each ancestor and the folder itself — a link
+    or a file standing there (the outer tree's own entry) is replaced, so a scope is never written THROUGH a link
+    (impl round 2, codex Critical, GRAVE)."""
+    parts = _safe_parts(rel)
+    root.mkdir(parents=True, exist_ok=True)
     cur = root
-    for comp in [c for c in rel.split("/") if c] if rel else []:
+    for comp in parts:
         cur = cur / comp
+        if not _inside(root, cur):
+            raise RuntimeError(f"refused path {rel!r}: outside the copy")
         if cur.is_symlink() or (cur.exists() and not cur.is_dir()):
             cur.unlink()
         if not cur.exists():
             cur.mkdir()
-    root.mkdir(parents=True, exist_ok=True)
     return cur
 
 
@@ -260,7 +293,7 @@ def _extract(repo: Path, treeish: str, root: Path, rel: str, exclude: "list[str]
         steps = [["read-tree", treeish]]
         drop = [spec[len(":(exclude)"):] for spec in exclude if spec.startswith(":(exclude)")]
         if drop:
-            steps.append(["rm", "--cached", "-r", "-q", "--ignore-unmatch", "--", *drop])
+            steps.append(["rm", "--cached", "-r", "-q", "-f", "--ignore-unmatch", "--", *drop])
         steps.append(["checkout-index", "-a", "-f", f"--prefix={dest}/"])
         for args in steps:
             r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, encoding="utf-8",
@@ -291,15 +324,11 @@ def _place(dst_root: Path, rel: str) -> Path:
     """The path `rel` inside `dst_root`, every ancestor a real directory of the copy: a link or a file in the way is
     removed (it is the copy's own entry) — so nothing is ever written THROUGH a link the base had (impl round 1,
     codex Critical). The leaf is cleared too."""
-    parts = rel.split("/")
-    cur = dst_root
-    for comp in parts[:-1]:
-        cur = cur / comp
-        if cur.is_symlink() or (cur.exists() and not cur.is_dir()):
-            cur.unlink()
-        if not cur.exists():
-            cur.mkdir()
+    parts = _safe_parts(rel)
+    cur = _real_dir(dst_root, "/".join(parts[:-1])) if len(parts) > 1 else dst_root
     leaf = cur / parts[-1]
+    if not _inside(dst_root, leaf):
+        raise RuntimeError(f"refused path {rel!r}: outside the copy")
     if leaf.is_symlink() or leaf.is_file():
         leaf.unlink()
     elif leaf.is_dir():
@@ -327,8 +356,12 @@ def _overlay_from_copy(src_root: Path, dst_root: Path, cfg: dict, scope_names: "
     """Lay the test files of the frozen "now" copy over the base copy — the same snapshot the "now" side runs, so a
     test edited during the run cannot be one thing on each side (impl round 1, codex). Returns how many were laid."""
     ex = list(exclude) if exclude else [":(exclude).agent"]
+    present = set(_test_files(src_root, cfg, scope_names, ex))
+    for rel in _test_files(dst_root, cfg, scope_names, ex):
+        if rel not in present:                          # a test the task deleted leaves the base copy (impl round 3)
+            _place(dst_root, rel)
     n = 0
-    for rel in _test_files(src_root, cfg, scope_names, ex):
+    for rel in sorted(present):
         src = src_root / rel
         dst = _place(dst_root, rel)
         if src.is_symlink():
@@ -576,18 +609,40 @@ def _cell(text: str) -> str:
 
 
 def _section(run: str, at: str, base_line: str, contained: str, results: "list[dict]") -> str:
+    """The run for the judges: a count of each verdict with its rows, and a table of the rows NOT proved (impl round 3,
+    sonnet: every row's line is in the jsonl) — a row of several tests shows each test (agy, opus, sonnet)."""
     head = [RECEIPT_HEADING, "<!-- pin -->",
-            f"Written by `tasks red` — run `{run}`, {at}; every run is in `{RECEIPT_NAME}` beside this file.",
-            f"On the base: {base_line}. Now: the working state at the run. {contained}", "",
-            "| # | Kind | Test | On the base | Now | Verdict | On the base, its first error (or last line) |",
-            "|---|------|------|-------------|-----|---------|---------------------------------------------|"]
+            f"Written by `tasks red` — run `{run}`, {at}; every row and side is in `{RECEIPT_NAME}` beside this file.",
+            f"On the base: {base_line}. Now: the working state at the run. {contained}", ""]
+    order: "list[str]" = []
+    by: "dict[str, list[str]]" = {}
     for r in results:
-        if r["status"] in ("unrunnable", "refused"):
-            sides, last = (r["status"], "—"), r.get("why", "")
+        if r["verdict"] not in by:
+            order.append(r["verdict"])
+            by[r["verdict"]] = []
+        by[r["verdict"]].append(_cell(r["row"]))
+    head.append("Verdicts: " + "; ".join(
+        f"{v}: {len(by[v])} (row{'s' if len(by[v]) > 1 else ''} {', '.join(by[v])})" for v in order) + ".")
+    rest = [r for r in results if r["verdict"] != "proved"]
+    if rest:
+        head += ["", "| # | Kind | Test | On the base | Now | Verdict | On the base, its first error (or last line) |",
+                 "|---|------|------|-------------|-----|---------|---------------------------------------------|"]
+    for r in rest:
+        tests = r.get("tests") or []
+        if r["status"] == "unrunnable" and not tests:
+            sides, last = ("unrunnable", "—"), r.get("why", "")
+        elif len(tests) > 1:
+            each = "; ".join(f"{k}: {t['base']['status']} → {t['now']['status']} ({t['verdict']})"
+                             for k, t in enumerate(tests, 1))
+            sides = (each, "(each test on the left)")
+            last = r.get("why") or next((t["base"].get("error") or t["base"].get("last") for t in tests
+                                         if t["verdict"] != "proved"), "") or ""
+        elif tests and tests[0]["verdict"] == "refused":
+            sides, last = ("refused", "—"), r.get("why", "")
         else:
             sides, last = (_side(r), _side(r["now"])), r.get("error") or r.get("last", "")
         head.append(f"| {_cell(r['row'])} | {_cell(r['kind'])} | {r['test'].replace('|', chr(92) + '|')} | "
-                    f"{sides[0]} | {sides[1]} | {r['verdict']} | {_cell(last)} |")
+                    f"{_cell(sides[0])} | {_cell(sides[1])} | {r['verdict']} | {_cell(last)} |")
     return "\n".join(head)
 
 
@@ -623,7 +678,7 @@ def _parse_base_flags(args: "list[str]") -> "tuple[list[str], dict[str, str], st
             if i + 1 >= len(args) or args[i + 1].startswith("-"):
                 return [], {}, "--base needs a value: [<scope>=]<commit>"
             scope, _, rev = args[i + 1].rpartition("=")
-            flags[scope] = rev
+            flags[_norm_scope(scope)] = rev
             i += 2
             continue
         rest.append(a)
@@ -657,6 +712,9 @@ def _plan_base(scopes: "dict[str, Path]", base: "dict | None", flags: "dict[str,
             tree, commit = b.get("tree"), b.get("commit")
             if tree and _tree_exists(repo, tree):
                 plan[name] = {"commit": commit, "tree": tree, "used": "tree"}
+            elif not commit:
+                _refuse(f"the base of {where} had no commit and its working-state tree is gone (git gc?) — name a "
+                        "base with --base")
             elif commit and _commit_of(repo, commit) and b.get("clean"):
                 plan[name] = {"commit": commit, "tree": tree, "used": "commit",
                               "why": "the working-state tree is gone (git gc?); the base was clean, so its commit "
@@ -776,10 +834,10 @@ def _no_git_overrides():
 
 def _norm_scope(name: str) -> str:
     """A scope's name as the copy's paths spell it: `./code/` is `code` (impl round 2, codex)."""
-    n = name.replace("\\", "/").strip()
+    n = name.strip()                                    # never `\\` → `/` (impl round 3, GRAVE): a name, not a path
     while n.startswith("./"):
         n = n[2:]
-    return n.strip("/")
+    return n.rstrip("/")
 
 
 def _scopes(project: Path, cfg: dict) -> "dict[str, Path]":
@@ -862,7 +920,7 @@ def _cmd_red(cmd_args: "list[str]") -> None:
     run = hashlib.sha256(f"{os.getpid()} {time.time_ns()}".encode()).hexdigest()[:12]
     at = _now()
     base_line = ", ".join(
-        f"{n or '(project)'} {e['commit'][:7]}" + (f" (tree {e['tree'][:7]})" if e["used"] == "tree" else
+        f"{n or '(project)'} {(e['commit'] or 'unborn')[:7]}" + (f" (tree {e['tree'][:7]})" if e["used"] == "tree" else
                                                    f" ({e.get('why', 'commit')})")
         for n, e in plan.items())
     links, link_notes = _links(project, cfg)
@@ -945,7 +1003,7 @@ def _cmd_red(cmd_args: "list[str]") -> None:
         print("  interrupted: the rows that ended are in " + RECEIPT_NAME + "; task.md was not written.",
               file=sys.stderr, flush=True)
         raise SystemExit(130)
-    except (RuntimeError, ValueError, tarfile.TarError) as e:
+    except (RuntimeError, ValueError) as e:
         print(f"Refused: {e}. The rows that ended are in {RECEIPT_NAME}; task.md was not written.", file=sys.stderr)
         raise SystemExit(1)
     finally:

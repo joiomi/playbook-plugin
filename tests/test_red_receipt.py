@@ -198,11 +198,11 @@ class TheBase(Project):
 
     def test_a_failed_first_capture_is_final(self):
         # row 26 (P7): the first activation decides; a later one never captures what the task has changed since
-        shutil.rmtree(self.code / ".git")
-        self.g("init", "-q", cwd=self.code)                     # a repository with no commit yet
+        shutil.rmtree(self.code / ".git")                       # the code scope is no repository at all
         self.new_task()
         b = self.base()
         self.assertIn("failed", b)
+        self.g("init", "-q", cwd=self.code)
         self.g("add", "-A", cwd=self.code)
         self.g("commit", "-qm", "now", cwd=self.code)
         r = self.cli("work", "1")
@@ -248,7 +248,9 @@ class TheRun(Project):
         self.assertEqual(lines[0]["run"], lines[1]["run"])
         sec = self.section()
         self.assertIn("<!-- pin -->", sec.split("\n", 2)[0] + sec.split("\n", 2)[1])
-        self.assertRegex(sec, r"\| 1 \| normal \| `tests\.test_new` \| red \(exit [1-9][^|]*\| green \(exit 0[^|]*\| proved \|")
+        # impl round 3 (sonnet): the section counts every verdict and lists only the rows not proved
+        self.assertIn("proved: 1 (row 1)", sec)
+        self.assertNotRegex(sec, r"(?m)^\| 1 \|")
         self.assertRegex(sec, r"\| 2 \| must-not \| `tests\.test_old` \| green \(exit 0[^|]*\| green \(exit 0[^|]*\| already true \|")
         self.assertIn(self.head(self.code)[:7], sec)
 
@@ -554,7 +556,7 @@ class TheRun(Project):
         line = self.receipt_lines()[0]
         self.assertRegex(line["last"], r"^FAILED")
         self.assertRegex(line["error"], r"^AssertionError: 1 != 2")
-        self.assertIn("AssertionError: 1 != 2", self.section())
+        self.assertIn("proved: 1 (row 1)", self.section())          # a proved row's lines are in the jsonl
         self.assertEqual(line["now"]["error"], "")
 
     def test_undecodable_output_is_recorded_replaced(self):
@@ -812,8 +814,10 @@ class RoundTwo(Project):
         self.cli("work", "1")
         (self.task_dir / "base.json").write_text(json.dumps(b), encoding="utf-8")
         self.set_contract([("1", "normal", "one", "`exit 1`")])
-        self.cli("red")
-        self.assertEqual(sorted(p.name for p in real.iterdir()), ["precious.txt"])
+        r = self.cli("red")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)        # it ran (impl round 3, opus) …
+        self.assertEqual(len(self.receipt_lines()), 1)
+        self.assertEqual(sorted(p.name for p in real.iterdir()), ["precious.txt"])   # … and wrote nothing there
 
     def test_bwrap_is_named_by_its_absolute_path(self):
         # row 44 (GRAVE, codex Critical): a relative PATH entry and a tracked `bin/bwrap` cannot replace the sandbox
@@ -977,6 +981,136 @@ class RoundTwo(Project):
         from tasks import red
         self.assertEqual(red._first_error(b"____ test ____\nE   AssertionError: 1 != 2\nFAILED x\n"),
                          "AssertionError: 1 != 2")
+
+
+class RoundThree(Project):
+    """Impl round 3's findings (task 280), each red before its fix."""
+
+    def test_a_backslash_scope_cannot_climb_out_of_the_copy(self):
+        # row 58 (GRAVE, codex's failed run): a code_roots name holding backslashes and dots is ONE folder name on
+        # Linux; read as `../../…` it made the unpack write outside the copy
+        victim = Path(tempfile.mkdtemp(prefix="pb280-victim-"))
+        self.addCleanup(shutil.rmtree, victim, True)
+        (victim / "f.txt").write_text("keep\n", encoding="utf-8")
+        name = "..\\" * 10 + "tmp\\" + victim.name
+        odd = self.d / name
+        odd.mkdir()
+        (odd / "f.txt").write_text("snapshot\n", encoding="utf-8")
+        self.g("init", "-q", cwd=odd)
+        self.g("add", "-A", cwd=odd)
+        self.g("commit", "-qm", "odd", cwd=odd)
+        (self.d / ".gitignore").write_text("home/\ncode/\n" + name.replace("\\", "\\\\") + "/\n"
+                                           ".agent/journal/\n.agent/sessions/\n", encoding="utf-8")
+        self.config(code_roots=["code", name])
+        self.new_task()
+        self.set_contract([("1", "normal", "one", "`exit 1`")])
+        r = self.cli("red")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)        # a legal folder name runs (mutant Q1) …
+        self.assertEqual(len(self.receipt_lines()), 1)
+        self.assertEqual((victim / "f.txt").read_text(encoding="utf-8"), "keep\n")   # … and writes only in the copy
+        self.assertEqual(sorted(p.name for p in victim.iterdir()), ["f.txt"])
+
+    def test_a_path_with_dot_dot_is_refused_in_the_copy(self):
+        # row 58 (GRAVE): no write lands outside the copy, whatever a name says
+        from tasks import red
+        root = self.d / "copyroot"
+        root.mkdir()
+        for bad in ("../x", "a/../../x", "/abs/x", "a//b", "./a"):
+            with self.subTest(bad=bad):
+                with self.assertRaises(RuntimeError):
+                    red._real_dir(root, bad)
+        self.assertFalse((self.d / "x").exists())
+
+    def test_an_unborn_scope_has_a_base(self):
+        # row 59 (opus): the first task of a project started from zero — its code repository has no commit yet
+        shutil.rmtree(self.code / ".git")
+        self.g("init", "-q", cwd=self.code)
+        self.new_task()
+        b = self.base()
+        self.assertNotIn("failed", b)
+        self.assertIsNone(b["scopes"]["code"]["commit"])
+        self.assertTrue(b["scopes"]["code"]["tree"])
+        self.change_code()
+        self.set_contract([("1", "normal", "f returns 2", "`tests.test_new`")])
+        r = self.cli("red")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertEqual(self.receipt_lines()[0]["verdict"], "proved")
+
+    def test_a_changed_tracked_record_does_not_stop_the_run(self):
+        # row 60 (opus): a tracked `.agent` file changed and committed after the activation
+        self.new_task()
+        self.config(red_timeout=200)
+        self.g("add", "-A")
+        self.g("commit", "-qm", "the config changed")
+        self.set_contract([("1", "normal", "one", "`exit 1`")])
+        r = self.cli("red", "--base", f"={self.head(self.d)}")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        r = self.cli("red")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+
+    def test_the_section_shows_each_test_of_a_row(self):
+        # row 61 (agy + opus + sonnet): a several-test row shows each test's sides; a refused one shows why
+        self.new_task()
+        self.change_code()
+        push = "git push " + "--force origin main"          # split: this file is written by tools the guard reads
+        self.set_contract([("1", "normal", "two", "`tests.test_new`, `tests.test_old`"),
+                           ("2", "hostile", "one refused", f"`exit 1`, `{push}`")])
+        self.cli("red")
+        sec = self.section()
+        row1 = next(ln for ln in sec.splitlines() if ln.startswith("| 1 |"))
+        self.assertIn("partly proved", row1)
+        self.assertIn("1: red → green (proved)", row1)
+        self.assertIn("2: green → green (already true)", row1)
+        row2 = next(ln for ln in sec.splitlines() if ln.startswith("| 2 |"))
+        self.assertIn("refused", row2)
+        self.assertIn("command guard", row2)
+
+    def test_real_dir_makes_its_root_first(self):
+        # row 62 (agy)
+        from tasks import red
+        root = self.d / "missing" / "root"
+        self.assertEqual(red._real_dir(root, "a/b"), root / "a" / "b")
+        self.assertTrue((root / "a" / "b").is_dir())
+
+    def test_an_interrupted_activation_removes_only_its_own_base(self):
+        # row 63 (agy + sonnet): any exception removes the base this call wrote; a base someone else wrote stays
+        from unittest import mock
+        from tasks import lifecycle
+        self.new_task(activate=False)
+
+        def interrupt(*_a, **_k):
+            raise KeyboardInterrupt()
+        with mock.patch.object(lifecycle, "_activate_status_then_publish", interrupt):
+            try:
+                _in_process(self.d, self.env(), lifecycle.cmd_work, ["1"])
+            except KeyboardInterrupt:
+                pass
+        self.assertFalse((self.task_dir / "base.json").exists())
+
+        def replaced_then_refused(task_file, *_a, **_k):
+            p = Path(task_file).parent / "base.json"
+            p.unlink()
+            p.write_text('{"v": 1, "scopes": {}, "by": "another session"}\n', encoding="utf-8")
+            raise SystemExit(1)
+        with mock.patch.object(lifecycle, "_activate_status_then_publish", replaced_then_refused):
+            _in_process(self.d, self.env(), lifecycle.cmd_work, ["1"])
+        self.assertEqual(self.base().get("by"), "another session")
+
+    def test_a_base_flag_scope_is_normalized(self):
+        # row 64 (agy Minor)
+        self.new_task()
+        self.set_contract([("1", "normal", "one", "`exit 1`")])
+        r = self.cli("red", "--base", f"./code/={self.head(self.code)}")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+
+    def test_a_test_the_task_deleted_leaves_the_base_copy(self):
+        # row 65 (opus Minor): the base copy holds the task's tests — a deleted one is gone there too
+        self.new_task()
+        (self.code / "tests" / "test_old.py").unlink()
+        self.set_contract([("1", "normal", "deleted", "`test ! -e code/tests/test_old.py`")])
+        self.cli("red")
+        line = self.receipt_lines()[0]
+        self.assertEqual((line["status"], line["now"]["status"]), ("green", "green"), line)
 
 
 class TheText(unittest.TestCase):
