@@ -1050,6 +1050,26 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
         self.assertIn("Back: codex:gpt-5.5", out)
         self.assertIsNone(self._entry("codex:gpt-5.5"))
 
+    def test_a_failure_of_another_kind_keeps_a_reset_recorded_meanwhile(self):    # task 277 release round 1 (codex)
+        # B's call began before A's and its refusal, naming a reset time, lands while A's call runs; A then fails for
+        # another reason — it knows nothing about credit and must not write back the outage it was tried under
+        models = self.CLAUDE[:3] + ("codex:gpt-5.5",)
+        self._out("codex:gpt-5.5")
+        agent = self.d / ".agent"
+
+        def judge(adapter, prompt, model, system_context, **kw):
+            self.calls.append(model)
+            if "gpt-5.5" in model:
+                so.record_outage(agent, "codex:gpt-5.5", so.classify_outage(CODEX, NOW), NOW + dt.timedelta(seconds=5),
+                                 started=NOW - dt.timedelta(seconds=10), retried=True)
+                return "(FAILED — exit 1)\nTraceback: something else broke"
+            return "1. **Note** — fine.\n"
+
+        self._panel(models, judge, codex_available=True)
+        entry = self._entry("codex:gpt-5.5")
+        self.assertEqual(entry["until"], "2026-10-07T19:33+03:00")
+        self.assertEqual(entry["tried"], 2)
+
     def test_a_long_timeout_with_no_tokens_is_no_answer(self):                  # post-panel run 1 (codex)
         # elapsed time alone proves nothing: a hang past the first wait whose partial text says out of credits
         models = self.CLAUDE[:3] + ("codex:gpt-5.5",)

@@ -15,7 +15,7 @@ its account is out of credit), 0 FAIL.
 **Upgrading:** `/playbook:upgrade`, then restart every Claude Code session. No `/playbook:init` step: on a project
 1.6.7 set up, 1.6.8's init changed no file (measured). `hooks.json` is unchanged since 1.6.6. Nothing to migrate: a
 seat's outage entry in `<lane>/journal/seat-outages.json` gains `tried` and `last_tried` the first time a panel tries
-the seat again.
+the seat again and it is refused or fails (an answer removes the entry).
 
 **Measured before the release**, in temporary folders: on a project 1.6.7's `/playbook:init` set up, with a task 1.6.7
 left in flight and two seats recorded out of credit by 1.6.7's own code — one with a reset time ahead, one without —
@@ -55,7 +55,8 @@ round). Outages with a reset time are unchanged. The record's times are written 
   line); such a call that also reported tokens counts as the account answering, and its reset time is lost until the
   next refusal.
 - When too few seats can answer and a seat tried again is still working at the first wait, the panel lets it finish
-  before refusing, and that review is not kept (this needs two outages with a reset time and two without at once).
+  before refusing, and that review is not kept (on a five-seat panel, for example, two outages with a reset time and two
+  without at once, one of them back).
 
 ## [1.6.7] — 2026-10-21
 

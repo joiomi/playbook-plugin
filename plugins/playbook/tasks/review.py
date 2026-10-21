@@ -2218,10 +2218,12 @@ def _cmd_panel_review(cmd_args):
         _ad = resolve_agent_dir(project_path)
         for _lbl in sorted(set(_refused) | set(_tried_failed)):
             _o = _refused[_lbl][0] if _lbl in _refused else _tried_failed[_lbl]
-            if _o is None:          # a failure of another kind: the outage it was tried under stays as it is
+            _other = _o is None     # a failure of another kind: the outage stays as it is NOW (task 277 R1, codex)
+            if _other:
                 _o = {"reason": _retry[_lbl].get("reason", "?"), "until": _retry[_lbl].get("until")}
             try:
-                if not _seat_outage.record_outage(_ad, _lbl, _o, started=_seat_began.get(_lbl), retried=True):
+                if not _seat_outage.record_outage(_ad, _lbl, _o, started=_seat_began.get(_lbl), retried=True,
+                                                  keep_current=_other) and not _other:
                     print(f"  {_lbl} answered out of credit ({_o.get('reason', '?')}), but it was enabled "
                           "(`tasks models enable`) after this call to it began — not recorded; the next panel "
                           "calls it.", flush=True)

@@ -298,7 +298,8 @@ def split_outages(outages: dict) -> "tuple[dict, dict]":
 
 def record_outage(agent_dir: Path, spec: str, outage: dict,
                   now: Optional[_dt.datetime] = None, *,
-                  started: Optional[_dt.datetime] = None, retried: bool = False) -> bool:
+                  started: Optional[_dt.datetime] = None, retried: bool = False,
+                  keep_current: bool = False) -> bool:
     """Add or replace `spec`'s entry (expired entries are dropped on the way).
     True when it was recorded.
 
@@ -329,6 +330,17 @@ def record_outage(agent_dir: Path, spec: str, outage: dict,
         began = _aware(started or now, now)
         seen = [at for at in (_parse_at(old.get("since"), now), _parse_at(old.get("last_tried"), now))
                 if at is not None] if old else []
+        if keep_current:
+            # task 277 release round 1 (codex): a retried seat failed for another reason — no news about credit. Only
+            # the try is counted, on the entry as it is now: its reason and reset time stay (another panel's newer
+            # refusal may have set them while this call ran); with no entry left (cleared meanwhile) nothing is written.
+            if not old:
+                return None
+            current: dict = dict(old)
+            current["tried"] = tries + 1
+            current["last_tried"] = max(seen + [began]).isoformat()
+            data[spec] = current
+            return _dump(data, cleared)
         if old and started is not None and seen and max(seen) > began:
             # impl r1 (opus, codex), post-panel run 1 (codex): an OLDER call's failure — a retried seat's or a live
             # one's — landing after newer evidence of this seat (recorded, or refused, after this call began) changes
