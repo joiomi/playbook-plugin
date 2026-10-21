@@ -56,6 +56,14 @@ APPROVED = {
         "task 195: a new task.md written (O_CREAT|O_EXCL|O_NOFOLLOW, fsync'd) through the creator's held lane "
         "descriptor into its own temporary directory, which nothing else knows until the rename publishes it "
         "whole — the rename is the atomic step, so no temp-and-replace inside it",
+    ("tasks/red.py", "tmp.write_text(json.dumps(doc"):
+        "task 280: the base record written whole under a private temporary name in the task folder, then published "
+        "by os.link — exclusive, so two first activations make one base and none overwrites it; the temporary "
+        "name is removed in `finally` — the link is the atomic step",
+    ("tasks/red.py", "shutil.copy2(src, dst)"):
+        "task 280: a working-tree test file laid over the base copy — a new folder made by mkdtemp for this run "
+        "and removed in `finally` (an existing copy of the name, from the archive, is unlinked first) — ephemeral, "
+        "never state",
     ("tasks/atomic.py", 'os.fdopen(fd, "wb")'):
         "the primitive itself: the temp file it later os.replace()s into place",
     ("tasks/atomic.py", 'os.fdopen(fd, "w", encoding=encoding, newline=newline)'):

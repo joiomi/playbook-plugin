@@ -49,6 +49,9 @@ HONORED_KEYS = frozenset({
     "merge_verify",               # core.py / merge-verify.py
     "panel_quorum",               # core.py:430
     "panel_required_for",         # core.py:1140
+    "red_run",                    # red.py resolve (task 280)
+    "red_tests",                  # red.py _is_test_path (task 280)
+    "red_timeout",                # red.py cmd_red (task 280)
     "review_context_chars",       # core.py:376  .get(key) — DYNAMIC (variable key)
     "review_context_chars_stdin", # core.py:376  .get(key) — DYNAMIC (variable key)
     "review_soft_timeout_secs",   # core.py:647
