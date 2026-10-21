@@ -4,6 +4,21 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+**The red receipt: the CLI watches the contract's tests fail first** — task 280 (PHASE-B.md item 9b, part 1). At a
+task's first activation (its status `pending`) `tasks work` records where it began, in `<task>/base.json`: each scope
+(the project and each `code_roots` repository) with its HEAD commit and a tree of its working state, created once.
+`tasks red [<N>]` runs each `## Test contract` row twice — on a copy of the base with the working tree's test files
+laid over it, and on a copy of the current working state — with a throwaway HOME, the live project's environment
+removed, a timeout, and the judges' write containment when bubblewrap is there. A row's test is a backticked command,
+or a test id that `red_run` in `.agent/config.json` runs. The verdict reads both sides: `proved` (red, then green),
+`already true`, `broken` (red on both), `regressed`; a missing runner (126/127) or a time-out is never red. Each row
+goes to `red-receipt.jsonl` beside task.md and the run to its pinned `## Red receipt`. The close does not check the
+receipt yet (part 2, with `tasks numbers` and light's contract).
+- A task not `pending` at its activation (begun before) gets no base, and a failed first capture is final; `tasks red`
+  then needs `--base [<scope>=]<commit>`. A collected base tree falls back to its commit only when the base was clean.
+- A one-word command in a test cell reads as a test id (white space marks a command): write `exit 1`, not `false`.
+- Without bubblewrap a row runs uncontained, as `tasks verify` runs the project's command; the receipt says so.
+
 **The test contract: tests first, as the specification** — task 278 (PHASE-B.md item 9a; the owner, 2026-10-21:
 "daca am gandit o functionalitate, trebuie sa ii creez toate testele posibile si imposibile"). A new full task
 (feature, build, refactor, ops, bugfix, cleanup) carries a pinned `## Test contract` it fills at design, before any

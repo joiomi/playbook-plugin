@@ -1853,6 +1853,13 @@ def cmd_work(cmd_args):
             _print_guide(stub_type)
         # task 244: what this session's agent spent before this activation belongs to the task it leaves ("-": none)
         _record_agent_usage(agent_dir, prev_task or "-", [session_dir])     # the same task again: still its own
+        # task 280 (plan panel P7): the first activation is the one that finds the status `pending` — read before
+        # the activation moves it; `record_base` below writes the base only then
+        try:
+            from tasks.core import _extract_status as _es280
+            _first_activation = _es280(task_file) == "pending"
+        except Exception:                           # noqa: BLE001 — no base is the safe side
+            _first_activation = False
         _activate_status_then_publish(task_file, task_num, _resume_target, _reopen_target,
                                       _pointer_tmp, session_state)
         _record_transition(agent_dir, "work", task_num)
@@ -1873,6 +1880,16 @@ def cmd_work(cmd_args):
     # it while the session works, so its mtime means "when the task was
     # activated" and is never a liveness signal. Deleting sessions by that
     # mtime is what task 027 fixed; don't reintroduce it.
+
+    # Task 280 (PHASE-B.md item 9b): where the task began — each scope's HEAD and working tree, written once at its
+    # first activation, for `tasks red`. Best-effort: a failure is one line, never a refused activation.
+    try:
+        from tasks.red import record_base
+        _wrote, _note = record_base(Path(project_path), task_file.parent, task_num, _first_activation)
+    except Exception as _base_err:                  # noqa: BLE001 — the activation has already happened
+        _note = f"note: no base recorded for this task ({_base_err.__class__.__name__}: {_base_err})"
+    if _note:
+        print(_note, flush=True)
 
     # Workflow rules — deferred from bootstrap to task activation
     from tasks.template import workflow_briefing

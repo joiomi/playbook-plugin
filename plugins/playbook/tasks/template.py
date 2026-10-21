@@ -182,7 +182,7 @@ def contract_section() -> str:
 
 | # | Kind | Behavior | Test that proves it |
 |---|------|----------|---------------------|
-| 1 | (normal / edge / hostile / must-not) | (one behavior) | (the test, or the command and the output it must give) |
+| 1 | (normal / edge / hostile / must-not) | (one behavior) | (`a test id` that `red_run` runs, or `a command`) |
 
 Hostile classes — each: the rows that cover it, or "does not apply: <why>"
 {classes}"""
@@ -198,6 +198,9 @@ def contract_note() -> str:
 > - A bug's first row reproduces it; a refactor's rows are the behaviors that must stay the same.
 > - Each hostile class: the rows that cover it, or `does not apply: <why>` — a reason the change contradicts is a finding.
 > - Write the tests, then watch each new behavior's test fail on the code as it is before you write the code.
+> - `tasks red` runs each row on the task's base (recorded at its first activation) and on the code now.
+> - A row is proved when it is red on the base and green now; red on both is broken, never proof.
+> - A row's test is a backticked command, or a test id that `red_run` in `.agent/config.json` runs (`{test}`).
 > - A must-not or stay-the-same row shows its sensitivity with a mutant it catches, or says `already true before: <why>`.
 > - A row added later (a judge's finding) is red-first too.
 > - The plan panel reviews the contract as one of its lenses; the impl review asks each row for its test.
@@ -1080,6 +1083,7 @@ Tasks CLI:
     tasks verify [<N>]         run the verify contract as the close does; a green run of the same code is not run again at the close
                                (stage the change first — each code_roots repo committed, its gitlink staged if tracked; a later edit outside the task's records means the close runs it again)
     tasks numbers [N]          read-only: a task's own numbers per close (time by kind and section, rounds, seats, verify, the owner) — an open task's as a snapshot
+    tasks red [N] [--base [<scope>=]<commit>]  run each `## Test contract` row on the task's base (its start) and write the red receipt
     tasks compact <N>          move <!-- archive:start/end --> narrative to task-archive.md"""
 
 
@@ -1254,6 +1258,9 @@ Commands:
                       (stage the change first — each code_roots repo committed, its gitlink staged if tracked; a later edit outside the task's records means the close runs it again)
   numbers [N]         Read-only: the task's own numbers per close, kept in its numbers.json (time by kind
                       and section without sleep, rounds, seats, verify, the owner); an open task's as a snapshot
+  red [N] [--base [<scope>=]<commit>]  Run each `## Test contract` row's test on the task's base (recorded at
+                      its first activation) with the task's test files over it, in a copy with a throwaway HOME;
+                      writes `## Red receipt` in task.md and red-receipt.jsonl (tasks first, PHASE-B 9b)
   list [--pending]    List all tasks with status
   status              Show head position for active tasks
   compact <N> [--dry-run]  Move <!-- archive:start/end --> narrative from a bloated

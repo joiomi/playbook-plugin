@@ -32,6 +32,7 @@ COMMANDS = (
     "timeline", "tagger", "tag", "retro", "status", "audit", "blocked",
     "handoff", "parked", "freehand", "adopt", "doctor", "environment", "detect-verify", "merge-doctor",
     "mindmap-sync", "log", "prepare-merge", "compact", "recall", "dashboard", "guide", "ruling", "verify", "numbers",
+    "red",
 )
 
 
@@ -287,6 +288,10 @@ def _main():
         # A task's own numbers, written at each close (task 235); read-only here.
         from tasks.numbers import cmd_numbers
         cmd_numbers(cmd_args)
+    elif cmd == "red":
+        # Each contract row's test on the task's base, and the red receipt (task 280, PHASE-B.md item 9b).
+        from tasks.red import cmd_red
+        cmd_red(cmd_args)
 
     else:
         print(f"Unknown command: {cmd}", file=sys.stderr)
