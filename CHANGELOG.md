@@ -4,6 +4,14 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+**The agent recorder marks a call still being written at a free-lock end; a seed waits for a readable end** — task 265
+(the owner, 2026-10-20: "Reparațiile mici din PLAN"):
+- with the lane lock free at the session's end, a call the host was still writing (or was killed writing) was neither
+  counted nor marked (1.6.6's Known limitations). It now gets an `unknown` marker for the session's task, as at a busy
+  lock; a half-written user entry does not (PLAN.md "From task 255" (a));
+- a seed whose transcript's last newline could not be read was written at the file's size, inside a half-written line
+  that no later read would count. It is no longer written then; the next read seeds (PLAN.md "From task 253" (b)).
+
 **agy's soft-deadline note is playbook's own line; a soft stop never claims the hard one** — task 264 (the owner,
 2026-10-20: "Reparațiile mici din PLAN"):
 - the `**[playbook] Soft deadline:**` note rode inside the judge's quoted text, where a judge could write the same words.

@@ -37,6 +37,7 @@ import glob
 import hashlib
 import json
 import os
+import re
 import stat
 import time
 
@@ -277,8 +278,9 @@ def record_spans(lane, *, task, paths: "list[str]", session_id: str, pbj, lock_w
 
     `paths` are the main transcripts (the Stop payload's, the session dir's pointer); their subagents' files are added.
     A file with no record (or another file in its place: inode or `head` differ) is read from 0 when at most
-    `fresh_max` bytes, else gets a seed — a record `unknown`, `from = to =` the end of its last complete line (task 253) — so no history is charged to one
-    task; so does a file the journal scan could not reach back to (`scan_max`). A span's records (one per model and
+    `fresh_max` bytes, else gets a seed — a record `unknown`, `from = to =` the end of its last complete line (task
+    253), none while that end cannot be read (task 265) — so no history is charged to one task; so does a file the
+    journal scan could not reach back to (`scan_max`). A span's records (one per model and
     side) go in ONE append; a span with neither calls nor unreadable entries writes nothing. `pbj` is the loaded
     `pb_journal` module. `task` is the task's number, or a callable asked INSIDE the lock (impl round 2, opus: read
     before it, a close holding the lock could leave this span after its `done`); a callable answering None — a
@@ -331,6 +333,8 @@ def record_spans(lane, *, task, paths: "list[str]", session_id: str, pbj, lock_w
                 # at the last complete line, where `read_span` stops: a seed inside a half-written line left it
                 # uncounted once it ended, and read as unread at every busy end (task 253)
                 at = _complete_end(f, st.st_size)
+                if at is None:
+                    continue                   # its end not readable now: no seed at a guess, the next read seeds
                 if pbj.append_agent_usage(lane, task=task, file=key, ino=st.st_ino, span_from=at, span_to=at,
                                           head=head_of(f, min(HEAD_MAX, at)), known=False,
                                           session_id=session_id, why=why) is False:
@@ -384,7 +388,7 @@ def _rotate(pbj, lane: str, held: bool) -> None:
         rot(lane, held=held)
 
 
-_HORIZON_STAMP = __import__("re").compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
+_HORIZON_STAMP = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 
 
 def _horizon(journal: str) -> str:
@@ -444,7 +448,7 @@ def _begun_before(path: str, horizon: str) -> bool:
     return False
 
 
-_SESSION_RE = __import__("re").compile(r"[A-Za-z0-9._-]+")
+_SESSION_RE = re.compile(r"[A-Za-z0-9._-]+")
 
 
 def _pointer(lane: str, session: str) -> str:
@@ -494,14 +498,15 @@ def _same_file(prev, f: str, st) -> bool:
             and prev.get("head") == head_of(f, min(HEAD_MAX, p_to)))
 
 
-def _complete_end(path: str, size: int) -> int:
+def _complete_end(path: str, size: int) -> "int | None":
     """Where `read_span` would stop in a file of `size` bytes: just past its last newline, 0 when it has none — a host
-    killed mid-write leaves a last line no reader counts (task 252, PLAN.md "From task 247" (a)). On a read error, the
-    size: as before, the side of marking."""
+    killed mid-write leaves a last line no reader counts (task 252, PLAN.md "From task 247" (a)). On a read error,
+    None: the caller decides — no seed then (a seed at the size fell inside a half-written line), and unread for the
+    marker (task 265, PLAN.md "From task 253" (b))."""
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
     except OSError:
-        return size
+        return None
     try:
         pos = size
         while pos > 0:
@@ -512,13 +517,13 @@ def _complete_end(path: str, size: int) -> int:
                 return pos + i + 1
         return 0
     except OSError:
-        return size
+        return None
     finally:
         os.close(fd)
 
 
-_USER_TYPE = __import__("re").compile(rb'"type"\s*:\s*"user"')
-_MESSAGE_KEY = __import__("re").compile(rb'"message"\s*:')     # the KEY, not a value "message" (task 253)
+_USER_TYPE = re.compile(rb'"type"\s*:\s*"user"')
+_MESSAGE_KEY = re.compile(rb'"message"\s*:')     # the KEY, not a value "message" (task 253)
 
 
 def _tail_may_be_a_call(path: str, start: int, size: int) -> bool:
@@ -544,6 +549,22 @@ def _tail_may_be_a_call(path: str, start: int, size: int) -> bool:
     return not _USER_TYPE.search(_MESSAGE_KEY.split(head, 1)[0])
 
 
+def _tail_unread(paths: "list[str]") -> bool:
+    """Whether a file of the session ends in a half-written line that may be a call (`_tail_may_be_a_call`), or one
+    whose end cannot be read — what a read up to the last complete line leaves uncounted (task 265)."""
+    for f in session_files(paths):
+        try:
+            st = os.lstat(f)
+        except OSError:
+            continue
+        if not stat.S_ISREG(st.st_mode):
+            continue
+        end = _complete_end(f, st.st_size)
+        if end is None or _tail_may_be_a_call(f, end, st.st_size):
+            return True
+    return False
+
+
 def _unread(lane: str, paths: "list[str]") -> bool:
     """Whether any of the session's files holds a span the recorder would read — no record (a file with no complete
     line excepted: nothing to lose), another file in its place (`_same_file`, task 247: the size alone took a replaced
@@ -567,8 +588,8 @@ def _unread(lane: str, paths: "list[str]") -> bool:
             continue
         prev = newest.get(key)
         end = _complete_end(f, st.st_size)
-        if _tail_may_be_a_call(f, end, st.st_size):
-            return True
+        if end is None or _tail_may_be_a_call(f, end, st.st_size):
+            return True                        # an end not readable is not nothing unread (task 265)
         if prev is None and end == 0:
             continue
         if not _same_file(prev, f, st) or end != prev["to"]:
@@ -623,6 +644,13 @@ def hook_main(payload_text: str) -> str:
     said = f"recorded {res['calls']} call(s) from {res['files']} file(s) for task {(seen_task or ['-'])[0] or '-'}"
     if res.get("unwritten"):
         said += f"; {res['unwritten']} span(s) NOT written (the journal refused them)"
+    if os.environ.get("PB_AU_MARK_BUSY") == "1" and seen_task and seen_task[0] is not None and _tail_unread(paths):
+        # task 265 (PLAN.md "From task 255" (a)): at the session's end no later reader comes, and a last line the host
+        # is still writing (or was killed writing) that may be a call is never counted — marked, as at a busy lock
+        marked = pbj.append_agent_usage(lane, task=seen_task[0] or "-", known=False, session_id=session,
+                                        why="a half-written last line at the session's end may be a call: not counted")
+        said += ("; marked unknown (a half-written call at the end)" if marked
+                 else "; the unknown marker for a half-written call could not be written")
     return said
 
 

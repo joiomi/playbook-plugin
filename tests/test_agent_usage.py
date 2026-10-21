@@ -267,6 +267,24 @@ class RecordingSpans(_Lane):
         self.record(fresh_max=100)
         self.assertEqual(self.total(), 1, "only what came after the seed")
 
+    def test_a_seed_whose_end_cannot_be_read_is_not_written(self):
+        """PLAN.md "From task 253" (b) (task 265; opus): a failed read of the last newline seeded at the size again —
+        inside a half-written line, which the next read would never count. No seed then; the next read seeds."""
+        if os.geteuid() == 0:
+            self.skipTest("root reads a mode-000 file")
+        whole = lines(*[entry(f"old{i}") for i in range(20)])
+        self.main.write_bytes(whole + lines(entry("new1"))[:50])
+        os.chmod(self.main, 0)
+        try:
+            self.record(fresh_max=100)
+        finally:
+            os.chmod(self.main, 0o644)
+        self.assertEqual(self.records(), [], "a seed written on a read error")
+        self.assertTrue(self.mod._unread(str(self.lane), [str(self.main)]), "an unreadable file is not nothing unread")
+        self.record(fresh_max=100)
+        r = self.records()
+        self.assertEqual((r[0]["status"], r[0]["from"], r[0]["to"]), ("unknown", len(whole), len(whole)))
+
     def test_a_seed_taken_mid_write_sits_at_the_last_complete_line(self):
         # task 253 (PLAN.md "From task 252" (a), sonnet / codex): a seed at `size` fell inside a half-written line, which
         # the next read would then never count; at the last newline, the line is counted once it ends

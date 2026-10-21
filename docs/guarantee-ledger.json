@@ -20175,6 +20175,29 @@
           "limitations": [
             "The close's read with 10 compressed archives: 0.13 s for a task in the live file, 0.76 s for one begun in the oldest (task 257 W10, this repo's laptop)."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_agent_usage_hook.py",
+          "reference": "AtTheSessionsEnd.test_a_free_lock_at_the_end_with_a_call_still_being_written_marks_it",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_agent_usage_hook.py",
+            "reference": "AtTheSessionsEnd.test_a_free_lock_at_the_end_with_a_half_written_user_entry_marks_nothing"
+          },
+          "limitations": [
+            "Task 265 (PLAN.md \"From task 255\" (a)): the real session-end-hook with the lane lock free and the transcript's last line a call cut at 60 bytes: its two complete calls recorded, one `unknown` marker for the session's task, and the hook's journal line says so. Watched red: no marker."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_agent_usage.py",
+          "reference": "RecordingSpans.test_a_seed_whose_end_cannot_be_read_is_not_written",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 265 (PLAN.md \"From task 253\" (b)): a mode-000 transcript past `fresh_max` gets no seed (skipped as root); restored, the next read seeds at its last complete line. Watched red: a seed at the size."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -20189,7 +20212,8 @@
       "missing_evidence_or_limitation": [
         "Tool and model time are one kind (PreToolUse runs only for Bash, the edit tools and AskUserQuestion); Bash is not split by command (the hook journal keeps none), so the agent's own test runs count as agent and verify holds only recorded runs.",
         "Whole-second stamps: each gap is exact to a second either way; on three live sessions against their transcripts counted B1's way, agent came within 2.5 s and owner-idle within 2 s (task 235 W2). Sleep is measured only between two samples of one boot.",
-        "Two sessions working on one task at once each count their own time; a task closed before this existed has no numbers.json."
+        "Two sessions working on one task at once each count their own time; a task closed before this existed has no numbers.json.",
+        "2026-10-21 (task 265): a session's end with the lane lock free marks a half-written last line that may be a call `unknown` (as a busy lock did since task 246); a half-written user entry is not marked. A seed is not written while its file's end cannot be read. PLAN.md \"From task 253\" (a) was measured and rejected (an escaped `\\\"message\\\":` never matches the key's pattern), and (c) rejected (a seed at the size of a one-line file would break that line)."
       ],
       "follow_up_phases": [
         8

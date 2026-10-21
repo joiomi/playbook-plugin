@@ -215,6 +215,28 @@ class AtTheSessionsEnd(_Project):
         line = [x for x in self.hook_lines() if x.get("hook") == "session-end"]
         self.assertTrue(line and "recorded 2 call" in line[-1].get("detail", ""), line)
 
+    def test_a_free_lock_at_the_end_with_a_call_still_being_written_marks_it(self):
+        """PLAN.md "From task 255" (a) (task 265; 1.6.6's release round 1, codex): with the lane lock FREE at the
+        session's end, a call the host was still writing then was neither counted nor marked — the half-written tail was
+        checked only on a busy lock."""
+        with open(self.transcript, "ab") as fh:
+            fh.write(json.dumps(entry("m3")).encode()[:60])          # the host was killed writing a call
+        r = self.end("exit")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(sum(x.get("calls", 0) for x in self.records()), 2)
+        self.assertEqual(self.unknown(), [("5", "unknown")])
+        line = [x for x in self.hook_lines() if x.get("hook") == "session-end"]
+        self.assertIn("half-written", line[-1].get("detail", ""))
+
+    def test_a_free_lock_at_the_end_with_a_half_written_user_entry_marks_nothing(self):
+        user = {"parentUuid": "u9", "isSidechain": False, "promptId": "p9", "type": "user",
+                "message": {"role": "user", "content": "z" * 300}}
+        with open(self.transcript, "ab") as fh:
+            fh.write(json.dumps(user, separators=(",", ":")).encode()[:200])
+        r = self.end("exit")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.unknown(), [])
+
     def hold_lock(self):
         lock = self.agent / "journal" / "agent-usage.lock"
         lock.parent.mkdir(parents=True, exist_ok=True)
