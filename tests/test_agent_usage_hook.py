@@ -226,7 +226,20 @@ class AtTheSessionsEnd(_Project):
         self.assertEqual(sum(x.get("calls", 0) for x in self.records()), 2)
         self.assertEqual(self.unknown(), [("5", "unknown")])
         line = [x for x in self.hook_lines() if x.get("hook") == "session-end"]
-        self.assertIn("half-written", line[-1].get("detail", ""))
+        self.assertIn("marked unknown (unread at the end)", line[-1].get("detail", ""))
+
+    def test_a_free_lock_at_the_end_with_an_unreadable_transcript_marks_it(self):
+        """Task 265's impl round 1 (opus Important): the "an end that cannot be read gets the same marker" arm had no
+        test."""
+        if os.geteuid() == 0:
+            self.skipTest("root reads a mode-000 file")
+        os.chmod(self.transcript, 0)
+        try:
+            r = self.end("exit")
+        finally:
+            os.chmod(self.transcript, 0o644)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.unknown(), [("5", "unknown")])
 
     def test_a_free_lock_at_the_end_with_a_half_written_user_entry_marks_nothing(self):
         user = {"parentUuid": "u9", "isSidechain": False, "promptId": "p9", "type": "user",

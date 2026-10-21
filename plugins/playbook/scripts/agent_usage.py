@@ -549,22 +549,6 @@ def _tail_may_be_a_call(path: str, start: int, size: int) -> bool:
     return not _USER_TYPE.search(_MESSAGE_KEY.split(head, 1)[0])
 
 
-def _tail_unread(paths: "list[str]") -> bool:
-    """Whether a file of the session ends in a half-written line that may be a call (`_tail_may_be_a_call`), or one
-    whose end cannot be read — what a read up to the last complete line leaves uncounted (task 265)."""
-    for f in session_files(paths):
-        try:
-            st = os.lstat(f)
-        except OSError:
-            continue
-        if not stat.S_ISREG(st.st_mode):
-            continue
-        end = _complete_end(f, st.st_size)
-        if end is None or _tail_may_be_a_call(f, end, st.st_size):
-            return True
-    return False
-
-
 def _unread(lane: str, paths: "list[str]") -> bool:
     """Whether any of the session's files holds a span the recorder would read — no record (a file with no complete
     line excepted: nothing to lose), another file in its place (`_same_file`, task 247: the size alone took a replaced
@@ -644,12 +628,14 @@ def hook_main(payload_text: str) -> str:
     said = f"recorded {res['calls']} call(s) from {res['files']} file(s) for task {(seen_task or ['-'])[0] or '-'}"
     if res.get("unwritten"):
         said += f"; {res['unwritten']} span(s) NOT written (the journal refused them)"
-    if os.environ.get("PB_AU_MARK_BUSY") == "1" and seen_task and seen_task[0] is not None and _tail_unread(paths):
+    if os.environ.get("PB_AU_MARK_BUSY") == "1" and seen_task and seen_task[0] is not None and _unread(lane, paths):
         # task 265 (PLAN.md "From task 255" (a)): at the session's end no later reader comes, and a last line the host
-        # is still writing (or was killed writing) that may be a call is never counted — marked, as at a busy lock
+        # is still writing (or was killed writing) that may be a call is never counted — marked, as at a busy lock.
+        # Decided by `_unread` against the newest records, not by the tail alone: a call the host finished after the
+        # read let the lock go, and a span the journal refused, are unread too (its impl round 1: opus, sonnet)
         marked = pbj.append_agent_usage(lane, task=seen_task[0] or "-", known=False, session_id=session,
-                                        why="a half-written last line at the session's end may be a call: not counted")
-        said += ("; marked unknown (a half-written call at the end)" if marked
+                                        why="unread at the session's end (a half-written or late call, or a span the journal refused): not counted")
+        said += ("; marked unknown (unread at the end)" if marked
                  else "; the unknown marker for a half-written call could not be written")
     return said
 

@@ -20198,6 +20198,19 @@
           "limitations": [
             "Task 265 (PLAN.md \"From task 253\" (b)): a mode-000 transcript past `fresh_max` gets no seed (skipped as root); restored, the next read seeds at its last complete line. Watched red: a seed at the size."
           ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_agent_usage.py",
+          "reference": "RoundTwoFixes.test_a_free_lock_end_marks_a_call_the_host_finished_after_the_read",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_agent_usage.py",
+            "reference": "RoundTwoFixes.test_a_free_lock_end_after_a_clean_read_marks_nothing"
+          },
+          "limitations": [
+            "Task 265's impl round 1 (opus Important, sonnet): `hook_main` in-process at a session's end, the host's call finished between the read and the check (a wrapped `record_spans`). Watched red with the tail-only check."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -20213,7 +20226,7 @@
         "Tool and model time are one kind (PreToolUse runs only for Bash, the edit tools and AskUserQuestion); Bash is not split by command (the hook journal keeps none), so the agent's own test runs count as agent and verify holds only recorded runs.",
         "Whole-second stamps: each gap is exact to a second either way; on three live sessions against their transcripts counted B1's way, agent came within 2.5 s and owner-idle within 2 s (task 235 W2). Sleep is measured only between two samples of one boot.",
         "Two sessions working on one task at once each count their own time; a task closed before this existed has no numbers.json.",
-        "2026-10-21 (task 265): a session's end with the lane lock free marks a half-written last line that may be a call `unknown` (as a busy lock did since task 246); a half-written user entry is not marked. A seed is not written while its file's end cannot be read. PLAN.md \"From task 253\" (a) was measured and rejected (an escaped `\\\"message\\\":` never matches the key's pattern), and (c) rejected (a seed at the size of a one-line file would break that line)."
+        "2026-10-21 (task 265): a session's end with the lane lock free marks what is still unread after its read `unknown` (as a busy lock did since task 246) — a half-written last line that may be a call, a call finished after the read, a span the journal refused, an end that cannot be read; a half-written user entry is not marked, and a transcript resumed and ended again with the same half-written tail gets one more marker each time. A seed is not written while its file's end cannot be read. PLAN.md \"From task 253\" (a) was measured and rejected (an escaped `\\\"message\\\":` never matches the key's pattern), and (c) rejected (a seed at the size of a one-line file would break that line)."
       ],
       "follow_up_phases": [
         8

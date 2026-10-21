@@ -277,10 +277,13 @@ class RecordingSpans(_Lane):
         os.chmod(self.main, 0)
         try:
             self.record(fresh_max=100)
+            # asked while the file is still unreadable (impl round 1, opus Important: asked after the restore, it
+            # proved nothing of the read-error arm)
+            unread = self.mod._unread(str(self.lane), [str(self.main)])
         finally:
             os.chmod(self.main, 0o644)
         self.assertEqual(self.records(), [], "a seed written on a read error")
-        self.assertTrue(self.mod._unread(str(self.lane), [str(self.main)]), "an unreadable file is not nothing unread")
+        self.assertTrue(unread, "an unreadable file is not nothing unread")
         self.record(fresh_max=100)
         r = self.records()
         self.assertEqual((r[0]["status"], r[0]["from"], r[0]["to"]), ("unknown", len(whole), len(whole)))
@@ -496,6 +499,44 @@ class RoundTwoFixes(_Lane):
             fh.write(json.dumps(rec) + "\n")
         self.record(fresh_max=10 ** 6)
         self.assertEqual(self.total(), 2)
+
+    def _hook(self, payload, **env):
+        keys = ("PB_AU_LANE", "PB_AU_SESSION", "PB_AU_MARK_BUSY")
+        old = {k: os.environ.get(k) for k in keys}
+        os.environ.update({"PB_AU_LANE": str(self.lane), "PB_AU_SESSION": "s1", "PB_AU_MARK_BUSY": "1", **env})
+        try:
+            return self.mod.hook_main(json.dumps(payload))
+        finally:
+            for k, v in old.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+    def test_a_free_lock_end_marks_a_call_the_host_finished_after_the_read(self):
+        """Task 265's impl round 1 (opus Important, sonnet): the end check looked at the file again after the read had let
+        the lock go, so a call the host finished in between — the very case — was neither counted nor marked. The end
+        now asks whether anything is unread since the newest record (`_unread`)."""
+        from unittest import mock
+        tail = lines(entry("m2"))
+        self.main.write_bytes(lines(entry("m1")) + tail[:40])
+        real = self.mod.record_spans
+
+        def read_then_the_host_finishes(*a, **k):
+            res = real(*a, **k)
+            with open(self.main, "ab") as fh:
+                fh.write(tail[40:])
+            return res
+        with mock.patch.object(self.mod, "record_spans", read_then_the_host_finishes):
+            said = self._hook({"transcript_path": str(self.main)})
+        self.assertEqual(self.total(), 1, said)
+        self.assertEqual([r.get("status") for r in self.records() if r.get("status") == "unknown"], ["unknown"], said)
+
+    def test_a_free_lock_end_after_a_clean_read_marks_nothing(self):
+        self.main.write_bytes(lines(entry("m1"), entry("m2")))
+        said = self._hook({"transcript_path": str(self.main)})
+        self.assertEqual(self.total(), 2, said)
+        self.assertEqual([r for r in self.records() if r.get("status") == "unknown"], [])
 
     def test_an_unresolved_session_records_nothing(self):
         self.main.write_bytes(lines(entry("m1")))
