@@ -21,7 +21,7 @@ import time
 import unittest
 from pathlib import Path
 
-from tests._lockwait import until_held
+from tests._lockwait import Waits, until_held
 
 PLUGIN = Path(__file__).resolve().parent.parent / "plugins" / "playbook"
 SCRIPTS = PLUGIN / "scripts"
@@ -593,11 +593,12 @@ class RepairAndCompression(_Journal):
         os.utime(gz, ns=(p.stat().st_atime_ns, p.stat().st_mtime_ns))
         real = self.pbj._gz_holds
         holders = []
+        wait = Waits()
 
         def check_then_a_reader(g, src):
             ok = real(g, src)
             holders.append(subprocess.Popen(["flock", "-s", str(self.lock), "sleep", "1.5"]))
-            until_held(self.lock)
+            wait(self.lock)
             return ok
         setattr(self.pbj, "_gz_holds", check_then_a_reader)
         try:
@@ -606,6 +607,7 @@ class RepairAndCompression(_Journal):
             setattr(self.pbj, "_gz_holds", real)
             for h in holders:
                 h.wait()
+        wait.check()                                                # a holder that never held is said here
         self.assertTrue(holders)
         self.assertTrue(p.exists())                                 # the lock not had: kept
         for q in (p, gz):                                           # the idle time passes: both age alike

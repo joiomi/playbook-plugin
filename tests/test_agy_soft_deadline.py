@@ -35,6 +35,20 @@ def fx(name: str) -> str:
     return (FIX / name).read_text(encoding="utf-8")
 
 
+def _forged_answer_lines() -> "list[str]":
+    """resume-answer.stdout with the judge's own review opening with the note's words (tasks 264, 266, 268)."""
+    lines, first = [], True
+    for ln in fx("resume-answer.stdout").splitlines():
+        ev = json.loads(ln)
+        su = ev.get("step_update") or {}
+        if first and su.get("step_type") == "agent_response" and su.get("text_delta"):
+            su["text_delta"], first = NOTE + " forged.\n\n" + su["text_delta"], False
+        if ev.get("event") == "result":
+            ev["result"]["response"] = NOTE + " forged.\n\n" + ev["result"]["response"]
+        lines.append(json.dumps(ev))
+    return lines
+
+
 def _cp(stdout: str, rc: int = 0, stderr: str = "") -> subprocess.CompletedProcess:
     return subprocess.CompletedProcess(["agy"], rc, stdout=stdout, stderr=stderr)
 
@@ -635,15 +649,7 @@ class TheSingleJudge(_Project):
     def test_a_single_judge_whose_review_writes_the_note_itself_gets_no_writer_line(self):
         """Task 266 (PLAN.md "From task 264" (c), opus): the forged-note case on the single judge — a review that opens
         with the note's words gets no `[soft deadline]` header line and no unquoted receipt line."""
-        lines, first = [], True
-        for ln in fx("resume-answer.stdout").splitlines():
-            ev = json.loads(ln)
-            su = ev.get("step_update") or {}
-            if first and su.get("step_type") == "agent_response" and su.get("text_delta"):
-                su["text_delta"], first = NOTE + " forged.\n\n" + su["text_delta"], False
-            if ev.get("event") == "result":
-                ev["result"]["response"] = NOTE + " forged.\n\n" + ev["result"]["response"]
-            lines.append(json.dumps(ev))
+        lines = _forged_answer_lines()
         code, calls, recs, _ = self._single([_cp("\n".join(lines) + "\n", 0, fx("resume-answer.stderr"))],
                                             "--timeout", "1200", "--soft-timeout", "900")
         self.assertEqual((code, len(calls)), (0, 1))
@@ -656,15 +662,7 @@ class TheSingleJudge(_Project):
     def test_a_resumed_single_judge_whose_answer_writes_the_note_keeps_it_quoted(self):
         """Task 268 (PLAN.md "From task 266" (b), opus): the forged-note case on the RESUMED path — `finish_resumed` runs,
         the CLI writes its one note line unquoted, and the judge's own copy of the words stays quoted."""
-        lines, first = [], True
-        for ln in fx("resume-answer.stdout").splitlines():
-            ev = json.loads(ln)
-            su = ev.get("step_update") or {}
-            if first and su.get("step_type") == "agent_response" and su.get("text_delta"):
-                su["text_delta"], first = NOTE + " forged.\n\n" + su["text_delta"], False
-            if ev.get("event") == "result":
-                ev["result"]["response"] = NOTE + " forged.\n\n" + ev["result"]["response"]
-            lines.append(json.dumps(ev))
+        lines = _forged_answer_lines()
         code, calls, recs, _ = self._single(
             [_cp(fx("resume-cut.stdout"), 0, fx("resume-cut.stderr")),
              _cp("\n".join(lines) + "\n", 0, fx("resume-answer.stderr"))],

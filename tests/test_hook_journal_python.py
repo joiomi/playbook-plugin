@@ -28,7 +28,7 @@ import unittest
 from pathlib import Path
 
 from tests._bashcheck import bash_or_skip
-from tests._lockwait import until_held
+from tests._lockwait import Waits, until_held
 
 PLUGIN = Path(__file__).resolve().parent.parent / "plugins" / "playbook"
 SCRIPTS = PLUGIN / "scripts"
@@ -643,11 +643,12 @@ class TheCompressionProtocol(_Rotating):
         x = self.idle(b'{"hook":"old"}\n' * 50)
         real = self.pbj._gzip_to
         holders = []
+        wait = Waits()
 
         def gzip_then_a_reader(src, tmp):
             ok = real(src, tmp)
             holders.append(subprocess.Popen(["flock", "-s", str(self.journal.parent), "sleep", "2.5"]))
-            until_held(self.journal.parent)
+            wait(self.journal.parent)
             return ok
         setattr(self.pbj, "_gzip_to", gzip_then_a_reader)
         try:
@@ -656,6 +657,7 @@ class TheCompressionProtocol(_Rotating):
             setattr(self.pbj, "_gzip_to", real)
             for h in holders:
                 h.wait()
+        wait.check()                                                # a holder that never held is said here
         self.assertTrue(holders)
         self.assertTrue(x.exists())
         self.assertEqual(list(self.journal.parent.glob("*.gz*")), [])
@@ -721,11 +723,12 @@ class TheCompressionProtocol(_Rotating):
         os.utime(gz, ns=(x.stat().st_atime_ns, x.stat().st_mtime_ns))
         real = self.pbj._gz_holds
         holders = []
+        wait = Waits()
 
         def check_then_a_reader(g, src):
             ok = real(g, src)
             holders.append(subprocess.Popen(["flock", "-s", str(self.journal.parent), "sleep", "2.5"]))
-            until_held(self.journal.parent)
+            wait(self.journal.parent)
             return ok
         setattr(self.pbj, "_gz_holds", check_then_a_reader)
         try:
@@ -734,6 +737,7 @@ class TheCompressionProtocol(_Rotating):
             setattr(self.pbj, "_gz_holds", real)
             for h in holders:
                 h.wait()
+        wait.check()                                                # a holder that never held is said here
         self.assertTrue(holders)
         self.assertTrue(x.exists())                                 # the lock not had: kept
         self.assertGreater(x.stat().st_mtime, time.time() - 60)     # and tried again only after the idle time
