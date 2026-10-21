@@ -365,7 +365,7 @@ class State(Project):
 
 
 class Close(Project):
-    def light(self, contract=None, gate=False):
+    def light(self, contract=None, gate=False, fenced_gate=False):
         """A light task, its gates ticked with a note, `reversible`, committed, active — a close needs no review."""
         r = self.cli("new", "light", "probe", "probe the close")
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -381,6 +381,9 @@ class Close(Project):
         text = "\n".join(ln + (" — done" if ln.startswith("- [x] ") else "") for ln in text.split("\n"))
         if contract:                                                # a light task has no `## Plan Review` to sit above
             text = text.replace("## Pre-review\n", _contract(contract) + "## Pre-review\n", 1)
+        if fenced_gate:                                             # an example of the gate, inside a fence
+            from tasks.template import CONTRACT_GATE
+            text = text.replace("## Pre-review\n", f"```\n- [ ] {CONTRACT_GATE}\n```\n\n## Pre-review\n", 1)
         self.task_md.write_text(text, encoding="utf-8")
         self.g("add", "-A")
         self.g("commit", "-qm", "the task")
@@ -436,6 +439,13 @@ class Close(Project):
     def test_a_task_without_the_contract_gate_gets_no_report(self):
         # row 10 (must-not)
         self.light()
+        r = self.cli("work", "done")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotIn("red receipt", (r.stdout + r.stderr).lower())
+
+    def test_a_fenced_gate_line_is_no_gate(self):
+        # row 10 (must-not): the gate's line quoted inside a code fence is an example, not the task's gate
+        self.light(fenced_gate=True)
         r = self.cli("work", "done")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertNotIn("red receipt", (r.stdout + r.stderr).lower())

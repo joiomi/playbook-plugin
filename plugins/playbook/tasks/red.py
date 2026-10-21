@@ -990,7 +990,13 @@ def state_of(project: Path, task_dir: Path, rows: "list[dict]", cfg: dict,
     return st
 
 
-_GATE_LINE = re.compile(r"(?m)^[ \t]*- \[[ xX]\] Test contract:")
+_GATE_LINE = re.compile(r"- \[[ xX]\] Test contract:")
+
+
+def _has_contract_gate(text: str) -> bool:
+    """The task has the `Test contract:` design gate — a line outside any code fence (a quoted example is none)."""
+    from tasks.core import _iter_nonfenced, _physical_lines
+    return any(_GATE_LINE.match(s) for _i, s in _iter_nonfenced(_physical_lines(text)))
 
 
 def close_report(project: Path, task_file: Path, budget: float = 20.0) -> "list[str]":
@@ -1001,7 +1007,7 @@ def close_report(project: Path, task_file: Path, budget: float = 20.0) -> "list[
     text = read_task_text(Path(task_file))
     rows, why = parse_contract(text)
     if rows is None:
-        return [f"{head}: {why} — the task has the `Test contract:` gate"] if _GATE_LINE.search(text) else []
+        return [f"{head}: {why} — the task has the `Test contract:` gate"] if _has_contract_gate(text) else []
     try:
         cfg = load_config(Path(project))
     except Exception:                                   # noqa: BLE001
