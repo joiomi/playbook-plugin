@@ -173,7 +173,7 @@ class Base(Base_):
         self.set_contract([ROW1, ROW2])
         self.assertEqual(self.cli("red", "--rows", "2", "--base", f"code={docs_only}").returncode, 0)
         self.assertEqual(self.receipt_lines()[-1]["verdict"], "proved")
-        self.assertNotRegex(self.check(), r"row 2: proved \(run")
+        self.assertRegex(self.check(), r"row 2: proved on older code")       # named exactly (impl round 1)
 
     def test_a_contract_row_on_older_code_is_no_proof(self):
         # row 7 (sonnet): a design row run on a commit OLDER than the start is red for the code's age
@@ -324,6 +324,107 @@ class Base(Base_):
         self.assertEqual(self.cli("red", "--base", f"code={other}").returncode, 0)
         self.assertEqual(self.receipt_lines()[-1]["verdict"], "proved")
         self.assertRegex(self.check(), r"row 1: proved on unrelated code")
+
+
+class RoundOne(Base_):
+    """Task 283's impl round 1 (rows 23-29), each red on nested 21e0276 before its fix."""
+
+    def test_an_unborn_activations_code_is_its_work(self):
+        # row 23 (opus, codex): a project with no commit yet — its first commit left the activation's code out
+        import shutil
+        shutil.rmtree(self.code / ".git")
+        self.g("init", "-q", cwd=self.code)                                     # unborn: src.py uncommitted
+        self.started(change=False)
+        self.assertIsNone(self.base()["scopes"]["code"]["commit"])
+        (self.code / "Makefile").write_text("all:\n\ttrue\n", encoding="utf-8")
+        first = self.commit_code("a first commit without src.py", "Makefile")
+        self.change_code()
+        self.assertEqual(self.cli("red").returncode, 0)
+        self.set_contract([ROW1, ROW2])
+        self.assertEqual(self.cli("red", "--rows", "2", "--base", f"code={first}").returncode, 0)
+        self.assertEqual(self.receipt_lines()[-1]["verdict"], "proved")
+        self.assertRegex(self.check(), r"row 2: proved on older code")
+
+    def test_mode_and_content_are_judged_apart(self):
+        # row 24 (codex): committed (644, f1); the activation (644, f2); a base (755, f1) lacks f2 — and the other way:
+        # the activation (755, f1); a base (644, f3) lacks the mode
+        src = self.code / "src.py"
+        src.write_text("def f():\n    return 2\n", encoding="utf-8")       # the activation's uncommitted content
+        self.started(change=False)
+        src.write_text("def f():\n    return 1\n", encoding="utf-8")
+        src.chmod(0o755)
+        lost = self.commit_code("the mode, the committed content", "src.py")
+        src.write_text("def f():\n    return 2\n", encoding="utf-8")
+        (self.code / "tests" / "test_new.py").write_text(
+            "import unittest\nimport src\n\n\nclass N(unittest.TestCase):\n"
+            "    def test_two(self):\n        self.assertEqual(src.f(), 2)\n", encoding="utf-8")
+        self.set_contract([("1", "must-not", "the old test", "`tests.test_old`")])
+        self.assertEqual(self.cli("red").returncode, 0)
+        self.set_contract([("1", "must-not", "the old test", "`tests.test_old`"), ROW2])
+        self.assertEqual(self.cli("red", "--rows", "2", "--base", f"code={lost}").returncode, 0)
+        self.assertEqual(self.receipt_lines()[-1]["verdict"], "proved")
+        self.assertRegex(self.check(), r"row 2: proved on older code")
+
+    def test_a_half_captured_activation_is_unchecked(self):
+        # row 25 (codex): base.json kept the commit but not the working tree — the activation's code is not known
+        import json
+        self.started()
+        p = self.task_dir / "base.json"
+        doc = json.loads(p.read_text(encoding="utf-8"))
+        doc["scopes"]["code"].update(tree=None, clean=False)
+        p.write_text(json.dumps(doc), encoding="utf-8")
+        start = doc["scopes"]["code"]["commit"]
+        self.assertEqual(self.cli("red", "--base", f"code={start}").returncode, 0)
+        self.assertEqual(self.receipt_lines()[-1]["verdict"], "proved")
+        self.assertRegex(self.check(), r"row 1: proved on an unchecked base")
+
+    def test_a_frozen_miss_says_so(self):
+        # row 26 (opus): under the lock a record the prefetch did not see is not a git failure
+        from tasks import red
+        self.started(change=False)
+        older = self.head(self.code)
+        (self.code / "NOTES.md").write_text("x\n", encoding="utf-8")
+        start = self.commit_code("the start", "NOTES.md")
+        view = red._Trees({"code": self.code}, [":(exclude).agent"], {})
+        view.frozen = True
+        rec = {"base": {"code": {"commit": older, "used": "commit"}}, "now_tree": {"code": start}}
+        res, why = red._base_check(rec, {"code": {"commit": start, "tree": start, "clean": True}}, view, False)
+        self.assertEqual(res, "unchecked")
+        self.assertIn("written while the section was", why)
+        self.assertNotIn("git could not", why)
+
+    def test_a_scope_the_reference_lacks_gets_no_hint(self):
+        # row 27 (sonnet): a re-run puts that scope on its HEAD again — the reference still lacks it
+        from tasks import red
+        rows = _rows(red, ["1"])
+        key = red.row_key(rows[0])
+        rec = {"row": "1", "run": "r1", "verdict": "proved", "row_sha": "x", "row_key": key, "contract": [key],
+               "command": "true 1", "now_tree": {"code": "tn", "extra": "xn"},
+               "base": {"code": {"commit": "c0", "tree": "t0", "used": "tree"}, "extra": {"commit": "e1",
+                                                                                         "used": "commit"}}}
+        st = red.compute_state(rows, [rec], {}, View({"t0": "s"}), None, 0, {"code": {"commit": "c0", "tree": "t0"}})
+        lines = "\n".join(red.render_state(st, "001", "head"))
+        self.assertNotIn("refresh:", lines)
+        self.assertIn("a re-run cannot", lines)
+
+    def test_many_summaries_are_read_quickly(self):
+        # row 28 (sonnet): a test controls how many summaries it prints
+        import time
+        from tasks import red
+        out = b"Ran 1 test in 0.0s\n\nOK\n" * 20000
+        t0 = time.monotonic()
+        self.assertEqual(red._side_status(0, out)[0], "green")
+        self.assertLess(time.monotonic() - t0, 2.0)
+
+    def test_no_part_3_sentence_contradicts_part_4(self):
+        # row 29 (opus, codex): part 3's "on older code … reads start-only" is part 4's `proved on older code`
+        from tasks import red
+        doc = (_HERE.parent / "docs" / "cli.md").read_text(encoding="utf-8")
+        body = "\n".join(p for p in doc.split("\n\n") if p.startswith("**`tasks red"))
+        self.assertNotIn("Run on the start, on older code, or with", body)
+        view = red._Trees({}, [], {})
+        view.ran_out = True
+        self.assertNotIn("a late row then reads start-only", red._unchecked(view, ""))
 
 
 class Cli(Base_):
