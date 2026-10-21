@@ -489,6 +489,114 @@ class Default(Base):
         self.assertFalse(set(p.name for p in sessions.iterdir()) - set(before))   # nothing created (the GC may remove)
 
 
+class RoundOne(Base):
+    """Task 282's impl round 1, each red on nested c1f9693 before its fix (rows 32-41)."""
+
+    def test_a_failure_beside_a_return_of_5_is_red(self):
+        # row 32 (agy, opus): `a ; b` — a failed, b collected nothing and returned 5
+        from tasks import red
+        self.assertEqual(red._side_status(5, b"Ran 1 test in 0.0s\n\nFAILED (failures=1)\n"
+                                             b"=== no tests ran in 0.01s ===\n")[0], "red")
+        self.assertEqual(red._side_status(5, b"=== 1 failed in 0.1s ===\n\nRan 0 tests in 0.0s\n\nNO TESTS RAN\n")[0],
+                         "red")
+
+    def test_an_empty_pytest_run_in_a_chain_is_skipped(self):
+        # row 33 (codex): `pytest target; pytest smoke` — the target collected nothing, smoke passed, return 0
+        from tasks import red
+        self.assertEqual(red._side_status(0, b"=== no tests ran in 0.01s ===\n=== 3 passed in 0.1s ===\n")[0],
+                         "skipped")
+
+    def test_a_unittest_end_stops_at_a_pytest_summary(self):
+        # row 34 (agy): an unclosed unittest summary cannot take an `OK` that comes after a pytest one
+        from tasks import red
+        out = b"Ran 0 tests in 0.0s\n\nNO TESTS RAN\n=== 2 passed in 0.1s ===\nOK (skipped=7)\n"
+        self.assertEqual(red._side_status(0, out), ("skipped", "pytest+unittest", 0))
+
+    def test_an_older_base_in_an_unchanged_scope_is_no_proof(self):
+        # row 35 (sonnet): the task changed no code in `code`; a late row run there on an OLDER commit is red only
+        # because that code is older — already true at the start, not a proof
+        (self.code / "src.py").write_text("def f():\n    return 0\n", encoding="utf-8")
+        older = self.commit_code("an older f")
+        (self.code / "src.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+        self.commit_code("f as the task finds it")
+        self.started(rows=[("1", "must-not", "the old test still holds", "`tests.test_old`")], change=False)
+        (self.code / "tests" / "test_keep.py").write_text(
+            "import unittest\nimport src\n\n\nclass K(unittest.TestCase):\n"
+            "    def test_one(self):\n        self.assertEqual(src.f(), 1)\n", encoding="utf-8")
+        self.assertEqual(self.cli("red").returncode, 0)
+        self.set_contract([("1", "must-not", "the old test still holds", "`tests.test_old`"),
+                           ("2", "edge", "f stays 1 (a judge's row)", "`tests.test_keep`")])
+        self.assertEqual(self.cli("red", "--rows", "2", "--base", f"code={older}").returncode, 0)
+        self.assertEqual(self.receipt_lines()[-1]["verdict"], "proved")
+        self.assertRegex(self.check(), r"row 2: proved on the task's start only")
+
+    def test_a_first_run_on_a_post_code_base_is_after_the_code(self):
+        # row 36 (codex): activation A, the code committed as B, a first run on `--base B` — after the code
+        self.started()
+        b = self.commit_code("the change")
+        self.assertEqual(self.cli("red", "--base", f"code={b}").returncode, 0)
+        self.assertIn("the first run came after the code", self.check())
+
+    def test_a_config_changed_during_preparation_is_read(self):
+        # row 37 (codex): `red_run` changes after the section's trees were prepared — the lock re-reads it
+        from unittest import mock
+        from tasks import red
+        self.started()
+        real, done = red._prepare, []
+
+        def prepare_then_change(*a, **k):
+            out = real(*a, **k)
+            if not done:
+                done.append(1)
+                self.config(red_run="cd code && python3 -m unittest -q {test}")
+            return out
+        with mock.patch.object(red, "_prepare", prepare_then_change):
+            code = _in_process(self.d, self.env(), red.cmd_red, [])
+        self.assertIn(code, (None, 0))
+        self.assertRegex(self.section(), r"(?m)^\| 1 \| normal \|.*stale — the command changed")
+
+    def test_the_run_prints_every_tests_sides(self):
+        # row 38 (opus, agy): a row of two tests shows each one's sides; the state's header line is printed
+        self.started(rows=[("1", "normal", "two tests", "`tests.test_new` `tests.test_old`")])
+        r = self.cli("red")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertRegex(r.stdout, r"row 1 \(normal\): 1: red → green; 2: green → green")
+        self.assertIn("the state of the 1 row(s) run", r.stdout)
+
+    def test_a_reference_off_head_is_said_as_it_is(self):
+        # row 39 (opus, sonnet): an amended or switched branch is said as "not an ancestor of HEAD"; a scope the task
+        # did not change being so does not withhold the hint
+        self.started()
+        self.assertEqual(self.cli("red").returncode, 0)
+        self.g("commit", "-q", "--amend", "-m", "outer start, amended")              # the project, no code of the task
+        self.set_contract([ROW1, ROW2])
+        self.assertEqual(self.cli("red", "--rows", "2").returncode, 0)              # on the start: start-only
+        out = self.check()
+        self.assertIn("is not an ancestor of HEAD", out)
+        self.assertIn("the project", out)
+        self.assertNotIn("history rewritten", out)
+        self.assertIn("each needs its own base", out)
+
+    def test_numbers_says_what_was_not_checked(self):
+        # row 40 (codex m): numbers' line carries the reason a check was skipped
+        from tasks import red
+        self.started()
+        self.assertEqual(self.cli("red").returncode, 0)
+        self.set_contract([ROW1, ROW2])
+        self.assertEqual(self.cli("red", "--rows", "2").returncode, 0)
+        line = _in_process(self.d, self.env(), red.numbers_line, self.d, self.task_dir, 0.0)
+        self.assertIn("time budget ran out", line)
+
+    def test_the_docs_say_the_strict_rule(self):
+        # row 41 (opus m, sonnet m)
+        from tasks import red
+        self.assertNotIn("a `--base` its run named", red.__doc__)
+        self.assertNotIn("proves only on a `--base`", red.__doc__)
+        doc = (_HERE.parent / "docs" / "cli.md").read_text(encoding="utf-8")
+        body = "\n".join(p for p in doc.split("\n\n") if p.startswith("**`tasks red"))
+        self.assertIn("runs on its HEAD", body)
+
+
 class Text(unittest.TestCase):
     def test_the_guide_says_when_to_run_red_first(self):
         # row 19
