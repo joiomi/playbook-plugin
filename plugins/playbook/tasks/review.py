@@ -1913,7 +1913,7 @@ def _cmd_panel_review(cmd_args):
               "smaller panel with --models.", file=sys.stderr)
         sys.exit(1)
     # Task 276, the rare case: without the seats tried again the quorum is out of reach. They go FIRST, alone,
-    # each under the short limit `_RETRY_FIRST_TRY_SECS`; the others start only if enough of them answer — a
+    # the panel waiting for them at most `_RETRY_FIRST_TRY_SECS`; the others start only if enough of them answer — a
     # refused panel then spends nothing but those tries, and never the live seats' reviews.
     _retry_first = bool(_retry) and len(judges) - len(_retry) < _need
     for _lbl, _o in sorted(_retry.items()):

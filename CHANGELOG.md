@@ -8,7 +8,7 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 **A judge seat out of credit with no reset time comes back by itself** — task 276 (the owner, 2026-10-21: "nu vreau sa
 mai fiu eu nevoit sa repornesc judecatorii"). It lifts 1.6.7's known limitation of the same name. The suite has
-5,940 tests (5,907 at 1.6.7); CI is the same two Linux lanes. The guarantee ledger has 135 rows, 122 verified — the
+5,942 tests (5,907 at 1.6.7); CI is the same two Linux lanes. The guarantee ledger has 135 rows, 122 verified — the
 same counts as 1.6.7 — and no known violation. The live gauntlet on this release: 18 PASS, 5 WAITING (the grok rows:
 its account is out of credit), 0 FAIL.
 
@@ -52,11 +52,13 @@ round). Outages with a reset time are unchanged. The record's times are written 
   panels a few seconds apart can drop the later call's reset time, so the seat is tried once more before it (the next
   refusal records it again).
 - A provider's credit error inside a call that hit its timeout is not read (the output starts with playbook's timeout
-  line); such a call that also reported tokens counts as the account answering, and its reset time is lost until the
+  line); such a call that ran at least 60 s and reported tokens counts as the account answering, and its reset time is lost until the
   next refusal.
 - When too few seats can answer and a seat tried again is still working at the first wait, the panel lets it finish
   before refusing, and that review is not kept (on a five-seat panel, for example, two outages with a reset time and two
   without at once, one of them back).
+- A seat tried again that is still working at the first wait counts toward the quorum; if it then fails, the panel
+  can end below the quorum after the other seats have spent their reviews (it is never cut, by design).
 
 ## [1.6.7] — 2026-10-21
 

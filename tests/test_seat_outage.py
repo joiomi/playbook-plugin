@@ -512,6 +512,12 @@ class RetrySeatsRecord(unittest.TestCase):
         so.record_outage(self.agent, "grok:x", self.OUT, refusal + 3 * self.SEC, started=refusal, retried=True)
         self.assertEqual(so.clear_answered(self.agent, "grok:x", answer), "kept")
 
+    def test_a_failure_of_another_kind_writes_nothing_once_the_entry_is_gone(self):   # task 277 R2 (opus)
+        # another panel's answer (or the owner's enable) removed the entry while this call ran
+        self.assertFalse(so.record_outage(self.agent, "grok:x", self.OUT, NOW + self.SEC, started=NOW, retried=True,
+                                          keep_current=True))
+        self.assertFalse(so._record(self.agent).exists() and "grok:x" in self._data())
+
     def test_an_answer_for_an_entry_already_gone_says_so(self):                # impl r1 (opus)
         self.assertEqual(so.clear_answered(self.agent, "grok:x", NOW), "absent")
 
@@ -1084,8 +1090,11 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
         self._out("codex:gpt-5.5")
         code, out, err = self._panel(models, self._rare_judge(reset_refuse=("gpt-5.5",)), codex_available=True)
         line = next(ln for ln in out.splitlines() if "Still out of credit: codex:gpt-5.5" in ln)
-        self.assertIn("later panels skip it until 2026-10-07T19:33+03:00", line)
-        self.assertEqual(self._entry("codex:gpt-5.5")["until"], "2026-10-07T19:33+03:00")
+        # the reset as the panel reads it, on the same pinned clock in the host's zone (CI runs in UTC: a written
+        # "+03:00" failed there — task 277, CI run 39614639179)
+        until = so.classify_outage(CODEX)["until"]
+        self.assertIn(f"later panels skip it until {until}", line)
+        self.assertEqual(self._entry("codex:gpt-5.5")["until"], until)
         self.calls.clear()
         code, out, err = self._panel(models, self._judge(), codex_available=True)
         self.assertNotIn("gpt-5.5", self.calls)
