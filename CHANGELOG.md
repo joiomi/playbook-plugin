@@ -12,8 +12,11 @@ code: one row per behavior (normal, edge, hostile, must-not) naming the test tha
 missing tools, size, encodings), each answered by rows or `does not apply: <why>`. The design gate that asked for a
 test strategy now asks for the contract; `tasks guide <type>` explains it and lists what each class covers. The plan
 panel's fourth lens is the contract: a missing row, an unanswered class, a reason the plan contradicts, or a contract
-gate with no section is a finding; one defect is one finding. The impl review's test lens asks each row for its test;
-the post-panel judge counts only the rows its delta touched. The judges' trim keeps the section. research, audit,
+gate with no section is a finding; one defect is one finding. The impl review's test lens asks each row for its test:
+a new behavior's test must fail on the old code, a must-not or stay-the-same row shows a mutant it catches (or says
+`already true before: <why>`); the post-panel judge counts only the rows whose text, test or tested code its delta
+touched. The judges' trim keeps the section, pinned: when even the kept sections do not fit, its prose is cut only
+after the unpinned sections' — an unpinned Intent and Why included (PLAN.md "From task 278" (a)). research, audit,
 eval, light and quick are unchanged.
 - Not mechanical yet: that each test was watched failing before the code is still the agent's word; `tasks red`, its
   receipt and the edit hook's gate come next (PHASE-B.md 9b, 9c).

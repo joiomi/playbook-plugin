@@ -117,7 +117,8 @@ class Guide(unittest.TestCase):
             g = template.guide_text(ty)
             self.assertIn("### Test contract\n", g, ty)
             sec = g.split("### Test contract\n", 1)[1].split("\n### ", 1)[0]
-            for words in ("before any code", "does not apply: <why>", "watch"):
+            for words in ("before any code", "does not apply: <why>", "watch",
+                          "must-not or stay-the-same row shows its sensitivity with a mutant it catches"):   # row 18
                 self.assertIn(words, sec, (ty, words))
             for name, what in template.HOSTILE_CLASSES:                       # row 14: the examples live here
                 self.assertIn(f"> - {name}: {what}.", sec, (ty, name))
@@ -135,13 +136,19 @@ class Prompts(unittest.TestCase):
             self.assertNotIn("(4) Test coverage", p, f.__name__)
             for n in NAMES:
                 self.assertIn(n, p, (f.__name__, n))
-            self.assertIn("One defect is one finding: a sequence the hostile-sequences lens already raised is not raised again here.",
-                          p, f.__name__)                                       # row 17 (plan panel P8)
+            self.assertIn("One defect is one finding: a defect the failure-modes or hostile-sequences lens already "
+                          "raised is not raised again here.", p, f.__name__)   # rows 17, 21 (P8; impl round 1, opus)
             self.assertIn("a reason that holds is not", p, f.__name__)
         for f in IMPL_BUILDERS:
             p = f(TASK)
             self.assertIn("(5) Test quality", p, f.__name__)
-            self.assertIn("Each row of the task's `## Test contract` needs its test in the change", p, f.__name__)
+            self.assertIn("Each row of the task's `## Test contract` needs its test", p, f.__name__)
+            # row 18 (impl round 1, opus and codex): only new or changed behavior must fail on the old code
+            self.assertIn("A row of new or changed behavior needs a test that would fail on the code as it was; a "
+                          "must-not row, a row of behavior that must stay the same, or one already true before needs "
+                          "a test that holds on both and a shown sensitivity (a mutant it catches) or its reason "
+                          "`already true before: <why>`.", p, f.__name__)
+            self.assertNotIn("or a test that would pass on the code as it was, is a finding", p, f.__name__)
 
     def test_one_constant_feeds_render_and_prompts(self):
         # row 6: change the one constant and the render and both plan prompts follow it
@@ -175,8 +182,8 @@ class Prompts(unittest.TestCase):
 
     def test_the_delta_review_counts_only_the_rows_it_touched(self):
         # row 15 (plan panel P6): the post-panel judge reads a delta; a row it did not touch was the panel's
-        clause = ("In this post-panel delta review, a contract row counts only if the delta added or changed it or "
-                  "its test.")
+        clause = ("In this post-panel delta review, a contract row counts only if the delta added or changed it, its "
+                  "test, or the code its test covers.")                       # row 20 (impl round 1, codex)
         for f in IMPL_BUILDERS:
             self.assertIn(clause, f(TASK, delta=True), f.__name__)
             self.assertNotIn(clause, f(TASK), f.__name__)
@@ -265,6 +272,16 @@ class Docs(unittest.TestCase):
         line = next(ln for ln in doc.splitlines() if ln.startswith("A plan review runs six lenses"))
         self.assertIn("the test contract", line)
         self.assertNotIn("test coverage", line)
+        self.assertIn("a new behavior's test fails on the old code", line)          # row 18
+
+    def test_the_docs_name_the_contract_types_and_the_fix_exception(self):
+        # row 19 (impl round 1, sonnet): what a fresh project reads names the six types and says Fix has no plan panel
+        for rel in ("README.md", "plugins/playbook/scripts/CLAUDE.md.template"):
+            text = (REPO / rel).read_text(encoding="utf-8")
+            with self.subTest(doc=rel):
+                self.assertIn("a feature, build, refactor, ops, bugfix or cleanup task", text)
+                self.assertIn("a bugfix or cleanup has no plan panel: the impl review reads its contract", text)
+                self.assertNotIn("A full task fills its `## Test contract`", text)
 
 
 if __name__ == "__main__":

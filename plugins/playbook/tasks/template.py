@@ -197,7 +197,8 @@ def contract_note() -> str:
 > - Each row names the test that will prove it, or the command and the output it must give.
 > - A bug's first row reproduces it; a refactor's rows are the behaviors that must stay the same.
 > - Each hostile class: the rows that cover it, or `does not apply: <why>` — a reason the change contradicts is a finding.
-> - Write the tests, then watch each fail on the code as it is before you write the code.
+> - Write the tests, then watch each new behavior's test fail on the code as it is before you write the code.
+> - A must-not or stay-the-same row shows its sensitivity with a mutant it catches, or says `already true before: <why>`.
 > - A row added later (a judge's finding) is red-first too.
 > - The plan panel reviews the contract as one of its lenses; the impl review asks each row for its test.
 > - A Fix task (bugfix, cleanup) has no plan panel: the impl review reads its contract when one runs.
@@ -470,19 +471,23 @@ def _contract_plan_lens() -> str:
             "hostile sequence above, have a row naming the test that will prove it? Is each hostile class — "
             f"{names} — answered by rows or by `does not apply: <why>`? A missing row, an unanswered class, or a "
             "reason the plan or the code contradicts (cite it) is a finding; a reason that holds is not. "
-            "One defect is one finding: a sequence the hostile-sequences lens already raised is not raised again here. "
+            "One defect is one finding: a defect the failure-modes or hostile-sequences lens already raised is not "
+            "raised again here. "
             "For pure-function code, does it name invariants (idempotency, bounds, round-trip) worth property-testing? "
             f"{_CONTRACT_MISSING}judge the test plan it has. ")
 
 
 def _contract_impl_lens(delta: bool = False) -> str:
-    """The impl review's test lens (task 278): each contract row has its test, one that fails without the change. A
-    post-panel run reads a delta: a row it did not touch was the panel's to check (plan panel P6)."""
+    """The impl review's test lens (task 278): each contract row has its test — a new behavior's fails on the old code,
+    a must-not or stay-the-same row shows a mutant it catches (impl round 1). A post-panel run reads a delta: a row it
+    did not touch, nor the code under its test, was the panel's to check (plan panel P6, impl round 1)."""
     return ("(5) Test quality — do the tests verify Intent claims or just confirm the implementation? "
-            "Each row of the task's `## Test contract` needs its test in the change, one that would fail without it; "
-            "a row with no test, or a test that would pass on the code as it was, is a finding. "
-            + ("In this post-panel delta review, a contract row counts only if the delta added or changed it or its "
-               "test. " if delta else "")
+            "Each row of the task's `## Test contract` needs its test; a row with no test is a finding. "
+            "A row of new or changed behavior needs a test that would fail on the code as it was; a must-not row, a "
+            "row of behavior that must stay the same, or one already true before needs a test that holds on both and "
+            "a shown sensitivity (a mutant it catches) or its reason `already true before: <why>`. "
+            + ("In this post-panel delta review, a contract row counts only if the delta added or changed it, its "
+               "test, or the code its test covers. " if delta else "")
             + f"{_CONTRACT_MISSING}judge the tests against the Intent. "
             "For pure-function code (parsers, formatters, transformations), are there untested invariants that "
             "property tests would catch? ")
