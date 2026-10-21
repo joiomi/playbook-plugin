@@ -1049,6 +1049,8 @@ def rounds_table(runs: "list[dict]", reviews: "list[dict]", start: float, end: f
         if t is None or not (start <= t <= end):
             continue
         if r.get("kind") == "panel":
+            if r.get("outcome") == "refused":
+                continue     # task 276: refused before any round (too few seats could answer) — not a round
             m = r.get("measures") if isinstance(r.get("measures"), dict) else {}
             panels.append({"mode": r.get("mode"), "outcome": r.get("outcome"), "critical": m.get("critical"),
                            "important": m.get("important"), "owner_ok": r.get("owner_ok")})

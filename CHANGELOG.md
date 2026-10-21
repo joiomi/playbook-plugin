@@ -4,6 +4,17 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+**A judge seat out of credit with no reset time comes back by itself** — task 276. A seat whose provider said the
+account is out of credit without a reset time (grok's 402, a codex workspace out of credits) was skipped until
+`tasks models enable`. Every panel now tries it again, beside the other seats: a refusal for credit under 60 s that
+reports no tokens counts as a skip and leaves no review record, no `judge.md` section and no place in the verdict's
+counts (the record counts the try); a review removes the record and the panel prints `Back: <seat> …`, unless a
+newer outage of the seat was recorded meanwhile; any other failure is a failed seat, and the outage stays. When the
+other seats alone cannot reach the quorum, the seats tried again go first: the panel waits for them at most 60 s and
+starts the rest only if the quorum can still be reached, else it is refused with no round (`refused` in the run
+ledger, which `tasks numbers` does not count as a round). Outages with a reset time are unchanged. The record's
+`since` is written to the second, and entries may carry `tried` and `last_tried`; 1.6.7 reads the same outages.
+
 ## [1.6.7] — 2026-10-21
 
 **The enforcement journal rotates; agy keeps its vote at the soft deadline; a cut-off claude judge fails its seat** —

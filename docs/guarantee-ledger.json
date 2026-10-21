@@ -22508,7 +22508,7 @@
     {
       "id": "PB-PANEL-SEAT-OUTAGE",
       "category": "judges-and-reviews",
-      "statement": "A panel seat whose provider says the account is out of credit — grok's `402 Payment Required … usage balance exhausted`, codex's `You've hit your usage limit … try again at <time>` or `Your workspace is out of credits` (no time: until cleared — task 203), agy's quota stop, claude's `You've hit your weekly limit · resets <time>` — is recorded in the lane's `journal/seat-outages.json` (machine-local and gitignored, written under a lock) — read from the provider's own error — its stderr tail, and its structured error events on stdout for the CLIs whose stdout is an event stream (codex, grok, agy), and for claude — whose stdout is the judge's review — its limit line only when that line is the WHOLE stdout — not from output the judge quoted — until the reset time the message gives, or until `tasks models enable <seat>` when it gives none, and later panels skip it with one line naming it. The panel's quorum is resolved against the REQUESTED seats (the configured panel or the --models selection, counted before any seat is skipped), in the preflight and in the verdict: when fewer seats can run than the quorum, the panel fails before any judge is called.",
+      "statement": "A panel seat whose provider says the account is out of credit — grok's `402 Payment Required … usage balance exhausted`, codex's `You've hit your usage limit … try again at <time>` or `Your workspace is out of credits` (no time — task 203), agy's quota stop, claude's `You've hit your weekly limit · resets <time>` — is recorded in the lane's `journal/seat-outages.json` (machine-local and gitignored, written under a lock) — read from the provider's own error — its stderr tail, and its structured error events on stdout for the CLIs whose stdout is an event stream (codex, grok, agy), and for claude — whose stdout is the judge's review — its limit line only when that line is the WHOLE stdout — not from output the judge quoted — and later panels skip it with one line naming it until the reset time the message gives (or `tasks models enable <seat>`). When the message gives none, every later panel tries the seat again beside the other seats (task 276): a refusal for credit under 60 s that reports no tokens is a skip — no review record, no section or place in judge.md, not counted in the verdict or the run ledger — and the record counts the try; a review, or a call still running at its timeout, removes the record unless a newer outage of the seat was recorded after that call began; any other failure is a failed seat and the outage stays; when the other seats alone cannot reach the quorum, the seats tried again go first, the panel waits for them at most 60 s and starts the rest only if the quorum can still be reached (seats still working or with a review), else it is refused (exit 1) with no round and a run-ledger outcome `refused` that `tasks numbers` does not count as a round. The panel's quorum is resolved against the REQUESTED seats (the configured panel or the --models selection, counted before any seat is skipped), in the preflight and in the verdict: when fewer seats can run than the quorum, the panel fails before any judge is called.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/seat_outage.py",
@@ -22517,6 +22517,14 @@
         {
           "path": "plugins/playbook/tasks/seat_outage.py",
           "reference": "symbol:record_outage"
+        },
+        {
+          "path": "plugins/playbook/tasks/seat_outage.py",
+          "reference": "symbol:split_outages"
+        },
+        {
+          "path": "plugins/playbook/tasks/seat_outage.py",
+          "reference": "symbol:clear_answered"
         },
         {
           "path": "plugins/playbook/tasks/review.py",
@@ -22751,7 +22759,7 @@
         {
           "type": "executable integration",
           "path": "tests/test_seat_outage.py",
-          "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_a_codex_workspace_out_of_credits_is_recorded_then_skipped",
+          "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_a_codex_workspace_out_of_credits_is_recorded_then_tried_again",
           "boundary": "subprocess",
           "negative_control": {
             "path": "tests/test_seat_outage.py",
@@ -22774,6 +22782,71 @@
           "limitations": [
             "Task 203 r1 (codex): an exit-0 codex stream, turned into its failure text by the real `usage.judge_output_from_result`; the review's words in it (the malformed-output head's excerpt, the partial text after an error) are never read as the provider's."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_seat_outage.py",
+          "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_a_seat_with_no_reset_time_that_still_refuses_is_a_skip",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_seat_outage.py",
+            "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_a_seat_with_no_reset_time_that_answers_comes_back"
+          },
+          "limitations": [
+            "Task 276: the real panel, judges faked at the adapter; the journal, judge.md and the run ledger read after it."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_seat_outage.py",
+          "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_the_rare_case_tries_the_retry_seats_first_and_refuses_without_a_round",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_seat_outage.py",
+            "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_the_rare_case_starts_the_panel_when_enough_come_back"
+          },
+          "limitations": [
+            "Task 276: the first wait shortened to 0.25 s through `review._RETRY_FIRST_TRY_SECS`; `numbers.rounds_table` read on the run ledger."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_seat_outage.py",
+          "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_a_retried_seat_that_fails_otherwise_is_a_failed_seat_and_stays_out",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_seat_outage.py",
+            "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_a_seat_with_no_reset_time_that_answers_comes_back"
+          },
+          "limitations": [
+            "Task 276 (plan panel, sonnet and codex): only an answer clears an outage."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_seat_outage.py",
+          "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_a_credit_refusal_that_cost_tokens_is_a_failed_run",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_seat_outage.py",
+            "reference": "PanelSkipsOutagesAndHoldsTheQuorum.test_a_seat_with_no_reset_time_that_still_refuses_is_a_skip"
+          },
+          "limitations": [
+            "Task 276 (plan panel, codex): a refusal that cost tokens keeps its spend record."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_seat_outage.py",
+          "reference": "RetrySeatsRecord.test_a_newer_refusal_than_the_answered_call_stays",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_seat_outage.py",
+            "reference": "RetrySeatsRecord.test_an_answer_removes_the_entry_it_was_made_under"
+          },
+          "limitations": [
+            "Task 276 (plan panel, codex): the clear compares both `since` and `last_tried` with the answered call's start."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -22787,6 +22860,7 @@
       "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
         "Added by task 149 (PLAN S12b). Only panels skip a recorded seat; the single-judge path (`tasks impl-review`) still calls its judge.",
+        "2026-10-21 (task 276): the 60 s first wait and the 'free refusal' bound come from four journal samples (refusals in 3-17 s, 2026-10-18..21); a refusal for credit slower than that, or with tokens, is a failed run. In the refused rare case a seat tried again that is still working is not stopped: it finishes and its run is recorded, though no round is written. Only an answer clears an outage, so a seat whose new refusal wording is not recognised stays recorded (its failures counted) until it answers or `tasks models enable` clears it.",
         "A codex clock time without a date (`7:33 PM`) is read as today's when it passed less than six hours before the panel ended (the reset already happened), else as the next such time; a provider that changes its wording is not recognised (the seat fails as before).",
         "Requiring the quorum of the requested panel means a panel with seats whose CLI is not installed now fails instead of shrinking — name reachable seats with --models.",
         "A late failure recorded after `tasks models enable` cleared the seat (two panels started before the clear) disables it again; parked (task 149 impl panel r1, codex-high).",

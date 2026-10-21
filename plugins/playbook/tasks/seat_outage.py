@@ -5,10 +5,12 @@ account is out of credit — grok's `402 Payment Required … usage balance
 exhausted`, codex's `You've hit your usage limit … try again at <time>`, agy's
 quota stop — failed every later panel the same way, and the panel shrank
 silently. Such a failure is now recorded in `<agent dir>/journal/seat-outages.json`
-(machine-local account state, gitignored with the journal):
-until the reset time when the message gives one (codex, agy), else until the
-owner clears it (`tasks models enable <seat>`; grok gives no time). The next
-panels skip a seat whose outage is current and say so in one line.
+(machine-local account state, gitignored with the journal). When the message
+gives a reset time (codex, agy, claude) the next panels skip the seat until then
+and say so in one line (`tasks models enable <seat>` clears it sooner). When it
+gives none (grok, codex's workspace out of credits) every panel tries the seat
+again (task 276): a free refusal counts the try, an answer removes the entry —
+`split_outages`, `record_outage(retried=True)`, `clear_answered`.
 
 The record is written through `atomic_write` under a lock, and every write
 re-reads it inside the lock, so two panels recording at once keep both entries.
@@ -286,9 +288,17 @@ def _dump(entries: dict, cleared: dict) -> str:
     return json.dumps(data, indent=2, sort_keys=True) + "\n"
 
 
+def split_outages(outages: dict) -> "tuple[dict, dict]":
+    """(skipped, retried) — task 276: an outage with a reset time ahead is skipped until then; one with none
+    (grok's 402, codex's workspace out of credits) is tried again by every panel, which is how it comes back
+    without `tasks models enable`."""
+    skipped = {k: v for k, v in outages.items() if v.get("until")}
+    return skipped, {k: v for k, v in outages.items() if k not in skipped}
+
+
 def record_outage(agent_dir: Path, spec: str, outage: dict,
                   now: Optional[_dt.datetime] = None, *,
-                  started: Optional[_dt.datetime] = None) -> bool:
+                  started: Optional[_dt.datetime] = None, retried: bool = False) -> bool:
     """Add or replace `spec`'s entry (expired entries are dropped on the way).
     True when it was recorded.
 
@@ -297,7 +307,11 @@ def record_outage(agent_dir: Path, spec: str, outage: dict,
     called has failed AFTER the clear, and that is news). A failure of a call that
     began no later than the owner's last clear of this seat is from before that
     clear — it is not recorded (False), and the next panel calls the seat. Without
-    `started` the entry is recorded, as it always was."""
+    `started` the entry is recorded, as it always was.
+
+    `retried` (task 276): the call was a panel's new try of a seat recorded with no reset time, and it was
+    refused again. Its entry keeps the time it has been out since, counts the try (`tried`, `last_tried` = the
+    call's start) and takes the reset time the refusal names, if any."""
     from tasks.atomic import rewrite
     now = now or _dt.datetime.now().astimezone()
 
@@ -307,12 +321,58 @@ def record_outage(agent_dir: Path, spec: str, outage: dict,
         if started is not None and at is not None and _aware(started, now) <= at:
             return None
         data = {k: v for k, v in _load(text).items() if _is_current(v, now)}
-        data[spec] = {"reason": outage["reason"], "until": outage.get("until"),
-                      "since": now.isoformat(timespec="minutes")}
+        entry = {"reason": outage["reason"], "until": outage.get("until"),
+                 "since": now.isoformat(timespec="seconds")}
+        old = data.get(spec)
+        if retried:
+            tries = old.get("tried") if old else 0
+            entry["tried"] = (tries if isinstance(tries, int) and not isinstance(tries, bool) and tries > 0 else 0) + 1
+            entry["last_tried"] = _aware(started or now, now).isoformat(timespec="seconds")
+            if old and isinstance(old.get("since"), str):
+                entry["since"] = old["since"]
+        data[spec] = entry
         return _dump(data, cleared)
 
     _record(agent_dir).parent.mkdir(parents=True, exist_ok=True)
     return rewrite(_record(agent_dir), _t) is not None
+
+
+def clear_answered(agent_dir: Path, spec: str, started: _dt.datetime,
+                   now: Optional[_dt.datetime] = None) -> bool:
+    """A panel's new try of a seat recorded out of credit was ANSWERED (task 276): the account works again.
+    Remove the entry only if no newer evidence is in it: it was recorded (`since`) and last refused
+    (`last_tried`, a parallel panel's later try) no later than this call began — a newer record or refusal
+    stays (plan panel, codex: a refusal keeps the old `since`, so `since` alone let an older answer remove it).
+    The clear is dated at the call's START, not now: a failure of a call that began after it is news and is
+    recorded (`record_outage`). True if an entry was removed."""
+    from tasks.atomic import rewrite
+    now = now or _dt.datetime.now().astimezone()
+    begun = _aware(started, now)
+    found = []
+
+    def _seen(entry: dict, key: str) -> "_dt.datetime | None":
+        raw = entry.get(key)
+        if not isinstance(raw, str):
+            return None
+        try:
+            return _aware(_dt.datetime.fromisoformat(raw), now)
+        except ValueError:
+            return None                               # unreadable: the answer is the newer fact
+
+    def _t(text: str) -> str:
+        data = _load(text)
+        entry = data.get(spec)
+        if entry is not None:
+            newer = [at for at in (_seen(entry, "since"), _seen(entry, "last_tried")) if at is not None and at > begun]
+            if not newer:
+                found.append(data.pop(spec))
+        cleared = _cleared(text, now)
+        cleared[spec] = max(cleared.get(spec, begun), begun)
+        return _dump(data, cleared)
+
+    _record(agent_dir).parent.mkdir(parents=True, exist_ok=True)
+    rewrite(_record(agent_dir), _t)
+    return bool(found)
 
 
 def clear_outage(agent_dir: Path, spec: str,

@@ -1442,8 +1442,10 @@ def cli_models(cmd_args: list[str], project_root: Path) -> int:
 
     if sub == "enable":
         # PLAN S12b (task 149): a seat whose provider said the account is out of
-        # credit is skipped by later panels until its reset time — or, when the
-        # provider gave none (grok), until the owner says it has credit again.
+        # credit is skipped by later panels until its reset time; this brings it
+        # back sooner. When the provider gave none (grok, codex's workspace out of
+        # credits) every panel tries the seat again (task 276); this removes the
+        # record at once.
         if len(args) != 1 or args[0].startswith("-"):
             print("Error: tasks models enable takes one seat, as the panel names it "
                   "(e.g. grok:grok-4.7:medium). Nothing changed.", file=sys.stderr)

@@ -34,6 +34,12 @@ from tasks.shared import find_project_root
 # so the CLI advises a background launch up front (task 038).
 _FOREGROUND_TOOL_CAP_SECS = 600
 
+# Task 276: how long a panel waits for the seats it tries again (recorded out of credit with no reset time)
+# before it counts whether the quorum can still be reached — only when the live seats alone cannot reach it.
+# A refusal came in 3-17 s (journal, 2026-10-18..21). A refusal for credit that took this long or longer, or
+# that reported tokens, was work: a failed run, recorded like any other.
+_RETRY_FIRST_TRY_SECS = 60
+
 
 # ── Review-spend journal (task 042) ──────────────────────────────────────────
 # Every judge invocation appends ONE best-effort spend record to the enforcement
@@ -1563,8 +1569,9 @@ def _tamper_banner(changes: list[str]) -> str:
 
 _PD6_PANEL_PENDING: "list[tuple]" = []
 # Task 232 (PHASE-B item 6): how each reserved panel ended, by reservation id — `void` (the tamper guard voided it),
-# `unsaved` (judge.md could not be written), `completed` with its measures; a panel that ends before any of these
-# (a crash, an interrupt, any other exit) is `incomplete`.
+# `unsaved` (judge.md could not be written), `completed` with its measures, `refused` (task 276: the seats tried
+# again first left the quorum out of reach — no round); a panel that ends before any of these (a crash, an
+# interrupt, any other exit) is `incomplete`.
 _PD6_PANEL_ENDED: "dict[str, dict]" = {}
 
 
@@ -1864,7 +1871,10 @@ def _cmd_panel_review(cmd_args):
     # to two (task 147 impl panel r1).
     requested_seats = len(spec_names) if spec_names else len(judges)
     # A seat whose provider said the account is out of credit is not called
-    # again until its reset time, or until the owner clears it.
+    # again until its reset time, or until the owner clears it. Task 276: one
+    # whose provider gave NO reset time is tried again by every panel — beside
+    # the others, so nothing waits for it; a refusal is then a skip (it leaves no
+    # trace but one line), an answer removes its record.
     from tasks import seat_outage as _seat_outage
     # When each seat's call began (task 165): a seat the owner clears
     # (`tasks models enable`) while its call is under way fails with news from
@@ -1873,20 +1883,25 @@ def _cmd_panel_review(cmd_args):
     # a seat is called is older than that call — its failure is news.
     _seat_began: dict = {}
     _outages = _seat_outage.current_outages(resolve_agent_dir(project_path))
+    _skipped_out, _retry_out = _seat_outage.split_outages(_outages)
+    _retry: dict = {}           # label → the entry the seat is tried again under (task 276)
     if _outages:
         _live = []
         for _cls, _variant in judges:
             _lbl = f"{_cls.binary_name()}:{_variant}" if _variant else _cls.binary_name()
-            _o = _outages.get(_lbl)
+            if _lbl in _retry_out:
+                _retry[_lbl] = _retry_out[_lbl]
+                _live.append((_cls, _variant))
+                continue
+            _o = _skipped_out.get(_lbl)
             if _o is None:
                 _live.append((_cls, _variant))
                 continue
             # The command that clears it is on every line: a reset can be days away
             # and the account behind the seat may change the same hour (task 158).
-            _until = (f"until {_o['until']}; clear it earlier with `tasks models enable {_lbl}`"
-                      if _o.get("until")
-                      else f"until cleared with `tasks models enable {_lbl}`")
-            print(f"  Skipped out of credit: {_lbl} — {_o.get('reason', '?')} ({_until})", flush=True)
+            # (Only an entry with a reset time is skipped — task 276.)
+            print(f"  Skipped out of credit: {_lbl} — {_o.get('reason', '?')} (until {_o['until']}; "
+                  f"clear it earlier with `tasks models enable {_lbl}`)", flush=True)
         judges = _live
     from tasks.core import resolve_panel_quorum
     _need = resolve_panel_quorum(project_path, requested_seats)
@@ -1897,6 +1912,13 @@ def _cmd_panel_review(cmd_args):
               "above, clear one that works again with `tasks models enable <seat>`, or run a "
               "smaller panel with --models.", file=sys.stderr)
         sys.exit(1)
+    # Task 276, the rare case: without the seats tried again the quorum is out of reach. They go FIRST, alone,
+    # each under the short limit `_RETRY_FIRST_TRY_SECS`; the others start only if enough of them answer — a
+    # refused panel then spends nothing but those tries, and never the live seats' reviews.
+    _retry_first = bool(_retry) and len(judges) - len(_retry) < _need
+    for _lbl, _o in sorted(_retry.items()):
+        print(f"  Trying again: {_lbl} — out of credit since {_o.get('since', '?')}, no reset time given"
+              + ("; it goes first, the quorum needs it" if _retry_first else ""), flush=True)
 
     if not judges:
         print("Error: no available judges. Install a provider CLI, or name "
@@ -2090,76 +2112,172 @@ def _cmd_panel_review(cmd_args):
     # records no spend — consistent with the single/tail-cert paths.
     _spend_round = _next_review_round(project_path, task_file)
     _spend_pending = []
-    _print_ready(_view, task_num)
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(judges)) as executor:
-        futures = {executor.submit(run_judge, j): j for j in judges}
-        for future in concurrent.futures.as_completed(futures):
-            label, output, _dur_ms, _timed_out = future.result()
-            results[label] = output
-            print(f"  [{label}] done", flush=True)
-            # Seat carries model:effort (not the display `label`, which omits
-            # claude's fixed effort) — derived from the judge spec for this future.
-            _cls, _var = futures[future]
-            _st_now = _judge_status(output, timed_out=_timed_out)
-            _spend_pending.append((_seat_with_effort(_cls.binary_name(), _var),
-                                   _dur_ms, _st_now,
-                                   _parse_judge_usage(output),
-                                   _judge_error(output, _st_now),
-                                   getattr(output, "soft_cut", None) or ""))
+    from tasks.models_check import budget_exceeded, judge_failed as _judge_failed
+    # Task 276. A seat tried again (recorded out of credit with no reset time) ends one of three ways:
+    # - a FREE refusal (a credit outage, under `_RETRY_FIRST_TRY_SECS`, no tokens reported) is a skip: it stays out
+    #   of `results`, the spend records, the receipt and every count, as a skipped seat does (`_refused`);
+    # - any other failure is a failed seat, counted as today, and its outage stays (`_tried_failed`) — only an
+    #   answer clears one, so a refusal in a wording `classify_outage` does not know never erases it;
+    # - a usable review, or a call that ran until its timeout, shows the account works (`_answered`: when that
+    #   call began).
+    _refused: dict = {}
+    _tried_failed: dict = {}
+    _answered: dict = {}
 
-    _tamper_full = _detect_tamper_full(_ctx_root, _ctx_task, _tamper_before)
-    if _view is not None and not _view.matches(_fp_before, _view_cfg):
-        # impl round 1 (grok): the copy the judges read is no longer the sealed tree — no review of that stamp
-        _tamper_full.setdefault("mutations", []).append(
-            "the review's copy changed while the judges read it (its fingerprint is no longer the sealed one)")
-    # On a MUTATION the panel, like the single-judge path, does NOTHING but emit
-    # the banner and exit — before the tree fingerprint and judge.md assembly/
-    # write below, any of which could hang (an unbounded/FIFO read) or write
-    # through an attacker-redirected task dir on a hostile tree (panel rounds
-    # 9-10 codex:sol). The panel verdicts are untrustworthy on a mutated tree, so
-    # not persisting them costs nothing; the operator inspects per the banner.
-    # A CAUTION (task 059, T009): the guard could not fully run — that is not
-    # evidence a judge wrote anything, so the paid verdict is KEPT; the notice is
-    # printed and the round header records `**Tamper guard:** degraded`, which a
-    # high-consequence close treats like a stale round (lifecycle, W3b).
-    if _tamper_full["mutations"]:
-        print("\n" + _tamper_banner(_tamper_full["mutations"]), file=sys.stderr, flush=True)
+    def _take(spec, label, output, dur_ms, timed_out):
+        if label in _retry:
+            _failed_now = _judge_failed(output)
+            _o = _seat_outage.classify_outage(output, provider=label.split(":", 1)[0]) if _failed_now else None
+            _u = _parse_judge_usage(output) or {}
+            _spent = any(_u.get(k) for k in ("in", "out", "cache_read", "cache_write"))
+            if _o is not None and dur_ms < _RETRY_FIRST_TRY_SECS * 1000 and not _spent:
+                _refused[label] = (_o, dur_ms)
+                print(f"  Still out of credit: {label} (since {_retry[label].get('since', '?')}; refused in "
+                      f"{dur_ms / 1000:.0f} s) — the next panel tries it again.", flush=True)
+                return
+            if _o is not None or (_failed_now and not timed_out):
+                _tried_failed[label] = _o
+            else:
+                _answered.setdefault(label, _seat_began.get(label))
+        results[label] = output
+        print(f"  [{label}] done", flush=True)
+        # Seat carries model:effort (not the display `label`, which omits
+        # claude's fixed effort) — derived from the judge spec for this future.
+        _cls, _var = spec
+        _st_now = _judge_status(output, timed_out=timed_out)
+        _spend_pending.append((_seat_with_effort(_cls.binary_name(), _var),
+                               dur_ms, _st_now,
+                               _parse_judge_usage(output),
+                               _judge_error(output, _st_now),
+                               getattr(output, "soft_cut", None) or ""))
+
+    def _label_of(spec):
+        return f"{spec[0].binary_name()}:{spec[1]}" if spec[1] else spec[0].binary_name()
+
+    _print_ready(_view, task_num)
+    # The rare case (task 276): the seats tried again go first, alone; the panel waits for them at most
+    # `_RETRY_FIRST_TRY_SECS` and starts the others only if the quorum can still be reached — counting the
+    # retried seats still working and those whose review already came; never a refusal or a failure. A seat
+    # still working is never cut: it carries on as its review.
+    _first = [j for j in judges if _retry_first and _label_of(j) in _retry]
+    _rest = [j for j in judges if j not in _first]
+    _possible = None
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(judges)) as executor:
+        futures = {executor.submit(run_judge, j): j for j in _first}
+        _taken: set = set()
+
+        def _collect(fs):
+            for f in fs:
+                if f not in _taken:
+                    _taken.add(f)
+                    _take(futures[f], *f.result())
+
+        if _first:
+            _done, _working = concurrent.futures.wait(list(futures), timeout=_RETRY_FIRST_TRY_SECS)
+            _collect(_done)
+            _possible = (len(_rest) + len(_working)
+                         + sum(1 for _l in _answered if _l in results and not _judge_failed(results[_l])))
+        if _possible is None or _possible >= _need:
+            futures.update({executor.submit(run_judge, j): j for j in _rest})
+        # (refused: the seats still working finish — none is killed — and the live seats are never called)
+        _collect(concurrent.futures.as_completed(list(futures)))
+    # A skipped seat has no place in the context receipt or the model-gone probe either.
+    judges = [j for j in judges if _label_of(j) not in _refused]
+
+    def _tamper_stop():
+        _full = _detect_tamper_full(_ctx_root, _ctx_task, _tamper_before)
+        if _view is not None and not _view.matches(_fp_before, _view_cfg):
+            # impl round 1 (grok): the copy the judges read is no longer the sealed tree — no review of that stamp
+            _full.setdefault("mutations", []).append(
+                "the review's copy changed while the judges read it (its fingerprint is no longer the sealed one)")
+        # On a MUTATION the panel, like the single-judge path, does NOTHING but emit
+        # the banner and exit — before the tree fingerprint and judge.md assembly/
+        # write below, any of which could hang (an unbounded/FIFO read) or write
+        # through an attacker-redirected task dir on a hostile tree (panel rounds
+        # 9-10 codex:sol). The panel verdicts are untrustworthy on a mutated tree, so
+        # not persisting them costs nothing; the operator inspects per the banner.
+        # A CAUTION (task 059, T009): the guard could not fully run — that is not
+        # evidence a judge wrote anything, so the paid verdict is KEPT; the notice is
+        # printed and the round header records `**Tamper guard:** degraded`, which a
+        # high-consequence close treats like a stale round (lifecycle, W3b).
+        if _full["mutations"]:
+            print("\n" + _tamper_banner(_full["mutations"]), file=sys.stderr, flush=True)
+            if _prid:
+                _PD6_PANEL_ENDED[_prid] = {"outcome": "void"}       # task 232: the run ledger says why it ended
+            sys.exit(1)
+        return _full
+
+    def _note_retries():
+        # task 276, after the tamper check (a voided panel notes nothing): best-effort, like the outage record
+        _ad = resolve_agent_dir(project_path)
+        for _lbl in sorted(set(_refused) | set(_tried_failed)):
+            _o = _refused[_lbl][0] if _lbl in _refused else _tried_failed[_lbl]
+            if _o is None:          # a failure of another kind: the outage it was tried under stays as it is
+                _o = {"reason": _retry[_lbl].get("reason", "?"), "until": _retry[_lbl].get("until")}
+            try:
+                _seat_outage.record_outage(_ad, _lbl, _o, started=_seat_began.get(_lbl), retried=True)
+            except Exception as _e:   # noqa: BLE001 — never fail the review on it
+                print(f"  ⚠ could not note {_lbl}'s try ({_e})", file=sys.stderr, flush=True)
+        for _lbl, _at in sorted(_answered.items()):
+            try:
+                if _seat_outage.clear_answered(_ad, _lbl, _at or _seat_outage.now()):
+                    print(f"  Back: {_lbl} answered (out of credit since {_retry[_lbl].get('since', '?')}); "
+                          "its record is removed.", flush=True)
+                else:
+                    print(f"  {_lbl} answered, but a newer outage of it was recorded meanwhile; that one stays.",
+                          flush=True)
+            except Exception as _e:   # noqa: BLE001
+                print(f"  ⚠ could not clear {_lbl}'s outage ({_e})", file=sys.stderr, flush=True)
+
+    def _emit_spend():
+        # Clean tree: NOW emit the per-seat spend records (best-effort — fully
+        # swallowed inside the helper, so they never affect the review; and past the
+        # tamper banner, so they can never suppress it). One line per seat.
+        for _lbl, _dms, _st, _usg, _err, _cut in _spend_pending:
+            _journal_review_spend(
+                project_path, kind="panel", seat=_lbl,
+                task=(task_num if task_file else None), round_no=_spend_round,
+                duration_ms=_dms, status=_st, usage=_usg, error=_err, soft_cut=_cut)
+
+    _tamper_full = _tamper_stop()
+    if _possible is not None and _possible < _need:
+        # The rare case, refused: no round is written; the run ledger says `refused` (no round in `tasks numbers`).
+        _emit_spend()
+        _note_retries()
+        _still = ", ".join(sorted(_refused)) or "none"
+        _back = ", ".join(sorted(_answered)) or "none"
+        print(f"Error: only {_possible} of the {requested_seats} requested seats can answer, and the quorum is "
+              f"{_need} — the panel would fail. The seats with no reset time were tried first (still out of "
+              f"credit: {_still}; back: {_back}); the other seats were not called. Run it again later, or run a "
+              "smaller panel with --models.", file=sys.stderr, flush=True)
         if _prid:
-            _PD6_PANEL_ENDED[_prid] = {"outcome": "void"}       # task 232: the run ledger says why it ended
+            _PD6_PANEL_ENDED[_prid] = {"outcome": "refused"}
         sys.exit(1)
     _tamper_cautions = list(_tamper_full["cautions"])
     if _tamper_cautions:
         print("\n" + _degraded_notice(_tamper_cautions), file=sys.stderr, flush=True)
 
-    # Clean tree: NOW emit the per-seat spend records (best-effort — fully
-    # swallowed inside the helper, so they never affect the review; and past the
-    # tamper banner, so they can never suppress it). One line per seat.
-    for _lbl, _dms, _st, _usg, _err, _cut in _spend_pending:
-        _journal_review_spend(
-            project_path, kind="panel", seat=_lbl,
-            task=(task_num if task_file else None), round_no=_spend_round,
-            duration_ms=_dms, status=_st, usage=_usg, error=_err, soft_cut=_cut)
+    _emit_spend()
+    _note_retries()
 
     # Classify each judge as succeeded vs failed — a failed judge must NOT
     # read as a clean empty review (T139) or a successful one. Shared
     # predicate (task 012) also catches claude's budget-exhaustion message,
     # which arrives as exit-0 stdout and previously counted as success.
-    from tasks.models_check import budget_exceeded, judge_failed as _judge_failed
-
     failed = {lbl for lbl, out in results.items() if _judge_failed(out)}
     over_budget = {lbl for lbl in failed if budget_exceeded(results[lbl])}
     # PLAN S12b: record a seat that failed because its account is out of
     # credit, so the next panels skip it (best-effort: a write failure only
-    # means the seat is tried again).
-    for _lbl in sorted(failed):
+    # means the seat is tried again). A seat tried again is noted above (task 276).
+    for _lbl in sorted(failed - set(_retry)):
         _o = _seat_outage.classify_outage(results[_lbl], provider=_lbl.split(":", 1)[0])
         if _o:
             try:
                 if _seat_outage.record_outage(resolve_agent_dir(project_path), _lbl, _o,
                                               started=_seat_began.get(_lbl)):
-                    print(f"  Recorded {_lbl} as out of credit ({_o['reason']}); later panels skip it "
-                          + (f"until {_o['until']}." if _o.get("until")
-                             else f"until `tasks models enable {_lbl}`."), flush=True)
+                    print(f"  Recorded {_lbl} as out of credit ({_o['reason']}); "
+                          + (f"later panels skip it until {_o['until']}." if _o.get("until")
+                             else "no reset time was given, so the next panel tries it again."), flush=True)
                 else:
                     print(f"  {_lbl} answered out of credit ({_o['reason']}), but it was enabled "
                           "(`tasks models enable`) after this call to it began — not recorded; "
