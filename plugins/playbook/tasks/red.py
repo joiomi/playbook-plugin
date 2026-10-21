@@ -25,8 +25,16 @@ Part 2 (task 281) reads the records: a side that passed no test is "skipped" (un
 other runner's skip reads green, and the side says no reader matched), a green side that skipped a test "partly
 skipped" — neither proves. `--rows` runs only some rows; `## Red receipt` is the state across runs (`compute_state`:
 each row's newest record by its key — kind, behavior, test — else by its number); a row not in the first run's
-contract is "added later" and proves only on a `--base` its run named. `--check` and the close (`close_report`,
-advisory) print each row's state, stale when its text, its command or the test files changed since its record.
+contract is "added later". `--check` and the close (`close_report`, advisory) print each row's state, stale when its
+text, its command or the test files changed since its record.
+
+Part 3 (task 282) makes the claims hold: a late row proves only when, in each scope whose code the task changed since
+the reference (base.json, else the first run's base), its base is other code and a commit strictly after the
+reference's — and in a scope the task did not change, the start's code (`_own_base`); every summary in a side's
+output is read (`_summaries`); the first run's code is compared with the reference (a first run after the code is
+said); the section is written from the contract, the receipt and the config as they are under the task lock, every
+git answer worked out before it (`_Trees`, frozen under it); a bare `tasks red` / `tasks numbers` takes this
+session's task (`session_task_dir`) or refuses.
 """
 from __future__ import annotations
 
@@ -576,6 +584,7 @@ _PY_SUMMARY = re.compile(r"(?m)^=*\s*(" + _PY_WORD + r"(?:, " + _PY_WORD + r")*)
 
 
 _NO_TESTS = re.compile(r"(?m)^(?:=+ )?no tests ran in [\d.]+s|^NO TESTS RAN\s*$")
+_PY_EMPTY = re.compile(r"(?m)^=*\s*no tests ran in [\d.]+s(?: \([^)\n]*\))?\s*=*\s*$")
 
 
 def _summaries(out: bytes) -> "list[tuple[str, int, int, bool]]":
@@ -586,8 +595,11 @@ def _summaries(out: bytes) -> "list[tuple[str, int, int, bool]]":
     text = out.decode("utf-8", "replace")
     found: "list[tuple[int, str, int, int, bool]]" = []
     uts = list(_UT_RAN.finditer(text))
-    for i, m in enumerate(uts):
-        stop = uts[i + 1].start() if i + 1 < len(uts) else len(text)
+    pys = list(_PY_SUMMARY.finditer(text))
+    empties = list(_PY_EMPTY.finditer(text))         # pytest's empty run is a summary too (task 282, codex)
+    starts = sorted(m.start() for m in uts + pys + empties)
+    for m in uts:
+        stop = next((x for x in starts if x > m.start()), len(text))   # the next summary of EITHER runner (agy)
         end = _UT_END.search(text, m.end(), stop)
         counts: "dict[str, int]" = {}
         for part in (end.group(2) or "").split(",") if end else ():
@@ -598,7 +610,9 @@ def _summaries(out: bytes) -> "list[tuple[str, int, int, bool]]":
         failed = counts.get("failures", 0) + counts.get("errors", 0)              # (impl round 1, codex)
         found.append((m.start(), "unittest", max(int(m.group(1)) - skipped - failed, 0), skipped,
                       bool(failed) or (end is not None and end.group(1) == "FAILED")))
-    for m in _PY_SUMMARY.finditer(text):
+    for m in empties:
+        found.append((m.start(), "pytest", 0, 0, False))
+    for m in pys:
         counts = {}
         for part in m.group(1).split(","):
             n, _, word = part.strip().partition(" ")
@@ -622,11 +636,13 @@ def _side_status(code: int, out: bytes) -> "tuple[str, str, int]":
     sums = _summaries(out)
     reader = "+".join(sorted({x[0] for x in sums}))
     skips = sum(x[2] for x in sums)
+    if code in LAUNCH_FAILED:
+        return "launch failed", reader, skips
+    if any(x[3] for x in sums):                         # a failure, whatever the return (task 282, agy and opus)
+        return "red", reader, skips
     if code == 5 and _NO_TESTS.search(out.decode("utf-8", "replace")):
         return "skipped", reader, skips
     if code != 0:
-        return ("launch failed" if code in LAUNCH_FAILED else "red"), reader, skips
-    if any(x[3] for x in sums):
         return "red", reader, skips
     if any(x[1] <= 0 for x in sums):
         return "skipped", reader, skips
@@ -792,42 +808,50 @@ def _write_section(task_file: Path, project: Path, contained: str) -> "tuple[str
     from tasks.core import _physical_lines, _writer_section_span, load_config, read_task_text
     from tasks.filelock import task_lock
     task_dir = Path(task_file).parent
+
+    def config():
+        try:
+            return load_config(Path(project))
+        except Exception:                               # noqa: BLE001
+            return {}
+    st = None
     try:
-        cfg = load_config(Path(project))
-    except Exception:                                   # noqa: BLE001
-        cfg = {}
-    try:
-        with _no_git_overrides():
-            view, tests_now, why = _prepare(Path(project), cfg, None, True)
-            rows0, _w = parse_contract(read_task_text(task_file))
-            records0, old0 = _read_records(task_dir / RECEIPT_NAME)
-            ref = _reference(task_dir, records0)
-            if rows0:
-                compute_state(rows0, records0, cfg, view, tests_now, old0, ref)     # every git answer, now
-        view.frozen = True
-        with task_lock(task_file):
-            text = read_task_text(task_file)
-            rows, why_c = parse_contract(text)
-            if rows is None:
-                return why_c, None
-            records, old = _read_records(task_dir / RECEIPT_NAME)
-            st = compute_state(rows, records, cfg, view, tests_now, old, _reference(task_dir, records))
-            st["unchecked"] = _unchecked(view, why)
-            lines = _physical_lines(text)
-            new = _physical_lines(_section(st, contained)) + [""]
-            sp = _writer_section_span(lines, RECEIPT_HEADING)
-            if sp is not None:
-                lines[sp[0]:sp[1]] = new
-            else:
-                cp = _writer_section_span(lines, CONTRACT_HEADING)
-                at = cp[1] if cp is not None else len(lines)
-                if at and lines[at - 1].strip():
-                    new = [""] + new
-                lines[at:at] = new
-            atomic_write(task_file, "\n".join(lines))
+        for attempt in (1, 2):
+            cfg = config()
+            with _no_git_overrides():
+                view, tests_now, why = _prepare(Path(project), cfg, None, True)
+                rows0, _w = parse_contract(read_task_text(task_file))
+                records0, old0 = _read_records(task_dir / RECEIPT_NAME)
+                if rows0:                               # every git answer, now — before the lock
+                    compute_state(rows0, records0, cfg, view, tests_now, old0, _reference(task_dir, records0))
+            view.frozen = True
+            with task_lock(task_file):
+                now_cfg = config()                      # the config may have changed while the trees were built
+                if now_cfg != cfg and attempt == 1:     # (task 282, codex): prepare once more, outside the lock
+                    continue
+                text = read_task_text(task_file)
+                rows, why_c = parse_contract(text)
+                if rows is None:
+                    return why_c, None
+                records, old = _read_records(task_dir / RECEIPT_NAME)
+                st = compute_state(rows, records, now_cfg, view, tests_now, old, _reference(task_dir, records))
+                st["unchecked"] = _unchecked(view, why)
+                lines = _physical_lines(text)
+                new = _physical_lines(_section(st, contained)) + [""]
+                sp = _writer_section_span(lines, RECEIPT_HEADING)
+                if sp is not None:
+                    lines[sp[0]:sp[1]] = new
+                else:
+                    cp = _writer_section_span(lines, CONTRACT_HEADING)
+                    at = cp[1] if cp is not None else len(lines)
+                    if at and lines[at - 1].strip():
+                        new = [""] + new
+                    lines[at:at] = new
+                atomic_write(task_file, "\n".join(lines))
+                return "", st
     except OSError as exc:
         return f"{RECEIPT_NAME} or task.md cannot be read ({exc})", None
-    return "", st
+    return "the config kept changing while the section was prepared", None
 
 
 # ---------------------------------------------------------------------------- the state across runs (task 281)
@@ -909,12 +933,14 @@ def _own_base(rec: dict, ref, view) -> bool:
         if not isinstance(r, dict):
             continue                                    # a scope the reference had not: other code by definition
         start = view.digest(scope, _ref_treeish(r), code=True)
-        if start is None:
+        mine = view.digest(scope, _treeish(e), code=True)
+        if start is None or mine is None:
             return False
         if view.digest(scope, now.get(scope), code=True) == start:
-            continue                                    # the task changed no code there: any base will do
-        mine = view.digest(scope, _treeish(e), code=True)
-        if mine is None or mine == start:
+            if mine != start:                           # the task changed no code there: its base must be the start's
+                return False                            # code — an older one is red for its age (task 282, sonnet)
+            continue
+        if mine == start:
             return False
         if r.get("commit") is None:
             continue                                    # an unborn reference: every commit is after it
@@ -1027,10 +1053,10 @@ def compute_state(rows: "list[dict]", records: "list[dict]", cfg: dict, view: "_
     notes += [f"row {lab} is not a number — `tasks red` refuses the contract until each row's `#` is one"
               for lab in labels if lab and not _NUMBER.fullmatch(lab)]
     anchor_after = False
-    if records and view is not None:                    # the first run before the code? (task 282, opus)
-        fb, fn = records[0].get("base"), records[0].get("now_tree")
-        for scope, e in (fb.items() if isinstance(fb, dict) else ()):
-            then = view.digest(scope, _treeish(e), code=True)
+    if records and view is not None:                    # the first run before the code? (task 282, opus) — against
+        fn = records[0].get("now_tree")                 # the reference: base.json when there is one (codex)
+        for scope, e in (ref.items() if isinstance(ref, dict) else ()):
+            then = view.digest(scope, _ref_treeish(e), code=True)
             now = view.digest(scope, fn.get(scope) if isinstance(fn, dict) else None, code=True)
             if then is not None and now is not None and then != now:
                 anchor_after = True
@@ -1038,13 +1064,16 @@ def compute_state(rows: "list[dict]", records: "list[dict]", cfg: dict, view: "_
         notes.append("the first run came after the code — its code already differed from its base, so a row added "
                      "before it cannot be told from one written at design (run `tasks red` once the red tests are "
                      "written, before the code)")
-    rewritten = []
+    rewritten = []                                      # the scopes the task changed whose start is off HEAD
+    newest = records[-1].get("now_tree") if records and isinstance(records[-1].get("now_tree"), dict) else {}
     for scope, r in (ref.items() if isinstance(ref, dict) and view is not None else ()):
         if isinstance(r, dict) and view.on_head(scope, r.get("commit")) is False:
-            rewritten.append(scope)
-    if rewritten:
-        notes.append("history rewritten since the activation in " + ", ".join(n or "the project" for n in rewritten)
-                     + " — its commit is no ancestor of HEAD, so a late row there cannot prove")
+            changed = view.digest(scope, _ref_treeish(r), code=True) != view.digest(scope, newest.get(scope), code=True)
+            notes.append(f"the activation's commit in {scope or 'the project'} is not an ancestor of HEAD (a rebase, "
+                         "an amend, or another branch)" + (" — a late row whose code is there cannot prove" if changed
+                                                           else "; the task changed no code there"))
+            if changed:
+                rewritten.append(scope)
     if old:
         notes.append(f"{old} record(s) without a row key (written before task 281) are not read — `tasks red` "
                      "records the rows again")
@@ -1298,7 +1327,7 @@ def numbers_line(project: Path, task_dir: Path, budget: float = 10.0) -> "str | 
         cfg = {}
     st = state_of(Path(project), Path(task_dir), rows, cfg, time.monotonic() + budget, read_trees=False)
     return (f"contract: {len(rows)} row(s) — {_counts(st['rows'], st)} (test files not checked — `tasks red --check` "
-            "reads them)")
+            "reads them" + (f"; not checked either: {st['unchecked']}" if st.get("unchecked") else "") + ")")
 
 
 def _listing(repo: Path, treeish: str, exclude: "list[str]", timeout: float) -> "list[tuple[str, bytes, bytes]]":
@@ -1779,9 +1808,12 @@ def _cmd_red(cmd_args: "list[str]") -> None:
                     rec["why"] = why_all
             _append(task_file, rec)
             results.append(rec)
-            print(f"  row {rec['row']} ({rec['kind']}): {rec['status']} → {rec['now']['status']}"   # sides, never a
-                  + (f" — {rec['last']}" if rec.get("last") else "")                                 # verdict word
-                  + (f" — {rec['why']}" if rec.get("why") else ""), flush=True)                      # (task 282)
+            tests_ = [t for t in rec.get("tests") or [] if isinstance(t, dict)]
+            sides = ("; ".join(f"{k}: {t['base'].get('status')} → {t['now'].get('status')}"    # every test's sides,
+                               for k, t in enumerate(tests_, 1)) if len(tests_) > 1             # never a verdict
+                     else f"{rec['status']} → {rec['now']['status']}")                          # word (task 282)
+            print(f"  row {rec['row']} ({rec['kind']}): {sides}" + (f" — {rec['last']}" if rec.get("last") else "")
+                  + (f" — {rec['why']}" if rec.get("why") else ""), flush=True)
         left, st = _write_section(task_file, project, contained_line)
         ref_n = d.name.split("-", 1)[0]
         if st is None:
@@ -1792,7 +1824,7 @@ def _cmd_red(cmd_args: "list[str]") -> None:
             ran = {r["row"] for r in results}
             shown = dict(st, rows=[e for e in st["rows"] if e["row"] in ran])
             for ln in render_state(shown, ref_n, f"  the state of the {len(results)} row(s) run, as `## Red receipt` "
-                                                 "now says:")[1:]:
+                                                 "now says:"):
                 print(ln, flush=True)
             print(f"  the state across runs is in task.md (`{RECEIPT_HEADING}`), every record in {RECEIPT_NAME}; "
                   f"`tasks red {ref_n} --check` prints every row.", flush=True)

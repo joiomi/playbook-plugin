@@ -381,7 +381,8 @@ class TheRun(Project):
         runs = {x["run"] for x in lines}
         self.assertEqual(len(runs), 2)
         sec = self.section()
-        self.assertEqual(sum(1 for r in runs if r in sec), 1)
+        newest = {x["row"]: x["run"] for x in lines}             # the state across runs (task 281): each row's newest
+        self.assertTrue(all(r in sec for r in newest.values()), sec)
         self.assertEqual(len(re.findall(r"(?m)^\| [12] \|", sec)), 2)
 
     def test_an_interrupted_run_cleans_up(self):

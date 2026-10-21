@@ -77,6 +77,21 @@ class Late(Base):
         self.assertEqual(self.receipt_lines()[-1]["verdict"], "proved")
         self.assertRegex(self.check(), r"row 2: proved on the task's start only")
 
+    def test_a_commit_between_the_activation_and_the_first_runs_base_proves(self):
+        # row 2, its other side: the reference is the activation, so a commit after it — before the first run's base —
+        # is the code before a late row's fix, and proves (the first run's base as the reference would refuse it)
+        self.started()
+        (self.code / "src.py").write_text("def f():\n    return 2\n", encoding="utf-8")
+        between = self.commit_code("part of the change")
+        (self.code / "src.py").write_text(G_CODE, encoding="utf-8")
+        (self.code / "tests" / "test_g.py").write_text(G_TEST, encoding="utf-8")
+        later = self.commit_code("the rest")
+        self.assertEqual(self.cli("red", "--base", f"code={later}").returncode, 0)
+        self.set_contract([ROW1, ("2", "hostile", "g returns 3", "`tests.test_g`")])
+        self.assertEqual(self.cli("red", "--rows", "2", "--base", f"code={between}").returncode, 0)
+        self.assertEqual(self.receipt_lines()[-1]["verdict"], "proved")
+        self.assertRegex(self.check(), r"row 2: proved \(run [0-9a-f]+\) — added later")
+
     def test_a_newer_base_proves(self):
         # row 3: the code before the late row's fix, committed after the activation — proved (already true before:
         # part 2 proves it too; this row keeps it under the stricter rule)
@@ -151,7 +166,7 @@ class Late(Base):
         self.assertEqual(self.receipt_lines()[-1]["verdict"], "proved")
         out = self.check()
         self.assertRegex(out, r"row 2: proved on the task's start only")
-        self.assertIn("history rewritten since the activation", out)
+        self.assertIn("is not an ancestor of HEAD", out)          # said as it is (task 282's impl round 1)
         self.assertNotIn("each needs its own base", out)
 
     def test_a_late_row_without_base_json_still_proves(self):
@@ -554,6 +569,26 @@ class RoundOne(Base):
             code = _in_process(self.d, self.env(), red.cmd_red, [])
         self.assertIn(code, (None, 0))
         self.assertRegex(self.section(), r"(?m)^\| 1 \| normal \|.*stale — the command changed")
+
+    def test_red_tests_changed_during_preparation_is_read(self):
+        # row 37, the trees too: `red_tests` changes while the trees are prepared — they are prepared once more, so the
+        # section's tests digest is the new one's (stale, as --check says), not the old one's
+        from unittest import mock
+        from tasks import red
+        self.started()
+        real, done = red._prepare, []
+
+        def prepare_then_change(*a, **k):
+            out = real(*a, **k)
+            if not done:
+                done.append(1)
+                self.config(red_tests=["tests/test_old.py"])
+            return out
+        with mock.patch.object(red, "_prepare", prepare_then_change):
+            code = _in_process(self.d, self.env(), red.cmd_red, [])
+        self.assertIn(code, (None, 0))
+        self.assertRegex(self.check(), r"row 1: stale — the test files changed")
+        self.assertRegex(self.section(), r"(?m)^\| 1 \| normal \|.*stale — the test files changed")
 
     def test_the_run_prints_every_tests_sides(self):
         # row 38 (opus, agy): a row of two tests shows each one's sides; the state's header line is printed
