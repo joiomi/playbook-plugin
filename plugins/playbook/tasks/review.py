@@ -2137,9 +2137,11 @@ def _cmd_panel_review(cmd_args):
                       + (f"later panels skip it until {_o['until']}." if _o.get("until")
                          else "the next panel tries it again."), flush=True)
                 return
-            # an answer: a usable review, or a timeout after the first wait's worth of work (impl r1, codex: a
-            # hang or a short hard limit proves nothing about the account)
-            if _o is None and (not _failed_now or (timed_out and dur_ms >= _RETRY_FIRST_TRY_SECS * 1000)):
+            # an answer: a usable review, or a timeout after the first wait's worth of work that reported tokens
+            # (impl r1 and post-panel run 1, codex: a hang, a short hard limit, or time alone proves nothing about
+            # the account — a timed-out call's partial text may even be the provider's credit error)
+            if _o is None and (not _failed_now
+                               or (timed_out and dur_ms >= _RETRY_FIRST_TRY_SECS * 1000 and _spent)):
                 _answered.setdefault(label, _seat_began.get(label))
             else:
                 _tried_failed[label] = _o

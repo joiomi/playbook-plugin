@@ -324,18 +324,24 @@ def record_outage(agent_dir: Path, spec: str, outage: dict,
         # full precision (impl r1, codex): `clear_answered` compares these with a call's start, which has it
         entry = {"reason": outage["reason"], "until": outage.get("until"), "since": now.isoformat()}
         old = data.get(spec)
+        tries = old.get("tried") if old else 0
+        tries = tries if isinstance(tries, int) and not isinstance(tries, bool) and tries > 0 else 0
+        began = _aware(started or now, now)
+        seen = [at for at in (_parse_at(old.get("since"), now), _parse_at(old.get("last_tried"), now))
+                if at is not None] if old else []
+        if old and started is not None and seen and max(seen) > began:
+            # impl r1 (opus, codex), post-panel run 1 (codex): an OLDER call's failure — a retried seat's or a live
+            # one's — landing after newer evidence of this seat (recorded, or refused, after this call began) changes
+            # nothing but the count of tries: the newer reset time and reason stay, or a later answer could clear
+            # newer evidence and the next panels would try the seat before its reset
+            newer: dict = dict(old)
+            if retried:
+                newer["tried"] = tries + 1
+            data[spec] = newer
+            return _dump(data, cleared)
         if retried:
-            tries = old.get("tried") if old else 0
-            entry["tried"] = (tries if isinstance(tries, int) and not isinstance(tries, bool) and tries > 0 else 0) + 1
-            began = _aware(started or now, now)
-            last = _parse_at(old.get("last_tried"), now) if old else None
-            if old and last is not None and last > began:
-                # impl r1 (opus, codex): an OLDER call's refusal landing after a newer one only counts the try —
-                # the newer refusal's time, reset and reason stay, or a later answer could clear newer evidence
-                newer: dict = dict(old)
-                entry.update({k: newer[k] for k in ("reason", "until", "last_tried") if k in newer})
-            else:
-                entry["last_tried"] = began.isoformat()
+            entry["tried"] = tries + 1
+            entry["last_tried"] = began.isoformat()
             if old and isinstance(old.get("since"), str):
                 entry["since"] = old["since"]
         data[spec] = entry
