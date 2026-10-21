@@ -147,6 +147,17 @@ GATE_RE = re.compile(r"^\s*- \[[ xX]\]")
 PLACEHOLDER_RE = re.compile(r"^\(.*\)$")
 
 
+def _without_contract(lines: "list[str]") -> "list[str]":
+    """A render's lines without its `## Test contract` section (task 278), from that heading to the next `## `."""
+    out, inside = [], False
+    for ln in lines:
+        if ln.startswith("## "):
+            inside = ln == "## Test contract"
+        if not inside:
+            out.append(ln)
+    return out
+
+
 def _risk_block(text: str) -> "list[str]":
     lines = text.splitlines()
     i = lines.index("## Risk")
@@ -234,9 +245,10 @@ class ANewTaskMdCarriesNoneOfIt(unittest.TestCase):
     def test_every_gate_heading_and_placeholder_stays(self):
         # Every heading and placeholder in its place, and a gate at every place a gate was; task 223 shortened the
         # gates' titles (`tests/test_short_gate_titles.py` maps each old title to its new one).
+        # Task 278 ADDED one section, the test contract (`tests/test_test_contract.py`); the rest is compared as before.
         for name, ty in OLD_RENDERS.items():
             old = (BEFORE / f"render-{name}.md").read_text(encoding="utf-8").splitlines()
-            new = template.render_template(1, "X", ty).splitlines()
+            new = _without_contract(template.render_template(1, "X", ty).splitlines())
             kept = lambda ls: ["- [ ] <gate>" if GATE_RE.match(ln) else ln for ln in ls
                                if GATE_RE.match(ln) or PLACEHOLDER_RE.match(ln)
                                or (ln.startswith("#") and ln != "## Standing Orders")]

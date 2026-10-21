@@ -4,6 +4,24 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+**The test contract: tests first, as the specification** — task 278 (PHASE-B.md item 9a; the owner, 2026-10-21:
+"daca am gandit o functionalitate, trebuie sa ii creez toate testele posibile si imposibile"). A new full task
+(feature, build, refactor, ops, bugfix, cleanup) carries a pinned `## Test contract` it fills at design, before any
+code: one row per behavior (normal, edge, hostile, must-not) naming the test that proves it, and nine hostile classes
+(concurrency and order, repeat and retry, time, partial failure, paths and permissions, bad or old input, outages and
+missing tools, size, encodings), each answered by rows or `does not apply: <why>`. The design gate that asked for a
+test strategy now asks for the contract; `tasks guide <type>` explains it and lists what each class covers. The plan
+panel's fourth lens is the contract: a missing row, an unanswered class, a reason the plan contradicts, or a contract
+gate with no section is a finding; one defect is one finding. The impl review's test lens asks each row for its test;
+the post-panel judge counts only the rows its delta touched. The judges' trim keeps the section. research, audit,
+eval, light and quick are unchanged.
+- Not mechanical yet: that each test was watched failing before the code is still the agent's word; `tasks red`, its
+  receipt and the edit hook's gate come next (PHASE-B.md 9b, 9c).
+- A Fix task (bugfix, cleanup) has no plan panel: the impl review reads its contract when one runs; a reversible
+  bugfix closes with no judge, so 9b's red receipt will be its check.
+- Measured: an empty feature task.md grows from 3,214 to 4,198 characters, a bugfix from 2,085 to 3,046; the plan
+  prompts by about 800 characters, the impl prompts by about 450; `tasks guide feature` from 8,825 to 10,278.
+
 ## [1.6.8] — 2026-10-21
 
 **A judge seat out of credit with no reset time comes back by itself** — task 276 (the owner, 2026-10-21: "nu vreau sa

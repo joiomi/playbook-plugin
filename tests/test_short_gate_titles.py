@@ -76,6 +76,14 @@ NOTE_REWORDED = {
     "Verify: run the check that proves it — paste the result on this line":
         "Verify: run the check that proves it and paste its result under this gate.",
 }
+# Task 278 (PHASE-B.md item 9a): the test-strategy gates of the full types REPLACED by the test-contract gate — not a
+# reword: what the gate asks is the guide's "Test contract" section and the `## Test contract` it fills.
+REPLACED = {
+    "Test strategy: what are you testing and how? (point tests for specific behavior, property tests via "
+    "`hypothesis` for invariants on transformations/parsers/arithmetic)": template.CONTRACT_GATE,
+    "Test strategy: point tests, or also property tests (`hypothesis`) if fixing a parser/formatter/transformation?":
+        template.CONTRACT_GATE,
+}
 # The retro scaffold's (`retro.py`) gates before this task, old -> new; two carried more and are in
 # `RETRO_GATE_NOTES`, the rest are rewords.
 RETRO_BEFORE = {
@@ -272,16 +280,20 @@ class TheGuideHoldsWhatTheTitlesSaid(unittest.TestCase):
     def test_every_changed_title_is_in_the_guide_or_a_plain_reword(self):
         guide = template.guide_text()
         changed = old_to_new()
-        self.assertEqual(len(changed), 28)
+        self.assertEqual(len(changed), 29)
         plain = {**REWORDED, **NOTE_REWORDED}
         for old, new in changed.items():
             with self.subTest(old=old[:60]):
-                if old in plain:
+                if old in REPLACED:
+                    self.assertEqual(REPLACED[old], new)
+                    self.assertNotIn(old, guide)
+                    self.assertIn("### Test contract\n", guide)
+                elif old in plain:
                     self.assertEqual(plain[old], new)
                     self.assertNotIn(old, guide)
                 else:
                     self.assertIn(f"> **{new}**\n> {old}", guide)
-        self.assertEqual(len(changed) - len(plain), len(template.GATE_NOTES))
+        self.assertEqual(len(changed) - len(plain) - len(REPLACED), len(template.GATE_NOTES))
 
     def test_the_retro_gates(self):
         new = retro_fixed_gates(retro_text())

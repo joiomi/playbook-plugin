@@ -1094,9 +1094,11 @@ def template_commentary_lines() -> "frozenset[str]":
 # it: at the 50K argv window 21 of 41 WoW task.md and 18 of 202 here lost the whole Work Plan. The review
 # sections too (his ruling at the task's checkpoint): the triage of the previous round reaches the next judge only
 # through task.md — the SETTLED block reads rejected findings from judge.md, and here 50 of 64 tasks keep them in
-# task.md alone.
+# task.md alone. Task 278 (PHASE-B.md item 9a): the test contract too — the specification the judges check the plan
+# and the code against.
 _MUST_KEEP_HEADING = re.compile(
-    r'^(status|risk|intent|why|design|handoff|owner rulings|work plan|work|plan review|implementation review|review'
+    r'^(status|risk|intent|why|design|handoff|owner rulings|test contract|work plan|work|plan review'
+    r'|implementation review|review'
     r'|phase \d+|findings)\b',           # a retro record's journal: its phases and findings (impl round 2, S2)
     re.IGNORECASE)
 # Sent only after every other section: the template's standing text and the machine's own receipts.

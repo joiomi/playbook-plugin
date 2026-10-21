@@ -142,13 +142,67 @@ def structure() -> str:
 - [ ] Set `## Risk` and name what would show the change wrong (assertive: its instrument; irreversible: its rollback)."""
 
 
+# Task 278 (PHASE-B.md item 9a; the owner, 2026-10-21 15:15: "daca am gandit o functionalitate, trebuie sa ii creez
+# toate testele posibile si imposibile"): a full task writes its tests as the specification, before any code. The
+# classes are the ones judges kept finding only after the code (task 276's impl panel: order, clock precision,
+# timeouts); each is answered at design, by rows or a reason. One list: the contract renders the names, the guide their
+# examples (written once, task 213), the plan lens the names; lens 3's six sequences each fall in one (plan panel P7).
+HOSTILE_CLASSES = (
+    ("Concurrency and order", "two writers at once, events arriving reordered"),
+    ("Repeat and retry", "the same event twice, a lost reply retried, a step run again after an interruption"),
+    ("Time", "time zones, clock precision, a clock that moves, timeouts"),
+    ("Partial failure", "a crash or interrupt mid-write, a half-written file, the outside call done but the local "
+                        "step failed"),
+    ("Paths and permissions", "links, FIFOs, read-only places, another user's files, a missing directory"),
+    ("Bad or old input", "malformed, empty or missing, or written by an older version"),
+    ("Outages and missing tools", "a service down, a tool not installed, a quota or credit refusal"),
+    ("Size", "huge inputs, many items, none at all"),
+    ("Encodings", "non-ASCII text, invalid UTF-8, other line endings"),
+)
+CONTRACT_GATE = ("Test contract: fill `## Test contract` below — a row per behavior, and each hostile class a row "
+                 "or a reason.")
+
+
 def reflection_gates() -> str:
-    return """\
+    return f"""\
 ### Reflection Gates
 - [ ] Write task-specific check questions whose answers need evidence, not a yes or no.
-- [ ] Test strategy: what you will test and how (point tests, property tests for invariants).
+- [ ] {CONTRACT_GATE}
 - [ ] Before the riskiest step: what would make you stop and reconsider?
 - [ ] If judging quality before building: is the gap worth closing?"""
+
+
+def contract_section() -> str:
+    """The `## Test contract` a full task fills at design (task 278): rows, then every hostile class answered. Pinned:
+    a kept section without a pin is the first the judges' shrink cuts (`core._trim_shrink` tier 0; plan panel P3)."""
+    classes = "\n".join(f'- {name}: (the rows that cover it, or "does not apply: <why>")' for name, _ in HOSTILE_CLASSES)
+    return f"""\
+## Test contract
+<!-- pin -->
+
+| # | Kind | Behavior | Test that proves it |
+|---|------|----------|---------------------|
+| 1 | (normal / edge / hostile / must-not) | (one behavior) | (the test, or the command and the output it must give) |
+
+Hostile classes — each: the rows that cover it, or "does not apply: <why>"
+{classes}"""
+
+
+def contract_note() -> str:
+    """The test contract's instructions and the hostile classes' examples — in the guide only (task 278)."""
+    classes = "\n".join(f"> - {name}: {what}." for name, what in HOSTILE_CLASSES)
+    return """\
+> - Write it at design, before any code: the tests are the specification the code is written to pass.
+> - One row per behavior: normal, edge, hostile, or must-not (what must never happen — a negative control).
+> - Each row names the test that will prove it, or the command and the output it must give.
+> - A bug's first row reproduces it; a refactor's rows are the behaviors that must stay the same.
+> - Each hostile class: the rows that cover it, or `does not apply: <why>` — a reason the change contradicts is a finding.
+> - Write the tests, then watch each fail on the code as it is before you write the code.
+> - A row added later (a judge's finding) is red-first too.
+> - The plan panel reviews the contract as one of its lenses; the impl review asks each row for its test.
+> - A Fix task (bugfix, cleanup) has no plan panel: the impl review reads its contract when one runs.
+> - The hostile classes, with what each covers:
+""" + classes
 
 
 
@@ -402,6 +456,38 @@ def post_d6_clauses(settled: bool = False, delta: bool = False) -> str:
     return s
 
 
+# A full task made since task 278 has the contract gate and the section; one with the gate and no section dropped it
+# (plan panel P9). Neither: a task type without a contract, or an older record.
+_CONTRACT_MISSING = ("A task with the `Test contract:` design gate but no `## Test contract` section is missing its "
+                     "contract: that is a finding. With neither (a light, quick, research, audit or eval task, or a "
+                     "record from before the contract), ")
+
+
+def _contract_plan_lens() -> str:
+    """The plan panel's test lens (task 278): the task's `## Test contract`, its rows and every hostile class."""
+    names = "; ".join(name for name, _ in HOSTILE_CLASSES)
+    return ("(4) Test contract — read the task's `## Test contract`: does every Intent claim, and every failure mode and "
+            "hostile sequence above, have a row naming the test that will prove it? Is each hostile class — "
+            f"{names} — answered by rows or by `does not apply: <why>`? A missing row, an unanswered class, or a "
+            "reason the plan or the code contradicts (cite it) is a finding; a reason that holds is not. "
+            "One defect is one finding: a sequence the hostile-sequences lens already raised is not raised again here. "
+            "For pure-function code, does it name invariants (idempotency, bounds, round-trip) worth property-testing? "
+            f"{_CONTRACT_MISSING}judge the test plan it has. ")
+
+
+def _contract_impl_lens(delta: bool = False) -> str:
+    """The impl review's test lens (task 278): each contract row has its test, one that fails without the change. A
+    post-panel run reads a delta: a row it did not touch was the panel's to check (plan panel P6)."""
+    return ("(5) Test quality — do the tests verify Intent claims or just confirm the implementation? "
+            "Each row of the task's `## Test contract` needs its test in the change, one that would fail without it; "
+            "a row with no test, or a test that would pass on the code as it was, is a finding. "
+            + ("In this post-panel delta review, a contract row counts only if the delta added or changed it or its "
+               "test. " if delta else "")
+            + f"{_CONTRACT_MISSING}judge the tests against the Intent. "
+            "For pure-function code (parsers, formatters, transformations), are there untested invariants that "
+            "property tests would catch? ")
+
+
 def plan_review_prompt(
     task_path: str,
     inline_context: bool = False,
@@ -441,7 +527,7 @@ def plan_review_prompt(
         "transaction rolls back; a crash after commit but before any post-commit step; a lost response causing the caller to retry. "
         "For each applicable sequence, name the invariant or mechanism the plan relies on AND the planned test that will prove it — "
         "an unaddressed applicable sequence is a finding. If the change touches no shared or persisted state, say so in one line and move on. "
-        "(4) Test coverage — does the test plan cover the failure modes above? For pure-function code, does it identify invariants (idempotency, bounds, round-trip) worth property-testing? "
+        f"{_contract_plan_lens()}"
         "(5) Simplify — is anything over-engineered? What can be dropped? "
         "(6) Prove it — cite file:line evidence for claims about existing code. No hand-waving. "
         "Be specific and adversarial — your job is to find problems, not approve. "
@@ -503,7 +589,7 @@ def impl_review_prompt(
         "transaction rolls back; a crash after commit but before any post-commit step; a lost response causing the caller to retry. "
         "For each applicable sequence, trace the persisted state and external effects, then cite the test that proves it safe or raise a "
         "finding demanding one. If the change touches no shared or persisted state, say so in one line and move on. "
-        "(5) Test quality — do the tests verify Intent claims or just confirm the implementation? For pure-function code (parsers, formatters, transformations), are there untested invariants that property tests would catch? "
+        f"{_contract_impl_lens(delta)}"
         "(6) Prove it works — cite file:line evidence showing correctness, or construct a concrete scenario showing failure. "
         "Be specific and adversarial — your job is to find problems, not approve. "
         f"{post_d6_clauses(settled, delta)}"
@@ -562,7 +648,7 @@ def panel_plan_review_prompt(
         "transaction rolls back; a crash after commit but before any post-commit step; a lost response causing the caller to retry. "
         "For each applicable sequence, name the invariant or mechanism the plan relies on AND the planned test that will prove it — "
         "an unaddressed applicable sequence is a finding. If the change touches no shared or persisted state, say so in one line and move on. "
-        "(4) Test coverage — does the test plan cover the failure modes above? For pure-function code, does it identify invariants (idempotency, bounds, round-trip) worth property-testing? "
+        f"{_contract_plan_lens()}"
         "(5) Simplify — is anything over-engineered? What can be dropped? "
         "(6) Prove it — cite file:line evidence for claims about existing code. No hand-waving. "
         "Be specific and adversarial — your job is to find problems, not approve. "
@@ -622,7 +708,7 @@ def panel_impl_review_prompt(
         "transaction rolls back; a crash after commit but before any post-commit step; a lost response causing the caller to retry. "
         "For each applicable sequence, trace the persisted state and external effects, then cite the test that proves it safe or raise a "
         "finding demanding one. If the change touches no shared or persisted state, say so in one line and move on. "
-        "(5) Test quality — do the tests verify Intent claims or just confirm the implementation? For pure-function code (parsers, formatters, transformations), are there untested invariants that property tests would catch? "
+        f"{_contract_impl_lens(delta)}"
         "(6) Prove it works — cite file:line evidence showing correctness, or construct a concrete scenario showing failure. "
         "Be specific and adversarial — your job is to find problems, not approve. "
         f"{post_d6_clauses(settled, delta)}"
@@ -664,12 +750,12 @@ def judge_prompt(
 
 def design_phase_light() -> str:
     """Lightweight design phase for Fix tasks — just restate and define done."""
-    return "## Design Phase\n\n" + chat_log_research() + "\n\n" + """\
+    return "## Design Phase\n\n" + chat_log_research() + "\n\n" + f"""\
 ### Fix Orientation
 - [ ] What exactly is broken or needs cleaning up?
 - [ ] What does "fixed" look like (a specific grep, test or behavior)?
 - [ ] What adjacent code could this break?
-- [ ] Test strategy: point tests, or also property tests (`hypothesis`) if fixing a parser/formatter/transformation?"""
+- [ ] {CONTRACT_GATE}"""
 
 
 def work_plan_fix() -> str:
@@ -790,8 +876,6 @@ GATE_NOTES = (
      "**Set `## Risk`** (reversible / irreversible / assertive). Ask: if this claim/change were WRONG, what would show it? An `assertive` task (changes a claim about the world — docs, a calibration, a measurement) must name the instrument that would reveal the claim false. An `irreversible` task must name its rollback plan. These cannot be light-closed for being small."),
     ("Write task-specific check questions whose answers need evidence, not a yes or no.",
      "Wrote task-specific check questions (Bad: \"is this working?\" Good: \"Does the output include the progress counter?\" — the answer should require evidence, not just yes/no)"),
-    ("Test strategy: what you will test and how (point tests, property tests for invariants).",
-     "Test strategy: what are you testing and how? (point tests for specific behavior, property tests via `hypothesis` for invariants on transformations/parsers/arithmetic)"),
     ("Run the plan panel in the background — `.claude/bin/tasks panel-review <N>` — then read `judge.md`.",
      "Run `.claude/bin/tasks panel-review <N>` — ALL available judges review the plan in parallel (blind: they see the repo, not your conversation). Wait for it to finish; findings land in `judge.md` (this dir), led by a PANEL VERDICT. Read judge.md, then address valid concerns by revising Work Plan gates yourself. **Justify lens:** does every work gate trace up to something in Intent/Design? Are there gates that justify nothing above them (scope creep)? Intent claims with no gate to satisfy them (gaps)? *(Fallback if no panel can run: `.claude/bin/tasks plan-review <N>` — single judge, writes into this file.)*"),
     ("Triage the plan panel's findings here: accept, park or reject each one, with its reason.",
@@ -868,10 +952,12 @@ def _guide_sections(task_type: "str | None") -> "list[tuple[str, str]]":
     if task_type == "freehand":
         return gates
     pattern = PLAYBOOKS.get(task_type) if task_type else None
+    contract = [("Test contract", contract_note())]
     if pattern is None:
-        return full + common + [("Design Phase", design_phase_note())] + notes + gates + [
+        return full + common + [("Design Phase", design_phase_note())] + contract + notes + gates + [
             ("Standing Orders", standing_orders().split("\n", 1)[1])]
     return ([("Gate discipline", sticker())] + common + [("Design Phase", design_phase_note())]
+            + (contract if pattern in ("Build", "Fix") else [])
             + [n for n in notes if n[0].startswith(f"Work Plan ({pattern}:")] + gates
             + [("Standing Orders", standing_orders().split("\n", 1)[1])])
 
@@ -1373,6 +1459,7 @@ def render_template(num: int, title: str, task_type: str | None = None) -> str:
         # appends it; Investigate/Evaluate deliberately do not (report-shaped).
         middle = [
             design_phase_light(),
+            contract_section(),
             work_plan_fix(),
             judge_impl_section(),
         ]
@@ -1391,6 +1478,7 @@ def render_template(num: int, title: str, task_type: str | None = None) -> str:
         middle = []
         if _eval_cfg.get("design_phase", "on") != "off":
             middle.append(design_phase())
+            middle.append(contract_section())       # written at design, before any code (task 278)
         if _eval_cfg.get("judge", "on") != "off":
             middle.append(judge_section())
         middle.append(work_plan())
