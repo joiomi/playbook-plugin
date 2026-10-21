@@ -35,6 +35,7 @@ import unittest
 from pathlib import Path
 
 from tests._bashcheck import bash_or_skip
+from tests._lockwait import until_held
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "plugins" / "playbook" / "scripts"
 LIB = SCRIPTS / "gate-echo-lib.sh"
@@ -48,14 +49,6 @@ PRE = ('{"session_id":"host-sess-1","transcript_path":"/t","cwd":"/c","permissio
 SUB = ('{"session_id":"host-sess-1","agent_id":"a601d5c3","agent_type":"general-purpose",'
        '"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"x"},'
        '"tool_response":{"stdout":""},"tool_use_id":"toolu_01SUB","duration_ms":3}')
-
-
-def _until_held(path, limit: float = 10.0) -> None:
-    """Wait until another process holds `path`'s lock — an exclusive take that does not wait fails then. A fixed 0.3 s
-    sleep let a slow runner give the code under test the lock first (task 263's impl round 1, opus: a false red)."""
-    t0 = time.monotonic()
-    while subprocess.run(["flock", "-n", "-x", str(path), "true"]).returncode == 0 and time.monotonic() - t0 < limit:
-        time.sleep(0.02)
 
 
 def _needs(tool):
@@ -825,7 +818,7 @@ class Rotation(_Project):
         self.fill()
         holder = subprocess.Popen(["flock", str(self.lane / "journal"), "sleep", "5"])
         try:
-            _until_held(self.lane / "journal")
+            until_held(self.lane / "journal")
             t0 = time.monotonic()
             r = self.run_hook(self.in_lane("exit 0"), PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK="1")
             self.assertLess(time.monotonic() - t0, 2.5)

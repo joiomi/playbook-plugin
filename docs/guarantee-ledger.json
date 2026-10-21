@@ -20231,6 +20231,26 @@
           "limitations": [
             "Task 265's impl round 2 (opus, sonnet Important) and round 1 (opus Minor): `hook_main` in-process at a session's end."
           ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_agent_usage.py",
+          "reference": "RoundTwoFixes.test_a_free_lock_end_marks_a_subagent_file_that_appeared_after_the_read",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 268 (PLAN.md \"From task 265\" (d)): `hook_main` in-process, a subagent file made after the read. Watched red: no marker."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_agent_usage.py",
+          "reference": "RoundTwoFixes.test_a_free_lock_end_marks_a_read_that_came_back_unknown",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Task 268 (PLAN.md \"From task 265\" (f)): `read_span` made to come back `unknown`; a guard of the arm task 265's round 2 called an equivalent mutant (now red)."
+          ]
         }
       ],
       "applicable_platforms": [
@@ -20246,7 +20266,7 @@
         "Tool and model time are one kind (PreToolUse runs only for Bash, the edit tools and AskUserQuestion); Bash is not split by command (the hook journal keeps none), so the agent's own test runs count as agent and verify holds only recorded runs.",
         "Whole-second stamps: each gap is exact to a second either way; on three live sessions against their transcripts counted B1's way, agent came within 2.5 s and owner-idle within 2 s (task 235 W2). Sleep is measured only between two samples of one boot.",
         "Two sessions working on one task at once each count their own time; a task closed before this existed has no numbers.json.",
-        "2026-10-21 (task 265): a session's end with the lane lock free marks what is still unread after its read `unknown` (as a busy lock did since task 246) — a half-written last line that may be a call, a call finished after the read, a span the journal refused, an end that cannot be read; decided against where that read left each file (a span with no call writes no record, so the journal's newest `to` is no measure), so a normal end with complete non-call lines after the last call is not marked, nor a half-written user entry; and a transcript resumed and ended again with the same half-written tail gets one more marker each time. A seed is not written while its file's end cannot be read. PLAN.md \"From task 253\" (a) was measured and rejected (an escaped `\\\"message\\\":` never matches the key's pattern), and (c) rejected (a seed at the size of a one-line file would break that line)."
+        "2026-10-21 (task 265): a session's end with the lane lock free marks what is still unread after its read `unknown` (as a busy lock did since task 246) — a half-written last line that may be a call, a call finished after the read, a span the journal refused, an end that cannot be read; decided against where that read left each file (a span with no call writes no record, so the journal's newest `to` is no measure), so a normal end with complete non-call lines after the last call is not marked, nor a half-written user entry; and a transcript resumed and ended again with the same half-written tail gets one more marker each time. A seed is not written while its file's end cannot be read, so such a file is offered the seed again at every Stop until one lands (task 268, PLAN.md \"From task 265\" (a)); a subagent file that appears between the session's last read and its end check is judged as read up to its start (task 268, \"From task 265\" (d)). PLAN.md \"From task 253\" (a) was measured and rejected (an escaped `\\\"message\\\":` never matches the key's pattern), and (c) rejected (a seed at the size of a one-line file would break that line)."
       ],
       "follow_up_phases": [
         8

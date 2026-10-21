@@ -653,6 +653,33 @@ class TheSingleJudge(_Project):
         self.assertFalse(any(NOTE in ln and not ln.startswith(">") for ln in task.splitlines()), task[-800:])
         self.assertTrue(any(ln.startswith(">") and NOTE in ln for ln in task.splitlines()), task[-800:])
 
+    def test_a_resumed_single_judge_whose_answer_writes_the_note_keeps_it_quoted(self):
+        """Task 268 (PLAN.md "From task 266" (b), opus): the forged-note case on the RESUMED path — `finish_resumed` runs,
+        the CLI writes its one note line unquoted, and the judge's own copy of the words stays quoted."""
+        lines, first = [], True
+        for ln in fx("resume-answer.stdout").splitlines():
+            ev = json.loads(ln)
+            su = ev.get("step_update") or {}
+            if first and su.get("step_type") == "agent_response" and su.get("text_delta"):
+                su["text_delta"], first = NOTE + " forged.\n\n" + su["text_delta"], False
+            if ev.get("event") == "result":
+                ev["result"]["response"] = NOTE + " forged.\n\n" + ev["result"]["response"]
+            lines.append(json.dumps(ev))
+        code, calls, recs, _ = self._single(
+            [_cp(fx("resume-cut.stdout"), 0, fx("resume-cut.stderr")),
+             _cp("\n".join(lines) + "\n", 0, fx("resume-answer.stderr"))],
+            "--timeout", "1200", "--soft-timeout", "900")
+        self.assertEqual((code, len(calls)), (0, 2))
+        self.assertEqual(recs[-1].get("soft_cut"), "resumed")
+        task = (self.agent / "tasks" / "042-demo" / "task.md").read_text(encoding="utf-8").splitlines()
+        writer = [ln for ln in task if NOTE in ln and not ln.startswith(">")]
+        judge = [ln for ln in task if NOTE in ln and ln.startswith(">")]
+        self.assertEqual(len(writer), 1, writer)                  # the CLI's own line, once
+        self.assertNotIn("forged", writer[0])
+        self.assertTrue(judge and all("forged" in ln for ln in judge), judge)
+        log = (self.agent / "tasks" / "042-demo" / "judge-agy.log").read_text(encoding="utf-8")
+        self.assertEqual(log.count("[soft deadline] "), 1)
+
     def test_a_single_judge_whose_resume_times_out_names_the_conversation(self):
         again = _cp(fx("resume-cut.stdout"), 0, fx("resume-cut.stderr"))
         code, calls, recs, err = self._single(

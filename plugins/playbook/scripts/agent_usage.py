@@ -560,12 +560,12 @@ def _left_unread(paths: "list[str]", reached: "dict[str, int | None]") -> bool:
     """After a read with the lock had (task 265): whether a file of the session holds what that read did not record —
     a file it did not record (not readable, its span refused, its end not readable: None), lines completed since
     (the last complete line now past where it stopped), or a half-written last line that may be a call. A file the
-    read never reached (gone, not a regular file) is skipped, as `record_spans` skips it."""
+    read never reached is skipped while it is gone or not a regular file, as `record_spans` skips it — but one that is
+    a regular file now appeared (or became one) after the read and is judged as read up to its start: unread once it
+    holds a line or a half-written call (task 268, PLAN.md "From task 265" (d): a subagent file made between the read
+    and this check)."""
     for f in session_files(paths):
-        if f not in reached:
-            continue
-        got = reached[f]
-        if got is None:
+        if f in reached and reached[f] is None:
             return True
         try:
             st = os.lstat(f)
@@ -573,6 +573,7 @@ def _left_unread(paths: "list[str]", reached: "dict[str, int | None]") -> bool:
             continue
         if not stat.S_ISREG(st.st_mode):
             continue
+        got = reached.get(f, 0)                # one the read never reached: as read up to its start
         end = _complete_end(f, st.st_size)       # read again on purpose: lines the host wrote after the read count
         if end is None or end != got or _tail_may_be_a_call(f, end, st.st_size):
             return True

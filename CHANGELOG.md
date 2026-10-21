@@ -4,6 +4,12 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+**Two more ends of the agent recorder, and steadier test waits** — task 268 (the owner, 2026-10-20: "Reparațiile mici
+din PLAN"): a subagent file that appears between the session's last read and its end check is now marked `unknown`
+(it was skipped, neither counted nor marked); a read that comes back `unknown` at a free-lock end has its own test;
+the tests' lock-holder wait is one shared helper (`tests/_lockwait.py`) that fails saying so when the holder never
+took the lock (PLAN.md "From task 265" (a), (d), (f); "From task 266" (a)-(c)).
+
 **Wording and test waits from the night's reviews** — task 266 (the owner, 2026-10-20: "Reparațiile mici din PLAN"):
 - a single judge stopped at its soft deadline names the soft knob first and no longer says "before the kill"; a
   panel's agy marker for a seat never resumed now says "at the soft deadline (…) and could not be resumed", as the

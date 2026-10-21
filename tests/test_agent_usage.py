@@ -565,6 +565,45 @@ class RoundTwoFixes(_Lane):
             said = self._hook({"transcript_path": str(self.main)})
         self.assertIn("the unknown marker (unread at the end) could not be written", said)
 
+    def test_a_free_lock_end_marks_a_subagent_file_that_appeared_after_the_read(self):
+        """Task 268 (PLAN.md "From task 265" (d), the post-panel judge): a subagent file made between the read and the
+        end check was left out of `reached`, skipped, and neither counted nor marked."""
+        from unittest import mock
+        self.main.write_bytes(lines(entry("m1")))
+        sub = self.tdir / "sess-1" / "subagents"
+        real = self.mod.record_spans
+
+        def read_then_a_subagent_appears(*a, **k):
+            res = real(*a, **k)
+            sub.mkdir(parents=True)
+            (sub / "agent-late.jsonl").write_bytes(lines(entry("s1", side=True)))
+            return res
+        with mock.patch.object(self.mod, "record_spans", read_then_a_subagent_appears):
+            said = self._hook({"transcript_path": str(self.main)})
+        self.assertEqual([r.get("status") for r in self.records() if r.get("status") == "unknown"], ["unknown"], said)
+
+    def test_a_free_lock_end_marks_a_read_that_came_back_unknown(self):
+        """Task 268 (PLAN.md "From task 265" (f)): a read that is not `known` (a read error past the open) leaves the
+        file unrecorded — `reached` None — and the end marks it; no test drove it."""
+        from unittest import mock
+        self.main.write_bytes(lines(entry("m1")))
+        real = self.mod.read_span
+
+        def fails(path, offset=0, last_id="", stop=None):
+            r = real(path, offset, last_id, stop)
+            return dict(r, status="unknown", reason="cannot read the transcript (EIO)", models={}, sidechain={})
+        with mock.patch.object(self.mod, "read_span", fails):
+            said = self._hook({"transcript_path": str(self.main)})
+        self.assertEqual(self.total(), 0, said)
+        self.assertEqual([r.get("status") for r in self.records() if r.get("status") == "unknown"], ["unknown"], said)
+        # … and with nothing new since the last record too: a read that failed is no proof of nothing unread (it errs
+        # toward `unknown`, as the docs say) — the file's position is not where a failed read began
+        self._hook({"transcript_path": str(self.main)}, PB_AU_MARK_BUSY="")      # a Stop reads m1 for real
+        before = len([r for r in self.records() if r.get("status") == "unknown"])
+        with mock.patch.object(self.mod, "read_span", fails):
+            said = self._hook({"transcript_path": str(self.main)})
+        self.assertEqual(len([r for r in self.records() if r.get("status") == "unknown"]), before + 1, said)
+
     def test_a_free_lock_end_after_a_clean_read_marks_nothing(self):
         self.main.write_bytes(lines(entry("m1"), entry("m2")))
         said = self._hook({"transcript_path": str(self.main)})
