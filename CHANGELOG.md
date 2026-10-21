@@ -4,6 +4,13 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+**The order that lets the close reuse a green verify** — task 273 (the owner, 2026-10-20: "Reparațiile mici din
+PLAN"): the CLAUDE.md template, `tasks verify`'s usage lines and docs/cli.md now say to stage the change before
+`tasks verify` (in a `code_roots` repository, commit it) and to edit nothing outside the task records until the close
+— a `git add`, a code-root commit or an edit outside the task records after the run changes the key, and the close
+runs the contract again (PLAN.md "From task 272": 5 of 91 runs were reused over this repository's 30 closures with
+numbers).
+
 **A claude judge cut off is a failed seat; its account limit is found among several errors** — task 269 (PLAN.md "From
 task 232"): a `subtype: success` result whose `terminal_reason` is not `completed`, or whose `stop_reason` is
 `max_tokens`, was saved as a whole review — it now fails the seat, as grok's non-`end_turn` stop does; and claude's
