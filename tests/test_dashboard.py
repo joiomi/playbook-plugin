@@ -234,15 +234,6 @@ class JournalParsing(unittest.TestCase):
         recs, _ = db.load_review_records(self._write(base + cur))
         self.assertEqual(db.drift_triggers(recs, NOW, DriftTrigger._panel(None)), [])
 
-    def test_probe_records_do_not_move_seat_stats(self):
-        # Task 262: a panel's one-word probe of a seat recorded out of credit is a judge call but not a review —
-        # its seconds would pull the seat's median down, as an intent extraction's did
-        reviews = [_rec(1, "s", "ok", 100_000), _rec(2, "s", "timeout", 300_000), _rec(5, "s", "ok", 200_000)]
-        probes = [_rec(d, "s", "ok", 4_000, kind="probe", round=0) for d in (1, 2, 3, 4)]
-        recs, _ = db.load_review_records(self._write(reviews + probes))
-        st = db.window_stats(recs, NOW)["s"]
-        self.assertEqual((st["runs"], st["ok"], st["timeout"], st["median_ms"]), (3, 2, 1, 200_000))
-
     def _write(self, lines):
         d = tempfile.mkdtemp()
         p = Path(d) / "j.jsonl"

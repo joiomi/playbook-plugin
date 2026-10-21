@@ -1026,16 +1026,6 @@ def build_bwrap_argv(
     return argv
 
 
-def broad_writable_roots(home: "Path | None" = None) -> "list[Path]":
-    """What every agent's sandbox leaves writable whatever its project, in `build_bwrap_argv`'s order: /tmp, playbook's
-    write log, and the agents' home state. A project or git source under one of them is writable to an agent that does
-    not run in it — task 262's outage probe runs in a throwaway folder, so it is not probed there (its impl round 3,
-    sol); `tests/test_sandbox_bind_order.py` pins this list to the binds."""
-    home = Path.home() if home is None else Path(home)
-    return [Path("/tmp"), home / ".local" / "share" / "playbook",
-            *(home / sub for sub in (".claude", *_HOME_RW_SUBPATHS))]
-
-
 def _covers(outer: "Path | str", inner: Path) -> bool:
     """Is `inner` the path `outer`, or inside it? Both already resolved."""
     outer = Path(outer)

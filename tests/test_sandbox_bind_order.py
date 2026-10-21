@@ -54,23 +54,6 @@ class BindOrder(unittest.TestCase):
                         "/tmp rw bind must come BEFORE the project bind, or a "
                         "/tmp-resident project is re-exposed writable")
 
-    def test_the_broad_writable_roots_are_the_writable_binds_before_the_project(self):
-        """Task 262's impl round 3 (sol): the outage probe's exposure check reads `broad_writable_roots()`, so it must be
-        exactly what the sandbox binds writable whatever the project, in its order."""
-        from provider.sandbox import broad_writable_roots
-        proj = str(Path(tempfile.mkdtemp()).resolve())
-        argv = self._argv(proj)
-        end = bind_index(argv, proj)
-        rw = []
-        for i in range(end):
-            if argv[i] == "--bind" and argv[i + 1] == argv[i + 2]:
-                place = Path(argv[i + 1])
-                # an ancestor pin (a directory bound onto itself so it cannot be renamed) lies inside one of them and
-                # adds no writable place — under the verify runner's private TMPDIR there is one
-                if not any(place == Path(r) or Path(r) in place.parents for r in rw):
-                    rw.append(str(place))
-        self.assertEqual(rw, [str(p) for p in broad_writable_roots()])
-
     def test_project_is_ro_bound_in_judge_mode(self):
         proj = str(Path(tempfile.mkdtemp()).resolve())
         argv = self._argv(proj, writable=False)

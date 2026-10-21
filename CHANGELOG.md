@@ -65,26 +65,6 @@ took the lock (PLAN.md "From task 265" (a), (d), (f); "From task 266" (a)-(c)).
 - the side-by-side writers test counts spooled lines too and says how many were lost (it counted 1207 of 1208 once
   under the full suite's load: PLAN.md "From task 261" (c)).
 
-**A seat recorded out of credit is asked before it is skipped** — task 262 (the owner, 2026-10-20: "Agy + doar
-judecătorul lipsă (Recomandat)"). On 2026-10-20 opus was skipped for a weekly limit of an account the owner had left
-the day before. A panel now probes a seat whose outage has a reset time (claude, codex, agy) with one tiny judge call
-through its own CLI and account: an answer clears the record and seats it; an answer out of credit, or a failure, keeps
-it out, and the panel says what the probe saw. An outage with no reset time (grok's 402) is not probed. A panel the D6
-round cap refuses spends no probe. Its impl round 1 made the probe safe:
-- it runs from a throwaway folder, so a claude seat reads none of the project's CLAUDE.md or memory under its $0.5 budget;
-  since that folder is all its sandbox guards, no seat is probed where the project, its git metadata or its git
-  sources lie under — or hold — what every sandbox leaves writable (`/tmp`, the agents' home state), git cannot be
-  asked, or a git source file has another hard-link name this user could write through — the seat stays out as
-  before (its impl round 3 and post-panel runs 1-2, sol);
-- the project is snapshotted before the first probe and checked after each one: a change voids the panel before any
-  review is called, as the tamper guard voids a review (a probe ran before the panel's own snapshot);
-- its clear removes only the entry the probe saw and is dated at the probe's start, so a newer outage recorded by
-  another panel meanwhile stands, and a failure of a call begun during the probe is still recorded;
-- each probe is a spend record of kind `probe` (`tasks numbers` counts it under its seat);
-- no probe is spent when the round history cannot be read or the quorum cannot be reached whatever the probes answer,
-  and a refusal that comes after them says they ran;
-- a probe that raised (a timeout, a missing binary) stopped the whole panel with `NameError`; it now keeps its seat out.
-
 **The agy judge keeps its vote at the soft deadline** — task 261 (the owner, 2026-10-20: "pai vezi sa il rezolvi pe agy
 inainte sa mai pornesti paneluri. e important!"). agy has no clock, so the soft deadline in the judge's prompt did nothing
 for it: 6 of its 38 runs between 2026-10-18 and the evening of 10-20 reached the 1,200 s hard limit, each holding its
