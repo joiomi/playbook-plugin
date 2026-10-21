@@ -247,7 +247,10 @@ def _claude_usage(obj: dict) -> Optional[dict]:
 def extract_claude(raw: str) -> "Optional[tuple[str, Optional[dict], list[str]]]":
     """claude ``-p --output-format json`` stdout → ``(review_text, usage, error_messages)``; None when the stdout is
     not one claude result object. A failure (``is_error``, or a ``subtype`` other than ``success``) yields its own
-    words — ``errors`` joined, else ``result`` — as the error, and ``""`` as the text."""
+    words — ``errors`` joined, else ``result`` — as the error, and ``""`` as the text. So does a ``success`` whose
+    ``terminal_reason`` is a string other than ``completed`` (a ``max_tokens`` stop: its review was cut off — task
+    269, PLAN.md "From task 232"; the captured success says ``completed``, and an object without the field reads as
+    before)."""
     obj = _json_object(raw or "")
     if obj is None or obj.get("type") != "result" or not ("subtype" in obj or "modelUsage" in obj):
         return None
@@ -262,6 +265,10 @@ def extract_claude(raw: str) -> "Optional[tuple[str, Optional[dict], list[str]]]
         if not said:
             said = [f"claude reported an error: {json.dumps(obj, ensure_ascii=False)[:1500]}"]
         return "", usage, said
+    term = obj.get("terminal_reason")
+    if isinstance(term, str) and term and term != "completed":
+        return "", usage, [f"claude stopped before its answer was complete (terminal_reason: {term}; stop_reason: "
+                           f"{obj.get('stop_reason')})"]
     return result, usage, []
 
 
@@ -279,6 +286,16 @@ def claude_judge_output(result, format_judge_output) -> JudgeOutput:
     text, usage, errors = got
     if errors:
         rc = result.returncode
+        if len(errors) > 1:
+            # claude's own error list (never the review): its account-limit line alone, as the outage rule reads a
+            # claude limit only when it is the whole stdout tail (task 269, PLAN.md "From task 232")
+            try:
+                from tasks.seat_outage import _CLAUDE_OUT as _limit
+            except Exception:                   # noqa: BLE001 — without the rule, the list as it is
+                _limit = None
+            hit = [e for e in errors if _limit is not None and _limit.match(e.strip())]
+            if hit:
+                errors = hit[:1]
         shaped = subprocess.CompletedProcess(args=getattr(result, "args", ["claude"]), returncode=rc or 1,
                                              stdout="\n".join(errors), stderr=result.stderr or "")
         out = format_judge_output(shaped)

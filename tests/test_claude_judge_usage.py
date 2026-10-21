@@ -161,6 +161,43 @@ class ClaudeJudgeOutput(unittest.TestCase):
         self.assertTrue(judge_failed(out))
         self.assertIn("error_never_seen", out, "the first real shape of a new kind becomes a fixture")
 
+    def test_an_account_limit_among_several_errors_is_still_recorded(self):
+        """Task 269 (PLAN.md "From task 232", opus): with several lines in `errors` the failure's stdout tail had several
+        lines, and the outage rule — a claude limit line only when it is the whole tail — missed the account limit."""
+        obj = json.loads(_fx("budget-stop.stdout"))
+        obj.update({"errors": ["API Error: 429 rate limited", LIMIT_LINE], "result": "something went wrong"})
+        out = claude_judge_output(_cp(json.dumps(obj), rc=1), sandbox.format_judge_output)
+        self.assertTrue(judge_failed(out))
+        got = classify_outage(out, provider="claude")
+        self.assertIsNotNone(got, out)
+        self.assertTrue(got["reason"].startswith("claude: weekly limit reached"), got)
+
+    def test_several_errors_with_no_limit_line_are_no_outage(self):
+        obj = json.loads(_fx("budget-stop.stdout"))
+        obj.update({"errors": ["API Error: 500", "Reached maximum budget ($0.00001)"]})
+        out = claude_judge_output(_cp(json.dumps(obj), rc=1), sandbox.format_judge_output)
+        self.assertTrue(judge_failed(out))
+        self.assertIsNone(classify_outage(out, provider="claude"))
+        self.assertIn("API Error: 500", out)
+        self.assertIn("Reached maximum budget", out)
+
+    def test_a_success_stopped_short_is_a_failed_seat(self):
+        """Task 269 (PLAN.md "From task 232", opus): a `subtype: success` whose `terminal_reason` is not `completed` (a
+        `max_tokens` stop) was saved as a whole review; it fails the seat, as grok's non-`end_turn` stop does."""
+        obj = json.loads(_fx("success.stdout"))
+        obj.update({"terminal_reason": "max_tokens", "stop_reason": "max_tokens", "result": "1. **Important** — a cut"})
+        out = claude_judge_output(_cp(json.dumps(obj)), sandbox.format_judge_output)
+        self.assertTrue(judge_failed(out), out)
+        self.assertIn("max_tokens", out)
+        self.assertEqual(out.usage, SUCCESS, "tokens were spent")
+
+    def test_a_success_with_no_terminal_reason_reads_as_before(self):
+        obj = json.loads(_fx("success.stdout"))
+        obj.pop("terminal_reason")
+        out = claude_judge_output(_cp(json.dumps(obj)), sandbox.format_judge_output)
+        self.assertEqual(out, "OK")
+        self.assertFalse(judge_failed(out))
+
     def test_success_without_text_is_a_failure(self):
         obj = json.loads(_fx("success.stdout"))
         obj["result"] = "   "

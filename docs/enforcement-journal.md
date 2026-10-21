@@ -185,10 +185,11 @@ is the last call only and is never read. `in` is claude's `input_tokens` **as re
 it excludes the cache, whose two counts are `cache_read` (claude's
 `cacheReadInputTokens`) and `cache_write` (`cacheCreationInputTokens`) — not summed into
 `in`, since a sum would be derived. All four zero (nothing ran, as for a model that does
-not exist) is `unknown`. A failure — `is_error`, or a `subtype` other than `success` —
-reads exactly as plain mode's did: `(FAILED — exit N)` with claude's own words (the
+not exist) is `unknown`. A failure — `is_error`, a `subtype` other than `success`, or (task 269) a `success`
+whose `terminal_reason` is not `completed`, a review cut off — reads exactly as plain mode's did: `(FAILED — exit N)` with claude's own words (the
 object's `errors`, else its `result`, else the raw object) as the `[stdout tail]`, so the
-seat-outage rule (a claude account limit is read when its line is the whole stdout tail)
+seat-outage rule (a claude account limit is read when its line is the whole stdout tail; with several `errors`, the
+limit line alone is the tail — task 269)
 and the model-availability anchors see what they saw before; an error on exit 0 says
 `exit 0, claude reported an error`. A claude judge killed at its timeout has printed
 nothing yet (the object comes at the end), as in plain mode. Fixtures: verbatim
