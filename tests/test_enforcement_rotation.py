@@ -1290,6 +1290,72 @@ class TheRollbackRecipe(TheOracle):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual((d / "enforcement.jsonl").read_text(), want)
 
+    def _rotated(self, seed):
+        """A small rotated journal (with one spool) in its own folder."""
+        import random
+        rnd = random.Random(seed)
+        b = self.lane(f"r{seed}")
+        for r in self.stream(rnd)[:300]:
+            self.pbj._write_record(b, r)
+            if rnd.random() < 0.06:
+                self.pbj.rotate_enforcement(b, limit=4096)
+        self.assertGreater(len(list((b / "journal").glob("enforcement.jsonl.archived-*"))), 1)
+        return b / "journal"
+
+    def test_a_second_run_while_one_holds_the_lock_changes_nothing(self):
+        """Task 275's R2 (sol, Important): two overlapping runs could both pass the guard; one truncated `.all` under the
+        other, and a shortened journal was published once the archives were removed. One run at a time: a run that
+        cannot take `enforcement.jsonl.merge-lock` refuses and touches nothing."""
+        from tests._bashcheck import bash_or_skip
+        jd = self._rotated(21)
+        before = {p.name: p.read_bytes() for p in jd.iterdir() if p.is_file()}
+        (jd / "enforcement.jsonl.merge-lock").touch()
+        holder = subprocess.Popen(["flock", "-x", str(jd / "enforcement.jsonl.merge-lock"), "sleep", "30"])
+        try:
+            from tests._lockwait import until_held
+            until_held(jd / "enforcement.jsonl.merge-lock")
+            r = subprocess.run([bash_or_skip(), "-c", self.recipe()], cwd=jd, capture_output=True, text=True, timeout=60)
+        finally:
+            holder.kill()
+            holder.wait()
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("another merge", r.stdout + r.stderr)
+        after = {p.name: p.read_bytes() for p in jd.iterdir() if p.is_file() and p.name != "enforcement.jsonl.merge-lock"}
+        self.assertEqual(after, {k: v for k, v in before.items() if k != "enforcement.jsonl.merge-lock"})
+
+    def test_a_finish_refuses_when_the_live_file_was_written_after_the_stop(self):
+        """Task 275's R2 (opus): a run that finds `.merged` moved it over the live file even when the live file had been
+        written since the stop — those lines were lost. It refuses then, and says to merge from the start."""
+        import shutil
+        from tests._bashcheck import bash_or_skip
+        bash = bash_or_skip()
+        jd = self._rotated(22)
+        steps = self.steps(self.recipe())
+        stop = next(i for i, st in enumerate(steps) if "enforcement.jsonl.merging" in st) + 1   # after the build
+        subprocess.run([bash, "-c", "\n".join(steps[:stop])], cwd=jd, capture_output=True, text=True, timeout=60)
+        self.assertTrue((jd / "enforcement.jsonl.merged").exists())
+        late = _line({"ts": _iso(time.time()), "session_id": "pid-9", "hook": "task-gate", "decision": "allow",
+                      "reason": "written after the stop"})
+        time.sleep(0.02)
+        with open(jd / "enforcement.jsonl", "ab") as f:
+            f.write(late)
+        os.utime(jd / "enforcement.jsonl", None)
+        live = (jd / "enforcement.jsonl").read_bytes()
+        r = subprocess.run([bash, "-c", self.recipe()], cwd=jd, capture_output=True, text=True, timeout=60)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertEqual((jd / "enforcement.jsonl").read_bytes(), live)
+        self.assertTrue(list(jd.glob("enforcement.jsonl.archived-*")))
+
+    def test_a_killed_rotations_carry_file_is_removed_by_the_merge(self):
+        """Task 275's R2 (opus Minor): a rotation killed before its swap leaves `enforcement.jsonl.carry-*`."""
+        from tests._bashcheck import bash_or_skip
+        jd = self._rotated(23)
+        (jd / "enforcement.jsonl.carry-123-1").write_text("{}\n")
+        r = subprocess.run([bash_or_skip(), "-c", self.recipe()], cwd=jd, capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(sorted(p.name for p in jd.iterdir() if p.name.startswith("enforcement.jsonl")
+                                and p.name != "enforcement.jsonl.merge-lock"), ["enforcement.jsonl"])
+
 class ImplRoundOneFixes(_Archives):
     """Impl round 1's findings (Q1-Q16 at the end of judge.md), each red before its fix."""
 

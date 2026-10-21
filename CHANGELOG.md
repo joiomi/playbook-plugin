@@ -15,7 +15,7 @@ instead of losing its vote at the hard limit (task 261; its note is playbook's o
 cut off mid-review is a failed seat, not a whole review, and its account-limit line is found among several error lines
 (tasks 269, 270, 272). The agent's recorder marks what a session's end left unread with the lane lock free too, a
 subagent file that appeared late included (tasks 265, 268). The CLAUDE.md block tells the agent the order that lets the
-close reuse a green verify — stage the change before `tasks verify` (tasks 273, 274). The suite has 5,910 tests (5,706
+close reuse a green verify — stage the change before `tasks verify` (tasks 273, 274). The suite has 5,913 tests (5,706
 at 1.6.6); CI is the same two Linux lanes. The guarantee ledger has 135 rows, 122 verified — the same counts as 1.6.6 —
 and no known violation. The live gauntlet on this release: 18 PASS, 5 WAITING (the grok rows: its account is out of
 credit), 0 FAIL.
@@ -35,11 +35,12 @@ the closure's `numbers.json`. 1.6.7's `/playbook:init` then changed one line of 
 verify sentence.
 
 **Going back** to 1.6.6 (`88074a1`): in the release clone the marketplace reads, `git -C <clone> checkout 88074a1`, then
-`claude plugin marketplace update playbook-x-marketplace` and `claude plugin update playbook@playbook-x-marketplace` (a
-downgrade this way is not measured), then restart every Claude Code session and check that `claude plugin list` says
-1.6.6. 1.6.6 reads only the live `enforcement.jsonl`: its recorder takes the carried positions as ordinary records, and
-its numbers miss what the archives hold; to make one file again first, `docs/enforcement-journal.md`, "Going back to one
-file". Measured on a copy of a project 1.6.7 rotated and set up: 1.6.6's `doctor`, `bootstrap`, `list`, `status` and
+`claude plugin marketplace update playbook-x-marketplace` and `claude plugin update playbook@playbook-x-marketplace`
+(this route itself is not measured; what each CLI does with the project's files is, below), then restart every Claude
+Code session and check that `claude plugin list` says 1.6.6. 1.6.6 reads only the live `enforcement.jsonl`: its recorder
+takes the carried positions as ordinary records, and its numbers miss what the archives hold; to make one file again
+first, `docs/enforcement-journal.md`, "Going back to one file" — one run at a time, and a run stopped anywhere can be
+run again. Measured on a copy of a project 1.6.7 rotated and set up: 1.6.6's `doctor`, `bootstrap`, `list`, `status` and
 `numbers` ran clean and left `numbers.json` untouched; 1.6.6's `/playbook:init` puts the old verify sentence back (the
 block is init's); the recipe made one file of 43,005 lines — every line of the archive and the live file but the carries
 and the horizon — which 1.6.6's `numbers` read. 1.6.6's agent recorder, on a journal 1.6.7 rotated, read on from the
