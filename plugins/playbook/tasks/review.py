@@ -2090,7 +2090,7 @@ def _cmd_panel_review(cmd_args):
             raw = _salvage(provider_name, raw.strip())
             marker = f"(timed out after hard {hard_timeout_label})"
             # task 261: a cut turn that was never resumed stopped near the soft deadline, not the hard one
-            _at = (f"at the soft deadline ({format_timeout_label(soft_timeout_secs)})"
+            _at = (f"at the soft deadline ({format_timeout_label(soft_timeout_secs)}) and could not be resumed"
                    if getattr(expired, "agy_soft_cut", False) is True and getattr(expired, "agy_resumed", True) is False
                    else f"after hard {hard_timeout_label}")
             _cid = getattr(expired, "agy_conversation", None)
@@ -3423,23 +3423,28 @@ def _cmd_single_review(cmd, cmd_args):
                     f"{_judge_log_name(backend)}.\n{_trail}\n{partial}\n",
                 )
                 saved_note = ((f" Partial output ({len(partial)} chars) saved to " if partial else
-                               " The judge produced no output before the kill; its conversation is named in ")
+                               f" The judge produced no output before {'it stopped' if _soft_stop else 'the kill'}; "
+                               "its conversation is named in ")
                               + f"{partial_log.relative_to(project_path)}.")
             except OSError as _save_err:
                 saved_note = (f" Partial output ({len(partial)} chars) could NOT be "
                               f"saved ({_save_err}).")
         if not partial and not saved_note:
-            saved_note = " The judge produced no output before the kill."
+            # no kill at a soft stop: agy stopped itself at its soft deadline (PLAN.md "From task 264" (b))
+            saved_note = f" The judge produced no output before {'it stopped' if _soft_stop else 'the kill'}."
         if _to_cid:
             # task 261: its trail stays in agy's conversation; a person can resume it by hand
             saved_note += (f" agy conversation `{_to_cid}`, resumable by hand with "
                            f"`agy --conversation {_to_cid}`.")
+        # a soft stop names its own knob first (PLAN.md "From task 264" (d))
+        _knobs = ("Move the soft deadline with --soft-timeout or review_soft_timeout_secs; raise the hard kill with "
+                  "--timeout, PLAYBOOK_REVIEW_TIMEOUT_SECS, or .agent/config.json review_timeout_secs."
+                  if _soft_stop else
+                  "Raise the hard kill with --timeout, PLAYBOOK_REVIEW_TIMEOUT_SECS, or .agent/config.json "
+                  "review_timeout_secs; move the soft deadline with --soft-timeout or review_soft_timeout_secs.")
         print(
             f"\n{review_label} {_stopped} "
-            f"({review_soft_hard_label}). Raise the hard kill with --timeout, "
-            "PLAYBOOK_REVIEW_TIMEOUT_SECS, or .agent/config.json "
-            "review_timeout_secs; move the soft deadline with --soft-timeout "
-            "or review_soft_timeout_secs. Previous review log left untouched."
+            f"({review_soft_hard_label}). {_knobs} Previous review log left untouched."
             + saved_note,
             file=sys.stderr, flush=True,
         )

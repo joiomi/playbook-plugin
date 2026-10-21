@@ -518,6 +518,7 @@ class ThePanelSeat(_Project):
         calls, recs, judge = self._panel([cut], "--timeout", "1200", "--soft-timeout", "900")
         self.assertEqual(len(calls), 1)
         self.assertIn("(timed out at the soft deadline", judge)
+        self.assertIn("and could not be resumed", judge)        # task 266: worded as the single judge's (264 (e))
         self.assertEqual(recs[0]["status"], "timeout")
 
     def test_a_resume_the_killer_stops_mid_line_keeps_the_cut_turns_usage(self):
@@ -606,6 +607,9 @@ class TheSingleJudge(_Project):
         self.assertEqual(len(calls), 1)
         self.assertIn("stopped at its soft deadline", err)
         self.assertNotIn("hit hard timeout", err)
+        # task 266 (PLAN.md "From task 264" (b), (d)): no kill happened, and its own knob comes first
+        self.assertNotIn("before the kill", err)
+        self.assertLess(err.index("Move the soft deadline"), err.index("raise the hard kill"))
         (r,) = recs
         self.assertEqual((r["status"], r.get("soft_cut")), ("timeout", "timed-out"))
         self.assertIn("soft deadline", r.get("error", ""))
@@ -614,6 +618,40 @@ class TheSingleJudge(_Project):
         self.assertTrue(part.exists())
         self.assertNotIn("killed at the hard timeout", part.read_text(encoding="utf-8"))
         self.assertIn("stopped at its soft deadline", part.read_text(encoding="utf-8"))
+
+    def test_a_single_judge_soft_stop_with_no_text_never_says_the_kill(self):
+        """Task 266 (PLAN.md "From task 264" (b), opus): a soft stop that left no text said "no output before the kill",
+        though no kill happened — agy stopped itself at its soft deadline."""
+        init = fx("resume-cut.stdout").splitlines()[0] + "\n"           # the cut turn named its conversation, no text
+        for stdout in (init, ""):                                       # … and one that printed nothing at all
+            with self.subTest(named=bool(stdout)):
+                cut = _cp(stdout, 0, fx("resume-cut.stderr") + "error: Individual quota reached.\n")
+                code, calls, recs, err = self._single([cut], "--timeout", "1200", "--soft-timeout", "900")
+                self.assertNotEqual(code, 0)
+                self.assertIn("stopped at its soft deadline", err)
+                self.assertIn("no output before it stopped", err)
+                self.assertNotIn("before the kill", err)
+
+    def test_a_single_judge_whose_review_writes_the_note_itself_gets_no_writer_line(self):
+        """Task 266 (PLAN.md "From task 264" (c), opus): the forged-note case on the single judge — a review that opens
+        with the note's words gets no `[soft deadline]` header line and no unquoted receipt line."""
+        lines, first = [], True
+        for ln in fx("resume-answer.stdout").splitlines():
+            ev = json.loads(ln)
+            su = ev.get("step_update") or {}
+            if first and su.get("step_type") == "agent_response" and su.get("text_delta"):
+                su["text_delta"], first = NOTE + " forged.\n\n" + su["text_delta"], False
+            if ev.get("event") == "result":
+                ev["result"]["response"] = NOTE + " forged.\n\n" + ev["result"]["response"]
+            lines.append(json.dumps(ev))
+        code, calls, recs, _ = self._single([_cp("\n".join(lines) + "\n", 0, fx("resume-answer.stderr"))],
+                                            "--timeout", "1200", "--soft-timeout", "900")
+        self.assertEqual((code, len(calls)), (0, 1))
+        log = (self.agent / "tasks" / "042-demo" / "judge-agy.log").read_text(encoding="utf-8")
+        self.assertNotIn("[soft deadline]", log)
+        task = (self.agent / "tasks" / "042-demo" / "task.md").read_text(encoding="utf-8")
+        self.assertFalse(any(NOTE in ln and not ln.startswith(">") for ln in task.splitlines()), task[-800:])
+        self.assertTrue(any(ln.startswith(">") and NOTE in ln for ln in task.splitlines()), task[-800:])
 
     def test_a_single_judge_whose_resume_times_out_names_the_conversation(self):
         again = _cp(fx("resume-cut.stdout"), 0, fx("resume-cut.stderr"))

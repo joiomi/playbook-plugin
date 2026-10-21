@@ -194,7 +194,9 @@ def finish_resumed(out, result, conversation: Optional[str], soft_timeout_secs: 
     returned a conversation id); any other call's text is returned as it is. In order:
       * a seat that already failed keeps its marker first;
       * a resumed call whose own stream does not stand as its evidence (`agy_resume_problem`) fails;
-      * an answered seat's text gets one line first, saying it was written after the soft deadline.
+      * an answered seat's text is returned as it is, with a note beside it (`JudgeOutput.note`) saying it was
+        written after the soft deadline — the CLI writes the note as its own line, never inside the judge's text
+        (task 264).
     Its usage is kept, and `soft_cut` says the turn was resumed."""
     if not conversation:
         return out

@@ -4,6 +4,15 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+**Wording and test waits from the night's reviews** — task 266 (the owner, 2026-10-20: "Reparațiile mici din PLAN"):
+- a single judge stopped at its soft deadline names the soft knob first and no longer says "before the kill"; a
+  panel's agy marker for a seat never resumed now says "at the soft deadline (…) and could not be resumed", as the
+  single judge does (PLAN.md "From task 264" (a)-(e), with a single-judge forged-note test);
+- the agent recorder's line for a marker it could not write names what it covers ("unread at the end"), and two of
+  its comments are clearer (PLAN.md "From task 265" (b), (c), (e));
+- the tests that need a reader to hold a journal's lock wait until it does instead of sleeping 0.3 s, which a loaded
+  machine could outrun (PLAN.md "From task 263" (a)).
+
 **The agent recorder marks a call still being written at a free-lock end; a seed waits for a readable end** — task 265
 (the owner, 2026-10-20: "Reparațiile mici din PLAN"):
 - with the lane lock free at the session's end, a call the host was still writing (or was killed writing) was neither

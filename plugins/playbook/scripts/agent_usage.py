@@ -535,13 +535,12 @@ _MESSAGE_KEY = re.compile(rb'"message"\s*:')     # the KEY, not a value "message
 
 
 def _tail_may_be_a_call(path: str, start: int, size: int) -> bool:
-    """Whether the half-written line after the last complete one may be a call (task 252's impl round 1, opus): one
+    """Whether the half-written line after the last complete one may be a call (task 252's impl round 1, opus). One
     the host is still writing at the session's end, or was killed writing, is never counted, so it marks — unless it
-    names a user entry at its TOP level, before its `"message":` key (a value "message" — a branch so named — is no
-    key: task 253) (the host writes a user entry's `"type":"user"`
-    ~120 bytes in and an assistant entry's type after its message — measured on this workspace's transcript). Only
-    there: a tool call's input inside an assistant message can be an object with that very key (its impl round 2,
-    codex, agy). A read that fails: it may be."""
+    names a user entry at its TOP level, before its `"message":` key. A value "message" (a branch so named) is no key
+    (task 253). The host writes a user entry's `"type":"user"` ~120 bytes in, and an assistant entry's type after its
+    message (measured on this workspace's transcript). Only at the top level: a tool call's input inside an assistant
+    message can be an object with that very key (its impl round 2, codex, agy). A read that fails: it may be."""
     if start >= size:
         return False
     try:
@@ -574,7 +573,7 @@ def _left_unread(paths: "list[str]", reached: "dict[str, int | None]") -> bool:
             continue
         if not stat.S_ISREG(st.st_mode):
             continue
-        end = _complete_end(f, st.st_size)
+        end = _complete_end(f, st.st_size)       # read again on purpose: lines the host wrote after the read count
         if end is None or end != got or _tail_may_be_a_call(f, end, st.st_size):
             return True
     return False
@@ -669,7 +668,7 @@ def hook_main(payload_text: str) -> str:
         marked = pbj.append_agent_usage(lane, task=seen_task[0] or "-", known=False, session_id=session,
                                         why="unread at session end (half-written or late call, or refused span): not counted")
         said += ("; marked unknown (unread at the end)" if marked
-                 else "; the unknown marker for a half-written call could not be written")
+                 else "; the unknown marker (unread at the end) could not be written")
     return said
 
 

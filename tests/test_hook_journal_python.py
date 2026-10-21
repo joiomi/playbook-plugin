@@ -23,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 import time
+
 import unittest
 from pathlib import Path
 
@@ -32,6 +33,14 @@ PLUGIN = Path(__file__).resolve().parent.parent / "plugins" / "playbook"
 SCRIPTS = PLUGIN / "scripts"
 NUDGE = PLUGIN / "hooks" / "monitor-nudge.sh"
 LIMIT = 20971520
+
+
+def _until_held(path, limit: float = 10.0) -> None:
+    """Wait until another process holds `path`'s lock — an exclusive take that does not wait fails then. A fixed 0.3 s
+    sleep let a slow runner give the code under test the lock first (task 263's impl round 1, opus: a false red)."""
+    t0 = time.monotonic()
+    while subprocess.run(["flock", "-n", "-x", str(path), "true"]).returncode == 0 and time.monotonic() - t0 < limit:
+        time.sleep(0.02)
 
 
 def _load_pb_journal():
@@ -528,7 +537,7 @@ class ThePythonWriter(_Tmp):
         self.journal.write_text("x" * (LIMIT + 10) + "\n")
         holder = subprocess.Popen(["flock", str(self.journal.parent), "sleep", "5"])
         try:
-            time.sleep(0.3)
+            _until_held(self.journal.parent)
             os.environ["PLAYBOOK_HOOK_JOURNAL_SIZE_CHECK"] = "1"
             try:
                 self.pbj.append_hook_run(self.project, hook="x")
@@ -645,7 +654,7 @@ class TheCompressionProtocol(_Rotating):
         def gzip_then_a_reader(src, tmp):
             ok = real(src, tmp)
             holders.append(subprocess.Popen(["flock", "-s", str(self.journal.parent), "sleep", "2.5"]))
-            time.sleep(0.3)
+            _until_held(self.journal.parent)
             return ok
         setattr(self.pbj, "_gzip_to", gzip_then_a_reader)
         try:
@@ -723,7 +732,7 @@ class TheCompressionProtocol(_Rotating):
         def check_then_a_reader(g, src):
             ok = real(g, src)
             holders.append(subprocess.Popen(["flock", "-s", str(self.journal.parent), "sleep", "2.5"]))
-            time.sleep(0.3)
+            _until_held(self.journal.parent)
             return ok
         setattr(self.pbj, "_gz_holds", check_then_a_reader)
         try:

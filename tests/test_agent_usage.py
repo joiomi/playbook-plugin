@@ -555,6 +555,16 @@ class RoundTwoFixes(_Lane):
         self.assertIn("NOT written", said)
         self.assertEqual([r.get("status") for r in self.records() if r.get("status") == "unknown"], ["unknown"], said)
 
+    def test_a_marker_the_journal_refuses_at_the_end_is_said_as_such(self):
+        """Task 266 (PLAN.md "From task 265" (e)): the message for a marker that could not be written named a
+        half-written call only, though the marker covers anything unread at the end."""
+        from unittest import mock
+        self.main.write_bytes(lines(entry("m1")) + lines(entry("m2"))[:40])
+        with mock.patch.object(self.mod, "load_journal", lambda: self.pbj), \
+                mock.patch.object(self.pbj, "append_agent_usage", lambda *a, **k: False):
+            said = self._hook({"transcript_path": str(self.main)})
+        self.assertIn("the unknown marker (unread at the end) could not be written", said)
+
     def test_a_free_lock_end_after_a_clean_read_marks_nothing(self):
         self.main.write_bytes(lines(entry("m1"), entry("m2")))
         said = self._hook({"transcript_path": str(self.main)})
