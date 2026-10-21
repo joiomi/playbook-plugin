@@ -26,7 +26,7 @@ sys.path.insert(0, str(REPO / "plugins/playbook"))
 from tasks import core  # noqa: E402
 from tasks import template  # noqa: E402
 
-# The specification, written here and not read from the code: the eight classes and the gate's words.
+# The specification, written here and not read from the code: the nine classes and the gate's words.
 NAMES = ("Concurrency and order", "Repeat and retry", "Time", "Partial failure", "Paths and permissions", "Bad or old input",
          "Outages and missing tools", "Size", "Encodings")
 GATE = ("- [ ] Test contract: fill `## Test contract` below — a row per behavior, and each hostile class a row "
@@ -56,7 +56,7 @@ def _reset_render_caches() -> None:
 
 class Render(unittest.TestCase):
     def test_full_types_render_the_contract(self):
-        # row 1: one section, the table header and the eight classes, after the design gates, before the plan
+        # row 1: one section, the table header and the nine classes, after the design gates, before the plan
         for ty in FULL:
             text = _render(ty)
             self.assertEqual(text.count("\n## Test contract\n"), 1, ty)
@@ -273,6 +273,7 @@ class Docs(unittest.TestCase):
         self.assertIn("the test contract", line)
         self.assertNotIn("test coverage", line)
         self.assertIn("a new behavior's test fails on the old code", line)          # row 18
+        self.assertIn("a must-not or stay-the-same row's test catches a mutant", line)   # impl round 2, opus
 
     def test_the_docs_name_the_contract_types_and_the_fix_exception(self):
         # row 19 (impl round 1, sonnet): what a fresh project reads names the six types and says Fix has no plan panel
@@ -282,6 +283,8 @@ class Docs(unittest.TestCase):
                 self.assertIn("a feature, build, refactor, ops, bugfix or cleanup task", text)
                 self.assertIn("a bugfix or cleanup has no plan panel: the impl review reads its contract", text)
                 self.assertNotIn("A full task fills its `## Test contract`", text)
+        claude_md = (REPO / "plugins/playbook/scripts/CLAUDE.md.template").read_text(encoding="utf-8")
+        self.assertIn("a must-not or stay-the-same row's test you have watched catch a mutant", claude_md)  # round 2
 
 
 if __name__ == "__main__":
