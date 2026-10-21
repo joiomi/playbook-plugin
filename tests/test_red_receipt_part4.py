@@ -411,10 +411,10 @@ class RoundOne(Base_):
         # row 28 (sonnet): a test controls how many summaries it prints
         import time
         from tasks import red
-        out = b"Ran 1 test in 0.0s\n\nOK\n" * 20000
+        out = b"Ran 1 test in 0.0s\n\nOK\n" * 40000             # linear: ~0.2 s; the quadratic search: ~30 s
         t0 = time.monotonic()
         self.assertEqual(red._side_status(0, out)[0], "green")
-        self.assertLess(time.monotonic() - t0, 2.0)
+        self.assertLess(time.monotonic() - t0, 5.0)                  # a wide bound under a loaded verify (284)
 
     def test_no_part_3_sentence_contradicts_part_4(self):
         # row 29 (opus, codex): part 3's "on older code … reads start-only" is part 4's `proved on older code`
