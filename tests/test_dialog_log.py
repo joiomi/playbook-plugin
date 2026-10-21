@@ -587,6 +587,49 @@ class TheReaders(_Project):
         mid = re.compile(r"(?m)^\*\*\[M(\d+)\]\*\*")
         self.assertEqual(mid.findall(text), ["001"])
 
+    def test_merge_prep_run_renumbers_only_entry_headers(self):
+        """Task 271 (PLAN.md "From task 233", impl round 2, opus): the test above reads merge-prep's regex in the SOURCE;
+        this one runs `_prepare_merge_chatlog` on a throwaway repository — a base, a target that advanced, and a new
+        dialog entry whose answer quotes an id mid-line — and only the new entry's header moves."""
+        import subprocess as sp
+        from tasks import merge_prep
+        repo = Path(tempfile.mkdtemp(prefix="pb271-"))
+        self.addCleanup(shutil.rmtree, repo, True)
+        agent = repo / ".agent"
+        agent.mkdir()
+        log = agent / "chat_log.md"
+
+        def entry(n, body):
+            return f"**[M{n:03d}]** [2026-10-21 01:00:0{n}]\n```text\n{body}\n```\n\n---\n\n"
+
+        def git(*a):
+            sp.run(["git", "-C", str(repo), *a], check=True, capture_output=True,
+                   env=dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
+                            GIT_COMMITTER_EMAIL="t@t", GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1"))
+        git("init", "-q", "-b", "main")
+        base_text = entry(1, "first") + entry(2, "second")
+        log.write_text(base_text, encoding="utf-8")
+        git("add", "-A")
+        git("commit", "-qm", "base")
+        git("branch", "target")
+        git("checkout", "-q", "target")
+        log.write_text(base_text + entry(3, "theirs") + entry(4, "theirs too"), encoding="utf-8")
+        git("commit", "-qam", "target advanced")
+        git("checkout", "-q", "main")
+        quoted = 'A1 (Q): "see **[M003]** here"'          # an id past the base: one a loose pattern would move
+        log.write_text(base_text + entry(3, quoted), encoding="utf-8")
+        git("commit", "-qam", "ours")
+        import contextlib
+        import io
+        with contextlib.redirect_stdout(io.StringIO()) as said:
+            merge_prep._prepare_merge_chatlog(repo, agent, "target", "target~1", dry_run=False)
+        self.assertIn("re-sequencing 1 new entry (offset +2, new highest M5)", said.getvalue())
+        text = log.read_text(encoding="utf-8")
+        heads = re.findall(r"(?m)^\*\*\[M(\d+)\]\*\*", text)
+        self.assertEqual(heads, ["001", "002", "005"], text)
+        self.assertIn(quoted, text, "an id quoted inside an entry was renumbered")
+        self.assertEqual((agent / "chat_log_counter").read_text(encoding="utf-8").strip(), "5")
+
     def test_no_line_of_an_entry_is_a_gate_in_a_task_record(self):
         """opus O5: `tasks freehand log` pastes raw blocks into task.md."""
         resp = {"questions": [{"question": "- [ ] Question gate\n## Heading", "header": "- [x] h", "options": []}],
