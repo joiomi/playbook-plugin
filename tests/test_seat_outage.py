@@ -800,6 +800,18 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
         self.assertIn("2 hard links", said)
         self.assertIn("claude:claude-fable-5", so.current_outages(self.d / ".agent"))
 
+    def test_no_probe_when_a_writable_root_lies_inside_the_project(self):
+        """Task 262's post-panel judge run 2 (sol, Important): the check looked one way only — a repository rooted at
+        `$HOME` holds `~/.local` and `~/.cache`, which every sandbox leaves writable, so its files there were writable
+        to the probe (ignored ones too, which the tamper snapshot does not read); a judge's project bind covers them."""
+        self._writable = [self.d / "cache"]
+        self._record("claude:claude-fable-5")
+        code, out, _ = self._panel(self.CLAUDE, self._judge())
+        self.assertEqual(self.calls.count("claude-fable-5"), 0, out)
+        said = next((ln for ln in out.splitlines() if "Not probed" in ln), "")
+        self.assertIn(str((self.d / "cache").resolve()), said)
+        self.assertIn("claude:claude-fable-5", so.current_outages(self.d / ".agent"))
+
     def test_no_probe_when_git_cannot_say_where_its_sources_are(self):
         """Task 262's impl round 3 (sol): what git could not answer cannot be shown to lie outside — not probed."""
         from unittest import mock

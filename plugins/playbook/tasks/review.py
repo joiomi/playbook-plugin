@@ -108,8 +108,8 @@ def _probe_recorded_seat(adapter_cls, variant, label):
 def _probe_exposes(project_path) -> str:
     """Why an outage probe would be less contained than a judge here, or "" (task 262's impl round 3, sol). The probe
     runs in a throwaway folder, so its sandbox binds and guards that folder: the project, its git metadata and the
-    places git takes its hooks and settings from stay read-only only through the sandbox's read-only root — not under
-    what every agent's sandbox leaves writable (`sandbox.broad_writable_roots`: /tmp, the agents' home state), and not
+    places git takes its hooks and settings from stay read-only only through the sandbox's read-only root — not under,
+    nor around, what every agent's sandbox leaves writable (`sandbox.broad_writable_roots`: /tmp, the agents' home state), and not
     where git could not be asked, and not a source file with another hard-link name this user could write through —
     a read-only bind on one name keeps no other name read-only, so a judge's sandbox refuses it too (`build_bwrap_argv`;
     the post-panel judge's run 1, sol). There no seat is probed: it stays out until its reset or `tasks models enable`,
@@ -130,9 +130,14 @@ def _probe_exposes(project_path) -> str:
                   *(Path(p) for p in (*sources, *absent, *links))]
         roots = [Path(r).resolve() for r in _sb.broad_writable_roots()]
         for place in places:
+            place = place.resolve()
             for root in roots:
-                if _sb._covers(root, place.resolve()):
-                    return f"{place.resolve()} lies under {root}, which every agent's sandbox leaves writable"
+                if _sb._covers(root, place):
+                    return f"{place} lies under {root}, which every agent's sandbox leaves writable"
+                if _sb._covers(place, root):
+                    # … and the other way: a repository rooted at $HOME holds ~/.local and ~/.cache (the post-panel
+                    # judge's run 2, sol)
+                    return f"{root}, which every agent's sandbox leaves writable, lies inside {place}"
         return ""
     except Exception as e:                      # noqa: BLE001 — what cannot be checked is not probed
         return f"the probe's containment could not be checked ({type(e).__name__})"
