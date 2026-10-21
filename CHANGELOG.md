@@ -15,27 +15,33 @@ instead of losing its vote at the hard limit (task 261; its note is playbook's o
 cut off mid-review is a failed seat, not a whole review, and its account-limit line is found among several error lines
 (tasks 269, 270, 272). The agent's recorder marks what a session's end left unread with the lane lock free too, a
 subagent file that appeared late included (tasks 265, 268). The CLAUDE.md block tells the agent the order that lets the
-close reuse a green verify — stage the change before `tasks verify` (tasks 272-274). The suite has ⟦N⟧ tests (5,706 at
+close reuse a green verify — stage the change before `tasks verify` (tasks 272-274). The suite has 5,909 tests (5,706 at
 1.6.6); CI is the same two Linux lanes. The guarantee ledger has 135 rows, 122 verified, as at 1.6.6, and no known
-violation. The live gauntlet on this release: ⟦P⟧ PASS, ⟦W⟧ WAITING (the grok rows: its account is out of credit), ⟦F⟧
-FAIL.
+violation. The live gauntlet on this release: 18 PASS, 5 WAITING (the grok rows: its account is out of credit), 0 FAIL.
 
 **Upgrading:** `/playbook:upgrade`, then restart every Claude Code session, then `/playbook:init` in each project: the
-CLAUDE.md block's verify sentence changed (task 273), and init rewrites the block in place ⟦W3: what else init changes in
-a project 1.6.6 set up — expected nothing⟧. `hooks.json` is unchanged since 1.6.6. The first hook run on an
-`enforcement.jsonl` over 20 MB rotates it (0.36 s for 20 MB, measured in task 257). From 1.6.5 or earlier, 1.6.6's
-upgrade notes apply first.
+CLAUDE.md block's verify sentence changed (task 273), and init rewrites the block in place: on a project 1.6.6 set up it
+changed that one line and nothing else (measured; its backups go to `.agent/backups/`, as in 1.6.6). `hooks.json` is
+unchanged since 1.6.6. The first hook run on an `enforcement.jsonl` over 20 MB rotates it (0.36 s for 20 MB, measured in
+task 257). From 1.6.5 or earlier, 1.6.6's upgrade notes apply first.
 
-**Measured before the release**, in temporary folders: ⟦W3: a project 1.6.6 set up, a task in flight, 1.6.7's CLI and
-hooks over it — doctor, bootstrap, a close, the recorder, a journal over 20 MB rotating; init's change⟧.
+**Measured before the release**, in temporary folders: on a project 1.6.6's `/playbook:init` set up, with a task 1.6.6
+left in flight, 1.6.7's `doctor` (14 of 14 checks), `bootstrap` and `status` ran clean; its close, with the project's
+`enforcement.jsonl` filled past 21 MB, rotated the journal on its own append — one archive and its index, a live file of
+274 bytes, no line lost (43,002 lines before, 43,007 after: the close's own records and the horizon line) — and wrote
+the closure's `numbers.json`. 1.6.7's `/playbook:init` then changed one line of the project: the CLAUDE.md block's
+verify sentence.
 
 **Going back** to 1.6.6 (`88074a1`): in the release clone the marketplace reads, `git -C <clone> checkout 88074a1`, then
 `claude plugin marketplace update playbook-x-marketplace` and `claude plugin update playbook@playbook-x-marketplace`,
 then restart every Claude Code session and check that `claude plugin list` says 1.6.6. 1.6.6 reads only the live
 `enforcement.jsonl`: its recorder takes the carried positions as ordinary records, and its numbers miss what the
-archives hold; to make one file again first, `docs/enforcement-journal.md`, "Going back to one file". ⟦W3b: measured
-1.6.7 → 1.6.6 → 1.6.7 on a copy of a project 1.6.7 rotated; what 1.6.6's init does to the CLAUDE.md sentence⟧. Before
-the next `/playbook:upgrade`, `git -C <clone> checkout main`.
+archives hold; to make one file again first, `docs/enforcement-journal.md`, "Going back to one file". Measured on a copy
+of a project 1.6.7 rotated and set up: 1.6.6's `doctor`, `bootstrap`, `list`, `status` and `numbers` ran clean and left
+`numbers.json` untouched; 1.6.6's `/playbook:init` puts the old verify sentence back (the block is init's); the recipe
+made one file of 43,005 lines — every line of the archive and the live file but the carries and the horizon — which
+1.6.6's `numbers` read; back on 1.6.7, `doctor`, `numbers` and `/playbook:init` (the new sentence again) ran clean.
+Before the next `/playbook:upgrade`, `git -C <clone> checkout main`.
 
 **The order that lets the close reuse a green verify** — task 273 (the owner, 2026-10-20: "Reparațiile mici din
 PLAN"): the CLAUDE.md template, `tasks verify`'s usage lines and docs/cli.md now say to stage the change before
