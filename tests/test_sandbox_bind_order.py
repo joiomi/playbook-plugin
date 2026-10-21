@@ -61,7 +61,14 @@ class BindOrder(unittest.TestCase):
         proj = str(Path(tempfile.mkdtemp()).resolve())
         argv = self._argv(proj)
         end = bind_index(argv, proj)
-        rw = [argv[i + 1] for i in range(end) if argv[i] == "--bind" and argv[i + 1] == argv[i + 2]]
+        rw = []
+        for i in range(end):
+            if argv[i] == "--bind" and argv[i + 1] == argv[i + 2]:
+                place = Path(argv[i + 1])
+                # an ancestor pin (a directory bound onto itself so it cannot be renamed) lies inside one of them and
+                # adds no writable place — under the verify runner's private TMPDIR there is one
+                if not any(place == Path(r) or Path(r) in place.parents for r in rw):
+                    rw.append(str(place))
         self.assertEqual(rw, [str(p) for p in broad_writable_roots()])
 
     def test_project_is_ro_bound_in_judge_mode(self):
