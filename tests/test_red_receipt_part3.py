@@ -13,6 +13,7 @@ driven as `python3 -m tasks.cli`. Pure stdlib unittest. Run: python3 tests/test_
 """
 import contextlib
 import io
+import subprocess
 import sys
 import time
 import unittest
@@ -109,6 +110,50 @@ class Late(Base):
         self.assertTrue(red._own_base(rec, born, View(True)))
         self.assertFalse(red._own_base(rec, born, View(False)))
 
+    def test_a_dirty_activation_and_its_head(self):
+        # row 21 (agy, opus, sonnet): base.json's tree held uncommitted work; its HEAD is the activation minus it
+        start = self.head(self.code)
+        (self.code / "extra.py").write_text("X = 1\n", encoding="utf-8")     # uncommitted at the activation
+        self.started()
+        self.assertFalse(self.base()["scopes"]["code"]["clean"])
+        self.assertEqual(self.cli("red").returncode, 0)
+        self.set_contract([ROW1, ROW2])
+        self.assertEqual(self.cli("red", "--rows", "2", "--base", f"code={start}").returncode, 0)
+        self.assertEqual(self.receipt_lines()[-1]["verdict"], "proved")
+        self.assertRegex(self.check(), r"row 2: proved on the task's start only")
+        self.assertEqual(self.cli("red", "--rows", "2").returncode, 0)          # on the recorded tree itself
+        self.assertRegex(self.check(), r"row 2: proved on the task's start only")
+
+    def test_a_rewritten_history_is_said(self):
+        # row 28 (sonnet m): the activation's commit amended away — it is no ancestor of anything now
+        self.started(change=False)
+        self.g("commit", "-q", "--amend", "-m", "code start, amended", cwd=self.code)
+        self.change_code()
+        b = self.commit_code("the change")
+        self.assertEqual(self.cli("red").returncode, 0)
+        (self.code / "src.py").write_text(G_CODE, encoding="utf-8")
+        (self.code / "tests" / "test_g.py").write_text(G_TEST, encoding="utf-8")
+        self.set_contract([ROW1, ("2", "hostile", "g returns 3", "`tests.test_g`")])
+        self.assertEqual(self.cli("red", "--rows", "2", "--base", f"code={b}").returncode, 0)
+        self.assertEqual(self.receipt_lines()[-1]["verdict"], "proved")
+        out = self.check()
+        self.assertRegex(out, r"row 2: proved on the task's start only")
+        self.assertIn("history rewritten since the activation", out)
+        self.assertNotIn("each needs its own base", out)
+
+    def test_a_late_row_without_base_json_still_proves(self):
+        # row 29 (must-not): 281's case — no base.json, a first run on `--base` its start, a late row on a newer commit
+        start = self.head(self.code)
+        self.started()
+        (self.task_dir / "base.json").unlink()
+        b = self.commit_code("the change")
+        self.assertEqual(self.cli("red", "--base", f"code={start}").returncode, 0)
+        (self.code / "src.py").write_text(G_CODE, encoding="utf-8")
+        (self.code / "tests" / "test_g.py").write_text(G_TEST, encoding="utf-8")
+        self.set_contract([ROW1, ("2", "hostile", "g returns 3", "`tests.test_g`")])
+        self.assertEqual(self.cli("red", "--rows", "2", "--base", f"code={b}").returncode, 0)
+        self.assertRegex(self.check(), r"row 2: proved \(run [0-9a-f]+\) — added later")
+
 
 class Anchor(Base):
     def test_a_first_run_after_the_code_is_said(self):
@@ -130,6 +175,25 @@ class Anchor(Base):
         self.assertNotIn("the first run came after the code", self.check())
         (self.code / "src.py").write_text("def f():\n    return 2\n", encoding="utf-8")
         self.assertNotIn("the first run came after the code", self.check())
+
+    def test_a_docs_only_change_is_no_code(self):
+        # row 22 (opus, sonnet): MIND_MAP, a root `*.md` or `docs/` changing is no code — no note, no base needed
+        self.started(change=False)
+        (self.code / "tests" / "test_new.py").write_text(
+            "import unittest\nimport src\n\n\nclass N(unittest.TestCase):\n"
+            "    def test_two(self):\n        self.assertEqual(src.f(), 2)\n", encoding="utf-8")
+        (self.code / "README.md").write_text("what the code does\n", encoding="utf-8")
+        (self.d / "NOTES.md").write_text("a root doc\n", encoding="utf-8")
+        self.assertEqual(self.cli("red").returncode, 0)
+        self.assertNotIn("the first run came after the code", self.check())
+        (self.code / "src.py").write_text("def f():\n    return 2\n", encoding="utf-8")
+        b = self.commit_code("the change")
+        (self.d / "MIND_MAP.md").write_text("# the map\n", encoding="utf-8")          # the project: docs only
+        (self.code / "src.py").write_text(G_CODE, encoding="utf-8")
+        (self.code / "tests" / "test_g.py").write_text(G_TEST, encoding="utf-8")
+        self.set_contract([ROW1, ("2", "hostile", "g returns 3", "`tests.test_g`")])
+        self.assertEqual(self.cli("red", "--rows", "2", "--base", f"code={b}").returncode, 0)
+        self.assertRegex(self.check(), r"row 2: proved \(run [0-9a-f]+\) — added later")
 
 
 class Summaries(Base):
@@ -171,6 +235,29 @@ class Summaries(Base):
         self.assertEqual(red._side_status(1, b"Ran 2 tests in 0.0s\n\nFAILED (failures=1, skipped=1)\n")[0], "red")
         self.assertEqual(red._side_status(1, b"Ran 1 test in 0.0s\n\nOK (skipped=1)\nRan 1 test in 0.0s\n\n"
                                              b"FAILED (failures=1)\n")[0], "red")
+
+    def test_a_hidden_failed_summary_is_red(self):
+        # row 23 (opus, sonnet): `a ; b` — a's FAILED summary, b's OK, exit 0
+        from tasks import red
+        self.assertEqual(red._side_status(0, b"Ran 1 test in 0.0s\n\nFAILED (failures=1)\nRan 1 test in 0.0s\n\nOK\n")[0],
+                         "red")
+        self.assertEqual(red._side_status(0, b"=== 1 failed in 0.1s ===\n=== 1 passed in 0.1s ===\n")[0], "red")
+        self.started()
+        (self.code / "tests" / "test_fail.py").write_text(
+            "import unittest\n\n\nclass F(unittest.TestCase):\n    def test_no(self):\n        self.fail()\n",
+            encoding="utf-8")
+        cmd = "cd code && python3 -m unittest tests.test_fail ; python3 -m unittest tests.test_old"
+        self.set_contract([("1", "normal", "a failure hidden by a later pass", f"`{cmd}`")])
+        self.assertEqual(self.cli("red").returncode, 0)
+        rec = self.receipt_lines()[-1]
+        self.assertEqual(rec["now"]["exit"], 0)
+        self.assertEqual(rec["now"]["status"], "red")
+
+    def test_each_summary_ends_before_the_next(self):
+        # row 24 (sonnet): `NO TESTS RAN` has no OK line — it must not take the next summary's
+        from tasks import red
+        out = b"Ran 0 tests in 0.0s\n\nNO TESTS RAN\nRan 5 tests in 0.1s\n\nOK (skipped=1)\n"
+        self.assertEqual(red._side_status(0, out), ("skipped", "unittest", 1))
 
 
 class Section(Base):
@@ -239,12 +326,31 @@ class Section(Base):
         def spy_tree(*a, **k):
             under.append(bool(held))
             return real_tree(*a, **k)
+        real_git = red._git
+
+        def spy_git(*a, **k):
+            under.append(bool(held))
+            return real_git(*a, **k)
         with mock.patch.object(filelock, "task_lock", spy_lock), mock.patch.object(post_d6, "worktree_tree_why",
-                                                                                    spy_tree):
+                                                                                    spy_tree), \
+                mock.patch.object(red, "_git", spy_git):
             code = _in_process(self.d, self.env(), red.cmd_red, [])
         self.assertIn(code, (None, 0))
         self.assertTrue(under, "no tree was built")
         self.assertNotIn(True, under)
+
+    def test_the_run_never_prints_a_raw_proved(self):
+        # row 25 (opus, agy, sonnet): a row's line prints its sides, never a verdict word; the count is the state's
+        import re
+        self.started()
+        self.assertEqual(self.cli("red").returncode, 0)
+        self.set_contract([ROW1, ROW2])
+        r = self.cli("red", "--rows", "2")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertRegex(r.stdout, r"row 2 \(edge\): red → green")
+        self.assertNotRegex(r.stdout, r"(?m)^  row 2 \(edge\):[^\n]*\bproved\b")
+        self.assertNotIn("proved (red on the base", r.stdout)
+        self.assertIsNotNone(re.search(r"row 2: proved on the task's start only", r.stdout))
 
 
 class Budget(Base):
@@ -263,6 +369,14 @@ class Budget(Base):
         st = _in_process(self.d, self.env(), red.state_of, self.d, self.task_dir, rows, load_config(self.d),
                          time.monotonic() - 1, False)
         self.assertIn("time budget ran out", st["unchecked"])
+
+
+    def test_the_section_says_what_was_not_checked(self):
+        # row 14 (agy m): the reason a check was skipped is in `## Red receipt` too, not only at `--check`
+        from tasks import red
+        st = red.compute_state([], [], {}, None, None)
+        st["unchecked"] = "the time budget ran out"
+        self.assertIn("the time budget ran out", red._section(st, "contained"))
 
 
 class Rows(Base):
@@ -285,6 +399,15 @@ class Rows(Base):
         self.assertFalse((self.task_dir / "red-receipt.jsonl").exists())
         self.assertIn("row 1a is not a number", self.check())
 
+    def test_row_numbers_are_ascii_and_bounded(self):
+        # row 27 (agy, opus, sonnet): the total is capped, only ASCII digits, no huge number — and never a traceback
+        self.started()
+        for bad in ("1-9000,9001-18000", "²", "1-" + "9" * 5000, "١"):
+            r = self.cli("red", "--rows", bad)
+            self.assertEqual(r.returncode, 2, (bad[:20], r.stderr[:300]))
+            self.assertNotIn("Traceback", r.stderr)
+            self.assertLess(len(r.stderr), 2000)
+
 
 class Default(Base):
     def test_the_sessions_task_is_the_default(self):
@@ -306,6 +429,34 @@ class Default(Base):
         r = self.cli("numbers")
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
         self.assertIn("Task 002", r.stdout)
+
+    def test_no_session_task_is_a_refusal(self):
+        # row 26 (opus, sonnet): with no session task a bare `tasks red` / `tasks numbers` refuses — never a guess
+        self.started()
+        sessions = self.d / ".agent" / "sessions"
+        pointer = sessions / "pid-red-probe" / "current_state"
+        self.assertTrue(pointer.is_file())
+
+        def refused(why, env=None):
+            for args in (("red",), ("numbers",)):
+                r = subprocess.run([sys.executable, "-m", "tasks.cli", *args], cwd=self.d, env=env or self.env(),
+                                   capture_output=True, text=True, timeout=120)
+                self.assertEqual(r.returncode, 2, (why, args, r.stdout[-300:], r.stderr[-300:]))
+                self.assertIn("name the task", r.stderr, (why, args))
+        text = self.task_md.read_text(encoding="utf-8")
+        for status in ("done", "blocked"):
+            self.task_md.write_text(text.replace("## Status\nin_progress\n", f"## Status\n{status}\n", 1),
+                                    encoding="utf-8")
+            refused(f"a {status} task")
+        self.task_md.write_text(text, encoding="utf-8")
+        pointer.write_text("009\n", encoding="utf-8")
+        refused("a missing task")
+        pointer.unlink()
+        refused("no pointer")
+        env = {k: v for k, v in self.env().items() if k != "PLAYBOOK_SESSION_ID"}
+        before = sorted(p.name for p in sessions.iterdir())
+        refused("no session id", env)
+        self.assertEqual(sorted(p.name for p in sessions.iterdir()), before)     # nothing created
 
 
 class Text(unittest.TestCase):
