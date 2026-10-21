@@ -72,8 +72,9 @@ class Skips(Project):
         self.assertTrue(red._no_test_passed(b"\nRan 0 tests in 0.000s\n\nOK\n"))
         self.assertTrue(red._no_test_passed(b"\nRan 0 tests in 0.000s\n\nOK (skipped=1)\n"))   # a class-level skip
         self.assertFalse(red._no_test_passed(b"Ran 2 tests in 0.000s\n\nOK\n"))
-        # the LAST summary counts: a test that printed one of its own earlier does not
-        self.assertFalse(red._no_test_passed(b"Ran 1 test in 0.0s\n\nOK (skipped=1)\nRan 4 tests in 0.1s\n\nOK\n"))
+        # every summary counts (task 282, row 7): an all-skipped one anywhere is no pass — a chained command's, or a
+        # test's own printed one (the cautious side)
+        self.assertTrue(red._no_test_passed(b"Ran 1 test in 0.0s\n\nOK (skipped=1)\nRan 4 tests in 0.1s\n\nOK\n"))
         self.assertFalse(red._no_test_passed(b"all good\n"))         # no summary read: the exit code stands
         self.assertEqual(red._side_status(0, b"Ran 3 tests in 0.0s\n\nOK (skipped=1)\n"), ("green", "unittest", 1))
         self.assertEqual(red._side_status(0, b"Ran 1 test in 0.0s\n\nOK (skipped=1)\n"), ("skipped", "unittest", 1))
