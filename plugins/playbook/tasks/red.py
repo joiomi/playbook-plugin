@@ -41,6 +41,7 @@ activation's work — else `proved on older code`, `on unrelated code` or `on an
 """
 from __future__ import annotations
 
+import bisect
 import contextlib
 import fnmatch
 import hashlib
@@ -604,7 +605,8 @@ def _summaries(out: bytes) -> "list[tuple[str, int, int, bool]]":
     nones = list(_UT_NONE.finditer(text))
     starts = sorted(m.start() for m in uts + pys + empties + nones)
     for m in uts:
-        stop = next((x for x in starts if x > m.start()), len(text))   # the next summary of EITHER runner (agy)
+        k = bisect.bisect_right(starts, m.start())     # the next summary of EITHER runner (agy), in log time (283)
+        stop = starts[k] if k < len(starts) else len(text)
         end = _UT_END.search(text, m.end(), stop)
         counts: "dict[str, int]" = {}
         for part in (end.group(2) or "").split(",") if end else ():
@@ -961,7 +963,10 @@ def _base_check(rec: dict, ref, view, late: bool) -> "tuple[str, str]":
         where = scope or "the project"
         r = refs.get(scope)
         if not isinstance(r, dict) or not isinstance(e, dict):
-            return "unchecked", f"{where} has no reference (a scope added after the activation?)"
+            return "unchecked", (f"{where} has no reference (a scope added after the activation?) — a re-run cannot "
+                                 "judge it")
+        if r.get("clean") is False and not isinstance(r.get("tree"), str):      # (task 283, codex)
+            return "unchecked", f"{where}'s activation tree was not captured — its uncommitted code is not known"
         rt, et = _ref_treeish(r), _treeish(e)
         same = (rt is not None and rt == et) or (r.get("clean") is True and isinstance(e.get("commit"), str)
                                                   and e.get("commit") == r.get("commit"))
@@ -973,7 +978,7 @@ def _base_check(rec: dict, ref, view, late: bool) -> "tuple[str, str]":
         nowd = view.digest(scope, now.get(scope), code=True)
         mine = start if same else view.digest(scope, et, code=True)
         if start is None or nowd is None or mine is None:
-            return "unchecked", f"git could not list {where}'s trees"
+            return "unchecked", _why_none(view, where)
         changed = nowd != start
         if mine == start:
             if late and changed:
@@ -996,16 +1001,25 @@ def _base_check(rec: dict, ref, view, late: bool) -> "tuple[str, str]":
                 ("unrelated", f"{where}'s base is neither before nor after the start")
         if not changed:
             return "unrelated", f"the task changed no code in {where}, and its base is other code"
-        if r.get("clean") is False and isinstance(r.get("tree"), str) and isinstance(rc, str):
-            c0, t0, mine_e = view.entries(scope, rc), view.entries(scope, r["tree"]), view.entries(scope, et)
+        if r.get("clean") is False and isinstance(r.get("tree"), str):
+            c0 = {} if rc is None else view.entries(scope, rc)   # unborn: every code path is the work (283, opus, codex)
+            t0, mine_e = view.entries(scope, r["tree"]), view.entries(scope, et)
             if c0 is None or t0 is None or mine_e is None:
-                return "unchecked", f"git could not list {where}'s trees"
+                return "unchecked", _why_none(view, where)
+            none = (None, None)
             for path in set(c0) | set(t0):
-                if c0.get(path) != t0.get(path) and mine_e.get(path) == c0.get(path):
+                (cm, cb), (tm, tb), (bm, bb) = c0.get(path, none), t0.get(path, none), mine_e.get(path, none)
+                if (cb != tb and bb == cb) or (cm != tm and bm == cm):    # content and mode apart (283, codex)
                     return "older", f"{where}'s base lacks the activation's uncommitted code ({path})"
     if on_start:
         return "start", "its base is the start in " + ", ".join(n or "the project" for n in on_start)
     return "ok", ""
+
+
+def _why_none(view, where: str) -> str:
+    """Why a digest was not known — a record the frozen view never saw is not a git failure (task 283, opus)."""
+    return {"frozen": "written while the section was being written — `tasks red --check` compares it",
+            "budget": "the time budget ran out"}.get(getattr(view, "last_none", ""), f"git could not list {where}'s trees")
 
 
 def _own_base(rec: dict, ref, view) -> bool:
@@ -1217,9 +1231,12 @@ def render_state(st: dict, task_ref: str, header: str) -> "list[str]":
     if st.get("unchecked"):
         lines.append(f"  (staleness not checked: {st['unchecked']} — the rows' text and commands were)")
     elsewhere = ("proved on older code", "proved on unrelated code", "proved on an unchecked base")
-    plain = [e["row"] for e in rows if not e["late"] and e["state"] in ("stale", "no record") + elsewhere]
+    hopeless = {e["row"] for e in rows if "a re-run cannot" in (e.get("base_why") or "")}   # (task 283, sonnet)
+    plain = [e["row"] for e in rows if not e["late"] and e["state"] in ("stale", "no record") + elsewhere
+             and e["row"] not in hopeless]
     needs_base = [e["row"] for e in rows if e["late"] and e["state"] in ("stale", "no record",
-                                                                         "proved on the task's start only") + elsewhere]
+                                                                         "proved on the task's start only") + elsewhere
+                  and e["row"] not in hopeless]
     if plain:
         lines.append(f"  refresh: tasks red {task_ref} --rows {','.join(plain)}")
     if needs_base and not st.get("rewritten"):          # no hint for a base that cannot exist (task 282, sonnet)
@@ -1247,6 +1264,7 @@ class _Trees:
         self.frozen = False
         self.ran_out = False
         self.missed = False
+        self.last_none = ""                             # why the last answer was None: frozen / budget / git
         self._seen: dict = {}
 
     def left(self) -> float:
@@ -1254,17 +1272,21 @@ class _Trees:
 
     def _ask(self, key, work):
         if key in self._seen:
+            if self._seen[key] is None:
+                self.last_none = "git"
             return self._seen[key]
         if self.frozen:
-            self.missed = True
+            self.missed, self.last_none = True, "frozen"
             return None
         if self.left() <= 0:
-            self.ran_out = True
+            self.ran_out, self.last_none = True, "budget"
             return None
         try:
             self._seen[key] = work(max(self.left(), 1.0))
         except (RuntimeError, OSError, subprocess.SubprocessError, ValueError):
             self._seen[key] = None
+        if self._seen[key] is None:
+            self.last_none = "git"
         return self._seen[key]
 
     def entries(self, scope: str, treeish, code: bool = True) -> "dict[str, tuple[bytes, bytes]] | None":
@@ -1361,8 +1383,8 @@ def _unchecked(view: _Trees, why: str) -> str:
     if why:
         return why
     if view.ran_out:
-        return ("the time budget ran out — a late row then reads start-only and a change of the working state is not "
-                "known")
+        return ("the time budget ran out — a base not judged in time reads `proved on an unchecked base`, and a change of "
+                "the working state is not known")
     if view.missed:
         return "a record written while the section was being written was not compared (`tasks red --check` does)"
     return ""
