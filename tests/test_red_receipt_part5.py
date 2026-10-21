@@ -119,6 +119,13 @@ class Base(Base_):
         self.assertEqual(self.receipt_lines()[-1]["verdict"], "proved")
         self.assertRegex(self.check(), r"row 2: proved on older code")
         self.assertIs(self.receipt_lines()[0]["base"]["code"]["clean"], False)      # carried from base.json
+        # a record written before `clean` was carried (part 4's): the dirty work is inferred from its listings
+        from tasks import red
+        view = View({"t0": "s", "c1": "b", "tn": "n"}, listings={"c0": {}, "t0": {"x.py": (b"100644", b"w")},
+                                                                 "c1": {}})
+        rec = {"base": {"code": {"commit": "c1", "used": "commit"}}, "now_tree": {"code": "tn"}}
+        old_ref = {"code": {"commit": "c0", "tree": "t0", "used": "tree"}}              # no `clean`
+        self.assertEqual(red._base_check(rec, old_ref, view, True)[0], "older")
 
     def test_a_reference_whose_tree_is_gone_is_not_listed(self):
         # row 2 (opus): `used: commit` because the recorded tree was collected — the tree is not asked for
@@ -164,7 +171,8 @@ class Base(Base_):
         work = {f"m{n:02}.py": (b"100644", b"w") for n in range(30)}
         view = View({"t0": "s", "cb": "b", "tn": "n"}, listings={"t0": work, "cb": {}})
         rec = {"base": {"code": {"commit": "cb", "used": "commit"}}, "now_tree": {"code": "tn"}}
-        res, why = red._base_check(rec, {"code": {"commit": None, "tree": "t0", "clean": False}}, view, False)
+        res, why, _fixable = red._base_check(rec, {"code": {"commit": None, "tree": "t0", "clean": False}}, view,
+                                             False)
         self.assertEqual(res, "older")
         self.assertIn("(m00.py)", why)
 
@@ -178,12 +186,17 @@ class Base(Base_):
         self.assertIsNone(view.digest("code", "0" * 40))                   # an earlier frozen miss
         view.frozen = False
         rec = {"base": {"code": {"commit": head, "used": "commit"}}, "now_tree": {}}      # no tree named for `code`
-        res, why = red._base_check(rec, {"code": {"commit": head, "clean": True}}, view, True)
+        res, why, _fixable = red._base_check(rec, {"code": {"commit": head, "clean": True}}, view, True)
         self.assertEqual(res, "unchecked")
         self.assertNotIn("written while", why)                                        # the frozen miss's reason
         self.assertIn("names no tree", why)
         self.assertIsNone(view.digest("gone", head))                                  # a scope no longer configured
         self.assertIn("no longer", red._why_none(view, "gone"))
+        # a clean reference skips the dirty-work listing: there the unknown now tree must stop the proof by itself
+        stub = View({"t0": "s", "c2": "b"})                                           # "tn" not known
+        late = {"base": {"code": {"commit": "c2", "used": "commit"}}, "now_tree": {"code": "tn"}}
+        self.assertEqual(red._base_check(late, {"code": {"commit": "c0", "tree": "t0", "clean": True}}, stub, True)[0],
+                         "unchecked")
 
     def test_a_digest_is_worked_out_once(self):
         # row 7 (codex m): the listing was cached, its digest hashed again on every call

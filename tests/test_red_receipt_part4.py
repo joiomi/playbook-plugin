@@ -388,7 +388,8 @@ class RoundOne(Base_):
         view = red._Trees({"code": self.code}, [":(exclude).agent"], {})
         view.frozen = True
         rec = {"base": {"code": {"commit": older, "used": "commit"}}, "now_tree": {"code": start}}
-        res, why = red._base_check(rec, {"code": {"commit": start, "tree": start, "clean": True}}, view, False)
+        res, why, _fixable = red._base_check(rec, {"code": {"commit": start, "tree": start, "clean": True}}, view,
+                                             False)
         self.assertEqual(res, "unchecked")
         self.assertIn("written while the section was", why)
         self.assertNotIn("git could not", why)

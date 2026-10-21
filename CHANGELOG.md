@@ -4,6 +4,13 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+**The red receipt reads Twisted trial and coloured output, and judges a reference without base.json** — task 284
+(PHASE-B.md item 9b, part 5: task 283's last review). `PASSED (...)` closes a summary (trial's words from its docs, not
+run here); colour escapes are taken out before reading, and rows run with no colour. A run on base.json records its
+`clean`; a reference without it has its dirty work inferred from its listings. Hints and "asks again" only where a
+re-run can help (by cause, not by wording); without base.json a hint names the `--base`. Each unknown answer names its
+own cause; digests are worked out once; the summary search is tested structurally (one bisect per summary).
+
 **The red receipt judges every proof's base** — task 283 (PHASE-B.md item 9b, part 4: task 282's last review). A row
 of the first contract and a late one alike prove only on the start or on newer code: a base strictly before the start
 reads `proved on older code`, one on another branch `proved on unrelated code`, one git cannot judge (or a scope the

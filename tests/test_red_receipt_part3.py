@@ -120,6 +120,9 @@ class Late(Base):
 
             def older(self, scope, old, new):         # task 283's base rule also asks the other way
                 return None
+
+            def entries(self, scope, treeish, **_k):  # task 284: a tree-naming reference is listed (all empty here)
+                return {}
         rec = {"base": {"code": {"commit": "c2", "used": "commit"}}, "now_tree": {"code": "tn"}}
         unborn = {"code": {"commit": None, "tree": "t0", "used": "tree"}}
         self.assertTrue(red._own_base(rec, unborn, View(None)))

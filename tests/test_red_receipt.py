@@ -491,7 +491,8 @@ class TheRun(Project):
                                  "GIT_OBJECT_DIRECTORY": "/x", "PYTHONPATH": "/x", "CLAUDE_X": "1", "PLAYBOOK_Y": "1",
                                  "PATH": "/usr/bin", "LANG": "C"}, Path("/tmp/h"), Path("/tmp/c"))
         self.assertEqual(scrubbed, {"PATH": "/usr/bin", "LANG": "C", "HOME": "/tmp/h", "PLAYBOOK_RED": "1",
-                                    "GIT_CEILING_DIRECTORIES": "/tmp/c"})
+                                    "GIT_CEILING_DIRECTORIES": "/tmp/c",
+                                    "NO_COLOR": "1", "PY_COLORS": "0", "PYTHON_COLORS": "0"})   # no colour (task 284)
 
     def test_a_write_to_the_real_project_is_denied(self):
         # row 25 (P6): with bubblewrap the root is read-only — a row cannot reach the real project by an absolute path
