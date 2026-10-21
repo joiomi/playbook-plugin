@@ -8,19 +8,30 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 **A judge seat out of credit with no reset time comes back by itself** — task 276 (the owner, 2026-10-21: "nu vreau sa
 mai fiu eu nevoit sa repornesc judecatorii"). It lifts 1.6.7's known limitation of the same name. The suite has
-⟦TESTS⟧ tests (5,907 at 1.6.7); CI is the same two Linux lanes. The guarantee ledger has 135 rows, 122
-verified — the same counts as 1.6.7 — and no known violation. The live gauntlet on this release: ⟦GAUNTLET⟧.
+5,940 tests (5,907 at 1.6.7); CI is the same two Linux lanes. The guarantee ledger has 135 rows, 122 verified — the
+same counts as 1.6.7 — and no known violation. The live gauntlet on this release: 18 PASS, 5 WAITING (the grok rows:
+its account is out of credit), 0 FAIL.
 
-**Upgrading:** `/playbook:upgrade`, then restart every Claude Code session. ⟦INIT⟧ `hooks.json` is unchanged since
-1.6.6. Nothing to migrate: a seat's outage entry in `<lane>/journal/seat-outages.json` gains `tried` and `last_tried`
-the first time a panel tries the seat again.
+**Upgrading:** `/playbook:upgrade`, then restart every Claude Code session. No `/playbook:init` step: on a project
+1.6.7 set up, 1.6.8's init changed no file (measured). `hooks.json` is unchanged since 1.6.6. Nothing to migrate: a
+seat's outage entry in `<lane>/journal/seat-outages.json` gains `tried` and `last_tried` the first time a panel tries
+the seat again.
 
-**Measured before the release**, in temporary folders: ⟦WINDOW⟧
+**Measured before the release**, in temporary folders: on a project 1.6.7's `/playbook:init` set up, with a task 1.6.7
+left in flight and two seats recorded out of credit by 1.6.7's own code — one with a reset time ahead, one without —
+1.6.8's `doctor`, `bootstrap` and `status` ran clean; 1.6.8 read the same two outages, skipping the first and trying
+the second again; a free refusal of that seat, written by 1.6.8's code, kept the time it ran out and counted the try;
+the close ran clean and wrote the closure's `numbers.json`; 1.6.8's `/playbook:init` changed no file. No judge was
+called there: the panel path with a real refusal was run live in task 276 (grok refused in 3-4 s; a refused rare-case
+panel took 6.6 s and called no other seat).
 
 **Going back** to 1.6.7 (`fa164b8`): in the release clone the marketplace reads, `git -C <clone> checkout fa164b8`, then
 `claude plugin marketplace update playbook-x-marketplace` and `claude plugin update playbook@playbook-x-marketplace`,
-then restart every Claude Code session and check that `claude plugin list` says 1.6.7. ⟦WAYBACK⟧ Before the next
-`/playbook:upgrade`, `git -C <clone> checkout main`.
+then restart every Claude Code session and check that `claude plugin list` says 1.6.7. Nothing needs converting:
+measured on that project after 1.6.8 had written its outage record, 1.6.7 read the same outages (it ignores `tried` and
+`last_tried`), its `doctor`, `bootstrap`, `status` and `numbers` ran clean and its `/playbook:init` changed no line of
+CLAUDE.md; back on 1.6.8, the same outages again. Under 1.6.7 a seat with no reset time is skipped until `tasks models
+enable` again. Before the next `/playbook:upgrade`, `git -C <clone> checkout main`.
 
 **A judge seat out of credit with no reset time comes back by itself** — task 276. A seat whose provider said the
 account is out of credit without a reset time (grok's 402, a codex workspace out of credits) was skipped until
