@@ -408,13 +408,19 @@ class RoundOne(Base_):
         self.assertIn("a re-run cannot", lines)
 
     def test_many_summaries_are_read_quickly(self):
-        # row 28 (sonnet): a test controls how many summaries it prints
-        import time
+        # row 28 (sonnet): a test controls how many summaries it prints — the next one is found by bisect, once per
+        # summary, never by a scan from the start (structural since task 284: a wall-clock bound flakes under load)
+        from unittest import mock
         from tasks import red
-        out = b"Ran 1 test in 0.0s\n\nOK\n" * 40000             # linear: ~0.2 s; the quadratic search: ~30 s
-        t0 = time.monotonic()
-        self.assertEqual(red._side_status(0, out)[0], "green")
-        self.assertLess(time.monotonic() - t0, 5.0)                  # a wide bound under a loaded verify (284)
+        calls = []
+        real = red.bisect.bisect_right
+
+        def counted(*a, **k):
+            calls.append(1)
+            return real(*a, **k)
+        with mock.patch.object(red.bisect, "bisect_right", counted):
+            self.assertEqual(red._side_status(0, b"Ran 1 test in 0.0s\n\nOK\n" * 2000)[0], "green")
+        self.assertEqual(len(calls), 2000)
 
     def test_no_part_3_sentence_contradicts_part_4(self):
         # row 29 (opus, codex): part 3's "on older code … reads start-only" is part 4's `proved on older code`

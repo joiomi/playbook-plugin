@@ -78,6 +78,30 @@ class Summaries(Base_):
         self.assertEqual(red._side_status(0, b"Ran 3 tests in 0.0s\n\nPASSED (expectedFailures=1, successes=2)\n"),
                          ("green", "unittest", 1))
         self.assertEqual(red._side_status(0, b"Ran 3 tests in 0.0s\n\nFAILED (failures=1, successes=2)\n")[0], "red")
+        self.assertEqual(red._side_status(0, b"Ran 3 tests in 0.0s\n\nPASSED (unexpectedSuccesses=1, successes=2)\n")[0],
+                         "green")
+
+    def test_coloured_summaries_are_read(self):
+        # row 9 (opus, sonnet, codex): a forced colour wraps the summary in ANSI escapes — read as plain
+        from tasks import red
+        self.assertEqual(red._side_status(0, b"\x1b[33m=== 1 skipped in 0.01s ===\x1b[0m\n")[0], "skipped")
+        self.assertEqual(red._side_status(0, b"Ran 2 tests in 0.0s\n\n\x1b[32mOK\x1b[0m\n")[0], "green")
+        self.assertEqual(red._side_status(0, b"Ran 1 test in 0.0s\n\n\x1b[1;33mOK (skipped=1)\x1b[0m\n")[0], "skipped")
+
+    def test_the_next_summary_is_found_by_bisect(self):
+        # row 11 (sonnet, agy, opus, codex): one bisect per unittest summary — no rescan from the start (already true
+        # before: part 4 uses bisect; this replaces its wall-clock bound)
+        from unittest import mock
+        from tasks import red
+        calls = []
+        real = red.bisect.bisect_right
+
+        def counted(*a, **k):
+            calls.append(1)
+            return real(*a, **k)
+        with mock.patch.object(red.bisect, "bisect_right", counted):
+            self.assertEqual(red._side_status(0, b"Ran 1 test in 0.0s\n\nOK\n" * 50)[0], "green")
+        self.assertEqual(len(calls), 50)
 
 
 class Base(Base_):
@@ -94,6 +118,26 @@ class Base(Base_):
         self.assertEqual(self.cli("red", "--rows", "2", "--base", f"code={docs_only}").returncode, 0)
         self.assertEqual(self.receipt_lines()[-1]["verdict"], "proved")
         self.assertRegex(self.check(), r"row 2: proved on older code")
+        self.assertIs(self.receipt_lines()[0]["base"]["code"]["clean"], False)      # carried from base.json
+
+    def test_a_reference_whose_tree_is_gone_is_not_listed(self):
+        # row 2 (opus): `used: commit` because the recorded tree was collected — the tree is not asked for
+        from tasks import red
+        view = View({"c0": "s", "c1": "b", "tn": "n"}, listings={"c0": {}, "c1": {}})
+        rec = {"base": {"code": {"commit": "c1", "used": "commit"}}, "now_tree": {"code": "tn"}}
+        ref = {"code": {"commit": "c0", "tree": "tgone", "used": "commit"}}
+        self.assertEqual(red._base_check(rec, ref, view, True)[0], "ok")
+
+    def test_without_base_json_a_hint_names_the_base(self):
+        # row 10 (opus): `tasks red` refuses a run without --base when there is no base.json — the hint names one
+        self.started()
+        (self.task_dir / "base.json").unlink()
+        start = self.head(self.code)
+        self.assertEqual(self.cli("red", "--base", f"code={start}").returncode, 0)
+        p = self.code / "tests" / "test_old.py"
+        p.write_text(p.read_text(encoding="utf-8") + "\n# edited\n", encoding="utf-8")
+        out = self.check()
+        self.assertRegex(out, r"refresh: tasks red \S+ --rows 1 [^\n]*--base code=" + start)
 
     def test_only_a_fixable_cause_gets_a_hint(self):
         # row 3 (agy, opus, sonnet): a half capture cannot be judged by a re-run; a frozen miss can
@@ -138,6 +182,8 @@ class Base(Base_):
         self.assertEqual(res, "unchecked")
         self.assertNotIn("written while", why)                                        # the frozen miss's reason
         self.assertIn("names no tree", why)
+        self.assertIsNone(view.digest("gone", head))                                  # a scope no longer configured
+        self.assertIn("no longer", red._why_none(view, "gone"))
 
     def test_a_digest_is_worked_out_once(self):
         # row 7 (codex m): the listing was cached, its digest hashed again on every call
@@ -154,8 +200,10 @@ class Base(Base_):
         with mock.patch.object(red, "_digest_entries", counted):
             first = view.digest("code", head, code=True)
             self.assertEqual(view.digest("code", head, code=True), first)
-            self.assertEqual(view.digest("code", head, code=True), first)
+            view.frozen = True
+            self.assertEqual(view.digest("code", head, code=True), first)          # cached: no frozen miss
         self.assertEqual(len(calls), 1)
+        self.assertFalse(view.missed)
 
 
 class Env(unittest.TestCase):
@@ -166,6 +214,8 @@ class Env(unittest.TestCase):
         env = red._row_env({"FORCE_COLOR": "1", "PATH": "/usr/bin", "TERM": "xterm"}, Path("/h"), Path("/c"))
         self.assertEqual(env.get("NO_COLOR"), "1")
         self.assertNotIn("FORCE_COLOR", env)
+        env = red._row_env({"PY_COLORS": "1", "PYTHON_COLORS": "1", "PATH": "/usr/bin"}, Path("/h"), Path("/c"))
+        self.assertEqual((env.get("PY_COLORS"), env.get("PYTHON_COLORS")), ("0", "0"))      # they outrank NO_COLOR
 
 
 class Text(unittest.TestCase):
