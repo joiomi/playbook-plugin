@@ -255,9 +255,9 @@ def extract_claude(raw: str) -> "Optional[tuple[str, Optional[dict], list[str]]]
     """claude ``-p --output-format json`` stdout → ``(review_text, usage, error_messages)``; None when the stdout is
     not one claude result object. A failure (``is_error``, or a ``subtype`` other than ``success``) yields its own
     words — ``errors`` joined, else ``result`` — as the error, and ``""`` as the text. So does a ``success`` whose
-    ``terminal_reason`` is a string other than ``completed`` (a ``max_tokens`` stop: its review was cut off — task
-    269, PLAN.md "From task 232"; the captured success says ``completed``, and an object without the field reads as
-    before)."""
+    ``terminal_reason`` is present and not ``completed`` (null included), or whose ``stop_reason`` is ``max_tokens`` —
+    its review was cut off (task 269, PLAN.md "From task 232"; the captured success says ``completed``, and an object
+    without the field reads as before)."""
     obj = _json_object(raw or "")
     if obj is None or obj.get("type") != "result" or not ("subtype" in obj or "modelUsage" in obj):
         return None
@@ -300,15 +300,11 @@ def claude_judge_output(result, format_judge_output) -> JudgeOutput:
     if errors:
         rc = result.returncode
         # claude's own words on a failure (never the review): its account-limit line alone, as the outage rule reads a
-        # claude limit only when it is the whole stdout tail (task 269, PLAN.md "From task 232") — sought in every
-        # line of every `errors` entry and of the object's `result` beside them (its impl round 1: agy, opus, sonnet)
-        obj = _json_object(raw)
-        # `result` is claude's own words only on an error object; on a cut-off success it is the judge's partial
-        # review, which may quote the line (impl round 2: agy, opus, sonnet — a false outage)
-        is_error_object = isinstance(obj, dict) and (obj.get("is_error") is True or obj.get("subtype") != "success")
-        said = obj.get("result") if is_error_object else None
+        # claude limit only when it is the whole stdout tail (task 269, PLAN.md "From task 232") — sought in every line
+        # of every `errors` entry (its impl round 1: agy, opus, sonnet). `result` is not searched apart: with `errors`
+        # empty, `extract_claude` already gave `result` as the error; beside `errors`, it may be a partial review — a
+        # quoted line there would be a false outage (task 269's round 2, task 270)
         lines = [ln.strip() for e in errors for ln in str(e).splitlines()]
-        lines += [ln.strip() for ln in said.splitlines()] if isinstance(said, str) else []
         hit = [ln for ln in lines if CLAUDE_LIMIT_LINE.match(ln)]
         if hit:
             errors = hit[:1]

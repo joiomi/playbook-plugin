@@ -7,10 +7,11 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 **A claude judge cut off is a failed seat; its account limit is found among several errors** — task 269 (PLAN.md "From
 task 232"): a `subtype: success` result whose `terminal_reason` is not `completed`, or whose `stop_reason` is
 `max_tokens`, was saved as a whole review — it now fails the seat, as grok's non-`end_turn` stop does; and claude's
-account-limit line, found in any line of its error list (or of its `result` on an error object, never a cut-off review's text), alone is the failure's stdout tail, so the
-seat-outage rule records it (a limit inside a two-error object, or after a newline, was missed). Neither shape has been
-seen live; the captured success (claude 2.1.302) says `completed` and `end_turn`, and an object without the fields
-reads as before. The limit pattern now lives in the provider layer, which never imports `tasks/`.
+account-limit line, found in any line of its error list (or of its `result` on an error object with no `errors` — task
+270 — never a cut-off review's text), alone is the failure's stdout tail, so the seat-outage rule records it (a limit
+inside a two-error object, or after a newline, was missed). Neither shape has been seen live; the captured success
+(claude 2.1.302) says `completed` and `end_turn`, and an object without the fields reads as before. The limit pattern
+now lives in the provider layer, which never imports `tasks/`.
 
 **Two more ends of the agent recorder, and steadier test waits** — task 268 (the owner, 2026-10-20: "Reparațiile mici
 din PLAN"): a subagent file that appears between the session's last read and its end check is now marked `unknown`

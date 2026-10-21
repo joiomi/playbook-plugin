@@ -209,7 +209,8 @@ class ClaudeJudgeOutput(unittest.TestCase):
     def test_the_limit_line_in_result_or_inside_one_entry_is_found(self):
         """Task 269's impl round 1 (agy, opus, sonnet Minor): the limit beside a generic error in `result`, or inside one
         `errors` entry after a newline, reached the outage rule as part of a several-line tail."""
-        for case in ({"errors": ["API Error: 429"], "result": LIMIT_LINE},
+        # (task 270: `result` is claude's words only when `errors` is empty, as `extract_claude` chooses)
+        for case in ({"errors": [], "result": "API Error: 429\n" + LIMIT_LINE},
                      {"errors": ["API Error: 429\n" + LIMIT_LINE]}):
             with self.subTest(case=case):
                 obj = json.loads(_fx("budget-stop.stdout"))
@@ -217,6 +218,16 @@ class ClaudeJudgeOutput(unittest.TestCase):
                 out = claude_judge_output(_cp(json.dumps(obj), rc=1), sandbox.format_judge_output)
                 got = classify_outage(out, provider="claude")
                 self.assertIsNotNone(got, out)
+
+    def test_a_result_beside_errors_is_not_searched(self):
+        """Task 270 (PLAN.md "From task 269" (a), the post-panel judge): beside a non-empty `errors`, `result` may be a
+        partial review (a future `error_max_turns`); a line in it quoting the limit is no outage."""
+        obj = json.loads(_fx("budget-stop.stdout"))
+        obj.update({"subtype": "error_max_turns", "errors": ["Reached maximum number of turns (3)"],
+                    "result": "1. **Important** — the panel quoted:\n```\n" + LIMIT_LINE + "\n```\n2. cut"})
+        out = claude_judge_output(_cp(json.dumps(obj), rc=1), sandbox.format_judge_output)
+        self.assertTrue(judge_failed(out))
+        self.assertIsNone(classify_outage(out, provider="claude"), out)
 
     def test_a_limit_beside_a_budget_stop_is_the_outage(self):
         """Task 269's impl round 1 (opus Minor): with both lines, the account limit is what the tail keeps — a recorded
