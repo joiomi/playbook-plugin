@@ -663,5 +663,13 @@ class TheTeachingSites(unittest.TestCase):
                 self.assertRegex(line, r"later edit|edit that has to come later")
                 self.assertNotIn("edit nothing", line)
 
+    def test_the_template_limits_the_git_add_to_the_change(self):
+        """Task 274's impl round 1 (opus): a `git add` of only the task's records keeps the key, so the template says
+        "a `git add` of the change", not any `git add`."""
+        text = (_PLAYBOOK / "scripts" / "CLAUDE.md.template").read_text(encoding="utf-8")
+        line = self.entry(text, "Run the contract with `tasks verify`")
+        self.assertIn("a `git add` of the change or a code-root commit after the run", line)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
