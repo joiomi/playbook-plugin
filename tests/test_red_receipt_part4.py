@@ -62,6 +62,12 @@ class View:
     def newer(self, scope, old, new):
         return self._newer
 
+    def older(self, scope, old, new):
+        return None
+
+    def entries(self, scope, treeish, **_k):
+        return None
+
     def on_head(self, scope, commit):
         return self._on_head
 
@@ -153,7 +159,7 @@ class Base(Base_):
                     base={"code": {"commit": "c2", "used": "commit"}})
         ref = {"code": {"commit": "c0", "tree": "t0"}}
         st = red.compute_state(rows, [first, late], {}, View({"t0": "s", "c2": "b"}), None, 0, ref)
-        self.assertEqual(st["rows"][1]["state"], "proved on the task's start only")
+        self.assertEqual(st["rows"][1]["state"], "proved on an unchecked base")       # never proved (task 283)
 
     def test_a_base_without_the_activations_work_is_older(self):
         # row 6 (opus): the activation held uncommitted code; a commit after its HEAD that lacks it is older code
@@ -229,7 +235,7 @@ class Base(Base_):
         self.set_contract([ROW1, ROW2])
         self.assertEqual(self.cli("red", "--rows", "2", "--base", f"code={docs_only}").returncode, 0)
         self.assertEqual(self.receipt_lines()[-1]["verdict"], "proved")
-        self.assertNotRegex(self.check(), r"row 2: proved \(run")
+        self.assertRegex(self.check(), r"row 2: proved on older code")         # the mode is the work (not the start)
 
     def test_a_sibling_branch_base_is_unrelated(self):
         # row 16 (opus): a base that is neither an ancestor nor a descendant of the start is not "older"
@@ -297,6 +303,27 @@ class Base(Base_):
         (self.code / "tests" / "test_keep.py").write_text(KEEP_TEST, encoding="utf-8")
         self.assertEqual(self.cli("red", "--base", f"code={older}").returncode, 0)
         self.assertRegex(self.check(), r"refresh: tasks red \S+ --rows 1\b")
+
+    def test_a_commit_is_not_after_itself(self):
+        # row 21 (W4: part 3's mutant P7 survived once `_base_check` caught the same commit first): the view alone
+        from tasks import red
+        self.started(change=False)
+        head = self.head(self.code)
+        view = red._Trees({"code": self.code}, [":(exclude).agent"], {})
+        self.assertIs(view.newer("code", head, head), False)
+        self.assertIs(view.older("code", head, head), False)
+
+    def test_a_newer_base_in_an_unchanged_scope_is_unrelated(self):
+        # row 22 (W4: part 3's mutant Q4 lost its test): a commit after the start changed `code`, the working state
+        # undid it — the task changed no code there, so a red on that commit is not the task's
+        self.started(rows=[("1", "normal", "f is 1", "`tests.test_keep`")], change=False)
+        (self.code / "tests" / "test_keep.py").write_text(KEEP_TEST, encoding="utf-8")
+        (self.code / "src.py").write_text("def f():\n    return 5\n", encoding="utf-8")
+        other = self.commit_code("an unrelated f", "src.py")
+        (self.code / "src.py").write_text("def f():\n    return 1\n", encoding="utf-8")     # undone, uncommitted
+        self.assertEqual(self.cli("red", "--base", f"code={other}").returncode, 0)
+        self.assertEqual(self.receipt_lines()[-1]["verdict"], "proved")
+        self.assertRegex(self.check(), r"row 1: proved on unrelated code")
 
 
 class Cli(Base_):

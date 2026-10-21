@@ -35,6 +35,9 @@ output is read (`_summaries`); the first run's code is compared with the referen
 said); the section is written from the contract, the receipt and the config as they are under the task lock, every
 git answer worked out before it (`_Trees`, frozen under it); a bare `tasks red` / `tasks numbers` takes this
 session's task (`session_task_dir`) or refuses.
+
+Part 4 (task 283) judges every proof's base (`_base_check`): the start, or newer code that keeps a dirty
+activation's work — else `proved on older code`, `on unrelated code` or `on an unchecked base`.
 """
 from __future__ import annotations
 
@@ -577,14 +580,15 @@ def _run_row(cmd: str, root: Path, home: Path, ceiling: Path, timeout: float, co
 
 # A test run's summary (task 281, PHASE-B 9b part 2): a run that passed no test is no proof. Only these two runners'
 # summaries are read — any other runner's skip reads green, and the side records that no reader matched.
-_UT_RAN = re.compile(r"(?m)^Ran (\d+) tests? in [\d.]+s\s*$")
+_UT_RAN = re.compile(r"(?m)^Ran ([0-9]+) tests? in [0-9.]+s\s*$")     # ASCII digits: a test controls them (282)
 _UT_END = re.compile(r"(?m)^(OK|FAILED)(?: \(([^)\n]*)\))?\s*$")
-_PY_WORD = r"\d+ (?:passed|failed|skipped|xfailed|xpassed|errors?|warnings?|deselected|rerun)"
-_PY_SUMMARY = re.compile(r"(?m)^=*\s*(" + _PY_WORD + r"(?:, " + _PY_WORD + r")*) in [\d.]+s(?: \([^)\n]*\))?\s*=*\s*$")
+_PY_WORD = r"[0-9]+ (?:passed|failed|skipped|xfailed|xpassed|errors?|warnings?|deselected|rerun)"
+_PY_SUMMARY = re.compile(r"(?m)^=*\s*(" + _PY_WORD + r"(?:, " + _PY_WORD + r")*) in [0-9.]+s(?: \([^)\n]*\))?\s*=*\s*$")
 
 
-_NO_TESTS = re.compile(r"(?m)^(?:=+ )?no tests ran in [\d.]+s|^NO TESTS RAN\s*$")
-_PY_EMPTY = re.compile(r"(?m)^=*\s*no tests ran in [\d.]+s(?: \([^)\n]*\))?\s*=*\s*$")
+_NO_TESTS = re.compile(r"(?m)^(?:=+ )?no tests ran in [0-9.]+s|^NO TESTS RAN\s*$")
+_PY_EMPTY = re.compile(r"(?m)^=*\s*no tests ran in [0-9.]+s(?: \([^)\n]*\))?\s*=*\s*$")
+_UT_NONE = re.compile(r"(?m)^NO TESTS RAN\s*$")       # unittest's word for a run that passed no test (283, agy)
 
 
 def _summaries(out: bytes) -> "list[tuple[str, int, int, bool]]":
@@ -597,19 +601,26 @@ def _summaries(out: bytes) -> "list[tuple[str, int, int, bool]]":
     uts = list(_UT_RAN.finditer(text))
     pys = list(_PY_SUMMARY.finditer(text))
     empties = list(_PY_EMPTY.finditer(text))         # pytest's empty run is a summary too (task 282, codex)
-    starts = sorted(m.start() for m in uts + pys + empties)
+    nones = list(_UT_NONE.finditer(text))
+    starts = sorted(m.start() for m in uts + pys + empties + nones)
     for m in uts:
         stop = next((x for x in starts if x > m.start()), len(text))   # the next summary of EITHER runner (agy)
         end = _UT_END.search(text, m.end(), stop)
         counts: "dict[str, int]" = {}
         for part in (end.group(2) or "").split(",") if end else ():
             k, _, v = part.strip().partition("=")
-            if v.strip().isdigit():
+            if _NUMBER.fullmatch(v.strip()):
                 counts[k.strip()] = int(v)
         skipped = counts.get("skipped", 0) + counts.get("expected failures", 0)   # an expected failure FAILED
         failed = counts.get("failures", 0) + counts.get("errors", 0)              # (impl round 1, codex)
-        found.append((m.start(), "unittest", max(int(m.group(1)) - skipped - failed, 0), skipped,
+        ran = int(m.group(1))
+        if end is None and ran > 0:                     # killed after `Ran N`: no pass, a failure (283, agy)
+            found.append((m.start(), "unittest", 0, skipped, True))
+            continue
+        found.append((m.start(), "unittest", max(ran - skipped - failed, 0), skipped,
                       bool(failed) or (end is not None and end.group(1) == "FAILED")))
+    for m in nones:
+        found.append((m.start(), "unittest", 0, 0, False))
     for m in empties:
         found.append((m.start(), "pytest", 0, 0, False))
     for m in pys:
@@ -775,7 +786,9 @@ def _section(st: dict, contained: str) -> str:
         head.append(f"Note: not checked — {_cell(st['unchecked'])}.")
     late = [e for e in rows if e["late"]]
     if late:
-        head.append("Added later (not in the first run's contract): " + "; ".join(
+        said = ("Added later (per the first run, which came after the code): " if st.get("anchor_after")   # (283)
+                else "Added later (not in the first run's contract): ")
+        head.append(said + "; ".join(
             f"row {_cell(e['row'])}" + (f" — run `{e['rec'].get('run', '')}`, on {_base_short(e['rec'].get('base'))}"
                                         if e.get("rec") else " — no record") for e in late) + ".")
     noreader = [_cell(e["row"]) for e in rows if e.get("noreader")]
@@ -827,8 +840,10 @@ def _write_section(task_file: Path, project: Path, contained: str) -> "tuple[str
             view.frozen = True
             with task_lock(task_file):
                 now_cfg = config()                      # the config may have changed while the trees were built
-                if now_cfg != cfg and attempt == 1:     # (task 282, codex): prepare once more, outside the lock
-                    continue
+                if now_cfg != cfg:                      # (task 282, codex): prepare once more, outside the lock —
+                    if attempt == 1:                    # a second change is a refusal, never a mix (283, agy, codex)
+                        continue
+                    return "the config kept changing while the section was prepared", None
                 text = read_task_text(task_file)
                 rows, why_c = parse_contract(text)
                 if rows is None:
@@ -851,7 +866,7 @@ def _write_section(task_file: Path, project: Path, contained: str) -> "tuple[str
                 return "", st
     except OSError as exc:
         return f"{RECEIPT_NAME} or task.md cannot be read ({exc})", None
-    return "the config kept changing while the section was prepared", None
+    return "the config kept changing while the section was prepared", None     # not reached: attempt 2 returns
 
 
 # ---------------------------------------------------------------------------- the state across runs (task 281)
@@ -919,34 +934,83 @@ def _ref_treeish(e) -> "str | None":
     return e["commit"] if isinstance(e.get("commit"), str) else None
 
 
-def _own_base(rec: dict, ref, view) -> bool:
-    """A late row's run ran on the code before its fix (impl rounds 1 and 2 of task 281): in each scope whose code
-    the task changed since the REFERENCE (base.json, else the first run's base), its base is other code and a commit
-    strictly after the reference's — never the start again, never older code. What cannot be told is not."""
+BASE_STATES = {"ok": "proved", "start": "proved on the task's start only", "older": "proved on older code",
+               "unrelated": "proved on unrelated code", "unchecked": "proved on an unchecked base"}
+
+
+def _base_check(rec: dict, ref, view, late: bool) -> "tuple[str, str]":
+    """What a proved record's base is against the REFERENCE (base.json, else the first run's base), per scope — one
+    rule for every row (task 283): ("ok" | "start" | "older" | "unrelated" | "unchecked", why).
+
+    - The reference itself (the same tree or commit): the start, with no git asked (task 283, opus) — for a late row
+      "start" when the task changed code in that scope (its proof is on the start only).
+    - Else, by code (`classify_delta_paths`' behavioral files, not test files): the start's code is as above; other
+      code must be a commit strictly AFTER the reference commit (task 282) — strictly before it is "older", neither
+      is "unrelated" (task 283, opus) — in a scope the task changed (in one it did not, other code is "unrelated"),
+      and after a dirty activation it must keep the activation's uncommitted code: on each path that work touched
+      (mode and blob; added or deleted) the base must differ from the activation commit (task 283, opus, sonnet,
+      codex). A stated limit: a base that restored a dirty file to its committed form reads "older".
+    - What git cannot answer, or a scope the reference does not have, is "unchecked" (task 283, codex)."""
     b = rec.get("base")
-    if view is None or not isinstance(b, dict) or not b:
-        return False
+    if not isinstance(b, dict) or not b:
+        return "unchecked", "the record names no base"
     refs = ref if isinstance(ref, dict) else {}
     now = rec.get("now_tree") if isinstance(rec.get("now_tree"), dict) else {}
+    on_start = []
     for scope, e in b.items():
+        where = scope or "the project"
         r = refs.get(scope)
-        if not isinstance(r, dict):
-            continue                                    # a scope the reference had not: other code by definition
-        start = view.digest(scope, _ref_treeish(r), code=True)
-        mine = view.digest(scope, _treeish(e), code=True)
-        if start is None or mine is None:
-            return False
-        if view.digest(scope, now.get(scope), code=True) == start:
-            if mine != start:                           # the task changed no code there: its base must be the start's
-                return False                            # code — an older one is red for its age (task 282, sonnet)
-            continue
+        if not isinstance(r, dict) or not isinstance(e, dict):
+            return "unchecked", f"{where} has no reference (a scope added after the activation?)"
+        rt, et = _ref_treeish(r), _treeish(e)
+        same = (rt is not None and rt == et) or (r.get("clean") is True and isinstance(e.get("commit"), str)
+                                                  and e.get("commit") == r.get("commit"))
+        if same and not late:
+            continue                                    # the start: no git (task 283, opus)
+        if view is None:
+            return "unchecked", "the trees were not read"
+        start = view.digest(scope, rt, code=True)
+        nowd = view.digest(scope, now.get(scope), code=True)
+        mine = start if same else view.digest(scope, et, code=True)
+        if start is None or nowd is None or mine is None:
+            return "unchecked", f"git could not list {where}'s trees"
+        changed = nowd != start
         if mine == start:
-            return False
-        if r.get("commit") is None:
-            continue                                    # an unborn reference: every commit is after it
-        if view.newer(scope, r.get("commit"), e.get("commit") if isinstance(e, dict) else None) is not True:
-            return False
-    return True
+            if late and changed:
+                on_start.append(scope)
+            continue
+        rc, ec = r.get("commit"), e.get("commit")
+        if isinstance(rc, str) and ec == rc:            # the activation's commit without its uncommitted work
+            return "older", f"{where}'s base is the activation's commit without its uncommitted code"
+        if rc is None:
+            after = True                                # an unborn reference: every commit is after it
+        else:
+            after = view.newer(scope, rc, ec)
+            if after is None:
+                return "unchecked", f"git could not tell how {where}'s base and start are related"
+        if not after:
+            before = view.older(scope, ec, rc)
+            if before is None:
+                return "unchecked", f"git could not tell how {where}'s base and start are related"
+            return ("older", f"{where}'s base is older than the start") if before else \
+                ("unrelated", f"{where}'s base is neither before nor after the start")
+        if not changed:
+            return "unrelated", f"the task changed no code in {where}, and its base is other code"
+        if r.get("clean") is False and isinstance(r.get("tree"), str) and isinstance(rc, str):
+            c0, t0, mine_e = view.entries(scope, rc), view.entries(scope, r["tree"]), view.entries(scope, et)
+            if c0 is None or t0 is None or mine_e is None:
+                return "unchecked", f"git could not list {where}'s trees"
+            for path in set(c0) | set(t0):
+                if c0.get(path) != t0.get(path) and mine_e.get(path) == c0.get(path):
+                    return "older", f"{where}'s base lacks the activation's uncommitted code ({path})"
+    if on_start:
+        return "start", "its base is the start in " + ", ".join(n or "the project" for n in on_start)
+    return "ok", ""
+
+
+def _own_base(rec: dict, ref, view) -> bool:
+    """A late row's run ran on the code before its fix (task 282's question, answered by `_base_check`)."""
+    return _base_check(rec, ref, view, True)[0] == "ok"
 
 
 def _base_line(plan) -> str:
@@ -999,6 +1063,7 @@ def compute_state(rows: "list[dict]", records: "list[dict]", cfg: dict, view: "_
     if ref is None and records:                         # an empty contract list is unknown (agy)
         ref = records[0].get("base")
     out = []
+    unchecked_rows: "list[str]" = []
     keys_now = {row_key(r) for r in rows}
     for row in rows:
         key = row_key(row)
@@ -1022,8 +1087,11 @@ def compute_state(rows: "list[dict]", records: "list[dict]", cfg: dict, view: "_
         e["rec"], e["verdict"] = rec, rec["verdict"]
         if why:
             e["state"], e["why"] = "stale", " and ".join(why) + " changed"
-        elif rec["verdict"] == "proved" and e["late"] and not _own_base(rec, ref, view):
-            e["state"] = "proved on the task's start only"
+        elif rec["verdict"] == "proved":                # every proof's base is judged (task 283, sonnet)
+            res, e["base_why"] = _base_check(rec, ref, view, e["late"])
+            e["state"] = BASE_STATES[res]
+            if res == "unchecked":
+                unchecked_rows.append(row["row"])
         else:
             e["state"] = rec["verdict"]
         nt = rec.get("now_tree") if isinstance(rec.get("now_tree"), dict) else {}
@@ -1068,15 +1136,23 @@ def compute_state(rows: "list[dict]", records: "list[dict]", cfg: dict, view: "_
     newest = records[-1].get("now_tree") if records and isinstance(records[-1].get("now_tree"), dict) else {}
     for scope, r in (ref.items() if isinstance(ref, dict) and view is not None else ()):
         if isinstance(r, dict) and view.on_head(scope, r.get("commit")) is False:
-            changed = view.digest(scope, _ref_treeish(r), code=True) != view.digest(scope, newest.get(scope), code=True)
+            then = view.digest(scope, _ref_treeish(r), code=True)
+            last = view.digest(scope, newest.get(scope), code=True)
+            changed = None if then is None or last is None else then != last     # known, or not claimed (283, agy)
             notes.append(f"the activation's commit in {scope or 'the project'} is not an ancestor of HEAD (a rebase, "
-                         "an amend, or another branch)" + (" — a late row whose code is there cannot prove" if changed
-                                                           else "; the task changed no code there"))
+                         "an amend, or another branch)" + {True: " — a late row whose code is there cannot prove",
+                                                           False: "; the task changed no code there",
+                                                           None: "; whether the task changed code there is not known"
+                                                           }[changed])
             if changed:
                 rewritten.append(scope)
     if old:
         notes.append(f"{old} record(s) without a row key (written before task 281) are not read — `tasks red` "
                      "records the rows again")
+    if unchecked_rows:                                  # what could not be judged is said (task 283, opus, sonnet)
+        notes.append(f"{_rows_word(unchecked_rows)}: a base that could not be judged ("
+                     + "; ".join(sorted({e["base_why"] for e in out if e.get("base_why") and e["row"] in unchecked_rows}))
+                     + ") — `tasks red --check` asks again")
     return {"rows": out, "runs": runs, "notes": notes, "anchor_after": anchor_after, "rewritten": rewritten,
             "newest": {"run": records[-1]["run"], "at": str(records[-1].get("at", ""))} if records else {},
             "records": len(records)}
@@ -1092,13 +1168,16 @@ def _group(state: str) -> str:
         return "skipped"
     if state == "proved on the task's start only":
         return "start only"
+    if state in ("proved on older code", "proved on unrelated code", "proved on an unchecked base"):
+        return state[len("proved "):]                   # each counted apart from proved (task 283)
     return "not proved"
 
 
 def _counts(rows: "list[dict]", st: "dict | None" = None) -> str:
     """The counts line — the same groups for `--check`, the close and `tasks numbers` (impl round 1, opus). When the
     first run came after the code, "added later" is not known (task 282, opus)."""
-    count = {g: [e["row"] for e in rows if _group(e["state"]) == g] for g in _GROUPS + ("start only",)}
+    apart = ("start only", "on older code", "on unrelated code", "on an unchecked base")
+    count = {g: [e["row"] for e in rows if _group(e["state"]) == g] for g in _GROUPS + apart}
     late = [e["row"] for e in rows if e["late"]]
     moved = [e["row"] for e in rows if e.get("moved")]
     noreader = [e["row"] for e in rows if e.get("noreader")]
@@ -1106,7 +1185,9 @@ def _counts(rows: "list[dict]", st: "dict | None" = None) -> str:
     def n(label: str, xs: "list[str]") -> str:
         return f"{label} {len(xs)}" + (f" ({_rows_word(xs)})" if xs and label not in _GROUPS else "")
     return (", ".join(n(g, count[g]) for g in _GROUPS) + "; "
-            + "; ".join((n("on the task's start only", count["start only"]),
+            + "; ".join((n("on the task's start only", count["start only"]), n("on older code", count["on older code"]),
+                         n("on unrelated code", count["on unrelated code"]),
+                         n("on an unchecked base", count["on an unchecked base"]),
                          (f"added later not known ({len(late)} after the first run)" if (st or {}).get("anchor_after")
                           else n("added later", late)),
                          n("working state changed since the run", moved), n("no skip reader", noreader))))
@@ -1124,8 +1205,9 @@ def render_state(st: dict, task_ref: str, header: str) -> "list[str]":
             s += f"stale — {e['why']} since its run (was: {e['verdict']})"
         else:
             s += e["state"] + (f" (run {e['rec']['run']})" if e.get("rec") else "")
-        if e["late"]:
-            s += " — added later" + (f", on {_base_short(e['rec'].get('base'))}" if e.get("rec") else "")
+        if e["late"]:                                   # only what the first run shows when it came after the code
+            s += (" — added later" + (" (per the first run)" if st.get("anchor_after") else "")       # (283, sonnet)
+                  + (f", on {_base_short(e['rec'].get('base'))}" if e.get("rec") else ""))
         if e.get("moved"):
             s += " — the working state changed since its run"
         if e.get("noreader"):
@@ -1134,9 +1216,10 @@ def render_state(st: dict, task_ref: str, header: str) -> "list[str]":
     lines.append("  " + _counts(rows, st))
     if st.get("unchecked"):
         lines.append(f"  (staleness not checked: {st['unchecked']} — the rows' text and commands were)")
-    plain = [e["row"] for e in rows if not e["late"] and e["state"] in ("stale", "no record")]
+    elsewhere = ("proved on older code", "proved on unrelated code", "proved on an unchecked base")
+    plain = [e["row"] for e in rows if not e["late"] and e["state"] in ("stale", "no record") + elsewhere]
     needs_base = [e["row"] for e in rows if e["late"] and e["state"] in ("stale", "no record",
-                                                                         "proved on the task's start only")]
+                                                                         "proved on the task's start only") + elsewhere]
     if plain:
         lines.append(f"  refresh: tasks red {task_ref} --rows {','.join(plain)}")
     if needs_base and not st.get("rewritten"):          # no hint for a base that cannot exist (task 282, sonnet)
@@ -1184,7 +1267,8 @@ class _Trees:
             self._seen[key] = None
         return self._seen[key]
 
-    def digest(self, scope: str, treeish, code: bool = False) -> "str | None":
+    def entries(self, scope: str, treeish, code: bool = True) -> "dict[str, tuple[bytes, bytes]] | None":
+        """A tree's listing as path → (mode, blob) — its code only by default (task 283, codex: modes too)."""
         if scope not in self.scopes or not isinstance(treeish, str) or not treeish:
             return None
 
@@ -1194,8 +1278,12 @@ class _Trees:
                 from tasks.core import classify_delta_paths
                 behavioral = set(classify_delta_paths([e[0] for e in entries], is_outer_scope=(scope == ""))[0])
                 entries = [e for e in entries if e[0] in behavioral and not _is_test_path(e[0], self.cfg)]
-            return _digest_entries(entries)
-        return self._ask(("digest", scope, treeish, code), work)
+            return {rel: (mode, blob) for rel, mode, blob in entries}
+        return self._ask(("entries", scope, treeish, code), work)
+
+    def digest(self, scope: str, treeish, code: bool = False) -> "str | None":
+        listed = self.entries(scope, treeish, code)
+        return None if listed is None else _digest_entries([(p, m, b) for p, (m, b) in listed.items()])
 
     def _ancestor(self, scope: str, old: str, new: str) -> "bool | None":
         def work(timeout):
@@ -1211,6 +1299,14 @@ class _Trees:
         if old is None:
             return True
         if not isinstance(old, str) or old == new:
+            return False
+        return self._ancestor(scope, old, new)
+
+    def older(self, scope: str, old, new) -> "bool | None":
+        """`old` is a commit strictly before `new` (its ancestor, not itself) — the base older than the start."""
+        if scope not in self.scopes or not isinstance(old, str) or not old or not isinstance(new, str) or not new:
+            return None
+        if old == new:
             return False
         return self._ancestor(scope, old, new)
 
@@ -1664,7 +1760,7 @@ def _cmd_red(cmd_args: "list[str]") -> None:
     from tasks.post_d6 import worktree_tree_why
     from tasks.shared import find_project_root
     args, flags, only, check, err = _parse_flags(list(cmd_args))
-    if err or len(args) > 1 or (args and not args[0].isdigit()):
+    if err or len(args) > 1 or (args and not _NUMBER.fullmatch(args[0])):     # ASCII digits (task 283)
         print(f"Error: {err or USAGE}", file=sys.stderr)
         raise SystemExit(2)
     project = Path(find_project_root())

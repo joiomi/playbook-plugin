@@ -1495,7 +1495,7 @@ def cmd_numbers(cmd_args: "list[str]") -> None:
     from tasks.core import resolve_agent_dir
     from tasks.intent import find_task_dir
     from tasks.shared import find_project_root
-    if len(cmd_args) > 1 or (cmd_args and not cmd_args[0].isdigit()):
+    if len(cmd_args) > 1 or (cmd_args and not re.fullmatch(r"[0-9]+", cmd_args[0])):   # ASCII (task 283)
         print("Error: usage: tasks numbers [N]", file=sys.stderr)
         raise SystemExit(2)
     project = find_project_root()

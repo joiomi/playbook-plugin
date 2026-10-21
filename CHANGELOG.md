@@ -4,6 +4,15 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+**The red receipt judges every proof's base** — task 283 (PHASE-B.md item 9b, part 4: task 282's last review). A row
+of the first contract and a late one alike prove only on the start or on newer code: a base strictly before the start
+reads `proved on older code`, one on another branch `proved on unrelated code`, one git cannot judge (or a scope the
+activation did not have) `proved on an unchecked base` — each counted apart, with its hint. After a dirty activation,
+a base must keep the uncommitted code (mode and blob on each path it touched). The start itself needs no git.
+- A unittest run killed after `Ran N` is a failure; `NO TESTS RAN` is a summary; only ASCII digits are read.
+- A config changed twice while the section is prepared leaves it unwritten; `tasks red <N>` takes ASCII digits.
+- With the first run after the code, "added later" is said per that run.
+
 **The red receipt tells less, truer** — task 282 (PHASE-B.md item 9b, part 3: task 281's last review). A row added
 after the code proves only on code newer than the task's activation — in each scope whose code the task changed, its
 base must be other code and a commit strictly after the activation's (base.json's recorded tree when there is one);

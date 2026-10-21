@@ -64,7 +64,7 @@ class Late(Base):
         r = self.cli("red", "--rows", "2", "--base", f"code={older}")
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
         self.assertEqual(self.receipt_lines()[-1]["verdict"], "proved")
-        self.assertRegex(self.check(), r"row 2: proved on the task's start only")
+        self.assertRegex(self.check(), r"row 2: proved on older code")
 
     def test_the_reference_is_the_activation_base(self):
         # row 2 (codex, impl round 2): activation A, a first run on `--base B`, a late row run on A — still the start
@@ -117,6 +117,9 @@ class Late(Base):
 
             def newer(self, scope, old, new):
                 return self._newer
+
+            def older(self, scope, old, new):         # task 283's base rule also asks the other way
+                return None
         rec = {"base": {"code": {"commit": "c2", "used": "commit"}}, "now_tree": {"code": "tn"}}
         unborn = {"code": {"commit": None, "tree": "t0", "used": "tree"}}
         self.assertTrue(red._own_base(rec, unborn, View(None)))
@@ -135,7 +138,7 @@ class Late(Base):
         self.set_contract([ROW1, ROW2])
         self.assertEqual(self.cli("red", "--rows", "2", "--base", f"code={start}").returncode, 0)
         self.assertEqual(self.receipt_lines()[-1]["verdict"], "proved")
-        self.assertRegex(self.check(), r"row 2: proved on the task's start only")
+        self.assertRegex(self.check(), r"row 2: proved on older code")      # task 283: named exactly
         self.assertEqual(self.cli("red", "--rows", "2").returncode, 0)          # on the recorded tree itself
         self.assertRegex(self.check(), r"row 2: proved on the task's start only")
 
@@ -165,7 +168,7 @@ class Late(Base):
         self.assertEqual(self.cli("red", "--rows", "2", "--base", f"code={b}").returncode, 0)
         self.assertEqual(self.receipt_lines()[-1]["verdict"], "proved")
         out = self.check()
-        self.assertRegex(out, r"row 2: proved on the task's start only")
+        self.assertRegex(out, r"row 2: proved on unrelated code")
         self.assertIn("is not an ancestor of HEAD", out)          # said as it is (task 282's impl round 1)
         self.assertNotIn("each needs its own base", out)
 
@@ -543,7 +546,7 @@ class RoundOne(Base):
                            ("2", "edge", "f stays 1 (a judge's row)", "`tests.test_keep`")])
         self.assertEqual(self.cli("red", "--rows", "2", "--base", f"code={older}").returncode, 0)
         self.assertEqual(self.receipt_lines()[-1]["verdict"], "proved")
-        self.assertRegex(self.check(), r"row 2: proved on the task's start only")
+        self.assertRegex(self.check(), r"row 2: proved on older code")
 
     def test_a_first_run_on_a_post_code_base_is_after_the_code(self):
         # row 36 (codex): activation A, the code committed as B, a first run on `--base B` — after the code
