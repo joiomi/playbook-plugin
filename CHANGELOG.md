@@ -42,10 +42,12 @@ folder, untouched. 1.6.6 reads only the live `enforcement.jsonl`, so its numbers
 hold; back on 1.6.7 they are read again. Measured on a copy of a project 1.6.7 rotated and set up: 1.6.6's `doctor`,
 `bootstrap`, `list`, `status` and `numbers` ran clean and left `numbers.json` untouched; 1.6.6's `/playbook:init` puts
 the old verify sentence back (the block is init's); 1.6.6's agent recorder, on a journal 1.6.7 rotated, read on from the
-carried position: six calls written, six counted across the archive and the live file, none twice. Back on 1.6.7,
-`doctor`, `numbers` and `/playbook:init` (the new sentence again) ran clean. Before the next `/playbook:upgrade`, `git
--C <clone> checkout main`. (A shell recipe to merge the archives back into one file, written in task 257, is not
-shipped: the release rounds found ways it could lose lines when something wrote the journal while it ran.)
+carried position: six calls written, six counted across the archive and the live file, none twice — but a transcript
+begun more than 30 days before a rotation and resumed under 1.6.6 before 1.6.7 read it again has no carried position,
+and 1.6.6 counted it again from its start (three calls twice; up to 8 MiB). Back on 1.6.7, `doctor`, `numbers` and
+`/playbook:init` (the new sentence again) ran clean. Before the next `/playbook:upgrade`, `git -C <clone> checkout
+main`. (A shell recipe to merge the archives back into one file, written in task 257, is not shipped: the release rounds
+found ways it could lose lines when something wrote the journal while it ran.)
 
 **The order that lets the close reuse a green verify** — task 273 (the owner, 2026-10-20: "Reparațiile mici din PLAN"):
 the CLAUDE.md template, `tasks verify`'s usage lines and docs/cli.md now say to stage the change before `tasks verify`
@@ -144,9 +146,10 @@ exactly as unrotated (12 seeds, up to 69 archives, one task over 12 files) — a
 writers against a rotator at 2 KiB with compression immediate (every record exactly once). Known limits: appends with no
 pause between them postpone a rotation (never a loss); a reopen in the same second as a close whose record waited over 5
 s for the lock may be read first; a transcript resumed after 30 days idle gets a seed for its first turn back. Going
-back: 1.6.6 reads only the live file — its recorder takes the carried positions as ordinary records (no transcript is
-read twice), and its numbers show a carry or horizon line inside a closure as an `agent ?` row with zero calls; the
-archives stay untouched, for 1.6.7 to read again.
+back: 1.6.6 reads only the live file — its recorder takes the carried positions as ordinary records (a transcript whose
+position was carried is not read twice; one begun before the 30-day horizon can be, if resumed under 1.6.6), and its
+numbers show a carry or horizon line inside a closure as an `agent ?` row with zero calls; the archives stay untouched,
+for 1.6.7 to read again.
 
 **Both journals compress the same careful way** — task 259 (the owner, 2026-10-19: "Repar ce a rămas (Recomandat)"). The
 hook journal (`hooks.jsonl`) now shares the enforcement journal's compression:
@@ -168,6 +171,9 @@ reader drops as an exact duplicate.
 
 ### Known limitations
 
+- After going back to 1.6.6, a transcript begun more than 30 days before a rotation and resumed before 1.6.7 read it
+  again is counted again from its start by 1.6.6's recorder (up to 8 MiB): its position was not carried. Nothing is
+  lost; its calls are counted twice.
 - With the lane lock free at a session's end, a transcript the host rewrote in place to the same length after the
   last read is not marked unread (the check keeps byte offsets only; never observed).
 - A seat recorded out of credit with no reset time — a codex workspace out of credits, grok's 402 — stays skipped until

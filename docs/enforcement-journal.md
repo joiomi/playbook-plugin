@@ -394,10 +394,13 @@ no message id shared between the 300 newest transcripts, 2026-10-19).
 
 **Going back to 1.6.6**, whose readers read only the live file. Nothing is merged: the archives stay in the journal
 folder, untouched. 1.6.6's numbers and retro miss the history they hold, and its recorder takes the carried read
-positions as ordinary records, so no transcript is read twice (measured in task 275: six calls written across a
-rotation and a downgrade, six counted). Back on 1.6.7, every archive is read again. A merge back to one file is not
-shipped: in task 275's release rounds, each version of a shell recipe for it could still lose lines when something wrote
-the journal while it ran (1.6.6's writers take no lock), and the owner chose to remove it (2026-10-21).
+positions as ordinary records, so a transcript whose position was carried is not read twice (measured in task 275: six
+calls written across a rotation and a downgrade, six counted). A transcript begun before a rotation's 30-day horizon has
+its position dropped; resumed under 1.6.6 before 1.6.7 has read it again (1.6.7 would seed it), it has no record 1.6.6
+can see, and 1.6.6 counts it again from its start when it is at most 8 MiB (measured in task 275: three calls counted
+twice; found by the release's post-panel judge). Back on 1.6.7, every archive is read again. A merge back to one file is
+not shipped: in task 275's release rounds, each version of a shell recipe for it could still lose lines when something
+wrote the journal while it ran (1.6.6's writers take no lock), and the owner chose to remove it (2026-10-21).
 
 ## The hook journal — `journal/hooks.jsonl` (task 222)
 
