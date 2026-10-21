@@ -1209,8 +1209,8 @@ class TheRollbackRecipe(TheOracle):
             _line(dict(late[2], spool="enforcement.jsonl.spool-20261019-000001-999999-7.0")))
         r = subprocess.run([bash_or_skip(), "-c", self.recipe()], cwd=jb, capture_output=True, text=True, timeout=60)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(sorted(p.name for p in jb.iterdir() if p.name.startswith("enforcement.jsonl")),
-                         ["enforcement.jsonl"])
+        self.assertEqual(sorted(p.name for p in jb.iterdir() if p.name.startswith("enforcement.jsonl")
+                                and p.name != "enforcement.jsonl.merge-lock"), ["enforcement.jsonl"])
 
         def canon(raw):
             d = json.loads(raw)
@@ -1279,8 +1279,8 @@ class TheRollbackRecipe(TheOracle):
                 r = run(d, recipe)
                 self.assertEqual(r.returncode, 0, r.stderr)
                 self.assertEqual((d / "enforcement.jsonl").read_text(), want)
-                self.assertEqual(sorted(p.name for p in d.iterdir() if p.name.startswith("enforcement.jsonl")),
-                                 ["enforcement.jsonl"])
+                self.assertEqual(sorted(p.name for p in d.iterdir() if p.name.startswith("enforcement.jsonl")
+                                        and p.name != "enforcement.jsonl.merge-lock"), ["enforcement.jsonl"])
         # … and stopped inside its build: a partial `.merging` (and `.all`) left, which the next run writes anew
         d = Path(tempfile.mkdtemp(dir=self.root)) / "j"
         shutil.copytree(src, d)
@@ -1323,28 +1323,118 @@ class TheRollbackRecipe(TheOracle):
         after = {p.name: p.read_bytes() for p in jd.iterdir() if p.is_file() and p.name != "enforcement.jsonl.merge-lock"}
         self.assertEqual(after, {k: v for k, v in before.items() if k != "enforcement.jsonl.merge-lock"})
 
-    def test_a_finish_refuses_when_the_live_file_was_written_after_the_stop(self):
-        """Task 275's R2 (opus): a run that finds `.merged` moved it over the live file even when the live file had been
-        written since the stop — those lines were lost. It refuses then, and says to merge from the start."""
+    def _late(self, reason="written after the stop"):
+        return _line({"ts": _iso(time.time()), "session_id": "pid-9", "hook": "task-gate", "decision": "allow",
+                      "reason": reason})
+
+    def _whole(self, src):
+        """What one uninterrupted run leaves, from a copy of `src`."""
+        import shutil
+        from tests._bashcheck import bash_or_skip
+        d = Path(tempfile.mkdtemp(dir=self.root)) / "j"
+        shutil.copytree(src, d)
+        r = subprocess.run([bash_or_skip(), "-c", self.recipe()], cwd=d, capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return (d / "enforcement.jsonl").read_bytes()
+
+    def test_lines_written_after_a_stop_are_added_never_lost(self):
+        """Task 275's post-panel judge run 1 (sol, Important; reproduced, 300 and 297 records lost): R2's fix refused to
+        finish over a newer live file and told the user to remove the merged file — after a stop that had already
+        removed the archives, that file held their only copy. Whatever step a run stopped at, lines the live file got
+        afterwards end up in the result once, and nothing is lost (the order of a late line against the spooled ones
+        may differ, so lines are compared as a multiset)."""
+        import collections
         import shutil
         from tests._bashcheck import bash_or_skip
         bash = bash_or_skip()
-        jd = self._rotated(22)
+        src = self._rotated(22)
+        late = self._late()
+        want = collections.Counter((self._whole(src) + late).splitlines())
+        steps = self.steps(self.recipe())
+        for k in range(1, len(steps) + 1):
+            with self.subTest(stopped_after=steps[k - 1].splitlines()[0][:60]):
+                d = Path(tempfile.mkdtemp(dir=self.root)) / "j"
+                shutil.copytree(src, d)
+                subprocess.run([bash, "-c", "\n".join(steps[:k])], cwd=d, capture_output=True, text=True, timeout=60)
+                with open(d / "enforcement.jsonl", "ab") as f:
+                    f.write(late)
+                r = subprocess.run([bash, "-c", self.recipe()], cwd=d, capture_output=True, text=True, timeout=60)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertEqual(collections.Counter((d / "enforcement.jsonl").read_bytes().splitlines()), want)
+                self.assertEqual([p.name for p in d.iterdir() if ".merged" in p.name or ".merging" in p.name], [])
+
+    def test_a_line_written_while_the_merge_is_made_is_there_once(self):
+        """Task 275's post-panel run 1 fix: the merged file takes in the live file only up to the size its name holds, so
+        a line written after that size was taken — here by a `stat` stand-in that appends one right after it answers —
+        is added once by the finish, not taken in by the build and added again."""
+        import collections
+        import stat as st
+        from tests._bashcheck import bash_or_skip
+        bash = bash_or_skip()
+        src = self._rotated(27)
+        late = self._late("written while the merge was made")
+        want = collections.Counter((self._whole(src) + late).splitlines())
+        shim = Path(tempfile.mkdtemp(dir=self.root))
+        (shim / "stat").write_text("#!/bin/bash\n"
+                                   "out=$(/usr/bin/stat \"$@\") || exit $?\n"
+                                   "if [ ! -e \"$PB_MARK\" ]; then : > \"$PB_MARK\"; cat \"$PB_LATE\" >> enforcement.jsonl; fi\n"
+                                   "printf '%s\\n' \"$out\"\n")
+        (shim / "stat").chmod(0o755)
+        (shim / "late").write_bytes(late)
+        env = dict(os.environ, PATH=f"{shim}:{os.environ.get('PATH', '')}", PB_MARK=str(shim / "mark"),
+                   PB_LATE=str(shim / "late"))
+        r = subprocess.run([bash, "-c", self.recipe()], cwd=src, capture_output=True, text=True, timeout=60, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue((shim / "mark").exists(), "the stand-in never ran")
+        self.assertEqual(collections.Counter((src / "enforcement.jsonl").read_bytes().splitlines()), want)
+
+    def test_the_lock_file_stays_after_a_run(self):
+        """Task 275's post-panel judge run 1 (sol, Important; reproduced): unlinking the lock let a run paused between
+        opening and locking the old file take it after the first ended, while another run locked a new file."""
+        from tests._bashcheck import bash_or_skip
+        jd = self._rotated(24)
+        r = subprocess.run([bash_or_skip(), "-c", self.recipe()], cwd=jd, capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue((jd / "enforcement.jsonl.merge-lock").exists())
+
+    def test_a_live_file_shorter_than_the_merged_one_took_refuses_and_keeps_it(self):
+        """Task 275's post-panel judge run 1: a live file shorter than when the merged file was built was rotated or
+        replaced since — nothing is guessed: the run refuses and keeps the merged file."""
+        from tests._bashcheck import bash_or_skip
+        bash = bash_or_skip()
+        jd = self._rotated(25)
         steps = self.steps(self.recipe())
         stop = next(i for i, st in enumerate(steps) if "enforcement.jsonl.merging" in st) + 1   # after the build
         subprocess.run([bash, "-c", "\n".join(steps[:stop])], cwd=jd, capture_output=True, text=True, timeout=60)
-        self.assertTrue((jd / "enforcement.jsonl.merged").exists())
-        late = _line({"ts": _iso(time.time()), "session_id": "pid-9", "hook": "task-gate", "decision": "allow",
-                      "reason": "written after the stop"})
-        time.sleep(0.02)
-        with open(jd / "enforcement.jsonl", "ab") as f:
-            f.write(late)
-        os.utime(jd / "enforcement.jsonl", None)
-        live = (jd / "enforcement.jsonl").read_bytes()
+        [merged] = [p for p in jd.iterdir() if p.name.startswith("enforcement.jsonl.merged-")]
+        kept = merged.read_bytes()
+        (jd / "enforcement.jsonl").write_bytes(b"")
         r = subprocess.run([bash, "-c", self.recipe()], cwd=jd, capture_output=True, text=True, timeout=60)
         self.assertNotEqual(r.returncode, 0)
-        self.assertEqual((jd / "enforcement.jsonl").read_bytes(), live)
-        self.assertTrue(list(jd.glob("enforcement.jsonl.archived-*")))
+        self.assertIn("shorter", r.stderr)
+        self.assertEqual(merged.read_bytes(), kept)
+
+    def test_of_two_merged_files_the_larger_is_finished(self):
+        """Task 275's post-panel judge run 1: a run stopped between writing the merged file that holds late lines and
+        removing the one before it leaves both; the next run finishes the larger, and no line is there twice."""
+        import collections
+        from tests._bashcheck import bash_or_skip
+        bash = bash_or_skip()
+        src = self._rotated(26)
+        late = self._late()
+        want = collections.Counter((self._whole(src) + late).splitlines())
+        steps = self.steps(self.recipe())
+        stop = next(i for i, st in enumerate(steps) if "enforcement.jsonl.merging" in st) + 1
+        subprocess.run([bash, "-c", "\n".join(steps[:stop])], cwd=src, capture_output=True, text=True, timeout=60)
+        [old] = [p for p in src.iterdir() if p.name.startswith("enforcement.jsonl.merged-")]
+        with open(src / "enforcement.jsonl", "ab") as f:
+            f.write(late)
+        size = (src / "enforcement.jsonl").stat().st_size
+        (src / f"enforcement.jsonl.merged-{size}").write_bytes(old.read_bytes() + late)
+        r = subprocess.run([bash, "-c", self.recipe()], cwd=src, capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(collections.Counter((src / "enforcement.jsonl").read_bytes().splitlines()), want)
+        self.assertEqual([p.name for p in src.iterdir() if ".merged" in p.name], [])
 
     def test_a_killed_rotations_carry_file_is_removed_by_the_merge(self):
         """Task 275's R2 (opus Minor): a rotation killed before its swap leaves `enforcement.jsonl.carry-*`."""

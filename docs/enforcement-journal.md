@@ -399,13 +399,12 @@ session of the project first, so nothing writes the journal, then, in the journa
 <!-- recipe:merge:start -->
 ```bash
 set -eo pipefail
-exec 9>>enforcement.jsonl.merge-lock                # one merge at a time: two at once could publish a shortened file
+exec 9>>enforcement.jsonl.merge-lock    # one merge at a time; the file stays (removed, two runs could lock two files)
 flock -n 9 || { echo "another merge is running in this folder: let it end, then run this again" >&2; exit 1; }
-if [ -e enforcement.jsonl.merged ] && [ enforcement.jsonl -nt enforcement.jsonl.merged ]; then
-  echo "the journal was written after the merge stopped: remove enforcement.jsonl.merged, then run this again" >&2
-  exit 1
-fi
-if [ ! -e enforcement.jsonl.merged ]; then          # whole once it has this name: a run stopped later only finishes
+# a merged file is whole once it has its name, which holds the size of the live file it took in
+merged=$(ls | grep -E '^enforcement\.jsonl\.merged-[0-9]+$' | sort -t- -k2,2n | tail -n 1 || true)
+if [ -z "$merged" ]; then
+  size=$(stat -c %s enforcement.jsonl)
   for f in $(ls | grep -E '^enforcement\.jsonl\.archived-[0-9]{8}-[0-9]{6}-[0-9]+-[0-9]+(\.gz)?$' | sort -t- -k5,5n); do
     [ "$f" -ef enforcement.jsonl ] && continue        # a rotation killed half-way: the live file itself
     case "$f" in
@@ -413,7 +412,7 @@ if [ ! -e enforcement.jsonl.merged ]; then          # whole once it has this nam
       *) cat -- "$f" ;;
     esac
   done > enforcement.jsonl.all
-  cat enforcement.jsonl >> enforcement.jsonl.all
+  head -c "$size" enforcement.jsonl >> enforcement.jsonl.all
   # every file a rotation started holds a horizon line and carries: read positions, not events
   { grep -v -e '"reason":"read position carried"' -e '"reason":"read positions horizon"' enforcement.jsonl.all || [ $? -eq 1 ]; } > enforcement.jsonl.merging
   rm enforcement.jsonl.all
@@ -424,23 +423,40 @@ if [ ! -e enforcement.jsonl.merged ]; then          # whole once it has this nam
     if [ -n "$id" ] && grep -qF -- "$id" enforcement.jsonl.merging; then continue; fi   # merged already
     cat -- "$s" >> enforcement.jsonl.merging
   done
-  mv enforcement.jsonl.merging enforcement.jsonl.merged
+  merged=enforcement.jsonl.merged-$size
+  mv enforcement.jsonl.merging "$merged"
 fi
-wc -l < enforcement.jsonl.merged
+for m in $(ls | grep -E '^enforcement\.jsonl\.merged-[0-9]+$'); do   # an older one a stopped run left: a part of it
+  [ "$m" = "$merged" ] || rm -f -- "$m"
+done
+size=${merged##*-}
+now=$(stat -c %s enforcement.jsonl)
+if [ "$now" -lt "$size" ]; then
+  echo "enforcement.jsonl is shorter than when $merged was made (rotated or replaced since): nothing more is removed;" \
+       "keep $merged and the journal folder as they are" >&2
+  exit 1
+fi
+if [ "$now" -gt "$size" ]; then                    # lines the live file got after the merge was made: added at its end
+  { cat -- "$merged"; tail -c +"$((size + 1))" enforcement.jsonl | { grep -v -e '"reason":"read position carried"' -e '"reason":"read positions horizon"' || [ $? -eq 1 ]; }; } > enforcement.jsonl.merging
+  mv enforcement.jsonl.merging "enforcement.jsonl.merged-$now"
+  rm -f -- "$merged"
+  merged=enforcement.jsonl.merged-$now
+fi
+wc -l < "$merged"
 rm -f enforcement.jsonl.archived-* enforcement.jsonl.spool-* enforcement.jsonl.spooling-* enforcement.jsonl.carry-*
-mv enforcement.jsonl.merged enforcement.jsonl
-rm -f enforcement.jsonl.merge-lock
+mv -- "$merged" enforcement.jsonl
 ```
 <!-- recipe:merge:end -->
 
 Every line comes back (the rotation never deletes one), the carries and the horizon go, and the spooled lines come
-last. A run stopped anywhere can be run again: nothing is removed until `enforcement.jsonl.merged` is whole, and a
-run that finds it only removes the archives and moves it over the live file — unless the live file was written after
-the stop, when it refuses (task 275's R2). One run at a time: a second one refuses while the first holds
-`enforcement.jsonl.merge-lock` (task 275's R1, sol: the first version
-moved the merged file first, so a run stopped before its `rm` merged the archives a second time). Tested on rotated
-journals with each kill state, and stopped after each of its steps (`tests/test_enforcement_rotation.py`,
-`TheRollbackRecipe`).
+last. A run stopped anywhere can be run again: nothing is removed until a merged file is whole, and its name holds the
+size of the live file it took in, so a later run adds the lines the live file got since (a session left open) or,
+if the live file is shorter, refuses and keeps everything. One run at a time: a second one refuses while the first
+holds `enforcement.jsonl.merge-lock`, which stays in the folder (task 275's R2 and its post-panel judge, sol: an
+earlier version moved the merged file first, so a stopped run merged the archives twice; the next one, told to
+remove a merged file, could lose the archives it alone held). Tested on rotated journals with each kill state,
+stopped after each of its steps with a line written afterwards, and with two merged files left
+(`tests/test_enforcement_rotation.py`, `TheRollbackRecipe`).
 
 ## The hook journal — `journal/hooks.jsonl` (task 222)
 

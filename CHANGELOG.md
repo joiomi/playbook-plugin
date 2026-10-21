@@ -15,7 +15,7 @@ instead of losing its vote at the hard limit (task 261; its note is playbook's o
 cut off mid-review is a failed seat, not a whole review, and its account-limit line is found among several error lines
 (tasks 269, 270, 272). The agent's recorder marks what a session's end left unread with the lane lock free too, a
 subagent file that appeared late included (tasks 265, 268). The CLAUDE.md block tells the agent the order that lets the
-close reuse a green verify — stage the change before `tasks verify` (tasks 273, 274). The suite has 5,913 tests (5,706
+close reuse a green verify — stage the change before `tasks verify` (tasks 273, 274). The suite has 5,917 tests (5,706
 at 1.6.6); CI is the same two Linux lanes. The guarantee ledger has 135 rows, 122 verified — the same counts as 1.6.6 —
 and no known violation. The live gauntlet on this release: 18 PASS, 5 WAITING (the grok rows: its account is out of
 credit), 0 FAIL.
