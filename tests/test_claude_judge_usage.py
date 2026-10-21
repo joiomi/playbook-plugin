@@ -247,6 +247,34 @@ class ClaudeJudgeOutput(unittest.TestCase):
         self.assertEqual(tail[0], LIMIT_LINE, r.stdout)
         self.assertNotIn("API Error: 429", r.stdout.split("[stderr tail]")[0])
 
+    def test_a_cut_off_review_quoting_the_limit_line_is_no_outage(self):
+        """Task 269's impl round 2 (agy, opus, sonnet Important): the limit search read the object's `result` on the
+        cut-off path too, where `result` is the judge's partial review — a review quoting the line on a line of its own
+        (in a code block) became a one-line tail and a false outage. "A review that quotes these messages is not an
+        outage" (seat_outage.classify_outage)."""
+        for field, value in (("stop_reason", "max_tokens"), ("terminal_reason", "max_turns")):
+            with self.subTest(**{field: value}):
+                obj = json.loads(_fx("success.stdout"))
+                obj.update({field: value, "result": "1. **Important** — the panel quotes:\n```\n" + LIMIT_LINE + "\n```\n2. cut"})
+                out = claude_judge_output(_cp(json.dumps(obj)), sandbox.format_judge_output)
+                self.assertTrue(judge_failed(out), out)
+                self.assertIsNone(classify_outage(out, provider="claude"), out)
+
+    def test_a_terminal_reason_that_is_present_must_be_completed(self):
+        """Task 269's impl round 2 (opus Minor): a present `terminal_reason` of null read as complete; grok's rule —
+        a present field must hold the expected value — fails it."""
+        obj = json.loads(_fx("success.stdout"))
+        obj["terminal_reason"] = None
+        out = claude_judge_output(_cp(json.dumps(obj)), sandbox.format_judge_output)
+        self.assertTrue(judge_failed(out), out)
+
+    def test_an_errors_limit_line_wins_over_a_different_result_line(self):
+        """Task 269's impl round 2 (sonnet Minor): which line wins is pinned — `errors` first."""
+        obj = json.loads(_fx("budget-stop.stdout"))
+        obj.update({"errors": [LIMIT_LINE], "result": "You've hit your session limit · resets 1am (Europe/Bucharest)"})
+        out = claude_judge_output(_cp(json.dumps(obj), rc=1), sandbox.format_judge_output)
+        self.assertTrue(classify_outage(out, provider="claude")["reason"].startswith("claude: weekly limit"), out)
+
     def test_a_success_with_no_terminal_reason_reads_as_before(self):
         obj = json.loads(_fx("success.stdout"))
         obj.pop("terminal_reason")

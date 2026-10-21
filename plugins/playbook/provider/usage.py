@@ -277,7 +277,9 @@ def extract_claude(raw: str) -> "Optional[tuple[str, Optional[dict], list[str]]]
     # stop, which an envelope may carry beside `terminal_reason: completed` or none (task 269's impl round 1, agy).
     # Any other `terminal_reason` fails the seat too, on purpose: an unknown ending is not a whole review, and the
     # seat's text says which it was
-    if (isinstance(term, str) and term and term != "completed") or stop == "max_tokens":
+    # a present `terminal_reason` must say `completed` (null included — grok's rule for its own stop field; impl
+    # round 2, opus); an absent one reads as before
+    if ("terminal_reason" in obj and term != "completed") or stop == "max_tokens":
         return "", usage, [f"claude stopped before its answer was complete (terminal_reason: {term}; stop_reason: "
                            f"{stop}) — playbook's words"]
     return result, usage, []
@@ -301,7 +303,10 @@ def claude_judge_output(result, format_judge_output) -> JudgeOutput:
         # claude limit only when it is the whole stdout tail (task 269, PLAN.md "From task 232") — sought in every
         # line of every `errors` entry and of the object's `result` beside them (its impl round 1: agy, opus, sonnet)
         obj = _json_object(raw)
-        said = obj.get("result") if isinstance(obj, dict) else None
+        # `result` is claude's own words only on an error object; on a cut-off success it is the judge's partial
+        # review, which may quote the line (impl round 2: agy, opus, sonnet — a false outage)
+        is_error_object = isinstance(obj, dict) and (obj.get("is_error") is True or obj.get("subtype") != "success")
+        said = obj.get("result") if is_error_object else None
         lines = [ln.strip() for e in errors for ln in str(e).splitlines()]
         lines += [ln.strip() for ln in said.splitlines()] if isinstance(said, str) else []
         hit = [ln for ln in lines if CLAUDE_LIMIT_LINE.match(ln)]
