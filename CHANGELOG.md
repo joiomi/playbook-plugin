@@ -4,6 +4,39 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+## [1.6.7] — 2026-10-21
+
+**The enforcement journal rotates; agy keeps its vote at the soft deadline; a cut-off claude judge fails its seat** —
+tasks 257-274. `enforcement.jsonl` now rotates like `hooks.jsonl`: past 20 MB it becomes an archive, compressed once
+idle, every archive kept and read in order, each transcript's read position carried into the new file (task 257); both
+journals compress the same careful way, and a repair whose lock was not had is taken again (tasks 259, 263). The agy
+(Gemini) judge is cut at its soft deadline and resumed in the same conversation, so a slow turn writes its findings
+instead of losing its vote at the hard limit (task 261; its note is playbook's own line, tasks 264, 266). A claude judge
+cut off mid-review is a failed seat, not a whole review, and its account-limit line is found among several error lines
+(tasks 269, 270, 272). The agent's recorder marks what a session's end left unread with the lane lock free too, a
+subagent file that appeared late included (tasks 265, 268). The CLAUDE.md block tells the agent the order that lets the
+close reuse a green verify — stage the change before `tasks verify` (tasks 272-274). The suite has ⟦N⟧ tests (5,706 at
+1.6.6); CI is the same two Linux lanes. The guarantee ledger has 135 rows, 122 verified, as at 1.6.6, and no known
+violation. The live gauntlet on this release: ⟦P⟧ PASS, ⟦W⟧ WAITING (the grok rows: its account is out of credit), ⟦F⟧
+FAIL.
+
+**Upgrading:** `/playbook:upgrade`, then restart every Claude Code session, then `/playbook:init` in each project: the
+CLAUDE.md block's verify sentence changed (task 273), and init rewrites the block in place ⟦W3: what else init changes in
+a project 1.6.6 set up — expected nothing⟧. `hooks.json` is unchanged since 1.6.6. The first hook run on an
+`enforcement.jsonl` over 20 MB rotates it (0.36 s for 20 MB, measured in task 257). From 1.6.5 or earlier, 1.6.6's
+upgrade notes apply first.
+
+**Measured before the release**, in temporary folders: ⟦W3: a project 1.6.6 set up, a task in flight, 1.6.7's CLI and
+hooks over it — doctor, bootstrap, a close, the recorder, a journal over 20 MB rotating; init's change⟧.
+
+**Going back** to 1.6.6 (`88074a1`): in the release clone the marketplace reads, `git -C <clone> checkout 88074a1`, then
+`claude plugin marketplace update playbook-x-marketplace` and `claude plugin update playbook@playbook-x-marketplace`,
+then restart every Claude Code session and check that `claude plugin list` says 1.6.6. 1.6.6 reads only the live
+`enforcement.jsonl`: its recorder takes the carried positions as ordinary records, and its numbers miss what the
+archives hold; to make one file again first, `docs/enforcement-journal.md`, "Going back to one file". ⟦W3b: measured
+1.6.7 → 1.6.6 → 1.6.7 on a copy of a project 1.6.7 rotated; what 1.6.6's init does to the CLAUDE.md sentence⟧. Before
+the next `/playbook:upgrade`, `git -C <clone> checkout main`.
+
 **The order that lets the close reuse a green verify** — task 273 (the owner, 2026-10-20: "Reparațiile mici din
 PLAN"): the CLAUDE.md template, `tasks verify`'s usage lines and docs/cli.md now say to stage the change before
 `tasks verify` (in each `code_roots` repository, commit it and stage its gitlink where the outer repository tracks
@@ -123,6 +156,33 @@ pass. An empty archive, and a cut hook-journal `.gz`, now make the read incomple
 `numbers: not written (JournalIncomplete)`) instead of short. The retro reads the archives once per command. Known
 limit: a spool merged by a merge killed before it removed the spool is merged again, one more line on disk, which the
 reader drops as an exact duplicate.
+
+### Known limitations
+
+- A seat recorded out of credit with no reset time — a codex workspace out of credits, grok's 402 — stays skipped until
+  `tasks models enable <seat>`, even after it has recovered (one with a reset time comes back by itself then). A check
+  of such a seat before a panel, run inside the judges' own sandbox, is planned; task 262's version, which ran outside
+  it, was removed before this release.
+- The rotation's own limits (task 257): appends with no pause between them postpone a rotation (never a loss); a
+  reopen in the same second as a close whose record waited over 5 s for the lock may be read first; a transcript
+  resumed after 30 days idle gets a seed for its first turn back. A spool merged by a merge killed before it removed
+  the spool is merged again (task 259), one more line that the reader drops as an exact duplicate.
+- agy's cut turn is resumed once; a resume that does not land times the seat out, and the soft deadline is used only
+  when it sits at least 90 s below the hard one (task 261).
+- A records-only commit after a post-panel judge's PASS still makes the bound close refuse to use that PASS (PLAN §S11
+  item (22), not built yet).
+- The call that runs a transition (`tasks work N`, the close) is charged to the span where the host wrote it, and the
+  host writes a call holding parallel tool uses after its tools ran, so that call can land after the transition (seen
+  on a real session).
+- A `claude` started from another session's shell is counted under the outer session's task. A transcript the host
+  rewrote in place, or an old conversation the host copied into a new file (a fork), would be counted again (neither
+  observed). The rest: `docs/enforcement-journal.md`, Family 6.
+- A close run in the background: only its recorded verify and review spans leave `owner-idle`; its audit and numbers
+  time stays there.
+- A task's numbers: two races within seconds of a close are not told apart (1.6.5's stated limits, unchanged).
+- The review copy needs bubblewrap able to mount it and `.agent/journal/` ignored by git; otherwise the judges read the
+  live tree, as before. A panel killed by SIGKILL (or an unhandled SIGTERM) still leaves its reservation without a
+  `done` record.
 
 ## [1.6.6] — 2026-10-19
 
