@@ -630,31 +630,36 @@ class TheTeachingSites(unittest.TestCase):
     map after Verify, review fixes after it) cannot keep (its impl round 1, opus and sonnet)."""
 
     def sites(self):
+        """Each site, its text and the words that open its `tasks verify` entry (found exactly once)."""
         from tasks.template import cli_reference, usage_text
-        yield "CLAUDE.md.template", (_PLAYBOOK / "scripts" / "CLAUDE.md.template").read_text(encoding="utf-8")
-        yield "cli_reference", cli_reference()
-        yield "usage_text", usage_text()
-        yield "docs/cli.md", (_HERE.parent / "docs" / "cli.md").read_text(encoding="utf-8")
+        yield ("CLAUDE.md.template", (_PLAYBOOK / "scripts" / "CLAUDE.md.template").read_text(encoding="utf-8"),
+               "Run the contract with `tasks verify`")
+        yield "cli_reference", cli_reference(), "    tasks verify [<N>]"
+        yield "usage_text", usage_text(), "  verify [<N>]"
+        yield "docs/cli.md", (_HERE.parent / "docs" / "cli.md").read_text(encoding="utf-8"), "**`tasks verify [<N>]`**"
 
-    @staticmethod
-    def entry(text):
-        """The `tasks verify` entry that says to stage: its line, with the usage lines' continuation lines above it."""
+    def entry(self, text, opening):
+        """The `tasks verify` entry: the one line holding `opening`, and the lines under it indented deeper — a usage
+        line's continuation (task 274, PLAN.md "From task 273" (c): the first line saying "stage the change" could be
+        another sentence above the entry)."""
         lines = text.splitlines()
-        for i, ln in enumerate(lines):
-            if "stage the change" in ln:
-                j = i
-                while j > 0 and "verify [<N>]" not in lines[j] and "tasks verify" not in lines[j]:
-                    j -= 1
-                return " ".join(lines[j:i + 1])
-        return ""
+        at = [i for i, ln in enumerate(lines) if opening in ln]
+        self.assertEqual(len(at), 1, opening)
+        depth = len(lines[at[0]]) - len(lines[at[0]].lstrip())
+        block = [lines[at[0]]]
+        for ln in lines[at[0] + 1:]:
+            if not ln.strip() or len(ln) - len(ln.lstrip()) <= depth:
+                break
+            block.append(ln)
+        return " ".join(block)
 
     def test_each_says_to_stage_first_and_what_a_later_edit_costs(self):
-        for name, text in self.sites():
-            line = self.entry(text)
+        for name, text, opening in self.sites():
+            line = self.entry(text, opening)
             with self.subTest(site=name):
-                self.assertIn("verify", line)
                 self.assertIn("stage the change", line)
                 self.assertIn("code_roots", line)
+                self.assertIn("gitlink", line)
                 self.assertRegex(line, r"later edit|edit that has to come later")
                 self.assertNotIn("edit nothing", line)
 
