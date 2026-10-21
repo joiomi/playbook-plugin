@@ -581,7 +581,7 @@ class RoundOne(Project):
     def test_a_linked_base_folder_is_never_written_through(self):
         # row 32 (GRAVE, codex Critical): the base's `tests` is a link to a real folder; the working tree made it a
         # directory — the overlay must replace the link inside the copy, never write or unlink through it
-        outside = Path(tempfile.mkdtemp(prefix="pb280-shared-", dir="/var/tmp"))
+        outside = Path(tempfile.mkdtemp(prefix="pb280-shared-"))     # the overlay runs in the CLI, outside any cage
         self.addCleanup(shutil.rmtree, outside, True)
         (outside / "keep.txt").write_text("real\n", encoding="utf-8")
         (outside / "test_old.py").write_text("real test\n", encoding="utf-8")
@@ -765,7 +765,8 @@ class RoundOne(Project):
     def test_the_cli_own_git_calls_ignore_git_dir(self):
         # row 41 (agy Minor): `red._git` runs in the named repository whatever GIT_DIR the caller has
         from tasks import red
-        with __import__("unittest").mock.patch.dict(os.environ, {"GIT_DIR": "/nonexistent", "GIT_WORK_TREE": "/x"}):
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"GIT_DIR": "/nonexistent", "GIT_WORK_TREE": "/x"}):
             r = red._git(self.code, ["rev-parse", "HEAD"])
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stdout.strip(), self.head(self.code))
