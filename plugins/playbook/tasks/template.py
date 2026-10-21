@@ -200,6 +200,7 @@ def contract_note() -> str:
 > - Write the tests, then watch each new behavior's test fail on the code as it is before you write the code.
 > - `tasks red` runs each row on the task's base (recorded at its first activation) and on the code now.
 > - A row is proved when it is red on the base and green now; red on both is broken, never proof.
+> - A test helper outside `red_tests` (a fixture, a conftest) makes "proved" unreliable: lay it with the tests.
 > - A row's test is a backticked command, or a test id that `red_run` in `.agent/config.json` runs (`{test}`).
 > - A must-not or stay-the-same row shows its sensitivity with a mutant it catches, or says `already true before: <why>`.
 > - A row added later (a judge's finding) is red-first too.

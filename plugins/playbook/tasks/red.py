@@ -48,8 +48,8 @@ RECEIPT_HEADING = "## Red receipt"
 DEFAULT_TIMEOUT = 300
 LAST_MAX = 200
 # The working tree's files laid over the base: a test directory anywhere in the path, or a test file by its name.
-DEFAULT_TEST_DIRS = ("tests", "test", "spec", "__tests__")
-DEFAULT_TEST_NAMES = ("test_*", "*_test.*", "*.test.*", "*.spec.*")
+DEFAULT_TEST_DIRS = ("tests", "test", "spec", "__tests__", "fixtures", "testdata", "__snapshots__")
+DEFAULT_TEST_NAMES = ("test_*", "*_test.*", "*.test.*", "*.spec.*", "conftest.py")
 
 
 def _now() -> str:
@@ -81,7 +81,7 @@ def _capture(project_path: Path) -> "tuple[dict | None, str, list[str]]":
         cfg = {}
     exclude = _fingerprint_exclude_pathspecs(cfg)
     scopes: "dict[str, dict]" = {}
-    for name, repo in _tail_cert_scopes(Path(project_path), cfg).items():
+    for name, repo in _scopes(Path(project_path), cfg).items():
         where = name or "the project"
         try:
             head = _git(repo, ["rev-parse", "--verify", "-q", "HEAD^{commit}"])
@@ -113,7 +113,8 @@ def record_base(project_path: Path, task_dir: Path, task_num: str, first: bool) 
         # re-activated after the upgrade would record its changed state as its start)
         return False, ("note: no base recorded — this task already began (its status was not `pending` at this "
                        "activation); `tasks red` will need `--base [<scope>=]<commit>`")
-    scopes, why, exclude = _capture(Path(project_path))
+    with _no_git_overrides():
+        scopes, why, exclude = _capture(Path(project_path))
     doc: "dict" = {"v": 1, "task": task_num, "recorded_at": _now(), "exclude": sorted(exclude)}
     if scopes is None:
         doc["failed"] = why
@@ -228,32 +229,44 @@ def _is_test_path(rel: str, cfg: dict) -> bool:
     if isinstance(globs, list) and globs:
         return any(fnmatch.fnmatchcase(rel, g) for g in globs if isinstance(g, str))
     parts = rel.split("/")
-    if any(p in DEFAULT_TEST_DIRS for p in parts[:-1]):
+    if any(p in DEFAULT_TEST_DIRS for p in parts):      # a `tests` link itself counts (impl round 2, agy)
         return True
     return any(fnmatch.fnmatchcase(parts[-1], g) for g in DEFAULT_TEST_NAMES)
 
 
-def _extract(repo: Path, treeish: str, dest: Path, exclude: "list[str]") -> None:
-    """`git archive <treeish>` of `repo` into `dest` (the excludes left out). A member that would land outside
-    `dest` is refused — git writes none, but the copy is checked, not trusted."""
-    dest.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryFile() as fh:
-        r = subprocess.run(["git", "-C", str(repo), "archive", "--format=tar", treeish, "--", ".", *exclude],
-                           stdout=fh, stderr=subprocess.PIPE, timeout=600)
-        if r.returncode != 0:
-            raise RuntimeError(f"git archive {treeish[:12]} failed: "
-                               f"{r.stderr.decode('utf-8', 'replace').strip()[:200]}")
-        fh.seek(0)
-        with tarfile.open(fileobj=fh, mode="r:") as tar:
-            root = dest.resolve()
-            for m in tar.getmembers():
-                target = (dest / m.name).resolve()
-                if target != root and root not in target.parents:
-                    raise RuntimeError(f"git archive member outside the copy: {m.name}")
-            if hasattr(tarfile, "fully_trusted_filter"):   # each member was checked above; git's links are kept
-                tar.extractall(dest, filter="fully_trusted")
-            else:
-                tar.extractall(dest)                    # noqa: S202 — each member checked above
+def _real_dir(root: Path, rel: str) -> Path:
+    """`root/rel` as a real directory of the copy: each ancestor and the folder itself, when a link or a file stands
+    there (the outer tree's own entry), is replaced — a scope is never written THROUGH a link (impl round 2, codex
+    Critical, GRAVE)."""
+    cur = root
+    for comp in [c for c in rel.split("/") if c] if rel else []:
+        cur = cur / comp
+        if cur.is_symlink() or (cur.exists() and not cur.is_dir()):
+            cur.unlink()
+        if not cur.exists():
+            cur.mkdir()
+    root.mkdir(parents=True, exist_ok=True)
+    return cur
+
+
+def _extract(repo: Path, treeish: str, root: Path, rel: str, exclude: "list[str]") -> None:
+    """Write `treeish` of `repo` at `root/rel`: `read-tree` into a temporary index, the excludes removed from it,
+    then `checkout-index --prefix` — the tree as git stores it, whatever `.gitattributes` says for `git archive`
+    (`export-ignore`, `export-subst`; impl round 2, opus and codex)."""
+    dest = _real_dir(root, rel)
+    env = {k: v for k, v in os.environ.items() if k not in _GIT_OVERRIDES}
+    with tempfile.TemporaryDirectory(prefix="pb-red-index-") as td:
+        env["GIT_INDEX_FILE"] = str(Path(td) / "index")
+        steps = [["read-tree", treeish]]
+        drop = [spec[len(":(exclude)"):] for spec in exclude if spec.startswith(":(exclude)")]
+        if drop:
+            steps.append(["rm", "--cached", "-r", "-q", "--ignore-unmatch", "--", *drop])
+        steps.append(["checkout-index", "-a", "-f", f"--prefix={dest}/"])
+        for args in steps:
+            r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, encoding="utf-8",
+                               errors="replace", env=env, timeout=600)
+            if r.returncode != 0:
+                raise RuntimeError(f"git {args[0]} {treeish[:12]} failed in {repo}: {r.stderr.strip()[:200]}")
 
 
 def _scope_of(rel: str, scope_names: "list[str]") -> "tuple[str, str]":
@@ -360,7 +373,7 @@ def _commit_of(repo: Path, rev: str) -> "str | None":
 # real repository, a PYTHONPATH could load the current code into the base copy, the host's and the CLI's own
 # variables name the real project and the session.
 _ENV_DROP_PREFIXES = ("GIT_", "CLAUDE", "PLAYBOOK_")
-_ENV_DROP = ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV_PROMPT")
+_ENV_DROP = ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "VIRTUAL_ENV_PROMPT")
 LAUNCH_FAILED = (126, 127)
 _SAID: "set[str]" = set()
 
@@ -384,7 +397,7 @@ def _last_line(data: bytes) -> str:
     return ""
 
 
-_ERROR_LINE = re.compile(r"^(?:[A-Za-z_][\w.]*\.)?[A-Z]\w*(?:Error|Exception|Failure|Exit|Interrupt)\b.*")
+_ERROR_LINE = re.compile(r"^(?:E\s+)?((?:[A-Za-z_][\w.]*\.)?[A-Z]\w*(?:Error|Exception|Failure|Exit|Interrupt)\b.*)")
 
 
 def _first_error(data: bytes) -> str:
@@ -393,8 +406,20 @@ def _first_error(data: bytes) -> str:
     for ln in data.decode("utf-8", "replace").split("\n"):
         m = _ERROR_LINE.match(ln.strip())
         if m:
-            return m.group(0)[:LAST_MAX]
+            return m.group(1)[:LAST_MAX]
     return ""
+
+
+def _abs_exe(name: str) -> "str | None":
+    """`name` found only on the ABSOLUTE entries of PATH, as a real path: a relative entry (`bin:`) would let a file
+    of the copy, or of the project, stand in for the sandbox or the shell (impl round 2, codex Critical, GRAVE)."""
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        if not d or not os.path.isabs(d):
+            continue
+        cand = os.path.join(d, name)
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return os.path.realpath(cand)
+    return None
 
 
 def _containment() -> "tuple[bool, str]":
@@ -405,13 +430,13 @@ def _containment() -> "tuple[bool, str]":
         return False, f"the sandbox module cannot load ({e.__class__.__name__})"
     if _sb.is_sandboxed():
         return False, "already inside a sandbox (no nesting)"
-    if not _sb._bwrap_exe():
-        return False, "bubblewrap is not installed"
+    if not _abs_exe("bwrap"):
+        return False, "bubblewrap is not installed (on an absolute PATH entry)"
     return True, ""
 
 
 def _argv(bash: str, cmd: str, root: Path, home: Path, contained: bool, private_tmp: bool = False,
-          ro_links: "list[tuple[str, str]] | None" = None) -> "list[str]":
+          ro_links: "list[tuple[str, str]] | None" = None, protect: "list[str] | None" = None) -> "list[str]":
     """The row's argv. Contained: the judges' bubblewrap launch, plus `--die-with-parent` (a killed run takes its row
     with it, impl round 1 opus), a private `/tmp` when the run's folder is not under it (a live project under `/tmp`
     must not be writable from a row — impl round 1, agy and codex, GRAVE), and each `red_links` folder bound read-only
@@ -419,14 +444,23 @@ def _argv(bash: str, cmd: str, root: Path, home: Path, contained: bool, private_
     if not contained:
         return [bash, "-c", cmd]
     argv = _launcher_argv(bash, cmd, root, home)
+    exe = _abs_exe("bwrap")
+    if not exe or os.path.basename(argv[0]) != "bwrap":
+        raise RuntimeError("the sandbox's argv does not start with bwrap, or no absolute bwrap was found")
+    argv[0] = exe                                       # never a PATH lookup from the copy (impl round 2, GRAVE)
     argv.insert(1, "--die-with-parent")
-    if private_tmp:
-        for i in range(len(argv) - 2):
-            if argv[i:i + 3] == ["--bind", "/tmp", "/tmp"]:
+    for i in range(len(argv) - 2):
+        if argv[i:i + 3] == ["--bind", "/tmp", "/tmp"]:
+            if private_tmp:
                 argv[i + 3:i + 3] = ["--tmpfs", "/tmp"]
-                break
-        else:
-            raise RuntimeError("the sandbox's argv has no `--bind /tmp /tmp` to make private")
+            else:                                       # /tmp stays shared: each live repository read-only over it
+                ro = []
+                for live in protect or []:
+                    ro += ["--ro-bind", live, live]
+                argv[i + 3:i + 3] = ro
+            break
+    else:
+        raise RuntimeError("the sandbox's argv has no `--bind /tmp /tmp` to make private")
     tail = len(argv) - 3                                # the target: bash -c <cmd>
     extra = []
     for real, inside in ro_links or []:
@@ -457,17 +491,20 @@ def _launcher_argv(bash: str, cmd: str, root: Path, home: Path) -> "list[str]":
 
 
 def _run_row(cmd: str, root: Path, home: Path, ceiling: Path, timeout: float, contained: bool,
-             private_tmp: bool = False, ro_links: "list[tuple[str, str]] | None" = None) -> "dict":
+             private_tmp: bool = False, ro_links: "list[tuple[str, str]] | None" = None,
+             protect: "list[str] | None" = None) -> "dict":
     """One command in one copy: {status, exit, seconds, last, error}. Its own process group: a timeout or an
     interrupt kills the group; a child that left the group and holds the output open cannot hang the run."""
     from tasks.bash_resolver import resolve_bash
     bash, _how = resolve_bash()
+    if bash and not os.path.isabs(bash):
+        bash = _abs_exe(os.path.basename(bash))         # never a relative shell (impl round 2, GRAVE)
     if not bash:
         return {"status": "launch failed", "exit": None, "seconds": 0.0, "last": "no bash found to run the command",
                 "error": ""}
     env = _row_env(dict(os.environ), home, ceiling, caged=contained or os.environ.get("PLAYBOOK_SANDBOXED") == "1")
     t0 = time.monotonic()
-    p = subprocess.Popen(_argv(bash, cmd, root, home, contained, private_tmp, ro_links), cwd=str(root), env=env,
+    p = subprocess.Popen(_argv(bash, cmd, root, home, contained, private_tmp, ro_links, protect), cwd=str(root), env=env,
                          stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                          start_new_session=True)
     try:
@@ -494,6 +531,10 @@ def _run_row(cmd: str, root: Path, home: Path, ceiling: Path, timeout: float, co
         p.wait()
         raise
     code = p.returncode
+    try:
+        os.killpg(p.pid, signal.SIGKILL)                # a child the row left behind goes with it (impl round 2)
+    except OSError:
+        pass
     status = "green" if code == 0 else ("launch failed" if code in LAUNCH_FAILED else "red")
     return {"status": status, "exit": code, "seconds": round(time.monotonic() - t0, 2),
             "last": _last_line(out or b""), "error": _first_error(out or b"")}
@@ -638,13 +679,13 @@ _GUARD = None
 
 def _guard(cmd: str, cfg: dict) -> "tuple[bool, str]":
     """The destructive-command interlock the agent's own shell meets, for a row's command (impl round 1, sonnet):
-    the config's `command_guard: false` and `dangerous_commands`, the operator's PLAYBOOK_ALLOW_DANGEROUS. A guard
-    that cannot load or judge refuses (fails closed)."""
+    the config's `command_guard: false` and `dangerous_commands`. A guard that cannot load or judge refuses (fails
+    closed)."""
     global _GUARD
     if cfg.get("command_guard") is False:
         return True, ""
-    if os.environ.get("PLAYBOOK_ALLOW_DANGEROUS", "").strip().lower() in ("1", "true", "yes", "on"):
-        return True, ""
+    # NOT `PLAYBOOK_ALLOW_DANGEROUS`: in this process it is the agent's environment, and the guard's own hook refuses
+    # a permission an agent can give itself (impl round 2, opus — a guard failing open)
     try:
         if _GUARD is None:
             import importlib.util
@@ -688,35 +729,83 @@ def _links(project: Path, cfg: dict) -> "tuple[list[tuple[str, str]], list[str]]
     return out, notes
 
 
-def _prepare_links(copy: Path, links: "list[tuple[str, str]]", contained: bool, notes: "list[str]") -> None:
-    """Contained: an empty folder where each link is bound read-only. Uncontained: a link to the real folder."""
+def _prepare_links(copy: Path, links: "list[tuple[str, str]]", contained: bool, notes: "list[str]",
+                   side: str) -> "set[str]":
+    """Contained: an empty folder where each link is bound read-only. Uncontained: a link to the real folder.
+    Returns the links this copy got — each copy decides alone (impl round 2, codex)."""
+    ready: "set[str]" = set()
     for real, rel in links:
         at = copy / rel
         if at.exists() or at.is_symlink():
-            notes.append(f"red_links {rel}: the copy already has it — the copy's own is used")
+            notes.append(f"red_links {rel}: the {side} copy already has it — its own is used")
             continue
-        at.parent.mkdir(parents=True, exist_ok=True)
+        _real_dir(copy, str(Path(rel).parent) if str(Path(rel).parent) != "." else "")
         if contained:
             at.mkdir()
         else:
             os.symlink(real, at)
+        ready.add(rel)
+    return ready
 
 
 def _side_run(command: str, pristine: Path, work: Path, home: Path, ceiling: Path, timeout: float, contained: bool,
-              private_tmp: bool, links: "list[tuple[str, str]]", ready: "set[str]") -> "dict":
+              private_tmp: bool, links: "list[tuple[str, str]]", ready: "set[str]",
+              protect: "list[str] | None" = None) -> "dict":
     """One side of one row in a fresh copy of `pristine` and a fresh HOME (impl round 1, codex: a side's writes must
     not reach the other side, nor the next row)."""
     shutil.copytree(pristine, work, symlinks=True)
     home.mkdir(parents=True)
     try:
         ro = [(real, str(work / rel)) for real, rel in links if rel in ready] if contained else None
-        return _run_row(command, work, home, ceiling, timeout, contained, private_tmp, ro)
+        return _run_row(command, work, home, ceiling, timeout, contained, private_tmp, ro, protect)
     finally:
         shutil.rmtree(work, ignore_errors=True)
         shutil.rmtree(home, ignore_errors=True)
 
 
+@contextlib.contextmanager
+def _no_git_overrides():
+    """The CLI's own git — here and in what it calls (`post_d6.worktree_tree_why`) — in the repository it names,
+    whatever GIT_DIR / GIT_WORK_TREE the caller exported (impl round 2, agy and opus)."""
+    saved = {k: os.environ.pop(k) for k in _GIT_OVERRIDES if k in os.environ}
+    try:
+        yield
+    finally:
+        os.environ.update(saved)
+
+
+def _norm_scope(name: str) -> str:
+    """A scope's name as the copy's paths spell it: `./code/` is `code` (impl round 2, codex)."""
+    n = name.replace("\\", "/").strip()
+    while n.startswith("./"):
+        n = n[2:]
+    return n.strip("/")
+
+
+def _scopes(project: Path, cfg: dict) -> "dict[str, Path]":
+    from tasks.core import _tail_cert_scopes
+    return {_norm_scope(n): p for n, p in _tail_cert_scopes(project, cfg).items()}
+
+
+def _combine(verdicts: "list[str]") -> str:
+    """A row's verdict from its tests' (impl round 2, opus): proved only when each is proved."""
+    if verdicts and all(v == "proved" for v in verdicts):
+        return "proved"
+    if verdicts and all(v == "already true" for v in verdicts):
+        return "already true"
+    for s in ("refused", "unrunnable", "launch failed", "timeout", "broken", "regressed"):
+        if s in verdicts:
+            return s
+    return "partly proved"
+
+
 def cmd_red(cmd_args: "list[str]") -> None:
+    """`tasks red [<N>] [--base [<scope>=]<commit>]…` — see the module docstring."""
+    with _no_git_overrides():
+        _cmd_red(cmd_args)
+
+
+def _cmd_red(cmd_args: "list[str]") -> None:
     """`tasks red [<N>] [--base [<scope>=]<commit>]…` — see the module docstring."""
     from tasks.core import _fingerprint_exclude_pathspecs, _find_active_task, _tail_cert_scopes, load_config
     from tasks.core import read_task_text, resolve_agent_dir
@@ -746,7 +835,7 @@ def cmd_red(cmd_args: "list[str]") -> None:
         cfg = load_config(project)
     except Exception:                                   # noqa: BLE001
         cfg = {}
-    scopes = _tail_cert_scopes(project, cfg)
+    scopes = _scopes(project, cfg)
     exclude = _fingerprint_exclude_pathspecs(cfg)
     base = _load_base(d)
     if (base is None or "failed" in base) and not flags:
@@ -768,6 +857,8 @@ def cmd_red(cmd_args: "list[str]") -> None:
     contained, why_not = _containment()
     contained_line = ("Each row ran under the judges' write containment (root read-only)." if contained else
                       f"Uncontained ({why_not}): each row ran as `tasks verify` runs the project's command.")
+    if contained and _run_parent() is None:
+        contained_line += " /tmp shared (no usable /var/tmp): each live repository was bound read-only."
     run = hashlib.sha256(f"{os.getpid()} {time.time_ns()}".encode()).hexdigest()[:12]
     at = _now()
     base_line = ", ".join(
@@ -789,22 +880,24 @@ def cmd_red(cmd_args: "list[str]") -> None:
             pass
     try:
         bprist, nprist = tmp / "pristine-base", tmp / "pristine-now"
-        for name, repo in scopes.items():
-            e = plan[name]
-            _extract(repo, e["tree"] if e["used"] == "tree" else e["commit"], bprist / name if name else bprist,
-                     exclude)
-            _extract(repo, now_tree[name], nprist / name if name else nprist, exclude)
+        order = sorted(scopes, key=lambda n: (n.count("/") + (1 if n else 0), n))   # the project first, then inward
+        for name in order:
+            repo, e = scopes[name], plan[name]
+            _extract(repo, e["tree"] if e["used"] == "tree" else e["commit"], bprist, name, exclude)
+            _extract(repo, now_tree[name], nprist, name, exclude)
         laid = _overlay_from_copy(nprist, bprist, cfg, list(scopes), exclude)
         tests_sha = _digest_copy(nprist, cfg, list(scopes), exclude)
-        ready: "set[str]" = set()
-        for copy in (bprist, nprist):
-            before = len(link_notes)
-            _prepare_links(copy, links, contained, link_notes)
-            if len(link_notes) == before:
-                ready |= {rel for _real, rel in links}
+        ready = {"base": _prepare_links(bprist, links, contained, link_notes, "base"),
+                 "now": _prepare_links(nprist, links, contained, link_notes, "now")}
+        protect: "list[str]" = []
+        if contained and not private_tmp:              # /tmp shared: each live repository read-only over it
+            for repo in scopes.values():
+                live = str(Path(repo).resolve())
+                if not str(tmp.resolve()).startswith(live + "/"):
+                    protect.append(live)
         print(f"tasks red — task {d.name}, run {run}; base copy: {bprist}", flush=True)
         print(f"  on the base: {base_line}; {laid} test file(s) from the working state laid over it; "
-              + ("contained" + ("" if private_tmp else " (the run's folder is under /tmp: /tmp stays shared)")
+              + ("contained" + ("" if private_tmp else " (/tmp shared: each live repository bound read-only)")
                  if contained else f"UNCONTAINED ({why_not})"), flush=True)
         for note in link_notes:
             print("  note: " + note, flush=True)
@@ -814,20 +907,31 @@ def cmd_red(cmd_args: "list[str]") -> None:
                    "row_sha": hashlib.sha256(row["line"].encode("utf-8")).hexdigest()[:16], "test": row["test"],
                    "base": plan, "now_tree": now_tree, "tests_sha": tests_sha, "contained": contained,
                    "private_tmp": private_tmp}
-            command = (" && ".join(f"( {c} )" for c in cmds) if len(cmds) > 1 else cmds[0]) if cmds else ""
-            ok, guard_why = _guard(command, cfg) if cmds else (True, "")
-            if not cmds or not ok:
-                status = "unrunnable" if not cmds else "refused"
-                why = why if not cmds else guard_why
-                empty = {"status": status, "exit": None, "seconds": 0.0, "last": "", "error": ""}
-                rec.update(dict(empty, why=why, command=command, now=dict(empty), verdict=status))
+            empty = {"exit": None, "seconds": 0.0, "last": "", "error": ""}
+            if not cmds:
+                rec.update(dict(empty, status="unrunnable", why=why, command="", tests=[],
+                                now=dict(empty, status="unrunnable"), verdict="unrunnable"))
             else:
-                b = _side_run(command, bprist, tmp / "rows" / f"{k}-base", tmp / "homes" / f"{k}-base", tmp,
-                              timeout, contained, private_tmp, links, ready)
-                n = _side_run(command, nprist, tmp / "rows" / f"{k}-now", tmp / "homes" / f"{k}-now", tmp,
-                              timeout, contained, private_tmp, links, ready)
-                rec.update(b)
-                rec.update({"command": command, "now": n, "verdict": verdict(b["status"], n["status"])})
+                tests = []
+                for j_, c in enumerate(cmds, 1):           # each test on its own, on each side (impl round 2, opus)
+                    ok, guard_why = _guard(c, cfg)
+                    if not ok:
+                        t = {"command": c, "base": dict(empty, status="refused"), "now": dict(empty, status="refused"),
+                             "verdict": "refused", "why": guard_why}
+                    else:
+                        b = _side_run(c, bprist, tmp / "rows" / f"{k}-{j_}-base", tmp / "homes" / f"{k}-{j_}-base",
+                                      tmp, timeout, contained, private_tmp, links, ready["base"], protect)
+                        n = _side_run(c, nprist, tmp / "rows" / f"{k}-{j_}-now", tmp / "homes" / f"{k}-{j_}-now",
+                                      tmp, timeout, contained, private_tmp, links, ready["now"], protect)
+                        t = {"command": c, "base": b, "now": n, "verdict": verdict(b["status"], n["status"])}
+                    tests.append(t)
+                first = tests[0]
+                rec.update(first["base"])
+                rec.update({"command": " ; ".join(t["command"] for t in tests), "now": first["now"],
+                            "tests": tests, "verdict": _combine([t["verdict"] for t in tests])})
+                why_all = "; ".join(t["why"] for t in tests if t.get("why"))
+                if why_all:
+                    rec["why"] = why_all
             _append(task_file, rec)
             results.append(rec)
             print(f"  row {rec['row']} ({rec['kind']}): {rec['verdict']} — base {rec['status']}, now "

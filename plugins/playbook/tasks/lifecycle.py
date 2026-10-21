@@ -1866,9 +1866,19 @@ def cmd_work(cmd_args):
             from tasks.red import record_base
             _wrote, _base_note = record_base(Path(project_path), task_file.parent, task_num, _first_activation)
         except Exception as _base_err:              # noqa: BLE001 — the activation goes on
+            _wrote = False
             _base_note = f"note: no base recorded for this task ({_base_err.__class__.__name__}: {_base_err})"
-        _activate_status_then_publish(task_file, task_num, _resume_target, _reopen_target,
-                                      _pointer_tmp, session_state)
+        try:
+            _activate_status_then_publish(task_file, task_num, _resume_target, _reopen_target,
+                                          _pointer_tmp, session_state)
+        except SystemExit:
+            # a refused activation keeps no base it wrote (impl round 2, sonnet): the task did not start here
+            if _wrote:
+                try:
+                    (task_file.parent / "base.json").unlink()
+                except OSError:
+                    pass
+            raise
         _record_transition(agent_dir, "work", task_num)
     finally:
         try:

@@ -772,6 +772,213 @@ class RoundOne(Project):
         self.assertEqual(r.stdout.strip(), self.head(self.code))
 
 
+def _in_process(project: Path, env: dict, fn, *args):
+    """Run a CLI function in this process, in `project`, with `env` (for a spy or a patched helper)."""
+    from unittest import mock
+    with mock.patch.dict(os.environ, env, clear=True):
+        cwd = os.getcwd()
+        os.chdir(project)
+        try:
+            return fn(*args)
+        except SystemExit as e:
+            return e.code
+        finally:
+            os.chdir(cwd)
+
+
+class RoundTwo(Project):
+    """Impl round 2's findings (task 280), each red before its fix."""
+
+    def test_a_linked_scope_path_is_never_unpacked_through(self):
+        # row 43 (GRAVE, codex Critical): the outer base tracks `code` as a LINK to a real repository; unpacking the
+        # code scope into the copy must not write through it
+        real = Path(tempfile.mkdtemp(prefix="pb280-realrepo-"))
+        self.addCleanup(shutil.rmtree, real, True)
+        (real / "precious.txt").write_text("keep\n", encoding="utf-8")
+        (self.d / ".gitignore").write_text("home/\n.agent/journal/\n.agent/sessions/\n", encoding="utf-8")
+        shutil.move(str(self.code), str(self.d / "code-real"))
+        os.symlink(str(real), self.d / "code")
+        self.g("add", "-A")
+        self.g("commit", "-qm", "code is a link in the outer tree")
+        os.unlink(self.d / "code")
+        shutil.move(str(self.d / "code-real"), str(self.code))       # the task's work: a real clone at `code`
+        (self.d / ".gitignore").write_text("home/\ncode/\n.agent/journal/\n.agent/sessions/\n", encoding="utf-8")
+        self.g("add", "-A")
+        self.g("commit", "-qm", "code is a real repository again")
+        self.new_task(activate=False)
+        b = {"v": 1, "task": "001", "recorded_at": "2026-10-21T00:00:00+00:00", "exclude": [":(exclude).agent"],
+             "scopes": {"": {"commit": self.g("rev-parse", "HEAD~1").stdout.strip(), "tree": None, "clean": True},
+                        "code": {"commit": self.head(self.code), "tree": None, "clean": True}}}
+        self.cli("work", "1")
+        (self.task_dir / "base.json").write_text(json.dumps(b), encoding="utf-8")
+        self.set_contract([("1", "normal", "one", "`exit 1`")])
+        self.cli("red")
+        self.assertEqual(sorted(p.name for p in real.iterdir()), ["precious.txt"])
+
+    def test_bwrap_is_named_by_its_absolute_path(self):
+        # row 44 (GRAVE, codex Critical): a relative PATH entry and a tracked `bin/bwrap` cannot replace the sandbox
+        if not shutil.which("bwrap"):
+            self.skipTest("bubblewrap is not installed")
+        from provider import sandbox
+        if sandbox.is_sandboxed():
+            self.skipTest("already inside a sandbox: a nested one cannot start")
+        (self.d / "bin").mkdir()
+        fake = self.d / "bin" / "bwrap"
+        fake.write_text("#!/bin/sh\ntouch \"$PWD/FAKE_BWRAP_RAN\"\nexit 0\n", encoding="utf-8")
+        fake.chmod(0o755)
+        self.g("add", "-A")
+        self.g("commit", "-qm", "a tracked bin/bwrap")
+        self.new_task()
+        self.set_contract([("1", "hostile", "whoever runs", "`exit 4`")])
+        env = dict(self.env(), PATH="bin:" + os.environ.get("PATH", "/usr/bin:/bin"))
+        subprocess.run([sys.executable, "-m", "tasks.cli", "red"], cwd=self.d, env=env, capture_output=True,
+                       text=True, timeout=300)
+        line = self.receipt_lines()[0]
+        self.assertEqual((line["status"], line["exit"]), ("red", 4), line)     # the fake would have exited 0
+
+    def test_the_operator_variable_does_not_open_the_guard(self):
+        # row 45 (GRAVE, opus): PLAYBOOK_ALLOW_DANGEROUS in the CLI's own environment is the agent's, not the owner's
+        self.new_task()
+        marker = self.d / "ran.txt"
+        push = "git push " + "--force origin main"          # split: this file is written by tools the guard reads
+        self.set_contract([("1", "hostile", "a force push", f"`touch {marker} && {push}`")])
+        env = dict(self.env(), PLAYBOOK_ALLOW_DANGEROUS="1")
+        subprocess.run([sys.executable, "-m", "tasks.cli", "red"], cwd=self.d, env=env, capture_output=True,
+                       text=True, timeout=300)
+        self.assertEqual(self.receipt_lines()[0]["status"], "refused")
+        self.assertFalse(marker.exists())
+
+    def test_export_ignore_does_not_empty_the_copy(self):
+        # row 46 (opus + codex): the copy is the tree, whatever `.gitattributes` says for `git archive`
+        (self.code / ".gitattributes").write_text("/tests export-ignore\n", encoding="utf-8")
+        self.g("add", "-A", cwd=self.code)
+        self.g("commit", "-qm", "export-ignore the tests", cwd=self.code)
+        self.new_task()
+        self.set_contract([("1", "must-not", "the old test is in the copy", "`test -f code/tests/test_old.py`")])
+        self.cli("red")
+        line = self.receipt_lines()[0]
+        self.assertEqual((line["status"], line["now"]["status"]), ("green", "green"), line)
+
+    def test_each_test_of_a_row_runs_on_its_own(self):
+        # row 47 (opus): a row naming two tests is proved only when each is red on the base and green now
+        self.new_task()
+        self.change_code()
+        self.set_contract([("1", "normal", "two tests", "`tests.test_new`, `tests.test_old`")])
+        self.cli("red")
+        line = self.receipt_lines()[0]
+        self.assertEqual(line["verdict"], "partly proved")                 # never "proved" (mutant P5)
+        self.assertEqual([c["verdict"] for c in line["tests"]], ["proved", "already true"])
+
+    def test_a_live_project_under_tmp_is_kept_when_tmp_cannot_be_private(self):
+        # row 48 (agy + opus): no usable /var/tmp — each live scope root is bound read-only, and the section says so
+        if not shutil.which("bwrap"):
+            self.skipTest("bubblewrap is not installed")
+        from provider import sandbox
+        if sandbox.is_sandboxed():
+            self.skipTest("already inside a sandbox: a nested one cannot start")
+        from unittest import mock
+        from tasks import red
+        self.new_task()
+        target = self.code / "src.py"
+        before = target.read_text(encoding="utf-8")
+        self.set_contract([("1", "hostile", "a write to the live project", f"`echo gone > {target}; exit 3`")])
+        with mock.patch.object(red, "_run_parent", lambda: None):
+            _in_process(self.d, self.env(), red.cmd_red, [])
+        self.assertEqual(target.read_text(encoding="utf-8"), before)
+        self.assertIn("/tmp shared", self.section())
+
+    def test_links_are_ready_per_copy(self):
+        # row 49 (codex): the base has the folder itself; the now copy needs the link — each copy decides alone
+        (self.code / "deps").mkdir()
+        (self.code / "deps" / "dep.py").write_text("VALUE = 1\n", encoding="utf-8")
+        self.g("add", "-A", cwd=self.code)
+        self.g("commit", "-qm", "deps tracked", cwd=self.code)
+        self.new_task()
+        self.g("rm", "-rq", "--cached", "deps", cwd=self.code)
+        (self.code / ".gitignore").write_text("deps/\n", encoding="utf-8")
+        (self.code / "deps" / "dep.py").write_text("VALUE = 2\n", encoding="utf-8")
+        self.config(red_links=["code/deps"])
+        self.set_contract([("1", "normal", "the value", "`grep -q 'VALUE = 2' code/deps/dep.py`")])
+        self.cli("red")
+        line = self.receipt_lines()[0]
+        self.assertEqual((line["status"], line["now"]["status"]), ("red", "green"), line)
+
+    def test_a_scope_spelled_with_dots_and_slashes_is_the_same_scope(self):
+        # row 50 (codex): `./code/` names the scope `code`
+        # a NEW test of behavior the base already has: laid over the base it is green there too ("already true");
+        # missed by the overlay it is red on the base for the wrong reason (a false "proved")
+        self.config(code_roots=["./code/"], red_tests=["tests/*"])
+        self.new_task()
+        (self.code / "tests" / "test_exist.py").write_text(
+            "import unittest\nimport src\n\n\nclass E(unittest.TestCase):\n"
+            "    def test_exists(self):\n        self.assertTrue(callable(src.f))\n", encoding="utf-8")
+        self.set_contract([("1", "must-not", "f exists", "`tests.test_exist`")])
+        self.cli("red")
+        self.assertEqual(self.receipt_lines()[0]["verdict"], "already true")
+
+    def test_test_support_files_are_laid(self):
+        # row 51 (opus + sonnet): conftest.py, fixtures/, testdata/, __snapshots__/ are tests' own files
+        from tasks import red
+        for rel in ("conftest.py", "pkg/conftest.py", "fixtures/a.json", "testdata/b.txt", "x/__snapshots__/c.snap"):
+            self.assertTrue(red._is_test_path(rel, {}), rel)
+        self.assertFalse(red._is_test_path("src/main.py", {}))
+
+    def test_a_link_named_tests_is_laid(self):
+        # row 52 (agy): a `tests` link of the working state reaches the base copy
+        from tasks import red
+        self.assertTrue(red._is_test_path("tests", {}))
+        self.assertTrue(red._is_test_path("code/spec", {}))
+
+    def test_virtual_env_is_dropped(self):
+        # row 53 (agy): a row runs on the copy, not the caller's virtualenv
+        from tasks import red
+        env = red._row_env({"VIRTUAL_ENV": "/v", "PATH": "/usr/bin"}, Path("/tmp/h"), Path("/tmp/c"))
+        self.assertNotIn("VIRTUAL_ENV", env)
+
+    def test_a_refused_activation_leaves_no_base(self):
+        # row 54 (sonnet): the base is for an activation that happened
+        from unittest import mock
+        from tasks import lifecycle
+        self.new_task(activate=False)
+
+        def refuse(*_a, **_k):
+            raise SystemExit(1)
+        with mock.patch.object(lifecycle, "_activate_status_then_publish", refuse):
+            _in_process(self.d, self.env(), lifecycle.cmd_work, ["1"])
+        self.assertFalse((self.task_dir / "base.json").exists())
+
+    def test_a_background_child_does_not_outlive_its_row(self):
+        # row 55 (sonnet): a child left running after a row ended normally is stopped with the row's group
+        tag = f"pb280bg{os.getpid()}x{time.time_ns()}"
+        self.addCleanup(subprocess.run, ["pkill", "-f", tag], capture_output=True)
+        self.new_task()
+        self.set_contract([("1", "normal", "a background child",
+                            f"`bash -c 'exec -a {tag} sleep 30' >/dev/null 2>&1 & exit 0`")])
+        self.cli("red")
+        time.sleep(0.5)
+        left = subprocess.run(["pgrep", "-f", tag], capture_output=True, text=True).stdout.strip()
+        self.assertEqual(left, "")
+
+    def test_a_caller_git_dir_does_not_pick_the_trees(self):
+        # row 57 (agy + opus, mutant P15): GIT_DIR/GIT_WORK_TREE of the caller name the OUTER repository — the code
+        # scope's trees are still the code repository's
+        self.new_task()
+        self.change_code()
+        self.set_contract([("1", "normal", "the new code", "`grep -q 'return 2' code/src.py`")])
+        env = dict(self.env(), GIT_DIR=str(self.d / ".git"), GIT_WORK_TREE=str(self.d))
+        r = subprocess.run([sys.executable, "-m", "tasks.cli", "red"], cwd=self.d, env=env, capture_output=True,
+                           text=True, timeout=300)
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        line = self.receipt_lines()[0]
+        self.assertEqual((line["status"], line["now"]["status"]), ("red", "green"), line)
+
+    def test_a_pytest_error_line_is_found(self):
+        # row 56 (agy): pytest prints the exception as `E   AssertionError: …`
+        from tasks import red
+        self.assertEqual(red._first_error(b"____ test ____\nE   AssertionError: 1 != 2\nFAILED x\n"),
+                         "AssertionError: 1 != 2")
+
+
 class TheText(unittest.TestCase):
     def test_the_template_and_guide_name_tasks_red(self):
         # row 20
