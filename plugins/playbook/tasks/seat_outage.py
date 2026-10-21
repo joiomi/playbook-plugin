@@ -53,7 +53,7 @@ _AGY_IN = re.compile(r"resets in (?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?", re.I)
 # claude prints its account limit as ONE plain line on stdout and exits 1 (both
 # claude seats of task 156's panel, 2026-10-08: "You've hit your weekly limit ·
 # resets Oct 13, 6pm (Europe/Bucharest)").
-_CLAUDE_OUT = re.compile(r"^you(?:'|’)ve hit your ([a-z0-9][a-z0-9 -]*?) limit\s*·\s*resets (.+?)\s*$", re.I)
+from provider.usage import CLAUDE_LIMIT_LINE as _CLAUDE_OUT  # noqa: E402 — one pattern, kept in the provider layer (task 269)
 _CLAUDE_AT = re.compile(r"^(?:([A-Za-z]{3,9}) (\d{1,2}), )?(\d{1,2})(?::(\d{2}))?\s*(am|pm)"
                         r"(?: \(([A-Za-z0-9_+-]+(?:/[A-Za-z0-9_+-]+)*)\))?$", re.I)
 _MONTHS = {m: i for i, m in enumerate(

@@ -244,6 +244,13 @@ def _claude_usage(obj: dict) -> Optional[dict]:
     return _claude_counts(obj.get("usage"), _CLAUDE_USAGE_KEYS)
 
 
+# claude's account limit, byte for byte as both claude seats of a panel returned it on 2026-10-08 (task 156): "You've hit
+# your weekly limit · resets Oct 13, 6pm (Europe/Bucharest)". Here, not in `tasks/`: the provider layer never imports
+# `tasks` (the Codex hook scripts run its mirror with only `scripts/lib` on the path — task 269's impl round 1, agy);
+# `tasks.seat_outage` takes it from here.
+CLAUDE_LIMIT_LINE = re.compile(r"^you(?:'|’)ve hit your ([a-z0-9][a-z0-9 -]*?) limit\s*·\s*resets (.+?)\s*$", re.I)
+
+
 def extract_claude(raw: str) -> "Optional[tuple[str, Optional[dict], list[str]]]":
     """claude ``-p --output-format json`` stdout → ``(review_text, usage, error_messages)``; None when the stdout is
     not one claude result object. A failure (``is_error``, or a ``subtype`` other than ``success``) yields its own
@@ -265,10 +272,14 @@ def extract_claude(raw: str) -> "Optional[tuple[str, Optional[dict], list[str]]]
         if not said:
             said = [f"claude reported an error: {json.dumps(obj, ensure_ascii=False)[:1500]}"]
         return "", usage, said
-    term = obj.get("terminal_reason")
-    if isinstance(term, str) and term and term != "completed":
+    term, stop = obj.get("terminal_reason"), obj.get("stop_reason")
+    # a cut-off: the turn did not complete, or the model ran out of output tokens — the Messages API's `max_tokens`
+    # stop, which an envelope may carry beside `terminal_reason: completed` or none (task 269's impl round 1, agy).
+    # Any other `terminal_reason` fails the seat too, on purpose: an unknown ending is not a whole review, and the
+    # seat's text says which it was
+    if (isinstance(term, str) and term and term != "completed") or stop == "max_tokens":
         return "", usage, [f"claude stopped before its answer was complete (terminal_reason: {term}; stop_reason: "
-                           f"{obj.get('stop_reason')})"]
+                           f"{stop}) — playbook's words"]
     return result, usage, []
 
 
@@ -286,16 +297,16 @@ def claude_judge_output(result, format_judge_output) -> JudgeOutput:
     text, usage, errors = got
     if errors:
         rc = result.returncode
-        if len(errors) > 1:
-            # claude's own error list (never the review): its account-limit line alone, as the outage rule reads a
-            # claude limit only when it is the whole stdout tail (task 269, PLAN.md "From task 232")
-            try:
-                from tasks.seat_outage import _CLAUDE_OUT as _limit
-            except Exception:                   # noqa: BLE001 — without the rule, the list as it is
-                _limit = None
-            hit = [e for e in errors if _limit is not None and _limit.match(e.strip())]
-            if hit:
-                errors = hit[:1]
+        # claude's own words on a failure (never the review): its account-limit line alone, as the outage rule reads a
+        # claude limit only when it is the whole stdout tail (task 269, PLAN.md "From task 232") — sought in every
+        # line of every `errors` entry and of the object's `result` beside them (its impl round 1: agy, opus, sonnet)
+        obj = _json_object(raw)
+        said = obj.get("result") if isinstance(obj, dict) else None
+        lines = [ln.strip() for e in errors for ln in str(e).splitlines()]
+        lines += [ln.strip() for ln in said.splitlines()] if isinstance(said, str) else []
+        hit = [ln for ln in lines if CLAUDE_LIMIT_LINE.match(ln)]
+        if hit:
+            errors = hit[:1]
         shaped = subprocess.CompletedProcess(args=getattr(result, "args", ["claude"]), returncode=rc or 1,
                                              stdout="\n".join(errors), stderr=result.stderr or "")
         out = format_judge_output(shaped)

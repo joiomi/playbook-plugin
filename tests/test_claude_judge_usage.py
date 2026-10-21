@@ -191,6 +191,62 @@ class ClaudeJudgeOutput(unittest.TestCase):
         self.assertIn("max_tokens", out)
         self.assertEqual(out.usage, SUCCESS, "tokens were spent")
 
+    def test_a_max_tokens_stop_is_a_failed_seat_whatever_terminal_reason_says(self):
+        """Task 269's impl round 1 (agy Important): the Messages API says a cut-off by `stop_reason: max_tokens`, which
+        an envelope can carry with `terminal_reason: completed` or none at all."""
+        for term in ("completed", None):
+            with self.subTest(terminal_reason=term):
+                obj = json.loads(_fx("success.stdout"))
+                obj.update({"stop_reason": "max_tokens", "result": "1. **Important** — a cut"})
+                if term is None:
+                    obj.pop("terminal_reason")
+                else:
+                    obj["terminal_reason"] = term
+                out = claude_judge_output(_cp(json.dumps(obj)), sandbox.format_judge_output)
+                self.assertTrue(judge_failed(out), out)
+                self.assertIn("max_tokens", out)
+
+    def test_the_limit_line_in_result_or_inside_one_entry_is_found(self):
+        """Task 269's impl round 1 (agy, opus, sonnet Minor): the limit beside a generic error in `result`, or inside one
+        `errors` entry after a newline, reached the outage rule as part of a several-line tail."""
+        for case in ({"errors": ["API Error: 429"], "result": LIMIT_LINE},
+                     {"errors": ["API Error: 429\n" + LIMIT_LINE]}):
+            with self.subTest(case=case):
+                obj = json.loads(_fx("budget-stop.stdout"))
+                obj.update(case)
+                out = claude_judge_output(_cp(json.dumps(obj), rc=1), sandbox.format_judge_output)
+                got = classify_outage(out, provider="claude")
+                self.assertIsNotNone(got, out)
+
+    def test_a_limit_beside_a_budget_stop_is_the_outage(self):
+        """Task 269's impl round 1 (opus Minor): with both lines, the account limit is what the tail keeps — a recorded
+        outage stops the next panels calling a seat that cannot answer; the budget notice is not recorded."""
+        obj = json.loads(_fx("budget-stop.stdout"))
+        obj.update({"errors": ["Reached maximum budget ($0.00001)", LIMIT_LINE]})
+        out = claude_judge_output(_cp(json.dumps(obj), rc=1), sandbox.format_judge_output)
+        self.assertIsNotNone(classify_outage(out, provider="claude"), out)
+        self.assertIn(LIMIT_LINE, out)
+
+    def test_the_mirror_finds_the_limit_line_without_the_tasks_package(self):
+        """Task 269's impl round 1 (agy Important, sonnet): `provider/` must not import `tasks/` — the Codex hook
+        scripts run the mirror with only `scripts/lib` on the path — and a lazy import there degraded quietly."""
+        lib = _HERE.parent / "plugins" / "playbook" / "scripts" / "lib"
+        obj = json.loads(_fx("budget-stop.stdout"))
+        obj.update({"errors": ["API Error: 429", LIMIT_LINE]})
+        code = ("import json, subprocess, sys\n"
+                "sys.path.insert(0, sys.argv[1])\n"
+                "from provider.usage import claude_judge_output\n"
+                "from provider.sandbox import format_judge_output\n"
+                "assert 'tasks' not in sys.modules\n"
+                "r = subprocess.CompletedProcess(['claude'], 1, stdout=sys.argv[2], stderr='')\n"
+                "print(claude_judge_output(r, format_judge_output))\n")
+        r = subprocess.run([sys.executable, "-I", "-c", code, str(lib), json.dumps(obj)], capture_output=True, text=True,
+                           cwd=str(lib), timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        tail = r.stdout.split("[stdout tail]\n", 1)[1].splitlines()
+        self.assertEqual(tail[0], LIMIT_LINE, r.stdout)
+        self.assertNotIn("API Error: 429", r.stdout.split("[stderr tail]")[0])
+
     def test_a_success_with_no_terminal_reason_reads_as_before(self):
         obj = json.loads(_fx("success.stdout"))
         obj.pop("terminal_reason")

@@ -185,13 +185,13 @@ is the last call only and is never read. `in` is claude's `input_tokens` **as re
 it excludes the cache, whose two counts are `cache_read` (claude's
 `cacheReadInputTokens`) and `cache_write` (`cacheCreationInputTokens`) — not summed into
 `in`, since a sum would be derived. All four zero (nothing ran, as for a model that does
-not exist) is `unknown`. A failure — `is_error`, a `subtype` other than `success`, or (task 269) a `success`
-whose `terminal_reason` is not `completed`, a review cut off — reads exactly as plain mode's did: `(FAILED — exit N)` with claude's own words (the
+not exist) is `unknown`. A failure — `is_error`, or a `subtype` other than `success` — reads exactly as plain
+mode's did: `(FAILED — exit N)` with claude's own words (the
 object's `errors`, else its `result`, else the raw object) as the `[stdout tail]`, so the
-seat-outage rule (a claude account limit is read when its line is the whole stdout tail; with several `errors`, the
-limit line alone is the tail — task 269)
+seat-outage rule (a claude account limit is read when its line is the whole stdout tail; since task 269 that line,
+found in any line of claude's `errors` or of its `result` beside them, is the tail alone)
 and the model-availability anchors see what they saw before; an error on exit 0 says
-`exit 0, claude reported an error`. A claude judge killed at its timeout has printed
+`exit 0, claude reported an error`. New in task 269: a `success` whose `terminal_reason` is not `completed`, or whose `stop_reason` is `max_tokens` (a review cut off — plain mode saved it as a review), is a failed seat; its words are playbook's, naming both fields, and an unseen `terminal_reason` fails it on purpose (not a whole review). The account-limit pattern lives in `provider/usage.py` (`CLAUDE_LIMIT_LINE`), which the provider layer may import and `tasks.seat_outage` takes from there. A claude judge killed at its timeout has printed
 nothing yet (the object comes at the end), as in plain mode. Fixtures: verbatim
 captures of claude 2.1.302, `tests/fixtures/claude-2.1.302/`.
 **Usage comes ONLY from the adapter-carried value** (`JudgeOutput.usage`,
