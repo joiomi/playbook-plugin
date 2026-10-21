@@ -52,8 +52,8 @@ round). Outages with a reset time are unchanged. The record's times are written 
   panels a few seconds apart can drop the later call's reset time, so the seat is tried once more before it (the next
   refusal records it again).
 - A provider's credit error inside a call that hit its timeout is not read (the output starts with playbook's timeout
-  line); such a call that ran at least 60 s and reported tokens counts as the account answering, and its reset time is lost until the
-  next refusal.
+  line); such a call that ran at least 60 s and reported tokens counts as the account answering, and its reset time
+  is lost until the next refusal.
 - When too few seats can answer and a seat tried again is still working at the first wait, the panel lets it finish
   before refusing, and that review is not kept (on a five-seat panel, for example, two outages with a reset time and two
   without at once, one of them back).
