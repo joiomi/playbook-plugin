@@ -1484,15 +1484,6 @@ def cmd_work(cmd_args):
                           "recorded in the receipt; consider re-running "
                           "`tasks panel-review <N> --mode impl` on a healthy git.",
                           flush=True)
-                # Task 281 (PHASE-B 9b part 2): the red receipt's state of each contract row — advisory, after the
-                # close is written; a fault is one line and never changes the close (plan panel: sonnet, a budget).
-                try:
-                    from tasks.red import close_report as _red_report
-                    for _ln in _red_report(Path(project_path), task_file):
-                        print(_ln, flush=True)
-                except (Exception, SystemExit) as _rexc:  # noqa: BLE001 — never changes the close
-                    print(f"red receipt (advisory — this close does not wait for it): not read "
-                          f"({type(_rexc).__name__}: {_rexc})", flush=True)
             # Remove session dirs that reference this task.
             # PLAYBOOK_SESSION_ID is not set when called from Bash tool, so scan all sessions.
             # Intentional partial delete: only sessions pointing at prev_task are removed;
@@ -1523,6 +1514,16 @@ def cmd_work(cmd_args):
                           file=sys.stderr)
             except (Exception, SystemExit) as _nexc:  # noqa: BLE001 — never changes the close
                 print(f"numbers: not written ({type(_nexc).__name__})", file=sys.stderr)
+            # Task 281 (PHASE-B 9b part 2): the red receipt's state of each contract row — advisory, after the close
+            # is done and its numbers written, so a slow git holds none of the close's own lines (impl round 1,
+            # sonnet); a fault is one line and never changes the close.
+            try:
+                from tasks.red import close_report as _red_report
+                for _ln in _red_report(Path(project_path), task_file):
+                    print(_ln, flush=True)
+            except (Exception, SystemExit) as _rexc:  # noqa: BLE001 — never changes the close
+                print(f"red receipt (advisory — this close does not wait for it): not read "
+                      f"({type(_rexc).__name__}: {_rexc})", flush=True)
 
             # P9: surface this task's OPEN parked items at close so they are
             # not swallowed. Advisory (does not block) — resolve each by

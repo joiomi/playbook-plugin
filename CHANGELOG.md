@@ -10,13 +10,15 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 and under any other runner a skip still reads green (the state counts those rows). A green side that skipped some
 test is `partly skipped`: neither proves. `tasks red --rows 3,5-7` runs only those rows; `## Red receipt` is now the
 state across runs — each row's newest record, matched by its kind, behavior and test, so renumbering keeps it.
-- A row not in the first run's contract is `added later`; its proof counts only when its run named `--base` (the
-  code before its fix) — on the task's start it reads `proved on the task's start only`, counted apart.
+- A row not in the first run's contract is `added later`; its proof counts only when its run's base is other code
+  than the first run's in each scope the task changed (the code before its fix) — else `proved on the task's start
+  only`, counted apart. An expected failure counts as a skip; pytest's summary is read from its outcome words only.
 - `tasks red --check` prints each row's state — proved, already true, skipped, not proved, no record, or stale (the
   row's text, its command, or any test file changed since its record) — and the command that refreshes the stale
   rows. It runs and writes nothing, and skips the session GC. A record of an older working state says so.
-- The close of a task with a contract prints the same state — advisory: it never stops the close (whether it should
-  is the owner's call). `tasks numbers` shows the contract line, read live.
+- The close of a task with a contract prints the same state after `Task N done.` — advisory: it never stops the close
+  (whether it should is the owner's call). `tasks numbers` shows the contract line, read live, building no tree.
+- The receipt is opened without waiting and only as a regular file: a FIFO in its place cannot hang a close.
 - The tests digest is read from the working-state tree (path, mode, blob), the same from a run and a check.
 - A contract with a duplicate or empty `#` is refused; a torn receipt line no longer swallows the next record.
 - A first activation that fails keeps the base it wrote once the task's status has left `pending`.

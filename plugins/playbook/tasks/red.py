@@ -39,6 +39,7 @@ import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -570,7 +571,8 @@ def _run_row(cmd: str, root: Path, home: Path, ceiling: Path, timeout: float, co
 # summaries are read — any other runner's skip reads green, and the side records that no reader matched.
 _UT_RAN = re.compile(r"(?m)^Ran (\d+) tests? in [\d.]+s\s*$")
 _UT_END = re.compile(r"(?m)^(OK|FAILED)(?: \(([^)\n]*)\))?\s*$")
-_PY_SUMMARY = re.compile(r"(?m)^=*\s*((?:\d+ [a-z]+)(?:, \d+ [a-z]+)*) in [\d.]+s(?: \([^)\n]*\))?\s*=*\s*$")
+_PY_WORD = r"\d+ (?:passed|failed|skipped|xfailed|xpassed|errors?|warnings?|deselected|rerun)"
+_PY_SUMMARY = re.compile(r"(?m)^=*\s*(" + _PY_WORD + r"(?:, " + _PY_WORD + r")*) in [\d.]+s(?: \([^)\n]*\))?\s*=*\s*$")
 
 
 def _summary(out: bytes) -> "tuple[str, int, int] | None":
@@ -588,23 +590,22 @@ def _summary(out: bytes) -> "tuple[str, int, int] | None":
             k, _, v = part.strip().partition("=")
             if v.strip().isdigit():
                 counts[k.strip()] = int(v)
-        skipped = counts.get("skipped", 0)
-        not_passed = (skipped + counts.get("expected failures", 0) + counts.get("failures", 0)
-                      + counts.get("errors", 0))
+        skipped = counts.get("skipped", 0) + counts.get("expected failures", 0)   # an expected failure FAILED
+        not_passed = skipped + counts.get("failures", 0) + counts.get("errors", 0)    # (impl round 1, codex)
         return "unittest", max(ran - not_passed, 0), skipped     # a class-level skip: Ran 0 with skipped=1
     if py:
         counts = {}
         for part in py[-1].group(1).split(","):
             n, _, word = part.strip().partition(" ")
             counts[word] = counts.get(word, 0) + int(n)
-        return "pytest", counts.get("passed", 0), counts.get("skipped", 0) + counts.get("xfailed", 0)
+        return ("pytest", counts.get("passed", 0) + counts.get("xpassed", 0),     # only pytest's outcome words,
+                counts.get("skipped", 0) + counts.get("xfailed", 0))              # xpassed a pass (sonnet)
     return None
 
 
 def _no_test_passed(out: bytes) -> bool:
     """The output's last summary shows that no test passed (all skipped, expected failures, or none ran)."""
-    s = _summary(out)
-    return s is not None and s[1] <= 0
+    return _side_status(0, out)[0] == "skipped"
 
 
 def _side_status(code: int, out: bytes) -> "tuple[str, str, int]":
@@ -635,30 +636,55 @@ def verdict(base: str, now: str, now_skips: int = 0) -> str:
 
 # ---------------------------------------------------------------------------- the records
 
+RECEIPT_MAX = 64 * 1024 * 1024
+
+
+def _open_receipt(p: Path, write: bool) -> int:
+    """The receipt's descriptor — opened without waiting and without following a link, and only a regular file: a
+    FIFO in its place made the close wait forever (impl round 1, codex). OSError otherwise."""
+    flags = (os.O_RDWR | os.O_APPEND | os.O_CREAT) if write else os.O_RDONLY
+    fd = os.open(p, flags | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0), 0o644)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(f"{p.name} is not a regular file")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
 def _append(task_file: Path, record: dict) -> None:
     from tasks.filelock import task_lock
     p = Path(task_file).parent / RECEIPT_NAME
+    data = json.dumps(record, sort_keys=True, ensure_ascii=False).encode("utf-8") + b"\n"
     with task_lock(task_file):
-        torn = False                                    # a run killed mid-line: the next record starts its own line
         try:
-            with open(p, "rb") as fh:
-                if fh.seek(0, 2):
-                    fh.seek(-1, 2)
-                    torn = fh.read(1) != b"\n"
-        except FileNotFoundError:
-            pass
-        with open(p, "a", encoding="utf-8") as fh:
-            fh.write(("\n" if torn else "") + json.dumps(record, sort_keys=True, ensure_ascii=False) + "\n")
-            fh.flush()
-            os.fsync(fh.fileno())
+            fd = _open_receipt(p, write=True)
+        except OSError as exc:
+            raise RuntimeError(f"{RECEIPT_NAME} cannot be written ({exc})") from None
+        try:
+            size = os.fstat(fd).st_size
+            if size and os.pread(fd, 1, size - 1) != b"\n":
+                data = b"\n" + data                     # a run killed mid-line: this record starts its own line
+            view = memoryview(data)
+            while view:
+                view = view[os.write(fd, view):]
+            os.fsync(fd)
+        finally:
+            os.close(fd)
 
 
-def _side(r: dict) -> str:
-    if r["status"] in ("red", "green", "launch failed") and r.get("exit") is not None:
-        return f"{r['status']} (exit {r['exit']}, {r['seconds']} s)"
-    if r["status"] == "timeout":
-        return f"timeout ({r['seconds']} s)"
-    return r["status"]
+def _side(r) -> str:
+    """One side as the table shows it — each field read defensively (impl round 1, codex: a record without `status`
+    broke the section)."""
+    if not isinstance(r, dict):
+        return "—"
+    st, ex, sec = r.get("status"), r.get("exit"), r.get("seconds")
+    if st in ("red", "green", "launch failed", "skipped") and ex is not None:
+        return f"{st} (exit {ex}, {sec} s)"
+    if st == "timeout":
+        return f"timeout ({sec} s)"
+    return str(st or "—")
 
 
 def _cell(text: str) -> str:
@@ -739,15 +765,19 @@ def _rows_word(labels: "list[str]") -> str:
     return ("rows " if len(labels) > 1 else "row ") + ", ".join(labels)
 
 
-def _write_section(task_file: Path, make) -> None:
-    """Replace `## Red receipt` (or put it right after `## Test contract`) under the task's lock — `make(records)`
-    renders it from the receipt as read under the same lock, so a run that ends meanwhile is in it."""
+def _write_section(task_file: Path, project: Path, cfg: dict, contained: str) -> str:
+    """Replace `## Red receipt` (or put it right after `## Test contract`) under the task's lock — from the contract and
+    the receipt as they are under that lock and today's working state, so a run that ends last cannot write the rows
+    it began with over rows added meanwhile (impl round 1, codex). Returns "" or why nothing was written."""
     from tasks.atomic import atomic_write
     from tasks.core import _physical_lines, _writer_section_span, read_task_text
     from tasks.filelock import task_lock
     with task_lock(task_file):
-        entry = make(*_read_records(Path(task_file).parent / RECEIPT_NAME))
         text = read_task_text(task_file)
+        rows, why = parse_contract(text)
+        if rows is None:
+            return why
+        entry = _section(state_of(project, Path(task_file).parent, rows, cfg), contained)
         lines = _physical_lines(text)
         new = _physical_lines(entry) + [""]
         sp = _writer_section_span(lines, RECEIPT_HEADING)
@@ -760,6 +790,7 @@ def _write_section(task_file: Path, make) -> None:
                 new = [""] + new
             lines[at:at] = new
         atomic_write(task_file, "\n".join(lines))
+    return ""
 
 
 # ---------------------------------------------------------------------------- the state across runs (task 281)
@@ -775,9 +806,22 @@ def _read_records(path: Path) -> "tuple[list[dict], int]":
     `contract` (task 280's) cannot say which row it was, so it is counted and not read — never "its text changed" or
     "added later" (found by the dogfood on task 280). A receipt that cannot be read raises OSError."""
     try:
-        data = Path(path).read_bytes()
+        fd = _open_receipt(Path(path), write=False)
     except FileNotFoundError:
         return [], 0
+    try:
+        chunks, n = [], 0
+        while True:
+            b = os.read(fd, 1 << 20)
+            if not b:
+                break
+            n += len(b)
+            if n > RECEIPT_MAX:
+                raise OSError(f"{RECEIPT_NAME} is over {RECEIPT_MAX} bytes")
+            chunks.append(b)
+    finally:
+        os.close(fd)
+    data = b"".join(chunks)
     out, old = [], 0
     for raw in data.split(b"\n"):
         if not raw.strip():
@@ -795,9 +839,36 @@ def _read_records(path: Path) -> "tuple[list[dict], int]":
     return out, old
 
 
-def _named_base(rec: dict) -> bool:
+def _treeish(e) -> "str | None":
+    """What a base entry names: its recorded tree, else its commit."""
+    if not isinstance(e, dict):
+        return None
+    if e.get("used") == "tree" and isinstance(e.get("tree"), str):
+        return e["tree"]
+    return e["commit"] if isinstance(e.get("commit"), str) else None
+
+
+def _own_base(rec: dict, first_base, view: "_Trees | None") -> bool:
+    """A late row's run ran on the code before its fix (impl round 1, opus and codex): in each scope the task changed
+    since the first run's base, its run's base is other code than that base. The start named again, or a base named
+    only for a scope the task did not change, is not; what cannot be told (no view, past the budget) is not."""
     b = rec.get("base")
-    return isinstance(b, dict) and any(isinstance(e, dict) and e.get("why") == "--base" for e in b.values())
+    if view is None or not isinstance(b, dict) or not b:
+        return False
+    fb = first_base if isinstance(first_base, dict) else {}
+    now = rec.get("now_tree") if isinstance(rec.get("now_tree"), dict) else {}
+    for scope, e in b.items():
+        mine = view.digest(scope, _treeish(e))
+        if mine is None:
+            return False
+        if scope not in fb:
+            continue                                    # a scope the first run had not: other code by definition
+        first = view.digest(scope, _treeish(fb[scope]))
+        if first is None:
+            return False
+        if mine == first and view.digest(scope, now.get(scope)) != first:
+            return False                                # the first run's code in a scope the task changed
+    return True
 
 
 def _base_line(plan) -> str:
@@ -835,17 +906,19 @@ def _sides(rec: dict) -> "list[dict]":
     return out
 
 
-def compute_state(rows: "list[dict]", records: "list[dict]", cfg: dict, trees: "dict[str, str] | None",
+def compute_state(rows: "list[dict]", records: "list[dict]", cfg: dict, view: "_Trees | None",
                   tests_now: "str | None", old: int = 0) -> dict:
     """Each contract row's state from the receipt's records (file order: the newest per row wins). A row is matched by
-    its key (kind, behavior, test), else by its number — then its text changed. `trees` / `tests_now` are today's
-    working state (None: not read, so no test or tree staleness is claimed either way)."""
+    its key (kind, behavior, test), else by its number — then its text changed. `view` compares trees (its `today`:
+    each scope's working state) and `tests_now` is today's tests digest — None: not read, so no test or tree change
+    is claimed either way."""
     by_key: "dict[str, dict]" = {}
     by_label: "dict[str, dict]" = {}
     for rec in records:
         by_key[rec["row_key"]] = rec
         by_label[rec["row"]] = rec
-    first: "set | None" = ({k for k in records[0]["contract"] if isinstance(k, str)} if records else None)
+    first: "set | None" = ({k for k in records[0]["contract"] if isinstance(k, str)} or None) if records else None
+    first_base = records[0].get("base") if records else None     # an empty contract list is unknown (agy)
     out = []
     keys_now = {row_key(r) for r in rows}
     for row in rows:
@@ -870,13 +943,17 @@ def compute_state(rows: "list[dict]", records: "list[dict]", cfg: dict, trees: "
         e["rec"], e["verdict"] = rec, rec["verdict"]
         if why:
             e["state"], e["why"] = "stale", " and ".join(why) + " changed"
-        elif rec["verdict"] == "proved" and e["late"] and not _named_base(rec):
+        elif rec["verdict"] == "proved" and e["late"] and not _own_base(rec, first_base, view):
             e["state"] = "proved on the task's start only"
         else:
             e["state"] = rec["verdict"]
-        nt = rec.get("now_tree")
-        e["moved"] = (e["state"] != "stale" and trees is not None and isinstance(nt, dict)
-                      and any(nt.get(n) != t for n, t in trees.items()))
+        nt = rec.get("now_tree") if isinstance(rec.get("now_tree"), dict) else {}
+        e["moved"] = False
+        if e["state"] != "stale" and view is not None:
+            for scope, today in view.today.items():
+                then = view.digest(scope, nt.get(scope))
+                if today is not None and then is not None and then != today:
+                    e["moved"] = True
         sides = _sides(rec)
         e["noreader"] = bool(sides) and all(s.get("reader") == "" for s in sides)
         out.append(e)
@@ -915,6 +992,20 @@ def _group(state: str) -> str:
     return "not proved"
 
 
+def _counts(rows: "list[dict]") -> str:
+    """The counts line — the same groups for `--check`, the close and `tasks numbers` (impl round 1, opus)."""
+    count = {g: [e["row"] for e in rows if _group(e["state"]) == g] for g in _GROUPS + ("start only",)}
+    late = [e["row"] for e in rows if e["late"]]
+    moved = [e["row"] for e in rows if e.get("moved")]
+    noreader = [e["row"] for e in rows if e.get("noreader")]
+
+    def n(label: str, xs: "list[str]") -> str:
+        return f"{label} {len(xs)}" + (f" ({_rows_word(xs)})" if xs and label not in _GROUPS else "")
+    return (", ".join(n(g, count[g]) for g in _GROUPS) + "; "
+            + "; ".join((n("on the task's start only", count["start only"]), n("added later", late),
+                         n("working state changed since the run", moved), n("no skip reader", noreader))))
+
+
 def render_state(st: dict, task_ref: str, header: str) -> "list[str]":
     """The state as `--check` and the close print it: a line per row, the counts, and the commands that refresh."""
     rows = st["rows"]
@@ -934,16 +1025,7 @@ def render_state(st: dict, task_ref: str, header: str) -> "list[str]":
         if e.get("noreader"):
             s += " — no skip reader matched its output"
         lines.append(s)
-    count = {g: [e["row"] for e in rows if _group(e["state"]) == g] for g in _GROUPS + ("start only",)}
-    late = [e["row"] for e in rows if e["late"]]
-    moved = [e["row"] for e in rows if e.get("moved")]
-    noreader = [e["row"] for e in rows if e.get("noreader")]
-
-    def n(label: str, xs: "list[str]") -> str:
-        return f"{label} {len(xs)}" + (f" ({_rows_word(xs)})" if xs and label not in _GROUPS else "")
-    lines.append("  " + ", ".join(n(g, count[g]) for g in _GROUPS) + "; "
-                 + "; ".join((n("on the task's start only", count["start only"]), n("added later", late),
-                              n("working state changed since the run", moved), n("no skip reader", noreader))))
+    lines.append("  " + _counts(rows))
     if st.get("unchecked"):
         lines.append(f"  (staleness not checked: {st['unchecked']} — the rows' text and commands were)")
     plain = [e["row"] for e in rows if not e["late"] and e["state"] in ("stale", "no record")]
@@ -957,35 +1039,71 @@ def render_state(st: dict, task_ref: str, header: str) -> "list[str]":
     return lines
 
 
-def _today(project: Path, cfg: dict, deadline: "float | None") -> "tuple[dict[str, str] | None, str | None, str]":
-    """Each scope's working-state tree and the tests digest read from them — (None, None, why) when one cannot be
-    read, or the deadline passed before it (the close's budget; plan panel: sonnet)."""
-    from tasks.core import _fingerprint_exclude_pathspecs
+class _Trees:
+    """Trees compared by their listing with the excludes left out (impl round 1, opus: a working-state tree keeps the
+    index's `.agent` entries, so committing the task's records moved it), each listed once by `git ls-tree` (which
+    writes nothing); `today` is each scope's working state, when it was read. Past the deadline, or when git cannot
+    list a tree, a digest is None — not known, so nothing is claimed from it."""
+
+    def __init__(self, scopes: "dict[str, Path]", exclude: "list[str]", deadline: "float | None" = None):
+        self.scopes = scopes
+        self.exclude = list(exclude) if exclude else [":(exclude).agent"]
+        self.deadline = deadline
+        self.today: "dict[str, str | None]" = {}
+        self._seen: "dict[tuple[str, str], str | None]" = {}
+
+    def left(self) -> float:
+        return 120.0 if self.deadline is None else self.deadline - time.monotonic()
+
+    def digest(self, scope: str, treeish) -> "str | None":
+        if scope not in self.scopes or not isinstance(treeish, str) or not treeish:
+            return None
+        key = (scope, treeish)
+        if key not in self._seen:
+            if self.left() <= 0:
+                return None
+            try:
+                self._seen[key] = _digest_entries(_listing(self.scopes[scope], treeish, self.exclude,
+                                                           max(self.left(), 1.0)))
+            except (RuntimeError, OSError, subprocess.SubprocessError):
+                self._seen[key] = None
+        return self._seen[key]
+
+
+def _today(scopes: "dict[str, Path]", cfg: dict, exclude: "list[str]", view: _Trees) -> "tuple[str | None, str]":
+    """Each scope's working-state tree into `view.today`, and the tests digest read from them — (None, why) when one
+    cannot be read, or the deadline passed (the close's budget; plan panel: sonnet)."""
     from tasks.post_d6 import worktree_tree_why
-    scopes = _scopes(project, cfg)
-    exclude = _fingerprint_exclude_pathspecs(cfg)
     trees: "dict[str, str]" = {}
     for name, repo in scopes.items():
-        if deadline is not None and time.monotonic() >= deadline:
-            return None, None, "the time budget ran out"
+        if view.left() <= 0:
+            return None, "the time budget ran out"
         t, why = worktree_tree_why(repo, exclude)
         if not t:
-            return None, None, f"the working state of {name or 'the project'} cannot be read ({why})"
+            return None, f"the working state of {name or 'the project'} cannot be read ({why})"
         trees[name] = t
     try:
-        return trees, _digest_trees(scopes, trees, cfg, exclude), ""
+        tests = _digest_trees(scopes, trees, cfg, exclude, max(view.left(), 1.0))
     except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
-        return None, None, f"the test files cannot be listed ({exc})"
+        return None, f"the test files cannot be listed ({exc})"
+    for name, t in trees.items():
+        view.today[name] = view.digest(name, t)
+    return tests, ""
 
 
 def state_of(project: Path, task_dir: Path, rows: "list[dict]", cfg: dict,
-             deadline: "float | None" = None) -> dict:
+             deadline: "float | None" = None, read_trees: bool = True) -> dict:
     """The state of `task_dir`'s contract rows today — reads task.md's rows (given), the receipt and git; writes
-    nothing (git may store the working state's objects, as the close's freshness check does)."""
+    nothing (building today's working-state trees may store their objects in git, as the close's freshness check
+    does — `read_trees=False` builds none and only lists recorded trees)."""
+    from tasks.core import _fingerprint_exclude_pathspecs
     records, old = _read_records(Path(task_dir) / RECEIPT_NAME)
     with _no_git_overrides():
-        trees, tests_now, why = _today(Path(project), cfg, deadline)
-    st = compute_state(rows, records, cfg, trees, tests_now, old)
+        scopes = _scopes(Path(project), cfg)
+        exclude = _fingerprint_exclude_pathspecs(cfg)
+        view = _Trees(scopes, exclude, deadline)
+        tests_now, why = _today(scopes, cfg, exclude, view) if read_trees else (None, "")
+        st = compute_state(rows, records, cfg, view, tests_now, old)
     st["unchecked"] = why
     return st
 
@@ -1019,8 +1137,9 @@ def close_report(project: Path, task_file: Path, budget: float = 20.0) -> "list[
 
 
 def numbers_line(project: Path, task_dir: Path, budget: float = 10.0) -> "str | None":
-    """`tasks numbers`'s contract line, read live (never written into numbers.json): rows, proved, not proved, added
-    later — None for a task without a live `## Test contract`."""
+    """`tasks numbers`'s contract line, read live (never written into numbers.json): the counts `--check` prints — it
+    builds no working-state tree, so `tasks numbers` stays read-only and the test files are not checked (impl round
+    1, opus). None for a task without a live `## Test contract`."""
     from tasks.core import load_config, read_task_text
     rows, _why = parse_contract(read_task_text(Path(task_dir) / "task.md"))
     if rows is None:
@@ -1029,35 +1148,47 @@ def numbers_line(project: Path, task_dir: Path, budget: float = 10.0) -> "str | 
         cfg = load_config(Path(project))
     except Exception:                                   # noqa: BLE001
         cfg = {}
-    st = state_of(Path(project), Path(task_dir), rows, cfg, time.monotonic() + budget)
-    proved = sum(1 for e in st["rows"] if e["state"] == "proved")
-    late = sum(1 for e in st["rows"] if e["late"])
-    return (f"contract: {len(rows)} row(s) — proved {proved}, not proved {len(rows) - proved}, added later {late}"
-            + (f" (staleness not checked: {st['unchecked']})" if st.get("unchecked") else ""))
+    st = state_of(Path(project), Path(task_dir), rows, cfg, time.monotonic() + budget, read_trees=False)
+    return (f"contract: {len(rows)} row(s) — {_counts(st['rows'])} (test files not checked — `tasks red --check` "
+            "reads them)")
 
 
-def _digest_trees(scopes: "dict[str, Path]", trees: "dict[str, str]", cfg: dict, exclude: "list[str]") -> str:
+def _listing(repo: Path, treeish: str, exclude: "list[str]", timeout: float) -> "list[tuple[str, bytes, bytes]]":
+    """A tree's blobs — (path, mode, blob), the excludes left out — by `git ls-tree`. Gitlinks are left to their own
+    scope. RuntimeError when git cannot list it."""
+    r = _git(repo, ["ls-tree", "-r", "-z", "--full-tree", treeish], text=False, timeout=timeout)
+    if r.returncode != 0:
+        raise RuntimeError(f"git ls-tree {treeish[:12]} failed")
+    out = []
+    for ent in r.stdout.split(b"\0"):
+        meta, tab, path = ent.partition(b"\t")
+        parts = meta.split(b" ")
+        if not tab or len(parts) != 3 or parts[1] != b"blob":
+            continue
+        rel = path.decode("utf-8", "surrogateescape")
+        if not _excluded(rel, exclude):
+            out.append((rel, parts[0], parts[2]))
+    return out
+
+
+def _digest_entries(entries) -> str:
+    h = hashlib.sha256()
+    for key, mode, blob in sorted(entries):
+        h.update(key.encode("utf-8", "surrogateescape") + b"\0" + mode + b"\0" + blob + b"\n")
+    return h.hexdigest()[:16]
+
+
+def _digest_trees(scopes: "dict[str, Path]", trees: "dict[str, str]", cfg: dict, exclude: "list[str]",
+                  timeout: float = 120) -> str:
     """A digest of the test files in each scope's working-state tree — a path, its mode and its blob — the same from
-    a run (its frozen "now" tree) and from a check, with no copy (task 281). Gitlinks are left to their own scope."""
+    a run (its frozen "now" tree) and from a check, with no copy (task 281)."""
     ex = list(exclude) if exclude else [":(exclude).agent"]
     entries = []
     for name in sorted(scopes):
-        r = _git(scopes[name], ["ls-tree", "-r", "-z", "--full-tree", trees[name]], text=False)
-        if r.returncode != 0:
-            raise RuntimeError(f"git ls-tree failed in {name or 'the project'}")
-        for ent in r.stdout.split(b"\0"):
-            meta, tab, path = ent.partition(b"\t")
-            parts = meta.split(b" ")
-            if not tab or len(parts) != 3 or parts[1] != b"blob":
-                continue
-            rel = path.decode("utf-8", "surrogateescape")
-            if _excluded(rel, ex) or not _is_test_path(rel, cfg):
-                continue
-            entries.append(((f"{name}/{rel}" if name else rel).encode("utf-8", "surrogateescape"), parts[0], parts[2]))
-    h = hashlib.sha256()
-    for key, mode, blob in sorted(entries):
-        h.update(key + b"\0" + mode + b"\0" + blob + b"\n")
-    return h.hexdigest()[:16]
+        for rel, mode, blob in _listing(scopes[name], trees[name], ex, timeout):
+            if _is_test_path(rel, cfg):
+                entries.append((f"{name}/{rel}" if name else rel, mode, blob))
+    return _digest_entries(entries)
 
 
 # ---------------------------------------------------------------------------- the command
@@ -1460,8 +1591,9 @@ def _cmd_red(cmd_args: "list[str]") -> None:
             print(f"  row {rec['row']} ({rec['kind']}): {rec['verdict']} — base {rec['status']}, now "
                   f"{rec['now']['status']}" + (f" — {rec['last']}" if rec.get("last") else "")
                   + (f" — {rec['why']}" if rec.get("why") else ""), flush=True)
-        _write_section(task_file, lambda records, old: _section(
-            compute_state(rows, records, cfg, now_tree, tests_sha, old), contained_line))
+        left = _write_section(task_file, project, cfg, contained_line)
+        if left:
+            print(f"  note: `{RECEIPT_HEADING}` not written — {left}", flush=True)
         proved = sum(1 for r in results if r["verdict"] == "proved")
         print(f"  {len(results)} row(s) run: {proved} proved (red on the base, green now); the state across runs is in "
               f"task.md (`{RECEIPT_HEADING}`), every record in {RECEIPT_NAME}; `tasks red {d.name.split('-', 1)[0]} "

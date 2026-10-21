@@ -210,7 +210,7 @@ class State(Project):
         self.assertRegex(out, r"on the task's start only 1")
         self.assertRegex(out, r"--rows 2 --base")                  # the way to its own base is printed
         r = self.cli("numbers", "1")
-        self.assertRegex(r.stdout, r"contract: 2 row\(s\) — proved 1, not proved 1, added later 1")
+        self.assertRegex(r.stdout, r"contract: 2 row\(s\) — proved 1, [^\n]*on the task's start only 1[^\n]*added later 1")
 
     def test_renumbering_marks_no_other_row(self):
         # row 6: a row inserted in the middle is late; the row it pushed down keeps its record and is not late
@@ -364,6 +364,147 @@ class State(Project):
         self.assertIn("a row with no number", r.stderr)
 
 
+class RoundOne(Project):
+    """Impl round 1's findings (task 281), each red on nested 9c766c7 before its fix."""
+
+    def started(self, rows=None):
+        self.new_task()
+        self.change_code()
+        self.set_contract(rows or [("1", "normal", "f returns 2", "`tests.test_new`"),
+                                   ("2", "must-not", "the old test still holds", "`tests.test_old`")])
+
+    def check(self):
+        r = self.cli("red", "1", "--check")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        return r.stdout
+
+    def test_an_expected_failure_beside_a_pass_cannot_prove(self):
+        # row 2 (codex I): `OK (expected failures=1)` after `Ran 2` — one passed, the other failed as expected
+        from tasks import red
+        self.assertEqual(red._side_status(0, b"Ran 2 tests in 0.0s\n\nOK (expected failures=1)\n"),
+                         ("green", "unittest", 1))
+        self.assertEqual(red.verdict("red", "green", now_skips=1), "partly skipped")
+
+    def test_only_pytest_outcome_words_make_a_summary(self):
+        # row 3 (sonnet m): `5 files in 1.2s` is no summary; `xpassed` is a pass
+        from tasks import red
+        self.assertEqual(red._side_status(0, b"5 files in 1.2s\n"), ("green", "", 0))
+        self.assertFalse(red._no_test_passed(b"=== 1 xpassed in 0.01s ===\n"))
+        self.assertTrue(red._no_test_passed(b"=== 1 xfailed, 1 warning in 0.01s ===\n"))
+        # a later shape-alike line does not beat unittest's real summary
+        self.assertEqual(red._side_status(0, b"Ran 1 test in 0.0s\n\nOK (skipped=1)\n3 items in 0.1s\n")[0],
+                         "skipped")
+
+    def test_a_late_row_on_the_first_runs_base_is_start_only(self):
+        # row 6 (opus I): a task with no base.json names --base on every run; the late row's run on the SAME base
+        self.started(rows=[("1", "normal", "f returns 2", "`tests.test_new`")])
+        start = self.head(self.code)
+        (self.task_dir / "base.json").unlink()
+        self.assertEqual(self.cli("red", "--base", f"code={start}").returncode, 0)
+        self.set_contract([("1", "normal", "f returns 2", "`tests.test_new`"),
+                           ("2", "edge", "f returns 2 by its own test", "`tests.test_new.N.test_two`")])
+        self.assertEqual(self.cli("red", "--rows", "2", "--base", f"code={start}").returncode, 0)
+        self.assertRegex(self.check(), r"row 2: proved on the task's start only")
+
+    def test_a_base_on_an_unchanged_scope_does_not_count(self):
+        # row 6 (codex I): `--base <HEAD>` names the project, which the task did not change; the code is on its start
+        self.started(rows=[("1", "normal", "f returns 2", "`tests.test_new`")])
+        self.assertEqual(self.cli("red").returncode, 0)
+        self.set_contract([("1", "normal", "f returns 2", "`tests.test_new`"),
+                           ("2", "edge", "f returns 2 by its own test", "`tests.test_new.N.test_two`")])
+        self.assertEqual(self.cli("red", "--rows", "2", "--base", self.head(self.d)).returncode, 0)
+        self.assertRegex(self.check(), r"row 2: proved on the task's start only")
+
+    def test_an_empty_contract_list_makes_no_row_late(self):
+        # agy m: a record whose contract list is empty says nothing about the first run's rows
+        from tasks import red
+        rows, _ = red.parse_contract(
+            "## Test contract\n\n| # | Kind | Behavior | Test |\n|---|---|---|---|\n| 1 | normal | b | `t.x` |\n")
+        rec = {"row": "1", "run": "r1", "verdict": "proved", "row_sha": "x", "row_key": red.row_key(rows[0]),
+               "contract": [], "command": "t.x"}
+        st = red.compute_state(rows, [rec], {}, None, None)
+        self.assertFalse(st["rows"][0]["late"])
+
+    def test_a_record_without_its_sides_does_not_break_the_section(self):
+        # row 14 (codex I): a record with the fields the reader checks but no `status` / `now`
+        self.started()
+        self.assertEqual(self.cli("red").returncode, 0)
+        p = self.task_dir / "red-receipt.jsonl"
+        first = json.loads(p.read_text(encoding="utf-8").splitlines()[0])
+        bare = {k: first[k] for k in ("row", "run", "row_sha", "row_key", "contract", "command", "tests_sha",
+                                      "now_tree")}
+        bare.update(verdict="broken", run="bare00000000")
+        with open(p, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(bare) + "\n")
+        r = self.cli("red", "--rows", "2")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertRegex(self.section(), r"(?m)^\| 1 \| normal \|.*\| broken \|")
+        self.assertRegex(self.check(), r"row 1: broken")
+
+    def test_a_fifo_receipt_does_not_hang_the_close_or_the_check(self):
+        # row 9 (codex I): a FIFO where the receipt should be — one line, never a wait
+        import os
+        Close.light(self, contract=[("1", "normal", "f returns 2", "`tests.test_new`")])
+        os.mkfifo(self.task_dir / "red-receipt.jsonl")
+        r = self.cli("red", "1", "--check", timeout=30)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("cannot be read", r.stderr)
+        r = self.cli("work", "done", timeout=60)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("red receipt (advisory", r.stdout + r.stderr)
+
+    def test_the_report_comes_after_the_close_is_done(self):
+        # row 9 (sonnet m): a slow report never holds the close's own lines
+        Close.light(self, contract=[("1", "normal", "f returns 2", "`tests.test_new`")])
+        r = self.cli("work", "done")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        out = r.stdout
+        self.assertGreater(out.index("red receipt (advisory"), out.index("Task 001 done."))
+
+    def test_committing_the_tasks_records_is_no_working_state_change(self):
+        # row 16 (opus m): the tree keeps the index's `.agent` entries — committing the task's records moved it
+        self.started()
+        self.assertEqual(self.cli("red").returncode, 0)
+        self.g("add", ".agent/tasks")
+        self.g("commit", "-qm", "the task's records")
+        self.assertRegex(self.check(), r"working state changed since the run 0")
+
+    def test_numbers_reads_no_tree(self):
+        # row 12 (opus m): `tasks numbers` stays read-only — no git object is written for the contract line
+        self.started()
+        self.assertEqual(self.cli("red").returncode, 0)
+        (self.code / "fresh.py").write_text("x = 1\n", encoding="utf-8")
+        objects = self.code / ".git" / "objects"
+
+        def loose():
+            return sorted(str(q) for q in objects.glob("??/*"))
+        before = loose()
+        r = self.cli("numbers", "1")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertIn("contract: 2 row(s)", r.stdout)
+        self.assertEqual(loose(), before)
+
+    def test_the_section_shows_rows_added_while_the_run_ran(self):
+        # row 18 (codex I): run A knows only row 1; row 2 is added before A writes — A's section shows it
+        from unittest import mock
+        from tasks import red
+        self.started(rows=[("1", "normal", "f returns 2", "`tests.test_new`")])
+        real = red._side_run
+        done = []
+
+        def add_a_row(*a, **k):
+            if not done:
+                done.append(1)
+                self.set_contract([("1", "normal", "f returns 2", "`tests.test_new`"),
+                                   ("2", "must-not", "the old test still holds", "`tests.test_old`")])
+            return real(*a, **k)
+        with mock.patch.object(red, "_side_run", add_a_row):
+            code = _in_process(self.d, self.env(), red.cmd_red, ["--rows", "1"])
+        self.assertIn(code, (None, 0))
+        self.assertRegex(self.section(), r"(?m)^\| 2 \| must-not \|.*\| no record \|")
+
+
 class Close(Project):
     def light(self, contract=None, gate=False, fenced_gate=False):
         """A light task, its gates ticked with a note, `reversible`, committed, active — a close needs no review."""
@@ -499,7 +640,9 @@ class Close(Project):
         self.assertEqual(self.cli("red").returncode, 0)
         r = self.cli("numbers", "1")
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
-        self.assertRegex(r.stdout, r"contract: 3 row\(s\) — proved 1, not proved 2, added later 0")
+        self.assertRegex(r.stdout, r"contract: 3 row\(s\) — proved 1, already true 2, skipped 0, not proved 0, "
+                                   r"no record 0, stale 0;")
+        self.assertIn("test files not checked", r.stdout)
 
     def test_numbers_of_a_task_without_a_contract_has_no_contract_line(self):
         # row 12: the negative control
