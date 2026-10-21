@@ -1492,7 +1492,7 @@ def cmd_numbers(cmd_args: "list[str]") -> None:
     """`tasks numbers [N]` — read-only: the task's closures from its numbers.json, or, for a task not closed (or closed
     before numbers.json existed), a composition from the records marked as a snapshot. Never writes."""
     import sys
-    from tasks.core import _find_active_task, resolve_agent_dir
+    from tasks.core import resolve_agent_dir
     from tasks.intent import find_task_dir
     from tasks.shared import find_project_root
     if len(cmd_args) > 1 or (cmd_args and not cmd_args[0].isdigit()):
@@ -1503,11 +1503,14 @@ def cmd_numbers(cmd_args: "list[str]") -> None:
     tasks_dir = lane / "tasks"
     if cmd_args:
         d = find_task_dir(tasks_dir, cmd_args[0].zfill(3))
-    else:
-        tf = _find_active_task(project)
-        d = tf.parent if tf is not None else None
+    else:                   # this session's task, never the first open one (task 282, 281's parked item)
+        from tasks.red import session_task_dir
+        d, why_none = session_task_dir(Path(project))
+        if d is None:
+            print(f"Error: tasks numbers: {why_none} — name the task: `tasks numbers <N>`", file=sys.stderr)
+            raise SystemExit(2)
     if d is None or not (d / "task.md").is_file():
-        print(f"Error: no task {cmd_args[0] if cmd_args else '(none active)'}", file=sys.stderr)
+        print(f"Error: no task {cmd_args[0] if cmd_args else ''}", file=sys.stderr)
         raise SystemExit(2)
     task = d.name.split("-", 1)[0]
     print(f"Task {task} — {d.name}")

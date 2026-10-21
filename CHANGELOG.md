@@ -4,6 +4,19 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+**The red receipt tells less, truer** — task 282 (PHASE-B.md item 9b, part 3: task 281's last review). A row added
+after the code proves only on code newer than the task's activation — in each scope whose code the task changed, its
+base must be other code and a commit strictly after the activation's (base.json's recorded tree when there is one);
+the start named again, or older code, reads `proved on the task's start only`. Every test summary in a side's output
+is read: a chained command can no longer hide an all-skipped run or a failure, and exit 5 with no test collected is a
+skip. "The code" leaves out docs, the map and the task records.
+- A first run made after the code is said ("added later" not known); the guide says to run `tasks red` once the red
+  tests are written, before the code. History rewritten since the activation is said.
+- The run prints each row's sides, then the state; the section reads the config and builds its trees before the task
+  lock (no git under it), and a receipt it cannot read is one line.
+- A bare `tasks red` / `tasks numbers` takes this session's task or refuses — never the first open task.
+- `--rows` takes ASCII digits, at most 10,000 rows, checked before expanding; each `#` must be a number.
+
 **The red receipt reads its own records: a skip is no proof, and the close says what is proved** — task 281
 (PHASE-B.md item 9b, part 2). A side that passed no test is `skipped`, never green — read from unittest's summary
 (`Ran N` with `skipped=` / `expected failures=`; `Ran 0` too) and pytest's; each side records which reader matched,

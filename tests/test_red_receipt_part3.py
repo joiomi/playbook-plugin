@@ -97,7 +97,7 @@ class Late(Base):
             def __init__(self, newer):
                 self._newer = newer
 
-            def digest(self, scope, treeish):
+            def digest(self, scope, treeish, **_k):
                 return {"t0": "d-start", "c2": "d-late", "tn": "d-now"}.get(treeish)
 
             def newer(self, scope, old, new):
@@ -122,6 +122,19 @@ class Late(Base):
         self.assertEqual(self.receipt_lines()[-1]["verdict"], "proved")
         self.assertRegex(self.check(), r"row 2: proved on the task's start only")
         self.assertEqual(self.cli("red", "--rows", "2").returncode, 0)          # on the recorded tree itself
+        self.assertRegex(self.check(), r"row 2: proved on the task's start only")
+
+    def test_the_activations_work_committed_is_still_the_start(self):
+        # row 21 (sonnet): the uncommitted work of the activation, committed right after — that commit IS the start
+        (self.code / "extra.py").write_text("X = 1\n", encoding="utf-8")
+        self.started(change=False)
+        self.assertFalse(self.base()["scopes"]["code"]["clean"])
+        c1 = self.commit_code("the activation's own work, committed")
+        self.change_code()
+        self.assertEqual(self.cli("red").returncode, 0)
+        self.set_contract([ROW1, ROW2])
+        self.assertEqual(self.cli("red", "--rows", "2", "--base", f"code={c1}").returncode, 0)
+        self.assertEqual(self.receipt_lines()[-1]["verdict"], "proved")
         self.assertRegex(self.check(), r"row 2: proved on the task's start only")
 
     def test_a_rewritten_history_is_said(self):
@@ -338,6 +351,7 @@ class Section(Base):
         self.assertIn(code, (None, 0))
         self.assertTrue(under, "no tree was built")
         self.assertNotIn(True, under)
+        self.assertNotIn("was not compared", self.section())                # worked out before the lock, not skipped
 
     def test_the_run_never_prints_a_raw_proved(self):
         # row 25 (opus, agy, sonnet): a row's line prints its sides, never a verdict word; the count is the state's
@@ -351,6 +365,22 @@ class Section(Base):
         self.assertNotRegex(r.stdout, r"(?m)^  row 2 \(edge\):[^\n]*\bproved\b")
         self.assertNotIn("proved (red on the base", r.stdout)
         self.assertIsNotNone(re.search(r"row 2: proved on the task's start only", r.stdout))
+
+
+    def test_a_frozen_view_runs_no_git(self):
+        # row 13 (opus, sonnet): under the lock the view answers only from what it already worked out
+        from unittest import mock
+        from tasks import red
+        self.started()
+        view = red._Trees({"code": self.code}, [":(exclude).agent"], {})
+        head = self.head(self.code)
+        self.assertIsNotNone(view.digest("code", head))                        # worked out before
+        view.frozen = True
+        with mock.patch.object(red, "_git", side_effect=AssertionError("git ran under the lock")):
+            self.assertIsNotNone(view.digest("code", head))                    # from the cache
+            self.assertIsNone(view.digest("code", head, code=True))            # not worked out: not known
+            self.assertIsNone(view.newer("code", head + "x", head))
+        self.assertTrue(view.missed)
 
 
 class Budget(Base):
@@ -456,7 +486,7 @@ class Default(Base):
         env = {k: v for k, v in self.env().items() if k != "PLAYBOOK_SESSION_ID"}
         before = sorted(p.name for p in sessions.iterdir())
         refused("no session id", env)
-        self.assertEqual(sorted(p.name for p in sessions.iterdir()), before)     # nothing created
+        self.assertFalse(set(p.name for p in sessions.iterdir()) - set(before))   # nothing created (the GC may remove)
 
 
 class Text(unittest.TestCase):

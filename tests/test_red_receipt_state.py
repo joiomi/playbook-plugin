@@ -211,7 +211,9 @@ class State(Project):
         self.assertRegex(out, r"on the task's start only 1")
         self.assertRegex(out, r"--rows 2 --base")                  # the way to its own base is printed
         r = self.cli("numbers", "1")
-        self.assertRegex(r.stdout, r"contract: 2 row\(s\) — proved 1, [^\n]*on the task's start only 1[^\n]*added later 1")
+        # this fixture's first run comes after the code, so "added later" is not known (task 282, row 5)
+        self.assertRegex(r.stdout, r"contract: 2 row\(s\) — proved 1, [^\n]*on the task's start only 1[^\n]*"
+                                   r"added later not known \(1 after the first run\)")
 
     def test_renumbering_marks_no_other_row(self):
         # row 6: a row inserted in the middle is late; the row it pushed down keeps its record and is not late

@@ -575,46 +575,60 @@ _PY_WORD = r"\d+ (?:passed|failed|skipped|xfailed|xpassed|errors?|warnings?|dese
 _PY_SUMMARY = re.compile(r"(?m)^=*\s*(" + _PY_WORD + r"(?:, " + _PY_WORD + r")*) in [\d.]+s(?: \([^)\n]*\))?\s*=*\s*$")
 
 
-def _summary(out: bytes) -> "tuple[str, int, int] | None":
-    """(reader, tests that passed, tests skipped) from the LAST unittest or pytest summary in `out` (a test that
-    printed one of its own earlier does not count), or None when neither is there."""
+_NO_TESTS = re.compile(r"(?m)^(?:=+ )?no tests ran in [\d.]+s|^NO TESTS RAN\s*$")
+
+
+def _summaries(out: bytes) -> "list[tuple[str, int, int, bool]]":
+    """EVERY unittest and pytest summary in `out`, in order: (reader, tests that passed, tests skipped, a failure
+    or error). Each unittest summary's end is looked for only up to the next summary (task 282, sonnet: a 3.12
+    `NO TESTS RAN` has no OK line and took the next one's). A chained command shows several (task 282, codex and
+    sonnet: the last one hid an all-skipped or a FAILED run)."""
     text = out.decode("utf-8", "replace")
-    ut = list(_UT_RAN.finditer(text))
-    py = list(_PY_SUMMARY.finditer(text))
-    if ut and (not py or ut[-1].start() > py[-1].start()):
-        m = ut[-1]
-        ran = int(m.group(1))
-        end = _UT_END.search(text, m.end())
+    found: "list[tuple[int, str, int, int, bool]]" = []
+    uts = list(_UT_RAN.finditer(text))
+    for i, m in enumerate(uts):
+        stop = uts[i + 1].start() if i + 1 < len(uts) else len(text)
+        end = _UT_END.search(text, m.end(), stop)
         counts: "dict[str, int]" = {}
         for part in (end.group(2) or "").split(",") if end else ():
             k, _, v = part.strip().partition("=")
             if v.strip().isdigit():
                 counts[k.strip()] = int(v)
         skipped = counts.get("skipped", 0) + counts.get("expected failures", 0)   # an expected failure FAILED
-        not_passed = skipped + counts.get("failures", 0) + counts.get("errors", 0)    # (impl round 1, codex)
-        return "unittest", max(ran - not_passed, 0), skipped     # a class-level skip: Ran 0 with skipped=1
-    if py:
+        failed = counts.get("failures", 0) + counts.get("errors", 0)              # (impl round 1, codex)
+        found.append((m.start(), "unittest", max(int(m.group(1)) - skipped - failed, 0), skipped,
+                      bool(failed) or (end is not None and end.group(1) == "FAILED")))
+    for m in _PY_SUMMARY.finditer(text):
         counts = {}
-        for part in py[-1].group(1).split(","):
+        for part in m.group(1).split(","):
             n, _, word = part.strip().partition(" ")
             counts[word] = counts.get(word, 0) + int(n)
-        return ("pytest", counts.get("passed", 0) + counts.get("xpassed", 0),     # only pytest's outcome words,
-                counts.get("skipped", 0) + counts.get("xfailed", 0))              # xpassed a pass (sonnet)
-    return None
+        found.append((m.start(), "pytest", counts.get("passed", 0) + counts.get("xpassed", 0),   # xpassed a pass
+                      counts.get("skipped", 0) + counts.get("xfailed", 0),
+                      bool(counts.get("failed", 0) + counts.get("error", 0) + counts.get("errors", 0))))
+    return [f[1:] for f in sorted(found)]
 
 
 def _no_test_passed(out: bytes) -> bool:
-    """The output's last summary shows that no test passed (all skipped, expected failures, or none ran)."""
+    """A summary in the output shows that no test passed (all skipped, expected failures, or none ran)."""
     return _side_status(0, out)[0] == "skipped"
 
 
 def _side_status(code: int, out: bytes) -> "tuple[str, str, int]":
-    """(status, reader, skips) of one side: a zero exit that passed no test is `skipped`, never green."""
-    s = _summary(out)
-    reader, skips = (s[0], s[2]) if s else ("", 0)
+    """(status, reader, skips) of one side. A non-zero exit is red — but exit 5 with pytest's `no tests ran` or
+    unittest's `NO TESTS RAN` ran no test: `skipped` (task 282, opus). At exit 0 a summary with a failure makes the
+    side red (`a ; b` — task 282, opus and sonnet), and one that passed no test makes it `skipped`, never green; the
+    skips of every summary add up."""
+    sums = _summaries(out)
+    reader = "+".join(sorted({x[0] for x in sums}))
+    skips = sum(x[2] for x in sums)
+    if code == 5 and _NO_TESTS.search(out.decode("utf-8", "replace")):
+        return "skipped", reader, skips
     if code != 0:
         return ("launch failed" if code in LAUNCH_FAILED else "red"), reader, skips
-    if s is not None and s[1] <= 0:
+    if any(x[3] for x in sums):
+        return "red", reader, skips
+    if any(x[1] <= 0 for x in sums):
         return "skipped", reader, skips
     return "green", reader, skips
 
@@ -637,6 +651,7 @@ def verdict(base: str, now: str, now_skips: int = 0) -> str:
 # ---------------------------------------------------------------------------- the records
 
 RECEIPT_MAX = 64 * 1024 * 1024
+_NUMBER = re.compile(r"[0-9]+")                         # ASCII digits only: `²` passes str.isdigit (task 282, sonnet)
 
 
 def _open_receipt(p: Path, write: bool) -> int:
@@ -740,6 +755,8 @@ def _section(st: dict, contained: str) -> str:
         by[e["state"]].append(_cell(e["row"]))
     head.append("State: " + "; ".join(f"{v}: {len(by[v])} ({_rows_word(by[v])})" for v in order) + ".")
     head += [f"Note: {_cell(n)}." for n in st["notes"]]
+    if st.get("unchecked"):                             # what was not checked is said here too (task 282, agy)
+        head.append(f"Note: not checked — {_cell(st['unchecked'])}.")
     late = [e for e in rows if e["late"]]
     if late:
         head.append("Added later (not in the first run's contract): " + "; ".join(
@@ -765,32 +782,52 @@ def _rows_word(labels: "list[str]") -> str:
     return ("rows " if len(labels) > 1 else "row ") + ", ".join(labels)
 
 
-def _write_section(task_file: Path, project: Path, cfg: dict, contained: str) -> str:
-    """Replace `## Red receipt` (or put it right after `## Test contract`) under the task's lock — from the contract and
-    the receipt as they are under that lock and today's working state, so a run that ends last cannot write the rows
-    it began with over rows added meanwhile (impl round 1, codex). Returns "" or why nothing was written."""
+def _write_section(task_file: Path, project: Path, contained: str) -> "tuple[str, dict | None]":
+    """Replace `## Red receipt` (or put it right after `## Test contract`) under the task's lock — from the contract, the
+    receipt and the config as they are then (impl round 1 and task 282, codex: a run that ends last wrote the rows
+    and the runner it began with), with today's trees built and every git answer worked out BEFORE the lock (task
+    282, opus and sonnet: under it only the cache answers). Returns ("", the state) or (why nothing was written,
+    None) — a receipt that cannot be read is that, never a traceback (task 282, opus)."""
     from tasks.atomic import atomic_write
-    from tasks.core import _physical_lines, _writer_section_span, read_task_text
+    from tasks.core import _physical_lines, _writer_section_span, load_config, read_task_text
     from tasks.filelock import task_lock
-    with task_lock(task_file):
-        text = read_task_text(task_file)
-        rows, why = parse_contract(text)
-        if rows is None:
-            return why
-        entry = _section(state_of(project, Path(task_file).parent, rows, cfg), contained)
-        lines = _physical_lines(text)
-        new = _physical_lines(entry) + [""]
-        sp = _writer_section_span(lines, RECEIPT_HEADING)
-        if sp is not None:
-            lines[sp[0]:sp[1]] = new
-        else:
-            cp = _writer_section_span(lines, CONTRACT_HEADING)
-            at = cp[1] if cp is not None else len(lines)
-            if at and lines[at - 1].strip():
-                new = [""] + new
-            lines[at:at] = new
-        atomic_write(task_file, "\n".join(lines))
-    return ""
+    task_dir = Path(task_file).parent
+    try:
+        cfg = load_config(Path(project))
+    except Exception:                                   # noqa: BLE001
+        cfg = {}
+    try:
+        with _no_git_overrides():
+            view, tests_now, why = _prepare(Path(project), cfg, None, True)
+            rows0, _w = parse_contract(read_task_text(task_file))
+            records0, old0 = _read_records(task_dir / RECEIPT_NAME)
+            ref = _reference(task_dir, records0)
+            if rows0:
+                compute_state(rows0, records0, cfg, view, tests_now, old0, ref)     # every git answer, now
+        view.frozen = True
+        with task_lock(task_file):
+            text = read_task_text(task_file)
+            rows, why_c = parse_contract(text)
+            if rows is None:
+                return why_c, None
+            records, old = _read_records(task_dir / RECEIPT_NAME)
+            st = compute_state(rows, records, cfg, view, tests_now, old, _reference(task_dir, records))
+            st["unchecked"] = _unchecked(view, why)
+            lines = _physical_lines(text)
+            new = _physical_lines(_section(st, contained)) + [""]
+            sp = _writer_section_span(lines, RECEIPT_HEADING)
+            if sp is not None:
+                lines[sp[0]:sp[1]] = new
+            else:
+                cp = _writer_section_span(lines, CONTRACT_HEADING)
+                at = cp[1] if cp is not None else len(lines)
+                if at and lines[at - 1].strip():
+                    new = [""] + new
+                lines[at:at] = new
+            atomic_write(task_file, "\n".join(lines))
+    except OSError as exc:
+        return f"{RECEIPT_NAME} or task.md cannot be read ({exc})", None
+    return "", st
 
 
 # ---------------------------------------------------------------------------- the state across runs (task 281)
@@ -848,26 +885,41 @@ def _treeish(e) -> "str | None":
     return e["commit"] if isinstance(e.get("commit"), str) else None
 
 
-def _own_base(rec: dict, first_base, view: "_Trees | None") -> bool:
-    """A late row's run ran on the code before its fix (impl round 1, opus and codex): in each scope the task changed
-    since the first run's base, its run's base is other code than that base. The start named again, or a base named
-    only for a scope the task did not change, is not; what cannot be told (no view, past the budget) is not."""
+def _ref_treeish(e) -> "str | None":
+    """A reference entry's code: its tree when it has one — base.json's entries carry `commit`, `tree`, `clean` and
+    no `used` (task 282, sonnet: a dirty activation's tree is not its HEAD) — else its commit."""
+    if not isinstance(e, dict):
+        return None
+    if e.get("used") != "commit" and isinstance(e.get("tree"), str):
+        return e["tree"]
+    return e["commit"] if isinstance(e.get("commit"), str) else None
+
+
+def _own_base(rec: dict, ref, view) -> bool:
+    """A late row's run ran on the code before its fix (impl rounds 1 and 2 of task 281): in each scope whose code
+    the task changed since the REFERENCE (base.json, else the first run's base), its base is other code and a commit
+    strictly after the reference's — never the start again, never older code. What cannot be told is not."""
     b = rec.get("base")
     if view is None or not isinstance(b, dict) or not b:
         return False
-    fb = first_base if isinstance(first_base, dict) else {}
+    refs = ref if isinstance(ref, dict) else {}
     now = rec.get("now_tree") if isinstance(rec.get("now_tree"), dict) else {}
     for scope, e in b.items():
-        mine = view.digest(scope, _treeish(e))
-        if mine is None:
+        r = refs.get(scope)
+        if not isinstance(r, dict):
+            continue                                    # a scope the reference had not: other code by definition
+        start = view.digest(scope, _ref_treeish(r), code=True)
+        if start is None:
             return False
-        if scope not in fb:
-            continue                                    # a scope the first run had not: other code by definition
-        first = view.digest(scope, _treeish(fb[scope]))
-        if first is None:
+        if view.digest(scope, now.get(scope), code=True) == start:
+            continue                                    # the task changed no code there: any base will do
+        mine = view.digest(scope, _treeish(e), code=True)
+        if mine is None or mine == start:
             return False
-        if mine == first and view.digest(scope, now.get(scope)) != first:
-            return False                                # the first run's code in a scope the task changed
+        if r.get("commit") is None:
+            continue                                    # an unborn reference: every commit is after it
+        if view.newer(scope, r.get("commit"), e.get("commit") if isinstance(e, dict) else None) is not True:
+            return False
     return True
 
 
@@ -907,7 +959,7 @@ def _sides(rec: dict) -> "list[dict]":
 
 
 def compute_state(rows: "list[dict]", records: "list[dict]", cfg: dict, view: "_Trees | None",
-                  tests_now: "str | None", old: int = 0) -> dict:
+                  tests_now: "str | None", old: int = 0, ref=None) -> dict:
     """Each contract row's state from the receipt's records (file order: the newest per row wins). A row is matched by
     its key (kind, behavior, test), else by its number — then its text changed. `view` compares trees (its `today`:
     each scope's working state) and `tests_now` is today's tests digest — None: not read, so no test or tree change
@@ -918,7 +970,8 @@ def compute_state(rows: "list[dict]", records: "list[dict]", cfg: dict, view: "_
         by_key[rec["row_key"]] = rec
         by_label[rec["row"]] = rec
     first: "set | None" = ({k for k in records[0]["contract"] if isinstance(k, str)} or None) if records else None
-    first_base = records[0].get("base") if records else None     # an empty contract list is unknown (agy)
+    if ref is None and records:                         # an empty contract list is unknown (agy)
+        ref = records[0].get("base")
     out = []
     keys_now = {row_key(r) for r in rows}
     for row in rows:
@@ -943,7 +996,7 @@ def compute_state(rows: "list[dict]", records: "list[dict]", cfg: dict, view: "_
         e["rec"], e["verdict"] = rec, rec["verdict"]
         if why:
             e["state"], e["why"] = "stale", " and ".join(why) + " changed"
-        elif rec["verdict"] == "proved" and e["late"] and not _own_base(rec, first_base, view):
+        elif rec["verdict"] == "proved" and e["late"] and not _own_base(rec, ref, view):
             e["state"] = "proved on the task's start only"
         else:
             e["state"] = rec["verdict"]
@@ -971,10 +1024,31 @@ def compute_state(rows: "list[dict]", records: "list[dict]", cfg: dict, view: "_
              for lab in sorted({x for x in labels if x and labels.count(x) > 1})]
     if any(not lab for lab in labels):
         notes.append("a row with no number — `tasks red` refuses the contract until each row has its own number")
+    notes += [f"row {lab} is not a number — `tasks red` refuses the contract until each row's `#` is one"
+              for lab in labels if lab and not _NUMBER.fullmatch(lab)]
+    anchor_after = False
+    if records and view is not None:                    # the first run before the code? (task 282, opus)
+        fb, fn = records[0].get("base"), records[0].get("now_tree")
+        for scope, e in (fb.items() if isinstance(fb, dict) else ()):
+            then = view.digest(scope, _treeish(e), code=True)
+            now = view.digest(scope, fn.get(scope) if isinstance(fn, dict) else None, code=True)
+            if then is not None and now is not None and then != now:
+                anchor_after = True
+    if anchor_after:
+        notes.append("the first run came after the code — its code already differed from its base, so a row added "
+                     "before it cannot be told from one written at design (run `tasks red` once the red tests are "
+                     "written, before the code)")
+    rewritten = []
+    for scope, r in (ref.items() if isinstance(ref, dict) and view is not None else ()):
+        if isinstance(r, dict) and view.on_head(scope, r.get("commit")) is False:
+            rewritten.append(scope)
+    if rewritten:
+        notes.append("history rewritten since the activation in " + ", ".join(n or "the project" for n in rewritten)
+                     + " — its commit is no ancestor of HEAD, so a late row there cannot prove")
     if old:
         notes.append(f"{old} record(s) without a row key (written before task 281) are not read — `tasks red` "
                      "records the rows again")
-    return {"rows": out, "runs": runs, "notes": notes,
+    return {"rows": out, "runs": runs, "notes": notes, "anchor_after": anchor_after, "rewritten": rewritten,
             "newest": {"run": records[-1]["run"], "at": str(records[-1].get("at", ""))} if records else {},
             "records": len(records)}
 
@@ -992,8 +1066,9 @@ def _group(state: str) -> str:
     return "not proved"
 
 
-def _counts(rows: "list[dict]") -> str:
-    """The counts line — the same groups for `--check`, the close and `tasks numbers` (impl round 1, opus)."""
+def _counts(rows: "list[dict]", st: "dict | None" = None) -> str:
+    """The counts line — the same groups for `--check`, the close and `tasks numbers` (impl round 1, opus). When the
+    first run came after the code, "added later" is not known (task 282, opus)."""
     count = {g: [e["row"] for e in rows if _group(e["state"]) == g] for g in _GROUPS + ("start only",)}
     late = [e["row"] for e in rows if e["late"]]
     moved = [e["row"] for e in rows if e.get("moved")]
@@ -1002,7 +1077,9 @@ def _counts(rows: "list[dict]") -> str:
     def n(label: str, xs: "list[str]") -> str:
         return f"{label} {len(xs)}" + (f" ({_rows_word(xs)})" if xs and label not in _GROUPS else "")
     return (", ".join(n(g, count[g]) for g in _GROUPS) + "; "
-            + "; ".join((n("on the task's start only", count["start only"]), n("added later", late),
+            + "; ".join((n("on the task's start only", count["start only"]),
+                         (f"added later not known ({len(late)} after the first run)" if (st or {}).get("anchor_after")
+                          else n("added later", late)),
                          n("working state changed since the run", moved), n("no skip reader", noreader))))
 
 
@@ -1025,7 +1102,7 @@ def render_state(st: dict, task_ref: str, header: str) -> "list[str]":
         if e.get("noreader"):
             s += " — no skip reader matched its output"
         lines.append(s)
-    lines.append("  " + _counts(rows))
+    lines.append("  " + _counts(rows, st))
     if st.get("unchecked"):
         lines.append(f"  (staleness not checked: {st['unchecked']} — the rows' text and commands were)")
     plain = [e["row"] for e in rows if not e["late"] and e["state"] in ("stale", "no record")]
@@ -1033,7 +1110,7 @@ def render_state(st: dict, task_ref: str, header: str) -> "list[str]":
                                                                          "proved on the task's start only")]
     if plain:
         lines.append(f"  refresh: tasks red {task_ref} --rows {','.join(plain)}")
-    if needs_base:
+    if needs_base and not st.get("rewritten"):          # no hint for a base that cannot exist (task 282, sonnet)
         lines.append(f"  added later, each needs its own base: tasks red {task_ref} --rows {','.join(needs_base)} "
                      "--base <scope>=<the commit before its fix>")
     return lines
@@ -1042,32 +1119,77 @@ def render_state(st: dict, task_ref: str, header: str) -> "list[str]":
 class _Trees:
     """Trees compared by their listing with the excludes left out (impl round 1, opus: a working-state tree keeps the
     index's `.agent` entries, so committing the task's records moved it), each listed once by `git ls-tree` (which
-    writes nothing); `today` is each scope's working state, when it was read. Past the deadline, or when git cannot
-    list a tree, a digest is None — not known, so nothing is claimed from it."""
+    writes nothing); `today` is each scope's working state, when it was read. `code=True` compares only the code —
+    `core.classify_delta_paths`' behavioral paths that are not test paths (task 282, opus and sonnet: a MIND_MAP or
+    root `*.md` edit is no code). `newer` and `on_head` ask `git merge-base --is-ancestor`. Every answer is cached;
+    `frozen` (under the task lock) answers only from the cache — no git runs there (task 282, opus and sonnet). Past
+    the deadline, a frozen miss, or a git that cannot answer: None — not known, so nothing is claimed from it."""
 
-    def __init__(self, scopes: "dict[str, Path]", exclude: "list[str]", deadline: "float | None" = None):
+    def __init__(self, scopes: "dict[str, Path]", exclude: "list[str]", cfg: "dict | None" = None,
+                 deadline: "float | None" = None):
         self.scopes = scopes
         self.exclude = list(exclude) if exclude else [":(exclude).agent"]
+        self.cfg = cfg or {}
         self.deadline = deadline
         self.today: "dict[str, str | None]" = {}
-        self._seen: "dict[tuple[str, str], str | None]" = {}
+        self.frozen = False
+        self.ran_out = False
+        self.missed = False
+        self._seen: dict = {}
 
     def left(self) -> float:
         return 120.0 if self.deadline is None else self.deadline - time.monotonic()
 
-    def digest(self, scope: str, treeish) -> "str | None":
+    def _ask(self, key, work):
+        if key in self._seen:
+            return self._seen[key]
+        if self.frozen:
+            self.missed = True
+            return None
+        if self.left() <= 0:
+            self.ran_out = True
+            return None
+        try:
+            self._seen[key] = work(max(self.left(), 1.0))
+        except (RuntimeError, OSError, subprocess.SubprocessError, ValueError):
+            self._seen[key] = None
+        return self._seen[key]
+
+    def digest(self, scope: str, treeish, code: bool = False) -> "str | None":
         if scope not in self.scopes or not isinstance(treeish, str) or not treeish:
             return None
-        key = (scope, treeish)
-        if key not in self._seen:
-            if self.left() <= 0:
-                return None
-            try:
-                self._seen[key] = _digest_entries(_listing(self.scopes[scope], treeish, self.exclude,
-                                                           max(self.left(), 1.0)))
-            except (RuntimeError, OSError, subprocess.SubprocessError):
-                self._seen[key] = None
-        return self._seen[key]
+
+        def work(timeout):
+            entries = _listing(self.scopes[scope], treeish, self.exclude, timeout)
+            if code:
+                from tasks.core import classify_delta_paths
+                behavioral = set(classify_delta_paths([e[0] for e in entries], is_outer_scope=(scope == ""))[0])
+                entries = [e for e in entries if e[0] in behavioral and not _is_test_path(e[0], self.cfg)]
+            return _digest_entries(entries)
+        return self._ask(("digest", scope, treeish, code), work)
+
+    def _ancestor(self, scope: str, old: str, new: str) -> "bool | None":
+        def work(timeout):
+            r = _git(self.scopes[scope], ["merge-base", "--is-ancestor", old, new], timeout=timeout)
+            return True if r.returncode == 0 else (False if r.returncode == 1 else None)
+        return self._ask(("ancestor", scope, old, new), work)
+
+    def newer(self, scope: str, old, new) -> "bool | None":
+        """`new` is a commit strictly after `old` (its descendant, not itself — task 282, agy and opus); an `old` of
+        None (an unborn repository) has every commit after it."""
+        if scope not in self.scopes or not isinstance(new, str) or not new:
+            return None
+        if old is None:
+            return True
+        if not isinstance(old, str) or old == new:
+            return False
+        return self._ancestor(scope, old, new)
+
+    def on_head(self, scope: str, commit) -> "bool | None":
+        """`commit` is HEAD or an ancestor of it — False: history was rewritten since (task 282, sonnet)."""
+        if scope not in self.scopes or not isinstance(commit, str) or not commit:
+            return None
+        return self._ancestor(scope, commit, "HEAD")
 
 
 def _today(scopes: "dict[str, Path]", cfg: dict, exclude: "list[str]", view: _Trees) -> "tuple[str | None, str]":
@@ -1091,20 +1213,46 @@ def _today(scopes: "dict[str, Path]", cfg: dict, exclude: "list[str]", view: _Tr
     return tests, ""
 
 
+def _reference(task_dir: Path, records: "list[dict]"):
+    """Each scope's reference base: base.json's (the activation) when the task has one, else the first record's base
+    (task 282, codex: a first run on `--base B` is not the task's start)."""
+    base = _load_base(Path(task_dir))
+    if base and isinstance(base.get("scopes"), dict) and "failed" not in base:
+        return base["scopes"]
+    return records[0].get("base") if records else None
+
+
+def _prepare(project: Path, cfg: dict, deadline: "float | None", read_trees: bool) -> "tuple[_Trees, str | None, str]":
+    """The view and today's tests digest — every tree built OUTSIDE any lock (task 282, sonnet)."""
+    from tasks.core import _fingerprint_exclude_pathspecs
+    scopes = _scopes(Path(project), cfg)
+    exclude = _fingerprint_exclude_pathspecs(cfg)
+    view = _Trees(scopes, exclude, cfg, deadline)
+    tests_now, why = _today(scopes, cfg, exclude, view) if read_trees else (None, "")
+    return view, tests_now, why
+
+
+def _unchecked(view: _Trees, why: str) -> str:
+    if why:
+        return why
+    if view.ran_out:
+        return ("the time budget ran out — a late row then reads start-only and a change of the working state is not "
+                "known")
+    if view.missed:
+        return "a record written while the section was being written was not compared (`tasks red --check` does)"
+    return ""
+
+
 def state_of(project: Path, task_dir: Path, rows: "list[dict]", cfg: dict,
              deadline: "float | None" = None, read_trees: bool = True) -> dict:
     """The state of `task_dir`'s contract rows today — reads task.md's rows (given), the receipt and git; writes
     nothing (building today's working-state trees may store their objects in git, as the close's freshness check
     does — `read_trees=False` builds none and only lists recorded trees)."""
-    from tasks.core import _fingerprint_exclude_pathspecs
     records, old = _read_records(Path(task_dir) / RECEIPT_NAME)
     with _no_git_overrides():
-        scopes = _scopes(Path(project), cfg)
-        exclude = _fingerprint_exclude_pathspecs(cfg)
-        view = _Trees(scopes, exclude, deadline)
-        tests_now, why = _today(scopes, cfg, exclude, view) if read_trees else (None, "")
-        st = compute_state(rows, records, cfg, view, tests_now, old)
-    st["unchecked"] = why
+        view, tests_now, why = _prepare(Path(project), cfg, deadline, read_trees)
+        st = compute_state(rows, records, cfg, view, tests_now, old, _reference(Path(task_dir), records))
+    st["unchecked"] = _unchecked(view, why)
     return st
 
 
@@ -1149,7 +1297,7 @@ def numbers_line(project: Path, task_dir: Path, budget: float = 10.0) -> "str | 
     except Exception:                                   # noqa: BLE001
         cfg = {}
     st = state_of(Path(project), Path(task_dir), rows, cfg, time.monotonic() + budget, read_trees=False)
-    return (f"contract: {len(rows)} row(s) — {_counts(st['rows'])} (test files not checked — `tasks red --check` "
+    return (f"contract: {len(rows)} row(s) — {_counts(st['rows'], st)} (test files not checked — `tasks red --check` "
             "reads them)")
 
 
@@ -1193,15 +1341,51 @@ def _digest_trees(scopes: "dict[str, Path]", trees: "dict[str, str]", cfg: dict,
 
 # ---------------------------------------------------------------------------- the command
 
+ROWS_MAX = 10000
+
+
 def _parse_rows(spec: str) -> "tuple[set[int] | None, str]":
-    """`--rows 3,5-7` → {3, 5, 6, 7}; an empty item, a word, an inverted range is refused (plan panel: agy)."""
+    """`--rows 3,5-7` → {3, 5, 6, 7}; an empty item, a word, an inverted range is refused (plan panel: agy), and so
+    is anything but ASCII digits or more than ROWS_MAX rows in all — checked BEFORE a range is expanded (task 282:
+    `1-99999999` expanded first; `²` passed `\\d`)."""
+    shown = spec if len(spec) <= 40 else spec[:40] + "…"
+    bad = f"--rows {shown!r}: a row number, a list or a range like 5-7 (ASCII digits; at most {ROWS_MAX} rows)"
     out: "set[int]" = set()
     for item in spec.split(","):
-        m = re.fullmatch(r"\s*(\d+)\s*(?:-\s*(\d+)\s*)?", item)
-        if not m or (m.group(2) and int(m.group(2)) < int(m.group(1))):
-            return None, f"--rows {spec!r}: each item is a row number or a range like 5-7"
-        out.update(range(int(m.group(1)), int(m.group(2) or m.group(1)) + 1))
+        m = re.fullmatch(r"[ \t]*([0-9]{1,9})[ \t]*(?:-[ \t]*([0-9]{1,9})[ \t]*)?", item)
+        if not m:
+            return None, bad
+        lo, hi = int(m.group(1)), int(m.group(2) or m.group(1))
+        if hi < lo or len(out) + (hi - lo + 1) > ROWS_MAX:
+            return None, bad
+        out.update(range(lo, hi + 1))
     return out, ""
+
+
+def session_task_dir(project: Path) -> "tuple[Path | None, str]":
+    """This session's task — the number in `.agent/sessions/<id>/current_state`, read without creating anything (as
+    `tasks verify` reads it) — or (None, why): no id, no pointer, or a task that is missing, done or blocked. Never
+    the first open task (task 281's parked item; task 282, opus and sonnet: a wrong pick writes into another task)."""
+    from tasks.core import _extract_status, resolve_agent_dir, resolve_session_id
+    from tasks.intent import find_task_dir
+    sid = resolve_session_id(quiet=True)
+    if not sid:
+        return None, "this session has no id"
+    lane = resolve_agent_dir(Path(project))
+    p = lane / "sessions" / sid / "current_state"
+    try:
+        num = p.read_text(encoding="utf-8", errors="replace").strip() if p.is_file() and not p.is_symlink() else ""
+    except OSError:
+        num = ""
+    if not _NUMBER.fullmatch(num):
+        return None, "this session points at no task"
+    d = find_task_dir(lane / "tasks", num.zfill(3))
+    if d is None or not (d / "task.md").is_file():
+        return None, f"this session's task {num} does not exist"
+    status = _extract_status(d / "task.md")
+    if status in ("done", "blocked"):
+        return None, f"this session's task {d.name} is {status}"
+    return d, ""
 
 
 def _parse_flags(args: "list[str]") -> "tuple[list[str], dict[str, str], set[int] | None, bool, str]":
@@ -1445,7 +1629,7 @@ def cmd_red(cmd_args: "list[str]") -> None:
 
 def _cmd_red(cmd_args: "list[str]") -> None:
     """`tasks red [<N>] [--base [<scope>=]<commit>]…` — see the module docstring."""
-    from tasks.core import _fingerprint_exclude_pathspecs, _find_active_task, _tail_cert_scopes, load_config
+    from tasks.core import _fingerprint_exclude_pathspecs, _tail_cert_scopes, load_config
     from tasks.core import read_task_text, resolve_agent_dir
     from tasks.intent import find_task_dir
     from tasks.post_d6 import worktree_tree_why
@@ -1458,10 +1642,12 @@ def _cmd_red(cmd_args: "list[str]") -> None:
     if args:
         d = find_task_dir(resolve_agent_dir(project) / "tasks", args[0].zfill(3))
     else:
-        tf = _find_active_task(project)
-        d = tf.parent if tf is not None else None
+        d, why_none = session_task_dir(project)
+        if d is None:
+            print(f"Error: tasks red: {why_none} — name the task: `tasks red <N>`", file=sys.stderr)
+            raise SystemExit(2)
     if d is None or not (d / "task.md").is_file():
-        print(f"Error: tasks red: no task {args[0] if args else '(none active)'}", file=sys.stderr)
+        print(f"Error: tasks red: no task {args[0] if args else ''}", file=sys.stderr)
         raise SystemExit(2)
     task_file = d / "task.md"
     rows, why = parse_contract(read_task_text(task_file))
@@ -1482,13 +1668,17 @@ def _cmd_red(cmd_args: "list[str]") -> None:
     twice = sorted({lab for lab in labels if labels.count(lab) > 1})
     if twice:
         _refuse(f"row {twice[0]} appears twice in `## Test contract` — each row needs its own `#` (plan panel: sonnet)")
+    words = [lab for lab in labels if not _NUMBER.fullmatch(lab)]
+    if words:                                           # `--rows` names rows by number (task 282, agy)
+        _refuse(f"row {words[0]} is not a number — each row's `#` in `## Test contract` is one")
     contract = [row_key(r) for r in rows]
     if only is not None:
-        numbered = {int(r["row"]) for r in rows if r["row"].isdigit()}
+        numbered = {int(r["row"]) for r in rows}
         missing = sorted(only - numbered)
         if missing:
-            _refuse(f"no row {', '.join(map(str, missing))} in `## Test contract`")
-        run_rows = [r for r in rows if r["row"].isdigit() and int(r["row"]) in only]
+            _refuse(f"no row {', '.join(map(str, missing[:20]))}{' …' if len(missing) > 20 else ''} in "
+                    "`## Test contract`")
+        run_rows = [r for r in rows if int(r["row"]) in only]
     else:
         run_rows = rows
     scopes = _scopes(project, cfg)
@@ -1521,6 +1711,7 @@ def _cmd_red(cmd_args: "list[str]") -> None:
     tmp = Path(tempfile.mkdtemp(prefix="pb-red-", dir=_run_parent()))
     private_tmp = contained and not str(tmp.resolve()).startswith("/tmp/")
     results: "list[dict]" = []
+    section_failed = False
     old_handlers = {}
 
     def _stop(signum, _frame):                          # SIGTERM / SIGHUP take the interrupt's path (impl round 1)
@@ -1588,16 +1779,23 @@ def _cmd_red(cmd_args: "list[str]") -> None:
                     rec["why"] = why_all
             _append(task_file, rec)
             results.append(rec)
-            print(f"  row {rec['row']} ({rec['kind']}): {rec['verdict']} — base {rec['status']}, now "
-                  f"{rec['now']['status']}" + (f" — {rec['last']}" if rec.get("last") else "")
-                  + (f" — {rec['why']}" if rec.get("why") else ""), flush=True)
-        left = _write_section(task_file, project, cfg, contained_line)
-        if left:
-            print(f"  note: `{RECEIPT_HEADING}` not written — {left}", flush=True)
-        proved = sum(1 for r in results if r["verdict"] == "proved")
-        print(f"  {len(results)} row(s) run: {proved} proved (red on the base, green now); the state across runs is in "
-              f"task.md (`{RECEIPT_HEADING}`), every record in {RECEIPT_NAME}; `tasks red {d.name.split('-', 1)[0]} "
-              "--check` prints it.", flush=True)
+            print(f"  row {rec['row']} ({rec['kind']}): {rec['status']} → {rec['now']['status']}"   # sides, never a
+                  + (f" — {rec['last']}" if rec.get("last") else "")                                 # verdict word
+                  + (f" — {rec['why']}" if rec.get("why") else ""), flush=True)                      # (task 282)
+        left, st = _write_section(task_file, project, contained_line)
+        ref_n = d.name.split("-", 1)[0]
+        if st is None:
+            print(f"  `{RECEIPT_HEADING}` not written — {left}. The {len(results)} row(s) run are in {RECEIPT_NAME}; "
+                  f"`tasks red {ref_n} --check` prints their state.", file=sys.stderr, flush=True)
+            section_failed = True
+        else:
+            ran = {r["row"] for r in results}
+            shown = dict(st, rows=[e for e in st["rows"] if e["row"] in ran])
+            for ln in render_state(shown, ref_n, f"  the state of the {len(results)} row(s) run, as `## Red receipt` "
+                                                 "now says:")[1:]:
+                print(ln, flush=True)
+            print(f"  the state across runs is in task.md (`{RECEIPT_HEADING}`), every record in {RECEIPT_NAME}; "
+                  f"`tasks red {ref_n} --check` prints every row.", flush=True)
     except KeyboardInterrupt:
         print("  interrupted: the rows that ended are in " + RECEIPT_NAME + "; task.md was not written.",
               file=sys.stderr, flush=True)
@@ -1612,3 +1810,5 @@ def _cmd_red(cmd_args: "list[str]") -> None:
                 signal.signal(sig, h)
             except (ValueError, OSError):
                 pass
+    if section_failed:
+        raise SystemExit(1)
