@@ -1294,11 +1294,19 @@ def compute_state(rows: "list[dict]", records: "list[dict]", cfg: dict, view: "_
     if old:
         notes.append(f"{old} record(s) without a row key (written before task 281) are not read — `tasks red` "
                      "records the rows again")
-    removed = []                                        # each number's newest record no current row reads: a row
-    for label, rec in by_label.items():                 # deleted, or renumbered over (task 286, opus, codex, agy)
-        if rec["row_key"] in claimed or rec is not by_key.get(rec["row_key"]):   # a newer record of its key
-            continue                                                          # supersedes it (post-panel judge)
-        gone = {"row": label, "late": first is not None and rec["row_key"] not in first, "verdict": rec["verdict"]}
+    born: "dict[str, tuple[int, str]]" = {}             # each key's first record: (its place, the number it had)
+    last: "dict[str, int]" = {}
+    for i, rec in enumerate(records):
+        born.setdefault(rec["row_key"], (i, rec["row"]))
+        last[rec["row_key"]] = i
+    removed = []                                        # a row deleted from the contract: the newest record of a key no
+    for key, rec in by_key.items():                     # current row reads (task 286, opus, codex, agy; post-panel)
+        if key in claimed:
+            continue
+        label = rec["row"]
+        if any(k != key and n == label and i > last[key] for k, (i, n) in born.items()):
+            continue                                    # an edit of that row (a key first recorded under its number
+        gone = {"row": label, "late": first is not None and key not in first, "verdict": rec["verdict"]}   # after)
         if rec["verdict"] == "proved" or (rec["verdict"] == "partly proved" and gone["late"]):
             res = _base_check(rec, ref, view, gone["late"])[0]        # the live rule, its base too (codex, grok)
             gone["state"] = BASE_STATES[res] if rec["verdict"] == "proved" else "partly proved"
