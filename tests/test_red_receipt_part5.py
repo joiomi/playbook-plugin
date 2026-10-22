@@ -164,6 +164,12 @@ class Base(Base_):
         out = "\n".join(red.render_state(st, "001", "head"))
         self.assertIn("asks again", out)
         self.assertIn("refresh:", out)
+        st = red.compute_state(rows, [rec2], {}, View({}, last_none="scope"), None, 0,      # a code root removed
+                               {"code": {"commit": "c0", "tree": "t0", "clean": True}})
+        out = "\n".join(red.render_state(st, "001", "head"))
+        self.assertIn("no longer a scope", out)
+        self.assertNotIn("asks again", out)
+        self.assertNotIn("refresh:", out)
 
     def test_the_named_dirty_path_is_the_first_sorted(self):
         # row 4 (agy): many paths lack the work — the note names the first one sorted, whatever the hash seed
@@ -261,6 +267,12 @@ class RoundOne(Base_):
         out = self.check()
         self.assertNotRegex(out, r"refresh: tasks red")
         self.assertIn("code's start was uncommitted work", out)
+        # a record written before `clean` was carried (part 4's): not known to be clean, so no `--base` either
+        import tempfile
+        from tasks import red
+        with tempfile.TemporaryDirectory() as d:
+            got = red._base_hint(Path(d), {"code": {"commit": "c0", "tree": "t0", "used": "tree"}})
+        self.assertIsNone(got[0] if isinstance(got, tuple) else got)
 
     def test_the_last_line_and_the_error_are_plain(self):
         # row 15 (opus, sonnet): escapes reached the table, and a coloured `E   AssertionError` was not found
@@ -290,6 +302,16 @@ class RoundOne(Base_):
         self.assertRegex(out, r"row 1: no record")
         self.assertNotIn("tasks red 1 --rows", out)
         self.assertIn("activation tree was not captured", out)
+        # a row added after a run (on `--base`) gets no added-later command either
+        from tasks import red
+        rows = _rows(red, ["1", "2"])
+        k1 = red.row_key(rows[0])
+        rec = {"row": "1", "run": "r1", "verdict": "proved", "row_sha": "x", "row_key": k1, "contract": [k1],
+               "command": "true 1", "base": {"code": {"commit": "c9", "used": "commit"}}, "now_tree": {"code": "tn"}}
+        st = red.compute_state(rows, [rec], {}, View({}), None, 0, {"code": {"commit": "c0", "tree": None, "clean": False}})
+        out = "\n".join(red.render_state(st, "001", "head"))
+        self.assertIn("row 2: no record", out)
+        self.assertNotIn("added later, each needs", out)
 
     def test_scope_names_are_shell_quoted(self):
         # row 18 (codex): `--base backend api=c1` splits into two words

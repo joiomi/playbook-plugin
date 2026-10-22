@@ -49,6 +49,7 @@ import io
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import stat
@@ -432,7 +433,7 @@ def _row_env(environ: "dict[str, str]", home: Path, ceiling: Path, caged: bool =
 
 
 def _last_line(data: bytes) -> str:
-    text = data.decode("utf-8", "replace")
+    text = _plain(data)                                 # no escapes in the table (task 284, opus, sonnet)
     for ln in reversed(text.split("\n")):
         if ln.strip():
             return ln.strip()[:LAST_MAX]
@@ -445,7 +446,7 @@ _ERROR_LINE = re.compile(r"^(?:E\s+)?((?:[A-Za-z_][\w.]*\.)?[A-Z]\w*(?:Error|Exc
 def _first_error(data: bytes) -> str:
     """The first line of the output that names an exception (`AssertionError: 1 != 2`, `ModuleNotFoundError: …`) —
     what a runner's summary line (`FAILED (errors=1)`) does not say (plan panel P5, opus)."""
-    for ln in data.decode("utf-8", "replace").split("\n"):
+    for ln in _plain(data).split("\n"):                 # a coloured `E   AssertionError` too (task 284, opus)
         m = _ERROR_LINE.match(ln.strip())
         if m:
             return m.group(1)[:LAST_MAX]
@@ -585,7 +586,9 @@ def _run_row(cmd: str, root: Path, home: Path, ceiling: Path, timeout: float, co
 # A test run's summary (task 281, PHASE-B 9b part 2): a run that passed no test is no proof. Only these two runners'
 # summaries are read — any other runner's skip reads green, and the side records that no reader matched.
 _NUMBER = re.compile(r"[0-9]+")                         # ASCII digits only: `²` passes str.isdigit (task 282, sonnet)
-_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")         # a colour escape: read the summary as plain (task 284)
+# A terminal escape, read as plain (task 284): a CSI with any parameter bytes (`\x1b[38:5:3m` — impl round 1, codex),
+# an OSC title or link (ended by BEL or ST, never past its line), or a two-byte one such as `tput sgr0`'s `\x1b(B`.
+_ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b\n]*(?:\x07|\x1b\\)?|[ -/]*[0-~])")
 _UT_RAN = re.compile(r"(?m)^Ran ([0-9]+) tests? in [0-9.]+s\s*$")     # ASCII digits: a test controls them (282)
 _UT_END = re.compile(r"(?m)^(OK|FAILED|PASSED)(?: \(([^)\n]*)\))?\s*$")     # PASSED: Twisted trial's (task 284)
 _PY_WORD = r"[0-9]+ (?:passed|failed|skipped|xfailed|xpassed|errors?|warnings?|deselected|rerun)"
@@ -863,7 +866,7 @@ def _write_section(task_file: Path, project: Path, contained: str) -> "tuple[str
                     return why_c, None
                 records, old = _read_records(task_dir / RECEIPT_NAME)
                 ref = _reference(task_dir, records)
-                st = compute_state(rows, records, now_cfg, view, tests_now, old, ref, _base_hint(task_dir, ref))
+                st = compute_state(rows, records, now_cfg, view, tests_now, old, ref, *_base_hint(task_dir, ref))
                 st["unchecked"] = _unchecked(view, why)
                 lines = _physical_lines(text)
                 new = _physical_lines(_section(st, contained)) + [""]
@@ -985,7 +988,9 @@ def _base_check(rec: dict, ref, view, late: bool) -> "tuple[str, str, bool]":
             return "unchecked", (f"{where}'s activation tree was not captured — its uncommitted code is not known; a "
                                  "re-run cannot judge it"), False
         rt, et = _ref_treeish(r), _treeish(e)
-        same = (rt is not None and rt == et) or (r.get("clean") is True and isinstance(e.get("commit"), str)
+        if rt is None:                                  # a cause of its own, not "names no tree" (task 284, opus)
+            return "unchecked", f"{where}'s reference names no commit or tree — a re-run cannot judge it", False
+        same =(rt is not None and rt == et) or (r.get("clean") is True and isinstance(e.get("commit"), str)
                                                   and e.get("commit") == r.get("commit"))
         if same and not late:
             continue                                    # the start: no git (task 283, opus)
@@ -1043,7 +1048,7 @@ def _base_check(rec: dict, ref, view, late: bool) -> "tuple[str, str, bool]":
     return "ok", "", False
 
 
-_UNFIXABLE = ("scope", "half", "noref")                  # causes a re-run cannot change (task 284, agy, sonnet)
+_UNFIXABLE = ("scope",)     # the cause a re-run cannot change; the others return directly (task 284, agy, opus)
 
 
 def _why_none(view, where: str) -> str:
@@ -1102,7 +1107,8 @@ def _sides(rec: dict) -> "list[dict]":
 
 
 def compute_state(rows: "list[dict]", records: "list[dict]", cfg: dict, view: "_Trees | None",
-                  tests_now: "str | None", old: int = 0, ref=None, hint_base: "str | None" = "") -> dict:
+                  tests_now: "str | None", old: int = 0, ref=None, hint_base: "str | None" = "",
+                  hint_why: str = "") -> dict:
     """Each contract row's state from the receipt's records (file order: the newest per row wins). A row is matched by
     its key (kind, behavior, test), else by its number — then its text changed. `view` compares trees (its `today`:
     each scope's working state) and `tests_now` is today's tests digest — None: not read, so no test or tree change
@@ -1207,8 +1213,13 @@ def compute_state(rows: "list[dict]", records: "list[dict]", cfg: dict, view: "_
         notes.append(f"{_rows_word(unchecked_rows)}: a base that could not be judged ("
                      + "; ".join(sorted({e["base_why"] for e in mine if e.get("base_why")})) + ")"
                      + (" — `tasks red --check` asks again" if any(e.get("base_fixable") for e in mine) else ""))
+    half = sorted(s for s, r in ref.items() if isinstance(r, dict) and r.get("clean") is False
+                  and not isinstance(r.get("tree"), str)) if isinstance(ref, dict) else []
+    if half:                                            # `_plan_base` refuses every run there (task 284, codex)
+        hint_base, hint_why = None, (f"cannot be refreshed — {half[0] or 'the project'}'s activation tree was not "
+                                     "captured, so no run can be judged against it")
     return {"rows": out, "runs": runs, "notes": notes, "anchor_after": anchor_after, "rewritten": rewritten,
-            "hint_base": hint_base,
+            "hint_base": hint_base, "hint_why": hint_why, "half": bool(half),
             "newest": {"run": records[-1]["run"], "at": str(records[-1].get("at", ""))} if records else {},
             "records": len(records)}
 
@@ -1281,12 +1292,11 @@ def render_state(st: dict, task_ref: str, header: str) -> "list[str]":
                   and e["row"] not in hopeless]
     if plain and st.get("hint_base") is not None:      # without base.json the hint names the base (284, opus)
         lines.append(f"  refresh: tasks red {task_ref} --rows {','.join(plain)}{st.get('hint_base') or ''}")
-    elif plain:
-        lines.append(f"  refresh: rows {','.join(plain)} need a run on the start, and with no base.json the start "
-                     "names no commit to pass as --base")
-    if needs_base and not st.get("rewritten"):          # no hint for a base that cannot exist (task 282, sonnet)
+    elif plain:                                         # why none can be given (task 284)
+        lines.append(f"  refresh: rows {','.join(plain)} {st.get('hint_why') or _NO_COMMIT}")
+    if needs_base and not st.get("rewritten") and not st.get("half"):   # no hint for a base that cannot exist (task
         lines.append(f"  added later, each needs its own base: tasks red {task_ref} --rows {','.join(needs_base)} "
-                     "--base <scope>=<the commit before its fix>")
+                     "--base <scope>=<the commit before its fix>")                # 282, sonnet; a half capture: 284)
     return lines
 
 
@@ -1356,6 +1366,9 @@ class _Trees:
         return self._ask(("entries", scope, treeish, code), work)
 
     def digest(self, scope: str, treeish, code: bool = False) -> "str | None":
+        if not isinstance(treeish, str) or not treeish:  # a record's value is any JSON: never a key (284, sonnet, codex)
+            self.entries(scope, treeish, code)          # None, leaving its cause
+            return None
         key = (scope, treeish, code)
         if key in self._digests:                        # worked out once; a cached one is no frozen miss (284)
             self.last_none = ""
@@ -1428,21 +1441,29 @@ def _reference(task_dir: Path, records: "list[dict]"):
     return records[0].get("base") if records else None
 
 
-def _base_hint(task_dir: Path, ref) -> "str | None":
-    """What a refresh hint adds: nothing with base.json; else `--base` for each scope of the reference — `tasks red`
-    refuses a run without one there (task 284, opus) — or None when a scope names no commit (no hint can be given)."""
+_NO_COMMIT = "need a run on the start, and with no base.json the start names no commit to pass as --base"
+
+
+def _base_hint(task_dir: Path, ref) -> "tuple[str | None, str]":
+    """(what a refresh hint adds, why there is none). Nothing with base.json; else `--base` for each scope of the
+    reference — `tasks red` refuses a run without one there (task 284, opus), each `scope=commit` shell-quoted (284,
+    codex) — or None when a scope names no commit, or its start was uncommitted work: no commit holds that code, and
+    a re-run on its commit reads "older" again (task 284, opus, sonnet, codex)."""
     base = _load_base(Path(task_dir))
     if base and isinstance(base.get("scopes"), dict) and "failed" not in base:
-        return ""
+        return "", ""
     if not isinstance(ref, dict) or not ref:
-        return None
+        return None, _NO_COMMIT
     parts = []
     for scope, e in sorted(ref.items()):
         commit = e.get("commit") if isinstance(e, dict) else None
         if not isinstance(commit, str) or not commit:
-            return None
-        parts.append(f"--base {scope + '=' if scope else ''}{commit}")
-    return " " + " ".join(parts)
+            return None, _NO_COMMIT
+        if e.get("used") != "commit" and isinstance(e.get("tree"), str) and e.get("clean") is not True:
+            return None, (f"need a run on the start, and with no base.json {scope or 'the project'}'s start was "
+                          "uncommitted work — no commit holds it to pass as --base")
+        parts.append("--base " + shlex.quote(f"{scope}={commit}" if scope else commit))
+    return " " + " ".join(parts), ""
 
 
 def _prepare(project: Path, cfg: dict, deadline: "float | None", read_trees: bool) -> "tuple[_Trees, str | None, str]":
@@ -1475,7 +1496,7 @@ def state_of(project: Path, task_dir: Path, rows: "list[dict]", cfg: dict,
     with _no_git_overrides():
         view, tests_now, why = _prepare(Path(project), cfg, deadline, read_trees)
         ref = _reference(Path(task_dir), records)
-        st = compute_state(rows, records, cfg, view, tests_now, old, ref, _base_hint(Path(task_dir), ref))
+        st = compute_state(rows, records, cfg, view, tests_now, old, ref, *_base_hint(Path(task_dir), ref))
     st["unchecked"] = _unchecked(view, why)
     return st
 

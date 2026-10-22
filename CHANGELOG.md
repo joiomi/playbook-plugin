@@ -9,7 +9,10 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 run here); colour escapes are taken out before reading, and rows run with no colour. A run on base.json records its
 `clean`; a reference without it has its dirty work inferred from its listings. Hints and "asks again" only where a
 re-run can help (by cause, not by wording); without base.json a hint names the `--base`. Each unknown answer names its
-own cause; digests are worked out once; the summary search is tested structurally (one bisect per summary).
+own cause; digests are worked out once; the summary search is tested structurally (one bisect per summary). Its first
+review: every terminal escape is taken out (a `:` colour, `tput sgr0`'s charset switch, a title), the last and error
+lines too; a start that was uncommitted work names no `--base`, and an uncaptured activation tree gets no refresh
+command; scope names in a hint are shell-quoted; a tree value that is no string is not known, never a crash.
 
 **The red receipt judges every proof's base** — task 283 (PHASE-B.md item 9b, part 4: task 282's last review). A row
 of the first contract and a late one alike prove only on the start or on newer code: a base strictly before the start
