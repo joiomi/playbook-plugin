@@ -1214,7 +1214,9 @@ class ANonShellQuotedHeredocBodyIsData(unittest.TestCase):
                        "git commit -e -F - <<'EOF'", "GIT_EDITOR='sh -s' git commit -F - <<'EOF'",   # an editor (fable)
                        "git commit -qe -F - <<'EOF'", "git commit -t tpl -F - <<'EOF'"):        # (the single judge)
             with self.subTest(opener=opener):
-                self.assertEqual(cg.classify_command(opener + body)[1], "pipe-to-shell", opener)
+                # task 293: an alias defined on the command line is refused before its body is read (stricter)
+                want = "git-config-unreadable" if "-c alias." in opener else "pipe-to-shell"
+                self.assertEqual(cg.classify_command(opener + body)[1], want, opener)
 
     def test_known_over_block_a_literal_in_a_loop_is_pinned(self):
         """Task 199 (impl panel r1, fable): task 073's masks apply only to a PLAIN command, so an echo literal or a
