@@ -219,6 +219,103 @@ class Base(Base_):
         self.assertFalse(view.missed)
 
 
+class RoundOne(Base_):
+    """Task 284's impl round 1 (rows 12-20)."""
+
+    def test_every_terminal_escape_is_taken_out(self):
+        # row 12 (codex): `:` parameters, a charset switch, a title — each hid an all-skipped summary, read green
+        from tasks import red
+        skip = b"=== 1 skipped in 0.01s ===\n"
+        for pre in (b"\x1b[38:5:3m", b"\x1b[38:2::255:0:0m", b"\x1b(B\x1b[m", b"\x1b]0;title\x07",
+                    b"\x1b]8;;http://x\x1b\\"):
+            self.assertEqual(red._side_status(0, pre + skip)[0], "skipped", pre)
+        self.assertEqual(red._side_status(0, b"\x1b]0;title\n" + skip)[0], "skipped")     # an OSC never ends past its line
+        self.assertEqual(red._side_status(0, b"Ran 2 tests in 0.0s\n\n\x1b[38:2::0:255:0mOK\x1b(B\x1b[m\n")[0], "green")
+
+    def test_a_tree_that_is_no_string_is_unknown(self):
+        # row 13 (sonnet, codex): a list as a cache key raised TypeError — `--check` ended in a traceback
+        import json
+        from tasks import red
+        self.started()
+        self.assertEqual(self.cli("red").returncode, 0)
+        p = self.task_dir / "red-receipt.jsonl"
+        recs = self.receipt_lines()
+        for rec in recs:
+            rec["now_tree"] = {"code": [], "": {"a": 1}}
+        p.write_text("".join(json.dumps(r) + "\n" for r in recs), encoding="utf-8")
+        self.assertRegex(self.check(), r"row 1: ")
+        view = red._Trees({"code": self.code}, [":(exclude).agent"], {})
+        self.assertIsNone(view.digest("code", ["x"], code=True))
+        self.assertEqual(view.last_none, "tree")
+
+    def test_an_uncommitted_start_names_no_base(self):
+        # row 14 (opus, sonnet, codex): without base.json the hint named a dirty start's commit — "older" again
+        (self.code / "extra.py").write_text("X = 1\n", encoding="utf-8")
+        self.started(change=False)
+        self.change_code()
+        self.assertEqual(self.cli("red").returncode, 0)
+        self.assertIs(self.receipt_lines()[0]["base"]["code"]["clean"], False)
+        (self.task_dir / "base.json").unlink()
+        p = self.code / "tests" / "test_old.py"
+        p.write_text(p.read_text(encoding="utf-8") + "\n# edited\n", encoding="utf-8")
+        out = self.check()
+        self.assertNotRegex(out, r"refresh: tasks red")
+        self.assertIn("code's start was uncommitted work", out)
+
+    def test_the_last_line_and_the_error_are_plain(self):
+        # row 15 (opus, sonnet): escapes reached the table, and a coloured `E   AssertionError` was not found
+        from tasks import red
+        self.assertEqual(red._last_line(b"x\n\x1b[31mFAILED (failures=1)\x1b[0m\n"), "FAILED (failures=1)")
+        self.assertEqual(red._first_error(b"\x1b[31mE   AssertionError: 1 != 2\x1b[0m\n"), "AssertionError: 1 != 2")
+
+    def test_a_reference_naming_no_code_is_not_asked_again(self):
+        # row 16 (opus): no commit and no tree was "the record names no tree" and "asks again"
+        from tasks import red
+        rec = {"base": {"code": {"commit": "c1", "used": "commit"}}, "now_tree": {"code": "tn"}}
+        res, why, fixable = red._base_check(rec, {"code": {"clean": True}}, View({"c1": "b", "tn": "n"}), False)
+        self.assertEqual(res, "unchecked")
+        self.assertIn("names no commit or tree", why)
+        self.assertFalse(fixable)
+
+    def test_a_half_capture_gets_no_refresh_command(self):
+        # row 17 (codex): stale and unrecorded rows were told a `--rows` run that `_plan_base` refuses
+        import json
+        self.started()
+        b = self.task_dir / "base.json"
+        doc = json.loads(b.read_text(encoding="utf-8"))
+        doc["scopes"]["code"].update({"tree": None, "clean": False})
+        b.write_text(json.dumps(doc), encoding="utf-8")
+        self.set_contract([ROW1, ROW2])
+        out = self.check()
+        self.assertRegex(out, r"row 1: no record")
+        self.assertNotIn("tasks red 1 --rows", out)
+        self.assertIn("activation tree was not captured", out)
+
+    def test_scope_names_are_shell_quoted(self):
+        # row 18 (codex): `--base backend api=c1` splits into two words
+        import shlex
+        import tempfile
+        from tasks import red
+        with tempfile.TemporaryDirectory() as d:
+            got = red._base_hint(Path(d), {"": {"commit": "c0", "used": "commit"},
+                                           "backend api": {"commit": "c1", "used": "commit"}})
+        got = got[0] if isinstance(got, tuple) else got                 # (part 4's returned the suffix alone)
+        self.assertEqual(shlex.split(got), ["--base", "c0", "--base", "backend api=c1"])
+
+    def test_each_end_is_read_after_its_own_summary(self):
+        # row 19 (sonnet): a search for each end from the text's start read the first summary's OK twice
+        from tasks import red
+        out = b"Ran 2 tests in 0.0s\n\nOK\nRan 1 test in 0.0s\n\nOK (skipped=1)\n"
+        self.assertEqual(red._side_status(0, out)[0], "skipped")
+
+    def test_the_cli_doc_documents_round_one(self):
+        # row 20
+        doc = (_HERE.parent / "docs" / "cli.md").read_text(encoding="utf-8")
+        body = "\n".join(p for p in doc.split("\n\n") if p.startswith("**`tasks red"))
+        for word in ("tput sgr0", "no refresh command", "shell-quoted"):
+            self.assertIn(word, body, word)
+
+
 class Env(unittest.TestCase):
     def test_rows_run_without_colour(self):
         # row 6 (sonnet): a coloured summary line is no summary — the row's environment asks for none
