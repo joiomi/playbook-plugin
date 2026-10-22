@@ -491,6 +491,9 @@ def _contract_check(project_path: Path, task_file: Path, prev_task: str, force: 
         rc = {"applies": True, "lines": [f"test contract (the close's check): it failed ({type(e).__name__}: {e})"],
               "blocks": [f"the close's check failed ({type(e).__name__}: {e})"], "digest": None}
         way = None
+    if before is not None and before.get("config") and rc.get("config") != before.get("config"):
+        rc = dict(rc, applies=True, blocks=list(rc.get("blocks") or []) + [   # verify ran on the first config (the
+            "the config changed while this close ran (after the first check) — `tasks work done` again"])  # judge)
     if rc.get("applies") and (before is None or rc["lines"] != before.get("lines")):
         if before is not None:
             print("test contract, checked again after verify:", flush=True)

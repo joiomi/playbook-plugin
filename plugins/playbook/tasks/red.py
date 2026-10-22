@@ -1296,8 +1296,8 @@ def compute_state(rows: "list[dict]", records: "list[dict]", cfg: dict, view: "_
                      "records the rows again")
     removed = []                                        # each number's newest record no current row reads: a row
     for label, rec in by_label.items():                 # deleted, or renumbered over (task 286, opus, codex, agy)
-        if rec["row_key"] in claimed:
-            continue
+        if rec["row_key"] in claimed or rec is not by_key.get(rec["row_key"]):   # a newer record of its key
+            continue                                                          # supersedes it (post-panel judge)
         gone = {"row": label, "late": first is not None and rec["row_key"] not in first, "verdict": rec["verdict"]}
         if rec["verdict"] == "proved" or (rec["verdict"] == "partly proved" and gone["late"]):
             res = _base_check(rec, ref, view, gone["late"])[0]        # the live rule, its base too (codex, grok)
@@ -1790,12 +1790,18 @@ def close_digest(project: Path, task_file: Path, text: "str | None" = None) -> s
         h.update(b"no base")
     except OSError as e:
         h.update(f"base unreadable: {e}".encode())
-    h.update(b"\0")
-    try:
-        h.update(json.dumps(load_config(Path(project)), sort_keys=True, default=str).encode())
-    except Exception as e:                              # noqa: BLE001 — a config that cannot be read is a value too
-        h.update(f"config unreadable: {e}".encode())
+    h.update(b"\0" + _config_digest(project).encode())
     return h.hexdigest()
+
+
+def _config_digest(project: Path) -> str:
+    """The config as the check read it — kept from the first check, so a config changed after verify is refused (the
+    post-panel judge, task 286)."""
+    from tasks.core import load_config
+    try:
+        return hashlib.sha256(json.dumps(load_config(Path(project)), sort_keys=True, default=str).encode()).hexdigest()
+    except Exception as e:                              # noqa: BLE001 — a config that cannot be read is a value too
+        return f"config unreadable: {e}"
 
 
 def _code_changed(project: Path, task_dir: Path, cfg: dict, deadline: float) -> "tuple[list[str] | None, str]":
@@ -1836,12 +1842,13 @@ def close_check(project: Path, task_file: Path, budget: float = 20.0) -> dict:
     rows, why = parse_contract(text)
     gate = _has_contract_gate(text)
     digest = close_digest(project, task_file, text)     # one snapshot, for every close (task 286, codex, grok)
+    config = _config_digest(project)
     if rows is None and not gate and not _recorded_contract(d):
-        return {"applies": False, "lines": [], "blocks": [], "digest": digest}
+        return {"applies": False, "lines": [], "blocks": [], "digest": digest, "config": config}
     head = f"test contract (the close's check): task {d.name}"
 
     def result(lines: "list[str]", blocks: "list[str]") -> dict:
-        return {"applies": True, "lines": lines, "blocks": blocks, "digest": digest}
+        return {"applies": True, "lines": lines, "blocks": blocks, "digest": digest, "config": config}
     if rows is None:
         if gate:
             return result([f"{head}: {why} — the task has the `Test contract:` gate"], [why])
