@@ -740,6 +740,48 @@ class PostPanel(Closing):
         self.assertEqual(self.cli("red", "1", "--rows", "2").returncode, 0)
         self.assertRegex(self.blocked(), r"row 2 was removed from the contract.*broken")
 
+    def test_a_partial_run_cannot_hide_a_deleted_row(self):
+        # row 34 (run 3, GRAVE): rows 1-2 run, 3 never; delete broken 2, renumber 3 to 2, run it — read as an edit
+        self.light([ROW1, ("2", "normal", "stays red", "`false 2`"), ("3", "must-not", "the old test", "`tests.test_old`")])
+        self.change_code()
+        self.assertEqual(self.cli("red", "1", "--rows", "1,2").returncode, 0)
+        self.set_contract([ROW1, ("2", "must-not", "the old test", "`tests.test_old`")])
+        self.assertEqual(self.cli("red", "1", "--rows", "2").returncode, 0)
+        self.assertRegex(self.blocked(), r"row 2 was removed from the contract.*broken")
+
+    def test_an_edit_back_and_forth_is_not_removed(self):
+        # row 35 (run 3): A red, B green, A red, B green — A was read as removed
+        self.light([ROW1, ("2", "normal", "A", "`false 2`")])
+        self.change_code()
+        self.assertEqual(self.cli("red", "1").returncode, 0)
+        for row in (("2", "must-not", "B", "`tests.test_old`"), ("2", "normal", "A", "`false 2`"),
+                    ("2", "must-not", "B", "`tests.test_old`")):
+            self.set_contract([ROW1, row])
+            self.assertEqual(self.cli("red", "1", "--rows", "2").returncode, 0)
+        r, out = self.close()
+        self.assertNotIn("was removed from the contract", out)
+        self.assertEqual(r.returncode, 0, out)
+
+    def test_code_written_before_the_commit_refuses_no_behavior_changes(self):
+        # row 36 (run 3, GRAVE): code written after the second check, before the commit, closed a no-code task
+        from tasks import core, lifecycle
+        self.light([ROW1])
+        text = self.task_md.read_text(encoding="utf-8")
+        head, rest = text.split("## Test contract", 1)
+        self.task_md.write_text(head + "## Test contract\n<!-- pin -->\n\nNo behavior changes: the docs only.\n\n"
+                                "## Pre-review" + rest.split("## Pre-review", 1)[1], encoding="utf-8")
+        real = core.format_verify_receipt
+
+        def meanwhile(*a, **k):
+            (self.code / "generated.py").write_text("X = 1\n", encoding="utf-8")
+            return real(*a, **k)
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(core, "format_verify_receipt", meanwhile), contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(err):
+            code = _in_process(self.d, self.env(), lifecycle.cmd_work, ["done"])
+        self.assertEqual(code, 1, out.getvalue() + err.getvalue())
+        self.assertFalse(self.done())
+
 
 class Text(unittest.TestCase):
     def test_the_docs_say_the_close_blocks(self):
