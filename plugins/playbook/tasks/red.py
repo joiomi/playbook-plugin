@@ -38,6 +38,10 @@ session's task (`session_task_dir`) or refuses.
 
 Part 4 (task 283) judges every proof's base (`_base_check`): the start, or newer code that keeps a dirty
 activation's work — else `proved on older code`, `on unrelated code` or `on an unchecked base`.
+
+Part 8 (task 287) — a row leaves the contract only by `tasks red [<N>] --drop <row> --reason "<why>"` (the owner,
+2026-10-22, M1444 and M1448): a recorded row (its key) not in today's contract and not dropped since its last run
+blocks the close (`_gone`); an edit after a run is a new row, its old version dropped.
 """
 from __future__ import annotations
 
@@ -62,6 +66,7 @@ from pathlib import Path
 
 BASE_NAME = "base.json"
 RECEIPT_NAME = "red-receipt.jsonl"
+DROPPED = "dropped"                                     # a removal's verdict (`tasks red --drop`, task 287)
 CONTRACT_HEADING = "## Test contract"
 RECEIPT_HEADING = "## Red receipt"
 DEFAULT_TIMEOUT = 300
@@ -749,10 +754,11 @@ def _open_receipt(p: Path, write: bool) -> int:
     return fd
 
 
-def _append(task_file: Path, record: dict) -> None:
+def _append(task_file: Path, *records: dict) -> None:
+    """Each record a line of the receipt, all in one write under the task lock (a drop's records: task 287, P6)."""
     from tasks.filelock import task_lock
     p = Path(task_file).parent / RECEIPT_NAME
-    data = json.dumps(record, sort_keys=True, ensure_ascii=False).encode("utf-8") + b"\n"
+    data = b"".join(json.dumps(r, sort_keys=True, ensure_ascii=False).encode("utf-8") + b"\n" for r in records)
     with task_lock(task_file):
         try:
             fd = _open_receipt(p, write=True)
@@ -853,7 +859,15 @@ def _section(st: dict, contained: str) -> str:
     if moved:
         head.append(f"The working state changed since the run of: {_rows_word(moved)} (their green side was an older "
                     "tree).")
-    rest = [e for e in rows if e["state"] != "proved"]
+    if st.get("missing"):                               # (task 287)
+        head.append("Recorded, no longer in the contract, not dropped (each blocks the close until `tasks red --drop`): "
+                    + "; ".join(f"row {_cell(m['row'])} ({_cell(m['kind'])}, {_cell(m['test'])})"
+                                for m in st["missing"]) + ".")
+    if st.get("dropped"):
+        head.append("Dropped: " + "; ".join(f"row {_cell(x['row'])} ({_cell(str(x.get('kind', '')))}, "
+                                           f"{_cell(str(x.get('test', '')))}) — {_cell(str(x.get('reason', '')))}"
+                                           for x in st["dropped"]) + ".")
+    rest =[e for e in rows if e["state"] != "proved"]
     if rest:
         head += ["", "| # | Kind | Test | On the base | Now | State | On the base, its first error (or last line) | Run |",
                  "|---|------|------|-------------|-----|-------|---------------------------------------------|-----|"]
@@ -888,10 +902,12 @@ def _write_section(task_file: Path, project: Path, contained: str) -> "tuple[str
             with _no_git_overrides():
                 view, tests_now, why = _prepare(Path(project), cfg, None, True)
                 rows0, _w = parse_contract(read_task_text(task_file))
-                records0, old0 = _read_records(task_dir / RECEIPT_NAME)
+                drops0: "list[tuple[int, dict]]" = []
+                records0, old0 = _read_records(task_dir / RECEIPT_NAME, None, drops0)
                 if rows0:                               # every git answer, now — before the lock (the hint's
                     ref0 = _reference(task_dir, records0)   # too: task 285, sonnet, agy)
-                    compute_state(rows0, records0, cfg, view, tests_now, old0, ref0, *_base_hint(task_dir, ref0, view))
+                    compute_state(rows0, records0, cfg, view, tests_now, old0, ref0, *_base_hint(task_dir, ref0, view),
+                                  dropped=drops0)
             view.frozen = True
             with task_lock(task_file):
                 now_cfg = config()                      # the config may have changed while the trees were built
@@ -903,9 +919,11 @@ def _write_section(task_file: Path, project: Path, contained: str) -> "tuple[str
                 rows, why_c = parse_contract(text)
                 if rows is None:
                     return why_c, None
-                records, old = _read_records(task_dir / RECEIPT_NAME)
+                drops: "list[tuple[int, dict]]" = []
+                records, old = _read_records(task_dir / RECEIPT_NAME, None, drops)
                 ref = _reference(task_dir, records)
-                st = compute_state(rows, records, now_cfg, view, tests_now, old, ref, *_base_hint(task_dir, ref, view))
+                st = compute_state(rows, records, now_cfg, view, tests_now, old, ref, *_base_hint(task_dir, ref, view),
+                                   dropped=drops)
                 st["unchecked"] = _unchecked(view, why)
                 lines = _physical_lines(text)
                 new = _physical_lines(_section(st, contained)) + [""]
@@ -932,12 +950,15 @@ def row_key(row: dict) -> str:
     return hashlib.sha256("\0".join((row["kind"], row["behavior"], row["test"])).encode("utf-8")).hexdigest()[:16]
 
 
-def _read_records(path: Path, skipped: "list[int] | None" = None) -> "tuple[list[dict], int]":
-    """(the receipt's records in file order, how many were written before the row key). A line that is not UTF-8, not
-    JSON, or not a record of the shape the state reads is skipped (plan panel: sonnet); a record with no `row_key` /
+def _read_records(path: Path, skipped: "list[int] | None" = None,
+                  dropped: "list[tuple[int, dict]] | None" = None) -> "tuple[list[dict], int]":
+    """(the receipt's run records in file order, how many were written before the row key). A line that is not UTF-8,
+    not JSON, or not a record of the shape the state reads is skipped (plan panel: sonnet); a record with no `row_key` /
     `contract` (task 280's) cannot say which row it was, so it is counted and not read — never "its text changed" or
     "added later" (found by the dogfood on task 280). A receipt that cannot be read raises OSError. `skipped` collects
-    the line number of each line skipped (the close's check blocks on one — task 286, opus)."""
+    the line number of each line skipped (the close's check blocks on one — task 286, opus). A `dropped` record
+    (`tasks red --drop`, task 287) is never a run: it goes to `dropped` with its place — how many run records came
+    before it — and nowhere else (plan panel P2: the newest run, the first, the count)."""
     try:
         fd = _open_receipt(Path(path), write=False)
     except FileNotFoundError:
@@ -970,10 +991,37 @@ def _read_records(path: Path, skipped: "list[int] | None" = None) -> "tuple[list
                 skipped.append(n)
             continue
         if isinstance(rec.get("row_key"), str) and isinstance(rec.get("contract"), list):
+            if rec["verdict"] == DROPPED:
+                if dropped is not None:
+                    dropped.append((len(out), rec))
+                continue
             out.append(rec)
         else:
             old += 1
     return out, old
+
+
+def _gone(rows: "list[dict]", records: "list[dict]",
+          dropped: "list[tuple[int, dict]]") -> "tuple[list[dict], dict[str, dict]]":
+    """(each recorded row not in today's contract and not dropped since its last run — its key, its number at that run,
+    kind, test and `row_sha`, by number; each drop in effect — after its key's last run — by key). A row is its key
+    (kind, behavior, test): a renumber keeps it, an edit makes a new one, and the old one leaves only by `--drop` (the
+    owner, 2026-10-22, M1444 and M1448). A row never run has no record, so nothing of it is checked (plan panel P9)."""
+    last: "dict[str, int]" = {}
+    newest: "dict[str, dict]" = {}
+    for i, rec in enumerate(records):
+        last[rec["row_key"]] = i
+        newest[rec["row_key"]] = rec
+    in_effect: "dict[str, dict]" = {}
+    for pos, rec in dropped:
+        if last.get(rec["row_key"], -1) < pos:          # after its last run; a later run supersedes it
+            in_effect[rec["row_key"]] = rec
+    keys_now = {row_key(r) for r in rows}
+    out = [{"key": k, "row": r["row"], "kind": str(r.get("kind", "")), "test": str(r.get("test", "")),
+            "row_sha": r["row_sha"], "run": r["run"]}
+           for k, r in newest.items() if k not in keys_now and k not in in_effect]
+    out.sort(key=lambda m: (int(m["row"]) if _NUMBER.fullmatch(m["row"]) else 1 << 62, m["row"]))
+    return out, in_effect
 
 
 def _treeish(e) -> "str | None":
@@ -1185,17 +1233,17 @@ def _sides(rec: dict) -> "list[dict]":
 
 def compute_state(rows: "list[dict]", records: "list[dict]", cfg: dict, view: "_Trees | None",
                   tests_now: "str | None", old: int = 0, ref=None, hint_base: "str | None" = "",
-                  hint_why: str = "") -> dict:
-    """Each contract row's state from the receipt's records (file order: the newest per row wins). A row is matched by
-    its key (kind, behavior, test), else by its number — then its text changed. `view` compares trees (its `today`:
-    each scope's working state) and `tests_now` is today's tests digest — None: not read, so no test or tree change
-    is claimed either way."""
+                  hint_why: str = "", dropped: "list[tuple[int, dict]] | None" = None) -> dict:
+    """Each contract row's state from the receipt's run records (file order: the newest per row wins). A row is matched
+    by its key (kind, behavior, test), else by its number — then its text changed. A key dropped since its last run
+    has no record (task 287). `view` compares trees (its `today`: each scope's working state) and `tests_now` is
+    today's tests digest — None: not read, so no test or tree change is claimed either way."""
     by_key: "dict[str, dict]" = {}
     by_label: "dict[str, dict]" = {}
     for rec in records:
         by_key[rec["row_key"]] = rec
         by_label[rec["row"]] = rec
-    claimed: "set[str]" = set()                        # the records a current row reads (task 286)
+    missing, gone_now = _gone(rows, records, dropped or [])
     first: "set | None" = ({k for k in records[0]["contract"] if isinstance(k, str)} or None) if records else None
     if ref is None and records:                         # an empty contract list is unknown (agy)
         ref = records[0].get("base")
@@ -1207,10 +1255,11 @@ def compute_state(rows: "list[dict]", records: "list[dict]", cfg: dict, view: "_
         cmds, _why = resolve(row["test"], cfg)
         e: dict = {"row": row["row"], "kind": row["kind"], "test": row["test"], "key": key,
                    "late": first is not None and key not in first, "rec": None, "verdict": ""}
-        rec = by_key.get(key)
+        rec = None if key in gone_now else by_key.get(key)     # dropped, then put back: it must run (task 287)
         why: "list[str]" = []
         prev = by_label.get(row["row"])
-        if rec is None and prev is not None and prev.get("row_key") not in keys_now:
+        if rec is None and key not in gone_now and prev is not None and prev["row_key"] not in keys_now \
+                and prev["row_key"] not in gone_now:    # a dropped old version is no record of it (P3)
             rec, why = prev, ["the row's text"]         # its number's record, of a text no row has now
         if rec is None:
             e["state"] = "no record"
@@ -1221,7 +1270,6 @@ def compute_state(rows: "list[dict]", records: "list[dict]", cfg: dict, view: "_
                 why.append("the command")
             if tests_now is not None and rec.get("tests_sha") != tests_now:
                 why.append("the test files")
-        claimed.add(rec["row_key"])
         e["rec"], e["verdict"] = rec, rec["verdict"]
         if why:
             e["state"], e["why"] = "stale", " and ".join(why) + " changed"
@@ -1294,32 +1342,6 @@ def compute_state(rows: "list[dict]", records: "list[dict]", cfg: dict, view: "_
     if old:
         notes.append(f"{old} record(s) without a row key (written before task 281) are not read — `tasks red` "
                      "records the rows again")
-    last: "dict[str, int]" = {}
-    beside: "dict[str, set]" = {}                       # the keys each key ever shared a contract with
-    for i, rec in enumerate(records):
-        last[rec["row_key"]] = i
-        keys = {k for k in rec["contract"] if isinstance(k, str)}
-        for k in keys:
-            beside.setdefault(k, set()).update(keys)
-    removed = []                                        # a row deleted from the contract: the newest record of a key no
-    for key, rec in by_key.items():                     # current row reads (task 286, opus, codex, agy; post-panel)
-        if key in claimed:
-            continue
-        label, together = rec["row"], beside.get(key, set())
-        # replaced: a later run of that number by a key it never shared a contract with — an edit, not a renumber
-        # (the post-panel judge, run 3: a row that stood beside it, run or not, is another row)
-        if any(r["row"] == label and r["row_key"] != key and r["row_key"] not in together
-               and key not in r["contract"] for r in records[last[key] + 1:]):
-            continue
-        gone = {"row": label, "late": first is not None and key not in first, "verdict": rec["verdict"]}
-        if rec["verdict"] == "proved" or (rec["verdict"] == "partly proved" and gone["late"]):
-            res = _base_check(rec, ref, view, gone["late"])[0]        # the live rule, its base too (codex, grok)
-            gone["state"] = BASE_STATES[res] if rec["verdict"] == "proved" else "partly proved"
-            if rec["verdict"] == "partly proved" and res != "ok":
-                gone["base_off"] = BASE_STATES[res]
-        else:
-            gone["state"] = rec["verdict"]
-        removed.append(gone)
     refresh = any(e["state"] in _REFRESHED for e in out)   # git is asked only for a refresh line (285, opus)
     lost = []                                           # a start no run can be judged against (284, codex; 285)
     for s, r in sorted(ref.items()) if isinstance(ref, dict) else ():
@@ -1339,7 +1361,8 @@ def compute_state(rows: "list[dict]", records: "list[dict]", cfg: dict, view: "_
                      + (" — `tasks red --check` asks again" if "check" in helps else "")
                      + (" — a re-run of the row records it anew" if "rerun" in helps else ""))
     return {"rows": out, "runs": runs, "notes": notes, "anchor_after": anchor_after, "rewritten": rewritten,
-            "hint_base": hint_base, "hint_why": hint_why, "half": bool(lost), "removed": removed,
+            "hint_base": hint_base, "hint_why": hint_why, "half": bool(lost), "missing": missing,
+            "dropped": sorted(gone_now.values(), key=lambda d: (str(d.get("at", "")), d["row"])),
             "newest": {"run": records[-1]["run"], "at": str(records[-1].get("at", ""))} if records else {},
             "records": len(records)}
 
@@ -1399,6 +1422,12 @@ def render_state(st: dict, task_ref: str, header: str) -> "list[str]":
         if e.get("noreader"):
             s += " — no skip reader matched its output"
         lines.append(s)
+    for m in st.get("missing") or ():                  # by its key, its number at its last run (task 287)
+        lines.append(f"  row {m['row']} ({m['kind']}, {m['test']}): recorded, no longer in the contract — "
+                     f"{_drop_command(task_ref, m['row'])} records its removal")
+    for x in st.get("dropped") or ():
+        lines.append(f"  dropped: row {x['row']} ({x.get('kind', '')}, {x.get('test', '')}) — {x.get('reason', '')} "
+                     f"({x.get('at', '')})")
     lines.append("  " + _counts(rows, st))
     if st.get("unchecked"):
         lines.append(f"  (staleness not checked: {st['unchecked']} — the rows' text and commands were)")
@@ -1638,11 +1667,13 @@ def state_of(project: Path, task_dir: Path, rows: "list[dict]", cfg: dict,
     """The state of `task_dir`'s contract rows today — reads task.md's rows (given), the receipt and git; writes
     nothing (building today's working-state trees may store their objects in git, as the close's freshness check
     does — `read_trees=False` builds none and only lists recorded trees)."""
-    records, old = _read_records(Path(task_dir) / RECEIPT_NAME)
+    drops: "list[tuple[int, dict]]" = []
+    records, old = _read_records(Path(task_dir) / RECEIPT_NAME, None, drops)
     with _no_git_overrides():
         view, tests_now, why = _prepare(Path(project), cfg, deadline, read_trees)
         ref = _reference(Path(task_dir), records)
-        st = compute_state(rows, records, cfg, view, tests_now, old, ref, *_base_hint(Path(task_dir), ref, view))
+        st = compute_state(rows, records, cfg, view, tests_now, old, ref, *_base_hint(Path(task_dir), ref, view),
+                           dropped=drops)
     st["unchecked"] = _unchecked(view, why)
     st["undecided"] = ((["tests"] if tests_now is None else []) + (["budget"] if view.ran_out else [])
                        + (["missed"] if view.missed else []))      # what the close's table reads (task 286)
@@ -1668,28 +1699,40 @@ _WHY_BLOCK = {"no record": "not run", "stale": "stale", "skipped": "skipped", "p
 _NO_CHANGE = re.compile(r"^\s*(?:[-*]\s+)?No behavior changes:\s*(\S.*?)\s*$")     # a bullet too (286, agy)
 
 
-def close_blocks(st: dict) -> "list[str]":
+def close_blocks(st: dict, task_ref: str = "") -> "list[str]":
     """The close's table (task 286): each row that is certainly wrong — not run, stale, skipped, run badly, red now, or a
     late row not proved on its own base (opus: on the start only, older or unrelated code, an unchecked base) — and a
     staleness the state could not decide (the tests' digest not read). Already true, partly proved and a design row on
     a base the receipt places elsewhere or cannot judge pass; a spent budget alone blocks nothing — it leaves only
-    such states, or a late row this table blocks (sonnet, agy, opus). Any other state blocks (fail closed)."""
+    such states, or a late row this table blocks (sonnet, agy, opus). Any other state blocks (fail closed). Each
+    recorded row gone from the contract and not dropped blocks, with its drop command (task 287, M1444)."""
     out = []
     for e in st.get("rows") or []:
         why = _row_block(e)
         if why:
             out.append(f"row {e.get('row')}: {why}")
-    for e in st.get("removed") or ():                   # a row deleted from the table is judged the same (task 286)
-        why = _row_block(e)
-        if why:
-            out.append(f"row {e.get('row')} was removed from the contract; its newest record: {why}")
+    out += [_missing_block(m, task_ref) for m in st.get("missing") or ()]
     if "tests" in (st.get("undecided") or ()):
         out.append("staleness not checked: the test files' digest was not read")
     return out
 
 
+def _drop_command(task_ref: str, row: str) -> str:
+    return "`" + " ".join(x for x in ("tasks red", task_ref, "--drop", row) if x) + ' --reason "<why>"`'
+
+
+def _missing_block(m: dict, task_ref: str) -> str:
+    """A recorded row gone from the contract — named by its number at its last run, its kind and its test (a record
+    keeps no behavior text) — and the command that records its removal (task 287; plan panel P10, opus)."""
+    return (f"row {m['row']} ({m['kind']}, {m['test']}) {_GONE_WORDS} — {m['row']} is its number at its last run; "
+            f"{_drop_command(task_ref, m['row'])} records its removal")
+
+
+_GONE_WORDS = "is recorded but no longer in the contract"
+
+
 def _row_block(e: dict) -> "str | None":
-    """Why one row (or one removed from the contract) blocks — None when it passes."""
+    """Why one row blocks — None when it passes."""
     state, late = e.get("state"), bool(e.get("late"))
     if state == "partly proved" and late and e.get("base_off"):         # (task 286, opus)
         return f"partly proved, {e['base_off']} (added later, not proved on its own base)"
@@ -1715,8 +1758,11 @@ def close_way(blocks: "list[str]") -> str:
         ways.append("fix `## Test contract`")
     if "staleness not checked" in text:
         ways.append("`tasks work done` again (git, or the time budget, left a row's staleness undecided)")
-    if "recorded a test contract" in text or "removed from the contract" in text:
-        ways.append("put the contract (or the row) back")
+    if _GONE_WORDS in text:                             # (task 287, grok: never "put the row back" alone)
+        ways.append("record each gone row's removal with the `tasks red --drop` the check names (or put it back in the "
+                    "contract)")
+    if "recorded a test contract" in text:
+        ways.append("put the contract back")
     if "no live `## Test contract` section" in text:    # (task 286, agy, opus)
         ways.append("put the `## Test contract` section back")
     if "while code changed since the start" in text:
@@ -1874,15 +1920,29 @@ def close_check(project: Path, task_file: Path, budget: float = 20.0) -> dict:
     except Exception:                                   # noqa: BLE001
         cfg = {}
     deadline = time.monotonic() + budget
+    ref_n = d.name.split("-", 1)[0]
     reason = _no_change_reason(text) if not rows else None
     if reason is not None:
+        bad: "list[int]" = []                           # a recorded row does not leave by the declaration (287, P5)
+        drops: "list[tuple[int, dict]]" = []
+        try:
+            records, _old = _read_records(d / RECEIPT_NAME, bad, drops)
+        except OSError as e:
+            return result([f"{head}: the receipt cannot be read ({e})"], [f"the receipt cannot be read ({e})"])
+        gone = [_missing_block(m, ref_n) for m in _gone([], records, drops)[0]]
+        if bad:
+            gone.append(f"the receipt has {len(bad)} line(s) the check cannot read (line {bad[0]}: a truncated record?)")
         changed, why_c = _code_changed(project, d, cfg, deadline)
         if changed is None:
-            return result([f"{head}: No behavior changes: {reason} — {why_c}"], [why_c])
+            return result([f"{head}: No behavior changes: {reason} — {why_c}"], [why_c] + gone)
         if changed:
             return result([f"{head}: No behavior changes: {reason} — but code changed since the start: "
                            + ", ".join(changed[:8]) + (" …" if len(changed) > 8 else "")],
-                          ["`No behavior changes:` while code changed since the start (" + ", ".join(changed[:8]) + ")"])
+                          ["`No behavior changes:` while code changed since the start (" + ", ".join(changed[:8]) + ")"]
+                          + gone)
+        if gone:
+            return result([f"{head}: No behavior changes: {reason} — no code file changed since the start, but "
+                           f"{len(gone)} recorded row(s) or line(s) stand"], gone)
         return dict(result([f"{head}: No behavior changes: {reason} — no code file changed since the start"], []),
                     nochange=True)                      # its working state is bound at the commit (post-panel judge)
     problems = contract_problems(rows)
@@ -1895,8 +1955,8 @@ def close_check(project: Path, task_file: Path, budget: float = 20.0) -> dict:
     except Exception as e:                              # noqa: BLE001 — a check that cannot judge refuses
         return result([f"{head}: the receipt could not be judged ({type(e).__name__}: {e})"],
                       [f"the receipt could not be judged ({type(e).__name__}: {e})"])
-    lines = render_state(st, d.name.split("-", 1)[0], f"{head}, {len(rows)} row(s), {st['records']} record(s)")
-    blocks = close_blocks(st)
+    lines = render_state(st, ref_n, f"{head}, {len(rows)} row(s), {st['records']} record(s)")
+    blocks = close_blocks(st, ref_n)
     bad: "list[int]" = []
     try:
         _read_records(d / RECEIPT_NAME, bad)
@@ -1904,7 +1964,7 @@ def close_check(project: Path, task_file: Path, budget: float = 20.0) -> dict:
         pass                                            # read just above by `state_of`
     if bad:                                             # an older record never stands in for a broken line (opus)
         blocks.append(f"the receipt has {len(bad)} line(s) the check cannot read (line {bad[0]}: a truncated record?)")
-    if blocks and st.get("half"):
+    if st.get("half") and len(blocks) > len(st.get("missing") or ()):  # a drop clears a gone row (287, grok)
         blocks.append("no run can be judged against the start — `--force --reason` is the only way through")
     return result(lines, blocks)
 
@@ -2013,6 +2073,36 @@ def session_task_dir(project: Path) -> "tuple[Path | None, str]":
     if status in ("done", "blocked"):
         return None, f"this session's task {d.name} is {status}"
     return d, ""
+
+
+def _parse_drop(args: "list[str]") -> "tuple[list[str], int | None, str | None, str]":
+    """(the rest, `--drop`'s row number or None, `--reason`'s text or None, an error) — task 287. A reason is any one
+    argument that does not start with `--`; an empty one says nothing, so it is refused."""
+    rest: "list[str]" = []
+    drop: "int | None" = None
+    reason: "str | None" = None
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in ("--drop", "--reason"):
+            v = args[i + 1] if i + 1 < len(args) else None
+            if a == "--drop":
+                if drop is not None or v is None or not _NUMBER.fullmatch(v):
+                    return [], None, None, "--drop takes one row number (ASCII digits): `--drop <row> --reason \"<why>\"`"
+                drop = int(v)
+            else:
+                if reason is not None or v is None or v.startswith("--"):
+                    return [], None, None, "--drop needs one --reason \"<why>\" (the removal is recorded with it)"
+                reason = v
+            i += 2
+            continue
+        rest.append(a)
+        i += 1
+    if drop is None and reason is not None:
+        return [], None, None, "--reason goes with --drop: `tasks red [<N>] --drop <row> --reason \"<why>\"`"
+    if drop is not None and not (reason or "").strip():
+        return [], None, None, "--drop needs a --reason that says why (an empty one says nothing)"
+    return rest, drop, reason, ""
 
 
 def _parse_flags(args: "list[str]") -> "tuple[list[str], dict[str, str], set[int] | None, bool, str]":
@@ -2231,7 +2321,8 @@ def _combine(verdicts: "list[str]") -> str:
     return "partly proved"
 
 
-USAGE = ("usage: tasks red [<N>] [--rows <3,5-7>] [--base [<scope>=]<commit>]…  |  tasks red [<N>] --check")
+USAGE = ("usage: tasks red [<N>] [--rows <3,5-7>] [--base [<scope>=]<commit>]…  |  tasks red [<N>] --check  |  "
+         "tasks red [<N>] --drop <row> --reason \"<why>\"")
 
 
 def _cmd_check(project: Path, d: Path, rows: "list[dict]", cfg: dict) -> None:
@@ -2248,6 +2339,63 @@ def _cmd_check(project: Path, d: Path, rows: "list[dict]", cfg: dict) -> None:
         print(ln)
 
 
+def _contained_line(contained: bool, shared_tmp: bool, why_not: str) -> str:
+    """How the rows ran, as the section says it."""
+    line = ("Each row ran under the judges' write containment (root read-only)." if contained else
+            f"Uncontained ({why_not}): each row ran as `tasks verify` runs the project's command.")
+    if contained and shared_tmp:
+        line += " /tmp shared (no usable /var/tmp): each live repository was bound read-only."
+    return line
+
+
+def _cmd_drop(project: Path, d: Path, number: int, reason: str) -> None:
+    """`tasks red [<N>] --drop <row> --reason "<why>"` (task 287; the owner, M1444, M1448): a `dropped` record for each
+    recorded row gone from the contract whose last run had that number — chosen from task.md and the receipt read
+    under the task lock and written there in one append (plan panel P6), whatever the contract's own problems (P4) —
+    then `## Red receipt` rewritten as a run rewrites it. It runs no row. Refused, nothing written: no such row."""
+    from tasks.core import read_task_text
+    from tasks.filelock import task_lock
+    task_file = d / "task.md"
+    ref_n = d.name.split("-", 1)[0]
+    run = hashlib.sha256(f"drop {os.getpid()} {time.time_ns()}".encode()).hexdigest()[:12]
+    try:
+        with task_lock(task_file):
+            rows, why = parse_contract(read_task_text(task_file))
+            if rows is None:
+                _refuse(f"{why} — `tasks red --drop` reads the contract")
+            drops: "list[tuple[int, dict]]" = []
+            try:
+                records, _old = _read_records(d / RECEIPT_NAME, None, drops)
+            except OSError as exc:
+                _refuse(f"{RECEIPT_NAME} cannot be read ({exc}) — nothing to drop from")
+            missing = _gone(rows, records, drops)[0]
+            targets = [m for m in missing if _NUMBER.fullmatch(m["row"]) and int(m["row"]) == number]
+            if not targets:
+                _refuse(f"nothing to drop: no recorded row whose last run had number {number} is gone from "
+                        f"`{CONTRACT_HEADING}`" + (" (gone, not dropped: " + ", ".join(
+                            f"row {m['row']} ({m['kind']}, {m['test']})" for m in missing) + ")" if missing else ""))
+            contract = [row_key(r) for r in rows]
+            at = _now()
+            _append(task_file, *[{"at": at, "run": run, "task": d.name, "verdict": DROPPED, "reason": reason,
+                                  "row": m["row"], "kind": m["kind"], "test": m["test"], "row_key": m["key"],
+                                  "row_sha": m["row_sha"], "contract": contract} for m in targets])
+            newest = records[-1]
+    except RuntimeError as exc:                         # the receipt could not be written, or the lock timed out
+        _refuse(str(exc))
+    print(f"tasks red — task {d.name}, drop {run}:", flush=True)
+    for m in targets:
+        print(f"  dropped row {m['row']} ({m['kind']}, {m['test']}) — {reason}", flush=True)
+    contained_line = _contained_line(newest.get("contained") is True, newest.get("private_tmp") is False,
+                                     _containment()[1] or "as its run recorded")
+    left, st = _write_section(task_file, project, contained_line)
+    if st is None:                                      # the record stands; the close reads it (plan panel P13)
+        print(f"  `{RECEIPT_HEADING}` not written — {left}. The drop is in {RECEIPT_NAME}, which the close reads; the "
+              f"next `tasks red {ref_n}` run rewrites the section.", file=sys.stderr, flush=True)
+        raise SystemExit(1)
+    print(f"  the state across runs is in task.md (`{RECEIPT_HEADING}`); `tasks red {ref_n} --check` prints every row.",
+          flush=True)
+
+
 def cmd_red(cmd_args: "list[str]") -> None:
     """`tasks red [<N>] [--base [<scope>=]<commit>]…` — see the module docstring."""
     with _no_git_overrides():
@@ -2261,7 +2409,10 @@ def _cmd_red(cmd_args: "list[str]") -> None:
     from tasks.intent import find_task_dir
     from tasks.post_d6 import worktree_tree_why
     from tasks.shared import find_project_root
-    args, flags, only, check, err = _parse_flags(list(cmd_args))
+    rest, drop, reason, err = _parse_drop(list(cmd_args))
+    args, flags, only, check, err = _parse_flags(rest) if not err else ([], {}, None, False, err)
+    if not err and drop is not None and (flags or only is not None or check):
+        err = "--drop runs no row, so it takes no --rows, --base or --check"
     if err or len(args) > 1 or (args and not _NUMBER.fullmatch(args[0])):     # ASCII digits (task 283)
         print(f"Error: {err or USAGE}", file=sys.stderr)
         raise SystemExit(2)
@@ -2286,6 +2437,9 @@ def _cmd_red(cmd_args: "list[str]") -> None:
         cfg = {}
     if check:
         _cmd_check(project, d, rows, cfg)
+        return
+    if drop is not None:                                # before the contract's own problems (task 287, P4)
+        _cmd_drop(project, d, drop, str(reason))
         return
     problems = contract_problems(rows)                  # one validation with the close's check (task 286, agy, opus)
     if problems:
@@ -2320,10 +2474,7 @@ def _cmd_red(cmd_args: "list[str]") -> None:
     if not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or timeout <= 0:
         timeout = DEFAULT_TIMEOUT
     contained, why_not = _containment()
-    contained_line = ("Each row ran under the judges' write containment (root read-only)." if contained else
-                      f"Uncontained ({why_not}): each row ran as `tasks verify` runs the project's command.")
-    if contained and _run_parent() is None:
-        contained_line += " /tmp shared (no usable /var/tmp): each live repository was bound read-only."
+    contained_line = _contained_line(contained, _run_parent() is None, why_not)
     run = hashlib.sha256(f"{os.getpid()} {time.time_ns()}".encode()).hexdigest()[:12]
     base_line = _base_line(plan)
     links, link_notes = _links(project, cfg)

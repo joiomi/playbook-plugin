@@ -28,6 +28,7 @@ from tests.test_red_receipt_part5 import View, _rows  # noqa: E402
 ROW1 = ("1", "normal", "f returns 2", "`tests.test_new`")
 ROW2 = ("2", "must-not", "the old test still holds", "`tests.test_old`")
 LATE = ("2", "edge", "f returns 2 by its own test", "`tests.test_new.N.test_two`")
+GONE = r"row 2 \(normal, `false 2`\) is recorded but no longer in the contract"   # a recorded row gone from the contract (task 287)
 
 
 class Closing(Project):
@@ -496,21 +497,21 @@ class RoundOne(Closing):
         self.assertFalse(red._not_a_repository(self.d / "sub"))
 
     def test_a_removed_red_row_still_blocks(self):
-        # row 19 (opus, GRAVE): deleting a broken row's line from the contract made it pass, unsaid
+        # row 19 (opus, GRAVE): deleting a broken row's line from the contract made it pass, unsaid — as task 287 made
+        # it (M1444, M1448): a recorded row gone blocks until dropped, an edit's old version too
         self.light([ROW1, ("2", "normal", "stays red", "`false 2`")])
         self.change_code()
         self.assertEqual(self.cli("red", "1").returncode, 0)
         self.assertEqual([r["verdict"] for r in self.receipt_lines()], ["proved", "broken"])
         self.set_contract([ROW1])
-        self.assertRegex(self.blocked(), r"row 2 .*removed from the contract.*broken")
+        self.assertRegex(self.blocked(), GONE)
         self.set_contract([("3", "normal", "f returns 2", "`tests.test_new`"), ("2", "normal", "stays red", "`false 2`")])
-        r, out = self.close()                                       # row 1 renumbered to 3: not removed
-        self.assertNotIn("row 1 was removed", out)
+        r, out = self.close()                                       # row 1 renumbered to 3: not gone
+        self.assertNotIn("no longer in the contract", out)          # a row in the table is not also gone
         self.assertIn("row 2: broken (red now)", out)
-        self.assertNotIn("row 2 was removed", out)                  # a row in the table is not also "removed"
         self.set_contract([ROW1, ("2", "normal", "stays red, said again", "`false 2`")])
-        r, out = self.close()                                       # row 2 edited, its number kept: not removed
-        self.assertNotIn("row 2 was removed", out)
+        r, out = self.close()                                       # row 2 edited, its number kept: a new row
+        self.assertRegex(out, GONE)
         self.assertIn("row 2: stale", out)
 
     def test_no_behavior_changes_as_a_bullet(self):
@@ -612,21 +613,25 @@ class RoundTwo(Closing):
         self.change_code()
         self.assertEqual(self.cli("red", "1").returncode, 0)
         self.set_contract([ROW1, ("2", "must-not", "the old test", "`tests.test_old`")])
-        self.assertRegex(self.blocked(), r"row 2 was removed from the contract.*broken")
+        self.assertRegex(self.blocked(), GONE)
 
     def test_a_superseded_record_is_not_removed(self):
-        # row 24 (codex, agy): a row edited and re-run green, then renumbered — its older red version is not read
+        # row 24 (codex, agy): a row edited and re-run green, then renumbered — as task 287 made it (M1448): its older
+        # red version is another row, gone until dropped; then the close passes
         self.light([ROW1, ("2", "normal", "stays red", "`false 2`")])
         self.change_code()
         self.assertEqual(self.cli("red", "1").returncode, 0)
         self.set_contract([ROW1, ("2", "must-not", "now green", "`tests.test_old`")])
         self.assertEqual(self.cli("red", "1", "--rows", "2").returncode, 0)
         self.set_contract([ROW1, ("3", "must-not", "now green", "`tests.test_old`")])
+        self.assertRegex(self.blocked(), GONE)
+        self.assertEqual(self.cli("red", "1", "--drop", "2", "--reason", "edited").returncode, 0)
         r, out = self.close()
-        self.assertNotIn("was removed from the contract", out)
+        self.assertEqual(r.returncode, 0, out)
 
     def test_a_removed_late_row_keeps_its_base_rule(self):
-        # row 25 (codex, grok, GRAVE): a late row proved only on the start, deleted, passed on its raw `proved`
+        # row 25 (codex, grok, GRAVE): a late row proved only on the start, deleted, passed on its raw `proved` — as
+        # task 287 made it: any recorded row gone blocks, whatever its verdict
         self.light([ROW1])
         self.change_code()
         self.assertEqual(self.cli("red", "1").returncode, 0)
@@ -634,7 +639,8 @@ class RoundTwo(Closing):
         self.assertEqual(self.cli("red", "1", "--rows", "2").returncode, 0)
         self.assertRegex(self.blocked(), r"row 2: proved on the task's start only")
         self.set_contract([ROW1])
-        self.assertRegex(self.blocked(), r"row 2 was removed from the contract.*proved on the task's start only")
+        self.assertRegex(self.blocked(), r"row 2 \(edge, `tests\.test_new\.N\.test_two`\) is recorded but no longer in the "
+                         "contract")
 
     def test_a_contract_written_during_the_close_is_judged(self):
         # row 26 (codex, grok, opus, GRAVE): no contract at the check, one written while the close ran — never judged
@@ -721,15 +727,19 @@ class PostPanel(Closing):
         self.assertFalse(self.done())
 
     def test_a_superseded_key_is_not_removed(self):
-        # row 32: row 2 red, renumbered to 3, re-run green, then deleted — its old red record was read as removed
+        # row 32: row 2 red, renumbered to 3, re-run green, then deleted — as task 287 made it: the row is gone (its
+        # key), named by its number at its last run, 3; dropped, the close passes
         self.light([ROW1, ("2", "normal", "red, then green", "`tests.test_new.N.test_two`")])
         self.assertEqual(self.cli("red", "1").returncode, 0)          # the code not changed yet: row 2 red now
         self.change_code()
         self.set_contract([ROW1, ("3", "normal", "red, then green", "`tests.test_new.N.test_two`")])
         self.assertEqual(self.cli("red", "1", "--rows", "1,3").returncode, 0)
         self.set_contract([ROW1])
+        self.assertRegex(self.blocked(), r"row 3 \(normal, `tests\.test_new\.N\.test_two`\) is recorded but no longer in "
+                         "the contract — 3 is its number at its last run")
+        self.assertEqual(self.cli("red", "1", "--drop", "3", "--reason", "gone").returncode, 0)
         r, out = self.close()
-        self.assertNotIn("was removed from the contract", out)
+        self.assertEqual(r.returncode, 0, out)
 
     def test_a_renumbered_row_rerun_cannot_hide_a_deleted_one(self):
         # row 33 (run 2, GRAVE): delete broken row 2, renumber green row 3 to 2, re-run row 2 — the red record vanished
@@ -738,7 +748,7 @@ class PostPanel(Closing):
         self.assertEqual(self.cli("red", "1").returncode, 0)
         self.set_contract([ROW1, ("2", "must-not", "the old test", "`tests.test_old`")])
         self.assertEqual(self.cli("red", "1", "--rows", "2").returncode, 0)
-        self.assertRegex(self.blocked(), r"row 2 was removed from the contract.*broken")
+        self.assertRegex(self.blocked(), GONE)
 
     def test_a_partial_run_cannot_hide_a_deleted_row(self):
         # row 34 (run 3, GRAVE): rows 1-2 run, 3 never; delete broken 2, renumber 3 to 2, run it — read as an edit
@@ -747,10 +757,11 @@ class PostPanel(Closing):
         self.assertEqual(self.cli("red", "1", "--rows", "1,2").returncode, 0)
         self.set_contract([ROW1, ("2", "must-not", "the old test", "`tests.test_old`")])
         self.assertEqual(self.cli("red", "1", "--rows", "2").returncode, 0)
-        self.assertRegex(self.blocked(), r"row 2 was removed from the contract.*broken")
+        self.assertRegex(self.blocked(), GONE)
 
     def test_an_edit_back_and_forth_is_not_removed(self):
-        # row 35 (run 3): A red, B green, A red, B green — A was read as removed
+        # row 35 (run 3): A red, B green, A red, B green — A was read as removed; as task 287 made it (M1448): A is
+        # another row, gone until dropped, then the close passes
         self.light([ROW1, ("2", "normal", "A", "`false 2`")])
         self.change_code()
         self.assertEqual(self.cli("red", "1").returncode, 0)
@@ -758,8 +769,9 @@ class PostPanel(Closing):
                     ("2", "must-not", "B", "`tests.test_old`")):
             self.set_contract([ROW1, row])
             self.assertEqual(self.cli("red", "1", "--rows", "2").returncode, 0)
+        self.assertRegex(self.blocked(), GONE)
+        self.assertEqual(self.cli("red", "1", "--drop", "2", "--reason", "edited back").returncode, 0)
         r, out = self.close()
-        self.assertNotIn("was removed from the contract", out)
         self.assertEqual(r.returncode, 0, out)
 
     def test_code_written_before_the_commit_refuses_no_behavior_changes(self):

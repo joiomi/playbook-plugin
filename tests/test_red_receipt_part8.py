@@ -77,8 +77,9 @@ class Missing(Part8):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertRegex(self.blocked(), r"row 1: no record")
         self.assertEqual(self.cli("red", "1").returncode, 0)
-        r, out = self.close()
-        self.assertEqual(r.returncode, 0, out)
+        out = self.blocked()                            # the old version gone; the new row is judged as one added later
+        self.assertNotIn("no longer in the contract", out)
+        self.assertRegex(out, r"row 1: proved on the task's start only \(run [0-9a-f]+\) — added later")
 
     def test_the_inferences_holes_all_block(self):
         # row 5: each way task 286's judges found past the inference — by key, nothing to guess
@@ -196,6 +197,10 @@ class Drop(Part8):
         self.assertEqual(self.cli("red", "1", "--drop", "2", "--reason", "for now").returncode, 0)
         self.set_contract([ROW1, GREEN2])
         self.assertRegex(self.blocked(), r"row 2: no record")
+        self.assertEqual(self.cli("red", "1", "--rows", "2").returncode, 0)         # a run after the drop supersedes it
+        r, out = self.close()
+        self.assertEqual(r.returncode, 0, out)
+        self.assertRegex(out, r"row 2: already true")
 
     def test_a_drop_is_not_a_run(self):
         # row 10 (P2): a drop as the last line — the newest run, the runs, the count and the rebased note as before it

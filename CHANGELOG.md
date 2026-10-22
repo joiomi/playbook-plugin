@@ -4,6 +4,14 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+**A row leaves the test contract only by `tasks red --drop`** — task 287 (PHASE-B.md item 9b, part 8; the owner's
+answers of 2026-10-22 12:07 and 12:19). A recorded row (its key: kind, behavior, test) no longer in the contract and
+not dropped blocks the close, named with its `tasks red <N> --drop <row> --reason "<why>"` — under `No behavior
+changes:` too; an edit after a run is a new row, its old version dropped. `--drop` records the reason, reads task.md and
+the receipt under the task lock and writes in one append, works on a contract `tasks red` refuses, and is never a run
+(the newest run, the first, the count leave it out). Task 286's inference of removed rows is gone; a row never run is
+not checked, said.
+
 **The close checks the test contract** — task 286 (PHASE-B.md item 9b, part 7; the owner's answers of 2026-10-22).
 A task with a test contract does not close while a row is certainly wrong — not run, stale, skipped, run badly, red now,
 or a late row not proved on its own base; the rest passes, said. The check comes before verify; a receipt that cannot

@@ -205,6 +205,8 @@ def contract_note() -> str:
 > - A test helper outside `red_tests` (a fixture, a conftest) makes "proved" unreliable: lay it with the tests.
 > - A row's test is a backticked command, or a test id that `red_run` in `.agent/config.json` runs (`{test}`).
 > - A must-not or stay-the-same row shows its sensitivity with a mutant it catches, or says `already true before: <why>`.
+> - A row leaves the contract only by `tasks red --drop <row> --reason "<why>"`, recorded; a renumber keeps a row, an
+>   edit after its run is a new row — drop its old version, run the new one.
 > - A row added later (a judge's finding) is red-first too: its own row (a test added to an old row makes the whole row late), run on the code before its fix — `tasks red --rows <N> --base <scope>=<that commit>`.
 > - The plan panel reviews the contract as one of its lenses; the impl review asks each row for its test.
 > - A Fix task (bugfix, cleanup) has no plan panel: the impl review reads its contract when one runs.
@@ -1087,6 +1089,7 @@ Tasks CLI:
                                (stage the change first — each code_roots repo committed, its gitlink staged if tracked; a later edit outside the task's records means the close runs it again)
     tasks numbers [N]          read-only: a task's own numbers per close (time by kind and section, rounds, seats, verify, the owner) — an open task's as a snapshot
     tasks red [N] [--base [<scope>=]<commit>]  run each `## Test contract` row on the task's base (its start) and write the red receipt
+    tasks red [N] --drop <row> --reason "<why>"  record that a row run before has left the contract (the close blocks until then)
     tasks compact <N>          move <!-- archive:start/end --> narrative to task-archive.md"""
 
 
