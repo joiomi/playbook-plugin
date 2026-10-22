@@ -123,6 +123,9 @@ class Late(Base):
 
             def entries(self, scope, treeish, **_k):  # task 284: a tree-naming reference is listed (all empty here)
                 return {}
+
+            def has(self, scope, treeish):            # task 285: every stub tree is there
+                return True
         rec = {"base": {"code": {"commit": "c2", "used": "commit"}}, "now_tree": {"code": "tn"}}
         unborn = {"code": {"commit": None, "tree": "t0", "used": "tree"}}
         self.assertTrue(red._own_base(rec, unborn, View(None)))

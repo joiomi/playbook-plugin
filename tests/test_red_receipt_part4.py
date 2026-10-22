@@ -71,6 +71,9 @@ class View:
     def on_head(self, scope, commit):
         return self._on_head
 
+    def has(self, scope, treeish):                       # task 285: every stub tree is there
+        return True
+
 
 def _rows(red, lines):
     rows, _ = red.parse_contract("## Test contract\n\n| # | Kind | Behavior | Test |\n|---|---|---|---|\n"

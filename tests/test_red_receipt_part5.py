@@ -62,6 +62,9 @@ class View:
     def on_head(self, scope, commit):
         return True
 
+    def has(self, scope, treeish):                       # task 285: every stub tree is there
+        return True
+
 
 def _rows(red, labels):
     rows, _ = red.parse_contract("## Test contract\n\n| # | Kind | Behavior | Test |\n|---|---|---|---|\n"
@@ -164,12 +167,6 @@ class Base(Base_):
         out = "\n".join(red.render_state(st, "001", "head"))
         self.assertIn("asks again", out)
         self.assertIn("refresh:", out)
-        st = red.compute_state(rows, [rec2], {}, View({}, last_none="scope"), None, 0,      # a code root removed
-                               {"code": {"commit": "c0", "tree": "t0", "clean": True}})
-        out = "\n".join(red.render_state(st, "001", "head"))
-        self.assertIn("no longer a scope", out)
-        self.assertNotIn("asks again", out)
-        self.assertNotIn("refresh:", out)
 
     def test_the_named_dirty_path_is_the_first_sorted(self):
         # row 4 (agy): many paths lack the work — the note names the first one sorted, whatever the hash seed
