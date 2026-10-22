@@ -166,14 +166,14 @@ class RoundThree(unittest.TestCase):
                 self.assertEqual(verdict(cmd)[0], "allow")
 
     def test_git_config_in_the_environment_is_refused(self):
-        # row 18
+        # row 18 (edited after post-panel run 1: any GIT_CONFIG_* assignment on the line, whatever runs — row 21)
         for cmd in ("GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.c GIT_CONFIG_VALUE_0='clean -fd' git c",
                     "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.push GIT_CONFIG_VALUE_0=+main; git push origin",
                     "declare -x GIT_CONFIG_PARAMETERS=x; git c",
                     "bash -c 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=x GIT_CONFIG_VALUE_0=y git push origin'"):
             with self.subTest(cmd=cmd):
                 self.assertEqual(verdict(cmd), ("block", "git-config-unreadable"))
-        for cmd in ("echo GIT_CONFIG_COUNT=1", "GIT_TRACE=1 git status", "GIT_CONFIG_COUNT=1 make build"):
+        for cmd in ("echo GIT_CONFIG_COUNT", "GIT_TRACE=1 git status", "git config --get user.name"):
             with self.subTest(cmd=cmd):
                 self.assertEqual(verdict(cmd)[0], "allow")
 
@@ -188,6 +188,73 @@ class RoundThree(unittest.TestCase):
         for cmd in ("git config user.name x", "git config --get remote.origin.push", "git config -l",
                     "git config remote.origin.push", "git config --unset alias.c", "git config get alias.c",
                     "git config --get-regexp remote.origin.push x", "git config --unset-all alias.c x"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(verdict(cmd)[0], "allow")
+
+
+class PostPanelOne(unittest.TestCase):
+    """Task 293's post-panel run 1 (codex: 1 Critical, 2 Important): git found through a path, `git config` options
+    the parser did not know, a section renamed into `alias` — closed as classes, not spellings."""
+
+    def test_git_config_in_the_environment_is_refused_whatever_runs(self):
+        # row 21: any program on the line may run git with it, whatever the line names
+        for cmd in ("GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.push GIT_CONFIG_VALUE_0=+main /usr/bin/git push origin",
+                    "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.push GIT_CONFIG_VALUE_0=+main ./git push origin",
+                    "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.c GIT_CONFIG_VALUE_0='clean -fd' g''it c",
+                    "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.c GIT_CONFIG_VALUE_0='clean -fd'; $G c",
+                    "GIT_CONFIG_COUNT=1 make build", "echo GIT_CONFIG_COUNT=1",
+                    "GIT_CONFIG_GLOBAL=/tmp/x.cfg git push origin", "env GIT_CONFIG_SYSTEM=/tmp/x.cfg git c",
+                    "GIT_CONFIG=/tmp/x.cfg git c"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(verdict(cmd), ("block", "git-config-unreadable"))
+        for cmd in ("GIT_TRACE=1 git status", "MY_GIT_CONFIG_COUNT=1 make", "/usr/bin/git status"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(verdict(cmd)[0], "allow")
+
+    def test_git_config_is_read_only_through_the_options_it_knows(self):
+        # row 22: every spelling of a value option's value is consumed; an option the guard does not know refuses
+        for cmd in ("git config -t path remote.origin.push +main", "git config -tpath alias.c 'clean -fd'",
+                    "git config --type path alias.c x", "git config --type=path alias.c x",
+                    "git config --comment x alias.c y", "git config --value x clean.requireForce false",
+                    "git config -ffile alias.c x", "git config --file=cfg alias.c x", "git config --no-type alias.c x",
+                    "git config set --append alias.c x", "git config set --comment=x --type bool clean.requireForce false",
+                    "git config --replace-all remote.o.push +x", "git config -- alias.c x",
+                    "git config --bool --global clean.requireForce false"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(verdict(cmd), ("block", "git-config-dangerous"))
+        for cmd in ("git config --typ=path remote.origin.push +main", "git config --frobnicate alias.c x",
+                    "git config -k alias.c x", "git config --glob alias.c x"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(verdict(cmd), ("block", "git-config-unreadable"))
+        for cmd in ("git config --global user.name x", "git config -t bool core.bare", "git config --type=bool core.bare true",
+                    "git config set --comment x user.email y", "git config -f cfg --get alias.c",
+                    "git config --show-origin --list", "git config -lz", "git config get --all --regexp remote",
+                    "git config --get-colorbool color.ui", "git config list --name-only", "git config --no-global user.name x"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(verdict(cmd)[0], "allow")
+
+    def test_a_section_renamed_into_a_guarded_one_is_refused(self):
+        # row 23: both spellings of the rename
+        for cmd in ("git config --rename-section scratch alias", "git config rename-section scratch alias",
+                    "git config rename-section scratch remote.origin", "git config --rename-section x clean",
+                    "git config --file cfg --rename-section a include", "git config --rename-section alias scratch",
+                    "git config scratch.c 'clean -fd'; git config --rename-section scratch alias; git c"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(verdict(cmd), ("block", "git-config-dangerous"))
+        for cmd in ("git config rename-section old new", "git config --remove-section alias",
+                    "git config remove-section remote.origin"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(verdict(cmd)[0], "allow")
+
+    def test_config_loaded_from_a_file_is_refused(self):
+        # row 24: include.path / includeIf.<cond>.path load config the guard cannot read
+        for cmd in ("git config include.path /tmp/x.cfg", "git config --global includeIf.gitdir:~/x/.path y"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(verdict(cmd), ("block", "git-config-dangerous"))
+        for cmd in ("git -c include.path=/tmp/x.cfg push origin", "git -c includeIf.onbranch:main.path=x c"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(verdict(cmd), ("block", "git-config-unreadable"))
+        for cmd in ("git config --get include.path", "git -c user.name=x status"):
             with self.subTest(cmd=cmd):
                 self.assertEqual(verdict(cmd)[0], "allow")
 
@@ -220,6 +287,8 @@ class Docs(unittest.TestCase):
         for word in ("abbreviation", "pathspec", "dry run", "remote.<name>.push", "GIT_CONFIG_", "alias",
                      "not read", "provable", "git config"):                         # rows 12, 16, 20
             self.assertIn(word, doc, word)
+        for words in ("whatever the line runs", "options git lists", "rename", "include.path"):  # row 25
+            self.assertIn(words, doc, words)
 
 
 if __name__ == "__main__":
