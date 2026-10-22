@@ -4,6 +4,13 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+**The red receipt says a start that is gone, and what helps each note** — task 285 (PHASE-B.md item 9b, part 6:
+task 284's last review). A pruned activation tree, or a clean start's commit gone after a reset and `git gc`, is said
+as gone, with no refresh (git is asked only once a listing failed); each note names its remedy — `--check` again, a
+re-run of the row, or none; without base.json the hint skips a removed code root and keeps a start dirty only in docs
+or tests, worked out before the task lock; a design row on the start's code needs no now-tree. The rows' no-colour
+environment is not `verify`'s — a trade-off, said.
+
 **The red receipt reads Twisted trial and coloured output, and judges a reference without base.json** — task 284
 (PHASE-B.md item 9b, part 5: task 283's last review). `PASSED (...)` closes a summary (trial's words from its docs, not
 run here); colour escapes are taken out before reading, and rows run with no colour. A run on base.json records its

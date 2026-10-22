@@ -392,11 +392,19 @@ def _overlay_from_copy(src_root: Path, dst_root: Path, cfg: dict, scope_names: "
     return n
 
 
-def _tree_exists(repo: Path, tree: str) -> bool:
+def _tree_state(repo: Path, treeish: str, timeout: float = 120) -> "bool | None":
+    """Whether a tree (or a commit's) is in `repo`: False only when git says it is not there (`rev-parse --verify
+    --quiet` returns 1 — pruned by `git gc`, a commit gone after a rebase), None when git cannot say (task 285, opus,
+    agy). One predicate for the receipt and for `_plan_base`."""
     try:
-        return _git(repo, ["cat-file", "-e", f"{tree}^{{tree}}"]).returncode == 0
+        r = _git(repo, ["rev-parse", "--verify", "--quiet", f"{treeish}^{{tree}}"], timeout=timeout)
     except (OSError, subprocess.SubprocessError):
-        return False
+        return None
+    return True if r.returncode == 0 else (False if r.returncode == 1 else None)
+
+
+def _tree_exists(repo: Path, tree: str) -> bool:
+    return _tree_state(repo, tree) is True              # "not known" is not there: `_plan_base` fails closed
 
 
 def _commit_of(repo: Path, rev: str) -> "str | None":
@@ -851,8 +859,9 @@ def _write_section(task_file: Path, project: Path, contained: str) -> "tuple[str
                 view, tests_now, why = _prepare(Path(project), cfg, None, True)
                 rows0, _w = parse_contract(read_task_text(task_file))
                 records0, old0 = _read_records(task_dir / RECEIPT_NAME)
-                if rows0:                               # every git answer, now — before the lock
-                    compute_state(rows0, records0, cfg, view, tests_now, old0, _reference(task_dir, records0))
+                if rows0:                               # every git answer, now — before the lock (the hint's
+                    ref0 = _reference(task_dir, records0)   # too: task 285, sonnet, agy)
+                    compute_state(rows0, records0, cfg, view, tests_now, old0, ref0, *_base_hint(task_dir, ref0, view))
             view.frozen = True
             with task_lock(task_file):
                 now_cfg = config()                      # the config may have changed while the trees were built
@@ -866,7 +875,7 @@ def _write_section(task_file: Path, project: Path, contained: str) -> "tuple[str
                     return why_c, None
                 records, old = _read_records(task_dir / RECEIPT_NAME)
                 ref = _reference(task_dir, records)
-                st = compute_state(rows, records, now_cfg, view, tests_now, old, ref, *_base_hint(task_dir, ref))
+                st = compute_state(rows, records, now_cfg, view, tests_now, old, ref, *_base_hint(task_dir, ref, view))
                 st["unchecked"] = _unchecked(view, why)
                 lines = _physical_lines(text)
                 new = _physical_lines(_section(st, contained)) + [""]
@@ -955,7 +964,7 @@ BASE_STATES = {"ok": "proved", "start": "proved on the task's start only", "olde
                "unrelated": "proved on unrelated code", "unchecked": "proved on an unchecked base"}
 
 
-def _base_check(rec: dict, ref, view, late: bool) -> "tuple[str, str, bool]":
+def _base_check(rec: dict, ref, view, late: bool) -> "tuple[str, str, str]":
     """What a proved record's base is against the REFERENCE (base.json, else the first run's base), per scope — one
     rule for every row (task 283): ("ok" | "start" | "older" | "unrelated" | "unchecked", why).
 
@@ -969,7 +978,8 @@ def _base_check(rec: dict, ref, view, late: bool) -> "tuple[str, str, bool]":
       codex). A stated limit: a base that restored a dirty file to its committed form reads "older".
     - What git cannot answer, or a scope the reference does not have, is "unchecked" (task 283, codex).
 
-    The third value says whether a re-run can change an "unchecked" (task 284: a cause code, not the note's words).
+    The third value says what helps an "unchecked" — `--check` again, a re-run of the row, or nothing (`_HELPS`;
+    task 284: a cause code, not the note's words; task 285: which remedy).
     The dirty-work test runs for any reference that names its tree and is not marked clean — a run on base.json
     carries its `clean`, and an older record without it is judged by its listings (a clean one has no dirty path)."""
     b = rec.get("base")
@@ -983,72 +993,78 @@ def _base_check(rec: dict, ref, view, late: bool) -> "tuple[str, str, bool]":
         r = refs.get(scope)
         if not isinstance(r, dict) or not isinstance(e, dict):
             return "unchecked", (f"{where} has no reference (a scope added after the activation?) — a re-run cannot "
-                                 "judge it"), False
+                                 "judge it"), ""
         if r.get("clean") is False and not isinstance(r.get("tree"), str):      # (task 283, codex)
             return "unchecked", (f"{where}'s activation tree was not captured — its uncommitted code is not known; a "
-                                 "re-run cannot judge it"), False
+                                 "re-run cannot judge it"), ""
         rt, et = _ref_treeish(r), _treeish(e)
         if rt is None:                                  # a cause of its own, not "names no tree" (task 284, opus)
-            return "unchecked", f"{where}'s reference names no commit or tree — a re-run cannot judge it", False
-        same =(rt is not None and rt == et) or (r.get("clean") is True and isinstance(e.get("commit"), str)
+            return "unchecked", f"{where}'s reference names no commit or tree — a re-run cannot judge it", ""
+        same = (rt is not None and rt == et) or (r.get("clean") is True and isinstance(e.get("commit"), str)
                                                   and e.get("commit") == r.get("commit"))
         if same and not late:
             continue                                    # the start: no git (task 283, opus)
         if view is None:
-            return "unchecked", "the trees were not read", True
+            return "unchecked", "the trees were not read", "check"
         start = view.digest(scope, rt, code=True)       # each question answered in turn, its own cause (284)
         if start is None:
-            return _unknown(view, where)
-        nowd = view.digest(scope, now.get(scope), code=True)
-        if nowd is None:
-            return _unknown(view, where)
+            return _unknown(view, where, scope, rt, True)
         mine = start if same else view.digest(scope, et, code=True)
         if mine is None:
-            return _unknown(view, where)
-        changed = nowd != start
+            return _unknown(view, where, scope, et)
         if mine == start:
-            if late and changed:
-                on_start.append(scope)
+            if late:                                    # the now-tree only where it is used (task 285, opus)
+                nowd = view.digest(scope, now.get(scope), code=True)
+                if nowd is None:
+                    return _unknown(view, where, scope, now.get(scope))
+                if nowd != start:
+                    on_start.append(scope)
             continue
         rc, ec = r.get("commit"), e.get("commit")
         if isinstance(rc, str) and ec == rc:            # the activation's commit without its uncommitted work
-            return "older", f"{where}'s base is the activation's commit without its uncommitted code", False
+            return "older", f"{where}'s base is the activation's commit without its uncommitted code", ""
         if rc is None:
             after = True                                # an unborn reference: every commit is after it
         else:
             after = view.newer(scope, rc, ec)
             if after is None:
-                return "unchecked", f"git could not tell how {where}'s base and start are related", True
+                return _not_related(view, where, scope, rc, ec)
         if not after:
             before = view.older(scope, ec, rc)
             if before is None:
-                return "unchecked", f"git could not tell how {where}'s base and start are related", True
-            return (("older", f"{where}'s base is older than the start", False) if before else
-                    ("unrelated", f"{where}'s base is neither before nor after the start", False))
-        if not changed:
-            return "unrelated", f"the task changed no code in {where}, and its base is other code", False
+                return _not_related(view, where, scope, rc, ec)
+            return (("older", f"{where}'s base is older than the start", "") if before else
+                    ("unrelated", f"{where}'s base is neither before nor after the start", ""))
+        nowd = view.digest(scope, now.get(scope), code=True)
+        if nowd is None:
+            return _unknown(view, where, scope, now.get(scope))
+        if nowd == start:
+            return "unrelated", f"the task changed no code in {where}, and its base is other code", ""
         names_tree = isinstance(r.get("tree"), str) and rt == r.get("tree")   # not a tree gone (284, opus)
         if names_tree and r.get("clean") is not True:
             c0 = {} if rc is None else view.entries(scope, rc)   # unborn: every code path is the work (283, opus, codex)
             if c0 is None:
-                return _unknown(view, where)
+                return _unknown(view, where, scope, rc, True)
             t0 = view.entries(scope, r["tree"])
             if t0 is None:
-                return _unknown(view, where)
+                return _unknown(view, where, scope, r["tree"], True)
             mine_e = view.entries(scope, et)
             if mine_e is None:
-                return _unknown(view, where)
+                return _unknown(view, where, scope, et)
             none = (None, None)
             for path in sorted(set(c0) | set(t0)):      # the first one named, whatever the hash seed (284, agy)
                 (cm, cb), (tm, tb), (bm, bb) = c0.get(path, none), t0.get(path, none), mine_e.get(path, none)
                 if (cb != tb and bb == cb) or (cm != tm and bm == cm):    # content and mode apart (283, codex)
-                    return "older", f"{where}'s base lacks the activation's uncommitted code ({path})", False
+                    return "older", f"{where}'s base lacks the activation's uncommitted code ({path})", ""
     if on_start:
-        return "start", "its base is the start in " + ", ".join(n or "the project" for n in on_start), False
-    return "ok", "", False
+        return "start", "its base is the start in " + ", ".join(n or "the project" for n in on_start), ""
+    return "ok", "", ""
 
 
-_UNFIXABLE = ("scope",)     # the cause a re-run cannot change; the others return directly (task 284, agy, opus)
+# What helps an answer that was not known (task 285, sonnet, agy): `tasks red --check` asking again ("check"), a re-run
+# of the row ("rerun": it records its trees anew, and only today's scopes), or nothing ("").
+_HELPS = {"frozen": "check", "budget": "check", "git": "check", "tree": "rerun", "scope": "rerun"}
+_GONE_START = "{}'s start is gone from the repository (git gc? a rebase?) — a re-run cannot judge it"
 
 
 def _why_none(view, where: str) -> str:
@@ -1056,14 +1072,30 @@ def _why_none(view, where: str) -> str:
     gone, or a tree the record does not name, is said as that (task 284)."""
     return {"frozen": "written while the section was being written — `tasks red --check` compares it",
             "budget": "the time budget ran out",
-            "scope": f"{where} is no longer a scope (a code root removed?) — a re-run cannot judge it",
+            "scope": f"{where} is no longer a scope (a code root removed?)",
             "tree": f"the record names no tree for {where}"}.get(getattr(view, "last_none", ""),
                                                                  f"git could not list {where}'s trees")
 
 
-def _unknown(view, where: str) -> "tuple[str, str, bool]":
+def _unknown(view, where: str, scope=None, treeish=None, of_start: bool = False) -> "tuple[str, str, str]":
+    """An answer that was not known, and what helps. A listing git could not make is asked whether its tree is still
+    there (task 285, opus, sonnet): the start gone can never be judged; a tree the record names, a re-run records
+    anew."""
     cause = getattr(view, "last_none", "")
-    return "unchecked", _why_none(view, where), cause not in _UNFIXABLE
+    if cause == "git" and scope is not None and view.has(scope, treeish) is False:
+        if of_start:
+            return "unchecked", _GONE_START.format(where), ""
+        return "unchecked", f"a tree the record names in {where} is gone from the repository (git gc?)", "rerun"
+    return "unchecked", _why_none(view, where), _HELPS.get(cause, "check")
+
+
+def _not_related(view, where: str, scope: str, rc, ec) -> "tuple[str, str, str]":
+    """git could not tell how a base and the start are related — either commit may be gone (task 285, opus)."""
+    if view.has(scope, rc) is False:
+        return "unchecked", _GONE_START.format(where), ""
+    if view.has(scope, ec) is False:
+        return "unchecked", f"the commit the record names in {where} is gone from the repository (git gc?)", "rerun"
+    return "unchecked", f"git could not tell how {where}'s base and start are related", "check"
 
 
 def _own_base(rec: dict, ref, view) -> bool:
@@ -1147,7 +1179,7 @@ def compute_state(rows: "list[dict]", records: "list[dict]", cfg: dict, view: "_
         if why:
             e["state"], e["why"] = "stale", " and ".join(why) + " changed"
         elif rec["verdict"] == "proved":                # every proof's base is judged (task 283, sonnet)
-            res, e["base_why"], e["base_fixable"] = _base_check(rec, ref, view, e["late"])
+            res, e["base_why"], e["base_helps"] = _base_check(rec, ref, view, e["late"])
             e["state"] = BASE_STATES[res]
             if res == "unchecked":
                 unchecked_rows.append(row["row"])
@@ -1210,16 +1242,23 @@ def compute_state(rows: "list[dict]", records: "list[dict]", cfg: dict, view: "_
                      "records the rows again")
     if unchecked_rows:                                  # what could not be judged is said (task 283, opus, sonnet)
         mine = [e for e in out if e["row"] in unchecked_rows]
+        helps = {e.get("base_helps") for e in mine}   # each remedy said (task 285, sonnet, agy)
         notes.append(f"{_rows_word(unchecked_rows)}: a base that could not be judged ("
                      + "; ".join(sorted({e["base_why"] for e in mine if e.get("base_why")})) + ")"
-                     + (" — `tasks red --check` asks again" if any(e.get("base_fixable") for e in mine) else ""))
-    half = sorted(s for s, r in ref.items() if isinstance(r, dict) and r.get("clean") is False
-                  and not isinstance(r.get("tree"), str)) if isinstance(ref, dict) else []
-    if half:                                            # `_plan_base` refuses every run there (task 284, codex)
-        hint_base, hint_why = None, (f"cannot be refreshed — {half[0] or 'the project'}'s activation tree was not "
-                                     "captured, so no run can be judged against it")
+                     + (" — `tasks red --check` asks again" if "check" in helps else "")
+                     + (" — a re-run of the row records it anew" if "rerun" in helps else ""))
+    lost = []                                           # a start no run can be judged against (284, codex; 285)
+    for s, r in sorted(ref.items()) if isinstance(ref, dict) else ():
+        if not isinstance(r, dict):
+            continue
+        if r.get("clean") is False and not isinstance(r.get("tree"), str):
+            lost.append(f"{s or 'the project'}'s activation tree was not captured")
+        elif view is not None and view.has(s, _ref_treeish(r)) is False:
+            lost.append(_GONE_START.format(s or "the project").split(" — ")[0])
+    if lost:                                            # `_plan_base` refuses every run there, or none is judged
+        hint_base, hint_why = None, f"cannot be refreshed — {lost[0]}, so no run can be judged against it"
     return {"rows": out, "runs": runs, "notes": notes, "anchor_after": anchor_after, "rewritten": rewritten,
-            "hint_base": hint_base, "hint_why": hint_why, "half": bool(half),
+            "hint_base": hint_base, "hint_why": hint_why, "half": bool(lost),
             "newest": {"run": records[-1]["run"], "at": str(records[-1].get("at", ""))} if records else {},
             "records": len(records)}
 
@@ -1284,7 +1323,7 @@ def render_state(st: dict, task_ref: str, header: str) -> "list[str]":
         lines.append(f"  (staleness not checked: {st['unchecked']} — the rows' text and commands were)")
     elsewhere = ("proved on older code", "proved on unrelated code", "proved on an unchecked base")
     hopeless = {e["row"] for e in rows if e["state"] == "proved on an unchecked base"     # by its cause code, not
-                and not e.get("base_fixable")}                                          # its words (284, agy)
+                and not e.get("base_helps")}                                            # its words (284, agy)
     plain = [e["row"] for e in rows if not e["late"] and e["state"] in ("stale", "no record") + elsewhere
              and e["row"] not in hopeless]
     needs_base = [e["row"] for e in rows if e["late"] and e["state"] in ("stale", "no record",
@@ -1385,6 +1424,13 @@ class _Trees:
             return True if r.returncode == 0 else (False if r.returncode == 1 else None)
         return self._ask(("ancestor", scope, old, new), work)
 
+    def has(self, scope: str, treeish) -> "bool | None":
+        """Whether a tree (or a commit's) is still in the scope's repository: False only when git says it is gone,
+        None when not known (task 285) — asked only once a listing has failed, or for a refresh line."""
+        if scope not in self.scopes or not isinstance(treeish, str) or not treeish:
+            return None
+        return self._ask(("has", scope, treeish), lambda timeout: _tree_state(self.scopes[scope], treeish, timeout))
+
     def newer(self, scope: str, old, new) -> "bool | None":
         """`new` is a commit strictly after `old` (its descendant, not itself — task 282, agy and opus); an `old` of
         None (an unborn repository) has every commit after it."""
@@ -1444,11 +1490,13 @@ def _reference(task_dir: Path, records: "list[dict]"):
 _NO_COMMIT = "need a run on the start, and with no base.json the start names no commit to pass as --base"
 
 
-def _base_hint(task_dir: Path, ref) -> "tuple[str | None, str]":
+def _base_hint(task_dir: Path, ref, view=None) -> "tuple[str | None, str]":
     """(what a refresh hint adds, why there is none). Nothing with base.json; else `--base` for each scope of the
     reference — `tasks red` refuses a run without one there (task 284, opus), each `scope=commit` shell-quoted (284,
     codex) — or None when a scope names no commit, or its start was uncommitted work: no commit holds that code, and
-    a re-run on its commit reads "older" again (task 284, opus, sonnet, codex)."""
+    a re-run on its commit reads "older" again (task 284, opus, sonnet, codex). With the view (task 285): a scope no
+    longer configured is left out (`_plan_base` refuses its `--base` — opus, codex), and a start whose uncommitted
+    part is not code (its code digest the commit's) is named by its commit (codex)."""
     base = _load_base(Path(task_dir))
     if base and isinstance(base.get("scopes"), dict) and "failed" not in base:
         return "", ""
@@ -1456,13 +1504,19 @@ def _base_hint(task_dir: Path, ref) -> "tuple[str | None, str]":
         return None, _NO_COMMIT
     parts = []
     for scope, e in sorted(ref.items()):
+        if view is not None and scope not in view.scopes:
+            continue
         commit = e.get("commit") if isinstance(e, dict) else None
         if not isinstance(commit, str) or not commit:
             return None, _NO_COMMIT
         if e.get("used") != "commit" and isinstance(e.get("tree"), str) and e.get("clean") is not True:
-            return None, (f"need a run on the start, and with no base.json {scope or 'the project'}'s start was "
-                          "uncommitted work — no commit holds it to pass as --base")
+            code = None if view is None else view.digest(scope, e["tree"], code=True)
+            if code is None or code != view.digest(scope, commit, code=True):
+                return None, (f"need a run on the start, and with no base.json {scope or 'the project'}'s start was "
+                              "uncommitted work — no commit holds it to pass as --base")
         parts.append("--base " + shlex.quote(f"{scope}={commit}" if scope else commit))
+    if not parts:                                       # (task 285, sonnet, agy)
+        return None, "need a run on the start, and its scopes are no longer configured (a code root removed?)"
     return " " + " ".join(parts), ""
 
 
@@ -1496,7 +1550,7 @@ def state_of(project: Path, task_dir: Path, rows: "list[dict]", cfg: dict,
     with _no_git_overrides():
         view, tests_now, why = _prepare(Path(project), cfg, deadline, read_trees)
         ref = _reference(Path(task_dir), records)
-        st = compute_state(rows, records, cfg, view, tests_now, old, ref, *_base_hint(Path(task_dir), ref))
+        st = compute_state(rows, records, cfg, view, tests_now, old, ref, *_base_hint(Path(task_dir), ref, view))
     st["unchecked"] = _unchecked(view, why)
     return st
 

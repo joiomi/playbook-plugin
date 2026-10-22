@@ -17,7 +17,7 @@ from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent))
-from tests.test_red_receipt_part5 import Base_, View, _rows  # noqa: E402
+from tests.test_red_receipt_part5 import ROW1, ROW2, Base_, View, _rows  # noqa: E402
 
 
 def _hint(red, d, ref, view):
@@ -33,6 +33,17 @@ def _view(digests, scopes):
     v = View(digests)
     v.scopes = dict.fromkeys(scopes)
     return v
+
+
+class GoneView(View):
+    """A stub view where the named treeishes are gone and ancestry is not known."""
+
+    def __init__(self, digests, gone):
+        super().__init__(digests, newer=None)
+        self.gone = gone
+
+    def has(self, scope, treeish):
+        return treeish not in self.gone
 
 
 class CauseView(View):
@@ -64,40 +75,55 @@ class Gone(Base_):
         self.assertNotIn("asks again", out)
         self.assertNotIn("tasks red 1 --rows", out)
         self.assertNotIn("added later, each needs", out)
+        self.assertRegex(out, r"refresh: rows 2 cannot be refreshed — code's start is gone")    # row 2 never ran
 
     def test_a_pruned_activation_tree_is_said_gone(self):
         # row 1 (opus, sonnet): `git gc` pruned the dirty activation's tree — "git could not list", "asks again"
         (self.code / "extra.py").write_text("X = 1\n", encoding="utf-8")
-        self.started(change=False)                      # the activation: extra.py not committed
+        self.started([ROW1, ROW2], change=False)        # the activation: extra.py not committed
         self.assertIs(self.base()["scopes"]["code"]["clean"], False)
         tree = self.base()["scopes"]["code"]["tree"]
         (self.code / "helper.py").write_text("Y = 2\n", encoding="utf-8")
         later = self.commit_code("the activation's work and more, before the fix")   # a tree of its own
         self.change_code()
-        self.assertEqual(self.cli("red", "--base", f"code={later}").returncode, 0)
+        self.assertEqual(self.cli("red", "--rows", "1", "--base", f"code={later}").returncode, 0)
         self.assertEqual(self.receipt_lines()[-1]["verdict"], "proved")
         self.assertRegex(self.check(), r"row 1: proved\b")
         self.g("gc", "--prune=now", "-q", cwd=self.code)
         self._gone(tree)
+        from tasks import red                           # gone only when git says so (agy)
+        self.assertIs(red._tree_state(self.code, tree), False)
+        self.assertIs(red._tree_state(self.code, later), True)
+        self.assertIsNone(red._tree_state(self.d / "nowhere", tree))
 
     def test_a_clean_start_whose_commit_is_gone(self):
         # row 1 (opus): a clean start's tree is its commit's — a reset, reflog expiry and `git gc` take both
         first = self.head(self.code)
         (self.code / "extra.py").write_text("X = 1\n", encoding="utf-8")
         self.commit_code("the start")
-        self.started(change=False)                      # a clean activation on that commit
+        self.started([ROW1, ROW2], change=False)        # a clean activation on that commit
         self.assertIs(self.base()["scopes"]["code"]["clean"], True)
         tree = self.base()["scopes"]["code"]["tree"]
         (self.code / "helper.py").write_text("Y = 2\n", encoding="utf-8")
         later = self.commit_code("more code, before the fix")
         self.change_code()
-        self.assertEqual(self.cli("red", "--base", f"code={later}").returncode, 0)
+        self.assertEqual(self.cli("red", "--rows", "1", "--base", f"code={later}").returncode, 0)
         self.assertRegex(self.check(), r"row 1: proved\b")
         self.g("reset", "-q", "--hard", first, cwd=self.code)
         self.g("reflog", "expire", "--expire=now", "--all", cwd=self.code)
         self.g("gc", "--prune=now", "-q", cwd=self.code)
         self.change_code()
         self._gone(tree)
+        # the start's tree still listed but its commit gone: ancestry is not known — asked which one is gone
+        from tasks import red
+        rec = {"base": {"code": {"commit": "c1", "used": "commit"}}, "now_tree": {"code": "tn"}}
+        ref = {"code": {"commit": "c0", "tree": "t0", "clean": True}}
+        digests = {"t0": "s", "c1": "b", "tn": "n"}
+        res, why, helps = red._base_check(rec, ref, GoneView(digests, {"c0"}), False)
+        self.assertEqual((res, helps), ("unchecked", ""))
+        self.assertIn("start is gone", why)
+        res, why, helps = red._base_check(rec, ref, GoneView(digests, {"c1"}), False)     # the record's commit
+        self.assertEqual((res, helps), ("unchecked", "rerun"))
 
 
 class Notes(Base_):
