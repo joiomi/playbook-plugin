@@ -1294,12 +1294,15 @@ def _segment_checks(seg):
                         if a.startswith("-") and not a.startswith("--"))
         # `git push --force --force-with-lease` still force-pushes: the presence
         # of the safe flag does not cancel the unsafe one (impl panel round 4).
-        if verb == "push" and ("--force" in args or "f" in short):
+        # Force in either spelling, and git's own per-ref force — a refspec that starts with `+` (task 293, audit 1:
+        # `git clean --force -d` and `git push origin +main` went through).
+        force = "--force" in args or "f" in short
+        if verb == "push" and (force or any(a.startswith("+") and len(a) > 1 for a in args)):
             return ("git-push-force", "force-push overwrites remote history irreversibly")
         if verb == "reset" and "--hard" in args:
             return ("git-reset-hard", "discards uncommitted work irrecoverably")
         if verb == "clean":
-            if "f" in short and "d" in short:
+            if force and "d" in short:
                 return ("git-clean-force", "deletes untracked files/dirs irrecoverably")
     if head == "dd" and any(a.startswith("of=/dev/") for a in values[1:]):
         return ("dd-to-device", "writes raw to a device — destroys it")

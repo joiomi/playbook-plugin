@@ -248,8 +248,9 @@ path that also exists under a nested root.
 ## `.agent/config.json` — `command_guard` (destructive-command interlock)
 
 A PreToolUse hook (`command-guard-hook`) blocks unambiguous high-blast /
-irreversible shell commands — `rm -rf` on a dangerous path, `git push --force`,
-`git reset --hard`, `git clean -fd`, `curl|sh`, `dd`/`mkfs` to a device, a DB
+irreversible shell commands — `rm -rf` on a dangerous path, `git push --force`
+(also `-f` and a `+` refspec such as `git push origin +main`), `git reset --hard`, `git clean -fd` (in any
+spelling of force with `-d`: `-f -d`, `git clean --force -d`), `curl|sh`, `dd`/`mkfs` to a device, a DB
 `DROP`/`TRUNCATE` — before they run, because the sandbox contains filesystem
 blast radius but not outward/logical irreversibility, and judgment alone is not a
 guarantee. It is **conservative** (matches only at a command position, so an
