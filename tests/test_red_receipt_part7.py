@@ -731,6 +731,15 @@ class PostPanel(Closing):
         r, out = self.close()
         self.assertNotIn("was removed from the contract", out)
 
+    def test_a_renumbered_row_rerun_cannot_hide_a_deleted_one(self):
+        # row 33 (run 2, GRAVE): delete broken row 2, renumber green row 3 to 2, re-run row 2 — the red record vanished
+        self.light([ROW1, ("2", "normal", "stays red", "`false 2`"), ("3", "must-not", "the old test", "`tests.test_old`")])
+        self.change_code()
+        self.assertEqual(self.cli("red", "1").returncode, 0)
+        self.set_contract([ROW1, ("2", "must-not", "the old test", "`tests.test_old`")])
+        self.assertEqual(self.cli("red", "1", "--rows", "2").returncode, 0)
+        self.assertRegex(self.blocked(), r"row 2 was removed from the contract.*broken")
+
 
 class Text(unittest.TestCase):
     def test_the_docs_say_the_close_blocks(self):
