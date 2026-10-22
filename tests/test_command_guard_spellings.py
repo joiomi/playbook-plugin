@@ -121,6 +121,8 @@ class RoundTwo(unittest.TestCase):
         # row 13
         for cmd in ("git clean -f", "git clean --force", "git clean -d", "git clean -x", "git clean -i -d",
                     "git clean -f -e build", "git clean -f -epattern", "git clean -f --end-of-options --tmp",
+                    "git clean -f -- -n", "git clean -f --end-of-options -n", "git clean -f -e -n",
+                    "git clean -f --exclude -n",
                     "git -c clean.requireForce=00 clean -d", "git -c clean.requireForce=0x0 clean -d",
                     "V=false git --config-env=clean.requireForce=V clean -d",
                     "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=clean.requireForce GIT_CONFIG_VALUE_0=false git clean -d"):
@@ -135,6 +137,8 @@ class RoundTwo(unittest.TestCase):
             with self.subTest(cmd=cmd):
                 self.assertEqual(verdict(cmd), ("block", "git-push-force"))
         self.assertEqual(verdict("GIT_TRACE=1 git push origin main")[0], "allow")
+        self.assertEqual(verdict("GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.pager GIT_CONFIG_VALUE_0=cat git log")[0],
+                         "allow")
 
     def test_a_command_line_alias_is_expanded(self):
         # row 15

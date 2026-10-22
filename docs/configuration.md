@@ -249,13 +249,15 @@ path that also exists under a nested root.
 
 A PreToolUse hook (`command-guard-hook`) blocks unambiguous high-blast /
 irreversible shell commands — `rm -rf` on a dangerous path, `git push --force`
-(also `-f`, a `+` refspec such as `git push origin +main`, and one set by `-c remote.<name>.push=+…`),
-`git reset --hard`, `git clean -fd` (force in any spelling — `-f`, `git clean --force -d`, an abbreviation such as
-`--fo`, or `-c clean.requireForce=false` — with `-d` or a pathspec, since with a pathspec git removes untracked
-directories without `-d`; a bare `git clean -f` stays allowed), `curl|sh`, `dd`/`mkfs` to a device, a DB
-`DROP`/`TRUNCATE` — before they run, because the sandbox contains filesystem
+(also `-f`, a `+` refspec such as `git push origin +main`, and a push refspec set on the same command by
+`-c remote.<name>.push=+…`, `--config-env` or a `GIT_CONFIG_*` prefix, which the guard cannot read and so refuses),
+`git reset --hard`, every `git clean` that is not a dry run (`-n` / `--dry-run`) — so `git clean --force -d`, an
+abbreviation such as `--fo`, a pathspec, and config that drops git's force requirement are all refused —, a git alias
+defined on the same command (`-c alias.<name>=…`, expanded and judged as what it runs), `curl|sh`, `dd`/`mkfs` to a
+device, a DB `DROP`/`TRUNCATE` — before they run, because the sandbox contains filesystem
 blast radius but not outward/logical irreversibility, and judgment alone is not a
-guarantee. It is **conservative** (matches only at a command position, so an
+guarantee. Git config held elsewhere — `~/.gitconfig`, the repository's config, an alias defined there — is not
+read by the guard (a stated limit). It is **conservative** (matches only at a command position, so an
 `echo`/`grep` of dangerous text is fine for the command-position rules; for the
 two WHOLE-command rules (pipe-to-shell, DB drop) only these inert data regions
 are skipped (task 073): a `cat`/`tee` heredoc body written to a plain file

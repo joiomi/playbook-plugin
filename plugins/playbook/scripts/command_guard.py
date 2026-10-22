@@ -1229,6 +1229,11 @@ def _git_config_overrides(args):
             continue
         if t.startswith("--"):
             base = t.split("=", 1)[0]
+            if base == "--config-env":                  # its value is an environment variable's: not readable here
+                pair = t.split("=", 1)[1] if "=" in t else (args[i + 1] if i + 1 < len(args) else "")
+                i += 1 if "=" in t else 2
+                out.append((pair.partition("=")[0].strip().lower(), None))
+                continue
             if base in _GIT_VALUE_LONG and "=" not in t:
                 i += 2
                 continue
@@ -1247,22 +1252,46 @@ def _git_config_overrides(args):
     return out
 
 
-def _clean_pathspecs(args):
-    """The pathspecs of a `git clean` (its non-option arguments; all after `--`; `-e`/`--exclude` take a value): with
-    one, git removes untracked directories without `-d` (task 293, impl round 1, grok)."""
-    paths, end, i = [], False, 0
+def _clean_is_dry_run(args):
+    """A `git clean` that deletes nothing: `-n` among its short flags or `--dry-run` (task 293, impl round 2: git's
+    config has more ways to drop the force requirement than a text guard can read — numeric booleans, `--config-env`,
+    `GIT_CONFIG_*`, a config file — so every other clean is refused). Letters after `-e` in a cluster are its value,
+    the argument after `-e` / `--exclude` too, and the options end at `--` / `--end-of-options`."""
+    i = 0
     while i < len(args):
         a = args[i]
-        if end:
-            paths.append(a)
-        elif a == "--":
-            end = True
-        elif a in ("-e", "--exclude"):
-            i += 1
-        elif not a.startswith("-"):
-            paths.append(a)
+        if a in ("--", "--end-of-options"):
+            return False
+        if a == "--dry-run":
+            return True
+        if a == "--exclude":
+            i += 2
+            continue
+        if a.startswith("-") and not a.startswith("--") and len(a) > 1:
+            letters = a[1:]
+            k = letters.find("e")
+            flags = letters if k < 0 else letters[:k]
+            if "n" in flags:
+                return True
+            if k == len(letters) - 1:                   # `-e` (or `-fe`): the next argument is its value
+                i += 2
+                continue
         i += 1
-    return paths
+    return False
+
+
+def _git_push_head(seg):
+    """The segment runs `git … push`."""
+    toks = _lex(seg)
+    values = [t[2] for t in toks]
+    if not values or _command_name(values[0]) != "git":
+        return False
+    rest = _git_after_globals(values[1:])
+    return bool(rest) and rest[0] == "push"
+
+
+_ALIAS_DEPTH = [0]
+_GIT_CONFIG_ENV = re.compile(r"(?<![\w])GIT_CONFIG_(?:COUNT|KEY_\d+|VALUE_\d+|PARAMETERS)=")
 
 
 def _brace_alternatives(t):
@@ -1354,19 +1383,30 @@ def _segment_checks(seg):
         # Force in either spelling, and git's own per-ref force — a refspec that starts with `+` (task 293, audit 1:
         # `git clean --force -d` and `git push origin +main` went through).
         force = "--force" in args or "f" in short
-        cfg_plus = any(k.startswith("remote.") and k.endswith(".push") and v.startswith("+") for k, v in git_cfg)
+        alias = [v for k, v in git_cfg if k == "alias." + verb.lower()]
+        if alias:                                       # a command-line alias runs its body (impl round 2, grok)
+            if alias[-1] is None:
+                return ("git-alias-unreadable", "an alias set by --config-env on this command cannot be read")
+            body = alias[-1]
+            text = body[1:] if body.startswith("!") else "git " + body
+            if _ALIAS_DEPTH[0] > 8:
+                return (_TOO_DEEP[1], _TOO_DEEP[2])
+            _ALIAS_DEPTH[0] += 1
+            try:
+                v = classify_command(text + "".join(" " + shlex.quote(a) for a in args))
+            finally:
+                _ALIAS_DEPTH[0] -= 1
+            if v[0] == "block":
+                return (v[1], v[2])
+        cfg_plus = any(k.startswith("remote.") and k.endswith(".push") and (v is None or v.startswith("+"))
+                       for k, v in git_cfg)            # a --config-env value cannot be read: refused
         if verb == "push" and (force or cfg_plus or any(a.startswith("+") and len(a) > 1 for a in args)):
             return ("git-push-force", "force-push overwrites remote history irreversibly")
         if verb == "reset" and "--hard" in args:
             return ("git-reset-hard", "discards uncommitted work irrecoverably")
-        if verb == "clean":
-            # a unique prefix of `--force` is `--force` (git's parse-options; clean has no other `--f…`), and a
-            # `-c clean.requireForce=false` needs no force at all (impl round 1)
-            req = [v.lower() for k, v in git_cfg if k == "clean.requireforce"]
-            force = (force or any(len(a) > 2 and "--force".startswith(a) for a in args)
-                     or bool(req and req[-1] in ("false", "no", "off", "0", "")))
-            if force and ("d" in short or _clean_pathspecs(args)):
-                return ("git-clean-force", "deletes untracked files/dirs irrecoverably")
+        if verb == "clean" and not _clean_is_dry_run(args):
+            # every spelling of force, a pathspec, and config that drops the force requirement (impl rounds 1-2)
+            return ("git-clean-force", "deletes untracked files/dirs irrecoverably (only a dry run, `-n`, passes)")
     if head == "dd" and any(a.startswith("of=/dev/") for a in values[1:]):
         return ("dd-to-device", "writes raw to a device — destroys it")
     if head and head.startswith("mkfs"):
@@ -2527,6 +2567,9 @@ def classify_command(command, extra_patterns=None, _depth=0, _argv=False):
 )
         if hit:
             return ("block", hit[0], hit[1])
+        if _GIT_CONFIG_ENV.search(seg) and _git_push_head(stripped):     # task 293, impl round 2 (grok)
+            return ("block", "git-push-force",
+                    "GIT_CONFIG_* on this command can set the push's refspecs, which the guard cannot read")
         inner = _unwrap_shell_c(stripped) or _unwrap_shell_c(normalized)
         if inner and _depth < _MAX_DEPTH:                       # unwrap `bash -lc "<script>"`
             v = classify_command(inner, extra_patterns, _depth + 1)
