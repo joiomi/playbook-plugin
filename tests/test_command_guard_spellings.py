@@ -173,7 +173,7 @@ class RoundThree(unittest.TestCase):
                     "bash -c 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=x GIT_CONFIG_VALUE_0=y git push origin'"):
             with self.subTest(cmd=cmd):
                 self.assertEqual(verdict(cmd), ("block", "git-config-unreadable"))
-        for cmd in ("echo GIT_CONFIG_COUNT=1", "GIT_TRACE=1 git status"):
+        for cmd in ("echo GIT_CONFIG_COUNT=1", "GIT_TRACE=1 git status", "GIT_CONFIG_COUNT=1 make build"):
             with self.subTest(cmd=cmd):
                 self.assertEqual(verdict(cmd)[0], "allow")
 
@@ -181,11 +181,13 @@ class RoundThree(unittest.TestCase):
         # row 19
         for cmd in ("git config remote.origin.push +main", "git config --global alias.c 'clean -fd'",
                     "git config clean.requireForce false", "git config --local remote.origin.mirror true",
-                    "git config set alias.x status", "git config --add remote.o.push +refs/heads/a:refs/heads/a"):
+                    "git config set alias.x status", "git config --add remote.o.push +refs/heads/a:refs/heads/a",
+                    "git config --file .git/config alias.c status", "git config -f cfg clean.requireForce false"):
             with self.subTest(cmd=cmd):
                 self.assertEqual(verdict(cmd), ("block", "git-config-dangerous"))
         for cmd in ("git config user.name x", "git config --get remote.origin.push", "git config -l",
-                    "git config remote.origin.push", "git config --unset alias.c", "git config get alias.c"):
+                    "git config remote.origin.push", "git config --unset alias.c", "git config get alias.c",
+                    "git config --get-regexp remote.origin.push x", "git config --unset-all alias.c x"):
             with self.subTest(cmd=cmd):
                 self.assertEqual(verdict(cmd)[0], "allow")
 

@@ -1252,45 +1252,72 @@ def _git_config_overrides(args):
     return out
 
 
+_CLEAN_SAFE_SHORT = frozenset("fdxXq")
+_CLEAN_SAFE_LONG = ("--force", "--quiet")
+
+
 def _clean_is_dry_run(args):
-    """A `git clean` that deletes nothing: `-n` among its short flags or `--dry-run` (task 293, impl round 2: git's
-    config has more ways to drop the force requirement than a text guard can read — numeric booleans, `--config-env`,
-    `GIT_CONFIG_*`, a config file — so every other clean is refused). Letters after `-e` in a cluster are its value,
-    the argument after `-e` / `--exclude` too, and the options end at `--` / `--end-of-options`."""
-    i = 0
+    """A `git clean` the guard can PROVE deletes nothing (task 293, impl rounds 2-3: git's config and option grammar
+    have more ways to undo a dry run or the force requirement than a text guard can follow — numeric booleans,
+    `--config-env`, `GIT_CONFIG_*`, `--no-dry-run`, abbreviations). Only `-n` / `--dry-run` with the flags `f d x X q`,
+    `-e` / `--exclude[=]` with its value, `--force`, `--quiet` and pathspecs; `--` / `--end-of-options` make the rest
+    paths; the last of `-n` / `--dry-run` / `--no-dry-run` wins. Anything else is not proven: refused."""
+    dry, i = False, 0
     while i < len(args):
         a = args[i]
         if a in ("--", "--end-of-options"):
-            return False
+            return dry
         if a == "--dry-run":
-            return True
-        if a == "--exclude":
+            dry = True
+        elif a == "--no-dry-run":
+            dry = False
+        elif a in _CLEAN_SAFE_LONG or a.startswith("--exclude="):
+            pass
+        elif a == "--exclude":
+            i += 1
+        elif a.startswith("--"):
+            return False                                # an abbreviation, a negation, an option not proven safe
+        elif a.startswith("-") and len(a) > 1:
+            letters = a[1:]
+            for n, ch in enumerate(letters):
+                if ch == "n":
+                    dry = True
+                elif ch == "e":                         # its value: the rest of the cluster, or the next argument
+                    if n == len(letters) - 1:
+                        i += 1
+                    break
+                elif ch not in _CLEAN_SAFE_SHORT:
+                    return False
+        i += 1
+    return dry
+
+
+def _git_config_write_key(args):
+    """The key a `git config` invocation WRITES (lowered), or None for a read, a listing or an unset."""
+    reads = {"--get", "--get-all", "--get-regexp", "--get-urlmatch", "-l", "--list", "--unset", "--unset-all",
+             "--remove-section", "--rename-section", "--get-color", "--get-colorbool", "-e", "--edit"}
+    vals, i = [], 0
+    while i < len(args):
+        a = args[i]
+        if a in reads:
+            return None
+        if a in ("--file", "-f", "--blob", "--type", "--default", "--comment"):
             i += 2
             continue
-        if a.startswith("-") and not a.startswith("--") and len(a) > 1:
-            letters = a[1:]
-            k = letters.find("e")
-            flags = letters if k < 0 else letters[:k]
-            if "n" in flags:
-                return True
-            if k == len(letters) - 1:                   # `-e` (or `-fe`): the next argument is its value
-                i += 2
-                continue
+        if not a.startswith("-"):
+            vals.append(a)
         i += 1
-    return False
+    if vals and vals[0] in ("get", "list", "unset", "rename-section", "remove-section", "edit"):
+        return None
+    if vals and vals[0] == "set":
+        vals = vals[1:]
+    return vals[0].lower() if len(vals) >= 2 else None
 
 
-def _git_push_head(seg):
-    """The segment runs `git … push`."""
-    toks = _lex(seg)
-    values = [t[2] for t in toks]
-    if not values or _command_name(values[0]) != "git":
-        return False
-    rest = _git_after_globals(values[1:])
-    return bool(rest) and rest[0] == "push"
+_GIT_CONFIG_DANGEROUS = re.compile(r"remote\..+\.(?:push|mirror)|alias\..+|clean\.requireforce")
+_RUNS_GIT = re.compile(r"(?<![\w./-])git(?![\w.-])")
 
 
-_ALIAS_DEPTH = [0]
 _GIT_CONFIG_ENV = re.compile(r"(?<![\w])GIT_CONFIG_(?:COUNT|KEY_\d+|VALUE_\d+|PARAMETERS)=")
 
 
@@ -1383,23 +1410,8 @@ def _segment_checks(seg):
         # Force in either spelling, and git's own per-ref force — a refspec that starts with `+` (task 293, audit 1:
         # `git clean --force -d` and `git push origin +main` went through).
         force = "--force" in args or "f" in short
-        alias = [v for k, v in git_cfg if k == "alias." + verb.lower()]
-        if alias:                                       # a command-line alias runs its body (impl round 2, grok)
-            if alias[-1] is None:
-                return ("git-alias-unreadable", "an alias set by --config-env on this command cannot be read")
-            body = alias[-1]
-            text = body[1:] if body.startswith("!") else "git " + body
-            if _ALIAS_DEPTH[0] > 8:
-                return (_TOO_DEEP[1], _TOO_DEEP[2])
-            _ALIAS_DEPTH[0] += 1
-            try:
-                v = classify_command(text + "".join(" " + shlex.quote(a) for a in args))
-            finally:
-                _ALIAS_DEPTH[0] -= 1
-            if v[0] == "block":
-                return (v[1], v[2])
-        cfg_plus = any(k.startswith("remote.") and k.endswith(".push") and (v is None or v.startswith("+"))
-                       for k, v in git_cfg)            # a --config-env value cannot be read: refused
+        cfg_plus = any(k.startswith("remote.") and k.endswith(".push") and v is not None and v.startswith("+")
+                       for k, v in git_cfg)            # a --config-env value (None) is refused below
         if verb == "push" and (force or cfg_plus or any(a.startswith("+") and len(a) > 1 for a in args)):
             return ("git-push-force", "force-push overwrites remote history irreversibly")
         if verb == "reset" and "--hard" in args:
@@ -1407,6 +1419,14 @@ def _segment_checks(seg):
         if verb == "clean" and not _clean_is_dry_run(args):
             # every spelling of force, a pathspec, and config that drops the force requirement (impl rounds 1-2)
             return ("git-clean-force", "deletes untracked files/dirs irrecoverably (only a dry run, `-n`, passes)")
+        # an alias defined on the command line (its chain and the overrides it keeps cannot be followed) and any
+        # `--config-env` (its value is not on the line) are refused (task 293, impl rounds 2-3)
+        if any(k.startswith("alias.") or v is None for k, v in git_cfg):
+            return ("git-config-unreadable", "git config set on this command (an alias, or --config-env) runs what "
+                    "the guard cannot read")
+        if verb == "config" and _GIT_CONFIG_DANGEROUS.fullmatch(_git_config_write_key(args) or ""):
+            return ("git-config-dangerous", "this git config makes a later git command force-push or delete, which "
+                    "the guard cannot see")
     if head == "dd" and any(a.startswith("of=/dev/") for a in values[1:]):
         return ("dd-to-device", "writes raw to a device — destroys it")
     if head and head.startswith("mkfs"):
@@ -2567,9 +2587,6 @@ def classify_command(command, extra_patterns=None, _depth=0, _argv=False):
 )
         if hit:
             return ("block", hit[0], hit[1])
-        if _GIT_CONFIG_ENV.search(seg) and _git_push_head(stripped):     # task 293, impl round 2 (grok)
-            return ("block", "git-push-force",
-                    "GIT_CONFIG_* on this command can set the push's refspecs, which the guard cannot read")
         inner = _unwrap_shell_c(stripped) or _unwrap_shell_c(normalized)
         if inner and _depth < _MAX_DEPTH:                       # unwrap `bash -lc "<script>"`
             v = classify_command(inner, extra_patterns, _depth + 1)
@@ -2615,6 +2632,9 @@ def classify_command(command, extra_patterns=None, _depth=0, _argv=False):
     # because the substitution scan lifted a backtick span out of single quotes
     # (#10, fixed above); measured again, the rule there refuses no command of
     # the corpus.
+    if _GIT_CONFIG_ENV.search(shell_text) and _RUNS_GIT.search(shell_text):     # task 293, impl round 3
+        return ("block", "git-config-unreadable",
+                "GIT_CONFIG_* on this command line sets git config the guard cannot read")
     if _downloads_then_runs(shell_text):
         return ("block", "download-then-run",
                 "running a script this command just downloaded executes unreviewed remote code")
