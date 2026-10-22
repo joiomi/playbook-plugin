@@ -586,6 +586,115 @@ class RoundOne(Closing):
         self.assertRegex(self.blocked(), r"fix `## Test contract`")
 
 
+class RoundTwo(Closing):
+    """Task 286's impl round 2 (rows 24-30)."""
+
+    def in_process_close(self, meanwhile_fn):
+        from tasks import core, lifecycle
+        real = core.has_review_evidence
+
+        def meanwhile(*a, **k):
+            meanwhile_fn()
+            return real(*a, **k)
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(core, "has_review_evidence", meanwhile), contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(err):
+            code = _in_process(self.d, self.env(), lifecycle.cmd_work, ["done"])
+        return code, out.getvalue() + err.getvalue()
+
+    def test_a_deleted_row_cannot_hide_behind_a_renumber(self):
+        # row 24 (opus, GRAVE): rows 1 proved, 2 broken, 3 green; delete 2, renumber 3 to 2 — the close passed
+        self.light([ROW1, ("2", "normal", "stays red", "`false 2`"), ("3", "must-not", "the old test", "`tests.test_old`")])
+        self.change_code()
+        self.assertEqual(self.cli("red", "1").returncode, 0)
+        self.set_contract([ROW1, ("2", "must-not", "the old test", "`tests.test_old`")])
+        self.assertRegex(self.blocked(), r"row 2 was removed from the contract.*broken")
+
+    def test_a_superseded_record_is_not_removed(self):
+        # row 24 (codex, agy): a row edited and re-run green, then renumbered — its older red version is not read
+        self.light([ROW1, ("2", "normal", "stays red", "`false 2`")])
+        self.change_code()
+        self.assertEqual(self.cli("red", "1").returncode, 0)
+        self.set_contract([ROW1, ("2", "must-not", "now green", "`tests.test_old`")])
+        self.assertEqual(self.cli("red", "1", "--rows", "2").returncode, 0)
+        self.set_contract([ROW1, ("3", "must-not", "now green", "`tests.test_old`")])
+        r, out = self.close()
+        self.assertNotIn("was removed from the contract", out)
+
+    def test_a_removed_late_row_keeps_its_base_rule(self):
+        # row 25 (codex, grok, GRAVE): a late row proved only on the start, deleted, passed on its raw `proved`
+        self.light([ROW1])
+        self.change_code()
+        self.assertEqual(self.cli("red", "1").returncode, 0)
+        self.set_contract([ROW1, LATE])
+        self.assertEqual(self.cli("red", "1", "--rows", "2").returncode, 0)
+        self.assertRegex(self.blocked(), r"row 2: proved on the task's start only")
+        self.set_contract([ROW1])
+        self.assertRegex(self.blocked(), r"row 2 was removed from the contract.*proved on the task's start only")
+
+    def test_a_contract_written_during_the_close_is_judged(self):
+        # row 26 (codex, grok, opus, GRAVE): no contract at the check, one written while the close ran — never judged
+        from tests.test_red_receipt import _contract
+        self.light()
+
+        def write_contract():
+            text = self.task_md.read_text(encoding="utf-8")
+            self.task_md.write_text(text.replace("## Pre-review\n", _contract([ROW1]) + "## Pre-review\n", 1),
+                                    encoding="utf-8")
+        code, out = self.in_process_close(write_contract)
+        self.assertEqual(code, 1, out)
+        self.assertFalse(self.done())
+        from tasks import red                           # base.json is in the digest
+        before = red.close_digest(self.d, self.task_md)
+        b = self.task_dir / "base.json"
+        b.write_text(b.read_text(encoding="utf-8").replace('"v": 1', '"v": 1, "x": 1'), encoding="utf-8")
+        self.assertNotEqual(red.close_digest(self.d, self.task_md), before)
+
+    def test_code_written_by_verify_blocks_no_behavior_changes(self):
+        # row 27 (codex, GRAVE): `No behavior changes:` judged before verify — a verify that writes code closed
+        self.light([ROW1])
+        text = self.task_md.read_text(encoding="utf-8")
+        head, rest = text.split("## Test contract", 1)
+        self.task_md.write_text(head + "## Test contract\n<!-- pin -->\n\nNo behavior changes: the docs only.\n\n"
+                                "## Pre-review" + rest.split("## Pre-review", 1)[1], encoding="utf-8")
+        self.config(verify="python3 -c \"open('code/gen.py', 'w').write('X = 1')\"")
+        out = self.blocked()
+        self.assertIn("gen.py", out)
+
+    def test_every_block_has_its_way_through(self):
+        # row 28 (agy, codex, grok, opus): a late partly-proved row's refresh named; the way through for each cause
+        self.light([ROW1])
+        self.change_code()
+        self.assertEqual(self.cli("red", "1").returncode, 0)
+        self.set_contract([ROW1, ("2", "edge", "two tests", "`tests.test_new.N.test_two` `tests.test_old`")])
+        self.assertEqual(self.cli("red", "1", "--rows", "2").returncode, 0)
+        self.assertRegex(self.blocked(), r"added later, each needs its own base: tasks red 001 --rows 2")
+        from tasks import red
+        self.assertIn("section back", red.close_way(["no live `## Test contract` section in task.md"]))
+        self.assertIn("write the contract's rows",
+                      red.close_way(["`No behavior changes:` while code changed since the start (code/src.py)"]))
+
+    def test_a_truncated_record_blocks(self):
+        # row 29 (opus): a crash mid-append left half a record; the older `proved` stood in for it, unsaid
+        self.light([ROW1])
+        self.change_code()
+        self.assertEqual(self.cli("red", "1").returncode, 0)
+        p = self.task_dir / "red-receipt.jsonl"
+        os.chmod(p, 0o644)
+        with open(p, "a", encoding="utf-8") as fh:
+            fh.write(p.read_text(encoding="utf-8").splitlines()[-1][:40] + "\n")
+        self.assertIn("cannot read", self.blocked())
+
+    def test_an_indented_gate_is_a_gate(self):
+        # row 30 (sonnet): core's own reader counts an indented gate; the check did not
+        self.light(gate=True)
+        (self.task_dir / "base.json").unlink()                      # no recorded contract to fall back on
+        from tasks.template import CONTRACT_GATE
+        text = self.task_md.read_text(encoding="utf-8")
+        self.task_md.write_text(text.replace(f"- [x] {CONTRACT_GATE}", f"  - [x] {CONTRACT_GATE}", 1), encoding="utf-8")
+        self.assertIn("no live `## Test contract` section", self.blocked())
+
+
 class Text(unittest.TestCase):
     def test_the_docs_say_the_close_blocks(self):
         # row 13
