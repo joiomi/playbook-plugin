@@ -789,6 +789,15 @@ def _side(r) -> str:
     return str(st or "—")
 
 
+# A line break or control character in a value would add a line to task.md — a `## Status` of its own (task 287, impl
+# round 1: codex, opus, sonnet, grok). `_physical_lines` splits on `\n` only; every other one is refused or flattened too.
+_LINE_BREAKERS = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+
+
+def _one_line(text) -> str:
+    return _LINE_BREAKERS.sub(" ", str(text))
+
+
 def _cell(text: str) -> str:
     """A value inside a table row: no `|` to end the cell, no backtick to open a span (plan panel P8)."""
     return (text or "").replace("\\", "\\\\").replace("|", "\\|").replace("`", "'")
@@ -872,7 +881,7 @@ def _section(st: dict, contained: str) -> str:
         head += ["", "| # | Kind | Test | On the base | Now | State | On the base, its first error (or last line) | Run |",
                  "|---|------|------|-------------|-----|-------|---------------------------------------------|-----|"]
         head += [_row_table_line(e) for e in rest]
-    return "\n".join(head)
+    return "\n".join(_one_line(h) for h in head)          # each value on its own line, never one more (task 287)
 
 
 def _rows_word(labels: "list[str]") -> str:
@@ -1423,11 +1432,11 @@ def render_state(st: dict, task_ref: str, header: str) -> "list[str]":
             s += " — no skip reader matched its output"
         lines.append(s)
     for m in st.get("missing") or ():                  # by its key, its number at its last run (task 287)
-        lines.append(f"  row {m['row']} ({m['kind']}, {m['test']}): recorded, no longer in the contract — "
-                     f"{_drop_command(task_ref, m['row'])} records its removal")
+        lines.append(_one_line(f"  row {m['row']} ({m['kind']}, {m['test']}): recorded, no longer in the contract — "
+                               f"{_drop_command(task_ref, m['row'])} records its removal"))
     for x in st.get("dropped") or ():
-        lines.append(f"  dropped: row {x['row']} ({x.get('kind', '')}, {x.get('test', '')}) — {x.get('reason', '')} "
-                     f"({x.get('at', '')})")
+        lines.append(_one_line(f"  dropped: row {x['row']} ({x.get('kind', '')}, {x.get('test', '')}) — "
+                               f"{x.get('reason', '')} ({x.get('at', '')})"))
     lines.append("  " + _counts(rows, st))
     if st.get("unchecked"):
         lines.append(f"  (staleness not checked: {st['unchecked']} — the rows' text and commands were)")
@@ -1724,8 +1733,8 @@ def _drop_command(task_ref: str, row: str) -> str:
 def _missing_block(m: dict, task_ref: str) -> str:
     """A recorded row gone from the contract — named by its number at its last run, its kind and its test (a record
     keeps no behavior text) — and the command that records its removal (task 287; plan panel P10, opus)."""
-    return (f"row {m['row']} ({m['kind']}, {m['test']}) {_GONE_WORDS} — {m['row']} is its number at its last run; "
-            f"{_drop_command(task_ref, m['row'])} records its removal")
+    return _one_line(f"row {m['row']} ({m['kind']}, {m['test']}) {_GONE_WORDS} — {m['row']} is its number at its last "
+                     f"run; {_drop_command(task_ref, m['row'])} records its removal")
 
 
 _GONE_WORDS = "is recorded but no longer in the contract"
@@ -2102,6 +2111,8 @@ def _parse_drop(args: "list[str]") -> "tuple[list[str], int | None, str | None, 
         return [], None, None, "--reason goes with --drop: `tasks red [<N>] --drop <row> --reason \"<why>\"`"
     if drop is not None and not (reason or "").strip():
         return [], None, None, "--drop needs a --reason that says why (an empty one says nothing)"
+    if reason is not None and _LINE_BREAKERS.search(reason):    # (task 287, impl round 1 — grave)
+        return [], None, None, "--drop's --reason is one line of text: no line break or other control character"
     return rest, drop, reason, ""
 
 

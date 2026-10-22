@@ -10,7 +10,8 @@ not dropped blocks the close, named with its `tasks red <N> --drop <row> --reaso
 changes:` too; an edit after a run is a new row, its old version dropped. `--drop` records the reason, reads task.md and
 the receipt under the task lock and writes in one append, works on a contract `tasks red` refuses, and is never a run
 (the newest run, the first, the count leave it out). Task 286's inference of removed rows is gone; a row never run is
-not checked, said.
+not checked, said. Its first review (grave): a reason with a line break wrote a `## Status` into task.md — such a
+reason is refused, and every line of `## Red receipt` is written as one line.
 
 **The close checks the test contract** — task 286 (PHASE-B.md item 9b, part 7; the owner's answers of 2026-10-22).
 A task with a test contract does not close while a row is certainly wrong — not run, stale, skipped, run badly, red now,
