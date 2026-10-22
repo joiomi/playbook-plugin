@@ -45,7 +45,7 @@ class PushForce(unittest.TestCase):
 class Neighbours(unittest.TestCase):
     def test_the_safe_spellings_pass(self):
         # row 3 (must-not)
-        for cmd in ("git clean -n -d", "git clean -d", "git clean --force", "git clean --dry-run -d",
+        for cmd in ("git clean -n -d", "git clean --dry-run -d", "git clean -n -f -d", "git clean -n -e build",
                     "git push origin main", "git push --force-with-lease", "git push origin main:main",
                     "git push origin --tags", "git push"):
             with self.subTest(cmd=cmd):
@@ -94,7 +94,7 @@ class RoundOne(unittest.TestCase):
         for cmd in ("git clean -f .", "git clean --force src", "git clean -f -- docs", "git clean -fx build/"):
             with self.subTest(cmd=cmd):
                 self.assertEqual(verdict(cmd), ("block", "git-clean-force"))
-        for cmd in ("git clean -f", "git clean --force", "git clean -f -e build", "git clean -n .", "git clean -d -- docs"):
+        for cmd in ("git clean -n .", "git clean --dry-run -- docs"):
             with self.subTest(cmd=cmd):
                 self.assertEqual(verdict(cmd)[0], "allow")
 
@@ -106,10 +106,45 @@ class RoundOne(unittest.TestCase):
                           ("git -c remote.origin.push=+main push origin", "git-push-force")):
             with self.subTest(cmd=cmd):
                 self.assertEqual(verdict(cmd), ("block", rule))
-        for cmd in ("git -c user.name=x push origin main", "git -c clean.requireForce=true clean -d",
+        for cmd in ("git -c user.name=x push origin main", "git -c clean.requireForce=true clean -n -d",
                     "git -c remote.origin.push=main push"):
             with self.subTest(cmd=cmd):
                 self.assertEqual(verdict(cmd)[0], "allow")
+
+
+class RoundTwo(unittest.TestCase):
+    """Task 293's impl round 2 (grok 3 Critical, each removing a directory in a throwaway repo; codex, opus): git's
+    config has more spellings than a text guard can read, so a real `git clean` is refused unless it is a dry run, and
+    a push or an alias whose config sits on the command line is read — or refused when it cannot be read."""
+
+    def test_every_clean_that_is_no_dry_run_is_blocked(self):
+        # row 13
+        for cmd in ("git clean -f", "git clean --force", "git clean -d", "git clean -x", "git clean -i -d",
+                    "git clean -f -e build", "git clean -f -epattern", "git clean -f --end-of-options --tmp",
+                    "git -c clean.requireForce=00 clean -d", "git -c clean.requireForce=0x0 clean -d",
+                    "V=false git --config-env=clean.requireForce=V clean -d",
+                    "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=clean.requireForce GIT_CONFIG_VALUE_0=false git clean -d"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(verdict(cmd), ("block", "git-clean-force"))
+
+    def test_push_config_the_guard_cannot_read_is_refused(self):
+        # row 14
+        for cmd in ("P=+main git --config-env=remote.origin.push=P push origin",
+                    "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.push GIT_CONFIG_VALUE_0=+main git push origin",
+                    "GIT_CONFIG_PARAMETERS=\"'remote.origin.push=+main'\" git push origin"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(verdict(cmd), ("block", "git-push-force"))
+        self.assertEqual(verdict("GIT_TRACE=1 git push origin main")[0], "allow")
+
+    def test_a_command_line_alias_is_expanded(self):
+        # row 15
+        for cmd, rule in (("git -c alias.c='clean -fd' c", "git-clean-force"),
+                          ("git -c alias.p='push origin +main' p", "git-push-force"),
+                          ("git -c alias.x='!rm -rf ~' x", "rm-rf-dangerous-target"),
+                          ("V='clean -fd' git --config-env=alias.c=V c", "git-alias-unreadable")):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(verdict(cmd), ("block", rule))
+        self.assertEqual(verdict("git -c alias.st=status st")[0], "allow")
 
 
 class Hook(unittest.TestCase):
@@ -137,7 +172,8 @@ class Docs(unittest.TestCase):
         doc = (_HERE.parent / "docs" / "configuration.md").read_text(encoding="utf-8")
         self.assertIn("`git clean --force -d`", doc)
         self.assertIn("`+` refspec", doc)
-        for word in ("abbreviation", "pathspec", "clean.requireForce=false", "remote.<name>.push"):   # row 12
+        for word in ("abbreviation", "pathspec", "dry run", "remote.<name>.push", "GIT_CONFIG_", "alias",
+                     "not read"):                                                   # rows 12, 16
             self.assertIn(word, doc, word)
 
 
