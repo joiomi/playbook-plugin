@@ -9,7 +9,11 @@ Each test names the row of task 287's contract it proves. Real temporary git pro
 driven as `python3 -m tasks.cli`. Pure stdlib unittest. Run: python3 tests/test_red_receipt_part8.py
 """
 import hashlib
+import json
+import re
+import subprocess
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -32,6 +36,20 @@ class Part8(Closing):
         self.change_code()
         self.assertEqual(self.cli("red", "1").returncode, 0)
 
+    def no_change(self):
+        """The contract replaced by `No behavior changes:` (task 286, M1439)."""
+        text = self.task_md.read_text(encoding="utf-8")
+        head, rest = text.split("## Test contract", 1)
+        tail = rest.split("## Pre-review", 1)[1]
+        self.task_md.write_text(head + "## Test contract\n<!-- pin -->\n\nNo behavior changes: the docs only.\n\n"
+                                "## Pre-review" + tail, encoding="utf-8")
+
+    def lose_the_start(self):
+        b = self.task_dir / "base.json"
+        doc = json.loads(b.read_text(encoding="utf-8"))
+        doc["scopes"]["code"].update({"tree": None, "clean": False})
+        b.write_text(json.dumps(doc), encoding="utf-8")
+
 
 class Missing(Part8):
     def test_a_missing_row_blocks_with_the_drop_command(self):
@@ -43,9 +61,9 @@ class Missing(Part8):
                 self.run_all()
                 self.set_contract([ROW1])
                 out = self.blocked()
-                self.assertRegex(out, r"row 2 \(" + gone[1] + r", " + gone[3].replace("`", r"`").replace(".", r"\.")
-                                 + r"\) is recorded but no longer in the contract")
-                self.assertIn('tasks red --drop 2 --reason "', out)
+                self.assertRegex(out, r"row 2 \(" + gone[1] + r", " + re.escape(gone[3])
+                                 + r"\) is recorded but no longer in the contract — 2 is its number at its last run")
+                self.assertIn('tasks red 001 --drop 2 --reason "', out)
 
     def test_an_edit_needs_the_old_version_dropped(self):
         # row 4 (M1448): an edit after a run is a new row; the old version blocks until dropped, the new one must run
@@ -55,7 +73,7 @@ class Missing(Part8):
         out = self.blocked()
         self.assertRegex(out, r"row 1 \(normal, `tests\.test_new`\) is recorded but no longer in the contract")
         self.assertRegex(out, r"row 1: stale")
-        r = self.cli("red", "1", "--drop", "1", "--reason", "its text was edited")
+        r = self.cli("red", "1", "--drop", "1", "--reason", "its text was edited")    # row 1 stands: still dropped
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertRegex(self.blocked(), r"row 1: no record")
         self.assertEqual(self.cli("red", "1").returncode, 0)
@@ -96,20 +114,52 @@ class Missing(Part8):
         self.assertEqual(r.returncode, 0, out)
         self.assertNotIn("no longer in the contract", out)
 
+    def test_a_row_never_run_is_not_checked(self):
+        # row 9 (must-not; P9): no record, nothing recorded to lose — the anchor run records every design row
+        self.light([ROW1, RED2])
+        self.change_code()
+        self.assertEqual(self.cli("red", "1", "--rows", "1").returncode, 0)
+        self.set_contract([ROW1])
+        r, out = self.close()
+        self.assertEqual(r.returncode, 0, out)
+        self.assertNotIn("no longer in the contract", out)
+
+    def test_the_way_through_is_the_drop(self):
+        # row 12 (P7, grok): the drop is the way, not "put the row back"; a lost start does not call --force the only one
+        from tasks import red
+        way = red.close_way(['row 2 (normal, `false 2`) is recorded but no longer in the contract — 2 is its number '
+                             'at its last run; `tasks red 001 --drop 2 --reason "<why>"` records its removal'])
+        self.assertIn("--drop", way)
+        self.assertNotIn("(or the row) back", way)
+        self.light([ROW1, GREEN2])
+        self.run_all()
+        self.set_contract([ROW1])
+        self.lose_the_start()
+        out = self.blocked()
+        self.assertIn('tasks red 001 --drop 2 --reason "', out)
+        self.assertNotIn("`--force --reason` is the only way through", out)
+        self.assertEqual(self.cli("red", "1", "--drop", "2", "--reason", "gone").returncode, 0)
+        r, out = self.close()
+        self.assertEqual(r.returncode, 0, out)
+
 
 class Drop(Part8):
     def test_drop_records_the_removal_and_the_close_passes(self):
-        # row 2: the removal written with its reason, as is; the section and `--check` name it; the close passes
+        # row 2: the removal written with its reason, as is; its output, the section and `--check` name it; it passes
         self.light([ROW1, RED2])
         self.run_all()
+        ran = self.receipt_lines()[-1]
         self.set_contract([ROW1])
         r = self.cli("red", "1", "--drop", "2", "--reason", "rândul nu mai e nevoie: comportamentul a ieșit")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("row 2 (normal, `false 2`)", r.stdout)
         rec = self.receipt_lines()[-1]
-        self.assertEqual((rec["verdict"], rec["row"], rec["reason"]),
-                         ("dropped", "2", "rândul nu mai e nevoie: comportamentul a ieșit"))
+        self.assertEqual((rec["verdict"], rec["row"], rec["reason"], rec["kind"], rec["test"]),
+                         ("dropped", "2", "rândul nu mai e nevoie: comportamentul a ieșit", "normal", "`false 2`"))
+        self.assertEqual((rec["row_key"], rec["row_sha"]), (ran["row_key"], ran["row_sha"]))
+        self.assertEqual(rec["contract"], [ran["contract"][0]])
         check = self.cli("red", "1", "--check").stdout
-        self.assertIn("dropped: row 2", check)
+        self.assertIn("dropped: row 2 (normal, `false 2`)", check)
         self.assertIn("rândul nu mai e nevoie", check)
         self.assertIn("rândul nu mai e nevoie", self.section())
         r, out = self.close()
@@ -130,11 +180,13 @@ class Drop(Part8):
                 self.assertRegex(r.stderr, r"Refused|Error: --drop")
                 self.assertIn("drop", r.stderr)
                 self.assertEqual(self.files(), before)
-        r = self.cli("red", "1", "--drop", "2", "--reason", "gone")
+        r = self.cli("red", "1", "--drop", "02", "--reason", "gone")                # a number: 02 is 2
         self.assertEqual(r.returncode, 0, r.stderr)
+        before = self.files()
         r = self.cli("red", "1", "--drop", "2", "--reason", "again")                # a second time: nothing left
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("Refused", r.stderr)
+        self.assertEqual(self.files(), before)
 
     def test_a_dropped_row_put_back_must_run_again(self):
         # row 6: its newest record says it left; back in the contract, it has no run
@@ -145,13 +197,71 @@ class Drop(Part8):
         self.set_contract([ROW1, GREEN2])
         self.assertRegex(self.blocked(), r"row 2: no record")
 
+    def test_a_drop_is_not_a_run(self):
+        # row 10 (P2): a drop as the last line — the newest run, the runs, the count and the rebased note as before it
+        self.light([ROW1, RED2])
+        self.run_all()
+        self.g("checkout", "-q", "--orphan", "other", cwd=self.code)    # the activation's commit off HEAD
+        self.g("commit", "-qm", "another history", cwd=self.code)
+        self.set_contract([ROW1])
+
+        def seen():
+            out = self.cli("red", "1", "--check").stdout.splitlines()
+            sec = [ln for ln in self.section().splitlines() if ln.startswith(("Written by", "Runs:"))]
+            return [ln for ln in out if "row 2" not in ln and "dropped" not in ln], sec
+        self.assertEqual(self.cli("red", "1", "--rows", "1").returncode, 0)     # the section from the contract now
+        before = seen()
+        self.assertIn("not an ancestor of HEAD", "\n".join(before[0]))
+        self.assertNotIn("is not known", "\n".join(before[0]))
+        self.assertEqual(self.cli("red", "1", "--drop", "2", "--reason", "gone").returncode, 0)
+        self.assertEqual(self.receipt_lines()[-1]["verdict"], "dropped")
+        self.assertEqual(seen(), before)
+
+    def test_drop_needs_no_valid_contract(self):
+        # row 11 (P4, P5): `No behavior changes:` does not let a recorded row through, and the drop works there
+        self.light([ROW1, RED2])
+        self.assertEqual(self.cli("red", "1").returncode, 0)                    # recorded, no code changed
+        self.no_change()
+        out = self.blocked()
+        self.assertRegex(out, r"row 2 \(normal, `false 2`\) is recorded but no longer in the contract")
+        self.assertRegex(out, r"row 1 \(normal, `tests\.test_new`\) is recorded but no longer in the contract")
+        for n in ("1", "2"):
+            r = self.cli("red", "1", "--drop", n, "--reason", "nothing to test")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        r, out = self.close()
+        self.assertEqual(r.returncode, 0, out)
+        self.setUp()                                    # a number twice: the contract is refused, the drop is not
+        self.light([ROW1, RED2])
+        self.run_all()
+        self.set_contract([ROW1, ("1", "normal", "twice", "`tests.test_old`")])
+        r = self.cli("red", "1", "--drop", "2", "--reason", "gone")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_the_drop_reads_under_the_lock(self):
+        # row 13 (P6): the row put back while `--drop` waits for the task lock — refused, nothing written
+        from tasks.filelock import task_lock
+        self.light([ROW1, RED2])
+        self.run_all()
+        self.set_contract([ROW1])
+        with task_lock(self.task_md):
+            p = subprocess.Popen([sys.executable, "-m", "tasks.cli", "red", "1", "--drop", "2", "--reason", "x"],
+                                 cwd=self.d, env=self.env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            time.sleep(2)                               # it has read whatever it reads before the lock
+            self.set_contract([ROW1, RED2])
+            before = self.files()
+        out, err = p.communicate(timeout=120)
+        self.assertNotEqual(p.returncode, 0, out + err)
+        self.assertIn("Refused", err)
+        self.assertEqual(self.files(), before)
+
 
 class Text(unittest.TestCase):
     def test_the_docs_say_drop(self):
         # row 8
         doc = (_HERE.parent / "docs" / "cli.md").read_text(encoding="utf-8")
         body = "\n".join(p for p in doc.split("\n\n") if p.startswith("**`tasks red"))
-        for word in ("--drop", "is recorded but no longer in the contract", "an edit after a run is a new row"):
+        for word in ("--drop", "is recorded but no longer in the contract", "an edit after a run is a new row",
+                     "a row never run"):
             self.assertIn(word, body, word)
         self.assertNotIn("a key it never shared a contract with", body)
 
