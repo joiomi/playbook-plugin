@@ -438,6 +438,147 @@ class Minors(Closing):
         self.assertEqual(calls, [])
 
 
+class RoundOne(Closing):
+    """Task 286's impl round 1 (rows 17-23)."""
+
+    def nochange(self, text_line="No behavior changes: the docs only."):
+        text = self.task_md.read_text(encoding="utf-8")
+        head, rest = text.split("## Test contract", 1)
+        tail = rest.split("## Pre-review", 1)[1]
+        self.task_md.write_text(head + "## Test contract\n<!-- pin -->\n\n" + text_line + "\n\n## Pre-review" + tail,
+                                encoding="utf-8")
+
+    def test_a_late_partly_proved_row_needs_its_own_base(self):
+        # row 17 (opus, GRAVE): a late row of two tests — one proved, one already true — was never judged for its base
+        self.light([ROW1])
+        self.change_code()
+        self.assertEqual(self.cli("red", "1").returncode, 0)
+        self.set_contract([ROW1, ("2", "edge", "two tests", "`tests.test_new.N.test_two` `tests.test_old`")])
+        self.assertEqual(self.cli("red", "1", "--rows", "2").returncode, 0)       # on the start: no base of its own
+        self.assertEqual(self.receipt_lines()[-1]["verdict"], "partly proved")
+        out = self.blocked()
+        self.assertRegex(out, r"the test contract: row 2: partly proved")
+
+    def test_a_damaged_repository_blocks(self):
+        # row 18 (opus, GRAVE): git says "not a git repository" for a broken one too — that is git failing, not no git
+        import shutil
+        self.light([ROW1])
+        self.change_code()
+        self.assertEqual(self.cli("red", "1").returncode, 0)
+        shutil.move(str(self.d / ".git"), str(self.d / ".git-real"))
+
+        def restore():
+            g = self.d / ".git"
+            if g.is_dir() and not g.is_symlink():
+                shutil.rmtree(g)
+            elif g.exists() or g.is_symlink():
+                g.unlink()
+            shutil.move(str(self.d / ".git-real"), str(g))
+        self.addCleanup(restore)
+        (self.d / ".git").write_text("gitdir: /nowhere/at/all\n", encoding="utf-8")   # a moved worktree's link
+        r, out = self.close()
+        self.assertEqual(r.returncode, 1, out)
+        self.assertNotIn("not judged: not a git repository", out)
+        self.assertIn("the test contract", out)
+        (self.d / ".git").unlink()
+        (self.d / ".git").mkdir()                                                    # a .git git cannot read
+        r, out = self.close()
+        self.assertEqual(r.returncode, 1, out)
+        self.assertNotIn("not judged: not a git repository", out)
+        from tasks import red
+        env = dict(self.env(), LC_ALL="fr_FR.UTF-8", LANG="fr_FR.UTF-8")             # any locale
+        got = _in_process(self.d, env, red._not_a_repository, self.d)
+        self.assertFalse(got)
+
+    def test_a_removed_red_row_still_blocks(self):
+        # row 19 (opus, GRAVE): deleting a broken row's line from the contract made it pass, unsaid
+        self.light([ROW1, ("2", "normal", "stays red", "`false 2`")])
+        self.change_code()
+        self.assertEqual(self.cli("red", "1").returncode, 0)
+        self.assertEqual([r["verdict"] for r in self.receipt_lines()], ["proved", "broken"])
+        self.set_contract([ROW1])
+        self.assertRegex(self.blocked(), r"row 2 .*removed from the contract.*broken")
+        self.set_contract([("3", "normal", "f returns 2", "`tests.test_new`")])       # renumbered: not removed
+        r, out = self.close()
+        self.assertNotIn("removed from the contract", out)
+
+    def test_no_behavior_changes_as_a_bullet(self):
+        # row 20 (agy, sonnet): a list marker was not read; a fenced example was
+        self.light([ROW1])
+        self.nochange("- No behavior changes: the docs only.")
+        r, out = self.close()
+        self.assertEqual(r.returncode, 0, out)
+        self.assertTrue(self.done())
+
+    def test_a_fenced_no_behavior_changes_is_no_reason(self):
+        # row 20: an example inside a fence is no reason
+        self.light([ROW1])
+        self.nochange("```\nNo behavior changes: an example\n```")
+        self.assertIn("no row", self.blocked())
+
+    def test_no_behavior_changes_reads_every_scope(self):
+        # row 21 (agy, opus, sonnet): a recorded scope no longer configured was skipped — "no code changed", unread
+        self.light([ROW1])
+        self.nochange()
+        self.config(code_roots=[])
+        self.assertIn("no longer configured", self.blocked())
+        # the working-state trees are kept as each is built, a failed tests digest or not (agy)
+        from tasks import red
+        from tasks.core import load_config
+        self.config()
+        cfg = load_config(self.d)
+        view = red._Trees(red._scopes(self.d, cfg), [":(exclude).agent"], cfg)
+        with mock.patch.object(red, "_digest_trees", side_effect=RuntimeError("no digest")):
+            tests, why = red._today(view.scopes, cfg, view.exclude, view)
+        self.assertIsNone(tests)
+        self.assertEqual(sorted(view.today_trees), ["", "code"])
+
+    def test_an_added_code_root_counts_as_changed(self):
+        # row 21: a code root added since the start holds code no start had
+        self.config(code_roots=[])
+        self.light([ROW1])
+        self.nochange()
+        self.config()
+        self.assertIn("src.py", self.blocked())
+
+    def test_a_contract_or_config_changed_during_the_close_refuses(self):
+        # row 22 (opus): the commit's digest covers the contract and the config, not only the receipt
+        from tasks import core, lifecycle
+        real = core.has_review_evidence
+        for change in ("contract", "config"):
+            self.light([ROW1]) if change == "contract" else None
+            if change == "contract":
+                self.change_code()
+                self.assertEqual(self.cli("red", "1").returncode, 0)
+
+            def meanwhile(*a, c=change, **k):
+                if c == "contract":
+                    self.set_contract([ROW1, ("2", "normal", "a new row", "`tests.test_old`")])
+                else:
+                    self.config(red_timeout=301)
+                return real(*a, **k)
+            out, err = io.StringIO(), io.StringIO()
+            with mock.patch.object(core, "has_review_evidence", meanwhile), contextlib.redirect_stdout(out), \
+                    contextlib.redirect_stderr(err):
+                code = _in_process(self.d, self.env(), lifecycle.cmd_work, ["done"])
+            self.assertEqual(code, 1, change + out.getvalue() + err.getvalue())
+            self.assertIn("changed while this close ran", out.getvalue() + err.getvalue(), change)
+            self.assertFalse(self.done())
+            if change == "contract":
+                self.set_contract([ROW1])
+
+    def test_the_block_names_the_way_through(self):
+        # row 23 (opus, sonnet): "Run the `tasks red` named above" where none is named
+        self.light([ROW1])
+        self.change_code()
+        self.assertRegex(self.blocked(), r"run the `tasks red` the check names above")
+        self.assertEqual(self.cli("red", "1").returncode, 0)
+        self.rewrite(lambda rec: rec.update(verdict="broken"))
+        self.assertRegex(self.blocked(), r"make its test run and pass")
+        self.set_contract([ROW1, ("1", "normal", "twice", "`tests.test_old`")])
+        self.assertRegex(self.blocked(), r"fix `## Test contract`")
+
+
 class Text(unittest.TestCase):
     def test_the_docs_say_the_close_blocks(self):
         # row 13
