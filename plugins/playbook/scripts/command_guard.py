@@ -1210,6 +1210,61 @@ def _git_after_globals(args):
     return list(args[i:])
 
 
+def _git_config_overrides(args):
+    """The `-c <name>=<value>` overrides among git's leading global options, as (name lowered, value) in order — git's
+    own config, which `_git_after_globals` drops with the globals (task 293, impl round 1, grok, opus: `git -c
+    clean.requireForce=false clean -d` deleted, `git -c remote.origin.push=+main push` force-pushed). A name with no
+    `=` is git's boolean true."""
+    out = []
+    i = 0
+    while i < len(args):
+        t = args[i]
+        if t == "--":
+            break
+        if t == "-c" or (t.startswith("-c") and len(t) > 2):
+            pair = t[2:] if len(t) > 2 else (args[i + 1] if i + 1 < len(args) else "")
+            i += 1 if len(t) > 2 else 2
+            name, sep, value = pair.partition("=")
+            out.append((name.strip().lower(), value.strip() if sep else "true"))
+            continue
+        if t.startswith("--"):
+            base = t.split("=", 1)[0]
+            if base in _GIT_VALUE_LONG and "=" not in t:
+                i += 2
+                continue
+            if base in _GIT_VALUE_LONG or base in _GIT_FLAG_LONG:
+                i += 1
+                continue
+            break
+        if t.startswith("-") and len(t) > 1:
+            letters = t[1:]
+            if letters[0] in _GIT_VALUE_SHORT:
+                i += 1 if letters[1:] else 2
+                continue
+            i += 1
+            continue
+        break
+    return out
+
+
+def _clean_pathspecs(args):
+    """The pathspecs of a `git clean` (its non-option arguments; all after `--`; `-e`/`--exclude` take a value): with
+    one, git removes untracked directories without `-d` (task 293, impl round 1, grok)."""
+    paths, end, i = [], False, 0
+    while i < len(args):
+        a = args[i]
+        if end:
+            paths.append(a)
+        elif a == "--":
+            end = True
+        elif a in ("-e", "--exclude"):
+            i += 1
+        elif not a.startswith("-"):
+            paths.append(a)
+        i += 1
+    return paths
+
+
 def _brace_alternatives(t):
     """`{/,./build}` expands to `/` and `./build`, so a brace list is dangerous
     when any ALTERNATIVE is (impl panel round 4, sol:medium)."""
@@ -1283,7 +1338,9 @@ def _segment_checks(seg):
     if not values:
         return None
     head = _command_name(values[0])
+    git_cfg = []
     if head == "git":
+        git_cfg = _git_config_overrides(values[1:])
         values = ["git"] + _git_after_globals(values[1:])
     kinds = [t[3] for t in toks]
     if _rm_is_dangerous([head or values[0]] + values[1:], kinds):
@@ -1297,12 +1354,18 @@ def _segment_checks(seg):
         # Force in either spelling, and git's own per-ref force — a refspec that starts with `+` (task 293, audit 1:
         # `git clean --force -d` and `git push origin +main` went through).
         force = "--force" in args or "f" in short
-        if verb == "push" and (force or any(a.startswith("+") and len(a) > 1 for a in args)):
+        cfg_plus = any(k.startswith("remote.") and k.endswith(".push") and v.startswith("+") for k, v in git_cfg)
+        if verb == "push" and (force or cfg_plus or any(a.startswith("+") and len(a) > 1 for a in args)):
             return ("git-push-force", "force-push overwrites remote history irreversibly")
         if verb == "reset" and "--hard" in args:
             return ("git-reset-hard", "discards uncommitted work irrecoverably")
         if verb == "clean":
-            if force and "d" in short:
+            # a unique prefix of `--force` is `--force` (git's parse-options; clean has no other `--f…`), and a
+            # `-c clean.requireForce=false` needs no force at all (impl round 1)
+            req = [v.lower() for k, v in git_cfg if k == "clean.requireforce"]
+            force = (force or any(len(a) > 2 and "--force".startswith(a) for a in args)
+                     or bool(req and req[-1] in ("false", "no", "off", "0", "")))
+            if force and ("d" in short or _clean_pathspecs(args)):
                 return ("git-clean-force", "deletes untracked files/dirs irrecoverably")
     if head == "dd" and any(a.startswith("of=/dev/") for a in values[1:]):
         return ("dd-to-device", "writes raw to a device — destroys it")

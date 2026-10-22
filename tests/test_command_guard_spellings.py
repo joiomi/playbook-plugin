@@ -94,7 +94,7 @@ class RoundOne(unittest.TestCase):
         for cmd in ("git clean -f .", "git clean --force src", "git clean -f -- docs", "git clean -fx build/"):
             with self.subTest(cmd=cmd):
                 self.assertEqual(verdict(cmd), ("block", "git-clean-force"))
-        for cmd in ("git clean -f", "git clean --force", "git clean -f -e build", "git clean -n ."):
+        for cmd in ("git clean -f", "git clean --force", "git clean -f -e build", "git clean -n .", "git clean -d -- docs"):
             with self.subTest(cmd=cmd):
                 self.assertEqual(verdict(cmd)[0], "allow")
 

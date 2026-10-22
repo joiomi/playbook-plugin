@@ -249,8 +249,10 @@ path that also exists under a nested root.
 
 A PreToolUse hook (`command-guard-hook`) blocks unambiguous high-blast /
 irreversible shell commands — `rm -rf` on a dangerous path, `git push --force`
-(also `-f` and a `+` refspec such as `git push origin +main`), `git reset --hard`, `git clean -fd` (in any
-spelling of force with `-d`: `-f -d`, `git clean --force -d`), `curl|sh`, `dd`/`mkfs` to a device, a DB
+(also `-f`, a `+` refspec such as `git push origin +main`, and one set by `-c remote.<name>.push=+…`),
+`git reset --hard`, `git clean -fd` (force in any spelling — `-f`, `git clean --force -d`, an abbreviation such as
+`--fo`, or `-c clean.requireForce=false` — with `-d` or a pathspec, since with a pathspec git removes untracked
+directories without `-d`; a bare `git clean -f` stays allowed), `curl|sh`, `dd`/`mkfs` to a device, a DB
 `DROP`/`TRUNCATE` — before they run, because the sandbox contains filesystem
 blast radius but not outward/logical irreversibility, and judgment alone is not a
 guarantee. It is **conservative** (matches only at a command position, so an
