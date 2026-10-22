@@ -21,12 +21,8 @@ from tests.test_red_receipt_part5 import ROW1, ROW2, Base_, View, _rows  # noqa:
 
 
 def _hint(red, d, ref, view):
-    """`_base_hint`'s suffix, on part 6's signature (with the view) or part 5's (without)."""
-    try:
-        got = red._base_hint(d, ref, view)
-    except TypeError:                                   # part 5's took no view
-        got = red._base_hint(d, ref)
-    return got[0] if isinstance(got, tuple) else got
+    """`_base_hint`'s suffix (part 6's signature; the first run's part 5 fallback is gone — impl round 1, sonnet)."""
+    return red._base_hint(d, ref, view)[0]
 
 
 def _view(digests, scopes):
@@ -44,6 +40,40 @@ class GoneView(View):
 
     def has(self, scope, treeish):
         return treeish not in self.gone
+
+
+class FlipView(View):
+    """Ancestry not known for its own cause; the existence question asked after it leaves another cause."""
+
+    def __init__(self, digests, first, after="budget"):
+        super().__init__(digests, newer=None)
+        self.first, self.after = first, after
+
+    def newer(self, scope, old, new):
+        self.last_none = self.first
+        return None
+
+    def older(self, scope, old, new):
+        self.last_none = self.first
+        return None
+
+    def has(self, scope, treeish):
+        self.last_none = self.after
+        return None
+
+
+class ListView(View):
+    """A listing git could not make; the existence question asked after it leaves the budget's cause."""
+
+    def digest(self, scope, treeish, **_k):
+        got = self.digests.get(treeish)
+        if got is None:
+            self.last_none = "git"
+        return got
+
+    def has(self, scope, treeish):
+        self.last_none = "budget"
+        return None
 
 
 class CauseView(View):
@@ -214,6 +244,68 @@ class Hints(Base_):
         self.assertIn("proved on older code", r.stdout)
         self.assertRegex(r.stdout, r"refresh: tasks red \S+ --rows 1 [^\n]*--base code=" + start)
         self.assertNotIn("written while", r.stdout)
+
+
+class RoundOne(Base_):
+    """Task 285's impl round 1 (rows 8-12)."""
+
+    def test_each_unknown_keeps_its_own_cause(self):
+        # row 8 (agy, sonnet, opus): a frozen view or a spent budget read "git could not tell"; `has` overwrote the cause
+        from tasks import red
+        rec = {"base": {"code": {"commit": "c1", "used": "commit"}}, "now_tree": {"code": "tn"}}
+        ref = {"code": {"commit": "c0", "tree": "t0", "clean": True}}
+        digests = {"t0": "s", "c1": "b", "tn": "n"}
+        res, why, helps = red._base_check(rec, ref, FlipView(digests, "frozen"), False)
+        self.assertEqual((res, helps), ("unchecked", "check"))
+        self.assertIn("written while", why)
+        self.assertIn("budget", red._base_check(rec, ref, FlipView(digests, "budget", after="frozen"), False)[1])
+        res, why, helps = red._base_check(rec, ref, ListView({"t0": "s", "tn": "n"}), False)    # c1 not listed
+        self.assertEqual((res, helps), ("unchecked", "check"))
+        self.assertIn("git could not list", why)
+        nocommit = {"base": {"code": {"tree": "tb", "used": "tree"}}, "now_tree": {"code": "tn"}}
+        res, why, helps = red._base_check(nocommit, ref, FlipView({"t0": "s", "tb": "b", "tn": "n"}, "git"), False)
+        self.assertEqual((res, helps), ("unchecked", "rerun"))                 # not `--check` for ever (agy)
+
+    def test_no_existence_question_without_a_refresh(self):
+        # row 9 (opus): every `--check`, close and `tasks numbers` asked git whether each start was there
+        from unittest import mock
+        from tasks import red
+        from tasks.core import load_config, read_task_text
+        self.started()
+        self.assertEqual(self.cli("red").returncode, 0)
+        rows, _w = red.parse_contract(read_task_text(self.task_md))
+        calls, real = [], red._tree_state
+
+        def counted(*a, **k):
+            calls.append(a[1:2])
+            return real(*a, **k)
+        with mock.patch.object(red, "_tree_state", counted):
+            st = red.state_of(self.d, self.task_dir, rows, load_config(self.d))
+        self.assertEqual([e["state"] for e in st["rows"]], ["proved"])
+        self.assertEqual(calls, [])
+
+    def test_an_unreadable_commit_is_said_so(self):
+        # row 10 (opus): a commit whose code git could not list read "its start was uncommitted work"
+        from tasks import red
+        ref = {"code": {"commit": "c0", "tree": "t0", "used": "tree", "clean": False}}
+        with tempfile.TemporaryDirectory() as d:
+            hint, why = red._base_hint(Path(d), ref, _view({"t0": "s"}, ["code"]))
+        self.assertIsNone(hint)
+        self.assertIn("could not be read", why)
+        self.assertNotIn("uncommitted work", why)
+
+    def test_a_dash_treeish_is_not_known(self):
+        # row 11 (sonnet): `rev-parse --verify --quiet "-v^{tree}"` returns 1 — it read "gone"
+        from tasks import red
+        self.started(change=False)
+        self.assertIsNone(red._tree_state(self.code, "-v"))
+        self.assertIsNone(red._Trees({"code": self.code}, [":(exclude).agent"], {}).has("code", "--all"))
+
+    def test_the_cli_doc_documents_round_one(self):
+        # row 12
+        doc = (_HERE.parent / "docs" / "cli.md").read_text(encoding="utf-8")
+        body = "\n".join(p for p in doc.split("\n\n") if p.startswith("**`tasks red"))
+        self.assertIn("or for a refresh line", body)
 
 
 class Text(unittest.TestCase):
