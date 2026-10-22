@@ -79,6 +79,39 @@ class Wrapped(unittest.TestCase):
                 self.assertEqual(verdict(cmd), ("block", rule))
 
 
+class RoundOne(unittest.TestCase):
+    """Task 293's impl round 1 (grok Critical, reproduced in a throwaway repo; opus, sonnet, codex): three more
+    spellings of the same deletion or force push."""
+
+    def test_an_abbreviated_long_force_is_force(self):
+        # row 9: git's parse-options takes a unique prefix of a long option, and --force is clean's only --f…
+        for cmd in ("git clean --f -d", "git clean --fo -d", "git clean --for -d", "git clean -d --forc"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(verdict(cmd), ("block", "git-clean-force"))
+
+    def test_a_forced_clean_with_a_pathspec_is_blocked(self):
+        # row 10: with a pathspec, git clean removes untracked directories without -d
+        for cmd in ("git clean -f .", "git clean --force src", "git clean -f -- docs", "git clean -fx build/"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(verdict(cmd), ("block", "git-clean-force"))
+        for cmd in ("git clean -f", "git clean --force", "git clean -f -e build", "git clean -n ."):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(verdict(cmd)[0], "allow")
+
+    def test_a_config_override_is_read(self):
+        # row 11: `-c` before the subcommand — git's own config, which the guard dropped with the globals
+        for cmd, rule in (("git -c clean.requireForce=false clean -d", "git-clean-force"),
+                          ("git -c clean.requireforce=0 clean .", "git-clean-force"),
+                          ("git -c remote.origin.push=+refs/heads/main:refs/heads/main push", "git-push-force"),
+                          ("git -c remote.origin.push=+main push origin", "git-push-force")):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(verdict(cmd), ("block", rule))
+        for cmd in ("git -c user.name=x push origin main", "git -c clean.requireForce=true clean -d",
+                    "git -c remote.origin.push=main push"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(verdict(cmd)[0], "allow")
+
+
 class Hook(unittest.TestCase):
     def test_the_hook_blocks_both(self):
         # row 7: the real hook, a temporary project and HOME
@@ -104,6 +137,8 @@ class Docs(unittest.TestCase):
         doc = (_HERE.parent / "docs" / "configuration.md").read_text(encoding="utf-8")
         self.assertIn("`git clean --force -d`", doc)
         self.assertIn("`+` refspec", doc)
+        for word in ("abbreviation", "pathspec", "clean.requireForce=false", "remote.<name>.push"):   # row 12
+            self.assertIn(word, doc, word)
 
 
 if __name__ == "__main__":
