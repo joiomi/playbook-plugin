@@ -655,10 +655,13 @@ def cmd_work(cmd_args):
                     for _ln286 in _rc286["lines"]:
                         print(_ln286, flush=True)
                     if _rc286["blocks"] and not force:
+                        try:
+                            _way286 = _red286.close_way(_rc286["blocks"])
+                        except Exception:       # noqa: BLE001 — the check itself failed to load
+                            _way286 = "override with --force --reason (written in the receipt)."
                         print(f"\nBlocked: cannot close task {prev_task} — the test contract: "
-                              + "; ".join(_rc286["blocks"])
-                              + ". Run the `tasks red` named above, then `tasks work done` again — or override with "
-                              "--force --reason (written in the receipt).", file=sys.stderr, flush=True)
+                              + "; ".join(_rc286["blocks"]) + ". The way through: " + _way286,
+                              file=sys.stderr, flush=True)
                         sys.exit(1)
                 # Evidence contract + consequence gate (P1 / P2). Close is no
                 # longer "write the string done": run the project's declared

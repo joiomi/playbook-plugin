@@ -1190,6 +1190,9 @@ def compute_state(rows: "list[dict]", records: "list[dict]", cfg: dict, view: "_
     for rec in records:
         by_key[rec["row_key"]] = rec
         by_label[rec["row"]] = rec
+    labels_now, keys_then = {r["row"] for r in rows}, {row_key(r) for r in rows}
+    removed = [(rec["row"], rec["verdict"]) for k, rec in by_key.items()     # a row gone from the contract: its key
+               if k not in keys_then and rec["row"] not in labels_now]       # and its number (task 286, opus)
     first: "set | None" = ({k for k in records[0]["contract"] if isinstance(k, str)} or None) if records else None
     if ref is None and records:                         # an empty contract list is unknown (agy)
         ref = records[0].get("base")
@@ -1221,6 +1224,13 @@ def compute_state(rows: "list[dict]", records: "list[dict]", cfg: dict, view: "_
         elif rec["verdict"] == "proved":                # every proof's base is judged (task 283, sonnet)
             res, e["base_why"], e["base_helps"] = _base_check(rec, ref, view, e["late"])
             e["state"] = BASE_STATES[res]
+            if res == "unchecked":
+                unchecked_rows.append(row["row"])
+        elif rec["verdict"] == "partly proved" and e["late"]:   # its proved tests' base too (task 286, opus)
+            res, e["base_why"], e["base_helps"] = _base_check(rec, ref, view, True)
+            e["state"] = "partly proved"
+            if res != "ok":
+                e["base_off"] = BASE_STATES[res]
             if res == "unchecked":
                 unchecked_rows.append(row["row"])
         else:
@@ -1299,7 +1309,7 @@ def compute_state(rows: "list[dict]", records: "list[dict]", cfg: dict, view: "_
                      + (" — `tasks red --check` asks again" if "check" in helps else "")
                      + (" — a re-run of the row records it anew" if "rerun" in helps else ""))
     return {"rows": out, "runs": runs, "notes": notes, "anchor_after": anchor_after, "rewritten": rewritten,
-            "hint_base": hint_base, "hint_why": hint_why, "half": bool(lost),
+            "hint_base": hint_base, "hint_why": hint_why, "half": bool(lost), "removed": removed,
             "newest": {"run": records[-1]["run"], "at": str(records[-1].get("at", ""))} if records else {},
             "records": len(records)}
 
@@ -1515,13 +1525,12 @@ def _today(scopes: "dict[str, Path]", cfg: dict, exclude: "list[str]", view: _Tr
         t, why = worktree_tree_why(repo, exclude)
         if not t:
             return None, f"the working state of {name or 'the project'} cannot be read ({why})"
-        trees[name] = t
+        trees[name] = view.today_trees[name] = t        # kept as built, whatever follows (task 286, agy)
     try:
         tests = _digest_trees(scopes, trees, cfg, exclude, max(view.left(), 1.0))
     except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
         return None, f"the test files cannot be listed ({exc})"
     for name, t in trees.items():
-        view.today_trees[name] = t
         view.today[name] = view.digest(name, t)
     return tests, ""
 
@@ -1625,7 +1634,7 @@ _PLACED = ("proved on older code", "proved on unrelated code", "proved on an unc
 _WHY_BLOCK = {"no record": "not run", "stale": "stale", "skipped": "skipped", "partly skipped": "skipped",
               "refused": "run badly", "unrunnable": "run badly", "launch failed": "run badly", "timeout": "run badly",
               "broken": "red now", "regressed": "red now"}
-_NO_CHANGE = re.compile(r"^\s*No behavior changes:\s*(\S.*?)\s*$")
+_NO_CHANGE = re.compile(r"^\s*(?:[-*]\s+)?No behavior changes:\s*(\S.*?)\s*$")     # a bullet too (286, agy)
 
 
 def close_blocks(st: dict) -> "list[str]":
@@ -1637,6 +1646,10 @@ def close_blocks(st: dict) -> "list[str]":
     out = []
     for e in st.get("rows") or []:
         state, late = e.get("state"), bool(e.get("late"))
+        if state == "partly proved" and late and e.get("base_off"):       # (task 286, opus)
+            out.append(f"row {e.get('row')}: partly proved, {e['base_off']} (added later, not proved on its own "
+                       "base)")
+            continue
         if state in _PASSING or (state in _PLACED and not late):
             continue
         if state in _WHY_BLOCK:
@@ -1646,9 +1659,34 @@ def close_blocks(st: dict) -> "list[str]":
         else:
             why = "a state the close does not know"
         out.append(f"row {e.get('row')}: {state} ({why})")
+    for label, verdict in st.get("removed") or ():
+        if verdict in _WHY_BLOCK:                       # a red row deleted from the table blocks still (286, opus)
+            out.append(f"row {label} was removed from the contract; its newest record is {verdict} "
+                       f"({_WHY_BLOCK[verdict]})")
     if "tests" in (st.get("undecided") or ()):
         out.append("staleness not checked: the test files' digest was not read")
     return out
+
+
+def close_way(blocks: "list[str]") -> str:
+    """The way through a block, by its causes (task 286, opus, sonnet) — never a `tasks red` the check did not name."""
+    text = " ".join(blocks)
+    ways = []
+    if any(w in text for w in ("(not run)", "(stale)", "(added later")):
+        ways.append("run the `tasks red` the check names above")
+    if any(w in text for w in ("(skipped)", "(run badly)", "(red now)")):
+        ways.append("make its test run and pass on the code, then run its row again with `tasks red`")
+    if "refuses the contract" in text or "`## Test contract` has no row" in text or "is not a number" in text \
+            or "appears twice" in text or "a row with no number" in text:
+        ways.append("fix `## Test contract`")
+    if "staleness not checked" in text:
+        ways.append("`tasks work done` again (git, or the time budget, left a row's staleness undecided)")
+    if "recorded a test contract" in text or "removed from the contract" in text:
+        ways.append("put the contract (or the row) back")
+    if "cannot be read" in text or "could not be judged" in text or "could not be read" in text:
+        ways.append("fix what the check says, then `tasks work done` again")
+    ways.append("or override with --force --reason (written in the receipt)")
+    return "; ".join(ways[:-1]) + (" — " if len(ways) > 1 else "") + ways[-1] + "."
 
 
 def _contract_lines(text: str) -> "list[str]":
@@ -1660,7 +1698,8 @@ def _contract_lines(text: str) -> "list[str]":
 
 def _no_change_reason(text: str) -> "str | None":
     """A contract with no row that says why: `No behavior changes: <why>` (the owner, M1439, 2026-10-22 08:47)."""
-    for ln in _contract_lines(text):
+    from tasks.core import _iter_nonfenced
+    for _i, ln in _iter_nonfenced(_contract_lines(text)):  # an example in a fence is none (task 286, sonnet)
         m = _NO_CHANGE.match(ln)
         if m:
             return m.group(1)
@@ -1677,14 +1716,15 @@ def _recorded_contract(task_dir: Path) -> bool:
 
 
 def _not_a_repository(project: Path) -> bool:
-    """Git says the project is not a repository at all — a git that fails otherwise is no such answer (the owner,
-    M1439: it passes, said; a git that fails still blocks)."""
-    try:
-        with _no_git_overrides():
-            r = _git(Path(project), ["rev-parse", "--git-dir"])
-    except (OSError, subprocess.SubprocessError, ValueError):
-        return False
-    return r.returncode != 0 and "not a git repository" in (r.stderr or "").lower()
+    """The project is not a repository at all: no `.git` entry on its path up to `/` (the owner, M1439: it passes,
+    said). Git's own "not a git repository" is also its word for a broken one — a moved worktree's `gitdir:`, a `.git`
+    it cannot read — and depends on the locale: that is git failing, which blocks (task 286, opus)."""
+    p = Path(project).resolve()
+    for d in (p, *p.parents):
+        g = d / ".git"
+        if g.exists() or g.is_symlink():
+            return False
+    return True
 
 
 def close_digest(project: Path, task_file: Path) -> str:
@@ -1730,14 +1770,20 @@ def _code_changed(project: Path, task_dir: Path, cfg: dict, deadline: float) -> 
         view, _tests, why = _prepare(Path(project), cfg, deadline, True)
         changed = []
         for scope, r in sorted(base["scopes"].items()):
-            if scope not in view.scopes:
-                continue
+            if scope not in view.scopes:                # unread is no "unchanged" (task 286, agy, opus, sonnet)
+                return None, (f"{scope or 'the project'} is no longer configured — whether its code changed since "
+                              "the start cannot be read")
             start = view.entries(scope, _ref_treeish(r), code=True)
             now = view.entries(scope, view.today_trees.get(scope), code=True)
             if start is None or now is None:
                 return None, f"whether code changed in {scope or 'the project'} could not be read{f' ({why})' if why else ''}"
             changed += [f"{scope + '/' if scope else ''}{path}" for path in sorted(set(start) | set(now))
                         if start.get(path) != now.get(path)]
+        for scope in sorted(set(view.scopes) - set(base["scopes"])):   # a code root added since the start
+            now = view.entries(scope, view.today_trees.get(scope), code=True)
+            if now is None:
+                return None, f"whether {scope}'s code changed could not be read"
+            changed += [f"{scope}/{path}" for path in sorted(now)]
     return changed, ""
 
 

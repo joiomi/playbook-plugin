@@ -10,7 +10,9 @@ or a late row not proved on its own base; the rest passes, said. The check comes
 be judged blocks (fail closed); `--force --reason` overrides and the receipt names what. The activation records a
 contract, so deleting it does not turn the check off; a project without git passes, said; `No behavior changes: <why>`
 holds only while no code changed. Plus task 285's last five (a lost start's remedies and late rows, removed code roots,
-a NUL, a `-` value never given to git).
+a NUL, a `-` value never given to git). Its first review: a late partly-proved row's base judged; a damaged repository blocks (only no `.git` on
+the path is "not a git repository"); a red row deleted from the contract still blocks; `No behavior changes:` as a list
+item, outside fences, every scope read; the block names the way through by cause.
 
 **The red receipt says a start that is gone, and what helps each note** — task 285 (PHASE-B.md item 9b, part 6:
 task 284's last review). A pruned activation tree, or a clean start's commit gone after a reset and `git gc`, is said

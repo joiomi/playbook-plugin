@@ -210,9 +210,9 @@ class Pass(Closing):
         self.assertEqual(r.returncode, 0, out)
         self.assertIn("not judged: not a git repository", out)
         self.assertTrue(self.done())
-        from tasks import red                           # a git that fails is no "not a repository": it blocks
-        with mock.patch.object(red, "_git", side_effect=OSError("git is gone")):
-            self.assertFalse(red._not_a_repository(self.d))
+        from tasks import red                           # any `.git` on the path is a repository, git able or not
+        (self.d / ".git").mkdir()
+        self.assertFalse(red._not_a_repository(self.d))
 
     def test_no_behavior_changes_needs_no_code_change(self):
         # row 16 (owner, M1439): a task with nothing to test says why; the CLI holds it to no code change
@@ -489,6 +489,8 @@ class RoundOne(Closing):
         env = dict(self.env(), LC_ALL="fr_FR.UTF-8", LANG="fr_FR.UTF-8")             # any locale
         got = _in_process(self.d, env, red._not_a_repository, self.d)
         self.assertFalse(got)
+        (self.d / "sub").mkdir()                                                    # a folder inside a repository
+        self.assertFalse(red._not_a_repository(self.d / "sub"))
 
     def test_a_removed_red_row_still_blocks(self):
         # row 19 (opus, GRAVE): deleting a broken row's line from the contract made it pass, unsaid
@@ -498,9 +500,14 @@ class RoundOne(Closing):
         self.assertEqual([r["verdict"] for r in self.receipt_lines()], ["proved", "broken"])
         self.set_contract([ROW1])
         self.assertRegex(self.blocked(), r"row 2 .*removed from the contract.*broken")
-        self.set_contract([("3", "normal", "f returns 2", "`tests.test_new`")])       # renumbered: not removed
-        r, out = self.close()
-        self.assertNotIn("removed from the contract", out)
+        self.set_contract([("3", "normal", "f returns 2", "`tests.test_new`"), ("2", "normal", "stays red", "`false 2`")])
+        r, out = self.close()                                       # row 1 renumbered to 3: not removed
+        self.assertNotIn("row 1 was removed", out)
+        self.assertIn("row 2: broken (red now)", out)
+        self.set_contract([ROW1, ("2", "normal", "stays red, said again", "`false 2`")])
+        r, out = self.close()                                       # row 2 edited, its number kept: not removed
+        self.assertNotIn("row 2 was removed", out)
+        self.assertIn("row 2: stale", out)
 
     def test_no_behavior_changes_as_a_bullet(self):
         # row 20 (agy, sonnet): a list marker was not read; a fenced example was
