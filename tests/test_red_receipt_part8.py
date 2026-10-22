@@ -260,6 +260,50 @@ class Drop(Part8):
         self.assertEqual(self.files(), before)
 
 
+class CannotFinish(Part8):
+    def test_a_drop_that_cannot_finish_says_so(self):
+        # row 14 (added after the code; the trap list: every `except` driven by what raises it)
+        import os
+        from tasks.filelock import task_lock
+        self.light([ROW1, RED2])
+        self.run_all()
+        self.set_contract([ROW1])
+        before = self.files()
+        with task_lock(self.task_md):                   # the lock held past its wait: refused, nothing written
+            r = subprocess.run([sys.executable, "-m", "tasks.cli", "red", "1", "--drop", "2", "--reason", "x"],
+                               cwd=self.d, env=dict(self.env(), PLAYBOOK_LOCK_TIMEOUT_SECS="1"),
+                               capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("Refused", r.stderr)
+        self.assertEqual(self.files(), before)
+        os.chmod(self.task_dir, 0o555)                  # the section cannot be written after the record: said
+        try:
+            r = self.cli("red", "1", "--drop", "2", "--reason", "gone")
+        finally:
+            os.chmod(self.task_dir, 0o755)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("not written", r.stderr)
+        self.assertIn("the next `tasks red 001` run rewrites the section", r.stderr)
+        self.assertEqual(self.receipt_lines()[-1]["verdict"], "dropped")     # the drop stands; the close reads it
+        r, out = self.close()
+        self.assertEqual(r.returncode, 0, out)
+        self.setUp()                                    # a receipt that cannot be read: a folder in its place
+        self.light([ROW1, RED2])
+        self.run_all()
+        self.set_contract([ROW1])
+        receipt = self.task_dir / "red-receipt.jsonl"
+        os.chmod(receipt, 0o644)
+        receipt.rename(self.task_dir / "kept.jsonl")
+        receipt.mkdir()
+        before = self.task_md.read_bytes()
+        r = self.cli("red", "1", "--drop", "2", "--reason", "x")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("Refused", r.stderr)
+        self.assertEqual(self.task_md.read_bytes(), before)
+        self.no_change()                                # under `No behavior changes:` too: it blocks
+        self.assertIn("the receipt cannot be read", self.blocked())
+
+
 class Text(unittest.TestCase):
     def test_the_docs_say_drop(self):
         # row 8
