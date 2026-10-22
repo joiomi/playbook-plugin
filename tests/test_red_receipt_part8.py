@@ -304,6 +304,37 @@ class CannotFinish(Part8):
         self.assertIn("the receipt cannot be read", self.blocked())
 
 
+class OneLine(Part8):
+    def test_a_reason_cannot_add_a_line_to_task_md(self):
+        # row 15 (impl round 1: codex Critical, opus, sonnet, grok — GRAVE): a reason's line break wrote `## Status`
+        # `done` into task.md; a record read back from the receipt with one (a hand-edited line) did the same
+        three = [ROW1, RED2, ("3", "must-not", "the old test", "`tests.test_old`")]
+        self.light(three)
+        self.run_all()
+        self.set_contract([ROW1, three[2]])
+        before = self.files()
+        for reason in ("removed\n## Status\ndone\n", "x\r\n## Risk\nreversible", "x\x1b[2J", "x ## Status",
+                       "x\x85## Status"):
+            with self.subTest(reason=reason):
+                r = self.cli("red", "1", "--drop", "2", "--reason", reason)
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn("Error: --drop's --reason is one line", r.stderr)
+                self.assertEqual(self.files(), before)
+        self.assertEqual(self.cli("red", "1", "--drop", "2", "--reason", "gone").returncode, 0)
+        self.rewrite(lambda rec: rec.update(reason="gone\n## Status\ndone") if rec["verdict"] == "dropped"
+                     else rec.update(at=rec["at"] + "\n## Risk\nreversible"))
+        self.set_contract([ROW1])
+        r = self.cli("red", "1", "--drop", "3", "--reason", "gone too")     # the section rewritten from the receipt
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        text = self.task_md.read_text(encoding="utf-8")
+        self.assertEqual(text.count("\n## Status\n"), 1, self.section())
+        self.assertEqual(text.count("\n## Risk\n"), 1, self.section())
+        self.assertIn("gone ## Status done", self.section())
+        self.assertNotIn("\n## Status\ndone", self.cli("red", "1", "--check").stdout)
+        r, out = self.close()
+        self.assertEqual(r.returncode, 0, out)
+
+
 class Text(unittest.TestCase):
     def test_the_docs_say_drop(self):
         # row 8
