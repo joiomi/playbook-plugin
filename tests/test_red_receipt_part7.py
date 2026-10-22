@@ -705,6 +705,33 @@ class RoundTwo(Closing):
         self.assertIn("no live `## Test contract` section", self.blocked())
 
 
+class PostPanel(Closing):
+    """Task 286's post-panel judge, run 1 (rows 31-32)."""
+
+    in_process_close = RoundTwo.in_process_close
+
+    def test_a_config_changed_after_verify_refuses(self):
+        # row 31 (GRAVE): verify ran on the old config; the second check took the new one's digest — closed
+        self.light([ROW1])
+        self.change_code()
+        self.assertEqual(self.cli("red", "1").returncode, 0)
+        code, out = self.in_process_close(lambda: self.config(verify="false"))
+        self.assertEqual(code, 1, out)
+        self.assertIn("the config changed while this close ran", out)
+        self.assertFalse(self.done())
+
+    def test_a_superseded_key_is_not_removed(self):
+        # row 32: row 2 red, renumbered to 3, re-run green, then deleted — its old red record was read as removed
+        self.light([ROW1, ("2", "normal", "red, then green", "`tests.test_new.N.test_two`")])
+        self.assertEqual(self.cli("red", "1").returncode, 0)          # the code not changed yet: row 2 red now
+        self.change_code()
+        self.set_contract([ROW1, ("3", "normal", "red, then green", "`tests.test_new.N.test_two`")])
+        self.assertEqual(self.cli("red", "1", "--rows", "1,3").returncode, 0)
+        self.set_contract([ROW1])
+        r, out = self.close()
+        self.assertNotIn("was removed from the contract", out)
+
+
 class Text(unittest.TestCase):
     def test_the_docs_say_the_close_blocks(self):
         # row 13
