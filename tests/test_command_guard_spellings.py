@@ -130,25 +130,64 @@ class RoundTwo(unittest.TestCase):
                 self.assertEqual(verdict(cmd), ("block", "git-clean-force"))
 
     def test_push_config_the_guard_cannot_read_is_refused(self):
-        # row 14
+        # row 14 (edited after round 3: one rule name for config the guard cannot read)
         for cmd in ("P=+main git --config-env=remote.origin.push=P push origin",
                     "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.push GIT_CONFIG_VALUE_0=+main git push origin",
                     "GIT_CONFIG_PARAMETERS=\"'remote.origin.push=+main'\" git push origin"):
             with self.subTest(cmd=cmd):
-                self.assertEqual(verdict(cmd), ("block", "git-push-force"))
+                self.assertEqual(verdict(cmd), ("block", "git-config-unreadable"))
         self.assertEqual(verdict("GIT_TRACE=1 git push origin main")[0], "allow")
-        self.assertEqual(verdict("GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.pager GIT_CONFIG_VALUE_0=cat git log")[0],
-                         "allow")
 
-    def test_a_command_line_alias_is_expanded(self):
-        # row 15
-        for cmd, rule in (("git -c alias.c='clean -fd' c", "git-clean-force"),
-                          ("git -c alias.p='push origin +main' p", "git-push-force"),
-                          ("git -c alias.x='!rm -rf ~' x", "rm-rf-dangerous-target"),
-                          ("V='clean -fd' git --config-env=alias.c=V c", "git-alias-unreadable")):
+    def test_a_command_line_alias_is_refused(self):
+        # row 15 (edited after round 3: an alias chain and the overrides it keeps cannot be followed — refused)
+        for cmd in ("git -c alias.c='clean -fd' c", "git -c alias.p='push origin +main' p",
+                    "git -c alias.x='!rm -rf ~' x", "V='clean -fd' git --config-env=alias.c=V c",
+                    "git -c alias.a=b -c alias.b='clean -fd' a", "git -c remote.origin.push=+main -c alias.p=push p",
+                    "git -c alias.st=status st"):
             with self.subTest(cmd=cmd):
-                self.assertEqual(verdict(cmd), ("block", rule))
-        self.assertEqual(verdict("git -c alias.st=status st")[0], "allow")
+                self.assertEqual(verdict(cmd), ("block", "git-config-unreadable"))
+
+
+class RoundThree(unittest.TestCase):
+    """Task 293's impl round 3 (agy, grok, opus Critical; codex, sonnet): what a dry run is, and git config set on the
+    command line, are refused unless the guard can prove them — the spellings kept coming."""
+
+    def test_a_clean_passes_only_as_a_provable_dry_run(self):
+        # row 17
+        for cmd in ("git clean -n --no-dry-run -fd", "git clean --dry-run --no-dry-run -f", "git clean -fn --no-dry-run",
+                    "git clean -fd --ex -n", "git clean -f --e -n", "git clean -f --ex --dry-run", "git clean -n --no-d -f",
+                    "git clean -n -k -f", "git clean -n --interactive"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(verdict(cmd), ("block", "git-clean-force"))
+        for cmd in ("git clean -n", "git clean -n -d", "git clean --dry-run -x .", "git clean -n -f -d", "git clean -nq",
+                    "git clean -n -e build", "git clean -n --exclude=build", "git clean -n --exclude build",
+                    "git clean -n -- -x", "git clean --dry-run --end-of-options --no-dry-run"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(verdict(cmd)[0], "allow")
+
+    def test_git_config_in_the_environment_is_refused(self):
+        # row 18
+        for cmd in ("GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.c GIT_CONFIG_VALUE_0='clean -fd' git c",
+                    "export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.origin.push GIT_CONFIG_VALUE_0=+main; git push origin",
+                    "declare -x GIT_CONFIG_PARAMETERS=x; git c",
+                    "bash -c 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=x GIT_CONFIG_VALUE_0=y git push origin'"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(verdict(cmd), ("block", "git-config-unreadable"))
+        for cmd in ("echo GIT_CONFIG_COUNT=1", "GIT_TRACE=1 git status"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(verdict(cmd)[0], "allow")
+
+    def test_writing_a_dangerous_git_config_key_is_refused(self):
+        # row 19
+        for cmd in ("git config remote.origin.push +main", "git config --global alias.c 'clean -fd'",
+                    "git config clean.requireForce false", "git config --local remote.origin.mirror true",
+                    "git config set alias.x status", "git config --add remote.o.push +refs/heads/a:refs/heads/a"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(verdict(cmd), ("block", "git-config-dangerous"))
+        for cmd in ("git config user.name x", "git config --get remote.origin.push", "git config -l",
+                    "git config remote.origin.push", "git config --unset alias.c", "git config get alias.c"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(verdict(cmd)[0], "allow")
 
 
 class Hook(unittest.TestCase):
@@ -177,7 +216,7 @@ class Docs(unittest.TestCase):
         self.assertIn("`git clean --force -d`", doc)
         self.assertIn("`+` refspec", doc)
         for word in ("abbreviation", "pathspec", "dry run", "remote.<name>.push", "GIT_CONFIG_", "alias",
-                     "not read"):                                                   # rows 12, 16
+                     "not read", "provable", "git config"):                         # rows 12, 16, 20
             self.assertIn(word, doc, word)
 
 
