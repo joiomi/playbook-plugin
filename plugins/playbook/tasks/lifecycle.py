@@ -494,6 +494,12 @@ def _contract_check(project_path: Path, task_file: Path, prev_task: str, force: 
     if before is not None and before.get("config") and rc.get("config") != before.get("config"):
         rc = dict(rc, applies=True, blocks=list(rc.get("blocks") or []) + [   # verify ran on the first config (the
             "the config changed while this close ran (after the first check) — `tasks work done` again"])  # judge)
+    if before is not None and rc.get("nochange"):     # `No behavior changes:` holds for this working state only —
+        try:                                            # the commit compares it (the post-panel judge, run 3)
+            from tasks.core import tree_state_fingerprint as _tsf
+            rc = dict(rc, tree_fp=_tsf(Path(project_path)) or "unreadable")
+        except Exception as e:                          # noqa: BLE001
+            rc = dict(rc, tree_fp=f"unreadable: {e}")
     if rc.get("applies") and (before is None or rc["lines"] != before.get("lines")):
         if before is not None:
             print("test contract, checked again after verify:", flush=True)
@@ -1443,6 +1449,14 @@ def cmd_work(cmd_args):
                         if _now286 != _rc286.get("digest"):
                             raise CloseRaceRefused("the test contract's receipt, its rows or the config changed while "
                                                    "this close ran — run `tasks work done` again.")
+                        if _rc286.get("tree_fp"):       # `No behavior changes:` was judged on this working state
+                            try:
+                                _tf286 = tree_state_fingerprint(project_path) or "unreadable"
+                            except Exception as _e286c:     # noqa: BLE001
+                                _tf286 = f"unreadable: {_e286c}"
+                            if _tf286 != _rc286["tree_fp"]:
+                                raise CloseRaceRefused("the working state changed after `No behavior changes:` was "
+                                                       "judged — run `tasks work done` again.")
                 try:
                     _rewrite(task_file, lambda _txt: _bound_still_holds() or compose_close(
                         _txt, receipt_heading="Verification Receipt",

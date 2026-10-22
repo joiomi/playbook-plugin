@@ -1294,19 +1294,24 @@ def compute_state(rows: "list[dict]", records: "list[dict]", cfg: dict, view: "_
     if old:
         notes.append(f"{old} record(s) without a row key (written before task 281) are not read — `tasks red` "
                      "records the rows again")
-    born: "dict[str, tuple[int, str]]" = {}             # each key's first record: (its place, the number it had)
     last: "dict[str, int]" = {}
+    beside: "dict[str, set]" = {}                       # the keys each key ever shared a contract with
     for i, rec in enumerate(records):
-        born.setdefault(rec["row_key"], (i, rec["row"]))
         last[rec["row_key"]] = i
+        keys = {k for k in rec["contract"] if isinstance(k, str)}
+        for k in keys:
+            beside.setdefault(k, set()).update(keys)
     removed = []                                        # a row deleted from the contract: the newest record of a key no
     for key, rec in by_key.items():                     # current row reads (task 286, opus, codex, agy; post-panel)
         if key in claimed:
             continue
-        label = rec["row"]
-        if any(k != key and n == label and i > last[key] for k, (i, n) in born.items()):
-            continue                                    # an edit of that row (a key first recorded under its number
-        gone = {"row": label, "late": first is not None and key not in first, "verdict": rec["verdict"]}   # after)
+        label, together = rec["row"], beside.get(key, set())
+        # replaced: a later run of that number by a key it never shared a contract with — an edit, not a renumber
+        # (the post-panel judge, run 3: a row that stood beside it, run or not, is another row)
+        if any(r["row"] == label and r["row_key"] != key and r["row_key"] not in together
+               and key not in r["contract"] for r in records[last[key] + 1:]):
+            continue
+        gone = {"row": label, "late": first is not None and key not in first, "verdict": rec["verdict"]}
         if rec["verdict"] == "proved" or (rec["verdict"] == "partly proved" and gone["late"]):
             res = _base_check(rec, ref, view, gone["late"])[0]        # the live rule, its base too (codex, grok)
             gone["state"] = BASE_STATES[res] if rec["verdict"] == "proved" else "partly proved"
@@ -1878,7 +1883,8 @@ def close_check(project: Path, task_file: Path, budget: float = 20.0) -> dict:
             return result([f"{head}: No behavior changes: {reason} — but code changed since the start: "
                            + ", ".join(changed[:8]) + (" …" if len(changed) > 8 else "")],
                           ["`No behavior changes:` while code changed since the start (" + ", ".join(changed[:8]) + ")"])
-        return result([f"{head}: No behavior changes: {reason} — no code file changed since the start"], [])
+        return dict(result([f"{head}: No behavior changes: {reason} — no code file changed since the start"], []),
+                    nochange=True)                      # its working state is bound at the commit (post-panel judge)
     problems = contract_problems(rows)
     if problems:
         return result([f"{head}: {p} — `tasks red` refuses the contract" for p in problems], problems)
