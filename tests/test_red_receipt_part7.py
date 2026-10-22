@@ -60,13 +60,16 @@ class Closing(Project):
                 out[f.name] = "unreadable"
         return out
 
-    def blocked(self, *extra):
+    def blocked(self, *extra, after_verify=False):
         before = self.written()
         r, out = self.close(*extra)
         self.assertEqual(r.returncode, 1, out)
         self.assertIn("Blocked: cannot close task 001", out)
         self.assertFalse(self.done())
-        self.assertEqual(self.written(), before)
+        now = self.written()
+        if after_verify:                                # verify's own run is journaled before the second check
+            now.pop("enforcement.jsonl"), before.pop("enforcement.jsonl")
+        self.assertEqual(now, before)
         return out
 
     def rewrite(self, edit):
@@ -334,7 +337,7 @@ class Race(Closing):
         self.change_code()
         self.assertEqual(self.cli("red", "1").returncode, 0)
         from tasks import core, lifecycle
-        real = core.has_review_evidence
+        real = core.format_verify_receipt                # after the second check, before the commit (task 286)
         p = self.task_dir / "red-receipt.jsonl"
 
         def meanwhile(*a, **k):
@@ -344,7 +347,7 @@ class Race(Closing):
                 fh.write(line + "\n")
             return real(*a, **k)
         out, err = io.StringIO(), io.StringIO()
-        with mock.patch.object(core, "has_review_evidence", meanwhile), contextlib.redirect_stdout(out), \
+        with mock.patch.object(core, "format_verify_receipt", meanwhile), contextlib.redirect_stdout(out), \
                 contextlib.redirect_stderr(err):
             code = _in_process(self.d, self.env(), lifecycle.cmd_work, ["done"])
         self.assertEqual(code, 1, out.getvalue() + err.getvalue())
@@ -504,6 +507,7 @@ class RoundOne(Closing):
         r, out = self.close()                                       # row 1 renumbered to 3: not removed
         self.assertNotIn("row 1 was removed", out)
         self.assertIn("row 2: broken (red now)", out)
+        self.assertNotIn("row 2 was removed", out)                  # a row in the table is not also "removed"
         self.set_contract([ROW1, ("2", "normal", "stays red, said again", "`false 2`")])
         r, out = self.close()                                       # row 2 edited, its number kept: not removed
         self.assertNotIn("row 2 was removed", out)
@@ -551,7 +555,7 @@ class RoundOne(Closing):
     def test_a_contract_or_config_changed_during_the_close_refuses(self):
         # row 22 (opus): the commit's digest covers the contract and the config, not only the receipt
         from tasks import core, lifecycle
-        real = core.has_review_evidence
+        real = core.format_verify_receipt                # after the second check, before the commit
         for change in ("contract", "config"):
             self.light([ROW1]) if change == "contract" else None
             if change == "contract":
@@ -565,7 +569,7 @@ class RoundOne(Closing):
                     self.config(red_timeout=301)
                 return real(*a, **k)
             out, err = io.StringIO(), io.StringIO()
-            with mock.patch.object(core, "has_review_evidence", meanwhile), contextlib.redirect_stdout(out), \
+            with mock.patch.object(core, "format_verify_receipt", meanwhile), contextlib.redirect_stdout(out), \
                     contextlib.redirect_stderr(err):
                 code = _in_process(self.d, self.env(), lifecycle.cmd_work, ["done"])
             self.assertEqual(code, 1, change + out.getvalue() + err.getvalue())
@@ -649,6 +653,12 @@ class RoundTwo(Closing):
         b = self.task_dir / "base.json"
         b.write_text(b.read_text(encoding="utf-8").replace('"v": 1', '"v": 1, "x": 1'), encoding="utf-8")
         self.assertNotEqual(red.close_digest(self.d, self.task_md), before)
+        before = red.close_digest(self.d, self.task_md)               # the gate line too
+        from tasks.template import CONTRACT_GATE
+        text = self.task_md.read_text(encoding="utf-8")
+        self.task_md.write_text(text.replace("## Work\n", f"## Work\n- [x] {CONTRACT_GATE}\n", 1),
+                                encoding="utf-8")                  # outside the contract section
+        self.assertNotEqual(red.close_digest(self.d, self.task_md), before)
 
     def test_code_written_by_verify_blocks_no_behavior_changes(self):
         # row 27 (codex, GRAVE): `No behavior changes:` judged before verify — a verify that writes code closed
@@ -658,7 +668,7 @@ class RoundTwo(Closing):
         self.task_md.write_text(head + "## Test contract\n<!-- pin -->\n\nNo behavior changes: the docs only.\n\n"
                                 "## Pre-review" + rest.split("## Pre-review", 1)[1], encoding="utf-8")
         self.config(verify="python3 -c \"open('code/gen.py', 'w').write('X = 1')\"")
-        out = self.blocked()
+        out = self.blocked(after_verify=True)
         self.assertIn("gen.py", out)
 
     def test_every_block_has_its_way_through(self):

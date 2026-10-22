@@ -932,11 +932,12 @@ def row_key(row: dict) -> str:
     return hashlib.sha256("\0".join((row["kind"], row["behavior"], row["test"])).encode("utf-8")).hexdigest()[:16]
 
 
-def _read_records(path: Path) -> "tuple[list[dict], int]":
+def _read_records(path: Path, skipped: "list[int] | None" = None) -> "tuple[list[dict], int]":
     """(the receipt's records in file order, how many were written before the row key). A line that is not UTF-8, not
     JSON, or not a record of the shape the state reads is skipped (plan panel: sonnet); a record with no `row_key` /
     `contract` (task 280's) cannot say which row it was, so it is counted and not read — never "its text changed" or
-    "added later" (found by the dogfood on task 280). A receipt that cannot be read raises OSError."""
+    "added later" (found by the dogfood on task 280). A receipt that cannot be read raises OSError. `skipped` collects
+    the line number of each line skipped (the close's check blocks on one — task 286, opus)."""
     try:
         fd = _open_receipt(Path(path), write=False)
     except FileNotFoundError:
@@ -955,14 +956,18 @@ def _read_records(path: Path) -> "tuple[list[dict], int]":
         os.close(fd)
     data = b"".join(chunks)
     out, old = [], 0
-    for raw in data.split(b"\n"):
+    for n, raw in enumerate(data.split(b"\n"), 1):
         if not raw.strip():
             continue
         try:
             rec = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, ValueError):
+            if skipped is not None:
+                skipped.append(n)
             continue
         if not (isinstance(rec, dict) and all(isinstance(rec.get(k), str) for k in ("row", "run", "verdict", "row_sha"))):
+            if skipped is not None:
+                skipped.append(n)
             continue
         if isinstance(rec.get("row_key"), str) and isinstance(rec.get("contract"), list):
             out.append(rec)
@@ -1190,9 +1195,7 @@ def compute_state(rows: "list[dict]", records: "list[dict]", cfg: dict, view: "_
     for rec in records:
         by_key[rec["row_key"]] = rec
         by_label[rec["row"]] = rec
-    labels_now, keys_then = {r["row"] for r in rows}, {row_key(r) for r in rows}
-    removed = [(rec["row"], rec["verdict"]) for k, rec in by_key.items()     # a row gone from the contract: its key
-               if k not in keys_then and rec["row"] not in labels_now]       # and its number (task 286, opus)
+    claimed: "set[str]" = set()                        # the records a current row reads (task 286)
     first: "set | None" = ({k for k in records[0]["contract"] if isinstance(k, str)} or None) if records else None
     if ref is None and records:                         # an empty contract list is unknown (agy)
         ref = records[0].get("base")
@@ -1218,6 +1221,7 @@ def compute_state(rows: "list[dict]", records: "list[dict]", cfg: dict, view: "_
                 why.append("the command")
             if tests_now is not None and rec.get("tests_sha") != tests_now:
                 why.append("the test files")
+        claimed.add(rec["row_key"])
         e["rec"], e["verdict"] = rec, rec["verdict"]
         if why:
             e["state"], e["why"] = "stale", " and ".join(why) + " changed"
@@ -1290,6 +1294,19 @@ def compute_state(rows: "list[dict]", records: "list[dict]", cfg: dict, view: "_
     if old:
         notes.append(f"{old} record(s) without a row key (written before task 281) are not read — `tasks red` "
                      "records the rows again")
+    removed = []                                        # each number's newest record no current row reads: a row
+    for label, rec in by_label.items():                 # deleted, or renumbered over (task 286, opus, codex, agy)
+        if rec["row_key"] in claimed:
+            continue
+        gone = {"row": label, "late": first is not None and rec["row_key"] not in first, "verdict": rec["verdict"]}
+        if rec["verdict"] == "proved" or (rec["verdict"] == "partly proved" and gone["late"]):
+            res = _base_check(rec, ref, view, gone["late"])[0]        # the live rule, its base too (codex, grok)
+            gone["state"] = BASE_STATES[res] if rec["verdict"] == "proved" else "partly proved"
+            if rec["verdict"] == "partly proved" and res != "ok":
+                gone["base_off"] = BASE_STATES[res]
+        else:
+            gone["state"] = rec["verdict"]
+        removed.append(gone)
     refresh = any(e["state"] in _REFRESHED for e in out)   # git is asked only for a refresh line (285, opus)
     lost = []                                           # a start no run can be judged against (284, codex; 285)
     for s, r in sorted(ref.items()) if isinstance(ref, dict) else ():
@@ -1377,9 +1394,10 @@ def render_state(st: dict, task_ref: str, header: str) -> "list[str]":
                 and not e.get("base_helps")}                                            # its words (284, agy)
     plain = [e["row"] for e in rows if not e["late"] and e["state"] in ("stale", "no record") + elsewhere
              and e["row"] not in hopeless]
-    needs_base = [e["row"] for e in rows if e["late"] and e["state"] in ("stale", "no record",
-                                                                         "proved on the task's start only") + elsewhere
-                  and e["row"] not in hopeless]
+    needs_base = [e["row"] for e in rows if e["late"] and (e["state"] in ("stale", "no record",
+                                                                          "proved on the task's start only") + elsewhere
+                                                           or (e["state"] == "partly proved" and e.get("base_off")))
+                  and e["row"] not in hopeless]                       # (task 286, agy, codex, grok)
     if plain and st.get("hint_base") is not None:      # without base.json the hint names the base (284, opus)
         lines.append(f"  refresh: tasks red {task_ref} --rows {','.join(plain)}{st.get('hint_base') or ''}")
     elif plain:                                         # why none can be given (task 284)
@@ -1645,27 +1663,30 @@ def close_blocks(st: dict) -> "list[str]":
     such states, or a late row this table blocks (sonnet, agy, opus). Any other state blocks (fail closed)."""
     out = []
     for e in st.get("rows") or []:
-        state, late = e.get("state"), bool(e.get("late"))
-        if state == "partly proved" and late and e.get("base_off"):       # (task 286, opus)
-            out.append(f"row {e.get('row')}: partly proved, {e['base_off']} (added later, not proved on its own "
-                       "base)")
-            continue
-        if state in _PASSING or (state in _PLACED and not late):
-            continue
-        if state in _WHY_BLOCK:
-            why = _WHY_BLOCK[state]
-        elif late and (state in _PLACED or state == "proved on the task's start only"):
-            why = "added later, not proved on its own base"
-        else:
-            why = "a state the close does not know"
-        out.append(f"row {e.get('row')}: {state} ({why})")
-    for label, verdict in st.get("removed") or ():
-        if verdict in _WHY_BLOCK:                       # a red row deleted from the table blocks still (286, opus)
-            out.append(f"row {label} was removed from the contract; its newest record is {verdict} "
-                       f"({_WHY_BLOCK[verdict]})")
+        why = _row_block(e)
+        if why:
+            out.append(f"row {e.get('row')}: {why}")
+    for e in st.get("removed") or ():                   # a row deleted from the table is judged the same (task 286)
+        why = _row_block(e)
+        if why:
+            out.append(f"row {e.get('row')} was removed from the contract; its newest record: {why}")
     if "tests" in (st.get("undecided") or ()):
         out.append("staleness not checked: the test files' digest was not read")
     return out
+
+
+def _row_block(e: dict) -> "str | None":
+    """Why one row (or one removed from the contract) blocks — None when it passes."""
+    state, late = e.get("state"), bool(e.get("late"))
+    if state == "partly proved" and late and e.get("base_off"):         # (task 286, opus)
+        return f"partly proved, {e['base_off']} (added later, not proved on its own base)"
+    if state in _PASSING or (state in _PLACED and not late):
+        return None
+    if state in _WHY_BLOCK:
+        return f"{state} ({_WHY_BLOCK[state]})"
+    if late and (state in _PLACED or state == "proved on the task's start only"):
+        return f"{state} (added later, not proved on its own base)"
+    return f"{state} (a state the close does not know)"
 
 
 def close_way(blocks: "list[str]") -> str:
@@ -1683,6 +1704,12 @@ def close_way(blocks: "list[str]") -> str:
         ways.append("`tasks work done` again (git, or the time budget, left a row's staleness undecided)")
     if "recorded a test contract" in text or "removed from the contract" in text:
         ways.append("put the contract (or the row) back")
+    if "no live `## Test contract` section" in text:    # (task 286, agy, opus)
+        ways.append("put the `## Test contract` section back")
+    if "while code changed since the start" in text:
+        ways.append("write the contract's rows for the code that changed (or undo the change)")
+    if "the check cannot read" in text:
+        ways.append("repair or remove the receipt's broken line (`tasks red` writes the row again)")
     if "cannot be read" in text or "could not be judged" in text or "could not be read" in text:
         ways.append("fix what the check says, then `tasks work done` again")
     ways.append("or override with --force --reason (written in the receipt)")
@@ -1727,10 +1754,11 @@ def _not_a_repository(project: Path) -> bool:
     return True
 
 
-def close_digest(project: Path, task_file: Path) -> str:
+def close_digest(project: Path, task_file: Path, text: "str | None" = None) -> str:
     """What the check read, by files only — the receipt's bytes, the contract section, the config — compared again at
     the commit under the task lock, where no git runs (task 286, agy). The test files are not in it: their digest is
-    git's (a stated limit; the close's tree check covers a task with an impl round)."""
+    git's (a stated limit; the close's tree check covers a task with an impl round). `text` is the task.md the check
+    parsed — one snapshot; the contract gate and base.json are in it too (task 286, codex, grok, opus)."""
     from tasks.core import load_config, read_task_text
     h = hashlib.sha256()
     try:
@@ -1750,9 +1778,18 @@ def close_digest(project: Path, task_file: Path) -> str:
             os.close(fd)
     h.update(b"\0")
     try:
-        h.update("\n".join(_contract_lines(read_task_text(Path(task_file)))).encode("utf-8", "surrogateescape"))
+        text = read_task_text(Path(task_file)) if text is None else text
+        h.update("\n".join(_contract_lines(text)).encode("utf-8", "surrogateescape"))
+        h.update(b"\0gate" if _has_contract_gate(text) else b"\0no gate")
     except OSError as e:
         h.update(f"task.md unreadable: {e}".encode())
+    h.update(b"\0")
+    try:
+        h.update((Path(task_file).parent / BASE_NAME).read_bytes())
+    except FileNotFoundError:
+        h.update(b"no base")
+    except OSError as e:
+        h.update(f"base unreadable: {e}".encode())
     h.update(b"\0")
     try:
         h.update(json.dumps(load_config(Path(project)), sort_keys=True, default=str).encode())
@@ -1787,7 +1824,7 @@ def _code_changed(project: Path, task_dir: Path, cfg: dict, deadline: float) -> 
     return changed, ""
 
 
-def close_check(project: Path, task_file: Path, budget: float = 20.0) -> "dict | None":
+def close_check(project: Path, task_file: Path, budget: float = 20.0) -> dict:
     """The close's check of the test contract (task 286 — task 281 reported it after the close): None for a task with
     no contract, no contract gate and none recorded at its activation; else {"lines", "blocks", "digest"} — the state
     as `--check` prints it, each certainly-wrong row (`close_blocks`) and any reason the receipt cannot be judged (fail
@@ -1798,13 +1835,13 @@ def close_check(project: Path, task_file: Path, budget: float = 20.0) -> "dict |
     text = read_task_text(task_file)
     rows, why = parse_contract(text)
     gate = _has_contract_gate(text)
+    digest = close_digest(project, task_file, text)     # one snapshot, for every close (task 286, codex, grok)
     if rows is None and not gate and not _recorded_contract(d):
-        return None
+        return {"applies": False, "lines": [], "blocks": [], "digest": digest}
     head = f"test contract (the close's check): task {d.name}"
-    digest = close_digest(project, task_file)
 
     def result(lines: "list[str]", blocks: "list[str]") -> dict:
-        return {"lines": lines, "blocks": blocks, "digest": digest}
+        return {"applies": True, "lines": lines, "blocks": blocks, "digest": digest}
     if rows is None:
         if gate:
             return result([f"{head}: {why} — the task has the `Test contract:` gate"], [why])
@@ -1839,6 +1876,13 @@ def close_check(project: Path, task_file: Path, budget: float = 20.0) -> "dict |
                       [f"the receipt could not be judged ({type(e).__name__}: {e})"])
     lines = render_state(st, d.name.split("-", 1)[0], f"{head}, {len(rows)} row(s), {st['records']} record(s)")
     blocks = close_blocks(st)
+    bad: "list[int]" = []
+    try:
+        _read_records(d / RECEIPT_NAME, bad)
+    except OSError:
+        pass                                            # read just above by `state_of`
+    if bad:                                             # an older record never stands in for a broken line (opus)
+        blocks.append(f"the receipt has {len(bad)} line(s) the check cannot read (line {bad[0]}: a truncated record?)")
     if blocks and st.get("half"):
         blocks.append("no run can be judged against the start — `--force --reason` is the only way through")
     return result(lines, blocks)

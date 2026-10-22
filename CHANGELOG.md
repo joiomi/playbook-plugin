@@ -12,7 +12,9 @@ contract, so deleting it does not turn the check off; a project without git pass
 holds only while no code changed. Plus task 285's last five (a lost start's remedies and late rows, removed code roots,
 a NUL, a `-` value never given to git). Its first review: a late partly-proved row's base judged; a damaged repository blocks (only no `.git` on
 the path is "not a git repository"); a red row deleted from the contract still blocks; `No behavior changes:` as a list
-item, outside fences, every scope read; the block names the way through by cause.
+item, outside fences, every scope read; the block names the way through by cause. Its second review: the check runs again
+after verify and the judges; a removed row is judged by the live rule, by its number's newest record; one snapshot
+(the gate and base.json in the digest); a truncated receipt line blocks.
 
 **The red receipt says a start that is gone, and what helps each note** — task 285 (PHASE-B.md item 9b, part 6:
 task 284's last review). A pruned activation tree, or a clean start's commit gone after a reset and `git gc`, is said
