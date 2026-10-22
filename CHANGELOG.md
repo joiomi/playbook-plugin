@@ -6,7 +6,7 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 **The red receipt says a start that is gone, and what helps each note** — task 285 (PHASE-B.md item 9b, part 6:
 task 284's last review). A pruned activation tree, or a clean start's commit gone after a reset and `git gc`, is said
-as gone, with no refresh (git is asked only once a listing failed, or for a refresh line); each note names its remedy — `--check` again, a
+as gone, with no refresh (git is asked only once a git question about it failed, or for a refresh line); each note names its remedy — `--check` again, a
 re-run of the row, or none; without base.json the hint skips a removed code root and keeps a start dirty only in docs
 or tests, worked out before the task lock; a design row on the start's code needs no now-tree. The rows' no-colour
 environment is not `verify`'s — a trade-off, said.
