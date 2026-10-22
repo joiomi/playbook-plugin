@@ -55,6 +55,8 @@ class View:
     def __init__(self, table, newer=True, on_head=True):
         self.table, self._newer, self._on_head = table, newer, on_head
         self.today: dict = {}
+        from tests.test_red_receipt_part5 import Every     # task 286: every scope configured
+        self.scopes = Every()
 
     def digest(self, scope, treeish, **_k):
         return self.table.get(treeish)

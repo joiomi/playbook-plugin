@@ -4345,7 +4345,7 @@ def freshness_gate_decision(*, risk: str, panel_required: bool,
 
 
 def format_verify_receipt(entries, head_sha, risk, *, reason=None, timestamp=None,
-                          dirty_files=0, freshness=None, post_d6=None) -> str:
+                          dirty_files=0, freshness=None, post_d6=None, contract_overridden=None) -> str:
     """Render ONE receipt ENTRY for the `## Verification Receipt` section (the
     heading itself belongs to upsert_task_section, which keeps entries
     newest-first). `entries` is a list of (source_label, command, rc, output);
@@ -4366,6 +4366,10 @@ def format_verify_receipt(entries, head_sha, risk, *, reason=None, timestamp=Non
         # reading the receipt would stop at that heading before the command list
         # — a false clean for the verify-contract drift sweep (panel round-9).
         out.append(f"- **Forced close, reason:** {' '.join(reason.split())}")
+    if contract_overridden:
+        # Task 286 (PHASE-B 9b part 7): what `--force` overrode in the test contract's check, on one line
+        out.append("- **Test contract, overridden by --force:** "
+                   + "; ".join(" ".join(str(b).split()) for b in contract_overridden))
     # F18 Leg 1: panel freshness is part of the durable record for EVERY close
     # where an impl round exists (the F17 advisory was console-only and its
     # firing at task 010 stayed unwitnessable forever). `freshness` is a dict:

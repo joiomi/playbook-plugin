@@ -639,6 +639,27 @@ def cmd_work(cmd_args):
                               "count. Finish them, or override with --force --reason.",
                               file=sys.stderr)
                         sys.exit(1)
+                # Task 286 (PHASE-B 9b part 7; the owner, 2026-10-22 08:26: "Doar ce e sigur greșit"): the test
+                # contract's check — BEFORE verify, so a certain block spends no verify run and no judge (sonnet). A
+                # check that cannot judge refuses (fail closed); only `--force --reason` goes through, recorded.
+                _rc286 = None
+                try:
+                    from tasks import red as _red286
+                    _rc286 = _red286.close_check(Path(project_path), task_file)
+                except Exception as _e286:      # noqa: BLE001 — a check that fails is a block, never a pass
+                    _rc286 = {"lines": [f"test contract (the close's check): it failed ({type(_e286).__name__}: "
+                                        f"{_e286})"],
+                              "blocks": [f"the close's check failed ({type(_e286).__name__}: {_e286})"],
+                              "digest": None}
+                if _rc286 is not None:
+                    for _ln286 in _rc286["lines"]:
+                        print(_ln286, flush=True)
+                    if _rc286["blocks"] and not force:
+                        print(f"\nBlocked: cannot close task {prev_task} — the test contract: "
+                              + "; ".join(_rc286["blocks"])
+                              + ". Run the `tasks red` named above, then `tasks work done` again — or override with "
+                              "--force --reason (written in the receipt).", file=sys.stderr, flush=True)
+                        sys.exit(1)
                 # Evidence contract + consequence gate (P1 / P2). Close is no
                 # longer "write the string done": run the project's declared
                 # verify contract, record a receipt, and refuse to close on a
@@ -1248,7 +1269,8 @@ def cmd_work(cmd_args):
                     _pd6_receipt = ""
                 receipt = format_verify_receipt(
                     entries, _head, risk, reason=(reason if force else None),
-                    dirty_files=_dirty, freshness=_freshness, post_d6=_pd6_receipt)
+                    dirty_files=_dirty, freshness=_freshness, post_d6=_pd6_receipt,
+                    contract_overridden=((_rc286 or {}).get("blocks") or None) if force else None)
                 # Task 058 (plan panel P1/P10): receipt + status are ONE locked
                 # transaction, composed on the bytes just read and re-checked
                 # against what earned this close. Everything expensive (verify,
@@ -1329,6 +1351,16 @@ def cmd_work(cmd_args):
                                 "task folder(s) the playbook CLI did not make appeared while this close ran: "
                                 + ", ".join(_late196) + " — adopt (`.claude/bin/tasks adopt <folder>`) or remove "
                                 "each, then re-run `tasks work done`.")
+                    # Task 286 (agy): the receipt, the contract or the config changed since the check — by files only,
+                    # no git under the task lock; under `--force` the block was overridden, so nothing is re-judged.
+                    if _rc286 is not None and not force:
+                        try:
+                            _now286 = _red286.close_digest(Path(project_path), task_file)
+                        except Exception as _e286b:     # noqa: BLE001
+                            _now286 = f"unreadable: {_e286b}"
+                        if _now286 != _rc286.get("digest"):
+                            raise CloseRaceRefused("the test contract's receipt, its rows or the config changed while "
+                                                   "this close ran — run `tasks work done` again.")
                     if _freshness and _freshness.get("bound") and not owner_ok:
                         from tasks.core import bound_stale_close as _bsc3
                         _ok3, _msg3, _ = _bsc3(Path(project_path), task_file.parent,
@@ -1514,17 +1546,6 @@ def cmd_work(cmd_args):
                           file=sys.stderr)
             except (Exception, SystemExit) as _nexc:  # noqa: BLE001 — never changes the close
                 print(f"numbers: not written ({type(_nexc).__name__})", file=sys.stderr)
-            # Task 281 (PHASE-B 9b part 2): the red receipt's state of each contract row — advisory, after the close
-            # is done and its numbers written, so a slow git holds none of the close's own lines (impl round 1,
-            # sonnet); a fault is one line and never changes the close.
-            try:
-                from tasks.red import close_report as _red_report
-                for _ln in _red_report(Path(project_path), task_file):
-                    print(_ln, flush=True)
-            except (Exception, SystemExit) as _rexc:  # noqa: BLE001 — never changes the close
-                print(f"red receipt (advisory — this close does not wait for it): not read "
-                      f"({type(_rexc).__name__}: {_rexc})", flush=True)
-
             # P9: surface this task's OPEN parked items at close so they are
             # not swallowed. Advisory (does not block) — resolve each by
             # promoting (`tasks new` then mark `[promoted → NNN]`), dismissing

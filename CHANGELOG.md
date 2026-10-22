@@ -4,6 +4,14 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+**The close checks the test contract** — task 286 (PHASE-B.md item 9b, part 7; the owner's answers of 2026-10-22).
+A task with a test contract does not close while a row is certainly wrong — not run, stale, skipped, run badly, red now,
+or a late row not proved on its own base; the rest passes, said. The check comes before verify; a receipt that cannot
+be judged blocks (fail closed); `--force --reason` overrides and the receipt names what. The activation records a
+contract, so deleting it does not turn the check off; a project without git passes, said; `No behavior changes: <why>`
+holds only while no code changed. Plus task 285's last five (a lost start's remedies and late rows, removed code roots,
+a NUL, a `-` value never given to git).
+
 **The red receipt says a start that is gone, and what helps each note** — task 285 (PHASE-B.md item 9b, part 6:
 task 284's last review). A pruned activation tree, or a clean start's commit gone after a reset and `git gc`, is said
 as gone, with no refresh (git is asked only once a git question about it failed, or for a refresh line); each note names its remedy — `--check` again, a

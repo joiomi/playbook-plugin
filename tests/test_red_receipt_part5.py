@@ -40,12 +40,20 @@ class Base_(Project):
         return self.head(self.code)
 
 
+class Every(dict):
+    """Every scope is configured (task 286: `compute_state` skips a reference scope the view does not have)."""
+
+    def __contains__(self, key):
+        return True
+
+
 class View:
     """A stub view: digests by treeish, listings by treeish (None: not known), ancestry as given."""
 
     def __init__(self, digests, listings=None, newer=True, last_none=""):
         self.digests, self.listings, self._newer, self.last_none = digests, listings or {}, newer, last_none
         self.today: dict = {}
+        self.scopes = Every()
 
     def digest(self, scope, treeish, **_k):
         return self.digests.get(treeish)

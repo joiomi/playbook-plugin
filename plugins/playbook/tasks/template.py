@@ -198,6 +198,8 @@ def contract_note() -> str:
 > - A bug's first row reproduces it; a refactor's rows are the behaviors that must stay the same.
 > - Each hostile class: the rows that cover it, or `does not apply: <why>` — a reason the change contradicts is a finding.
 > - Write the tests, then watch each new behavior's test fail on the code as it is before you write the code.
+> - The close does not pass while a row is certainly wrong (not run, stale, skipped, run badly, red now, or added late
+>   without its own base): run `tasks red` before `tasks work done`. Nothing to test? `No behavior changes: <why>`.
 > - `tasks red` runs each row on the task's base (recorded at its first activation) and on the code now; run it once the red tests are written, before the code — its first run fixes which rows the contract had before the code.
 > - A row is proved when it is red on the base and green now; red on both is broken, never proof.
 > - A test helper outside `red_tests` (a fixture, a conftest) makes "proved" unreliable: lay it with the tests.

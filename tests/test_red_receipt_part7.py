@@ -27,6 +27,7 @@ from tests.test_red_receipt_part5 import View, _rows  # noqa: E402
 
 ROW1 = ("1", "normal", "f returns 2", "`tests.test_new`")
 ROW2 = ("2", "must-not", "the old test still holds", "`tests.test_old`")
+LATE = ("2", "edge", "f returns 2 by its own test", "`tests.test_new.N.test_two`")
 
 
 class Closing(Project):
@@ -92,25 +93,28 @@ class Block(Closing):
 
     def test_each_certainly_wrong_state_blocks(self):
         # row 1 (Q1): each state of his list stops the close — the record's verdict set to it, then a stale row
+        first = self.head(self.code)
+        (self.code / "helper.py").write_text("Y = 2\n", encoding="utf-8")
+        self.commit_code("the start's own code")                   # the start sits on a commit after `first`
         self.light([ROW1])
         self.change_code()
         self.assertEqual(self.cli("red", "1").returncode, 0)
-        for verdict in ("skipped", "partly skipped", "refused", "unrunnable", "launch failed", "timeout", "broken",
-                        "regressed"):
+        for verdict, why in (("skipped", "skipped"), ("partly skipped", "skipped"), ("refused", "run badly"),
+                             ("unrunnable", "run badly"), ("launch failed", "run badly"), ("timeout", "run badly"),
+                             ("broken", "red now"), ("regressed", "red now")):
             self.rewrite(lambda rec, v=verdict: rec.update(verdict=v))
             out = self.blocked()
-            self.assertRegex(out, rf"row 1: {verdict}\b", verdict)
+            self.assertRegex(out, rf"the test contract: row 1: {verdict} \({why}\)", verdict)
         self.rewrite(lambda rec: rec.update(verdict="proved"))
         p = self.code / "tests" / "test_old.py"                     # any test edit makes the row stale
         p.write_text(p.read_text(encoding="utf-8") + "\n# edited\n", encoding="utf-8")
         self.assertRegex(self.blocked(), r"row 1: stale")
         # a late row with no base of its own: proved on the task's start only
         p.write_text(p.read_text(encoding="utf-8").replace("\n# edited\n", ""), encoding="utf-8")
-        self.set_contract([ROW1, ROW2])
+        self.set_contract([ROW1, LATE])
         self.assertEqual(self.cli("red", "1", "--rows", "2").returncode, 0)
         self.assertRegex(self.blocked(), r"row 2: proved on the task's start only")
         # a late row on another base that is not its own (opus): older code, an unchecked base
-        first = self.head(self.code)
         for base in (first, "1" * 40):
             self.rewrite(lambda rec, b=base: rec.update(base={"code": {"commit": b, "used": "commit"}})
                          if rec["row"] == "2" else None)
@@ -125,7 +129,7 @@ class Block(Closing):
         b.write_text(json.dumps(doc), encoding="utf-8")
         out = self.blocked()
         self.assertIn("cannot be refreshed", out)
-        self.assertIn("--force --reason", out)
+        self.assertIn("no run can be judged against the start — `--force --reason` is the only way through", out)
 
     def test_the_receipt_blocks_before_verify_and_the_review(self):
         # row 7 (sonnet): an assertive task with no panel and a row not run — the receipt's block, before verify runs
@@ -206,6 +210,9 @@ class Pass(Closing):
         self.assertEqual(r.returncode, 0, out)
         self.assertIn("not judged: not a git repository", out)
         self.assertTrue(self.done())
+        from tasks import red                           # a git that fails is no "not a repository": it blocks
+        with mock.patch.object(red, "_git", side_effect=OSError("git is gone")):
+            self.assertFalse(red._not_a_repository(self.d))
 
     def test_no_behavior_changes_needs_no_code_change(self):
         # row 16 (owner, M1439): a task with nothing to test says why; the CLI holds it to no code change
@@ -279,9 +286,12 @@ class FailClosed(Closing):
         self.set_contract([ROW1, ("1", "normal", "again", "`tests.test_old`")])    # a row number twice
         self.assertIn("refuses the contract", self.blocked())
         self.set_contract([ROW1, ("4b", "normal", "a label", "`tests.test_old`")])  # a non-numeric number
-        self.assertIn("refuses the contract", self.blocked())
+        self.assertRegex(self.blocked(), r"the test contract: row 4b is not a number")
         self.set_contract([ROW1, ("", "normal", "no number", "`tests.test_old`")])  # no number
-        self.assertIn("refuses the contract", self.blocked())
+        self.assertRegex(self.blocked(), r"the test contract: a row with no number")
+        self.set_contract([ROW1])
+        self.rewrite(lambda rec: rec.update(verdict="made up"))     # a state the close does not know: fail closed
+        self.assertIn("a state the close does not know", self.blocked())
         text = self.task_md.read_text(encoding="utf-8")
         self.task_md.write_text(text.split("## Test contract")[0] + "## Test contract\n<!-- pin -->\n\n"
                                 "| # | Kind | Behavior | Test that proves it |\n|---|---|---|---|\n\n## Pre-review"
@@ -433,7 +443,8 @@ class Text(unittest.TestCase):
         # row 13
         doc = (_HERE.parent / "docs" / "cli.md").read_text(encoding="utf-8")
         body = "\n".join(p for p in doc.split("\n\n") if p.startswith("**`tasks red"))
-        for word in ("certainly wrong", "cannot be judged", "`--force --reason`"):
+        for word in ("certainly wrong", "cannot be judged", "`--force --reason`", "not a git repository",
+                     "No behavior changes:"):
             self.assertIn(word, body, word)
 
 

@@ -25,8 +25,8 @@ Part 2 (task 281) reads the records: a side that passed no test is "skipped" (un
 other runner's skip reads green, and the side says no reader matched), a green side that skipped a test "partly
 skipped" — neither proves. `--rows` runs only some rows; `## Red receipt` is the state across runs (`compute_state`:
 each row's newest record by its key — kind, behavior, test — else by its number); a row not in the first run's
-contract is "added later". `--check` and the close (`close_report`, advisory) print each row's state, stale when its
-text, its command or the test files changed since its record.
+contract is "added later". `--check` and the close (`close_check`) print each row's state, stale when its text, its
+command or the test files changed since its record; the close stops on a row that is certainly wrong (task 286).
 
 Part 3 (task 282) makes the claims hold: a late row proves only when, in each scope whose code the task changed since
 the reference (base.json, else the first run's base), its base is other code and a commit strictly after the
@@ -148,6 +148,12 @@ def record_base(project_path: Path, task_dir: Path, task_num: str, first: bool) 
     with _no_git_overrides():
         scopes, why, exclude = _capture(Path(project_path))
     doc: "dict" = {"v": 1, "task": task_num, "recorded_at": _now(), "exclude": sorted(exclude)}
+    try:                                                # deleting it later does not turn the close's check off
+        from tasks.core import read_task_text           # (task 286, sonnet)
+        _text = read_task_text(Path(task_dir) / "task.md")
+        doc["contract"] = parse_contract(_text)[0] is not None or _has_contract_gate(_text)
+    except Exception:                                   # noqa: BLE001 — not known: the task.md says at the close
+        pass
     if scopes is None:
         doc["failed"] = why
     else:
@@ -181,6 +187,25 @@ def _load_base(task_dir: Path) -> "dict | None":
 
 
 # ---------------------------------------------------------------------------- the contract
+
+def contract_problems(rows: "list[dict]") -> "list[str]":
+    """Why `tasks red` refuses a contract's rows — and the close with it (task 286, agy, opus: one validation for both):
+    no row, a row with no number, a number twice, a number that is not one (ASCII digits — `--rows` names them)."""
+    if not rows:
+        return [f"`{CONTRACT_HEADING}` has no row (a table line after its `---` separator)"]
+    labels = [r["row"] for r in rows]
+    out = []
+    if any(not lab for lab in labels):
+        out.append("a row with no number in `## Test contract` — each row needs its own `#`, the state is kept by it")
+    twice = sorted({lab for lab in labels if lab and labels.count(lab) > 1})
+    if twice:
+        out.append(f"row {twice[0]} appears twice in `## Test contract` — each row needs its own `#` (plan panel: "
+                   "sonnet)")
+    words = [lab for lab in labels if lab and not _NUMBER.fullmatch(lab)]
+    if words:                                           # `--rows` names rows by number (task 282, agy)
+        out.append(f"row {words[0]} is not a number — each row's `#` in `## Test contract` is one")
+    return out
+
 
 def _cells(line: str) -> "list[str]":
     """A table line's cells; `\\|` is a `|` inside a cell (markdown's escape — a shell `||` is written `\\|\\|`)."""
@@ -401,7 +426,7 @@ def _tree_state(repo: Path, treeish: str, timeout: float = 120) -> "bool | None"
         return None
     try:
         r = _git(repo, ["rev-parse", "--verify", "--quiet", f"{treeish}^{{tree}}"], timeout=timeout)
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError, ValueError):   # ValueError: a NUL in it (task 286, agy)
         return None
     return True if r.returncode == 0 else (False if r.returncode == 1 else None)
 
@@ -411,6 +436,8 @@ def _tree_exists(repo: Path, tree: str) -> bool:
 
 
 def _commit_of(repo: Path, rev: str) -> "str | None":
+    if not isinstance(rev, str) or not rev or rev.startswith("-") or "\0" in rev:
+        return None                                     # never an option to git (task 286, opus, sonnet)
     try:
         r = _git(repo, ["rev-parse", "--verify", "-q", f"{rev}^{{commit}}"])
     except (OSError, subprocess.SubprocessError):
@@ -1253,24 +1280,24 @@ def compute_state(rows: "list[dict]", records: "list[dict]", cfg: dict, view: "_
     if old:
         notes.append(f"{old} record(s) without a row key (written before task 281) are not read — `tasks red` "
                      "records the rows again")
-    if unchecked_rows:                                  # what could not be judged is said (task 283, opus, sonnet)
-        mine = [e for e in out if e["row"] in unchecked_rows]
-        helps = {e.get("base_helps") for e in mine}   # each remedy said (task 285, sonnet, agy)
-        notes.append(f"{_rows_word(unchecked_rows)}: a base that could not be judged ("
-                     + "; ".join(sorted({e["base_why"] for e in mine if e.get("base_why")})) + ")"
-                     + (" — `tasks red --check` asks again" if "check" in helps else "")
-                     + (" — a re-run of the row records it anew" if "rerun" in helps else ""))
     refresh = any(e["state"] in _REFRESHED for e in out)   # git is asked only for a refresh line (285, opus)
     lost = []                                           # a start no run can be judged against (284, codex; 285)
     for s, r in sorted(ref.items()) if isinstance(ref, dict) else ():
-        if not isinstance(r, dict):
-            continue
+        if not isinstance(r, dict) or (view is not None and s not in view.scopes):    # a re-run never reads a
+            continue                                                                 # removed root (286, sonnet)
         if r.get("clean") is False and not isinstance(r.get("tree"), str):
             lost.append(f"{s or 'the project'}'s activation tree was not captured")
         elif refresh and view is not None and view.has(s, _ref_treeish(r)) is False:
             lost.append(_GONE_START.format(s or "the project").split(" — ")[0])
     if lost:                                            # `_plan_base` refuses every run there, or none is judged
         hint_base, hint_why = None, f"cannot be refreshed — {lost[0]}, so no run can be judged against it"
+    if unchecked_rows:                                  # what could not be judged is said (task 283, opus, sonnet)
+        mine = [e for e in out if e["row"] in unchecked_rows]
+        helps = set() if lost else {e.get("base_helps") for e in mine}   # each remedy said (285); none can help a
+        notes.append(f"{_rows_word(unchecked_rows)}: a base that could not be judged ("     # lost start (286, opus)
+                     + "; ".join(sorted({e["base_why"] for e in mine if e.get("base_why")})) + ")"
+                     + (" — `tasks red --check` asks again" if "check" in helps else "")
+                     + (" — a re-run of the row records it anew" if "rerun" in helps else ""))
     return {"rows": out, "runs": runs, "notes": notes, "anchor_after": anchor_after, "rewritten": rewritten,
             "hint_base": hint_base, "hint_why": hint_why, "half": bool(lost),
             "newest": {"run": records[-1]["run"], "at": str(records[-1].get("at", ""))} if records else {},
@@ -1347,9 +1374,11 @@ def render_state(st: dict, task_ref: str, header: str) -> "list[str]":
         lines.append(f"  refresh: tasks red {task_ref} --rows {','.join(plain)}{st.get('hint_base') or ''}")
     elif plain:                                         # why none can be given (task 284)
         lines.append(f"  refresh: rows {','.join(plain)} {st.get('hint_why') or _NO_COMMIT}")
-    if needs_base and not st.get("rewritten") and not st.get("half"):   # no hint for a base that cannot exist (task
+    if needs_base and st.get("half"):                   # said, not dropped (task 286, sonnet)
+        lines.append(f"  added later: rows {','.join(needs_base)} {st.get('hint_why') or _NO_COMMIT}")
+    elif needs_base and not st.get("rewritten"):        # no hint for a base that cannot exist (task 282, sonnet)
         lines.append(f"  added later, each needs its own base: tasks red {task_ref} --rows {','.join(needs_base)} "
-                     "--base <scope>=<the commit before its fix>")                # 282, sonnet; a half capture: 284)
+                     "--base <scope>=<the commit before its fix>")
     return lines
 
 
@@ -1369,6 +1398,7 @@ class _Trees:
         self.cfg = cfg or {}
         self.deadline = deadline
         self.today: "dict[str, str | None]" = {}
+        self.today_trees: "dict[str, str]" = {}        # the working-state trees themselves (task 286)
         self.frozen = False
         self.ran_out = False
         self.missed = False
@@ -1433,6 +1463,9 @@ class _Trees:
         return self._digests[key]
 
     def _ancestor(self, scope: str, old: str, new: str) -> "bool | None":
+        if old.startswith("-") or new.startswith("-") or "\0" in old + new:
+            return None                                 # never an option to git (task 286, opus, sonnet)
+
         def work(timeout):
             r = _git(self.scopes[scope], ["merge-base", "--is-ancestor", old, new], timeout=timeout)
             return True if r.returncode == 0 else (False if r.returncode == 1 else None)
@@ -1488,6 +1521,7 @@ def _today(scopes: "dict[str, Path]", cfg: dict, exclude: "list[str]", view: _Tr
     except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
         return None, f"the test files cannot be listed ({exc})"
     for name, t in trees.items():
+        view.today_trees[name] = t
         view.today[name] = view.digest(name, t)
     return tests, ""
 
@@ -1570,6 +1604,8 @@ def state_of(project: Path, task_dir: Path, rows: "list[dict]", cfg: dict,
         ref = _reference(Path(task_dir), records)
         st = compute_state(rows, records, cfg, view, tests_now, old, ref, *_base_hint(Path(task_dir), ref, view))
     st["unchecked"] = _unchecked(view, why)
+    st["undecided"] = ((["tests"] if tests_now is None else []) + (["budget"] if view.ran_out else [])
+                       + (["missed"] if view.missed else []))      # what the close's table reads (task 286)
     return st
 
 
@@ -1582,23 +1618,184 @@ def _has_contract_gate(text: str) -> bool:
     return any(_GATE_LINE.match(s) for _i, s in _iter_nonfenced(_physical_lines(text)))
 
 
-def close_report(project: Path, task_file: Path, budget: float = 20.0) -> "list[str]":
-    """The close's lines (task 281, advisory: it never stops a close): each row's state, for a task with a live
-    `## Test contract` or the contract gate — none for any other task (an older one, light, research)."""
-    from tasks.core import load_config, read_task_text
-    head = "red receipt (advisory — this close does not wait for it)"
-    text = read_task_text(Path(task_file))
-    rows, why = parse_contract(text)
-    if rows is None:
-        return [f"{head}: {why} — the task has the `Test contract:` gate"] if _has_contract_gate(text) else []
+# The close's check (task 286, PHASE-B 9b part 7; the owner, 2026-10-22 08:26: "Doar ce e sigur greșit"). It replaces
+# task 281's report after the close: the close now stops on what is certainly wrong, and passes the rest, said.
+_PASSING = ("proved", "already true", "partly proved")
+_PLACED = ("proved on older code", "proved on unrelated code", "proved on an unchecked base")   # a design row passes
+_WHY_BLOCK = {"no record": "not run", "stale": "stale", "skipped": "skipped", "partly skipped": "skipped",
+              "refused": "run badly", "unrunnable": "run badly", "launch failed": "run badly", "timeout": "run badly",
+              "broken": "red now", "regressed": "red now"}
+_NO_CHANGE = re.compile(r"^\s*No behavior changes:\s*(\S.*?)\s*$")
+
+
+def close_blocks(st: dict) -> "list[str]":
+    """The close's table (task 286): each row that is certainly wrong — not run, stale, skipped, run badly, red now, or a
+    late row not proved on its own base (opus: on the start only, older or unrelated code, an unchecked base) — and a
+    staleness the state could not decide (the tests' digest not read). Already true, partly proved and a design row on
+    a base the receipt places elsewhere or cannot judge pass; a spent budget alone blocks nothing — it leaves only
+    such states, or a late row this table blocks (sonnet, agy, opus). Any other state blocks (fail closed)."""
+    out = []
+    for e in st.get("rows") or []:
+        state, late = e.get("state"), bool(e.get("late"))
+        if state in _PASSING or (state in _PLACED and not late):
+            continue
+        if state in _WHY_BLOCK:
+            why = _WHY_BLOCK[state]
+        elif late and (state in _PLACED or state == "proved on the task's start only"):
+            why = "added later, not proved on its own base"
+        else:
+            why = "a state the close does not know"
+        out.append(f"row {e.get('row')}: {state} ({why})")
+    if "tests" in (st.get("undecided") or ()):
+        out.append("staleness not checked: the test files' digest was not read")
+    return out
+
+
+def _contract_lines(text: str) -> "list[str]":
+    from tasks.core import _live_section_span, _physical_lines
+    lines = _physical_lines(text)
+    sp = _live_section_span(lines, CONTRACT_HEADING)
+    return [] if sp is None else lines[sp[0]:sp[1]]
+
+
+def _no_change_reason(text: str) -> "str | None":
+    """A contract with no row that says why: `No behavior changes: <why>` (the owner, M1439, 2026-10-22 08:47)."""
+    for ln in _contract_lines(text):
+        m = _NO_CHANGE.match(ln)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _recorded_contract(task_dir: Path) -> bool:
+    """The activation recorded that the task carried a test contract (`base.json`'s `contract`; task 286, sonnet)."""
     try:
-        cfg = load_config(Path(project))
+        doc = json.loads((Path(task_dir) / BASE_NAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(doc, dict) and doc.get("contract") is True
+
+
+def _not_a_repository(project: Path) -> bool:
+    """Git says the project is not a repository at all — a git that fails otherwise is no such answer (the owner,
+    M1439: it passes, said; a git that fails still blocks)."""
+    try:
+        with _no_git_overrides():
+            r = _git(Path(project), ["rev-parse", "--git-dir"])
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return False
+    return r.returncode != 0 and "not a git repository" in (r.stderr or "").lower()
+
+
+def close_digest(project: Path, task_file: Path) -> str:
+    """What the check read, by files only — the receipt's bytes, the contract section, the config — compared again at
+    the commit under the task lock, where no git runs (task 286, agy). The test files are not in it: their digest is
+    git's (a stated limit; the close's tree check covers a task with an impl round)."""
+    from tasks.core import load_config, read_task_text
+    h = hashlib.sha256()
+    try:
+        fd = _open_receipt(Path(task_file).parent / RECEIPT_NAME, write=False)
+    except FileNotFoundError:
+        h.update(b"no receipt")
+    except OSError as e:
+        h.update(f"unreadable: {e}".encode())
+    else:
+        try:
+            while True:
+                b = os.read(fd, 1 << 20)
+                if not b:
+                    break
+                h.update(b)
+        finally:
+            os.close(fd)
+    h.update(b"\0")
+    try:
+        h.update("\n".join(_contract_lines(read_task_text(Path(task_file)))).encode("utf-8", "surrogateescape"))
+    except OSError as e:
+        h.update(f"task.md unreadable: {e}".encode())
+    h.update(b"\0")
+    try:
+        h.update(json.dumps(load_config(Path(project)), sort_keys=True, default=str).encode())
+    except Exception as e:                              # noqa: BLE001 — a config that cannot be read is a value too
+        h.update(f"config unreadable: {e}".encode())
+    return h.hexdigest()
+
+
+def _code_changed(project: Path, task_dir: Path, cfg: dict, deadline: float) -> "tuple[list[str] | None, str]":
+    """The code files changed since the task's start (base.json) — None with why when that cannot be read."""
+    base = _load_base(Path(task_dir))
+    if not base or not isinstance(base.get("scopes"), dict) or "failed" in base:
+        return None, "`No behavior changes:` needs the task's recorded start (base.json) to show no code changed"
+    with _no_git_overrides():
+        view, _tests, why = _prepare(Path(project), cfg, deadline, True)
+        changed = []
+        for scope, r in sorted(base["scopes"].items()):
+            if scope not in view.scopes:
+                continue
+            start = view.entries(scope, _ref_treeish(r), code=True)
+            now = view.entries(scope, view.today_trees.get(scope), code=True)
+            if start is None or now is None:
+                return None, f"whether code changed in {scope or 'the project'} could not be read{f' ({why})' if why else ''}"
+            changed += [f"{scope + '/' if scope else ''}{path}" for path in sorted(set(start) | set(now))
+                        if start.get(path) != now.get(path)]
+    return changed, ""
+
+
+def close_check(project: Path, task_file: Path, budget: float = 20.0) -> "dict | None":
+    """The close's check of the test contract (task 286 — task 281 reported it after the close): None for a task with
+    no contract, no contract gate and none recorded at its activation; else {"lines", "blocks", "digest"} — the state
+    as `--check` prints it, each certainly-wrong row (`close_blocks`) and any reason the receipt cannot be judged (fail
+    closed: a guard that cannot judge refuses), and `close_digest` of what was read."""
+    from tasks.core import load_config, read_task_text
+    project, task_file = Path(project), Path(task_file)
+    d = task_file.parent
+    text = read_task_text(task_file)
+    rows, why = parse_contract(text)
+    gate = _has_contract_gate(text)
+    if rows is None and not gate and not _recorded_contract(d):
+        return None
+    head = f"test contract (the close's check): task {d.name}"
+    digest = close_digest(project, task_file)
+
+    def result(lines: "list[str]", blocks: "list[str]") -> dict:
+        return {"lines": lines, "blocks": blocks, "digest": digest}
+    if rows is None:
+        if gate:
+            return result([f"{head}: {why} — the task has the `Test contract:` gate"], [why])
+        return result([f"{head}: {why}"], ["its activation recorded a test contract, and task.md has neither its gate "
+                                            "nor its section"])
+    if _not_a_repository(project):
+        return result([f"{head}: not judged: not a git repository — `tasks red` needs git (the close passes)"], [])
+    try:
+        cfg = load_config(project)
     except Exception:                                   # noqa: BLE001
         cfg = {}
-    st = state_of(Path(project), Path(task_file).parent, rows, cfg, time.monotonic() + budget)
-    d = Path(task_file).parent
-    return render_state(st, d.name.split("-", 1)[0],
-                        f"{head}: task {d.name}, {len(rows)} row(s), {st['records']} record(s)")
+    deadline = time.monotonic() + budget
+    reason = _no_change_reason(text) if not rows else None
+    if reason is not None:
+        changed, why_c = _code_changed(project, d, cfg, deadline)
+        if changed is None:
+            return result([f"{head}: No behavior changes: {reason} — {why_c}"], [why_c])
+        if changed:
+            return result([f"{head}: No behavior changes: {reason} — but code changed since the start: "
+                           + ", ".join(changed[:8]) + (" …" if len(changed) > 8 else "")],
+                          ["`No behavior changes:` while code changed since the start (" + ", ".join(changed[:8]) + ")"])
+        return result([f"{head}: No behavior changes: {reason} — no code file changed since the start"], [])
+    problems = contract_problems(rows)
+    if problems:
+        return result([f"{head}: {p} — `tasks red` refuses the contract" for p in problems], problems)
+    try:
+        st = state_of(project, d, rows, cfg, deadline)
+    except OSError as e:
+        return result([f"{head}: the receipt cannot be read ({e})"], [f"the receipt cannot be read ({e})"])
+    except Exception as e:                              # noqa: BLE001 — a check that cannot judge refuses
+        return result([f"{head}: the receipt could not be judged ({type(e).__name__}: {e})"],
+                      [f"the receipt could not be judged ({type(e).__name__}: {e})"])
+    lines = render_state(st, d.name.split("-", 1)[0], f"{head}, {len(rows)} row(s), {st['records']} record(s)")
+    blocks = close_blocks(st)
+    if blocks and st.get("half"):
+        blocks.append("no run can be judged against the start — `--force --reason` is the only way through")
+    return result(lines, blocks)
 
 
 def numbers_line(project: Path, task_dir: Path, budget: float = 10.0) -> "str | None":
@@ -1620,7 +1817,9 @@ def numbers_line(project: Path, task_dir: Path, budget: float = 10.0) -> "str | 
 
 def _listing(repo: Path, treeish: str, exclude: "list[str]", timeout: float) -> "list[tuple[str, bytes, bytes]]":
     """A tree's blobs — (path, mode, blob), the excludes left out — by `git ls-tree`. Gitlinks are left to their own
-    scope. RuntimeError when git cannot list it."""
+    scope. RuntimeError when git cannot list it — or a value that would be an option (task 286, opus, sonnet)."""
+    if treeish.startswith("-") or "\0" in treeish:
+        raise RuntimeError(f"not a tree: {treeish[:12]!r}")
     r = _git(repo, ["ls-tree", "-r", "-z", "--full-tree", treeish], text=False, timeout=timeout)
     if r.returncode != 0:
         raise RuntimeError(f"git ls-tree {treeish[:12]} failed")
@@ -1977,17 +2176,9 @@ def _cmd_red(cmd_args: "list[str]") -> None:
     if check:
         _cmd_check(project, d, rows, cfg)
         return
-    if not rows:
-        _refuse(f"`{CONTRACT_HEADING}` has no row (a table line after its `---` separator)")
-    labels = [r["row"] for r in rows]
-    if any(not lab for lab in labels):
-        _refuse("a row with no number in `## Test contract` — each row needs its own `#`, the state is kept by it")
-    twice = sorted({lab for lab in labels if labels.count(lab) > 1})
-    if twice:
-        _refuse(f"row {twice[0]} appears twice in `## Test contract` — each row needs its own `#` (plan panel: sonnet)")
-    words = [lab for lab in labels if not _NUMBER.fullmatch(lab)]
-    if words:                                           # `--rows` names rows by number (task 282, agy)
-        _refuse(f"row {words[0]} is not a number — each row's `#` in `## Test contract` is one")
+    problems = contract_problems(rows)                  # one validation with the close's check (task 286, agy, opus)
+    if problems:
+        _refuse(problems[0])
     contract = [row_key(r) for r in rows]
     if only is not None:
         numbered = {int(r["row"]) for r in rows}

@@ -454,16 +454,16 @@ class RoundOne(Project):
         self.assertEqual(r.returncode, 1)
         self.assertIn("cannot be read", r.stderr)
         r = self.cli("work", "done", timeout=60)
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn("red receipt (advisory", r.stdout + r.stderr)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)                 # a block (task 286), never a wait
+        self.assertIn("the receipt cannot be read", r.stdout + r.stderr)
 
-    def test_the_report_comes_after_the_close_is_done(self):
-        # row 9 (sonnet m): a slow report never holds the close's own lines
+    def test_the_check_comes_before_verify(self):
+        # row 9 (sonnet m), as task 286 made it: the check decides before verify runs — no verify run on a block
         Close.light(self, contract=[("1", "normal", "f returns 2", "`tests.test_new`")])
         r = self.cli("work", "done")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        out = r.stdout
-        self.assertGreater(out.index("red receipt (advisory"), out.index("Task 001 done."))
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("test contract (the close's check)", r.stdout)
+        self.assertNotIn("Verifying close", r.stdout + r.stderr)
 
     def test_committing_the_tasks_records_is_no_working_state_change(self):
         # row 16 (opus m): the tree keeps the index's `.agent` entries — committing the task's records moved it
@@ -534,8 +534,9 @@ class Close(Project):
         r = self.cli("work", "1")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
-    def test_the_close_reports_the_receipt(self):
-        # row 9: the state is printed at the close, which still closes (advisory) — a row with no record too
+    def test_the_close_checks_the_receipt(self):
+        # row 9, as task 286 made it (the owner, 2026-10-22: "Doar ce e sigur greșit"): the state is printed at the
+        # close, and a row with no record stops it
         self.light(contract=[("1", "normal", "f returns 2", "`tests.test_new`")])
         self.change_code()
         self.assertEqual(self.cli("red", "1").returncode, 0)          # its gates are all ticked: name the task
@@ -544,41 +545,45 @@ class Close(Project):
         self.g("add", "-A")
         self.g("commit", "-qm", "the receipt")
         r = self.cli("work", "done")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         out = r.stdout + r.stderr
-        self.assertIn("red receipt (advisory", out)
+        self.assertIn("test contract (the close's check)", out)
         self.assertRegex(out, r"row 1: proved")
         self.assertRegex(out, r"row 2: no record")
-        self.assertIn("## Status\ndone", self.task_md.read_text(encoding="utf-8"))
+        self.assertNotIn("## Status\ndone", self.task_md.read_text(encoding="utf-8"))
 
-    def test_a_contract_gate_without_its_section_is_reported(self):
-        # row 9: the gate says the task has a contract; the section is gone — the close says so, and closes
+    def test_a_contract_gate_without_its_section_blocks(self):
+        # row 9, as task 286 made it: the gate says the task has a contract; the section is gone — the close says so,
+        # and stops (fail closed)
         self.light(gate=True)
         r = self.cli("work", "done")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn("red receipt (advisory", r.stdout + r.stderr)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("test contract (the close's check)", r.stdout + r.stderr)
         self.assertIn("no live `## Test contract` section", r.stdout + r.stderr)
 
-    def test_a_broken_receipt_does_not_stop_the_close(self):
-        # row 9 (hostile): a receipt that cannot be read is one line, never a failed close
+    def test_a_broken_receipt_stops_the_close(self):
+        # row 9 (hostile), as task 286 made it: a receipt that cannot be read is one line and a block (fail closed),
+        # never a traceback
         self.light(contract=[("1", "normal", "f returns 2", "`tests.test_new`")])
         (self.task_dir / "red-receipt.jsonl").mkdir()                # a folder where the file should be
         r = self.cli("work", "done")
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertNotIn("Traceback", r.stdout + r.stderr)
-        self.assertIn("red receipt", r.stdout + r.stderr)
+        self.assertIn("the receipt cannot be read", r.stdout + r.stderr)
 
     def test_a_spent_budget_skips_the_trees_and_says_so(self):
-        # row 9 (time): past its budget the report reads no tree — the rows' states without staleness, said
+        # row 9 (time), as task 286 made it: past its budget the check reads no tree — the rows' states without
+        # staleness, said, and the close stops (whether a row is stale is not known)
         from tasks import red
         self.light(contract=[("1", "normal", "f returns 2", "`tests.test_new`")])
         self.change_code()
         self.assertEqual(self.cli("red", "1").returncode, 0)
-        lines = _in_process(self.d, self.env(), red.close_report, self.d, self.task_md, 0.0)
-        text = "\n".join(lines)
-        self.assertIn("red receipt (advisory", text)
+        got = _in_process(self.d, self.env(), red.close_check, self.d, self.task_md, 0.0)
+        text = "\n".join(got["lines"])
+        self.assertIn("test contract (the close's check)", text)
         self.assertRegex(text, r"row 1: proved")
         self.assertIn("staleness not checked", text)
+        self.assertTrue(any("staleness not checked" in b for b in got["blocks"]), got["blocks"])
 
     def test_a_task_without_the_contract_gate_gets_no_report(self):
         # row 10 (must-not)
@@ -660,7 +665,7 @@ class Close(Project):
         body = "\n".join(p for p in doc.split("\n\n") if p.startswith("**`tasks red"))
         self.assertIn("--check`**", body, "docs/cli.md has no `tasks red --check` entry")
         for word in ("--rows", "--check", "skipped", "partly skipped", "stale", "no record", "added later",
-                     "on the task's start only", "advisory", "expected failure", "unittest", "pytest",
+                     "on the task's start only", "certainly wrong", "expected failure", "unittest", "pytest",
                      "working state changed"):
             self.assertIn(word, body, word)
 
