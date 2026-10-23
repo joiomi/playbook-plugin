@@ -117,9 +117,9 @@ class UnclosedFenceInsideASection(unittest.TestCase):
     def test_a_blocked_section_that_hides_nothing_keeps_working(self):
         # `## Blocked` LAST with an open fence: the append path and the resume stamp land inside the section, where
         # the fail-open readers read them — pinned on what the readers see, not only on the status. The replace path
-        # (a block after a resume) replaces the CLI's `>` lines and, since task 296, keeps the rest: the open fence is
-        # an agent's text, and it now stands below the new reason
-        p = self._file("# T\n\n## Status\nblocked\n\n## Blocked\n> r1\n```\nunclosed\n")
+        # (a block after a resume) replaces the CLI's two line shapes and, since task 296, keeps the rest in place: the
+        # open fence is an agent's text, and it now stands below the new reason
+        p = self._file("# T\n\n## Status\nblocked\n\n## Blocked\n> r1  (since 2026-01-01T00:00+00:00)\n```\nunclosed\n")
         core.set_task_blocked(p, "r2")                                     # already blocked → append path
         self.assertEqual(core._block_reasons(p), ["r1", "r2"])
         core.resume_blocked_task(p)
@@ -134,18 +134,20 @@ class UnclosedFenceInsideASection(unittest.TestCase):
         self.assertNotIn("> r1", text)
 
     def test_the_section_after_a_closed_fence_survives_every_writer(self):
-        # the normal case, pinned structurally (task 188's lesson: order, not substring presence)
-        p = self._file("# T\n\n## Status\nin_progress\n\n## Blocked\n> r1\n```\nclosed\n```\n" + TAIL)
+        # the normal case, pinned structurally (task 188's lesson: order, not substring presence). Since task 296 a
+        # section that holds an agent's lines (here the fenced block) keeps its place: nothing moves past `## Parked`
+        p = self._file("# T\n\n## Status\nin_progress\n\n## Blocked\n> r1  (since 2026-01-01T00:00+00:00)\n"
+                       "```\nclosed\n```\n" + TAIL)
         core.set_task_blocked(p, "r2")
         core.resume_blocked_task(p)
         heads = [ln for ln in p.read_text(encoding="utf-8").splitlines() if ln.startswith("## ")]
-        self.assertEqual(heads, ["## Status", "## Parked", "## Blocked"])
+        self.assertEqual(heads, ["## Status", "## Blocked", "## Parked"])
         core.write_handoff_and_block(p, "## Handoff\nnote\n")              # impl panel r1, opus: the handoff too
         heads = [ln for ln in p.read_text(encoding="utf-8").splitlines() if ln.startswith("## ")]
-        self.assertEqual(heads, ["## Status", "## Parked", "## Handoff", "## Blocked"])   # resumed → block replaced
+        self.assertEqual(heads, ["## Status", "## Blocked", "## Parked", "## Handoff"])   # resumed → record replaced
         core.write_handoff_and_block(p, "## Handoff\nnote 2\n")            # already blocked → reason appended
         heads = [ln for ln in p.read_text(encoding="utf-8").splitlines() if ln.startswith("## ")]
-        self.assertEqual(heads, ["## Status", "## Parked", "## Blocked", "## Handoff history", "## Handoff"])
+        self.assertEqual(heads, ["## Status", "## Blocked", "## Parked", "## Handoff history", "## Handoff"])
         self.assertEqual(core._block_reasons(p), ["handoff", "handoff"])
 
 

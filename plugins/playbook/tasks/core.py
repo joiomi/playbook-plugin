@@ -5706,6 +5706,10 @@ def write_handoff_and_block(task_file: Path, section: str, reason: str = "handof
     _rewrite(task_file, _t)
 
 
+# The two lines the CLI writes into `## Blocked`: a reason with its stamp, and a resume stamp (task 296).
+_CLI_BLOCK_RECORD = re.compile(r"^> (?:Resumed \S+|.*\s\(since [^()]*\))$")
+
+
 def _compose_blocked(text: str, clean_reason: str, ts: str) -> str:
     """The `set_task_blocked` splice as a pure function of the text (task 058),
     so the handoff verb can compose it with its own section in one write."""
@@ -5739,26 +5743,44 @@ def _compose_blocked(text: str, clean_reason: str, ts: str) -> str:
             out = out[:end] + [f"> {clean_reason}  (since {ts})"] + out[end:]
             return "\n".join(out).rstrip("\n") + "\n"
     _splice_status_value(out, pair, "blocked")
-    # Task 296 (audit 2, G5): after a resume the earlier record is replaced — its reason and its `Resumed` stamp, the
-    # live `>` lines the CLI writes — but every other line of the section (an agent's note, a fenced block, a gate)
-    # moves into the new one, under the new reason. They were deleted with the section, a gate among them.
-    kept: "list[str]" = []
-    while True:
-        sp = _writer_section_span(out, "## Blocked")
-        if sp is None:
-            break
-        # a reason is what the readers take for one: a live line that starts with `>` once stripped (fail open)
-        reasons = {i for i, s in _iter_nonfenced(out, unclosed_is_live=True) if s.startswith(">")}
-        kept += [out[i] for i in range(sp[0] + 1, sp[1]) if i not in reasons]
-        out = out[:sp[0]] + out[sp[1]:]
-    while kept and not kept[0].strip():
-        kept.pop(0)
-    while kept and not kept[-1].strip():
-        kept.pop()
-    while out and out[-1].strip() == "":
-        out.pop()
-    out += ["", "## Blocked", f"> {clean_reason}  (since {ts})", ""] + (kept + [""] if kept else [])
-    return "\n".join(out) + "\n"
+    # Task 296 (audit 2, G5): after a resume the earlier record is replaced — the two line shapes the CLI writes there,
+    # `> <reason>  (since <ts>)` and `> Resumed <ts>` — and every other line of a `## Blocked` section (an agent's
+    # note, quote, fenced block or gate) stays where it is, under the new reason. They were deleted with the section.
+    # Nothing is moved past another section (impl round 1): a fenced block carried to the end of the file paired with
+    # a later section's unclosed fence and hid the gates between. With nothing else left, the section goes and a
+    # fresh one is appended at the end, byte for byte as before.
+    sections: "list[tuple[int, int]]" = []
+    sp = _writer_section_span(out, "## Blocked")
+    while sp is not None:
+        sections.append(sp)
+        nxt = _writer_section_span(out[sp[1]:], "## Blocked")
+        sp = (sp[1] + nxt[0], sp[1] + nxt[1]) if nxt is not None else None
+    live = dict(_iter_nonfenced(out, unclosed_is_live=True))                  # the readers' view (fail open)
+    bodies = []
+    for a, b in sections:
+        body = [out[i] for i in range(a + 1, b) if not (i in live and _CLI_BLOCK_RECORD.match(live[i]))]
+        while body and not body[0].strip():
+            body.pop(0)
+        while body and not body[-1].strip():
+            body.pop()
+        bodies.append(body)
+    record = f"> {clean_reason}  (since {ts})"
+    if not any(bodies):
+        for a, b in reversed(sections):
+            out = out[:a] + out[b:]
+        while out and out[-1].strip() == "":
+            out.pop()
+        out += ["", "## Blocked", record, ""]
+        return "\n".join(out) + "\n"
+    first = next(k for k, body in enumerate(bodies) if body)
+    for k in reversed(range(len(sections))):
+        a, b = sections[k]
+        if not bodies[k]:
+            out = out[:a] + out[b:]
+            continue
+        out = (out[:a] + [out[a]] + ([record, ""] if k == first else []) + bodies[k]
+               + ([""] if b < len(out) else []) + out[b:])
+    return "\n".join(out).rstrip("\n") + "\n"
 
 
 def set_task_blocked(task_file: Path, reason: str) -> None:
