@@ -16,8 +16,8 @@ The rules (design-1.5.5.md, F1 — including the judge's corrections):
     annotation; else born-checked.
   * n = |newly-checked| (times replace_all occurrences, when an Edit is judged
     on its fragments — since task 291 only when the file does not hold its
-    old_string byte for byte; otherwise every edit is judged on the whole file
-    it leaves). NEVER the raw x-count delta — unchecking in the same write must
+    old_string, even with curly and straight quotes made alike; otherwise every
+    edit is judged on the whole file it leaves). NEVER the raw x-count delta — unchecking in the same write must
     not launder n.
   * n ≤ 1 → allow silently (singles keep their old freedom).
   * 2 ≤ n ≤ 5 → allow ONLY if no born-checked line and every newly-checked
@@ -52,6 +52,8 @@ from pathlib import Path
 GATE_RE = re.compile(r"^[ \t]*- \[([ xX])\]\s*(.*)$")       # spaces or tabs only, as the gate counters (task 214, T6)
 _SUBHEADING_RE = re.compile(r"^#{3,}(?:[ \t]|$)")             # a `###` heading ends a gate's note (the trim's rule)
 ANNOTATION_FLOOR = 8   # unicode non-whitespace chars (never bash bytes)
+# curly quotes read as straight ones — the Edit tool matches an old_string across them (task 291)
+_QUOTES = str.maketrans({"‘": "'", "’": "'", "“": '"', "”": '"'})
 BATCH_CEILING = 5
 
 BARE_MSG = """\
@@ -278,8 +280,8 @@ def main() -> int:
     if tool == "Edit":
         # Judged on the whole file it leaves, as a Write and a MultiEdit are (task 291, audit 1 G1: `replace_all` of
         # `- [ ]` → `- [x]` is one empty gate as a fragment, and a fragment from mid-line hides a tick — item 9). When
-        # the file cannot show the edit — unreadable, or its `old_string` not there byte for byte (the Edit tool can
-        # normalise quotes, then apply what this cannot reproduce) — the fragments are judged, as before.
+        # the file cannot show the edit — unreadable, or its `old_string` not there even with the quotes made alike
+        # (the tool then fails it) — the fragments are judged, as before.
         o = str(ti.get("old_string", ""))
         n_ = str(ti.get("new_string", ""))
         replace_all = bool(ti.get("replace_all", False))
@@ -287,6 +289,9 @@ def main() -> int:
             whole = _read_untranslated(file_path)
         except OSError:
             whole = None
+        if whole is not None and o and o not in whole and o.translate(_QUOTES) in whole.translate(_QUOTES):
+            # the tool matches curly and straight quotes alike: read the file and the edit the same way (row 11)
+            whole, o, n_ = whole.translate(_QUOTES), o.translate(_QUOTES), n_.translate(_QUOTES)
         if whole is not None and o and o in whole:
             old, new = whole, (whole.replace(o, n_) if replace_all else whole.replace(o, n_, 1))
             replace_all = False                         # every gate is in view: nothing to multiply
