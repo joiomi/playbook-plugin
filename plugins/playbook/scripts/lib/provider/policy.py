@@ -40,7 +40,9 @@ def _is_management_path(file_path: str) -> bool:
     # (the bash gate strips the same segments: `.claude`, `worktrees` and the name's first component, repeatedly).
     i = 0
     while True:
-        k = next((j for j in range(i, len(parts) - 1) if parts[j] == ".claude" and parts[j + 1] == "worktrees"), None)
+        # a worktree NAME must follow (impl round 1): a path that ends at `.claude/worktrees` is the `.claude` itself,
+        # as the bash gate's `*/.claude/worktrees/*/*` pattern reads it
+        k = next((j for j in range(i, len(parts) - 2) if parts[j] == ".claude" and parts[j + 1] == "worktrees"), None)
         if k is None:
             break
         i = k + 3
