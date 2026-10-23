@@ -1282,21 +1282,22 @@ class ClosePathMatrix(unittest.TestCase):
     def test_default_list_config_asymmetry_is_pinned(self):
         # Panel finding O2: pin the SEEDED-default behavior, not just "all".
         # Under panel_required_for=["assertive","irreversible"] the freshness
-        # gate fires for assertive (panel required) but is INERT for
-        # unclassified (panel NOT required → resolve_panel_required False), so
-        # `unclassified` does not hit the freshness BLOCK. This is the boundary
-        # a future edit to resolve_panel_required or the init seed could shift
-        # undetected — the documented scope limit of the O1 fix.
+        # gate fires for assertive (panel required) — and since task 294 (its
+        # impl round 1, opus) for unclassified too: an unset risk is held to the
+        # strictest class's bar, so `resolve_panel_required` is True for it
+        # whenever a high-consequence class is listed. The old asymmetry (inert
+        # for unclassified) let not classifying lower an assertive task's bar.
         DEFAULT = ["assertive", "irreversible"]
         # assertive → freshness block fires
         d, td, env = self._setup(risk="assertive", panel_cfg=DEFAULT)
         r = self._close(d, env)
         self.assertNotIn("Task 001 done.", r.stdout)
         self.assertIn(BLOCK_MARKER, r.stderr)
-        # unclassified → gate inert (panel not required for it by default)
+        # unclassified → the same block
         d2, td2, env2 = self._setup(risk="unclassified", panel_cfg=DEFAULT)
         r2 = self._close(d2, env2)
-        self.assertNotIn(BLOCK_MARKER, r2.stderr)
+        self.assertNotIn("Task 001 done.", r2.stdout)
+        self.assertIn(BLOCK_MARKER, r2.stderr)
 
     def test_irreversible_stale_without_policy_is_advisory(self):
         # Judge A4: a voluntary panel in a no-policy project must not block — the freshness gate. Task 209 (the
