@@ -135,6 +135,7 @@ class TheDesignStays(_Task):
         record — column 0, two spaces, an ISO stamp. A quote that only looks like it stays: one space, a stamp that is
         not a time, `> Resumed <a word>`, or the CLI's shape indented."""
         quotes = ["> owner away (since Monday)", "> wait  (since Monday)", "> Broken (since Python 3.10)",
+                  "> deployed (since 2026-10-20T10:00+03:00)",
                   "> Resumed tomorrow", "  > x  (since 2026-01-01T00:00+00:00)", "  > Resumed 2026-01-01T00:00+00:00"]
         set_task_blocked(self.tf, "first pause")
         self.append("".join(q + "\n" for q in quotes))
