@@ -159,7 +159,10 @@ class TheDocsSayIt(unittest.TestCase):
         g = next(g for g in ledger["guarantees"] if g["id"] == "PB-RISK-CLASSIFY")
         self.assertNotIn("keeps the warning-only path", g["statement"])
         self.assertIn("a task with no Risk heading is held to the same bar", g["statement"])
+
+    def test_the_freshness_passages_hold_no_escape(self):
         # row 10 (sonnet Important): the freshness passages no longer say an unset risk escapes the seeded panel
+        doc = (_HERE.parent / "docs" / "configuration.md").read_text(encoding="utf-8")
         self.assertNotIn("`unclassified` is caught only where policy also requires a panel", doc)
         self.assertNotIn("`unclassified` does not require a panel", doc)
 
