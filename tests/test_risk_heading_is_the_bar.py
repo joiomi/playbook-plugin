@@ -114,7 +114,7 @@ class RoundTwo(_Deleting):
         self._record()
         r, out = self.close()
         self.assertEqual(r.returncode, 1, out)
-        self.assertIn("verify.assertive", out)
+        self.assertIn("[FAIL exit 1] false", out)                    # the assertive extra ran, and failed
 
     def test_a_classified_reversible_runs_its_own_verify_only(self):
         # row 9's must-not: a reversible task runs `_always` and `verify.reversible`, not the assertive extras
