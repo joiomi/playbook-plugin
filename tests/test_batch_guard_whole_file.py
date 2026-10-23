@@ -100,8 +100,11 @@ class WhenTheFileCannotShowTheEdit(unittest.TestCase):
                 r = _edit(ProjectFixture(), "\n".join(lines), "\n".join(checked(ln, note) for ln in lines))
                 self.assertEqual(r.returncode, 2, r.stderr.decode())
                 self.assertIn(b"cannot find", r.stderr)
+        # edited after post-panel run 1 (codex): an edit the guard cannot place is refused whatever it changes — it
+        # cannot see what such an edit ticks (row 18)
         r = _edit(ProjectFixture(), "- [ ] G0: not in the file", "- [ ] G0: not in the file, still open")
-        self.assertEqual(r.returncode, 0, r.stderr.decode())                 # ticks nothing
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+        self.assertIn(b"cannot find", r.stderr)
         r = _edit(ProjectFixture(), "- [ ] G0: not in the file", "- [x] G0: rewritten while ticked")
         self.assertEqual(r.returncode, 2, r.stderr.decode())                 # a line born checked is a tick too
         # a surrogate pair spelled as two escapes (the tool may read it as one character; the guard does not)
@@ -116,6 +119,19 @@ class WhenTheFileCannotShowTheEdit(unittest.TestCase):
                  {"old_string": "- [ ] G9: not in the file", "new_string": "- [x] G9: not in the file" + NOTE}]
         r = f.run_hook({"hook_event_name": "PreToolUse", "tool_name": "MultiEdit",
                         "tool_input": {"file_path": str(f.task_file), "edits": edits}})
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+
+    def test_a_mid_line_spelling_the_tool_matches_the_other_way(self):
+        # row 18 (post-panel run 1, codex, reproduced): the file holds `é` as text, the old_string the character —
+        # the tool matches it and ticks both gates; the guard cannot place it, so it refuses (Edit and MultiEdit)
+        gates = ["- [ ] \\u00e9 G1", "- [ ] \\u00e9 G2", *G[:2]]
+        r = _edit(ProjectFixture(gates=gates), "[ ] é", "[x] é", replace_all=True)
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+        f = ProjectFixture(gates=gates)
+        r = f.run_hook({"hook_event_name": "PreToolUse", "tool_name": "MultiEdit",
+                        "tool_input": {"file_path": str(f.task_file),
+                                       "edits": [{"old_string": "[ ] é", "new_string": "[x] é",
+                                                  "replace_all": True}]}})
         self.assertEqual(r.returncode, 2, r.stderr.decode())
 
     def test_an_unreadable_task_md_is_judged_on_the_fragments(self):
