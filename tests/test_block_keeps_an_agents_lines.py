@@ -157,6 +157,22 @@ class NothingMovesPastAnotherSection(_Task):
         self.assertLess(t.index("GATE-1"), t.index("GATE-2"))
         self.assertEqual(t.count("## Blocked"), 1)
 
+    def test_two_blocked_sections_both_lose_their_old_records(self):
+        """Row 9 (my mutant run after impl round 1): a file with two `## Blocked` sections (by hand, or an older
+        version) — after the next block neither keeps its old reason, an agent's gates in both stay, and the reason
+        read is the new one."""
+        self.tf.write_text(TASK + "\n## Blocked\n> OLD-A  (since 2026-01-01T00:00+00:00)\n- [ ] GATE-A\n\n## Notes\nx\n"
+                           "\n## Blocked\n> OLD-B  (since 2026-01-02T00:00+00:00)\n- [ ] GATE-B\n", encoding="utf-8")
+        before = _gate_counts(self.text())
+        set_task_blocked(self.tf, "new pause")
+        t = self.text()
+        self.assertNotIn("OLD-A", t)
+        self.assertNotIn("OLD-B", t)
+        self.assertIn("- [ ] GATE-A", t)
+        self.assertIn("- [ ] GATE-B", t)
+        self.assertEqual(_gate_counts(t), before)
+        self.assertEqual(_extract_block_reason(self.tf), "new pause")
+
     def test_with_nothing_but_the_clis_lines_the_bytes_are_as_before(self):
         """Row 5: a section holding only the CLI's lines comes out byte for byte as before the fix."""
         set_task_blocked(self.tf, "one")
