@@ -136,6 +136,9 @@ class TheDesignStays(_Task):
         not a time, `> Resumed <a word>`, or the CLI's shape indented."""
         quotes = ["> owner away (since Monday)", "> wait  (since Monday)", "> Broken (since Python 3.10)",
                   "> deployed (since 2026-10-20T10:00+03:00)",
+                  # post-panel run 1 (codex): the CLI writes a minute and a numeric offset, never seconds or `Z`
+                  "> observed outage  (since 2026-10-20T10:00:15+03:00)", "> outage  (since 2026-10-20T10:00Z)",
+                  "> Resumed 2026-10-20T10:00:15+03:00",
                   "> Resumed tomorrow", "  > x  (since 2026-01-01T00:00+00:00)", "  > Resumed 2026-01-01T00:00+00:00"]
         set_task_blocked(self.tf, "first pause")
         self.append("".join(q + "\n" for q in quotes))
