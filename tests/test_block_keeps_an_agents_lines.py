@@ -130,6 +130,23 @@ class TheDesignStays(_Task):
         self.assertEqual(_extract_block_reason(self.tf), "second pause")
 
 
+    def test_a_quote_close_to_the_clis_shapes_stays(self):
+        """Row 10 (impl round 2: codex, grok Important; agy, opus, sonnet Minor): only the CLI's exact grammar is its
+        record — column 0, two spaces, an ISO stamp. A quote that only looks like it stays: one space, a stamp that is
+        not a time, `> Resumed <a word>`, or the CLI's shape indented."""
+        quotes = ["> owner away (since Monday)", "> wait  (since Monday)", "> Broken (since Python 3.10)",
+                  "> Resumed tomorrow", "  > x  (since 2026-01-01T00:00+00:00)", "  > Resumed 2026-01-01T00:00+00:00"]
+        set_task_blocked(self.tf, "first pause")
+        self.append("".join(q + "\n" for q in quotes))
+        resume_blocked_task(self.tf)
+        set_task_blocked(self.tf, "second pause")
+        t = self.text()
+        for q in quotes:
+            with self.subTest(quote=q):
+                self.assertIn(q, t)
+        self.assertNotIn("first pause", t)
+        self.assertEqual(_extract_block_reason(self.tf), "second pause")
+
     def test_with_nothing_but_the_clis_lines_the_bytes_are_as_before(self):
         """Row 5: a section holding only the CLI's lines comes out byte for byte as before the fix."""
         set_task_blocked(self.tf, "one")
