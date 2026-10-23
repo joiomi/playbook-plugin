@@ -41,6 +41,9 @@ TASK_MD = """# {num} - Readopt Fixture
 ## Status
 {status}
 
+## Risk
+reversible
+
 ## Intent
 Fixture task for the re-adoption arm.
 
@@ -491,7 +494,7 @@ class TestAuditCommand(WorkReadoptBase):
         d = self.project / ".agent" / "tasks" / f"{num}-audit"
         d.mkdir(parents=True, exist_ok=True)
         (d / "task.md").write_text(
-            f"# {num} - a\n\n## Status\npending\n\n## Work Plan\n- [x] g\n", encoding="utf-8")
+            f"# {num} - a\n\n## Status\npending\n\n## Risk\nreversible\n\n## Work Plan\n- [x] g\n", encoding="utf-8")
         return d / "task.md"
 
     def test_clean_repo_passes_and_writes_receipt(self):
@@ -538,7 +541,7 @@ class TestGateCountGuard(WorkReadoptBase):
 
     def test_prose_marker_does_not_block_a_complete_task(self):
         tf = self._task("085",
-            "# 085 - g\n\n## Status\npending\n\n## Work Plan\n"
+            "# 085 - g\n\n## Status\npending\n\n## Risk\nreversible\n\n## Work Plan\n"
             "- [x] real gate one\n- [x] real gate two\n\n"
             "The convention is `- [ ]` until the gate's work lands.\n")
         self.assertEqual(self.run_tasks("work", "085").returncode, 0)
@@ -550,7 +553,7 @@ class TestGateCountGuard(WorkReadoptBase):
         # Task 190 (PLAN S14 T2c, #50; impl panel r1, fable): the WoW project's task 018 shape — every gate
         # checked, then bold lead-ins that introduce lists. The real close, through the CLI, must not read them.
         tf = self._task("087",
-            "# 087 - g\n\n## Status\npending\n\n## Work Plan\n"
+            "# 087 - g\n\n## Status\npending\n\n## Risk\nreversible\n\n## Work Plan\n"
             "- [x] real gate one\n- [x] real gate two\n\n## Notes\n"
             "  - **The rebuild**, in scratch:\n    - step one\n- **Ceva**, în scratch:\n")
         self.assertEqual(self.run_tasks("work", "087").returncode, 0)
@@ -561,7 +564,7 @@ class TestGateCountGuard(WorkReadoptBase):
 
     def test_real_open_gate_still_blocks_on_the_count(self):
         self._task("086",
-            "# 086 - g\n\n## Status\npending\n\n## Work Plan\n"
+            "# 086 - g\n\n## Status\npending\n\n## Risk\nreversible\n\n## Work Plan\n"
             "- [x] done one\n- [ ] genuinely open\n")
         self.assertEqual(self.run_tasks("work", "086").returncode, 0)
         r = self.run_tasks("work", "done")
@@ -576,7 +579,7 @@ class TestParkedAndRetro(WorkReadoptBase):
         d = self.project / ".agent" / "tasks" / f"{num}-parked"
         d.mkdir(parents=True, exist_ok=True)
         tf = d / "task.md"
-        body = (f"# {num} - Parked Fixture\n\n## Status\n{status}\n\n"
+        body = (f"# {num} - Parked Fixture\n\n## Status\n{status}\n\n## Risk\nreversible\n\n"
                 "## Work Plan\n- [x] g\n\n## Parked\n"
                 + "\n".join(f"- {it}" for it in items) + "\n")
         tf.write_text(body, encoding="utf-8")
