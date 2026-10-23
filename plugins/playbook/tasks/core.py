@@ -4948,11 +4948,11 @@ def create_task(project_path: Path, name: str, task_type: str | None = None,
     temporary name in the lane, renamed in and registered, under the lane lock that also takes
     the number. Raises `registry.RegistryUnreadable` before creating anything.
 
-    The intent is one line (task 292, audit 1 item 4): its whitespace, newlines included, is
-    folded to single spaces, so an intent such as `fix\\n## Status\\ndone` adds no heading.
+    The intent is one line (task 292, audit 1 item 4): each run of line breaks becomes one space
+    (its other spaces are kept), so an intent such as `fix\\n## Status\\ndone` adds no heading.
     """
     if intent_text:
-        intent_text = " ".join(intent_text.split())
+        intent_text = re.sub(r"[\r\n\v\f\x1c\x1d\x1e\x85  ]+", " ", intent_text)
     # Creating a task in the fresh-clone shape would mint a root `.agent/tasks/`
     # — and because a root tasks dir is itself a legitimate lane, that single
     # mkdir permanently converts the guarded shape into an "allowed mixed

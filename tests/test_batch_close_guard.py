@@ -666,7 +666,11 @@ class TheRecordIsKnownByIdentity(unittest.TestCase):
     def test_control_an_existing_record_through_a_link_is_a_rewrite(self):
         f = ProjectFixture()
         store = self._store_lane(f)
-        r = self._create(f, store / "tasks" / "001-thing" / "task.md")
+        record = store / "tasks" / "001-thing" / "task.md"
+        # the rewrite keeps the record's `## Status` (task 292: a Write that drops or changes it is refused)
+        r = f.run_hook({"hook_event_name": "PreToolUse", "tool_name": "Write",
+                        "tool_input": {"file_path": str(record),
+                                       "content": record.read_text(encoding="utf-8") + "\nA line by hand.\n"}})
         self.assertEqual(r.returncode, 0, r.stderr.decode())
 
     def test_a_task_directory_link_to_an_active_directory_that_is_a_link(self):
