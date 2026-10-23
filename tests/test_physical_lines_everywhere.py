@@ -586,10 +586,11 @@ class ReviewEvidenceIsAPhysicalGate(_Dir):
                 self.tf.write_text(task(f"## Notes\n{body}", risk="assertive"), encoding="utf-8")
                 self.assertFalse(core.has_review_evidence(self.tf, impl_only=True))
 
-    def test_a_real_review_gate_still_counts(self):
+    def test_a_real_review_gate_is_no_evidence_either(self):
+        # task 290 (audit 1 G2): since then no tick is evidence, a real gate's included — only the CLI's records
         self.tf.write_text(task("## Implementation Review\n- [x] Run `.claude/bin/tasks impl-review 1` — done\n"),
                            encoding="utf-8")
-        self.assertTrue(core.has_review_evidence(self.tf, impl_only=True))
+        self.assertFalse(core.has_review_evidence(self.tf, impl_only=True))
 
 
 class TheCodexHookReadsTheLiveStatus(_Dir):

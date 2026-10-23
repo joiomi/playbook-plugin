@@ -113,10 +113,11 @@ class ReviewEvidence(unittest.TestCase):
     def test_judge_md_present(self):
         self.assertTrue(has_review_evidence(self._dir(judge_md="# panel\n")))
 
-    def test_checked_impl_review_gate(self):
+    def test_a_checked_impl_review_gate_is_no_evidence(self):
+        # task 290 (audit 1 G2): a tick is never evidence — only the records the CLI writes
         tf = self._dir(task_md="## Implementation Review\n- [x] Run `.claude/bin/tasks impl-review 1`\n")
-        self.assertTrue(has_review_evidence(tf))
-        self.assertTrue(has_review_evidence(tf, impl_only=True))
+        self.assertFalse(has_review_evidence(tf))
+        self.assertFalse(has_review_evidence(tf, impl_only=True))
 
     def test_unchecked_gate_is_no_evidence(self):
         tf = self._dir(task_md="## Implementation Review\n- [ ] Run `.claude/bin/tasks impl-review 1`\n")
@@ -135,9 +136,10 @@ class ReviewEvidence(unittest.TestCase):
         tf = self._dir(judge_md="# Panel Impl Review — task\n\n**PANEL VERDICT: PASS**\n")
         self.assertTrue(has_review_evidence(tf, impl_only=True))
 
-    def test_panel_gate_with_impl_mode_satisfies_impl_only(self):
+    def test_a_checked_impl_panel_gate_is_no_evidence(self):
+        # task 290: the template's own gate, ticked, minted the evidence that closed a task with no judge
         tf = self._dir(task_md="- [x] Run `.claude/bin/tasks panel-review 1 --mode impl`\n")
-        self.assertTrue(has_review_evidence(tf, impl_only=True))
+        self.assertFalse(has_review_evidence(tf, impl_only=True))
 
 
 class ResolveVerifyCommands(unittest.TestCase):

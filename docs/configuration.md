@@ -366,6 +366,11 @@ distinguishes two facts that were previously conflated:
   blocks unless there is impl-review evidence or `--force --reason`, exactly as
   for `assertive` / `irreversible`.
 
+Review evidence is a record the CLI wrote: judge.md whose newest round is an impl
+round with verdict PASS, or judge-single.md's `## Single-judge impl review`
+heading; a ticked gate is never review evidence (task 290): the templates carry
+the gate that tells you to run the impl panel, and ticking it used to count.
+
 Setting `## Risk` to one word clears it. `## Risk Routing` in the light template
 is a gate checklist, not the classification field, and does not trigger this.
 

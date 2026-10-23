@@ -1750,7 +1750,7 @@
     {
       "id": "PB-RISK-REVIEW-REQUIRED",
       "category": "risk-and-close",
-      "statement": "Configured risk classes require structural implementation-review evidence at close; a fully checked prose template cannot mint that evidence and a single-judge note cannot satisfy a panel_required_for class. The implementation evidence of a close no panel is required for is structural too: the newest judge.md round an impl round with verdict PASS, judge-single.md's CLI-written heading, or a checked task.md line naming impl-review — never a phrase anywhere in judge.md, nor a line a judge wrote into task.md, which is quoted (task 200).",
+      "statement": "Configured risk classes require structural implementation-review evidence at close; a fully checked prose template cannot mint that evidence and a single-judge note cannot satisfy a panel_required_for class. The implementation evidence of a close no panel is required for is structural too: the newest judge.md round an impl round with verdict PASS, or judge-single.md's CLI-written heading — a ticked gate is never evidence (task 290, audit 1 G2: six templates carry the impl-panel gate, and ticking it closed a task with ## Risk unset, or panel_required_for: [], with no judge), never a phrase anywhere in judge.md, nor a line a judge wrote into task.md, which is quoted (task 200).",
       "owner": [
         {
           "path": "plugins/playbook/tasks/core.py",
@@ -1772,6 +1772,19 @@
       "failure_consequence": "High",
       "claim_kind": "mechanical",
       "proofs": [
+        {
+          "type": "executable integration",
+          "path": "tests/test_review_evidence_records_only.py",
+          "reference": "NoJudgeNoClose.test_an_unset_risk_does_not_close_on_ticked_boxes",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_review_evidence_records_only.py",
+            "reference": "TheRecordsAreTheEvidence.test_an_impl_pass_round_is_evidence"
+          },
+          "limitations": [
+            "Task 290 (audit 1 G2): each of the six templates that carry the impl-panel gate, ## Risk unset, every gate ticked with a note; panel_required_for: [] with an assertive or irreversible task too (NoJudgeNoClose.test_a_high_risk_task_without_the_panel_bar_needs_a_record)."
+          ]
+        },
         {
           "type": "executable integration",
           "path": "tests/test_work_readopt.py",

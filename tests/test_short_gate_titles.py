@@ -375,10 +375,11 @@ class TheTitlesReadAsBefore(unittest.TestCase):
             with self.subTest(old=old[:60]):
                 self.assertEqual(self._evidence(old), self._evidence(new))
 
-    def test_the_panel_gates_are_still_evidence(self):
+    def test_the_panel_gates_are_no_evidence(self):
+        # task 290 (audit 1 G2): ticked, the impl panel gate closed a task with no judge; no tick is evidence now
         plan, impl = (t for t in gates(template.render_template(1, "X", "feature")) if t.startswith("Run the "))
-        self.assertEqual(self._evidence(plan), (True, False))
-        self.assertEqual(self._evidence(impl), (True, True))
+        self.assertEqual(self._evidence(plan), (False, False))
+        self.assertEqual(self._evidence(impl), (False, False))
 
     def test_the_freehand_readers(self):
         """The CLI's release rule, the codex hooks' and the bash hook's patterns, on the new titles (plan panel P4)."""

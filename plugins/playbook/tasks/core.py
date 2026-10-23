@@ -4062,8 +4062,10 @@ def single_review_tamper_degraded(task_file) -> "str | None":
 
 def has_review_evidence(task_file, impl_only: bool = False) -> bool:
     """True when a task carries evidence that a review actually ran: a judge.md
-    or a judge-single.md (task 117/138) in its directory, or a checked
-    plan/impl/panel-review gate in task.md. Used
+    or a judge-single.md (task 117/138) in its directory — the records the CLI
+    writes, never a tick (task 290, audit 1 G2: six templates carry the gate "Run
+    the impl panel … `tasks panel-review <N> --mode impl`", and ticking it closed a
+    task with `## Risk` unset, or `panel_required_for: []`, with no judge). Used
     by the close policy — an assertive/irreversible task with no such evidence
     cannot light-close (the 056 fix).
 
@@ -4092,24 +4094,6 @@ def has_review_evidence(task_file, impl_only: bool = False) -> bool:
                      if ln.startswith("## Single-judge ")]
             if heads and (not impl_only or any(h.startswith("## Single-judge impl review")
                                                for h in heads)):
-                return True
-        _lines = _physical_lines(read_task_text(p))
-        _fenced = _iter_fenced_flags(_lines, unclosed_is_live=False)     # a fenced example is no evidence (U3)
-        for _i, ln in enumerate(_lines):
-            if _fenced[_i]:
-                continue
-            # a CHECKED gate as the gate counters read one (task 214, T3): a physical line, the box after spaces or
-            # tabs only — a quote with a separator, or one at the line's start, used to make this True
-            m = _GATE_LINE_RE.match(ln)
-            if not m or m.group(1) not in "xX":
-                continue
-            s = ln.strip(" \t\r").lower()
-            if "impl-review" in s:
-                return True
-            if impl_only:
-                if "panel-review" in s and "impl" in s:
-                    return True
-            elif "panel-review" in s or "plan-review" in s:
                 return True
     except OSError:
         pass

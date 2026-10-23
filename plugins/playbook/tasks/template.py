@@ -1389,11 +1389,11 @@ def render_light_template(num: int, title: str) -> str:
     impl-grade review evidence whatever template it used; this shape's job is
     to say so early and shed the Build ceremony around it.
 
-    Wording constraint (blind-judge Finding 2): no checkable line may carry
-    the literal `impl-review` / `panel-review` / `plan-review` tokens —
-    `has_review_evidence` matches those substrings on checked lines, so a
-    routing gate that names the command would MINT evidence when checked.
-    Say "the implementation panel"; the close gate reads judge.md, not boxes.
+    Wording (blind-judge Finding 2): no checkable line here carries the literal
+    `impl-review` / `panel-review` / `plan-review` tokens — they once minted
+    evidence when checked. Since task 290 no tick is evidence in any template
+    (`has_review_evidence` reads judge.md and judge-single.md only), so the
+    wording is kept for its own sake: the close gate reads records, not boxes.
     """
     parts = [
         header(num, title),
