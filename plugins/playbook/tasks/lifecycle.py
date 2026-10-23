@@ -232,6 +232,15 @@ def _capture_recent_chat(project_path: Path, max_messages: int = 10,
 _CHAT_HEADING = "### Recent Chat (auto-captured at activation — review and remove unrelated)"
 
 
+def _atx_h3_text(raw: str) -> "str | None":
+    """An ATX level-3 heading normalized like `core._atx_h2_text` normalizes an H2: up to three spaces of indent, a
+    tab or several spaces after the hashes, closing hashes and trailing white space dropped, a BOM tolerated."""
+    import re
+    from tasks.core import _ATX_CLOSING_HASHES_RE
+    m = re.match(r"^ {0,3}###[ \t]+(.*?)[ \t]*$", raw.lstrip("\ufeff").rstrip("\r\n"))
+    return f"### {_ATX_CLOSING_HASHES_RE.sub('', m.group(1))}" if m else None
+
+
 def _inject_chat_into_task(task_file: Path, messages: list[str]) -> None:
     """Inject captured chat messages into task.md References section."""
     if not messages:
@@ -255,7 +264,7 @@ def _inject_chat_into_task(task_file: Path, messages: list[str]) -> None:
         # inside its own fence, leaving the closing fence open over the whole task
         # (task 166, impl panel r2). A record with an unclosed fence gives no
         # anchor — nothing is written into it.
-        from tasks.core import _iter_nonfenced
+        from tasks.core import _atx_h2_text, _iter_fenced_flags, _iter_nonfenced
         lines = content.split("\n")
         sep = next((i for i, _s in _iter_nonfenced(lines) if i > 0 and lines[i] == "---"
                     and i + 1 < len(lines)), None)
@@ -272,13 +281,19 @@ def _inject_chat_into_task(task_file: Path, messages: list[str]) -> None:
         # therefore keeps the ones below it, which the capture may then add again: kept twice, never lost.
         refs = lines[:sep]
         live = [i for i, _s in _iter_nonfenced(refs)]
-        head = next((i for i in live if refs[i].rstrip() == _CHAT_HEADING), None)
+        # headings are matched the way every section writer matches them (impl round 2): up to three spaces of
+        # indent, a tab or several spaces after the hashes, closing hashes
+        head = next((i for i in live if _atx_h3_text(refs[i]) == _CHAT_HEADING), None)
         if head is None:
             # no block yet: at the end of `## References` (impl round 1, a pre-existing placement) — appended after a
-            # section an agent wrote there (`## Owner rulings`), it became part of it
-            ref = next((i for i in live if refs[i].rstrip() == "## References"), None)
-            at = next((i for i in live if ref is not None and i > ref and re.match(r" {0,3}#{1,2}(?:[ \t]|$)", refs[i])),
-                      len(refs))
+            # section an agent wrote there (`## Owner rulings`), it became part of it. With no References heading,
+            # above the first `## Owner rulings` there, else at the end, as before (impl round 2).
+            ref = next((i for i in live if _atx_h2_text(refs[i]) == "## References"), None)
+            if ref is not None:
+                at = next((i for i in live if i > ref and (_atx_h2_text(refs[i]) is not None
+                                                          or re.match(r" {0,3}#(?:[ \t]|$)", refs[i]))), len(refs))
+            else:
+                at = next((i for i in live if _atx_h2_text(refs[i]) == "## Owner rulings"), len(refs))
             after = "\n".join(refs[at:]).strip("\n")
             return _utf8_safe("\n".join(refs[:at]).rstrip() + "\n" + chat_block
                               + ("\n" + after + "\n" if after else "") + content[first_sep:])
@@ -289,8 +304,10 @@ def _inject_chat_into_task(task_file: Path, messages: list[str]) -> None:
                 continue
             fence = re.fullmatch(r"(`{3,})text", refs[j + 1]) if (
                 j + 1 < len(refs) and re.fullmatch(r"\*\*\[M\d+\]\*\* \[\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\]", refs[j])) else None
-            closes = re.compile(r" {0,3}`{%d,}[ \t\f\v\r]*" % len(fence.group(1))) if fence else None
-            close = next((k for k in range(j + 2, len(refs)) if closes.fullmatch(refs[k])), None) if fence else None
+            # the close is the line where the fence engine itself closes this fence (impl round 2: a BOM, a CR, a
+            # longer run — the engine's own rules, never a copy of them)
+            close = next((k for k in range(j + 2, len(refs))
+                          if _iter_fenced_flags(refs[j + 1:k + 1], unclosed_is_live=True)[0]), None) if fence else None
             if close is None or refs[close] != fence.group(1):
                 break
             j = close + 1
