@@ -265,11 +265,23 @@ def _inject_chat_into_task(task_file: Path, messages: list[str]) -> None:
         # Task 297 (audit 2, G4): only the block's own captured messages are replaced — its heading, then each
         # `**[M…]** [time]` line with the fence of text under it. The block used to run to the first `---`, so an
         # activation deleted whatever an agent wrote after it (five tasks here held `## Owner rulings` there). The
-        # first line that is not a captured message ends the block, and it and everything after it stay.
+        # first line that is not a captured message ends the block, and it and everything after it stay. A message
+        # ends where the fence rules close its fence (`_iter_fenced_flags`: a run at least as long, <=3 spaces in
+        # front, white space after); when that is not the exact closer the capture writes, an editor touched it, and
+        # the walk stops there rather than run on to a later fence (impl round 1). A note between two messages
+        # therefore keeps the ones below it, which the capture may then add again: kept twice, never lost.
         refs = lines[:sep]
-        head = next((i for i, _s in _iter_nonfenced(refs) if refs[i] == _CHAT_HEADING), None)
+        live = [i for i, _s in _iter_nonfenced(refs)]
+        head = next((i for i in live if refs[i].rstrip() == _CHAT_HEADING), None)
         if head is None:
-            return _utf8_safe(content[:first_sep].rstrip() + "\n" + chat_block + content[first_sep:])
+            # no block yet: at the end of `## References` (impl round 1, a pre-existing placement) — appended after a
+            # section an agent wrote there (`## Owner rulings`), it became part of it
+            ref = next((i for i in live if refs[i].rstrip() == "## References"), None)
+            at = next((i for i in live if ref is not None and i > ref and re.match(r" {0,3}#{1,2}(?:[ \t]|$)", refs[i])),
+                      len(refs))
+            after = "\n".join(refs[at:]).strip("\n")
+            return _utf8_safe("\n".join(refs[:at]).rstrip() + "\n" + chat_block
+                              + ("\n" + after + "\n" if after else "") + content[first_sep:])
         j = head + 1
         while j < len(refs):
             if not refs[j].strip():
@@ -277,8 +289,9 @@ def _inject_chat_into_task(task_file: Path, messages: list[str]) -> None:
                 continue
             fence = re.fullmatch(r"(`{3,})text", refs[j + 1]) if (
                 j + 1 < len(refs) and re.fullmatch(r"\*\*\[M\d+\]\*\* \[\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\]", refs[j])) else None
-            close = next((k for k in range(j + 2, len(refs)) if refs[k] == fence.group(1)), None) if fence else None
-            if close is None:
+            closes = re.compile(r" {0,3}`{%d,}[ \t\f\v\r]*" % len(fence.group(1))) if fence else None
+            close = next((k for k in range(j + 2, len(refs)) if closes.fullmatch(refs[k])), None) if fence else None
+            if close is None or refs[close] != fence.group(1):
                 break
             j = close + 1
         rest = "\n".join(refs[j:]).strip("\n")
