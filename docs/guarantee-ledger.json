@@ -18510,7 +18510,7 @@
     {
       "id": "PB-TASK-CREATE-CHAT-CAPTURE",
       "category": "task-lifecycle",
-      "statement": "Task activation (`tasks work <N>`) captures recent chat-log messages into the task's References, parsing both the provider-suffixed and the legacy unsuffixed header forms; creation (`tasks new`) captures nothing.",
+      "statement": "Task activation (`tasks work <N>`) captures recent chat-log messages into the task's References, parsing both the provider-suffixed and the legacy unsuffixed header forms; creation (`tasks new`) captures nothing. A later activation replaces only the block's own lines — its heading and each captured message, a `**[M…]** [YYYY-MM-DD HH:MM:SS]` line with the fence of text under it — and the first line that is not one ends the block: it and everything after it stay (task 297, audit 2 G4; the block used to run to the first `---`, and an activation deleted what an agent wrote after it).",
       "owner": [
         {
           "path": "plugins/playbook/tasks/lifecycle.py",
@@ -18524,6 +18524,25 @@
       "failure_consequence": "Medium",
       "claim_kind": "mechanical",
       "proofs": [
+        {
+          "type": "executable unit",
+          "path": "tests/test_chat_capture_keeps_what_follows.py",
+          "reference": "WhatFollowsTheBlockStays.test_a_section_and_its_gate_after_the_block_stay",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_chat_capture_keeps_what_follows.py",
+            "reference": "TheBlockIsStillReplaced.test_the_new_capture_replaces_the_old_messages"
+          },
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_chat_capture_keeps_what_follows.py",
+          "reference": "WhatFollowsTheBlockStays.test_the_real_verbs_keep_the_rulings",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
         {
           "type": "executable unit",
           "path": "tests/test_capture_recent_chat.py",

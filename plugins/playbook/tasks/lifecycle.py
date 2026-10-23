@@ -229,6 +229,9 @@ def _capture_recent_chat(project_path: Path, max_messages: int = 10,
     return captured
 
 
+_CHAT_HEADING = "### Recent Chat (auto-captured at activation — review and remove unrelated)"
+
+
 def _inject_chat_into_task(task_file: Path, messages: list[str]) -> None:
     """Inject captured chat messages into task.md References section."""
     if not messages:
@@ -240,7 +243,7 @@ def _inject_chat_into_task(task_file: Path, messages: list[str]) -> None:
         """Replace non-UTF-8-survivable code points like lone surrogates."""
         return text.encode("utf-8", errors="replace").decode("utf-8")
 
-    chat_block = "\n### Recent Chat (auto-captured at activation — review and remove unrelated)\n"
+    chat_block = "\n" + _CHAT_HEADING + "\n"
     for msg in messages:
         chat_block += f"\n{_utf8_safe(msg)}\n"
 
@@ -259,14 +262,28 @@ def _inject_chat_into_task(task_file: Path, messages: list[str]) -> None:
         if sep is None:
             return None                            # no anchor → nothing to write
         first_sep = len("\n".join(lines[:sep]))    # the offset of that line's "\n---\n"
-        references = content[:first_sep]
-        references = re.sub(
-            r'\n### Recent Chat \(auto-captured at activation — review and remove unrelated\)\n.*\Z',
-            "",
-            references,
-            flags=re.DOTALL,
-        )
-        return _utf8_safe(references.rstrip() + "\n" + chat_block + content[first_sep:])
+        # Task 297 (audit 2, G4): only the block's own captured messages are replaced — its heading, then each
+        # `**[M…]** [time]` line with the fence of text under it. The block used to run to the first `---`, so an
+        # activation deleted whatever an agent wrote after it (five tasks here held `## Owner rulings` there). The
+        # first line that is not a captured message ends the block, and it and everything after it stay.
+        refs = lines[:sep]
+        head = next((i for i, _s in _iter_nonfenced(refs) if refs[i] == _CHAT_HEADING), None)
+        if head is None:
+            return _utf8_safe(content[:first_sep].rstrip() + "\n" + chat_block + content[first_sep:])
+        j = head + 1
+        while j < len(refs):
+            if not refs[j].strip():
+                j += 1
+                continue
+            fence = re.fullmatch(r"(`{3,})text", refs[j + 1]) if (
+                j + 1 < len(refs) and re.fullmatch(r"\*\*\[M\d+\]\*\* \[\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\]", refs[j])) else None
+            close = next((k for k in range(j + 2, len(refs)) if refs[k] == fence.group(1)), None) if fence else None
+            if close is None:
+                break
+            j = close + 1
+        rest = "\n".join(refs[j:]).strip("\n")
+        return _utf8_safe("\n".join(refs[:head]).rstrip() + "\n" + chat_block
+                          + ("\n" + rest + "\n" if rest else "") + content[first_sep:])
 
     _rewrite(task_file, _t)   # task 058: one locked transaction
 
