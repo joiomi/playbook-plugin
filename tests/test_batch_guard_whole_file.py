@@ -100,8 +100,10 @@ class WhenTheFileCannotShowTheEdit(unittest.TestCase):
                 r = _edit(ProjectFixture(), "\n".join(lines), "\n".join(checked(ln, note) for ln in lines))
                 self.assertEqual(r.returncode, 2, r.stderr.decode())
                 self.assertIn(b"cannot find", r.stderr)
-        r = _edit(ProjectFixture(), checked(G[0]).replace("G1", "G0"), checked(G[0]).replace("G1", "G0") + NOTE)
-        self.assertEqual(r.returncode, 0, r.stderr.decode())                 # ticks nothing it did not hold
+        r = _edit(ProjectFixture(), "- [ ] G0: not in the file", "- [ ] G0: not in the file, still open")
+        self.assertEqual(r.returncode, 0, r.stderr.decode())                 # ticks nothing
+        r = _edit(ProjectFixture(), "- [ ] G0: not in the file", "- [x] G0: rewritten while ticked")
+        self.assertEqual(r.returncode, 2, r.stderr.decode())                 # a line born checked is a tick too
         # a surrogate pair spelled as two escapes (the tool may read it as one character; the guard does not)
         f = ProjectFixture(gates=["- [ ] \U0001F600 G1", "- [ ] \U0001F600 G2"])
         r = _edit(f, "- [ ] \\ud83d\\ude00", "- [x] \\ud83d\\ude00", replace_all=True)
@@ -156,6 +158,9 @@ class AsTheEditToolMatches(unittest.TestCase):
         f = ProjectFixture()
         r = _edit(f, "- [\\u0020]", "- [x]", replace_all=True)
         self.assertEqual(r.returncode, 2, r.stderr.decode())
+        # and one gate closed that way, with its note, is found and passes (not refused as text the guard cannot find)
+        r = _edit(ProjectFixture(), G[0].replace("[ ]", "[\\u0020]"), checked(G[0], NOTE))
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
 
     def test_a_deletion_takes_the_newline_after_it(self):
         # row 13: deleting `[ ] TODO` everywhere joins `- ` and the next line — two gates born checked
@@ -181,6 +186,11 @@ class AsTheEditToolMatches(unittest.TestCase):
                 r = f.run_hook({"hook_event_name": "PreToolUse", "tool_name": "MultiEdit",
                                 "tool_input": {"file_path": str(f.task_file), "edits": edits}})
                 self.assertEqual(r.returncode, 2, r.stderr.decode())
+        # one gate closed that way, with its note, is found and passes
+        one = [{"old_string": "- [ ] “a” G1", "new_string": "- [x] “a” G1" + NOTE}]
+        r = f.run_hook({"hook_event_name": "PreToolUse", "tool_name": "MultiEdit",
+                        "tool_input": {"file_path": str(f.task_file), "edits": one}})
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
 
 
 class TheDocsSayIt(unittest.TestCase):
