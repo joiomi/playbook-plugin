@@ -218,18 +218,20 @@ class PostPanelOne(unittest.TestCase):
                     "git config --comment x alias.c y", "git config --value x clean.requireForce false",
                     "git config -ffile alias.c x", "git config --file=cfg alias.c x", "git config --no-type alias.c x",
                     "git config set --append alias.c x", "git config set --comment=x --type bool clean.requireForce false",
-                    "git config --replace-all remote.o.push +x", "git config -- alias.c x",
+                    "git config --replace-all remote.o.push +x", "git config -- alias.c x", "git config -- alias.c -x",
                     "git config --bool --global clean.requireForce false"):
             with self.subTest(cmd=cmd):
                 self.assertEqual(verdict(cmd), ("block", "git-config-dangerous"))
         for cmd in ("git config --typ=path remote.origin.push +main", "git config --frobnicate alias.c x",
-                    "git config -k alias.c x", "git config --glob alias.c x"):
+                    "git config -k alias.c x", "git config --glob alias.c x",
+                    "git config --global=x alias.c y", "git config --no-get alias.c x", "git config --no-bool alias.c x"):
             with self.subTest(cmd=cmd):
                 self.assertEqual(verdict(cmd), ("block", "git-config-unreadable"))
         for cmd in ("git config --global user.name x", "git config -t bool core.bare", "git config --type=bool core.bare true",
                     "git config set --comment x user.email y", "git config -f cfg --get alias.c",
                     "git config --show-origin --list", "git config -lz", "git config get --all --regexp remote",
-                    "git config --get-colorbool color.ui", "git config list --name-only", "git config --no-global user.name x"):
+                    "git config --get-colorbool color.ui", "git config list --name-only", "git config --no-global user.name x",
+                    "git config --no-includes --no-file user.name x"):
             with self.subTest(cmd=cmd):
                 self.assertEqual(verdict(cmd)[0], "allow")
 

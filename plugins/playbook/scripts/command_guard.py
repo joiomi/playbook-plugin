@@ -1300,6 +1300,10 @@ _GIT_CONFIG_FLAGS = frozenset((
     "get", "get-all", "get-regexp", "get-urlmatch", "replace-all", "add", "unset", "unset-all", "rename-section",
     "remove-section", "list", "edit", "get-color", "get-colorbool"))
 _GIT_CONFIG_VALUED = frozenset(("file", "blob", "type", "default", "url", "value", "comment"))
+# the options git lists as `--[no-]…`; a mode has no negation (git: "unknown option `no-get'")
+_GIT_CONFIG_NEGATABLE = _GIT_CONFIG_VALUED | frozenset((
+    "global", "system", "local", "worktree", "all", "fixed-value", "append", "includes", "name-only", "regexp",
+    "show-names", "show-origin", "show-scope", "null"))
 _GIT_CONFIG_SHORT = {"l": "list", "e": "edit", "z": "null"}
 _GIT_CONFIG_SHORT_VALUED = frozenset("ft")
 _GIT_CONFIG_READ_MODES = frozenset(("get", "get-all", "get-regexp", "get-urlmatch", "unset", "unset-all",
@@ -1324,11 +1328,12 @@ def _git_config_verdict(args):
             if name in _GIT_CONFIG_VALUED:
                 i += 1 if eq else 2                     # `--type=path`, or `--type path`
                 continue
-            base = name[3:] if name.startswith("no-") else name
-            if eq or (base not in _GIT_CONFIG_FLAGS and base not in _GIT_CONFIG_VALUED):
+            if not eq and name.startswith("no-") and name[3:] in _GIT_CONFIG_NEGATABLE:
+                i += 1                                  # it turns an option off and selects no mode
+                continue
+            if eq or name not in _GIT_CONFIG_FLAGS:     # a flag given a value is refused by git too
                 return "unreadable"
-            if base == name:                            # `--no-…` turns an option off, it selects no mode
-                modes.add(name)
+            modes.add(name)
             i += 1
             continue
         if a.startswith("-") and len(a) > 1:
@@ -1350,10 +1355,10 @@ def _git_config_verdict(args):
         pos = pos[1:]
     if "rename-section" in modes or sub == "rename-section":
         return "dangerous" if any(_GIT_CONFIG_GUARDED_SECTION.fullmatch(p.lower()) for p in pos) else None
-    if modes & _GIT_CONFIG_READ_MODES or sub in ("get", "list", "unset", "remove-section", "edit"):
+    if modes & _GIT_CONFIG_READ_MODES:                  # the old spellings; `get`, `unset`, … take one name at most
         return None
-    if sub == "set" or modes & {"add", "replace-all"} or len(pos) >= 2:
-        return "dangerous" if pos and _GIT_CONFIG_DANGEROUS.fullmatch(pos[0].lower()) else None
+    if len(pos) >= 2:                                   # a write — `set`, `--add`, `--replace-all` or the old form —
+        return "dangerous" if _GIT_CONFIG_DANGEROUS.fullmatch(pos[0].lower()) else None    # names a key, then a value
     return None
 
 
