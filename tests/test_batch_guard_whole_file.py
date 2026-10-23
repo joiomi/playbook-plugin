@@ -89,20 +89,23 @@ class TheFreedomsStay(unittest.TestCase):
 
 class WhenTheFileCannotShowTheEdit(unittest.TestCase):
     def test_an_old_string_not_in_the_file_is_judged_on_its_fragment(self):
-        # row 8 (hostile): the Edit tool can match what the file does not hold literally (quotes it normalises) — the
-        # guard then judges the fragment, as before, never passes it unseen
-        f = ProjectFixture()
-        lines = [g.replace(":", "“:") for g in G[:3]]                   # not in the file byte for byte
-        r = _edit(f, "\n".join(lines), "\n".join(checked(ln) for ln in lines))
+        # row 8 (hostile): an old_string the file does not hold even with its quotes made alike (the tool will fail
+        # it) is judged on its fragment, as before — never passed unseen
+        lines = ["- [ ] G8: not in the file", "- [ ] G9: nor this", "- [ ] G10: nor this one"]
+        r = _edit(ProjectFixture(), "\n".join(lines), "\n".join(checked(ln) for ln in lines))
         self.assertEqual(r.returncode, 2, r.stderr.decode())
         r = _edit(ProjectFixture(), "\n".join(lines), "\n".join(checked(ln, NOTE) for ln in lines))
         self.assertEqual(r.returncode, 0, r.stderr.decode())
 
     def test_curly_quotes_do_not_hide_a_replace_all(self):
-        # row 11 (hostile; mine, before the judge): the gates hold straight quotes, the old_string curly ones — the
-        # Edit tool still matches all three; read with the quotes made alike, the whole file shows the three ticks
+        # row 11 (hostile; mine, before the judge): the Edit tool matches an old_string across curly and straight
+        # quotes, so the guard reads the file and the edit with the quotes made alike and judges the whole file
         f = ProjectFixture(gates=['- [ ] "a" G1', '- [ ] "a" G2', '- [ ] "a" G3'])
         r = _edit(f, "- [ ] “a”", "- [x] “a”", replace_all=True)
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+        # and the other way round: curly in the file, straight in the old_string
+        f = ProjectFixture(gates=["- [ ] “a” G1", "- [ ] “a” G2", "- [ ] “a” G3"])
+        r = _edit(f, '- [ ] "a"', '- [x] "a"', replace_all=True)
         self.assertEqual(r.returncode, 2, r.stderr.decode())
 
 
