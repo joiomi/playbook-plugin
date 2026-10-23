@@ -247,6 +247,23 @@ class PostPanelOne(_HookRun):
         self.assertEqual(r.returncode, 2, r.stderr.decode())
 
 
+class PostPanelTwo(_HookRun):
+    """Task 292's post-panel run 2 (codex Important, reproduced): a missing component and a link to the task
+    directory in one `~/` path — the three readings of a `~/` path are those of a plain one."""
+
+    def test_a_missing_component_then_a_link_to_the_task_directory(self):
+        # row 23: `~/missing/../proj/.agent/record-alias/task.md`, and the same as an absolute path (the control)
+        f, home = self._home_fixture()
+        (f.proj / ".agent" / "record-alias").symlink_to(f.task_file.parent)
+        tail = str((f.proj / ".agent" / "record-alias" / "task.md").relative_to(home))
+        for path in ("~/missing/../" + tail, str(home) + "/missing/../" + tail):
+            with self.subTest(path=path[:24]):
+                r = self._run(f, {"hook_event_name": "PreToolUse", "tool_name": "Edit",
+                                  "tool_input": {"file_path": path, "old_string": "## Status\npending",
+                                                 "new_string": "## Status\ndone"}}, home=home)
+                self.assertEqual(r.returncode, 2, r.stderr.decode())
+
+
 class AnIntentAfterRoundTwo(Project):
     def _new(self, *args):
         r = self.cli("new", "feature", *args)
