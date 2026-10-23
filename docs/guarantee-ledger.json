@@ -233,7 +233,7 @@
     {
       "id": "PB-TASK-BLOCKED",
       "category": "task-lifecycle",
-      "statement": "tasks blocked refuses an empty reason, records the reason without touching gates or minting a heading, locates the `## Blocked` section fence-aware so a fenced `## Blocked`/`## Handoff` example in task.md cannot delete or mis-splice the `## Blocked`/`## Handoff` section, reads and writes `## Status` fence-aware through the ONE shared reader (`_live_status_index`: LAST live heading, strict ATX, fail closed on an unclosed fence) so a fenced `## Status`/blocked example is never read as, or clobbered as, the status, refuses (writing nothing) when the blocked status cannot land live, and tasks work on the blocked task restores in_progress. Both transitions check their SOURCE status inside the locked transform (task 085): blocking (and handoff) refuses a task that is already done, and resume refuses anything that is not exactly `blocked`, so a close that commits first is never overwritten by a delayed block or resume (task.md byte-identical on the refusal). The stop-hook reads the status through the same Python reader (`scripts/task-status.py`) so the enforcing hook and the CLI cannot disagree about the same file. task-gate-hook's F3 done-check reads the resolved task's `## Status` through the same script (task 055), so the three `## Status` consumers on the enforcing path — CLI, stop-hook, task-gate-hook — are one reader. `tasks handoff` takes no arguments: any argument other than -h/--help is refused before anything is read or written (usage on stderr, exit 1, task.md byte-identical).",
+      "statement": "tasks blocked refuses an empty reason, records the reason without touching gates or minting a heading — after a resume too, where the earlier record (its reason and `Resumed` stamp, the live `>` lines) is replaced and every other line of the old section (an agent's note, a fenced block, a gate) moves into the new one under the new reason (task 296, audit 2 G5; it used to be deleted with the section) —, locates the `## Blocked` section fence-aware so a fenced `## Blocked`/`## Handoff` example in task.md cannot delete or mis-splice the `## Blocked`/`## Handoff` section, reads and writes `## Status` fence-aware through the ONE shared reader (`_live_status_index`: LAST live heading, strict ATX, fail closed on an unclosed fence) so a fenced `## Status`/blocked example is never read as, or clobbered as, the status, refuses (writing nothing) when the blocked status cannot land live, and tasks work on the blocked task restores in_progress. Both transitions check their SOURCE status inside the locked transform (task 085): blocking (and handoff) refuses a task that is already done, and resume refuses anything that is not exactly `blocked`, so a close that commits first is never overwritten by a delayed block or resume (task.md byte-identical on the refusal). The stop-hook reads the status through the same Python reader (`scripts/task-status.py`) so the enforcing hook and the CLI cannot disagree about the same file. task-gate-hook's F3 done-check reads the resolved task's `## Status` through the same script (task 055), so the three `## Status` consumers on the enforcing path — CLI, stop-hook, task-gate-hook — are one reader. `tasks handoff` takes no arguments: any argument other than -h/--help is refused before anything is read or written (usage on stderr, exit 1, task.md byte-identical).",
       "owner": [
         {
           "path": "plugins/playbook/tasks/lifecycle.py",
@@ -303,6 +303,25 @@
           "limitations": [
             "Despite its name this proof asserts only the GATE half: it compares tasks/core.py::_gate_counts before and after, which counts gate markers and not headings, then asserts the reason text round-trips. No assertion establishes that a hostile reason cannot create a Markdown heading."
           ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_block_keeps_an_agents_lines.py",
+          "reference": "AnAgentsLinesStay.test_a_line_and_a_gate_written_in_the_section_stay",
+          "boundary": "unit",
+          "negative_control": {
+            "path": "tests/test_block_keeps_an_agents_lines.py",
+            "reference": "TheDesignStays.test_the_earlier_reason_is_still_replaced"
+          },
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_block_keeps_an_agents_lines.py",
+          "reference": "AnAgentsLinesStay.test_the_real_verbs_keep_the_gate",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
         },
         {
           "type": "executable unit",

@@ -115,9 +115,10 @@ class UnclosedFenceInsideASection(unittest.TestCase):
         self.refuses(p, lambda f: core.write_handoff_and_block(f, "## Handoff\nnew\n"), "line 13)")
 
     def test_a_blocked_section_that_hides_nothing_keeps_working(self):
-        # `## Blocked` LAST with an open fence: the replace path deletes the fence with the section, the append path
-        # and the resume stamp land inside the section, where the fail-open readers read them — pinned on what the
-        # readers see, not only on the status
+        # `## Blocked` LAST with an open fence: the append path and the resume stamp land inside the section, where
+        # the fail-open readers read them — pinned on what the readers see, not only on the status. The replace path
+        # (a block after a resume) replaces the CLI's `>` lines and, since task 296, keeps the rest: the open fence is
+        # an agent's text, and it now stands below the new reason
         p = self._file("# T\n\n## Status\nblocked\n\n## Blocked\n> r1\n```\nunclosed\n")
         core.set_task_blocked(p, "r2")                                     # already blocked → append path
         self.assertEqual(core._block_reasons(p), ["r1", "r2"])
@@ -128,7 +129,9 @@ class UnclosedFenceInsideASection(unittest.TestCase):
         lines = p.read_text(encoding="utf-8").splitlines()
         self.assertIsNotNone(core._live_section_span(lines, "## Blocked"), "the new `## Blocked` is hidden")
         self.assertEqual(core._block_reasons(p), ["r3"])
-        self.assertNotIn("```", p.read_text(encoding="utf-8"))
+        text = p.read_text(encoding="utf-8")
+        self.assertLess(text.index("> r3"), text.index("```\nunclosed"))
+        self.assertNotIn("> r1", text)
 
     def test_the_section_after_a_closed_fence_survives_every_writer(self):
         # the normal case, pinned structurally (task 188's lesson: order, not substring presence)

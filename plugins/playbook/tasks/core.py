@@ -5739,14 +5739,25 @@ def _compose_blocked(text: str, clean_reason: str, ts: str) -> str:
             out = out[:end] + [f"> {clean_reason}  (since {ts})"] + out[end:]
             return "\n".join(out).rstrip("\n") + "\n"
     _splice_status_value(out, pair, "blocked")
+    # Task 296 (audit 2, G5): after a resume the earlier record is replaced — its reason and its `Resumed` stamp, the
+    # live `>` lines the CLI writes — but every other line of the section (an agent's note, a fenced block, a gate)
+    # moves into the new one, under the new reason. They were deleted with the section, a gate among them.
+    kept: "list[str]" = []
     while True:
         sp = _writer_section_span(out, "## Blocked")
         if sp is None:
             break
+        # a reason is what the readers take for one: a live line that starts with `>` once stripped (fail open)
+        reasons = {i for i, s in _iter_nonfenced(out, unclosed_is_live=True) if s.startswith(">")}
+        kept += [out[i] for i in range(sp[0] + 1, sp[1]) if i not in reasons]
         out = out[:sp[0]] + out[sp[1]:]
+    while kept and not kept[0].strip():
+        kept.pop(0)
+    while kept and not kept[-1].strip():
+        kept.pop()
     while out and out[-1].strip() == "":
         out.pop()
-    out += ["", "## Blocked", f"> {clean_reason}  (since {ts})", ""]
+    out += ["", "## Blocked", f"> {clean_reason}  (since {ts})", ""] + (kept + [""] if kept else [])
     return "\n".join(out) + "\n"
 
 
