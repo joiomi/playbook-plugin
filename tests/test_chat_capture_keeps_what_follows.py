@@ -112,8 +112,8 @@ class WhatIsNotAMessageStays(_Project):
         with a fence of text under it. An agent's quote of a message in another shape, right under the block, stays."""
         self.say("build the importer")
         self.activate()
-        self.write_after_the_block("\n**[M001]** [yesterday] he said: QUOTE-31 keep the CSV order\n"
-                                   "\n**[M002]** [last week]\n```text\nQUOTE-32 the old plan\n```\n")
+        self.write_after_the_block("\n**[M002]** [last week]\n```text\nQUOTE-32 the old plan\n```\n"
+                                   "\n**[M001]** [yesterday] he said: QUOTE-31 keep the CSV order\n")
         self.say("another message")
         self.activate()
         t = self.text()
