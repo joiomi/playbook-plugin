@@ -130,6 +130,15 @@ class TheDesignStays(_Task):
         self.assertEqual(_extract_block_reason(self.tf), "second pause")
 
 
+    def test_with_nothing_but_the_clis_lines_the_bytes_are_as_before(self):
+        """Row 5: a section holding only the CLI's lines comes out byte for byte as before the fix."""
+        set_task_blocked(self.tf, "one")
+        resume_blocked_task(self.tf)
+        set_task_blocked(self.tf, "two")
+        norm = re.sub(r"20\d\d-\d\d-\d\dT[0-9:+\-]+", "TS", self.text())
+        self.assertEqual(norm, TASK.replace("pending", "blocked") + "\n## Blocked\n> two  (since TS)\n\n")
+
+
 class NothingMovesPastAnotherSection(_Task):
     def test_a_fence_in_a_later_section_does_not_swallow_the_block(self):
         """Row 7 (impl round 1: opus, codex, grok): a fenced block in the old `## Blocked` and an unclosed fence in a
@@ -172,14 +181,6 @@ class NothingMovesPastAnotherSection(_Task):
         self.assertIn("- [ ] GATE-B", t)
         self.assertEqual(_gate_counts(t), before)
         self.assertEqual(_extract_block_reason(self.tf), "new pause")
-
-    def test_with_nothing_but_the_clis_lines_the_bytes_are_as_before(self):
-        """Row 5: a section holding only the CLI's lines comes out byte for byte as before the fix."""
-        set_task_blocked(self.tf, "one")
-        resume_blocked_task(self.tf)
-        set_task_blocked(self.tf, "two")
-        norm = re.sub(r"20\d\d-\d\d-\d\dT[0-9:+\-]+", "TS", self.text())
-        self.assertEqual(norm, TASK.replace("pending", "blocked") + "\n## Blocked\n> two  (since TS)\n\n")
 
 
 if __name__ == "__main__":
