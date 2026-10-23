@@ -143,8 +143,10 @@ class FindingsLand(unittest.TestCase):
     def test_the_close_accepts_a_full_task_review_end_to_end(self):
         # task 290, impl round 1: an assertive task with its `## Implementation Review` section, no panel required
         tf = self._task(with_impl_section=True)
+        # the template's own gate, ticked (round 2, opus: a made-up gate text never counted, even before the fix)
+        gate = "Run the impl panel in the background — `.claude/bin/tasks panel-review <N> --mode impl` — then read `judge.md`."
         tf.write_text(tf.read_text(encoding="utf-8").replace("## Risk\nreversible", "## Risk\nassertive")
-                      .replace("- [ ] review gate", "- [x] review gate\n  - the review ran"), encoding="utf-8")
+                      .replace("- [ ] review gate", f"- [x] {gate}\n  - the review ran"), encoding="utf-8")
         (self.agent / "config.json").write_text(json.dumps({"panel_required_for": []}), encoding="utf-8")
         env = dict(os.environ, PYTHONPATH=str(ROOT / "plugins" / "playbook"), PLAYBOOK_SESSION_ID="pid-290")
         env.pop("BASH_ENV", None)

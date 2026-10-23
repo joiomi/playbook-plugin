@@ -14177,7 +14177,7 @@
     {
       "id": "PB-TASK-CREATE-TEMPLATES",
       "category": "task-lifecycle",
-      "statement": "tasks new renders the selected built-in or custom template, fills the intent token when given and clears it when not, and preserves the quick and light shapes' distinct risk-routing gates. Every gate a built-in template renders, the retro scaffold's own gates (not its per-task and parked-item data gates) and the tasks freehand gates are one sentence of at most 120 characters (task 223, the owner's 2026-10-16 \"Titlu de o propoziție\"); what a longer title used to say is in tasks guide, verbatim under its new title, and a checked panel gate is review evidence exactly as its old wording was.",
+      "statement": "tasks new renders the selected built-in or custom template, fills the intent token when given and clears it when not, and preserves the quick and light shapes' distinct risk-routing gates. Every gate a built-in template renders, the retro scaffold's own gates (not its per-task and parked-item data gates) and the tasks freehand gates are one sentence of at most 120 characters (task 223, the owner's 2026-10-16 \"Titlu de o propoziție\"); what a longer title used to say is in tasks guide, verbatim under its new title, and a checked panel gate reads as review evidence exactly as its old wording did — since task 290 neither does: no tick is review evidence.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/lifecycle.py",
