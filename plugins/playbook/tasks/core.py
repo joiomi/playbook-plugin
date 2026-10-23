@@ -3984,10 +3984,10 @@ def resolve_panel_required(project_path: Path, risk: str) -> bool:
               "requirement; fix it to restore the close gate.", file=_sys.stderr)
         return False
     if isinstance(raw, list):
-        # an unclassified risk is held to the strictest class's bar (task 294, its impl round 1, opus): with a
-        # high-consequence class under the panel, not classifying must not lower the bar to a single judge
+        # an unclassified risk is held to the strictest class's bar (task 294, its impl rounds 1-2, opus, codex): with
+        # any class under the panel, not classifying must not lower the bar to a single judge
         return (risk in raw or "all" in raw
-                or (risk == DEFAULT_RISK and any(c in raw for c in HIGH_CONSEQUENCE)))
+                or (risk == DEFAULT_RISK and any(c in raw for c in RISK_CLASSES)))
     return False
 
 
@@ -4124,8 +4124,10 @@ def resolve_verify_commands(project_path: Path, risk: str = DEFAULT_RISK,
         out += [("verify", c) for c in _as_command_list(v)]
     elif isinstance(v, dict):
         out += [("verify._always", c) for c in _as_command_list(v.get("_always"))]
-        if risk in RISK_CLASSES:
-            out += [(f"verify.{risk}", c) for c in _as_command_list(v.get(risk))]
+        # an unclassified close runs every class's extras — the strictest bar (task 294, its impl round 2, opus,
+        # sonnet: deleting `## Risk` skipped `verify.assertive`'s claim checks)
+        for cls in ([risk] if risk in RISK_CLASSES else sorted(RISK_CLASSES) if risk == DEFAULT_RISK else []):
+            out += [(f"verify.{cls}", c) for c in _as_command_list(v.get(cls))]
     elif v is None:
         mv = cfg.get("merge_verify")
         if isinstance(mv, dict):
@@ -4168,6 +4170,9 @@ def close_decision(*, risk: str, verify_declared: bool, verify_failed: bool,
             "panel review required by policy (`panel_required_for`): close needs a "
             "quorum-PASS panel IMPL review in judge.md — run `tasks panel-review <N> "
             "--mode impl`, or override with --force --reason."
+            + (" ## Risk was left unclassified: set it — the heading, then exactly one word on the next line "
+               "(reversible / irreversible / assertive) — and its class's bar applies (task 294)."
+               if risk == DEFAULT_RISK else "")
         )
     if risk in HIGH_CONSEQUENCE and not has_review_evidence:
         return False, (

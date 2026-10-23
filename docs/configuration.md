@@ -135,10 +135,10 @@ Panels stamp the tree-state fingerprint they reviewed; close compares it and
 records `FRESH`/`STALE` in the receipt, and — **when policy requires a panel
 for that close** (`panel_required_for`) — a close held to the high-consequence
 bar (**assertive, irreversible, or an unset/`unclassified` `## Risk`**) resting
-on a stale panel BLOCKS (see below). Under the seeded default
-`panel_required_for: ["assertive","irreversible"]` that covers assertive and
-irreversible; `unclassified` is caught only where policy also requires a panel
-for it (e.g. `"all"`). The fingerprint already ignores `.agent/`
+on a stale panel BLOCKS (see below). An unset risk is held to the
+strictest listed class (task 294), so under the seeded default
+`panel_required_for: ["assertive","irreversible"]` that covers assertive,
+irreversible and `unclassified`. The fingerprint already ignores `.agent/`
 — workflow bookkeeping is not code. If your project has **owner-declared
 bookkeeping outside `.agent/`** that standing gates write after the last panel
 (the canonical case: a `journal/` directory), declare it:
@@ -394,11 +394,10 @@ the panel's verdict predates the code being closed — a claim (assertive), an
 unrecoverable act (irreversible), or work whose risk was never classified,
 signed off by a panel that predates the code, is a decision about code that was
 never reviewed. (Blocking only assertive/irreversible would make blanking
-`## Risk` strictly more lenient on freshness than honest classification.) Note
-the precondition: under the seeded default `panel_required_for:
-["assertive","irreversible"]`, `unclassified` does not require a panel, so its
-freshness block engages only where policy also requires a panel for it (e.g.
-`"all"`). Two exits, both on the record —
+`## Risk` strictly more lenient on freshness than honest classification.) Since task
+294 an unset risk requires a panel whenever `panel_required_for` lists any class
+(the strictest listed class's bar), so under the seeded default its freshness
+block engages as an assertive task's does. Two exits, both on the record —
 
 - re-run `tasks panel-review <N> --mode impl` (fresh evidence), or
 - `tasks work done --stale-panel-ok --reason "..."` — closes, and the reason
