@@ -14,8 +14,11 @@ The rules (design-1.5.5.md, F1 — including the judge's corrections):
     to an unchecked OLD original (longest original wins; empty originals
     excluded) = newly-checked, with the extension beyond the original as its
     annotation; else born-checked.
-  * n = |newly-checked| (times replace_all occurrences). NEVER the raw
-    x-count delta — unchecking in the same write must not launder n.
+  * n = |newly-checked| (times replace_all occurrences, when an Edit is judged
+    on its fragments — since task 291 only when the file does not hold its
+    old_string byte for byte; otherwise every edit is judged on the whole file
+    it leaves). NEVER the raw x-count delta — unchecking in the same write must
+    not launder n.
   * n ≤ 1 → allow silently (singles keep their old freedom).
   * 2 ≤ n ≤ 5 → allow ONLY if no born-checked line and every newly-checked
     gate's annotation has ≥ 8 unicode non-whitespace characters ("283 green"
@@ -273,9 +276,22 @@ def main() -> int:
     ti = d.get("tool_input", {}) or {}
 
     if tool == "Edit":
-        old = str(ti.get("old_string", ""))
-        new = str(ti.get("new_string", ""))
+        # Judged on the whole file it leaves, as a Write and a MultiEdit are (task 291, audit 1 G1: `replace_all` of
+        # `- [ ]` → `- [x]` is one empty gate as a fragment, and a fragment from mid-line hides a tick — item 9). When
+        # the file cannot show the edit — unreadable, or its `old_string` not there byte for byte (the Edit tool can
+        # normalise quotes, then apply what this cannot reproduce) — the fragments are judged, as before.
+        o = str(ti.get("old_string", ""))
+        n_ = str(ti.get("new_string", ""))
         replace_all = bool(ti.get("replace_all", False))
+        try:
+            whole = _read_untranslated(file_path)
+        except OSError:
+            whole = None
+        if whole is not None and o and o in whole:
+            old, new = whole, (whole.replace(o, n_) if replace_all else whole.replace(o, n_, 1))
+            replace_all = False                         # every gate is in view: nothing to multiply
+        else:
+            old, new = o, n_
     elif tool == "Write":
         new = str(ti.get("content", ""))
         replace_all = False
