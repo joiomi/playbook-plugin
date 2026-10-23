@@ -173,7 +173,8 @@ class RoundThree(unittest.TestCase):
                     "bash -c 'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=x GIT_CONFIG_VALUE_0=y git push origin'"):
             with self.subTest(cmd=cmd):
                 self.assertEqual(verdict(cmd), ("block", "git-config-unreadable"))
-        for cmd in ("echo GIT_CONFIG_COUNT", "GIT_TRACE=1 git status", "git config --get user.name"):
+        # edited again after post-panel run 2: the name anywhere is refused (row 26), so `echo GIT_CONFIG_COUNT` is too
+        for cmd in ("GIT_TRACE=1 git status", "git config --get user.name"):
             with self.subTest(cmd=cmd):
                 self.assertEqual(verdict(cmd)[0], "allow")
 
@@ -261,6 +262,37 @@ class PostPanelOne(unittest.TestCase):
                 self.assertEqual(verdict(cmd)[0], "allow")
 
 
+class PostPanelTwo(unittest.TestCase):
+    """Task 293's post-panel run 2 (codex: 1 Critical, 1 Important): a quoted or appended variable name, and a
+    `git config` option after the key — git ends its options at the first argument that is not one."""
+
+    def test_the_git_config_variable_name_anywhere_is_refused(self):
+        # row 26: quoted, escaped, appended, in a brace list, out of a substitution — the name is on the line
+        for cmd in ("env 'GIT_CONFIG_COUNT'=1 'GIT_CONFIG_KEY_0'=alias.c 'GIT_CONFIG_VALUE_0'='clean -fd' git c",
+                    "GIT_CONFIG_COUNT+=1 GIT_CONFIG_KEY_0+=alias.c GIT_CONFIG_VALUE_0+='clean -fd' git c",
+                    'env "GIT_CONFIG"_COUNT=1 git c', "env GIT\\_CONFIG_COUNT=1 git c",
+                    "env GIT_CONFIG_{COUNT=1,KEY_0=alias.c} git c", 'env "$(echo GIT_CONFIG_COUNT)=1" git c',
+                    "export GIT_CONFIG_\\\nCOUNT=1; git c", "echo GIT_CONFIG_COUNT", "unset GIT_CONFIG_GLOBAL"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(verdict(cmd), ("block", "git-config-unreadable"))
+        for cmd in ("MY_GIT_CONFIG_COUNT=1 make", "GIT_TRACE=1 git status", "echo git config"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(verdict(cmd)[0], "allow")
+
+    def test_git_config_options_end_at_the_first_argument_that_is_not_one(self):
+        # row 27: measured on git 2.54 — `a.b c --get` writes a.b (`--get` is a value pattern)
+        for cmd in ("git config alias.c 'clean -fd' --get", "git config alias.c x --list",
+                    "git config remote.origin.push +main --unset", "git config set alias.c x --get",
+                    "git config --file cfg alias.c x -l",
+                    "git config alias.c 'clean -fd' --get; git c"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(verdict(cmd), ("block", "git-config-dangerous"))
+        for cmd in ("git config --get alias.c", "git config get --all alias.c", "git config user.name x --get",
+                    "git config set --append user.name x"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(verdict(cmd)[0], "allow")
+
+
 class Hook(unittest.TestCase):
     def test_the_hook_blocks_both(self):
         # row 7: the real hook, a temporary project and HOME
@@ -290,6 +322,8 @@ class Docs(unittest.TestCase):
                      "not read", "provable", "git config"):                         # rows 12, 16, 20
             self.assertIn(word, doc, word)
         for words in ("whatever the line runs", "options git lists", "rename", "include.path"):  # row 25
+            self.assertIn(words, doc, words)
+        for words in ("quotes and backslashes", "first argument that is not one", "built at runtime"):  # row 28
             self.assertIn(words, doc, words)
 
 
