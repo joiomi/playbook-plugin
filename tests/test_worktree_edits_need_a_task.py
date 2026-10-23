@@ -52,9 +52,19 @@ class _Project(unittest.TestCase):
                               text=True, input=json.dumps({"tool_name": tool, "tool_input": tool_input}),
                               capture_output=True)
 
+    def assert_exempt(self, tool, p):
+        """Exit 0 for the reason we mean: the journal's last task-gate record says the path was exempt."""
+        r = self.gate(tool, p)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        import json as _json
+        recs = [_json.loads(x) for x in (self.project / ".agent" / "journal" / "hooks.jsonl").read_text(
+            encoding="utf-8").splitlines() if x.strip()]
+        last = [x for x in recs if x.get("hook") == "task-gate"][-1]
+        self.assertEqual(last.get("detail"), "exempt path (.agent/.claude)", last)
+
     def activate(self, root):
         pointer = root / ".agent" / "sessions" / SID / "current_state"
-        pointer.parent.mkdir(parents=True)
+        pointer.parent.mkdir(parents=True, exist_ok=True)
         pointer.write_text("001\n", encoding="utf-8")
 
 
@@ -82,7 +92,6 @@ class AWorktreeIsCode(_Project):
         self.assertFalse(_is_management_path("/p/.claude/worktrees/feat/x/src/a.py"))
         self.assertFalse(_is_management_path("/p/.claude/worktrees/w1/.claude/worktrees/w2/src/a.py"))
 
-
     def test_the_hook_agrees_with_the_twin_on_nested_and_slashed_names(self):
         """Row 8 (my mutant run): the hook strips the worktree segments as often as the twin does — a worktree inside a
         worktree, and a worktree whose name holds a `/` — so their code needs a task too, while their records stay
@@ -97,19 +106,37 @@ class AWorktreeIsCode(_Project):
         self.assertTrue(_is_management_path(str(rec)))
 
 
+class AWorktreeSession(_Project):
+    def test_a_task_activated_in_the_worktree_opens_its_gate(self):
+        """Row 9 (impl round 1, opus Important): a session whose directory is the worktree reads the worktree's own
+        pointer — a task active in the main tree does not open it, and `tasks work` in the worktree does."""
+        self.activate(self.project)
+        self.assertEqual(self.gate("Edit", self.wt / "src" / "a.py", cwd=self.wt).returncode, 2)
+        self.activate(self.wt)
+        r = self.gate("Edit", self.wt / "src" / "a.py", cwd=self.wt)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_the_halves_agree_on_a_path_that_ends_at_the_worktrees_folder(self):
+        """Row 10 (impl round 1, opus m): a path that ends at `.claude/worktrees` itself (no worktree name after it)
+        is the project's `.claude` in both halves."""
+        p = self.project / "src" / ".claude" / "worktrees"
+        self.assertTrue(_is_management_path(str(p)))
+        self.assertEqual(self.gate("Write", p).returncode, 0)
+
+
 class WhatStaysExempt(_Project):
     def test_the_worktrees_own_records_stay_exempt(self):
         """Row 5: inside a worktree, its own `.agent/` and `.claude/` stay exempt, in the hook and in the twin."""
         for p in (self.wt / ".agent" / "tasks" / "001-real" / "notes.py", self.wt / ".claude" / "hooks" / "x.sh"):
             with self.subTest(path=str(p)):
-                self.assertEqual(self.gate("Write", p).returncode, 0)
+                self.assert_exempt("Write", p)
                 self.assertTrue(_is_management_path(str(p)))
 
     def test_the_projects_own_records_stay_exempt(self):
         """Row 6: the project's `.agent/` and `.claude/` (its settings, its bin wrappers) stay exempt."""
         for p in (self.project / ".claude" / "bin" / "tasks.sh", self.project / ".agent" / "tasks" / "001-real" / "x.py"):
             with self.subTest(path=str(p)):
-                self.assertEqual(self.gate("Write", p).returncode, 0)
+                self.assert_exempt("Write", p)
                 self.assertTrue(_is_management_path(str(p)))
 
     def test_an_active_task_lets_the_worktree_edit_through(self):
