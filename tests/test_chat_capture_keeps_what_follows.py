@@ -120,6 +120,20 @@ class WhatIsNotAMessageStays(_Project):
         self.assertIn("**[M001]** [yesterday] he said: QUOTE-31 keep the CSV order", t)
         self.assertIn("**[M002]** [last week]\n```text\nQUOTE-32 the old plan\n```", t)
 
+    def test_an_older_unfenced_block_is_kept_under_one_heading(self):
+        """Row 7: a block in the older, unfenced format is not taken for captured messages: its lines stay, below the
+        new capture, under one heading (the writer fails toward keeping)."""
+        t = self.text()
+        i = t.index("\n---\n")
+        self.tf.write_text(t[:i] + "\n### Recent Chat (auto-captured at activation — review and remove unrelated)\n\n"
+                           "- **[M007]** [2026-10-13 04:32:52] \"LEGACY-LINE-9: I'm awake.\"\n" + t[i:], encoding="utf-8")
+        self.say("a new message")
+        self.activate()
+        t = self.text()
+        self.assertIn("LEGACY-LINE-9: I'm awake.", t)
+        self.assertIn("a new message", t)
+        self.assertEqual(t.count("### Recent Chat"), 1)
+
     def test_a_heading_quoted_in_a_fence_is_not_the_block(self):
         """Row 8: the block's heading quoted inside a fence in References (an example) is not the block; the real
         block below it is the one replaced, and the quote stays whole."""
@@ -193,20 +207,6 @@ class TheHeadingIsTheHeading(_Project):
         self.assertEqual(t.count("### Recent Chat"), 1)
         self.assertNotIn("OLD-MESSAGE-1", t)
         self.assertIn("NEW-MESSAGE-2", t)
-
-    def test_an_older_unfenced_block_is_kept_under_one_heading(self):
-        """Row 7: a block in the older, unfenced format is not taken for captured messages: its lines stay, below the
-        new capture, under one heading (the writer fails toward keeping)."""
-        t = self.text()
-        i = t.index("\n---\n")
-        self.tf.write_text(t[:i] + "\n### Recent Chat (auto-captured at activation — review and remove unrelated)\n\n"
-                           "- **[M007]** [2026-10-13 04:32:52] \"LEGACY-LINE-9: I'm awake.\"\n" + t[i:], encoding="utf-8")
-        self.say("a new message")
-        self.activate()
-        t = self.text()
-        self.assertIn("LEGACY-LINE-9: I'm awake.", t)
-        self.assertIn("a new message", t)
-        self.assertEqual(t.count("### Recent Chat"), 1)
 
 
 class TheBlockIsStillReplaced(_Project):
