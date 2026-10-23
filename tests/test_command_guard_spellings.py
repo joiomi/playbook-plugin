@@ -297,6 +297,28 @@ class PostPanelTwo(unittest.TestCase):
                 self.assertEqual(verdict(cmd)[0], "allow")
 
 
+class AGitOptionTheGuardDoesNotKnow(unittest.TestCase):
+    """Impl round 2's I2-5 (opus, routed as Minor — wrongly: R3 counts a guard that does not block as grave, whatever
+    the judge's word): an option before the subcommand that the guard's table lacks stopped the parse, so the promised
+    commands behind it reached no rule — `--attr-source` is a real one (git 2.40)."""
+
+    def test_the_promised_commands_behind_a_git_option(self):
+        # row 29: `--attr-source` read as the value option it is; any other unknown option refuses the command
+        for cmd, rule in (("git --attr-source=HEAD clean -fd", "git-clean-force"),
+                          ("git --attr-source HEAD push origin +main", "git-push-force"),
+                          ("git --attr-source=HEAD push --force origin main", "git-push-force"),
+                          ("git --frobnicate push --force", "git-option-unreadable"),
+                          ("git -x clean -fd", "git-option-unreadable"),
+                          ("git --no-advice --frob=1 clean -fd", "git-option-unreadable")):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(verdict(cmd), ("block", rule))
+        for cmd in ("git --version", "git -v", "git --help", "git -h", "git --exec-path", "git --html-path",
+                    "git --man-path", "git --info-path", "git --list-cmds=main", "git --no-pager log",
+                    "git -C x status", "git -p log", "git -P diff", "git --attr-source=HEAD status"):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(verdict(cmd)[0], "allow")
+
+
 class Hook(unittest.TestCase):
     def test_the_hook_blocks_both(self):
         # row 7: the real hook, a temporary project and HOME
@@ -328,6 +350,8 @@ class Docs(unittest.TestCase):
         for words in ("whatever the line runs", "options git lists", "rename", "include.path"):  # row 25
             self.assertIn(words, doc, words)
         for words in ("quotes and backslashes", "first argument that is not one", "built at runtime"):  # row 28
+            self.assertIn(words, doc, words)
+        for words in ("git-option-unreadable", "--attr-source"):                                    # row 30
             self.assertIn(words, doc, words)
 
 
