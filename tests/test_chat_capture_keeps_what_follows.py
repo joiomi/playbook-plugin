@@ -155,6 +155,7 @@ class AFenceEndsWhereTheFenceRulesSay(_Project):
         self.assertIn("OWNER-RULING-41: keep the CSV order", t)
         self.assertIn("- [ ] GATE-12: confirm the BOM scope with him", t)
         self.assertEqual(_gate_counts(t), before)
+        self.assertIn("build the importer\n``` \n", t)        # the touched message is kept, not taken for the CLI's
 
 
 class NoBlockYet(_Project):
