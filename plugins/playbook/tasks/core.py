@@ -5707,9 +5707,10 @@ def write_handoff_and_block(task_file: Path, section: str, reason: str = "handof
 
 
 # The two lines the CLI writes into `## Blocked`, in its exact grammar (task 296, impl round 2): from column 0,
-# `> <reason>  (since <stamp>)` with two spaces, and `> Resumed <stamp>`, each stamp an ISO minute with its offset.
-# A quote that only looks like one (one space, `(since Monday)`, `> Resumed tomorrow`, indented) is an agent's line.
-_BLOCK_STAMP = r"\d{4}-\d\d-\d\dT\d\d:\d\d(?::\d\d)?(?:[+-]\d\d:\d\d|Z)"
+# `> <reason>  (since <stamp>)` with two spaces, and `> Resumed <stamp>`, each stamp what every writer of the section
+# writes, `isoformat(timespec="minutes")` of an aware time: a minute and a numeric offset, no seconds, no `Z`.
+# A quote that only looks like one (one space, `(since Monday)`, `> Resumed tomorrow`, seconds, indented) is an agent's.
+_BLOCK_STAMP = r"\d{4}-\d\d-\d\dT\d\d:\d\d[+-]\d\d:\d\d"
 _CLI_BLOCK_RECORD = re.compile(rf"^> (?:Resumed {_BLOCK_STAMP}|.*  \(since {_BLOCK_STAMP}\))$")
 
 
