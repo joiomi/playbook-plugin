@@ -186,6 +186,22 @@ class RoundOne(unittest.TestCase):
                         "tool_input": {"file_path": path, "content": text}})
         self.assertEqual(r.returncode, 2, r.stderr.decode())
 
+    def test_both_readings_in_lanes_each_checked(self):
+        # row 16, my mutant N3: the kernel's reading in another lane of the project (a decoy that says done), the
+        # text's the record — the first reading passes, the second is the one written
+        f = ProjectFixture()
+        bob = f.proj / ".agent" / "bob"
+        (bob / "landing").mkdir(parents=True)
+        decoy = bob / "tasks" / "001-thing" / "task.md"
+        decoy.parent.mkdir(parents=True)
+        text = f.task_file.read_text(encoding="utf-8").replace("## Status\npending", "## Status\ndone")
+        decoy.write_text(text, encoding="utf-8")
+        (f.proj / ".agent" / "jump").symlink_to(bob / "landing")
+        path = str(f.proj / ".agent" / "jump") + "/../tasks/001-thing/task.md"
+        r = f.run_hook({"hook_event_name": "PreToolUse", "tool_name": "Write",
+                        "tool_input": {"file_path": path, "content": text}})
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+
 
 class AnIntentOrANameWithStructure(Project):
     def _new(self, *args):
