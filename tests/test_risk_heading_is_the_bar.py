@@ -166,6 +166,22 @@ class TheDocsSayIt(unittest.TestCase):
         self.assertNotIn("`unclassified` is caught only where policy also requires a panel", doc)
         self.assertNotIn("`unclassified` does not require a panel", doc)
 
+    def test_the_seeded_policy_texts_name_an_unset_risk(self):
+        # row 13 (grok Important): the texts that describe the seeded `panel_required_for` — the `_doc` init writes into
+        # every fresh config.json among them — no longer say only assertive and irreversible work needs the panel
+        root = _HERE.parent
+        texts = {
+            "plugins/playbook/scripts/init": "requires it only for changes to claims-about-the-world",
+            "docs/cli.md": "only claims/data/publish require one",
+            "plugins/playbook/commands/init.md": "only claims/data/publish need a panel",
+            "plugins/playbook/tasks/template.py": "only\n                      those close-gate on a PASS panel",
+        }
+        for rel, old in texts.items():
+            with self.subTest(file=rel):
+                s = re.sub(r"\s+", " ", (root / rel).read_text(encoding="utf-8"))
+                self.assertFalse(re.sub(r"\s+", " ", old) in s, f"{rel} still says: {old!r}")
+                self.assertTrue("unclassified task is held to the strictest class listed" in s, rel)
+
 
 if __name__ == "__main__":
     unittest.main()
