@@ -1292,33 +1292,81 @@ def _clean_is_dry_run(args):
     return dry
 
 
-def _git_config_write_key(args):
-    """The key a `git config` invocation WRITES (lowered), or None for a read, a listing or an unset."""
-    reads = {"--get", "--get-all", "--get-regexp", "--get-urlmatch", "-l", "--list", "--unset", "--unset-all",
-             "--remove-section", "--rename-section", "--get-color", "--get-colorbool", "-e", "--edit"}
-    vals, i = [], 0
+# `git config`'s options as git 2.54 lists them (`git config <mode> -h`, and the modes it still takes as options):
+# the guard reads a `git config` only through these, so an option it does not know cannot hide the key
+_GIT_CONFIG_FLAGS = frozenset((
+    "global", "system", "local", "worktree", "bool", "int", "bool-or-int", "bool-or-str", "path", "expiry-date", "all",
+    "fixed-value", "append", "includes", "name-only", "regexp", "show-names", "show-origin", "show-scope", "null",
+    "get", "get-all", "get-regexp", "get-urlmatch", "replace-all", "add", "unset", "unset-all", "rename-section",
+    "remove-section", "list", "edit", "get-color", "get-colorbool"))
+_GIT_CONFIG_VALUED = frozenset(("file", "blob", "type", "default", "url", "value", "comment"))
+_GIT_CONFIG_SHORT = {"l": "list", "e": "edit", "z": "null"}
+_GIT_CONFIG_SHORT_VALUED = frozenset("ft")
+_GIT_CONFIG_READ_MODES = frozenset(("get", "get-all", "get-regexp", "get-urlmatch", "unset", "unset-all",
+                                    "remove-section", "list", "edit", "get-color", "get-colorbool"))
+_GIT_CONFIG_SUBCOMMANDS = frozenset(("get", "list", "set", "unset", "rename-section", "remove-section", "edit"))
+
+
+def _git_config_verdict(args):
+    """What a `git config` invocation does to the config the guard guards: None (a read, an unset, or a write of
+    another key), "dangerous" (it writes a key, or renames a section, that turns a later git command destructive), or
+    "unreadable" (an option `git config` does not list — an abbreviation, a newer option: its arity is unknown, so the
+    key cannot be found). Task 293, post-panel run 1 (codex): `-t path <key> <value>` and `--rename-section scratch
+    alias` went through a parser that skipped only the options it knew."""
+    modes, pos, i = set(), [], 0
     while i < len(args):
         a = args[i]
-        if a in reads:
-            return None
-        if a in ("--file", "-f", "--blob", "--type", "--default", "--comment"):
-            i += 2
+        if a == "--":
+            pos.extend(args[i + 1:])
+            break
+        if a.startswith("--"):
+            name, eq, _value = a[2:].partition("=")
+            if name in _GIT_CONFIG_VALUED:
+                i += 1 if eq else 2                     # `--type=path`, or `--type path`
+                continue
+            base = name[3:] if name.startswith("no-") else name
+            if eq or (base not in _GIT_CONFIG_FLAGS and base not in _GIT_CONFIG_VALUED):
+                return "unreadable"
+            if base == name:                            # `--no-…` turns an option off, it selects no mode
+                modes.add(name)
+            i += 1
             continue
-        if not a.startswith("-"):
-            vals.append(a)
+        if a.startswith("-") and len(a) > 1:
+            letters = a[1:]
+            for n, ch in enumerate(letters):
+                if ch in _GIT_CONFIG_SHORT_VALUED:      # its value: the rest of the cluster, or the next argument
+                    if n == len(letters) - 1:
+                        i += 1
+                    break
+                if ch not in _GIT_CONFIG_SHORT:
+                    return "unreadable"
+                modes.add(_GIT_CONFIG_SHORT[ch])
+            i += 1
+            continue
+        pos.append(a)
         i += 1
-    if vals and vals[0] in ("get", "list", "unset", "rename-section", "remove-section", "edit"):
+    sub = pos[0] if pos and pos[0] in _GIT_CONFIG_SUBCOMMANDS else None
+    if sub:
+        pos = pos[1:]
+    if "rename-section" in modes or sub == "rename-section":
+        return "dangerous" if any(_GIT_CONFIG_GUARDED_SECTION.fullmatch(p.lower()) for p in pos) else None
+    if modes & _GIT_CONFIG_READ_MODES or sub in ("get", "list", "unset", "remove-section", "edit"):
         return None
-    if vals and vals[0] == "set":
-        vals = vals[1:]
-    return vals[0].lower() if len(vals) >= 2 else None
+    if sub == "set" or modes & {"add", "replace-all"} or len(pos) >= 2:
+        return "dangerous" if pos and _GIT_CONFIG_DANGEROUS.fullmatch(pos[0].lower()) else None
+    return None
 
 
-_GIT_CONFIG_DANGEROUS = re.compile(r"remote\..+\.(?:push|mirror)|alias\..+|clean\.requireforce")
-_RUNS_GIT = re.compile(r"(?<![\w./-])git(?![\w.-])")
+# config read from a file the guard never sees (task 293, found while fixing post-panel run 1)
+_GIT_CONFIG_FROM_FILE = re.compile(r"include\.path|includeif\..+\.path")
+_GIT_CONFIG_DANGEROUS = re.compile(r"remote\..+\.(?:push|mirror)|alias\..+|clean\.requireforce|"
+                                   + _GIT_CONFIG_FROM_FILE.pattern)
+_GIT_CONFIG_GUARDED_SECTION = re.compile(r"alias|remote(?:\..+)?|clean|include|includeif(?:\..+)?")
 
 
-_GIT_CONFIG_ENV = re.compile(r"(?<![\w])GIT_CONFIG_(?:COUNT|KEY_\d+|VALUE_\d+|PARAMETERS)=")
+# Any variable git reads its config from: `GIT_CONFIG_COUNT` / `_KEY_n` / `_VALUE_n` / `_PARAMETERS`, and the files
+# `GIT_CONFIG_GLOBAL` / `_SYSTEM` / `GIT_CONFIG` name
+_GIT_CONFIG_ENV = re.compile(r"(?<![\w])GIT_CONFIG(?:_\w+)?=")
 
 
 def _brace_alternatives(t):
@@ -1419,12 +1467,16 @@ def _segment_checks(seg):
         if verb == "clean" and not _clean_is_dry_run(args):
             # every spelling of force, a pathspec, and config that drops the force requirement (impl rounds 1-2)
             return ("git-clean-force", "deletes untracked files/dirs irrecoverably (only a dry run, `-n`, passes)")
-        # an alias defined on the command line (its chain and the overrides it keeps cannot be followed) and any
-        # `--config-env` (its value is not on the line) are refused (task 293, impl rounds 2-3)
-        if any(k.startswith("alias.") or v is None for k, v in git_cfg):
-            return ("git-config-unreadable", "git config set on this command (an alias, or --config-env) runs what "
-                    "the guard cannot read")
-        if verb == "config" and _GIT_CONFIG_DANGEROUS.fullmatch(_git_config_write_key(args) or ""):
+        # an alias defined on the command line (its chain and the overrides it keeps cannot be followed), any
+        # `--config-env` (its value is not on the line) and an include (its file is not either) are refused (task 293,
+        # impl rounds 2-3, post-panel run 1)
+        if any(k.startswith("alias.") or v is None or _GIT_CONFIG_FROM_FILE.fullmatch(k) for k, v in git_cfg):
+            return ("git-config-unreadable", "git config set on this command (an alias, an include, or --config-env) "
+                    "runs what the guard cannot read")
+        cv = _git_config_verdict(args) if verb == "config" else None
+        if cv == "unreadable":
+            return ("git-config-unreadable", "a `git config` option the guard does not know hides which key it writes")
+        if cv == "dangerous":
             return ("git-config-dangerous", "this git config makes a later git command force-push or delete, which "
                     "the guard cannot see")
     if head == "dd" and any(a.startswith("of=/dev/") for a in values[1:]):
@@ -2632,7 +2684,9 @@ def classify_command(command, extra_patterns=None, _depth=0, _argv=False):
     # because the substitution scan lifted a backtick span out of single quotes
     # (#10, fixed above); measured again, the rule there refuses no command of
     # the corpus.
-    if _GIT_CONFIG_ENV.search(shell_text) and _RUNS_GIT.search(shell_text):     # task 293, impl round 3
+    # Whatever the line runs (task 293, impl round 3; post-panel run 1, codex: `/usr/bin/git` was not seen as git) —
+    # any program on it may run git with that config, under any name.
+    if _GIT_CONFIG_ENV.search(shell_text):
         return ("block", "git-config-unreadable",
                 "GIT_CONFIG_* on this command line sets git config the guard cannot read")
     if _downloads_then_runs(shell_text):

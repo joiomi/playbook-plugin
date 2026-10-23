@@ -253,9 +253,13 @@ irreversible shell commands — `rm -rf` on a dangerous path, `git push --force`
 `git reset --hard`, every `git clean` that is not a provable dry run — only `-n` / `--dry-run` with the flags
 `f d x X q`, `-e` / `--exclude`, `--force`, `--quiet` and pathspecs pass, so `git clean --force -d`, an abbreviation
 such as `--fo`, a pathspec without `-n`, `--no-dry-run` and config that drops git's force requirement are all
-refused —, git config the guard cannot read on the command line (an alias defined with `-c alias.<name>=…`, any
-`--config-env`, a `GIT_CONFIG_*` variable anywhere on a line that runs git), a `git config` write of a key that
-makes a later command destructive (`remote.<name>.push` / `.mirror`, `alias.*`, `clean.requireForce`), `curl|sh`,
+refused —, git config the guard cannot read on the command line (an alias defined with `-c alias.<name>=…`, an
+include set with `-c include.path=…`, any `--config-env`, a `GIT_CONFIG_*` assignment anywhere on the line,
+whatever the line runs — any program on it may run git with it, so `echo GIT_CONFIG_COUNT=1` is refused too), a `git config`
+write of a key that makes a later command destructive (`remote.<name>.push` / `.mirror`, `alias.*`,
+`clean.requireForce`, `include.path` / `includeIf.<cond>.path`) or a rename of a section into or out of one (`alias`,
+`remote…`, `clean`, `include…`) — `git config` is read only through the options git lists for it, so an abbreviation
+or an option the guard does not know refuses the command —, `curl|sh`,
 `dd`/`mkfs` to a device, a DB `DROP`/`TRUNCATE` — before they run, because the sandbox contains filesystem
 blast radius but not outward/logical irreversibility, and judgment alone is not a
 guarantee. Git config held elsewhere — `~/.gitconfig`, the repository's config, an alias defined there — is not
