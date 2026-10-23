@@ -112,10 +112,29 @@ class WhatIsNotAMessageStays(_Project):
         with a fence of text under it. An agent's quote of a message in another shape, right under the block, stays."""
         self.say("build the importer")
         self.activate()
-        self.write_after_the_block("\n**[M001]** [yesterday] he said: QUOTE-31 keep the CSV order\n")
+        self.write_after_the_block("\n**[M001]** [yesterday] he said: QUOTE-31 keep the CSV order\n"
+                                   "\n**[M002]** [last week]\n```text\nQUOTE-32 the old plan\n```\n")
         self.say("another message")
         self.activate()
-        self.assertIn("**[M001]** [yesterday] he said: QUOTE-31 keep the CSV order", self.text())
+        t = self.text()
+        self.assertIn("**[M001]** [yesterday] he said: QUOTE-31 keep the CSV order", t)
+        self.assertIn("**[M002]** [last week]\n```text\nQUOTE-32 the old plan\n```", t)
+
+    def test_a_heading_quoted_in_a_fence_is_not_the_block(self):
+        """Row 8: the block's heading quoted inside a fence in References (an example) is not the block; the real
+        block below it is the one replaced, and the quote stays whole."""
+        t = self.text()
+        i = t.index("- context\n") + len("- context\n")
+        self.tf.write_text(t[:i] + "\n```text\n### Recent Chat (auto-captured at activation — review and remove "
+                           "unrelated)\nQUOTED-EXAMPLE-4\n```\n" + t[i:], encoding="utf-8")
+        self.say("first")
+        self.activate()
+        self.say("second")
+        self.activate()
+        t = self.text()
+        self.assertIn("QUOTED-EXAMPLE-4\n```", t)
+        self.assertEqual(t.count("### Recent Chat"), 2)        # the quoted one and the real one
+        self.assertIn("second", t[t.index("QUOTED-EXAMPLE-4"):])
 
     def test_an_older_unfenced_block_is_kept_under_one_heading(self):
         """Row 7: a block in the older, unfenced format is not taken for captured messages: its lines stay, below the
