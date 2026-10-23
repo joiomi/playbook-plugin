@@ -255,11 +255,15 @@ irreversible shell commands — `rm -rf` on a dangerous path, `git push --force`
 such as `--fo`, a pathspec without `-n`, `--no-dry-run` and config that drops git's force requirement are all
 refused —, git config the guard cannot read on the command line (an alias defined with `-c alias.<name>=…`, an
 include set with `-c include.path=…`, any `--config-env`, a `GIT_CONFIG_*` assignment anywhere on the line,
-whatever the line runs — any program on it may run git with it, so `echo GIT_CONFIG_COUNT=1` is refused too), a `git config`
+whatever the line runs — any program on it may run git with it; `GIT_CONFIG` anywhere in a word of the line, read
+after its quotes and backslashes are removed and `$'…'` decoded, is refused, so `'GIT_CONFIG_COUNT'=1`,
+`GIT_CONFIG_COUNT+=1`, `env -SGIT_CONFIG_COUNT=1 …` and even `echo GIT_CONFIG_COUNT` or `MY_GIT_CONFIG_COUNT=1` are;
+a name built at runtime from pieces (`GIT_CONF${E}IG_COUNT`) is not seen, a stated limit), a `git config`
 write of a key that makes a later command destructive (`remote.<name>.push` / `.mirror`, `alias.*`,
 `clean.requireForce`, `include.path` / `includeIf.<cond>.path`) or a rename of a section into or out of one (`alias`,
 `remote…`, `clean`, `include…`) — `git config` is read only through the options git lists for it, so an abbreviation
-or an option the guard does not know refuses the command —, `curl|sh`,
+or an option the guard does not know refuses the command, and, as git does, its options end at the
+first argument that is not one (`git config alias.c x --get` writes) —, `curl|sh`,
 `dd`/`mkfs` to a device, a DB `DROP`/`TRUNCATE` — before they run, because the sandbox contains filesystem
 blast radius but not outward/logical irreversibility, and judgment alone is not a
 guarantee. Git config held elsewhere — `~/.gitconfig`, the repository's config, an alias defined there — is not

@@ -1320,6 +1320,9 @@ def _git_config_verdict(args):
     modes, pos, i = set(), [], 0
     while i < len(args):
         a = args[i]
+        if pos and (len(pos) > 1 or pos[0] not in _GIT_CONFIG_SUBCOMMANDS):
+            pos.extend(args[i:])        # git ends its options at the first argument that is not one (run 2, codex:
+            break                       # `alias.c 'clean -fd' --get` writes, `--get` its value pattern)
         if a == "--":
             pos.extend(args[i + 1:])
             break
@@ -1371,7 +1374,12 @@ _GIT_CONFIG_GUARDED_SECTION = re.compile(r"alias|remote(?:\..+)?|clean|include|i
 
 # Any variable git reads its config from: `GIT_CONFIG_COUNT` / `_KEY_n` / `_VALUE_n` / `_PARAMETERS`, and the files
 # `GIT_CONFIG_GLOBAL` / `_SYSTEM` / `GIT_CONFIG` name
-_GIT_CONFIG_ENV = re.compile(r"(?<![\w])GIT_CONFIG(?:_\w+)?=")
+def _names_git_config(text):
+    """Whether `GIT_CONFIG` is in any token of the line once the lexer has removed its quotes, backslashes and line
+    continuations and decoded `$'…'` — anywhere in it, so an attached option (`env -SGIT_CONFIG_COUNT=1 …`) does not
+    hide it (task 293, post-panel run 2, codex: `env 'GIT_CONFIG_COUNT'=1 …` and `GIT_CONFIG_COUNT+=1` passed a scan
+    for `NAME=`). A name built at runtime from pieces (`GIT_CONF${E}IG_…`) is not seen — a stated limit."""
+    return any("GIT_CONFIG" in v for _raw, _st, v, _q in _lex(text))
 
 
 def _brace_alternatives(t):
@@ -2691,7 +2699,7 @@ def classify_command(command, extra_patterns=None, _depth=0, _argv=False):
     # the corpus.
     # Whatever the line runs (task 293, impl round 3; post-panel run 1, codex: `/usr/bin/git` was not seen as git) —
     # any program on it may run git with that config, under any name.
-    if _GIT_CONFIG_ENV.search(shell_text):
+    if _names_git_config(shell_text):
         return ("block", "git-config-unreadable",
                 "GIT_CONFIG_* on this command line sets git config the guard cannot read")
     if _downloads_then_runs(shell_text):
