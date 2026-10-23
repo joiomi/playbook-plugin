@@ -70,6 +70,9 @@ class WhatFollowsTheBlockStays(_Project):
         self.assertIn("OWNER-RULING-41: keep the CSV order", t)
         self.assertIn("- [ ] GATE-12: confirm the BOM scope with him", t)
         self.assertEqual(_gate_counts(t), before)
+        # the capture stays where it was: written after the rulings it would become a subsection of them
+        self.assertLess(t.index("### Recent Chat"), t.index("## Owner rulings"))
+        self.assertIn("and keep it simple", t[t.index("### Recent Chat"):t.index("## Owner rulings")])
 
     def test_a_note_right_under_the_messages_stays(self):
         """Row 2: a plain note an agent wrote right under the captured messages survives."""
