@@ -2251,7 +2251,10 @@ class GauntletHookStepsAsVectors(unittest.TestCase):
         td = d / ".agent" / "tasks" / "003-f1"
         td.mkdir(parents=True)
         status, risk = setup.get("status", "in_progress"), setup.get("risk", "assertive")
-        (td / "task.md").write_text(f"# 003 - F1\n\n## Status\n{status}\n\n## Risk\n{risk}\n\n## Work\n- [ ] first gate\n- [ ] second gate\n", encoding="utf-8")
+        # the gates the edit-batch payloads tick are in the file (task 291: an Edit's old_string the guard cannot find
+        # in a readable task.md is refused when it ticks a box — the tool would fail it)
+        gates = "".join(f"- [ ] gate {i}\n" for i in range(6))
+        (td / "task.md").write_text(f"# 003 - F1\n\n## Status\n{status}\n\n## Risk\n{risk}\n\n## Work\n- [ ] first gate\n- [ ] second gate\n{gates}", encoding="utf-8")
         sid = f"pid-{self._agent.pid}"
         if setup.get("active", True):
             (d / ".agent" / "sessions" / sid).mkdir(parents=True)
