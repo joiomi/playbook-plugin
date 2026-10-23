@@ -115,15 +115,47 @@ class TheDesignStays(_Task):
         self.assertNotIn("> Resumed", t)
         self.assertEqual(_block_reasons(self.tf), ["SECOND-PAUSE"])
 
-    def test_an_indented_quote_is_read_and_replaced_as_a_reason(self):
-        """Row 6: what the writer replaces as the CLI's lines is exactly what the readers read as a reason — an
-        indented `>` line included — so after the next block the only reason read is the new one."""
+    def test_an_agents_quote_stays(self):
+        """Row 6 (edited after impl round 1, grok): only the CLI's two line shapes are replaced — `> … (since …)` and
+        `> Resumed …`; a quote an agent wrote, indented or not, stays, and the reason read first is the new one."""
         set_task_blocked(self.tf, "first pause")
-        self.append("  > an indented quote\n")
-        self.assertEqual(_block_reasons(self.tf), ["first pause", "an indented quote"])     # the readers' view
+        self.append("> QUOTE-7: he said the column stays\n  > an indented quote\n")
         resume_blocked_task(self.tf)
         set_task_blocked(self.tf, "second pause")
-        self.assertEqual(_block_reasons(self.tf), ["second pause"])
+        t = self.text()
+        self.assertIn("> QUOTE-7: he said the column stays", t)
+        self.assertIn("  > an indented quote", t)
+        self.assertNotIn("first pause", t)
+        self.assertNotIn("> Resumed", t)
+        self.assertEqual(_extract_block_reason(self.tf), "second pause")
+
+
+class NothingMovesPastAnotherSection(_Task):
+    def test_a_fence_in_a_later_section_does_not_swallow_the_block(self):
+        """Row 7 (impl round 1: opus, codex, grok): a fenced block in the old `## Blocked` and an unclosed fence in a
+        later section — after the next block the later section's open gate is still counted, the new reason is read,
+        and the fenced block is still there (moved past the stray opener, its closer used to close it)."""
+        set_task_blocked(self.tf, "first pause")
+        self.append("```text\nLOG-LINE-3\n```\n\n## Notes\n```\n- [ ] GATE-9: a gate below a stray fence\n")
+        before = _gate_counts(self.text())
+        resume_blocked_task(self.tf)
+        set_task_blocked(self.tf, "second pause")
+        t = self.text()
+        self.assertEqual(_gate_counts(t), before)
+        self.assertEqual(_extract_block_reason(self.tf), "second pause")
+        self.assertIn("```text\nLOG-LINE-3\n```", t)
+
+    def test_the_section_stays_where_it_was(self):
+        """Row 8 (impl round 1: sonnet, grok): with an agent's lines in it the section keeps its place — a section
+        after it stays after it, so the order of the gates does not change."""
+        set_task_blocked(self.tf, "first pause")
+        self.append("- [ ] GATE-1: in the block section\n\n## Notes\n- [ ] GATE-2: in a later section\n")
+        resume_blocked_task(self.tf)
+        set_task_blocked(self.tf, "second pause")
+        t = self.text()
+        self.assertLess(t.index("## Blocked"), t.index("## Notes"))
+        self.assertLess(t.index("GATE-1"), t.index("GATE-2"))
+        self.assertEqual(t.count("## Blocked"), 1)
 
     def test_with_nothing_but_the_clis_lines_the_bytes_are_as_before(self):
         """Row 5: a section holding only the CLI's lines comes out byte for byte as before the fix."""
