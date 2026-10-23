@@ -49,8 +49,7 @@ class UnclassifiedPolicy(unittest.TestCase):
 
     def base(self, **kw):
         args = dict(risk="unclassified", verify_declared=False, verify_failed=False,
-                    has_review_evidence=False, force=False, reason=None,
-                    risk_section_present=True)
+                    has_review_evidence=False, force=False, reason=None)
         args.update(kw)
         return close_decision(**args)
 
@@ -79,11 +78,12 @@ class UnclassifiedPolicy(unittest.TestCase):
         self.assertFalse(allowed)
         self.assertIn("--reason", why)
 
-    def test_legacy_task_without_the_section_still_closes(self):
-        """The backward-compat carve-out survives, narrowed to the tasks it was
-        actually written for."""
-        allowed, why = self.base(risk_section_present=False)
-        self.assertTrue(allowed, why)
+    def test_no_legacy_carve_out_remains(self):
+        """Task 294: a task.md with no `## Risk` heading reads unclassified and is
+        held to the same bar — the pre-1.5.0 carve-out let a deleted heading drop
+        the review, and a fresh project has no pre-1.5.0 task."""
+        allowed, why = self.base()
+        self.assertFalse(allowed, why)
 
     def test_classified_risks_are_untouched(self):
         for risk in ("reversible",):
@@ -97,13 +97,12 @@ class UnclassifiedPolicy(unittest.TestCase):
                 allowed, _ = self.base(risk=risk, has_review_evidence=True)
                 self.assertTrue(allowed)
 
-    def test_default_is_the_lenient_legacy_path(self):
-        """A caller that does not know whether the gate was offered must not
-        have strictness invented for it — lifecycle passes the real value."""
+    def test_the_default_is_the_strict_bar(self):
+        """Task 294: no argument makes an unclassified risk lenient any more."""
         allowed, _ = close_decision(
             risk="unclassified", verify_declared=False, verify_failed=False,
             has_review_evidence=False, force=False, reason=None)
-        self.assertTrue(allowed)
+        self.assertFalse(allowed)
 
 
 class RiskSectionDetection(unittest.TestCase):
@@ -354,12 +353,16 @@ class CloseEndToEnd(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("Task 001 done.", r.stdout)
 
-    def test_legacy_task_closes_with_the_warning(self):
-        _, r = self._work_then_close(self.LEGACY)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("Task 001 done.", r.stdout)
-        self.assertIn("unclassified", r.stdout + r.stderr,
-                      "legacy close went silent — it must still say what was skipped")
+    def test_a_task_without_the_heading_blocks_the_close(self):
+        # task 294: the pre-1.5.0 warning-only path is gone — no heading reads unclassified, held to the bar
+        d, r = self._work_then_close(self.LEGACY)
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertNotIn("Task 001 done.", r.stdout)
+        self.assertIn("unclassified", r.stdout + r.stderr)
+        r2 = self._cli(d, "work", "done", "--force", "--reason", "an import with no Risk")
+        self.assertEqual(r2.returncode, 0, r2.stderr)
+        self.assertIn("unclassified", r2.stdout + r2.stderr,
+                      "the forced close went silent — it must still say what was skipped")
 
     def test_classified_reversible_is_unaffected(self):
         _, r = self._work_then_close(self.CLASSIFIED)
@@ -373,8 +376,9 @@ class CloseEndToEnd(unittest.TestCase):
                 _, r = self._work_then_close(body)
                 self.assertNotEqual(r.returncode, 0)
 
-    def test_fenced_risk_example_does_not_block_a_legacy_close(self):
-        body = self.LEGACY.replace(
+    def test_a_fenced_risk_example_does_not_block_a_classified_close(self):
+        # task 294: the fenced example is content — the classified field above it still decides
+        body = self.CLASSIFIED.replace(
             "## Work Plan", "```md\n## Risk\nunclassified\n```\n\n## Work Plan")
         _, r = self._work_then_close(body)
         self.assertEqual(r.returncode, 0, r.stderr)

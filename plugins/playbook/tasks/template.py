@@ -64,8 +64,8 @@ def status_note() -> str:
 def risk() -> str:
     """The `## Risk` field with its explanation. Its own function so a generator
     that writes its own `## Status` (the retro scaffold — task 080, S1c) still
-    offers the field: without the heading, `has_risk_section` reads the record
-    as pre-1.5.0 and the close takes the lenient legacy path. Task 213: the value and one pointer line; what
+    offers the field (since task 294 a record without it is held to the unset field's bar at the close, so the
+    field is the only way to classify it). Task 213: the value and one pointer line; what
     each class means is in the guide (`risk_explanation`) and in CLAUDE.md's Correctness Contract."""
     return """\
 ## Risk

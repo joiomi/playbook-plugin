@@ -4136,8 +4136,7 @@ def resolve_verify_commands(project_path: Path, risk: str = DEFAULT_RISK,
 
 def close_decision(*, risk: str, verify_declared: bool, verify_failed: bool,
                    has_review_evidence: bool, force: bool, reason: "str | None",
-                   panel_required: bool = False,
-                   risk_section_present: bool = False) -> "tuple[bool, str]":
+                   panel_required: bool = False) -> "tuple[bool, str]":
     """Pure close policy → (allowed, block_reason). block_reason is '' when allowed.
 
     1. --force ALWAYS requires a non-empty reason: a forced close must be
@@ -4155,11 +4154,10 @@ def close_decision(*, risk: str, verify_declared: bool, verify_failed: bool,
        class, so the whole risk-keyed requirement used to evaluate to nothing and
        the close proceeded on a warning — making "leave the field blank" the
        cheapest path through the strictest gate in the system, chosen by the very
-       agent the gate constrains. `risk_section_present` separates the two facts
-       the old code conflated: no `## Risk` heading = a pre-1.5.0 task that was
-       never offered the gate (warn and pass, unchanged), heading present but
-       unset = offered and skipped (block). Default False so a caller that cannot
-       tell gets the lenient legacy path rather than an invented block."""
+       agent the gate constrains. A task.md with no `## Risk` heading at all is
+       the same fact (task 294): deleting the heading took a path kept for
+       pre-1.5.0 tasks, and a fresh project has none (the owner's rule of
+       2026-10-16), so there is one answer — the high-consequence bar."""
     if force:
         if not (reason and reason.strip()):
             return False, '--force requires --reason "why" — a forced close must record why.'
@@ -4178,8 +4176,7 @@ def close_decision(*, risk: str, verify_declared: bool, verify_failed: bool,
             + ("a claim about the world" if risk == "assertive" else "state that is hard to undo")
             + " — run impl-review/panel-review first, or override with --force --reason."
         )
-    if (risk == DEFAULT_RISK and risk_section_present
-            and not has_review_evidence):
+    if risk == DEFAULT_RISK and not has_review_evidence:
         return False, (
             "## Risk was left unclassified, so the risk-keyed review requirement "
             "cannot be evaluated — an unset gate is held to the high-consequence "

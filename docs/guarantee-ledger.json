@@ -1495,7 +1495,7 @@
     {
       "id": "PB-RISK-CLASSIFY",
       "category": "risk-and-close",
-      "statement": "Risk metadata recognizes the configured reversible/irreversible/assertive values; an offered-but-unset or duplicated Risk field degrades to unclassified and blocks the close, while a legacy task with no Risk heading keeps the warning-only path. The value is read with spaces and tabs as its only separators (task 224, the owner's 2026-10-16 ruling on task 214's V2): any other character str.isspace() accepts — U+0085, U+2028, U+00A0, VT, FF and the rest — before, in or after the word leaves it unclassified — never read as a class: no irreversible acknowledgement from the command guard, and the close held to the strict review bar; the reader's lines are read_task_text's (CRLF folded once), so a CR left in them is such a character.",
+      "statement": "Risk metadata recognizes the configured reversible/irreversible/assertive values; an offered-but-unset or duplicated Risk field degrades to unclassified and blocks the close, and a task with no Risk heading is held to the same bar (task 294: the warning-only path kept for pre-1.5.0 tasks let a deleted heading drop the review, and a fresh project has no such task). The value is read with spaces and tabs as its only separators (task 224, the owner's 2026-10-16 ruling on task 214's V2): any other character str.isspace() accepts — U+0085, U+2028, U+00A0, VT, FF and the rest — before, in or after the word leaves it unclassified — never read as a class: no irreversible acknowledgement from the command guard, and the close held to the strict review bar; the reader's lines are read_task_text's (CRLF folded once), so a CR left in them is such a character.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/core.py",
@@ -1570,7 +1570,7 @@
         {
           "type": "executable integration",
           "path": "tests/test_unclassified_fails_closed.py",
-          "reference": "CloseEndToEnd.test_legacy_task_closes_with_the_warning",
+          "reference": "CloseEndToEnd.test_a_task_without_the_heading_blocks_the_close",
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": []
@@ -1632,7 +1632,7 @@
           "boundary": "unit",
           "negative_control": {
             "path": "tests/test_unclassified_fails_closed.py",
-            "reference": "CloseEndToEnd.test_fenced_risk_example_does_not_block_a_legacy_close"
+            "reference": "CloseEndToEnd.test_a_fenced_risk_example_does_not_block_a_classified_close"
           },
           "limitations": [
             "V2 (task 039, codex-sol #1 Critical): has_risk_section fails toward STRICT on an UNCERTAIN parse — an unclosed fence anywhere in the file counts as an offered (present) Risk gate (True), so a `## Risk` buried under an unclosed fence can no longer read as ABSENT and buy the pre-1.5.0 lenient legacy close (the P-C bypass). Combined with the fail-closed VALUE (unclassified), present+unclassified = BLOCK. The negative control proves a properly CLOSED fenced `## Risk` example does NOT over-block a legacy close (only an UNCLOSED fence is uncertain). Detection is `_has_unclosed_fence` (the two scanner fail-directions diverge exactly on an unclosed opener); it does not attempt to distinguish a malformed-but-benign unclosed fence from an adversarial one — both are held to the high-consequence bar, recoverable by fixing the fence / classifying / review evidence / `--force --reason`."
@@ -1645,7 +1645,7 @@
           "boundary": "subprocess",
           "negative_control": {
             "path": "tests/test_unclassified_fails_closed.py",
-            "reference": "CloseEndToEnd.test_fenced_risk_example_does_not_block_a_legacy_close"
+            "reference": "CloseEndToEnd.test_a_fenced_risk_example_does_not_block_a_classified_close"
           },
           "limitations": [
             "End-to-end through the real CLI: a task.md whose real `## Risk` is buried under an unclosed fence is BLOCKED at close (was a lenient legacy close before V2), and is recoverable with `--force --reason`. Best-effort bound (unchanged posture): the guard is against a self-authored/committed malformed task.md; human diff review + the OS sandbox remain the containment for adversarial raw-content crafting."
@@ -1658,7 +1658,7 @@
           "boundary": "unit",
           "negative_control": {
             "path": "tests/test_unclassified_fails_closed.py",
-            "reference": "CloseEndToEnd.test_fenced_risk_example_does_not_block_a_legacy_close"
+            "reference": "CloseEndToEnd.test_a_fenced_risk_example_does_not_block_a_classified_close"
           },
           "limitations": [
             "V8/opus CRITICAL: a sole `## Risk` indented >=4 after a blank still counts as OFFERED (has_risk_section True) and reads unclassified as a value -> BLOCK, closing the V4-introduced lenient regression."
@@ -1671,7 +1671,7 @@
           "boundary": "unit",
           "negative_control": {
             "path": "tests/test_unclassified_fails_closed.py",
-            "reference": "CloseEndToEnd.test_fenced_risk_example_does_not_block_a_legacy_close"
+            "reference": "CloseEndToEnd.test_a_fenced_risk_example_does_not_block_a_classified_close"
           },
           "limitations": [
             "V8/codex-sol #2: a NBSP-led `## Risk` is not read as a live value (extract_risk unclassified) but counts as offered (presence True) -> BLOCK."
@@ -1684,7 +1684,7 @@
           "boundary": "unit",
           "negative_control": {
             "path": "tests/test_unclassified_fails_closed.py",
-            "reference": "CloseEndToEnd.test_fenced_risk_example_does_not_block_a_legacy_close"
+            "reference": "CloseEndToEnd.test_a_fenced_risk_example_does_not_block_a_classified_close"
           },
           "limitations": [
             "V8/codex-sol #3: `## Risk ##` (CommonMark closing-hash) is recognized so an assertive task is not legacy-lenient-closed."

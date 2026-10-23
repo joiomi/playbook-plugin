@@ -359,15 +359,13 @@ experimental, and antigravity/pi are experimental everywhere. See the
 `panel_required_for` keys the review requirement to the risk class, so an
 `unclassified` task used to fall through it entirely and close on a warning —
 making a blank field the cheapest path through the strictest gate in the system,
-chosen by the same agent the gate constrains. Since 1.5.32 the close
-distinguishes two facts that were previously conflated:
-
-- **no `## Risk` heading at all** — a pre-1.5.0 task that was never offered the
-  gate. Closes, with the warning naming what could not be evaluated. Unchanged.
-- **heading present but unset** (or malformed, e.g. the one-line
-  `## Risk: assertive`) — the gate was offered and skipped. `tasks work done`
-  blocks unless there is impl-review evidence or `--force --reason`, exactly as
-  for `assertive` / `irreversible`.
+chosen by the same agent the gate constrains. Since 1.5.32 an unset field
+(or a malformed one, e.g. the one-line `## Risk: assertive`) blocks `tasks work
+done` unless there is impl-review evidence or `--force --reason`, exactly as for
+`assertive` / `irreversible`. Since task 294 a task with no `## Risk` heading at all is held to the same bar: it
+used to close on a warning, a path kept for pre-1.5.0 tasks, so deleting the
+heading dropped the review — and a fresh project has no such task. A close that
+clears the bar another way still prints the warning naming what was skipped.
 
 Review evidence is a record the CLI wrote: judge.md whose newest round is an impl
 round with verdict PASS, or judge-single.md's `## Single-judge impl review`

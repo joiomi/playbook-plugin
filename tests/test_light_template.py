@@ -84,7 +84,7 @@ class Fixture:
         if malformed_risk_line:
             text = text.replace("## Risk\nunclassified", "## Risk: assertive\n", 1)
         if strip_risk_section:
-            # Stand in for a pre-1.5.0 template: no Risk heading at all.
+            # A record with no Risk heading at all (task 294: held to the unset field's bar).
             text = text.replace("## Risk\nunclassified", "", 1)
         if checked:
             text = text.replace("- [ ]", "- [x]")
@@ -233,17 +233,17 @@ class CloseSideBar(unittest.TestCase):
         # It still SAYS what could not be evaluated — silence was the original sin.
         self.assertIn("unclassified", (r.stdout + r.stderr).lower())
 
-    def test_legacy_task_without_a_risk_section_still_closes_with_a_warning(self):
-        """The pre-1.5.0 carve-out survives, narrowed to the tasks it was written
-        for: no `## Risk` heading means the gate was never offered."""
+    def test_a_task_without_a_risk_section_is_held_to_the_bar(self):
+        """Task 294: the pre-1.5.0 carve-out is gone — no `## Risk` heading reads
+        unclassified and blocks like an unset field (deleting the heading used to
+        drop the review)."""
         f = Fixture()
         tf = f.make_light_task(None, checked=True, strip_risk_section=True)
         self.assertEqual(f.run("work", "1").returncode, 0)
         r = f.run("work", "done")
-        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
-        self.assertEqual(status_of(tf), "done")
+        self.assertNotEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertNotEqual(status_of(tf), "done")
         self.assertIn("unclassified", (r.stdout + r.stderr).lower())
-        self.assertIn("⚠", r.stdout + r.stderr)
 
     def test_malformed_one_line_risk_is_treated_as_offered_and_blocks(self):
         # Judge Finding 3: "## Risk: assertive" (one line) is NOT a valid
