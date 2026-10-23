@@ -5706,8 +5706,11 @@ def write_handoff_and_block(task_file: Path, section: str, reason: str = "handof
     _rewrite(task_file, _t)
 
 
-# The two lines the CLI writes into `## Blocked`: a reason with its stamp, and a resume stamp (task 296).
-_CLI_BLOCK_RECORD = re.compile(r"^> (?:Resumed \S+|.*\s\(since [^()]*\))$")
+# The two lines the CLI writes into `## Blocked`, in its exact grammar (task 296, impl round 2): from column 0,
+# `> <reason>  (since <stamp>)` with two spaces, and `> Resumed <stamp>`, each stamp an ISO minute with its offset.
+# A quote that only looks like one (one space, `(since Monday)`, `> Resumed tomorrow`, indented) is an agent's line.
+_BLOCK_STAMP = r"\d{4}-\d\d-\d\dT\d\d:\d\d(?::\d\d)?(?:[+-]\d\d:\d\d|Z)"
+_CLI_BLOCK_RECORD = re.compile(rf"^> (?:Resumed {_BLOCK_STAMP}|.*  \(since {_BLOCK_STAMP}\))$")
 
 
 def _compose_blocked(text: str, clean_reason: str, ts: str) -> str:
@@ -5755,10 +5758,10 @@ def _compose_blocked(text: str, clean_reason: str, ts: str) -> str:
         sections.append(sp)
         nxt = _writer_section_span(out[sp[1]:], "## Blocked")
         sp = (sp[1] + nxt[0], sp[1] + nxt[1]) if nxt is not None else None
-    live = dict(_iter_nonfenced(out, unclosed_is_live=True))                  # the readers' view (fail open)
+    live = set(i for i, _s in _iter_nonfenced(out, unclosed_is_live=True))   # the readers' view (fail open)
     bodies = []
     for a, b in sections:
-        body = [out[i] for i in range(a + 1, b) if not (i in live and _CLI_BLOCK_RECORD.match(live[i]))]
+        body = [out[i] for i in range(a + 1, b) if not (i in live and _CLI_BLOCK_RECORD.match(out[i]))]
         while body and not body[0].strip():
             body.pop(0)
         while body and not body[-1].strip():
