@@ -134,7 +134,64 @@ class WhatIsNotAMessageStays(_Project):
         t = self.text()
         self.assertIn("QUOTED-EXAMPLE-4\n```", t)
         self.assertEqual(t.count("### Recent Chat"), 2)        # the quoted one and the real one
-        self.assertIn("second", t[t.index("QUOTED-EXAMPLE-4"):])
+        self.assertIn("```text\nsecond\n```", t[t.index("QUOTED-EXAMPLE-4"):])     # impl round 1 (sonnet m): tighter
+
+
+class AFenceEndsWhereTheFenceRulesSay(_Project):
+    def test_a_closer_an_editor_touched_ends_nothing_it_should_not(self):
+        """Row 9 (impl round 1: codex, grok Important): a captured message whose closing fence gained a trailing space
+        still closes there by the fence rules; the walk does not run on to a later fence and delete what lies between
+        (here `## Owner rulings` and its gate, then a fenced sample)."""
+        self.say("build the importer")
+        self.activate()
+        t = self.text()
+        i = t.index("build the importer\n```") + len("build the importer\n```")
+        self.tf.write_text(t[:i] + " " + t[i:], encoding="utf-8")         # the closer: "``` "
+        self.write_after_the_block(RULINGS + "\n```\na sample\n```\n")
+        before = _gate_counts(self.text())
+        self.say("and keep it simple")
+        self.activate()
+        t = self.text()
+        self.assertIn("OWNER-RULING-41: keep the CSV order", t)
+        self.assertIn("- [ ] GATE-12: confirm the BOM scope with him", t)
+        self.assertEqual(_gate_counts(t), before)
+
+
+class NoBlockYet(_Project):
+    def test_a_first_capture_goes_into_references_not_into_a_later_section(self):
+        """Row 10 (impl round 1: opus, a pre-existing placement): with no block yet and `## Owner rulings` written
+        before the first `---`, the capture goes at the end of `## References`, above the rulings — appended at the end
+        it became part of them, and his chat reached the judges as rulings."""
+        from tasks.post_d6 import extract_owner_rulings
+        t = self.text()
+        i = t.index("\n---\n")
+        self.tf.write_text(t[:i] + "\n" + RULINGS + t[i:], encoding="utf-8")
+        self.say("CHAT-WORDS-5 build the importer")
+        self.activate()
+        t = self.text()
+        self.assertLess(t.index("### Recent Chat"), t.index("## Owner rulings"))
+        self.assertGreater(t.index("### Recent Chat"), t.index("## References"))
+        rulings = "\n".join(extract_owner_rulings(t))
+        self.assertIn("OWNER-RULING-41", rulings)
+        self.assertNotIn("CHAT-WORDS-5", rulings)
+
+
+class TheHeadingIsTheHeading(_Project):
+    def test_a_heading_with_trailing_space_is_still_the_block(self):
+        """Row 11 (impl round 1: agy, opus Minor): a heading that gained trailing whitespace is still the block —
+        replaced, under one heading, not a second block below it."""
+        self.say("OLD-MESSAGE-1")
+        self.activate()
+        self.tf.write_text(self.text().replace("review and remove unrelated)\n", "review and remove unrelated)  \n"),
+                           encoding="utf-8")
+        self.log = "# Project Chat Log\n"
+        self.n = 1
+        self.say("NEW-MESSAGE-2")
+        self.activate()
+        t = self.text()
+        self.assertEqual(t.count("### Recent Chat"), 1)
+        self.assertNotIn("OLD-MESSAGE-1", t)
+        self.assertIn("NEW-MESSAGE-2", t)
 
     def test_an_older_unfenced_block_is_kept_under_one_heading(self):
         """Row 7: a block in the older, unfenced format is not taken for captured messages: its lines stay, below the
