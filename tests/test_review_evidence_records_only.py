@@ -132,6 +132,10 @@ class TheRecordsAreTheEvidence(unittest.TestCase):
                                          "**PANEL VERDICT: PASS** — 3/3 judges succeeded, quorum 2\n\n**Round-id:** 1234567890ab\n",
                                          encoding="utf-8")
         self.assertFalse(has_review_evidence(self.tf, impl_only=True))
+        # and a judge-single.md that holds only a plan review
+        (self.d / "judge-single.md").write_text("## Single-judge plan review — 2026-10-23 · codex\n\nok\n", encoding="utf-8")
+        self.assertFalse(has_review_evidence(self.tf, impl_only=True))
+        self.assertTrue(has_review_evidence(self.tf))                   # a review ran, not of the implementation
 
 
 if __name__ == "__main__":
