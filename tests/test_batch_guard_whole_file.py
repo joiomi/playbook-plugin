@@ -90,14 +90,48 @@ class TheFreedomsStay(unittest.TestCase):
 
 
 class WhenTheFileCannotShowTheEdit(unittest.TestCase):
-    def test_an_old_string_not_in_the_file_is_judged_on_its_fragment(self):
-        # row 8 (hostile): an old_string the file does not hold even with its quotes made alike (the tool will fail
-        # it) is judged on its fragment, as before — never passed unseen
+    def test_an_old_string_the_guard_cannot_find_does_not_tick(self):
+        # row 8 (hostile; edited after impl round 2, opus): an old_string the guard cannot find in a readable file
+        # either fails at the tool or matches by a rule the guard does not model — so an edit that ticks a box there
+        # is refused, notes or not, and one that ticks nothing passes
         lines = ["- [ ] G8: not in the file", "- [ ] G9: nor this", "- [ ] G10: nor this one"]
-        r = _edit(ProjectFixture(), "\n".join(lines), "\n".join(checked(ln) for ln in lines))
+        for note in ("", NOTE):
+            with self.subTest(note=bool(note)):
+                r = _edit(ProjectFixture(), "\n".join(lines), "\n".join(checked(ln, note) for ln in lines))
+                self.assertEqual(r.returncode, 2, r.stderr.decode())
+                self.assertIn(b"cannot find", r.stderr)
+        r = _edit(ProjectFixture(), checked(G[0]).replace("G1", "G0"), checked(G[0]).replace("G1", "G0") + NOTE)
+        self.assertEqual(r.returncode, 0, r.stderr.decode())                 # ticks nothing it did not hold
+        # a surrogate pair spelled as two escapes (the tool may read it as one character; the guard does not)
+        f = ProjectFixture(gates=["- [ ] \U0001F600 G1", "- [ ] \U0001F600 G2"])
+        r = _edit(f, "- [ ] \\ud83d\\ude00", "- [x] \\ud83d\\ude00", replace_all=True)
         self.assertEqual(r.returncode, 2, r.stderr.decode())
-        r = _edit(ProjectFixture(), "\n".join(lines), "\n".join(checked(ln, NOTE) for ln in lines))
-        self.assertEqual(r.returncode, 0, r.stderr.decode())
+
+    def test_a_multiedit_edit_the_guard_cannot_find_does_not_tick(self):
+        # row 16 (hostile, impl round 2): the same for one edit of a MultiEdit
+        f = ProjectFixture()
+        edits = [{"old_string": G[0], "new_string": checked(G[0], NOTE)},
+                 {"old_string": "- [ ] G9: not in the file", "new_string": "- [x] G9: not in the file" + NOTE}]
+        r = f.run_hook({"hook_event_name": "PreToolUse", "tool_name": "MultiEdit",
+                        "tool_input": {"file_path": str(f.task_file), "edits": edits}})
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+
+    def test_an_unreadable_task_md_is_judged_on_the_fragments(self):
+        # row 17 (opus Minor, impl round 2): the `except OSError` branch — the helper itself, on a file it cannot read
+        import json, os, subprocess
+        from tests.test_batch_close_guard import HELPER
+        f = ProjectFixture()
+        os.chmod(f.task_file, 0)
+        self.addCleanup(os.chmod, f.task_file, 0o644)
+        if os.access(f.task_file, os.R_OK):
+            self.skipTest("running as a user who can read a mode-0 file")
+        payload = {"tool_name": "Edit", "tool_input": {"file_path": str(f.task_file), "old_string": "\n".join(G[:2]),
+                                                       "new_string": "\n".join(checked(g) for g in G[:2])}}
+        r = subprocess.run([sys.executable, str(HELPER), "--tool", "Edit", "--file", str(f.task_file),
+                            "--session-dir", str(f.session_dir)], input=json.dumps(payload).encode(),
+                           capture_output=True, timeout=60)
+        self.assertEqual(r.returncode, 2, r.stdout.decode())
+        self.assertIn(b"outcome note", r.stdout)
 
     def test_curly_quotes_do_not_hide_a_replace_all(self):
         # row 11 (hostile; mine, before the judge): the Edit tool matches an old_string across curly and straight
