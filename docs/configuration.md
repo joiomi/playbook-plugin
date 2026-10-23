@@ -368,7 +368,9 @@ distinguishes two facts that were previously conflated:
 
 Review evidence is a record the CLI wrote: judge.md whose newest round is an impl
 round with verdict PASS, or judge-single.md's `## Single-judge impl review`
-heading; a ticked gate is never review evidence (task 290): the templates carry
+heading, which the CLI writes for every single-judge review (its findings go into
+task.md's `## Implementation Review` when the task has one, the heading still goes
+there); a ticked gate is never review evidence (task 290): the templates carry
 the gate that tells you to run the impl panel, and ticking it used to count.
 
 Setting `## Risk` to one word clears it. `## Risk Routing` in the light template

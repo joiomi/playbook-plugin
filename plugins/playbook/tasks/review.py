@@ -911,7 +911,7 @@ SINGLE_JUDGE_FILE = "judge-single.md"
 
 
 def _append_review_to_judge_md(task_dir, review_mode: str, seat: str, findings: str,
-                               why: str, receipt: str = ""):
+                               why: str, receipt: str = "", in_task_md: bool = False):
     """Append a single-judge review to the task's `judge-single.md` (task 117) and
     return its path, or None when it cannot be written.
 
@@ -920,17 +920,29 @@ def _append_review_to_judge_md(task_dir, review_mode: str, seat: str, findings: 
     outside a round dropped or glued to one (single-judge review) — so a single
     review written there would be misfiled or lost at the next panel. Every line is
     QUOTED (`> `): a judge's own text, which may contain `- … REJECT`, must never
-    look like triage (parked R9) to anything that reads the record."""
+    look like triage (parked R9) to anything that reads the record.
+
+    `in_task_md` (task 290): the findings went into task.md, so only the heading and
+    where they are are written — the CLI's record that the review ran."""
     import datetime as _dt
     from tasks.filelock import task_lock
     path = Path(task_dir) / SINGLE_JUDGE_FILE
     stamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     from tasks.core import quote_judge_text
-    quoted = quote_judge_text(findings)
-    block = (f"## Single-judge {review_mode} review — {stamp} (`{seat}`)\n\n"
-             f"Recorded here by the CLI: task.md has no place for these findings ({why})."
-             + (f"\n\n{_one_line(receipt)}\n\n" if receipt else " ")   # the CLI's receipt: its line, unquoted (II-3)
-             + f"The review, verbatim, every line quoted:\n\n{quoted}\n")
+    if in_task_md:
+        # Task 290 (its impl round 1, agy Critical): a tick is no review evidence, and on a full template the findings
+        # go into task.md — so the CLI records here THAT the review ran and where its findings are, never their text
+        # again: the heading is what `has_review_evidence` reads.
+        section = "Plan Review" if review_mode == "plan" else "Implementation Review"
+        block = (f"## Single-judge {review_mode} review — {stamp} (`{seat}`)\n\n"
+                 f"Recorded here by the CLI: the findings were written into task.md (`## {section}`)."
+                 + (f"\n\n{_one_line(receipt)}\n" if receipt else "\n"))
+    else:
+        quoted = quote_judge_text(findings)
+        block = (f"## Single-judge {review_mode} review — {stamp} (`{seat}`)\n\n"
+                 f"Recorded here by the CLI: task.md has no place for these findings ({why})."
+                 + (f"\n\n{_one_line(receipt)}\n\n" if receipt else " ")   # the CLI's receipt: its line, unquoted (II-3)
+                 + f"The review, verbatim, every line quoted:\n\n{quoted}\n")
     try:
         with task_lock(path):
             old = path.read_text(encoding="utf-8") if path.exists() else ""
@@ -4123,6 +4135,11 @@ def _cmd_single_review(cmd, cmd_args):
             print(f"Findings written to {task_file.relative_to(project_path)} "
                   f"(## {'Plan' if review_mode == 'plan' else 'Implementation'} Review)",
                   flush=True)
+            # the CLI's record that it ran (task 290): without it the close has no evidence of this review
+            if not _append_review_to_judge_md(task_file.parent, review_mode, _spend_seat, "", "",
+                                              receipt=_receipt, in_task_md=True):
+                print(f"  ⚠ could not record the review in {SINGLE_JUDGE_FILE} — the close will not count it "
+                      "as review evidence", file=sys.stderr, flush=True)
         else:
             # Task 117 (gauntlet 2 item 28): task.md has no place for the findings (a
             # light/quick task, a compacted section) and we still never GUESS where to
