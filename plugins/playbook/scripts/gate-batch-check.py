@@ -86,9 +86,10 @@ A batch attests ALREADY-DONE work; two back-to-back batch writes look like
 end-of-task ticking. Do the next piece of work, then close its gates."""
 
 UNFOUND_MSG = """\
-BLOCKED: this edit ticks a gate, but the guard cannot find its old_string in task.md
-(read as the Edit tool reads it: the text itself, curly and straight quotes alike,
-\\uXXXX escapes as their characters). Re-read task.md and copy the gate's exact text."""
+BLOCKED: the guard cannot find this edit's old_string in task.md (read as the Edit
+tool reads it: the text itself, curly and straight quotes alike, \\uXXXX escapes as
+their characters), so it cannot see which gates the edit would tick.
+Re-read task.md and copy the exact text."""
 
 
 def _apply_as_the_tool(text: str, o: str, n: str, replace_all: bool) -> "str | None":
@@ -109,12 +110,6 @@ def _apply_as_the_tool(text: str, o: str, n: str, replace_all: bool) -> "str | N
             oo += "\n"
         return text.replace(oo, nn) if replace_all else text.replace(oo, nn, 1)
     return None
-
-
-def _ticks(old: str, new: str) -> bool:
-    """Whether going from `old` to `new` checks a box `old` did not have checked — a newly- or born-checked line."""
-    newly, born = partition(old, new)
-    return bool(newly or born)
 
 
 def _read_untranslated(path) -> str:
@@ -321,9 +316,10 @@ def main() -> int:
         after = None if whole is None else _apply_as_the_tool(whole, o, n_, bool(ti.get("replace_all", False)))
         if whole is not None and after is not None:
             old, new = whole, after
-        elif whole is not None and o and _ticks(o, n_):
+        elif whole is not None and o:
             # readable, and the guard cannot find the text: the tool fails the edit, or matches it by a rule this does
-            # not model (impl round 2, opus) — a tick there is refused, never judged on its fragment
+            # not model (impl round 2, opus) — and a fragment cannot show what such an edit ticks (post-panel run 1,
+            # codex: `[ ] é` against `é` text mid-line) — refused, whatever it changes
             print(UNFOUND_MSG)
             _journal_block("unfound-old-string")
             return 2
@@ -360,7 +356,7 @@ def main() -> int:
             after = _apply_as_the_tool(new, o, n, bool(e.get("replace_all")))
             if after is not None:
                 new = after
-            elif _ticks(o, n):                          # as for an Edit: a tick the guard cannot place
+            else:                                       # as for an Edit: an edit the guard cannot place
                 print(UNFOUND_MSG)
                 _journal_block("unfound-old-string")
                 return 2
