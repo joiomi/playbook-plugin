@@ -83,6 +83,20 @@ class AWorktreeIsCode(_Project):
         self.assertFalse(_is_management_path("/p/.claude/worktrees/w1/.claude/worktrees/w2/src/a.py"))
 
 
+    def test_the_hook_agrees_with_the_twin_on_nested_and_slashed_names(self):
+        """Row 8 (my mutant run): the hook strips the worktree segments as often as the twin does — a worktree inside a
+        worktree, and a worktree whose name holds a `/` — so their code needs a task too, while their records stay
+        exempt."""
+        for p in (self.wt / ".claude" / "worktrees" / "w2" / "src" / "a.py",
+                  self.project / ".claude" / "worktrees" / "feat" / "x" / "src" / "a.py"):
+            with self.subTest(path=str(p)):
+                self.assertEqual(self.gate("Edit", p).returncode, 2)
+                self.assertFalse(_is_management_path(str(p)))
+        rec = self.wt / ".claude" / "worktrees" / "w2" / ".agent" / "tasks" / "001-real" / "notes.py"
+        self.assertEqual(self.gate("Write", rec).returncode, 0)
+        self.assertTrue(_is_management_path(str(rec)))
+
+
 class WhatStaysExempt(_Project):
     def test_the_worktrees_own_records_stay_exempt(self):
         """Row 5: inside a worktree, its own `.agent/` and `.claude/` stay exempt, in the hook and in the twin."""
