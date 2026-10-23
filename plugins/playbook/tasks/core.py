@@ -4824,6 +4824,19 @@ def _slugify(name: str) -> str:
     return slug.strip('-').lower()
 
 
+_LINE_BREAKS = re.compile(r"[\r\n\v\f\x1c\x1d\x1e\x85\u2028\u2029]+")
+# a line that starts with one of these is structure to some reader of task.md: a heading, a gate or a list item, a
+# quote, a fence, a table row, an HTML marker, a link reference, a setext underline, an ordered item
+_STRUCTURE_START = re.compile(r"[#>|<\[\-+*~`=_]|\d+[.)]")
+
+
+def _one_plain_line(text: str) -> str:
+    """`text` as one line of plain text (task 292): each run of line breaks a space, and a leading structure marker
+    escaped with a backslash, so `## Status`, `- [x] …` or `~~~` under `## Intent` read as words."""
+    line = _LINE_BREAKS.sub(" ", text).strip(" \t")
+    return "\\" + line if _STRUCTURE_START.match(line) else line
+
+
 def _display_title(name: str) -> str:
     """Render a task name for markdown headers."""
     return name.replace("-", " ").replace("_", " ").title()
@@ -4948,11 +4961,13 @@ def create_task(project_path: Path, name: str, task_type: str | None = None,
     temporary name in the lane, renamed in and registered, under the lane lock that also takes
     the number. Raises `registry.RegistryUnreadable` before creating anything.
 
-    The intent is one line (task 292, audit 1 item 4): each run of line breaks becomes one space
-    (its other spaces are kept), so an intent such as `fix\\n## Status\\ndone` adds no heading.
+    The intent and the name add no structure to the record (task 292, audit 1 item 4 and its impl
+    round 1): each is one line (`_LINE_BREAKS`), and an intent that starts with a structure marker
+    has it escaped (`_one_plain_line`) — `fix\\n## Status\\ndone`, `## Status`, `- [x] …` read as words.
     """
+    name = _LINE_BREAKS.sub(" ", name)
     if intent_text:
-        intent_text = re.sub(r"[\r\n\v\f\x1c\x1d\x1e\x85\u2028\u2029]+", " ", intent_text)
+        intent_text = _one_plain_line(intent_text)
     # Creating a task in the fresh-clone shape would mint a root `.agent/tasks/`
     # — and because a root tasks dir is itself a legitimate lane, that single
     # mkdir permanently converts the guarded shape into an "allowed mixed

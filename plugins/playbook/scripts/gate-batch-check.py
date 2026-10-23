@@ -363,12 +363,14 @@ def main() -> int:
         # --session-dir was given (its parent's parent IS the resolved lane
         # dir: .agent[/<user>]); never guess a lane from cwd. Wrapped AND the
         # helper swallows errors — journalling can never change the block.
+        # Guard 0.6's refusals are its own (task 292, impl round 1), not batch closes.
         if not sd_raw:
             return
         try:
             j = _load_journal()
             if j is not None:
-                j.append(session_dir.parent.parent, "batch-close", "block", reason,
+                j.append(session_dir.parent.parent, "status-guard" if "--status" in args else "batch-close",
+                         "block", reason,
                          session_id=session_dir.name, tool=tool, path=file_path)
         except Exception:
             pass

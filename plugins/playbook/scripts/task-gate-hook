@@ -441,35 +441,32 @@ fi
 # `## Status`, or an edit it cannot place. `tasks work done` / `tasks blocked` write it and run no hook. A helper that
 # does not run fails OPEN, loudly (the uniform policy).
 if [ "$TOOL_NAME" = "Edit" ] || [ "$TOOL_NAME" = "Write" ] || [ "$TOOL_NAME" = "MultiEdit" ]; then
-    PB_STATUS_MD=""
-    if pb_in_lane_tasks "$FILE_PATH" "$NORM_PATH" "$REAL_PATH"; then
-        for PB_CAND in "$REAL_PATH" "${NORM_PATH:-$FILE_PATH}" "$FILE_PATH"; do
-            if [ -n "$PB_CAND" ] && [ -f "$PB_CAND" ]; then
-                PB_STATUS_MD="$PB_CAND"
-                break
-            fi
-        done
-    fi
-    if [ -n "$PB_STATUS_MD" ]; then
-        STATUS_HELPER="$HOOK_DIR/gate-batch-check.py"
+    # Every reading of the path that names an existing record in a lane is checked on its own (impl round 1, codex:
+    # the kernel's reading can be a decoy outside while the tool writes the record the text names), the
+    # home-relative one too (the tool expands a leading `~/`; measured: Read did).
+    PB_TILDE=""
+    case "$FILE_PATH" in "~/"*) PB_TILDE="$HOME/${FILE_PATH#"~/"}" ;; esac
+    STATUS_HELPER="$HOOK_DIR/gate-batch-check.py"
+    for PB_CAND in "$REAL_PATH" "${NORM_PATH:-$FILE_PATH}" "$FILE_PATH" "$PB_TILDE"; do
+        [ -n "$PB_CAND" ] && [ -f "$PB_CAND" ] && pb_in_lane_tasks "$PB_CAND" || continue
         if [ ! -r "$STATUS_HELPER" ]; then
             echo "[task-gate-hook] WARNING: helper not readable ($STATUS_HELPER)" \
                  "— the ## Status guard is DISABLED for this edit (failing open)." \
                  "Reinstall/repair the Playbook plugin." >&2
-        else
-            STATUS_RC=0
-            STATUS_MSG=$(echo "$INPUT" | python3 -E -s "$STATUS_HELPER" --status \
-                --tool "$TOOL_NAME" --file "$PB_STATUS_MD" --session-dir "$SESSION_DIR" 2>/dev/null) || STATUS_RC=$?
-            if [ "$STATUS_RC" = "2" ]; then
-                echo "$STATUS_MSG" >&2
-                PB_HJ_DETAIL="status edit refused"
-                exit 2
-            elif [ "$STATUS_RC" != "0" ]; then
-                echo "[task-gate-hook] WARNING: the ## Status guard did not run (exit $STATUS_RC)" \
-                     "— failing open for this edit." >&2
-            fi
+            break
         fi
-    fi
+        STATUS_RC=0
+        STATUS_MSG=$(echo "$INPUT" | python3 -E -s "$STATUS_HELPER" --status \
+            --tool "$TOOL_NAME" --file "$PB_CAND" --session-dir "$SESSION_DIR" 2>/dev/null) || STATUS_RC=$?
+        if [ "$STATUS_RC" = "2" ]; then
+            echo "$STATUS_MSG" >&2
+            PB_HJ_DETAIL="status edit refused"
+            exit 2
+        elif [ "$STATUS_RC" != "0" ]; then
+            echo "[task-gate-hook] WARNING: the ## Status guard did not run (exit $STATUS_RC)" \
+                 "— failing open for this edit." >&2
+        fi
+    done
 fi
 
 # --- Guard 0.5: annotated batch-close (v2 — F1, blind-judge-reviewed) ---
