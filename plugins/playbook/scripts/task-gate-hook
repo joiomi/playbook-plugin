@@ -585,8 +585,18 @@ if [ "$TOOL_NAME" = "Edit" ] || [ "$TOOL_NAME" = "Write" ] \
         NORM_PATH=$(FP="$FILE_PATH" python3 -I -c "import os; print(os.path.normpath(os.environ['FP']))" 2>/dev/null || echo "$FILE_PATH")
     fi
 
-    # Allow .agent/ and .claude/ edits (task management, hook config)
-    case "$NORM_PATH" in
+    # Allow .agent/ and .claude/ edits (task management, hook config). Task 298 (audit 2, G3): Claude Code makes its
+    # worktrees in `.claude/worktrees/<name>/` — a checkout, not configuration — so what is inside one is judged as the
+    # worktree's own path: only its own .agent/ and .claude/ are exempt (provider/policy.py strips the same segments).
+    EXEMPT_PATH="$NORM_PATH"
+    while :; do
+        case "$EXEMPT_PATH" in
+            */.claude/worktrees/*/*) EXEMPT_PATH="/${EXEMPT_PATH#*/.claude/worktrees/*/}" ;;
+            */.claude/worktrees/*) EXEMPT_PATH="/" ;;
+            *) break ;;
+        esac
+    done
+    case "$EXEMPT_PATH" in
         */.agent/*|*/.claude/*) PB_HJ_DETAIL="exempt path (.agent/.claude)"; exit 0 ;;
     esac
 

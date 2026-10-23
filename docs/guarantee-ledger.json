@@ -2193,7 +2193,7 @@
     {
       "id": "PB-PATH-MANAGEMENT-EXEMPT",
       "category": "hook-payload-and-paths",
-      "statement": "Genuine .agent and .claude management paths are exempt from the edit gate, while traversal through them onto code is normalized and blocked; a backslash is a file-name character, not a path separator, so a file merely NAMED with `\\.agent\\` in it is not exempt.",
+      "statement": "Genuine .agent and .claude management paths are exempt from the edit gate, while traversal through them onto code is normalized and blocked; a backslash is a file-name character, not a path separator, so a file merely NAMED with `\\.agent\\` in it is not exempt. A Claude Code worktree, `.claude/worktrees/<name>/`, is a checkout, not management: what is inside one is judged as the worktree's own path, so its code needs an active task and only its own `.agent`/`.claude` are exempt — in task-gate-hook and in its twin `_is_management_path` alike (task 298, audit 2 G3; every worktree's code used to pass with no task).",
       "owner": [
         {
           "path": "plugins/playbook/provider/policy.py",
@@ -2211,6 +2211,25 @@
       "failure_consequence": "Critical",
       "claim_kind": "mechanical",
       "proofs": [
+        {
+          "type": "executable integration",
+          "path": "tests/test_worktree_edits_need_a_task.py",
+          "reference": "AWorktreeIsCode.test_an_edit_of_a_worktree_code_file_is_blocked",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_worktree_edits_need_a_task.py",
+            "reference": "WhatStaysExempt.test_the_worktrees_own_records_stay_exempt"
+          },
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_worktree_edits_need_a_task.py",
+          "reference": "AWorktreeIsCode.test_the_python_twin_agrees",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": []
+        },
         {
           "type": "executable integration",
           "path": "tests/test_gate_path_traversal.py",

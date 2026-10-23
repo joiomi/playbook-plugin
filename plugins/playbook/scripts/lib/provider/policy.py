@@ -35,7 +35,17 @@ def _is_management_path(file_path: str) -> bool:
     # that file from the edit gate — task 158).
     norm = os.path.normpath(file_path)
     parts = norm.split("/")
-    return ".agent" in parts or ".claude" in parts
+    # Task 298 (audit 2, G3): `.claude/worktrees/<name>/` is a Claude Code checkout, not configuration — what is
+    # inside it is judged as the worktree's own path, so only the worktree's own `.agent/`/`.claude/` are management
+    # (the bash gate strips the same segments: `.claude`, `worktrees` and the name's first component, repeatedly).
+    i = 0
+    while True:
+        k = next((j for j in range(i, len(parts) - 1) if parts[j] == ".claude" and parts[j + 1] == "worktrees"), None)
+        if k is None:
+            break
+        i = k + 3
+    rest = parts[i:]
+    return ".agent" in rest or ".claude" in rest
 
 
 _CODE_EXTENSIONS = {
