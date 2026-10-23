@@ -444,10 +444,16 @@ if [ "$TOOL_NAME" = "Edit" ] || [ "$TOOL_NAME" = "Write" ] || [ "$TOOL_NAME" = "
     # Every reading of the path that names an existing record in a lane is checked on its own (impl round 1, codex:
     # the kernel's reading can be a decoy outside while the tool writes the record the text names), the
     # home-relative one too (the tool expands a leading `~/`; measured: Read did).
-    PB_TILDE=""
-    case "$FILE_PATH" in "~/"*) PB_TILDE="$HOME/${FILE_PATH#"~/"}" ;; esac
+    # Its readings are taken after the expansion (impl round 2, opus, codex: `~/jump/../proj/…` and `…/./task.md` named
+    # no record as the kernel or as the lane test reads them): the text's (`realpath -m -s`) and the kernel's.
+    PB_TILDE=""; PB_TILDE_TEXT=""; PB_TILDE_REAL=""
+    case "$FILE_PATH" in "~/"*)
+        PB_TILDE="$HOME/${FILE_PATH#"~/"}"
+        PB_TILDE_TEXT=$(realpath -m -s -- "$PB_TILDE" 2>/dev/null) || PB_TILDE_TEXT=""
+        PB_TILDE_REAL=$(realpath -m -- "$PB_TILDE" 2>/dev/null) || PB_TILDE_REAL="" ;;
+    esac
     STATUS_HELPER="$HOOK_DIR/gate-batch-check.py"
-    for PB_CAND in "$REAL_PATH" "${NORM_PATH:-$FILE_PATH}" "$FILE_PATH" "$PB_TILDE"; do
+    for PB_CAND in "$REAL_PATH" "${NORM_PATH:-$FILE_PATH}" "$FILE_PATH" "$PB_TILDE" "$PB_TILDE_TEXT" "$PB_TILDE_REAL"; do
         [ -n "$PB_CAND" ] && [ -f "$PB_CAND" ] && pb_in_lane_tasks "$PB_CAND" || continue
         if [ ! -r "$STATUS_HELPER" ]; then
             echo "[task-gate-hook] WARNING: helper not readable ($STATUS_HELPER)" \

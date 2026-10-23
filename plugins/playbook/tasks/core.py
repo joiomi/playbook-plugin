@@ -8,6 +8,7 @@ import json
 import math
 import os
 import re
+import unicodedata
 import subprocess
 import sys
 from pathlib import Path
@@ -4825,16 +4826,21 @@ def _slugify(name: str) -> str:
 
 
 _LINE_BREAKS = re.compile(r"[\r\n\v\f\x1c\x1d\x1e\x85\u2028\u2029]+")
-# a line that starts with one of these is structure to some reader of task.md: a heading, a gate or a list item, a
-# quote, a fence, a table row, an HTML marker, a link reference, a setext underline, an ordered item
-_STRUCTURE_START = re.compile(r"[#>|<\[\-+*~`=_]|\d+[.)]")
+# a line that starts with one of these is structure to a reader of task.md: a heading, a gate or a list item, a
+# fence, a quote, an HTML marker (task 292's impl round 2: an everyday `[WIP] x` or `1) fix` stays as written)
+_STRUCTURE_START = re.compile(r"#|>|<|```|~~~|[-*+](?:\s|$)")
 
 
 def _one_plain_line(text: str) -> str:
     """`text` as one line of plain text (task 292): each run of line breaks a space, and a leading structure marker
-    escaped with a backslash, so `## Status`, `- [x] …` or `~~~` under `## Intent` read as words."""
+    escaped with a backslash, so `## Status`, `- [x] …` or `~~~` under `## Intent` read as words. The marker is looked
+    for past what a reader skips before it — spaces and invisible format characters such as a byte-order mark (impl
+    round 2, sonnet, codex: `<BOM>## Status` was a second live heading)."""
     line = _LINE_BREAKS.sub(" ", text).strip(" \t")
-    return "\\" + line if _STRUCTURE_START.match(line) else line
+    lead = line
+    while lead and (lead[0] in " \t" or unicodedata.category(lead[0]) == "Cf"):
+        lead = lead[1:]
+    return "\\" + line if _STRUCTURE_START.match(lead) else line
 
 
 def _display_title(name: str) -> str:
@@ -5168,6 +5174,8 @@ def _extract_problem(task_file: Path) -> str:
                 text = s
                 if text.startswith("(") and text.endswith(")"):
                     text = text[1:-1]
+                if text.startswith("\\") and _STRUCTURE_START.match(text[1:].lstrip(" \t")):
+                    text = text[1:]                     # the escape `tasks new` added (task 292): show the words
                 return text
         return ""
     except Exception:
