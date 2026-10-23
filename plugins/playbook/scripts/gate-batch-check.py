@@ -54,27 +54,6 @@ ANNOTATION_FLOOR = 8   # unicode non-whitespace chars (never bash bytes)
 # curly quotes read as straight ones — the Edit tool matches an old_string across them (task 291)
 _QUOTES = str.maketrans({"‘": "'", "’": "'", "“": '"', "”": '"'})
 _ESCAPE = re.compile(r"\\u([0-9a-fA-F]{4})")
-
-
-def _apply_as_the_tool(text: str, o: str, n: str, replace_all: bool) -> "str | None":
-    """`text` after the Edit tool replaces `o` by `n`, or None when the tool finds no `o` (it then fails the edit).
-    Matched as the tool matches (task 291, its impl round 1, measured on the tool 2026-10-23): the text itself; else
-    with curly and straight quotes read alike, replacing the file's own first spelling (one character for one, so the
-    positions agree); else both with `\\uXXXX` escapes read as their characters. Replaced by nothing, a text takes
-    the newline after it."""
-    for oo, nn in ((o, n), (_ESCAPE.sub(lambda m: chr(int(m.group(1), 16)), o),
-                            _ESCAPE.sub(lambda m: chr(int(m.group(1), 16)), n))):
-        if not oo:
-            continue
-        if oo not in text:
-            i = text.translate(_QUOTES).find(oo.translate(_QUOTES))
-            if i < 0:
-                continue
-            oo = text[i:i + len(oo)]
-        if nn == "" and not oo.endswith("\n") and oo + "\n" in text:
-            oo += "\n"
-        return text.replace(oo, nn) if replace_all else text.replace(oo, nn, 1)
-    return None
 BATCH_CEILING = 5
 
 BARE_MSG = """\
@@ -105,6 +84,37 @@ CONSECUTIVE_MSG = """\
 BLOCKED: second batch close with no tool call in between.
 A batch attests ALREADY-DONE work; two back-to-back batch writes look like
 end-of-task ticking. Do the next piece of work, then close its gates."""
+
+UNFOUND_MSG = """\
+BLOCKED: this edit ticks a gate, but the guard cannot find its old_string in task.md
+(read as the Edit tool reads it: the text itself, curly and straight quotes alike,
+\\uXXXX escapes as their characters). Re-read task.md and copy the gate's exact text."""
+
+
+def _apply_as_the_tool(text: str, o: str, n: str, replace_all: bool) -> "str | None":
+    """`text` after the Edit tool replaces `o` by `n`, or None when the guard cannot find `o` (task 291, its impl
+    round 1, measured on the tool 2026-10-23): the text itself; else with curly and straight quotes read alike,
+    replacing the file's own first spelling (one character for one, so the positions agree); else both with
+    `\\uXXXX` escapes read as their characters. Replaced by nothing, a text takes the newline after it."""
+    for oo, nn in ((o, n), (_ESCAPE.sub(lambda m: chr(int(m.group(1), 16)), o),
+                            _ESCAPE.sub(lambda m: chr(int(m.group(1), 16)), n))):
+        if not oo:
+            continue
+        if oo not in text:
+            i = text.translate(_QUOTES).find(oo.translate(_QUOTES))
+            if i < 0:
+                continue
+            oo = text[i:i + len(oo)]
+        if nn == "" and not oo.endswith("\n") and oo + "\n" in text:
+            oo += "\n"
+        return text.replace(oo, nn) if replace_all else text.replace(oo, nn, 1)
+    return None
+
+
+def _ticks(old: str, new: str) -> bool:
+    """Whether going from `old` to `new` checks a box `old` did not have checked — a newly- or born-checked line."""
+    newly, born = partition(old, new)
+    return bool(newly or born)
 
 
 def _read_untranslated(path) -> str:
@@ -300,9 +310,8 @@ def main() -> int:
 
     if tool == "Edit":
         # Judged on the whole file it leaves, as a Write and a MultiEdit are (task 291, audit 1 G1: `replace_all` of
-        # `- [ ]` → `- [x]` is one empty gate as a fragment, and a fragment from mid-line hides a tick — item 9). When
-        # the file cannot show the edit — unreadable, or its `old_string` not there even with the quotes made alike
-        # (the tool then fails it) — the fragments are judged, as before.
+        # `- [ ]` → `- [x]` is one empty gate as a fragment, and a fragment from mid-line hides a tick — item 9). Only
+        # an unreadable file's edit is judged on its fragments, as before; one the guard cannot find is refused below.
         o = str(ti.get("old_string", ""))
         n_ = str(ti.get("new_string", ""))
         try:
@@ -312,6 +321,12 @@ def main() -> int:
         after = None if whole is None else _apply_as_the_tool(whole, o, n_, bool(ti.get("replace_all", False)))
         if whole is not None and after is not None:
             old, new = whole, after
+        elif whole is not None and o and _ticks(o, n_):
+            # readable, and the guard cannot find the text: the tool fails the edit, or matches it by a rule this does
+            # not model (impl round 2, opus) — a tick there is refused, never judged on its fragment
+            print(UNFOUND_MSG)
+            _journal_block("unfound-old-string")
+            return 2
         else:
             old, new = o, n_
     elif tool == "Write":
@@ -345,6 +360,10 @@ def main() -> int:
             after = _apply_as_the_tool(new, o, n, bool(e.get("replace_all")))
             if after is not None:
                 new = after
+            elif _ticks(o, n):                          # as for an Edit: a tick the guard cannot place
+                print(UNFOUND_MSG)
+                _journal_block("unfound-old-string")
+                return 2
     else:
         return 0
 
