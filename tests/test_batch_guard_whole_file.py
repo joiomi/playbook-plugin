@@ -32,12 +32,14 @@ class ReplaceAllTicksEveryGate(unittest.TestCase):
         f = ProjectFixture()
         r = _edit(f, "- [ ]", "- [x]", replace_all=True)
         self.assertEqual(r.returncode, 2, r.stderr.decode())
+        self.assertIn(b"6 gates closed in one write", r.stderr)              # the ceiling: all six are seen
 
     def test_replace_all_of_the_bare_box_too(self):
         # row 2: `[ ]` → `[x]`
         f = ProjectFixture()
         r = _edit(f, "[ ]", "[x]", replace_all=True)
         self.assertEqual(r.returncode, 2, r.stderr.decode())
+        self.assertIn(b"6 gates closed in one write", r.stderr)
 
     def test_two_gates_ticked_bare_by_replace_all(self):
         # row 3: a file of two open gates — a bare batch of two
@@ -107,6 +109,44 @@ class WhenTheFileCannotShowTheEdit(unittest.TestCase):
         f = ProjectFixture(gates=["- [ ] “a” G1", "- [ ] “a” G2", "- [ ] “a” G3"])
         r = _edit(f, '- [ ] "a"', '- [x] "a"', replace_all=True)
         self.assertEqual(r.returncode, 2, r.stderr.decode())
+
+
+class AsTheEditToolMatches(unittest.TestCase):
+    """Impl round 1 (codex, opus Important), measured on the Edit tool itself (2026-10-23 05:20, scratchpad probes):
+    it tries `\\uXXXX` escapes as their characters, it deletes the newline after a text replaced by nothing, and with
+    curly and straight quotes read alike it replaces the file's own first spelling — the guard reads an edit the same
+    way, or the ticks the tool makes are not the ones it judges."""
+
+    def test_an_escaped_space_in_the_old_string(self):
+        # row 12: `- [ ]` (a backslash escape, as the hook receives it) matches every `- [ ]`
+        f = ProjectFixture()
+        r = _edit(f, "- [\\u0020]", "- [x]", replace_all=True)
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+
+    def test_a_deletion_takes_the_newline_after_it(self):
+        # row 13: deleting `[ ] TODO` everywhere joins `- ` and the next line — two gates born checked
+        f = ProjectFixture(gates=["- [ ] TODO", "[x] G1: x", "- [ ] TODO", "[x] G2: y"])
+        r = _edit(f, "[ ] TODO", "", replace_all=True)
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+
+    def test_the_files_first_spelling_is_the_one_replaced(self):
+        # row 14 (must-not): with the quotes read alike, the tool replaces the spelling it found first — one gate here,
+        # a single close; reading every spelling at once over-blocked it
+        f = ProjectFixture(gates=['- [ ] "a" "b" G1', "- [ ] “a” “b” G2", *G[:2]])
+        r = _edit(f, '- [ ] “a” "b"', '- [x] “a” "b"', replace_all=True)
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+
+    def test_a_multiedit_is_read_the_same_way(self):
+        # row 15 (opus): a MultiEdit's old_string with other quotes, or an escape, ticks two gates bare — blocked
+        f = ProjectFixture(gates=['- [ ] "a" G1', '- [ ] "a" G2', *G[:2]])
+        for edits in ([{"old_string": "- [ ] “a” G1", "new_string": "- [x] “a” G1"},
+                       {"old_string": "- [ ] “a” G2", "new_string": "- [x] “a” G2"}],
+                      [{"old_string": '- [\\u0020] "a" G1', "new_string": '- [x] "a" G1'},
+                       {"old_string": '- [\\u0020] "a" G2', "new_string": '- [x] "a" G2'}]):
+            with self.subTest(edits=edits[0]["old_string"]):
+                r = f.run_hook({"hook_event_name": "PreToolUse", "tool_name": "MultiEdit",
+                                "tool_input": {"file_path": str(f.task_file), "edits": edits}})
+                self.assertEqual(r.returncode, 2, r.stderr.decode())
 
 
 class TheDocsSayIt(unittest.TestCase):
