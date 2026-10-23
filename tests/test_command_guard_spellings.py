@@ -208,7 +208,8 @@ class PostPanelOne(unittest.TestCase):
                     "GIT_CONFIG=/tmp/x.cfg git c"):
             with self.subTest(cmd=cmd):
                 self.assertEqual(verdict(cmd), ("block", "git-config-unreadable"))
-        for cmd in ("GIT_TRACE=1 git status", "MY_GIT_CONFIG_COUNT=1 make", "/usr/bin/git status"):
+        # edited after post-panel run 2: `MY_GIT_CONFIG_COUNT=1 make` is refused now (row 26: the name anywhere)
+        for cmd in ("GIT_TRACE=1 git status", "/usr/bin/git status"):
             with self.subTest(cmd=cmd):
                 self.assertEqual(verdict(cmd)[0], "allow")
 
@@ -272,10 +273,12 @@ class PostPanelTwo(unittest.TestCase):
                     "GIT_CONFIG_COUNT+=1 GIT_CONFIG_KEY_0+=alias.c GIT_CONFIG_VALUE_0+='clean -fd' git c",
                     'env "GIT_CONFIG"_COUNT=1 git c', "env GIT\\_CONFIG_COUNT=1 git c",
                     "env GIT_CONFIG_{COUNT=1,KEY_0=alias.c} git c", 'env "$(echo GIT_CONFIG_COUNT)=1" git c',
-                    "export GIT_CONFIG_\\\nCOUNT=1; git c", "echo GIT_CONFIG_COUNT", "unset GIT_CONFIG_GLOBAL"):
+                    "export GIT_CONFIG_\\\nCOUNT=1; git c", "echo GIT_CONFIG_COUNT", "unset GIT_CONFIG_GLOBAL",
+                    "env -SGIT_CONFIG_COUNT=1 git c", "env -S'GIT_CONFIG_COUNT=1 git c'", 'env GIT_CONF""IG_COUNT=1 git c',
+                    "env $'GIT\\x5fCONFIG_COUNT'=1 git c", "MY_GIT_CONFIG_COUNT=1 make"):
             with self.subTest(cmd=cmd):
                 self.assertEqual(verdict(cmd), ("block", "git-config-unreadable"))
-        for cmd in ("MY_GIT_CONFIG_COUNT=1 make", "GIT_TRACE=1 git status", "echo git config"):
+        for cmd in ("GIT_TRACE=1 git status", "echo git config", "GIT_DIR=x git status"):
             with self.subTest(cmd=cmd):
                 self.assertEqual(verdict(cmd)[0], "allow")
 
