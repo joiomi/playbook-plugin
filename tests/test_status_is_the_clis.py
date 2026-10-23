@@ -137,8 +137,8 @@ class AMultiLineIntent(Project):
         self.assertIn("## Intent\nfix the thing\n", tm.read_text(encoding="utf-8"))
 
 
-class RoundOne(unittest.TestCase):
-    """Task 292's impl round 1 (opus, codex Important; agy, opus, grok Minor)."""
+class _HookRun(unittest.TestCase):
+    """The hook run with a chosen HOME, for the home-relative paths (rounds 1 and 2)."""
 
     def _home_fixture(self):
         f = ProjectFixture()
@@ -155,6 +155,11 @@ class RoundOne(unittest.TestCase):
             env["HOME"] = str(home)
         return subprocess.run([bash_or_skip(), str(HOOK)], input=__import__("json").dumps(payload).encode(),
                               cwd=f.proj, env=env, capture_output=True, timeout=60)
+
+
+
+class RoundOne(_HookRun):
+    """Task 292's impl round 1 (opus, codex Important; agy, opus, grok Minor)."""
 
     def test_a_home_relative_path(self):
         # row 15 (codex): `~/proj/.agent/tasks/001-thing/task.md` — the tool expands `~` (measured: Read did), the hook
@@ -201,6 +206,63 @@ class RoundOne(unittest.TestCase):
         r = f.run_hook({"hook_event_name": "PreToolUse", "tool_name": "Write",
                         "tool_input": {"file_path": path, "content": text}})
         self.assertEqual(r.returncode, 2, r.stderr.decode())
+
+
+class RoundTwo(_HookRun):
+    """Task 292's impl round 2 (opus, codex, sonnet Important): `~` with `..` or `./`, and a BOM before the marker."""
+
+    def test_a_home_relative_path_with_dot_segments(self):
+        # row 18: `~/jump/../proj/…` (jump outside, or missing) and `~/proj/.agent/tasks/001-thing/./task.md`
+        import tempfile
+        for shape in ("dotdot-outside", "dotdot-missing", "dot"):
+            with self.subTest(shape=shape):
+                f, home = self._home_fixture()
+                rel = str(f.task_file.relative_to(home))
+                if shape == "dot":
+                    path = "~/" + rel.replace("/001-thing/task.md", "/001-thing/./task.md")
+                else:
+                    if shape == "dotdot-outside":
+                        out = Path(tempfile.mkdtemp())
+                        self.addCleanup(__import__("shutil").rmtree, out, True)
+                        (home / "jump").symlink_to(out)
+                    path = "~/jump/../" + rel
+                r = self._run(f, {"hook_event_name": "PreToolUse", "tool_name": "Edit",
+                                  "tool_input": {"file_path": path, "old_string": "## Status\npending",
+                                                 "new_string": "## Status\ndone"}}, home=home)
+                self.assertEqual(r.returncode, 2, r.stderr.decode())
+
+
+class AnIntentAfterRoundTwo(Project):
+    def _new(self, *args):
+        r = self.cli("new", "feature", *args)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        return next((self.d / ".agent" / "tasks").glob("001-*")) / "task.md"
+
+    def test_a_bom_before_the_marker(self):
+        # row 19 (sonnet, codex Important): the readers skip a byte-order mark; the escape must look past it too
+        bom = chr(0xFEFF)
+        for intent in (bom + "## Status", bom + "- [x] a gate", " " + bom + "## Risk"):
+            with self.subTest(intent=repr(intent)):
+                self.setUp()
+                tm = self._new("thing", intent)
+                self.assertEqual(_live_status_headings(tm), 1)
+                self.assertEqual(_extract_status(tm), "pending")
+                lines = _physical_lines(tm.read_text(encoding="utf-8"))
+                self.assertTrue(lines[lines.index("## Intent") + 1].startswith("\\"))
+
+    def test_everyday_intents_keep_their_text(self):
+        # row 20 (opus, sonnet Minor): only what the readers take as structure is escaped
+        for intent in ("[WIP] x", "_foo_ bar", "1) fix it", "*x* first", "(a parenthesis)"):
+            with self.subTest(intent=intent):
+                self.setUp()
+                tm = self._new("thing", intent)
+                self.assertIn("## Intent\n" + intent + "\n", tm.read_text(encoding="utf-8"))
+
+    def test_the_list_shows_the_words(self):
+        # row 21 (sonnet Minor): `tasks list` shows an escaped intent without its backslash
+        from tasks.core import _extract_problem
+        tm = self._new("thing", "## Status")
+        self.assertEqual(_extract_problem(tm), "## Status")
 
 
 class AnIntentOrANameWithStructure(Project):
