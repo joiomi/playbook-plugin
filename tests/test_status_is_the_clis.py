@@ -232,6 +232,21 @@ class RoundTwo(_HookRun):
                 self.assertEqual(r.returncode, 2, r.stderr.decode())
 
 
+class PostPanelOne(_HookRun):
+    """Task 292's post-panel run 1 (codex Important, reproduced): a `~/` path through a link to the task directory."""
+
+    def test_a_home_relative_path_through_a_link_to_the_task_directory(self):
+        # row 22: `.agent/record-alias` → `.agent/tasks/001-thing`; the lane test reads the record's grandparent on
+        # the text of the path, so only the resolved reading of the expanded path names the lane
+        f, home = self._home_fixture()
+        (f.proj / ".agent" / "record-alias").symlink_to(f.task_file.parent)
+        path = "~/" + str((f.proj / ".agent" / "record-alias" / "task.md").relative_to(home))
+        r = self._run(f, {"hook_event_name": "PreToolUse", "tool_name": "Edit",
+                          "tool_input": {"file_path": path, "old_string": "## Status\npending",
+                                         "new_string": "## Status\ndone"}}, home=home)
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+
+
 class AnIntentAfterRoundTwo(Project):
     def _new(self, *args):
         r = self.cli("new", "feature", *args)
@@ -263,6 +278,12 @@ class AnIntentAfterRoundTwo(Project):
         from tasks.core import _extract_problem
         tm = self._new("thing", "## Status")
         self.assertEqual(_extract_problem(tm), "## Status")
+        # and past a byte-order mark, as the escape reads it (post-panel run 1, codex Minor)
+        self.setUp()
+        tm = self._new("thing", chr(0xFEFF) + "## Status")
+        shown = _extract_problem(tm)
+        self.assertFalse(shown.startswith("\\"), repr(shown))
+        self.assertIn("## Status", shown)
 
 
 class AnIntentOrANameWithStructure(Project):
