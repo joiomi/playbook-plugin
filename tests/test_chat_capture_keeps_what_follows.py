@@ -172,6 +172,23 @@ class AFenceEndsWhereTheFenceRulesSay(_Project):
         self.assertIn("build the importer\n``` \n", t)        # the touched message is kept, not taken for the CLI's
 
 
+    def test_a_closer_the_fence_rules_accept_with_a_bom_keeps_what_follows(self):
+        """Row 12 (impl round 2: codex, grok Important): the fence engine reads a closer behind a BOM; the walk finds
+        the close by asking the engine itself, so it stops there and the rulings and gate below survive."""
+        self.say("build the importer")
+        self.activate()
+        t = self.text()
+        i = t.index("build the importer\n") + len("build the importer\n")
+        self.tf.write_text(t[:i] + "﻿" + t[i:], encoding="utf-8")        # the closer: BOM + "```"
+        self.write_after_the_block(RULINGS + "\n```\na sample\n```\n")
+        before = _gate_counts(self.text())
+        self.say("and keep it simple")
+        self.activate()
+        t = self.text()
+        self.assertIn("OWNER-RULING-41: keep the CSV order", t)
+        self.assertEqual(_gate_counts(t), before)
+
+
 class NoBlockYet(_Project):
     def test_a_first_capture_goes_into_references_not_into_a_later_section(self):
         """Row 10 (impl round 1: opus, a pre-existing placement): with no block yet and `## Owner rulings` written
@@ -191,7 +208,61 @@ class NoBlockYet(_Project):
         self.assertNotIn("CHAT-WORDS-5", rulings)
 
 
+    def test_any_valid_references_heading_takes_the_first_capture(self):
+        """Row 13 (impl round 2: grok Important): `## References` is found the way every section writer finds an H2
+        (`_atx_h2_text`) — indented, tab-separated, with closing hashes — so the first capture goes into it, above the
+        rulings."""
+        from tasks.post_d6 import extract_owner_rulings
+        for spelling in ("## References ##", "##\tReferences", " ## References", "##  References"):
+            with self.subTest(heading=spelling):
+                self.tf.write_text(TASK.replace("## References", spelling), encoding="utf-8")
+                t = self.text()
+                i = t.index("\n---\n")
+                self.tf.write_text(t[:i] + "\n" + RULINGS + t[i:], encoding="utf-8")
+                self.log, self.n = "# Project Chat Log\n", 0
+                self.say("CHAT-WORDS-5 build the importer")
+                self.activate()
+                t = self.text()
+                self.assertLess(t.index("### Recent Chat"), t.index("## Owner rulings"))
+                self.assertNotIn("CHAT-WORDS-5", "\n".join(extract_owner_rulings(t)))
+
+    def test_with_no_references_heading_the_capture_stays_above_the_rulings(self):
+        """Row 14 (impl round 2: grok Important; opus m): a task with no `## References` heading — the capture still
+        goes above a `## Owner rulings` written before the first `---`, never inside it."""
+        from tasks.post_d6 import extract_owner_rulings
+        self.tf.write_text(TASK.replace("## References\n- context\n", "") , encoding="utf-8")
+        t = self.text()
+        i = t.index("\n---\n")
+        self.tf.write_text(t[:i] + "\n" + RULINGS + t[i:], encoding="utf-8")
+        self.say("CHAT-WORDS-6 build the importer")
+        self.activate()
+        t = self.text()
+        self.assertLess(t.index("### Recent Chat"), t.index("## Owner rulings"))
+        self.assertNotIn("CHAT-WORDS-6", "\n".join(extract_owner_rulings(t)))
+
+
 class TheHeadingIsTheHeading(_Project):
+    def test_an_indented_or_closed_heading_is_still_the_block(self):
+        """Row 15 (impl round 2: agy, sonnet, grok Minor): the block's heading is matched as an ATX heading — up to
+        three spaces of indent, closing hashes — so it is still replaced, under one heading."""
+        for spelling in ("   ### Recent Chat (auto-captured at activation — review and remove unrelated)",
+                         "### Recent Chat (auto-captured at activation — review and remove unrelated) ###"):
+            with self.subTest(heading=spelling):
+                self.tf.write_text(TASK, encoding="utf-8")
+                self.log, self.n = "# Project Chat Log\n", 0
+                self.say("OLD-MESSAGE-1")
+                self.activate()
+                self.tf.write_text(self.text().replace(
+                    "### Recent Chat (auto-captured at activation — review and remove unrelated)", spelling),
+                    encoding="utf-8")
+                self.log, self.n = "# Project Chat Log\n", 1
+                self.say("NEW-MESSAGE-2")
+                self.activate()
+                t = self.text()
+                self.assertEqual(t.count("Recent Chat (auto-captured"), 1)
+                self.assertNotIn("OLD-MESSAGE-1", t)
+                self.assertIn("NEW-MESSAGE-2", t)
+
     def test_a_heading_with_trailing_space_is_still_the_block(self):
         """Row 11 (impl round 1: agy, opus Minor): a heading that gained trailing whitespace is still the block —
         replaced, under one heading, not a second block below it."""
