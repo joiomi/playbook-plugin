@@ -263,7 +263,10 @@ write of a key that makes a later command destructive (`remote.<name>.push` / `.
 `clean.requireForce`, `include.path` / `includeIf.<cond>.path`) or a rename of a section into or out of one (`alias`,
 `remote…`, `clean`, `include…`) — `git config` is read only through the options git lists for it, so an abbreviation
 or an option the guard does not know refuses the command, and, as git does, its options end at the
-first argument that is not one (`git config alias.c x --get` writes) —, `curl|sh`,
+first argument that is not one (`git config alias.c x --get` writes) —, a git option before the subcommand that the
+guard does not know (`git-option-unreadable`: its arity is unknown, so it hides the subcommand; `--attr-source` is
+read, and the options that print and exit, `--version` / `--help` / `--man-path` / `--info-path` / `--list-cmds`,
+pass), `curl|sh`,
 `dd`/`mkfs` to a device, a DB `DROP`/`TRUNCATE` — before they run, because the sandbox contains filesystem
 blast radius but not outward/logical irreversibility, and judgment alone is not a
 guarantee. Git config held elsewhere — `~/.gitconfig`, the repository's config, an alias defined there — is not

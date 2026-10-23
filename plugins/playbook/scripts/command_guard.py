@@ -1172,7 +1172,10 @@ def _normalize_command_head(seg):
 # agent usage (impl panel round 1, opus #2). These are git's global options.
 _GIT_VALUE_SHORT = set("Cc")
 _GIT_VALUE_LONG = {"--git-dir", "--work-tree", "--namespace", "--exec-path",
-                   "--super-prefix", "--config-env"}
+                   "--super-prefix", "--config-env", "--attr-source"}
+_GIT_FLAG_SHORT = set("pPvh")
+# git's options that print and exit — no subcommand runs after them (`git -h`)
+_GIT_TERMINAL = {"--version", "-v", "--help", "-h", "--man-path", "--info-path"}
 _GIT_FLAG_LONG = {"--paginate", "--no-pager", "--bare", "--literal-pathspecs",
                   "--no-replace-objects", "--no-optional-locks", "--no-ext-diff",
                   "--no-lazy-fetch", "--no-advice", "--glob-pathspecs",
@@ -1204,8 +1207,10 @@ def _git_after_globals(args):
             if letters[0] in _GIT_VALUE_SHORT:
                 i += 1 if letters[1:] else 2
                 continue
-            i += 1
-            continue
+            if all(ch in _GIT_FLAG_SHORT for ch in letters):
+                i += 1
+                continue
+            break                                       # an unknown short option: it stays first (refused)
         break
     return list(args[i:])
 
@@ -1464,6 +1469,10 @@ def _segment_checks(seg):
         return ("rm-rf-dangerous-target", "recursive force-delete of a dangerous path")
     if head == "git" and len(values) > 1:
         verb, args = values[1], values[2:]
+        # an option the guard's table does not know is left first: its arity is unknown, so the subcommand behind it
+        # cannot be found — refused (task 293: `git --attr-source=HEAD clean -fd` reached no rule)
+        if verb.startswith("-") and verb not in _GIT_TERMINAL and not verb.startswith("--list-cmds"):
+            return ("git-option-unreadable", "a git option the guard does not know hides which subcommand runs")
         short = "".join(a[1:] for a in args
                         if a.startswith("-") and not a.startswith("--"))
         # `git push --force --force-with-lease` still force-pushes: the presence
