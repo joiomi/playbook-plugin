@@ -23,7 +23,7 @@ from tests.test_review_evidence_records_only import Closing  # noqa: E402
 from tasks.core import close_decision  # noqa: E402
 
 
-class AHeadingDeleted(Closing):
+class _Deleting(Closing):
     def _without_the_heading(self):
         self.task("feature", risk="assertive")
         t = self.task_md.read_text(encoding="utf-8")
@@ -33,6 +33,8 @@ class AHeadingDeleted(Closing):
         self.g("add", "-A")
         self.g("commit", "-qm", "the Risk heading deleted")
 
+
+class AHeadingDeleted(_Deleting):
     def test_a_task_without_the_heading_does_not_close_unreviewed(self):
         # row 1 (the bug): every gate ticked with a note, no judge record, the `## Risk` heading deleted
         self._without_the_heading()
@@ -79,6 +81,61 @@ class RoundOne(Closing):
                 self.assertEqual(r.returncode == 0, closes, out)
 
 
+class RoundTwo(_Deleting):
+    """Task 294's impl round 2 (codex, opus, sonnet, agy Important): the other ways not classifying lowered the bar."""
+
+    def _record(self):
+        (self.task_dir / "judge-single.md").write_text(
+            "## Single-judge impl review — 2026-10-23 11:00 UTC (`codex:sol`)\n\nRecorded here by the CLI.\n",
+            encoding="utf-8")
+        self.g("add", "-A")
+        self.g("commit", "-qm", "a single-judge record")
+
+    def test_the_seeded_policy_still_names_the_field(self):
+        # row 7 (agy, codex, grok): under the seeded default the panel's block also names the missing field
+        self.config(panel_required_for=["assertive", "irreversible"])
+        self._without_the_heading()
+        r, out = self.close()
+        self.assertEqual(r.returncode, 1, out)
+        self.assertIn("the heading", out)
+
+    def test_a_panel_listed_for_any_class_holds_an_unset_risk(self):
+        # row 8 (codex, opus): `panel_required_for: ["reversible"]` — an unclassified task needs the panel too
+        self.config(panel_required_for=["reversible"])
+        self._without_the_heading()
+        self._record()
+        r, out = self.close()
+        self.assertEqual(r.returncode, 1, out)
+
+    def test_an_unset_risk_runs_every_class_verify(self):
+        # row 9 (opus, sonnet): `verify.<class>` extras run for an unclassified close — `verify.assertive` here fails
+        self.config(verify={"_always": ["true"], "assertive": ["false"]})
+        self._without_the_heading()
+        self._record()
+        r, out = self.close()
+        self.assertEqual(r.returncode, 1, out)
+        self.assertIn("verify.assertive", out)
+
+    def test_a_classified_reversible_runs_its_own_verify_only(self):
+        # row 9's must-not: a reversible task runs `_always` and `verify.reversible`, not the assertive extras
+        self.config(verify={"_always": ["true"], "assertive": ["false"]})
+        self.task("feature", risk="reversible")
+        r, out = self.close()
+        self.assertEqual(r.returncode, 0, out)
+
+
+class ClassifyingIsTheWayOut(_Deleting):
+    def test_restoring_the_field_closes_it(self):
+        # row 3 widened (agy Minor): the heading put back with a class closes the task without --force
+        self._without_the_heading()
+        t = self.task_md.read_text(encoding="utf-8").replace("## Intent", "## Risk\nreversible\n\n## Intent", 1)
+        self.task_md.write_text(t, encoding="utf-8")
+        self.g("add", "-A")
+        self.g("commit", "-qm", "the field restored")
+        r, out = self.close()
+        self.assertEqual(r.returncode, 0, out)
+
+
 class ThePolicy(unittest.TestCase):
     def test_unclassified_needs_evidence_whatever_the_file_holds(self):
         # row 2: `close_decision` has one answer for an unclassified risk — the high-consequence bar
@@ -102,6 +159,9 @@ class TheDocsSayIt(unittest.TestCase):
         g = next(g for g in ledger["guarantees"] if g["id"] == "PB-RISK-CLASSIFY")
         self.assertNotIn("keeps the warning-only path", g["statement"])
         self.assertIn("a task with no Risk heading is held to the same bar", g["statement"])
+        # row 10 (sonnet Important): the freshness passages no longer say an unset risk escapes the seeded panel
+        self.assertNotIn("`unclassified` is caught only where policy also requires a panel", doc)
+        self.assertNotIn("`unclassified` does not require a panel", doc)
 
 
 if __name__ == "__main__":
