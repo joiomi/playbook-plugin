@@ -91,9 +91,9 @@ class TheFreedomsStay(unittest.TestCase):
 
 class WhenTheFileCannotShowTheEdit(unittest.TestCase):
     def test_an_old_string_the_guard_cannot_find_does_not_tick(self):
-        # row 8 (hostile; edited after impl round 2, opus): an old_string the guard cannot find in a readable file
-        # either fails at the tool or matches by a rule the guard does not model — so an edit that ticks a box there
-        # is refused, notes or not, and one that ticks nothing passes
+        # row 8 (hostile; edited after impl round 2, opus, and post-panel run 1, codex): an old_string the guard cannot
+        # find in a readable file either fails at the tool or matches by a rule the guard does not model — so the edit
+        # is refused whatever it changes, notes or not, a box ticked or none
         lines = ["- [ ] G8: not in the file", "- [ ] G9: nor this", "- [ ] G10: nor this one"]
         for note in ("", NOTE):
             with self.subTest(note=bool(note)):
