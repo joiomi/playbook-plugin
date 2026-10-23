@@ -107,21 +107,29 @@ class RoundTwo(_Deleting):
         r, out = self.close()
         self.assertEqual(r.returncode, 1, out)
 
+    _EVERY_CLASS = {"_always": ["true"], "reversible": ["test reversible = extra"],
+                    "assertive": ["test assertive = extra"], "irreversible": ["test irreversible = extra"]}
+
     def test_an_unset_risk_runs_every_class_verify(self):
-        # row 9 (opus, sonnet): `verify.<class>` extras run for an unclassified close — `verify.assertive` here fails
-        self.config(verify={"_always": ["true"], "assertive": ["false"]})
+        # row 9 (opus, sonnet; post-panel run 1, codex Minor): every class's `verify.<class>` extras run for an
+        # unclassified close — each fails here, and the close prints each one
+        self.config(verify=self._EVERY_CLASS)
         self._without_the_heading()
         self._record()
         r, out = self.close()
         self.assertEqual(r.returncode, 1, out)
-        self.assertIn("[FAIL exit 1] false", out)                    # the assertive extra ran, and failed
+        for cls in ("reversible", "assertive", "irreversible"):
+            self.assertIn(f"[FAIL exit 1] test {cls} = extra", out)
 
     def test_a_classified_reversible_runs_its_own_verify_only(self):
-        # row 9's must-not: a reversible task runs `_always` and `verify.reversible`, not the assertive extras
-        self.config(verify={"_always": ["true"], "assertive": ["false"]})
+        # row 11, row 9's must-not: a reversible task runs `_always` and its own `verify.reversible`, not the others
+        self.config(verify=dict(self._EVERY_CLASS, reversible=["true reversible-extra"]))
         self.task("feature", risk="reversible")
         r, out = self.close()
         self.assertEqual(r.returncode, 0, out)
+        self.assertIn("[PASS] true reversible-extra", out)
+        self.assertNotIn("test assertive = extra", out)
+        self.assertNotIn("test irreversible = extra", out)
 
 
 class ClassifyingIsTheWayOut(_Deleting):
