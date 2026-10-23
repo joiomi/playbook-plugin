@@ -4837,10 +4837,15 @@ def _one_plain_line(text: str) -> str:
     for past what a reader skips before it — spaces and invisible format characters such as a byte-order mark (impl
     round 2, sonnet, codex: `<BOM>## Status` was a second live heading)."""
     line = _LINE_BREAKS.sub(" ", text).strip(" \t")
-    lead = line
-    while lead and (lead[0] in " \t" or unicodedata.category(lead[0]) == "Cf"):
-        lead = lead[1:]
-    return "\\" + line if _STRUCTURE_START.match(lead) else line
+    return "\\" + line if _STRUCTURE_START.match(_past_invisible(line)) else line
+
+
+def _past_invisible(text: str) -> str:
+    """`text` past what a reader skips before a structure marker: spaces, tabs and invisible format characters."""
+    i = 0
+    while i < len(text) and (text[i] in " \t" or unicodedata.category(text[i]) == "Cf"):
+        i += 1
+    return text[i:]
 
 
 def _display_title(name: str) -> str:
@@ -5174,7 +5179,7 @@ def _extract_problem(task_file: Path) -> str:
                 text = s
                 if text.startswith("(") and text.endswith(")"):
                     text = text[1:-1]
-                if text.startswith("\\") and _STRUCTURE_START.match(text[1:].lstrip(" \t")):
+                if text.startswith("\\") and _STRUCTURE_START.match(_past_invisible(text[1:])):
                     text = text[1:]                     # the escape `tasks new` added (task 292): show the words
                 return text
         return ""
