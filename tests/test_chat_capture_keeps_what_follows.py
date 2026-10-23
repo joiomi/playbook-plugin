@@ -218,11 +218,12 @@ class NoBlockYet(_Project):
                 self.tf.write_text(TASK.replace("## References", spelling), encoding="utf-8")
                 t = self.text()
                 i = t.index("\n---\n")
-                self.tf.write_text(t[:i] + "\n" + RULINGS + t[i:], encoding="utf-8")
+                self.tf.write_text(t[:i] + "\n## Notes\nNOTE-2\n" + RULINGS + t[i:], encoding="utf-8")
                 self.log, self.n = "# Project Chat Log\n", 0
                 self.say("CHAT-WORDS-5 build the importer")
                 self.activate()
                 t = self.text()
+                self.assertLess(t.index("### Recent Chat"), t.index("## Notes"))     # in References itself
                 self.assertLess(t.index("### Recent Chat"), t.index("## Owner rulings"))
                 self.assertNotIn("CHAT-WORDS-5", "\n".join(extract_owner_rulings(t)))
 
