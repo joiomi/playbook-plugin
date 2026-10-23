@@ -98,6 +98,13 @@ class WhenTheFileCannotShowTheEdit(unittest.TestCase):
         r = _edit(ProjectFixture(), "\n".join(lines), "\n".join(checked(ln, NOTE) for ln in lines))
         self.assertEqual(r.returncode, 0, r.stderr.decode())
 
+    def test_curly_quotes_do_not_hide_a_replace_all(self):
+        # row 11 (hostile; mine, before the judge): the gates hold straight quotes, the old_string curly ones — the
+        # Edit tool still matches all three; read with the quotes made alike, the whole file shows the three ticks
+        f = ProjectFixture(gates=['- [ ] "a" G1', '- [ ] "a" G2', '- [ ] "a" G3'])
+        r = _edit(f, "- [ ] “a”", "- [x] “a”", replace_all=True)
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+
 
 class TheDocsSayIt(unittest.TestCase):
     def test_the_docs_and_the_ledger_say_an_edit_is_judged_on_the_whole_file(self):
