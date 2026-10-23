@@ -123,7 +123,40 @@ class FindingsLand(unittest.TestCase):
         code = self._impl_review(_stdout_with_review(REVIEW))
         self.assertEqual(code, 0)
         self.assertIn("does a thing wrong", tf.read_text(encoding="utf-8"))
-        self.assertFalse((self.tdir / "judge-single.md").exists())
+        # task 290 (its impl round 1): and the CLI records it in judge-single.md — the heading and where the
+        # findings went, never the review's text a second time
+        jm = (self.tdir / "judge-single.md").read_text(encoding="utf-8")
+        self.assertIn("## Single-judge impl review — ", jm)
+        self.assertIn("agy:gemini-3.8-flash-high", jm)
+        self.assertIn("task.md", jm)
+        self.assertNotIn("does a thing wrong", jm)
+
+    def test_a_real_review_on_a_full_task_is_review_evidence(self):
+        # task 290, impl round 1 (agy Critical; opus, sonnet, codex): a tick is no evidence, and the review's findings
+        # land in task.md on a full template — without the CLI's record a real review counted for nothing
+        from tasks.core import has_review_evidence
+        tf = self._task(with_impl_section=True)
+        self.assertFalse(has_review_evidence(tf, impl_only=True))
+        self.assertEqual(self._impl_review(_stdout_with_review(REVIEW)), 0)
+        self.assertTrue(has_review_evidence(tf, impl_only=True))
+
+    def test_the_close_accepts_a_full_task_review_end_to_end(self):
+        # task 290, impl round 1: an assertive task with its `## Implementation Review` section, no panel required
+        tf = self._task(with_impl_section=True)
+        tf.write_text(tf.read_text(encoding="utf-8").replace("## Risk\nreversible", "## Risk\nassertive")
+                      .replace("- [ ] review gate", "- [x] review gate\n  - the review ran"), encoding="utf-8")
+        (self.agent / "config.json").write_text(json.dumps({"panel_required_for": []}), encoding="utf-8")
+        env = dict(os.environ, PYTHONPATH=str(ROOT / "plugins" / "playbook"), PLAYBOOK_SESSION_ID="pid-290")
+        env.pop("BASH_ENV", None)
+        run = lambda *a: subprocess.run([sys.executable, "-m", "tasks.cli", *a], cwd=self.project, env=env,
+                                        capture_output=True, text=True, timeout=120)
+        self.assertEqual(run("work", "042").returncode, 0)
+        r = run("work", "done")
+        self.assertNotEqual(r.returncode, 0, r.stdout)                # a tick, no review: blocked
+        self.assertEqual(self._impl_review(_stdout_with_review(REVIEW)), 0)
+        r = run("work", "done")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("done", tf.read_text(encoding="utf-8").split("## Status\n", 1)[1].split("\n", 1)[0])
 
     def test_a_review_in_judge_single_md_is_review_evidence_for_the_close(self):
         # Task 138 G1-5 (codex-high): has_review_evidence read judge.md and task.md only, so a
