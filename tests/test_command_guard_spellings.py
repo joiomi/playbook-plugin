@@ -287,7 +287,8 @@ class PostPanelTwo(unittest.TestCase):
         for cmd in ("git config alias.c 'clean -fd' --get", "git config alias.c x --list",
                     "git config remote.origin.push +main --unset", "git config set alias.c x --get",
                     "git config --file cfg alias.c x -l",
-                    "git config alias.c 'clean -fd' --get; git c"):
+                    "git config alias.c 'clean -fd' --get; git c",
+                    "git config set alias.c -x", "git config alias.c -fd"):          # git writes the value `-x`
             with self.subTest(cmd=cmd):
                 self.assertEqual(verdict(cmd), ("block", "git-config-dangerous"))
         for cmd in ("git config --get alias.c", "git config get --all alias.c", "git config user.name x --get",
