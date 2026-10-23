@@ -103,6 +103,32 @@ class WhatFollowsTheBlockStays(_Project):
         self.assertIn("OWNER-RULING-41: keep the CSV order", self.text())
 
 
+class WhatIsNotAMessageStays(_Project):
+    def test_a_quote_that_only_looks_like_a_message_stays(self):
+        """Row 6: only the capture's exact message shape is the block's own — a `**[M…]** [YYYY-MM-DD HH:MM:SS]` line
+        with a fence of text under it. An agent's quote of a message in another shape, right under the block, stays."""
+        self.say("build the importer")
+        self.activate()
+        self.write_after_the_block("\n**[M001]** [yesterday] he said: QUOTE-31 keep the CSV order\n")
+        self.say("another message")
+        self.activate()
+        self.assertIn("**[M001]** [yesterday] he said: QUOTE-31 keep the CSV order", self.text())
+
+    def test_an_older_unfenced_block_is_kept_under_one_heading(self):
+        """Row 7: a block in the older, unfenced format is not taken for captured messages: its lines stay, below the
+        new capture, under one heading (the writer fails toward keeping)."""
+        t = self.text()
+        i = t.index("\n---\n")
+        self.tf.write_text(t[:i] + "\n### Recent Chat (auto-captured at activation — review and remove unrelated)\n\n"
+                           "- **[M007]** [2026-10-13 04:32:52] \"LEGACY-LINE-9: I'm awake.\"\n" + t[i:], encoding="utf-8")
+        self.say("a new message")
+        self.activate()
+        t = self.text()
+        self.assertIn("LEGACY-LINE-9: I'm awake.", t)
+        self.assertIn("a new message", t)
+        self.assertEqual(t.count("### Recent Chat"), 1)
+
+
 class TheBlockIsStillReplaced(_Project):
     def test_the_new_capture_replaces_the_old_messages(self):
         """Row 4: the block's own messages are replaced, under one heading (what an activation is for)."""
