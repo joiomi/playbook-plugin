@@ -4952,7 +4952,7 @@ def create_task(project_path: Path, name: str, task_type: str | None = None,
     (its other spaces are kept), so an intent such as `fix\\n## Status\\ndone` adds no heading.
     """
     if intent_text:
-        intent_text = re.sub(r"[\r\n\v\f\x1c\x1d\x1e\x85  ]+", " ", intent_text)
+        intent_text = re.sub(r"[\r\n\v\f\x1c\x1d\x1e\x85\u2028\u2029]+", " ", intent_text)
     # Creating a task in the fresh-clone shape would mint a root `.agent/tasks/`
     # — and because a root tasks dir is itself a legitimate lane, that single
     # mkdir permanently converts the guarded shape into an "allowed mixed

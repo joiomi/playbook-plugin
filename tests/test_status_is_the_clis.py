@@ -106,6 +106,10 @@ class TheOtherEditsPass(unittest.TestCase):
                                + "\n## Notes\n```text\n## Status\nblocked\n```\n", encoding="utf-8")
         r = _edit(f, f.task_file, "```text\n## Status\nblocked\n```", "```text\n## Status\ndone\n```")
         self.assertEqual(r.returncode, 0, r.stderr.decode())
+        # and a new fenced example of the heading is no live heading added (my mutant M3)
+        g = ProjectFixture()
+        r = _edit(g, g.task_file, "## Work Plan", "## Work Plan\n\n```text\n## Status\ndone\n```")
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
 
     def test_a_task_md_of_another_project(self):
         # row 9 (must-not): the guard is for this project's records
