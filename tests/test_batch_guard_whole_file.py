@@ -74,6 +74,12 @@ class TheFreedomsStay(unittest.TestCase):
         r = _edit(f, old, new)
         self.assertEqual(r.returncode, 0, r.stderr.decode())
 
+    def test_a_replace_all_that_ticks_one_gate(self):
+        # row 10 (must-not): the gate's text also sits in a quote — two replacements, one gate: a single close
+        f = ProjectFixture(gates=[G[0], "> " + G[0], *G[1:]])
+        r = _edit(f, G[0], checked(G[0]), replace_all=True)
+        self.assertEqual(r.returncode, 0, r.stderr.decode())
+
     def test_an_edit_elsewhere_in_task_md(self):
         # row 7 (must-not)
         f = ProjectFixture()
