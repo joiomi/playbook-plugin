@@ -1686,10 +1686,11 @@ def _any_risk_heading_offered(lines: "list[str]") -> bool:
     Fails STRICT: a `## Risk` hidden by a >=4-col indent, a NBSP, a closing-hash,
     or an UNCLOSED fence still means the gate was OFFERED, so the close is held to
     the high bar (extract_risk degrades such a hidden heading to unclassified \u2192
-    block) rather than the pre-1.5.0 lenient path (opus CRITICAL: V4 had let an
-    indented real `## Risk` read as legacy-absent). The fence-only view
+    block) rather than read as absent (opus CRITICAL: V4 had let an indented real
+    `## Risk` read as legacy-absent; since task 294 the close no longer asks this
+    reader — absent and unset are held to the same bar). The fence-only view
     (`track_indented_code=False`) is deliberate: a closed FENCE example stays
-    documentation (lenient, test_fenced_risk_example_does_not_block_a_legacy_close),
+    documentation (test_a_fenced_risk_example_does_not_block_a_classified_close),
     but an indented heading is an ambiguous hide and must block."""
     fenced_only = {i for i, f in enumerate(
         _iter_fenced_flags(lines, unclosed_is_live=True, track_indented_code=False))
@@ -1829,8 +1830,8 @@ def _has_unclosed_fence(lines: "list[str]") -> bool:
     parse is UNCERTAIN. The two fail directions disagree exactly here: the
     fail-closed pass fences the opener's remainder through EOF, the fail-open pass
     does not, so any divergence between them is an unclosed fence. Used by the
-    risk close-gate (V2) to fail toward STRICT on a malformed task.md rather than
-    letting a buried `## Risk` masquerade as a pre-1.5.0 legacy task."""
+    risk readers (V2) to fail toward STRICT on a malformed task.md rather than
+    letting a buried `## Risk` masquerade as an absent one."""
     closed = _iter_fenced_flags(lines, unclosed_is_live=True)
     strict = _iter_fenced_flags(lines, unclosed_is_live=False)
     return closed != strict
@@ -2017,26 +2018,21 @@ def _risk_from_lines(lines: "list[str]") -> str:
 def has_risk_section(task_file) -> bool:
     """True when the task.md carries a `## Risk` HEADING at all.
 
-    This is the discriminator that lets `unclassified` fail closed without
-    breaking history, and it needs no new metadata: pre-1.5.0 templates have no
-    Risk section, so a missing heading means the gate was never offered to
-    whoever wrote the task, while a present-but-unset heading means it was
-    offered and skipped. Those are different facts and the close gate treats
-    them differently (see close_decision).
+    A presence reader only. It used to be the close gate's discriminator — a
+    missing heading took a lenient path kept for pre-1.5.0 tasks — and since task
+    294 the close no longer asks it: absent and unset are one fact, held to the
+    same bar (`close_decision`), because deleting the heading dropped the review.
 
     Deliberately LOOSER than extract_risk's exact `## Risk` match: any `## Risk…`
     heading counts as offered, so the malformed one-liner `## Risk: assertive`
     — which extract_risk correctly degrades to `unclassified` — lands on the
-    strict side rather than being mistaken for a pre-1.5.0 task. A skipped gate
-    and a botched gate are the same fact for this purpose. Erring toward strict
-    costs one word or a `--force --reason`; erring the other way is the fail-open
-    this function exists to remove.
+    strict side rather than being mistaken for an absent field. A skipped gate
+    and a botched gate are the same fact for this purpose.
 
     Heading-only by design, and only THIS heading: prose that mentions risk must
     not silently promote a task to the strict bar, `### Risk` is a different
     level, and `## Risk Routing` is the light template's gate checklist rather
-    than the classification field. Unreadable file → False: fail toward the
-    documented legacy behavior, never toward inventing a block from an I/O error.
+    than the classification field. Unreadable file → False.
     """
     try:
         lines = _physical_lines(read_task_text(Path(task_file)))
@@ -3988,7 +3984,10 @@ def resolve_panel_required(project_path: Path, risk: str) -> bool:
               "requirement; fix it to restore the close gate.", file=_sys.stderr)
         return False
     if isinstance(raw, list):
-        return risk in raw or "all" in raw
+        # an unclassified risk is held to the strictest class's bar (task 294, its impl round 1, opus): with a
+        # high-consequence class under the panel, not classifying must not lower the bar to a single judge
+        return (risk in raw or "all" in raw
+                or (risk == DEFAULT_RISK and any(c in raw for c in HIGH_CONSEQUENCE)))
     return False
 
 
@@ -4180,9 +4179,9 @@ def close_decision(*, risk: str, verify_declared: bool, verify_failed: bool,
         return False, (
             "## Risk was left unclassified, so the risk-keyed review requirement "
             "cannot be evaluated — an unset gate is held to the high-consequence "
-            "bar rather than skipped. Set ## Risk to exactly one word "
-            "(reversible / irreversible / assertive), or supply impl-review "
-            "evidence, or override with --force --reason."
+            "bar rather than skipped. Set ## Risk — the heading, then exactly one "
+            "word on the next line (reversible / irreversible / assertive) — or "
+            "supply impl-review evidence, or override with --force --reason."
         )
     return True, ""
 

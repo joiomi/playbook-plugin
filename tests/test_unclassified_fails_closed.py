@@ -9,14 +9,11 @@ releases ago; today the cheapest path through the strictest gate in the system i
 to leave one field blank — and the field is filled in by the same agent the gate
 exists to constrain.
 
-The discriminator is already on disk and needs no new metadata: pre-1.5.0
-templates have NO `## Risk` section at all. So:
-
-  * section ABSENT  → legacy task, the gate was never offered → warn and pass
-                      (the 1.5.31 behavior, deliberately preserved);
-  * section PRESENT but unset → the agent was offered the gate and skipped it
-                      → treat as high-consequence and BLOCK without review
-                      evidence, exactly like assertive/irreversible.
+Since 1.5.32 a PRESENT but unset section was treated as high-consequence and
+blocked without review evidence, while an ABSENT section — a pre-1.5.0 task —
+still warned and passed. Task 294 retired that carve-out: deleting the heading
+was a way past the review, and a fresh project has no pre-1.5.0 task, so an
+absent and an unset `## Risk` are one fact and BLOCK alike.
 
 `--force --reason` remains the one blunt hatch (A8, unchanged).
 

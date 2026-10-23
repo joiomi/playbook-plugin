@@ -2448,6 +2448,7 @@ def cmd_freehand(cmd_args):
         print("No active task — creating freehand session...")
         from tasks.core import _slugify
         from tasks.registry import RegistryUnreadable, create_task_dir, unreadable_message
+        from tasks.template import risk
         # Write minimal template — Freehand gate is first unchecked gate
         from datetime import datetime, timezone
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -2456,6 +2457,7 @@ def cmd_freehand(cmd_args):
             return (
                 f"# {num:03d} - Freehand\n\n"
                 f"## Status\nin_progress\n\n"
+                f"{risk()}\n\n"                      # the field every creator offers (task 294, its round 1)
                 f"## Intent\n(freehand session — intent determined during work)\n\n"
                 f"## Work Plan\n\n"
                 f"### Freehand\n"

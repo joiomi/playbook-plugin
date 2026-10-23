@@ -364,8 +364,11 @@ chosen by the same agent the gate constrains. Since 1.5.32 an unset field
 done` unless there is impl-review evidence or `--force --reason`, exactly as for
 `assertive` / `irreversible`. Since task 294 a task with no `## Risk` heading at all is held to the same bar: it
 used to close on a warning, a path kept for pre-1.5.0 tasks, so deleting the
-heading dropped the review — and a fresh project has no such task. A close that
-clears the bar another way still prints the warning naming what was skipped.
+heading dropped the review — and a fresh project has no such task. The bar is the
+strictest class's: when `panel_required_for` lists `assertive` or `irreversible`, an
+unclassified task needs the panel too, so not classifying never lowers an assertive
+task's bar to a single judge. A close that clears the bar another way still prints
+the warning naming what was skipped.
 
 Review evidence is a record the CLI wrote: judge.md whose newest round is an impl
 round with verdict PASS, or judge-single.md's `## Single-judge impl review`
