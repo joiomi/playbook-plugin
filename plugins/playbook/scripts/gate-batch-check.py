@@ -88,8 +88,14 @@ end-of-task ticking. Do the next piece of work, then close its gates."""
 UNFOUND_MSG = """\
 BLOCKED: the guard cannot find this edit's old_string in task.md (read as the Edit
 tool reads it: the text itself, curly and straight quotes alike, \\uXXXX escapes as
-their characters), so it cannot see which gates the edit would tick.
+their characters), so it cannot see what the edit changes — its gates, its Status.
 Re-read task.md and copy the exact text."""
+
+STATUS_MSG = """\
+BLOCKED: `## Status` is the CLI's — this edit {why}.
+Close a task with `.claude/bin/tasks work done`; pause one that waits for the owner
+with `.claude/bin/tasks blocked "<reason>"`; resume it with `.claude/bin/tasks work <N>`.
+The rest of task.md is edited as before."""
 
 
 def _apply_as_the_tool(text: str, o: str, n: str, replace_all: bool) -> "str | None":
@@ -109,6 +115,73 @@ def _apply_as_the_tool(text: str, o: str, n: str, replace_all: bool) -> "str | N
         if nn == "" and not oo.endswith("\n") and oo + "\n" in text:
             oo += "\n"
         return text.replace(oo, nn) if replace_all else text.replace(oo, nn, 1)
+    return None
+
+
+def _the_call(tool: str, ti: dict, file_path: str) -> "tuple[str, str] | str | None":
+    """The file before and after the tool call, as the tool would leave it, as `(old, new)`; "unplaced" when the file
+    can be read but an edit's `old_string` cannot be found in it — the tool fails that edit, or matches it by a rule
+    this does not model, and a fragment cannot show what it changes (task 291's impl round 2, opus, and its post-panel
+    run 1, codex: `[ ] é` mid-line against the escape text backslash-u-00e9); None for a tool this does not judge.
+    An Edit is judged on the whole file it leaves (task 291, audit 1 G1 and item 9), a MultiEdit after all its edits
+    (task 166), a Write against the file on disk. Only an unreadable file's Edit is judged on its fragments."""
+    if tool == "Edit":
+        o, n = str(ti.get("old_string", "")), str(ti.get("new_string", ""))
+        try:
+            whole = _read_untranslated(file_path)
+        except OSError:
+            return o, n
+        after = _apply_as_the_tool(whole, o, n, bool(ti.get("replace_all", False)))
+        if after is not None:
+            return whole, after
+        return "unplaced" if o else (o, n)
+    if tool == "Write":
+        try:
+            old = _read_untranslated(file_path)
+        except OSError:
+            old = ""
+        return old, str(ti.get("content", ""))
+    if tool == "MultiEdit":
+        try:
+            old = _read_untranslated(file_path)
+        except OSError:
+            old = ""
+        new = old
+        edits = ti.get("edits")
+        for e in edits if isinstance(edits, list) else ():   # not a list of edits: the text as it was, passed
+            if not isinstance(e, dict):
+                continue
+            o, n = str(e.get("old_string", "")), str(e.get("new_string", ""))
+            if not o:
+                if not new:                             # the first edit of a new file is its content
+                    new = n
+                continue
+            after = _apply_as_the_tool(new, o, n, bool(e.get("replace_all")))
+            if after is None:
+                return "unplaced"
+            new = after
+        return old, new
+    return None
+
+
+def _status_change(old: str, new: str) -> "str | None":
+    """How the call changes the task's `## Status` as the CLI reads it (`core._status_from_lines`: the last live
+    heading's value — task 043's one rule), or None: another value read, or a live `## Status` heading added (task
+    292, audit 1 G4 and item 4). The CLI's own reader, so the guard and `tasks list` cannot disagree."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from tasks.core import _atx_h2_text, _iter_fenced_flags, _physical_lines, _status_from_lines
+
+    def read(text: str) -> "tuple[str, int]":
+        lines = _physical_lines(text)
+        flags = _iter_fenced_flags(lines, unclosed_is_live=False)
+        heads = sum(1 for i, ln in enumerate(lines) if not flags[i] and _atx_h2_text(ln) == "## Status")
+        return _status_from_lines(lines), heads
+
+    (was, was_heads), (now, now_heads) = read(old), read(new)
+    if now != was:
+        return f"makes the status read `{now}` where the CLI wrote `{was}`"
+    if now_heads > was_heads:
+        return "adds a live `## Status` heading"
     return None
 
 
@@ -303,64 +376,20 @@ def main() -> int:
     d = json.load(sys.stdin)
     ti = d.get("tool_input", {}) or {}
 
-    if tool == "Edit":
-        # Judged on the whole file it leaves, as a Write and a MultiEdit are (task 291, audit 1 G1: `replace_all` of
-        # `- [ ]` → `- [x]` is one empty gate as a fragment, and a fragment from mid-line hides a tick — item 9). Only
-        # an unreadable file's edit is judged on its fragments, as before; one the guard cannot find is refused below.
-        o = str(ti.get("old_string", ""))
-        n_ = str(ti.get("new_string", ""))
-        try:
-            whole = _read_untranslated(file_path)
-        except OSError:
-            whole = None
-        after = None if whole is None else _apply_as_the_tool(whole, o, n_, bool(ti.get("replace_all", False)))
-        if whole is not None and after is not None:
-            old, new = whole, after
-        elif whole is not None and o:
-            # readable, and the guard cannot find the text: the tool fails the edit, or matches it by a rule this does
-            # not model (impl round 2, opus) — and a fragment cannot show what such an edit ticks (post-panel run 1,
-            # codex: `[ ] é` against `é` text mid-line) — refused, whatever it changes
-            print(UNFOUND_MSG)
-            _journal_block("unfound-old-string")
+    call = _the_call(tool, ti, file_path)
+    if call is None:
+        return 0
+    if call == "unplaced":
+        print(UNFOUND_MSG)
+        _journal_block("unfound-old-string")
+        return 2
+    old, new = call
+    if "--status" in args:                              # Guard 0.6 (task 292): only the `## Status` check
+        why = _status_change(old, new)
+        if why:
+            print(STATUS_MSG.format(why=why))
+            _journal_block("status-edit")
             return 2
-        else:
-            old, new = o, n_
-    elif tool == "Write":
-        new = str(ti.get("content", ""))
-        try:
-            old = _read_untranslated(file_path)
-        except OSError:
-            old = ""
-    elif tool == "MultiEdit":
-        # Judged like a Write (task 166): the file as it is on disk against the
-        # file as the edits, applied in order, leave it — so a gate ticked across
-        # two edits of one call, or rewritten by one edit and ticked by the next,
-        # is seen as what it is. An edit whose `old_string` is absent changes
-        # nothing here (the tool itself fails it); a payload that is not a list
-        # of edits leaves the text as it was, and the guard passes it — its own
-        # errors never block an edit. Each edit is matched as the Edit tool matches it (task 291, impl round 1, opus).
-        try:
-            old = _read_untranslated(file_path)
-        except OSError:
-            old = ""
-        new = old
-        edits = ti.get("edits")
-        for e in edits if isinstance(edits, list) else ():
-            if not isinstance(e, dict):
-                continue
-            o, n = str(e.get("old_string", "")), str(e.get("new_string", ""))
-            if not o:
-                if not new:                 # the first edit of a new file is its content
-                    new = n
-                continue
-            after = _apply_as_the_tool(new, o, n, bool(e.get("replace_all")))
-            if after is not None:
-                new = after
-            else:                                       # as for an Edit: an edit the guard cannot place
-                print(UNFOUND_MSG)
-                _journal_block("unfound-old-string")
-                return 2
-    else:
         return 0
 
     newly, born = partition(old, new)
