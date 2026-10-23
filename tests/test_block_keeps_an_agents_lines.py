@@ -115,6 +115,16 @@ class TheDesignStays(_Task):
         self.assertNotIn("> Resumed", t)
         self.assertEqual(_block_reasons(self.tf), ["SECOND-PAUSE"])
 
+    def test_an_indented_quote_is_read_and_replaced_as_a_reason(self):
+        """Row 6: what the writer replaces as the CLI's lines is exactly what the readers read as a reason — an
+        indented `>` line included — so after the next block the only reason read is the new one."""
+        set_task_blocked(self.tf, "first pause")
+        self.append("  > an indented quote\n")
+        self.assertEqual(_block_reasons(self.tf), ["first pause", "an indented quote"])     # the readers' view
+        resume_blocked_task(self.tf)
+        set_task_blocked(self.tf, "second pause")
+        self.assertEqual(_block_reasons(self.tf), ["second pause"])
+
     def test_with_nothing_but_the_clis_lines_the_bytes_are_as_before(self):
         """Row 5: a section holding only the CLI's lines comes out byte for byte as before the fix."""
         set_task_blocked(self.tf, "one")
