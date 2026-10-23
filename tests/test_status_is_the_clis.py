@@ -137,6 +137,101 @@ class AMultiLineIntent(Project):
         self.assertIn("## Intent\nfix the thing\n", tm.read_text(encoding="utf-8"))
 
 
+class RoundOne(unittest.TestCase):
+    """Task 292's impl round 1 (opus, codex Important; agy, opus, grok Minor)."""
+
+    def _home_fixture(self):
+        f = ProjectFixture()
+        return f, f.proj.parent                         # HOME such that `~/proj/…` is the project
+
+    def _run(self, f, payload, home=None):
+        import os
+        import subprocess
+        from tests._bashcheck import bash_or_skip
+        from tests.test_batch_close_guard import HOOK, SESSION
+        env = dict(os.environ, PLAYBOOK_SESSION_ID=SESSION)
+        env.pop("PLAYBOOK_ROLE", None)
+        if home is not None:
+            env["HOME"] = str(home)
+        return subprocess.run([bash_or_skip(), str(HOOK)], input=__import__("json").dumps(payload).encode(),
+                              cwd=f.proj, env=env, capture_output=True, timeout=60)
+
+    def test_a_home_relative_path(self):
+        # row 15 (codex): `~/proj/.agent/tasks/001-thing/task.md` — the tool expands `~` (measured: Read did), the hook
+        # read it as text and skipped the guard
+        f, home = self._home_fixture()
+        path = "~/" + str(f.task_file.relative_to(home))
+        r = self._run(f, {"hook_event_name": "PreToolUse", "tool_name": "Edit",
+                          "tool_input": {"file_path": path, "old_string": "## Status\npending",
+                                         "new_string": "## Status\ndone"}}, home=home)
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+
+    def test_a_decoy_where_the_text_and_the_kernel_disagree(self):
+        # row 16 (codex): `<proj>/jump/../.agent/tasks/001-thing/task.md` with `jump → <out>/landing` — the kernel
+        # reads `<out>/.agent/…` (a decoy that says done), the text `<proj>/.agent/…` (the record): every reading in a
+        # lane is checked
+        import tempfile
+        f = ProjectFixture()
+        out = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, out, True)
+        (out / "landing").mkdir()
+        decoy = out / ".agent" / "tasks" / "001-thing" / "task.md"
+        decoy.parent.mkdir(parents=True)
+        decoy.write_text("# 001 - Thing\n\n## Status\ndone\n", encoding="utf-8")
+        (f.proj / "jump").symlink_to(out / "landing")
+        path = str(f.proj / "jump") + "/../.agent/tasks/001-thing/task.md"
+        # a Write of the record's text with `done`: against the decoy it changes nothing, against the record it does
+        text = f.task_file.read_text(encoding="utf-8").replace("## Status\npending", "## Status\ndone")
+        r = f.run_hook({"hook_event_name": "PreToolUse", "tool_name": "Write",
+                        "tool_input": {"file_path": path, "content": text}})
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+
+
+class AnIntentOrANameWithStructure(Project):
+    def _new(self, *args):
+        r = self.cli("new", "feature", *args)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        return next((self.d / ".agent" / "tasks").glob("001-*")) / "task.md"
+
+    def test_an_intent_that_starts_with_structure(self):
+        # row 13 (opus Important): one line, but it starts with a heading, a gate, a fence or a quote
+        from tasks.core import _live_gate_scan
+        baseline = None
+        for intent in ("## Status", "  ## Risk", "- [x] a gate ticked at birth", "~~~", "```", "> quoted"):
+            with self.subTest(intent=intent):
+                self.setUp()
+                tm = self._new("thing", intent)
+                self.assertEqual(_live_status_headings(tm), 1)
+                self.assertEqual(_extract_status(tm), "pending")
+                lines = _physical_lines(tm.read_text(encoding="utf-8"))
+                line = lines[lines.index("## Intent") + 1]
+                self.assertTrue(line.startswith("\\"), line)     # its structure marker escaped: plain text
+                self.assertIn(intent.strip(), line)              # and its words kept
+                unchecked, total, _first, _i = _live_gate_scan(lines)
+                self.assertEqual(unchecked, total)               # no gate born checked
+                if baseline is None:
+                    baseline = total
+                self.assertEqual(total, baseline)                # no fence hid a gate
+
+    def test_a_multi_line_name(self):
+        # row 14 (agy, opus Minor): the title is one line too
+        tm = self._new("fix\n## Status\ndone", "an intent")
+        self.assertEqual(_live_status_headings(tm), 1)
+        self.assertTrue(tm.read_text(encoding="utf-8").splitlines()[0].startswith("# 001 - "))
+        self.assertNotIn("\n## Status\ndone", tm.read_text(encoding="utf-8"))
+
+
+class TheJournalNamesTheGuard(unittest.TestCase):
+    def test_a_status_refusal_is_journaled_as_the_status_guard(self):
+        # row 17 (agy, opus, grok Minor): not as a batch close
+        f = ProjectFixture()
+        r = _edit(f, f.task_file, "## Status\npending", "## Status\ndone")
+        self.assertEqual(r.returncode, 2, r.stderr.decode())
+        journal = f.proj / ".agent" / "journal" / "enforcement.jsonl"
+        rows = [__import__("json").loads(ln) for ln in journal.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        self.assertEqual(rows[-1].get("hook"), "status-guard", rows[-1])
+
+
 class TheDocsSayIt(unittest.TestCase):
     def test_architecture_names_the_guard(self):
         # row 12: docs/architecture.md says `## Status` is the CLI's
