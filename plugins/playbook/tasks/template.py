@@ -1232,9 +1232,11 @@ Commands:
   work done [--force --reason "why"]  Finish task; runs the verify contract and
                       records a receipt; a failing verify blocks, as does an
                       unreviewed task under the panel_required_for policy
-                      (/playbook:init seeds ["assertive","irreversible"] ⇒ only
-                      those close-gate on a PASS panel, reversible work closes on
-                      verify+single-judge; set "all" for a panel on every close).
+                      (/playbook:init seeds ["assertive","irreversible"] ⇒
+                      those close-gate on a PASS panel, an unclassified task is
+                      held to the strictest class listed, reversible work closes
+                      on verify+single-judge; set "all" for a panel on every
+                      close).
                       Stale panel evidence on a high-consequence close blocks;
                       --stale-panel-ok --reason accepts only that, while --force
                       --reason is the blunt whole-policy override. --force and
