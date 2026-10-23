@@ -39,7 +39,8 @@ class AHeadingDeleted(Closing):
         r, out = self.close()
         self.assertEqual(r.returncode, 1, out)
         self.assertNotIn("Task 001 done.", out)
-        self.assertIn("unclassified", out)
+        self.assertIn("left unclassified", out)                    # the block's own words (round 1, sonnet)
+        self.assertIn("the heading", out)                          # and how to add a missing field (round 1, opus)
 
     def test_it_closes_once_classified_or_forced(self):
         # row 3 (must-not): the ways out of an unset Risk are its ways out — a class, or `--force --reason`
@@ -47,6 +48,35 @@ class AHeadingDeleted(Closing):
         r = self.cli("work", "done", "--force", "--reason", "an import with no Risk", timeout=180)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("unclassified", r.stdout + r.stderr)        # the close still says what was skipped
+
+
+class RoundOne(Closing):
+    """Task 294's impl round 1 (opus Important ×2)."""
+
+    def test_a_freehand_task_offers_the_field(self):
+        # row 5: `tasks freehand` with no active task writes a record — with its `## Risk` field, as every creator does
+        from tasks.core import extract_risk, has_risk_section
+        r = self.cli("freehand")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        tm = next((self.d / ".agent" / "tasks").glob("*-freehand/task.md"))
+        self.assertTrue(has_risk_section(tm), tm.read_text(encoding="utf-8"))
+        self.assertEqual(extract_risk(tm), "unclassified")
+
+    def test_an_unset_risk_is_held_to_the_strictest_class_bar(self):
+        # row 6: with the panel required for a high-consequence class, an unclassified task needs the panel too — a
+        # single-judge record would let "not classifying" lower an assertive task's bar
+        for policy, closes in ((["assertive", "irreversible"], False), ([], True)):
+            with self.subTest(policy=policy):
+                self.setUp()
+                self.config(panel_required_for=policy)
+                self.task("feature")
+                (self.task_dir / "judge-single.md").write_text(
+                    "## Single-judge impl review — 2026-10-23 10:00 UTC (`codex:sol`)\n\nRecorded here by the CLI.\n",
+                    encoding="utf-8")
+                self.g("add", "-A")
+                self.g("commit", "-qm", "a single-judge record")
+                r, out = self.close()
+                self.assertEqual(r.returncode == 0, closes, out)
 
 
 class ThePolicy(unittest.TestCase):
