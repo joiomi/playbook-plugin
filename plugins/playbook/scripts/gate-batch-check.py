@@ -14,11 +14,10 @@ The rules (design-1.5.5.md, F1 — including the judge's corrections):
     to an unchecked OLD original (longest original wins; empty originals
     excluded) = newly-checked, with the extension beyond the original as its
     annotation; else born-checked.
-  * n = |newly-checked| (times replace_all occurrences, when an Edit is judged
-    on its fragments — since task 291 only when the file does not hold its
-    old_string, even with curly and straight quotes made alike; otherwise every
-    edit is judged on the whole file it leaves). NEVER the raw x-count delta — unchecking in the same write must
-    not launder n.
+  * n = |newly-checked| + |born-checked|, on the whole file each edit leaves
+    (task 291: an Edit too, matched as the Edit tool matches it; only an Edit
+    the file cannot show is judged on its fragments). NEVER the raw x-count
+    delta — unchecking in the same write must not launder n.
   * n ≤ 1 → allow silently (singles keep their old freedom).
   * 2 ≤ n ≤ 5 → allow ONLY if no born-checked line and every newly-checked
     gate's annotation has ≥ 8 unicode non-whitespace characters ("283 green"
@@ -54,6 +53,28 @@ _SUBHEADING_RE = re.compile(r"^#{3,}(?:[ \t]|$)")             # a `###` heading 
 ANNOTATION_FLOOR = 8   # unicode non-whitespace chars (never bash bytes)
 # curly quotes read as straight ones — the Edit tool matches an old_string across them (task 291)
 _QUOTES = str.maketrans({"‘": "'", "’": "'", "“": '"', "”": '"'})
+_ESCAPE = re.compile(r"\\u([0-9a-fA-F]{4})")
+
+
+def _apply_as_the_tool(text: str, o: str, n: str, replace_all: bool) -> "str | None":
+    """`text` after the Edit tool replaces `o` by `n`, or None when the tool finds no `o` (it then fails the edit).
+    Matched as the tool matches (task 291, its impl round 1, measured on the tool 2026-10-23): the text itself; else
+    with curly and straight quotes read alike, replacing the file's own first spelling (one character for one, so the
+    positions agree); else both with `\\uXXXX` escapes read as their characters. Replaced by nothing, a text takes
+    the newline after it."""
+    for oo, nn in ((o, n), (_ESCAPE.sub(lambda m: chr(int(m.group(1), 16)), o),
+                            _ESCAPE.sub(lambda m: chr(int(m.group(1), 16)), n))):
+        if not oo:
+            continue
+        if oo not in text:
+            i = text.translate(_QUOTES).find(oo.translate(_QUOTES))
+            if i < 0:
+                continue
+            oo = text[i:i + len(oo)]
+        if nn == "" and not oo.endswith("\n") and oo + "\n" in text:
+            oo += "\n"
+        return text.replace(oo, nn) if replace_all else text.replace(oo, nn, 1)
+    return None
 BATCH_CEILING = 5
 
 BARE_MSG = """\
@@ -284,22 +305,17 @@ def main() -> int:
         # (the tool then fails it) — the fragments are judged, as before.
         o = str(ti.get("old_string", ""))
         n_ = str(ti.get("new_string", ""))
-        replace_all = bool(ti.get("replace_all", False))
         try:
             whole = _read_untranslated(file_path)
         except OSError:
             whole = None
-        if whole is not None and o and o not in whole and o.translate(_QUOTES) in whole.translate(_QUOTES):
-            # the tool matches curly and straight quotes alike: read the file and the edit the same way (row 11)
-            whole, o, n_ = whole.translate(_QUOTES), o.translate(_QUOTES), n_.translate(_QUOTES)
-        if whole is not None and o and o in whole:
-            old, new = whole, (whole.replace(o, n_) if replace_all else whole.replace(o, n_, 1))
-            replace_all = False                         # every gate is in view: nothing to multiply
+        after = None if whole is None else _apply_as_the_tool(whole, o, n_, bool(ti.get("replace_all", False)))
+        if whole is not None and after is not None:
+            old, new = whole, after
         else:
             old, new = o, n_
     elif tool == "Write":
         new = str(ti.get("content", ""))
-        replace_all = False
         try:
             old = _read_untranslated(file_path)
         except OSError:
@@ -311,8 +327,7 @@ def main() -> int:
         # is seen as what it is. An edit whose `old_string` is absent changes
         # nothing here (the tool itself fails it); a payload that is not a list
         # of edits leaves the text as it was, and the guard passes it — its own
-        # errors never block an edit.
-        replace_all = False
+        # errors never block an edit. Each edit is matched as the Edit tool matches it (task 291, impl round 1, opus).
         try:
             old = _read_untranslated(file_path)
         except OSError:
@@ -327,20 +342,15 @@ def main() -> int:
                 if not new:                 # the first edit of a new file is its content
                     new = n
                 continue
-            new = new.replace(o, n) if e.get("replace_all") else new.replace(o, n, 1)
+            after = _apply_as_the_tool(new, o, n, bool(e.get("replace_all")))
+            if after is not None:
+                new = after
     else:
         return 0
 
     newly, born = partition(old, new)
 
-    occurrences = 1
-    if replace_all and newly:
-        try:
-            occurrences = max(_read_untranslated(file_path).count(str(ti.get("old_string", ""))), 1)
-        except OSError:
-            occurrences = 1
-
-    n = (len(newly) + len(born)) * occurrences
+    n = len(newly) + len(born)
     if n <= 1:
         return 0
 
@@ -372,7 +382,7 @@ def main() -> int:
     bare = [(body, ext) for body, ext in newly if not annotation_ok(ext)]
     if bare:
         print(BARE_MSG.format(
-            n=n, k=len(bare) * occurrences, floor=ANNOTATION_FLOOR,
+            n=n, k=len(bare), floor=ANNOTATION_FLOOR,
             lines="\n".join(f"  - [x] {b}" for b, _ in bare)))
         _journal_block("bare-batch")
         return 2
