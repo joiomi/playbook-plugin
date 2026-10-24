@@ -426,6 +426,9 @@ class AfterTheLastRound(_Tree):
         (self.w / ".agent" / "sessions").symlink_to(outside)
         self.assertEqual(self.batch(self.w, (1, 2, 3)), 0)
         self.assertEqual(precious.read_text(encoding="utf-8"), "the user's own words\n")
+        # nor is anything written in the folder outside the project the link leads to: the linked folder is not carried
+        self.assertTrue((outside / SID / "last_batch_close").is_symlink())
+        self.assertEqual(sorted(x.name for x in (outside / SID).iterdir()), ["counters", "last_batch_close"])
         # and a link at the mark inside a session folder that is no link
         (self.w / ".agent" / "sessions").unlink()
         wd = self.w / ".agent" / "sessions" / SID
