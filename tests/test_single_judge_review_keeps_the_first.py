@@ -198,15 +198,6 @@ class EndToEnd(unittest.TestCase):
         self.assertLess(log.index("FINDING-RUN-2"), log.index("FINDING-RUN-1"))
         self.assertLess(log.index("[tamper guard]"), log.index("FINDING-RUN-2"))
 
-    def test_a_task_md_that_is_not_utf8_still_gets_the_review_recorded(self):
-        # row 18 (impl round 2, opus Minor): a task.md with a byte that is not UTF-8 is no place for the findings —
-        # the review is recorded in judge-single.md, no crash, and task.md is not touched
-        self.tf.write_bytes(_task_text().encode("utf-8") + b"\nbad byte: \xff\n")
-        before = self.tf.read_bytes()
-        self.assertEqual(self.impl_review(RUN1), 0)
-        self.assertEqual(self.tf.read_bytes(), before)
-        self.assertIn("> **Important** — FINDING-RUN-1", self.judge_single())
-
 
 class TheWriter(unittest.TestCase):
     """`_write_review_findings` on a task file, a second run after the agent wrote among the CLI's lines."""
@@ -308,6 +299,16 @@ class TheWriter(unittest.TestCase):
         lines = f.read_text(encoding="utf-8").split("\n")
         self.assertIn(GATE, lines)
         self.assertIn(" my note after the closer", lines)
+
+    def test_a_task_md_that_is_not_utf8_is_no_place(self):
+        # row 18 (impl round 2, opus Minor): a task.md that is no longer UTF-8 when the findings are placed (it was,
+        # when the command read it to build the judge's context) is no place for them — the look says why, it does
+        # not crash, so the caller records the review in judge-single.md
+        f = self.task()
+        f.write_bytes(f.read_bytes() + b"\nbad byte: \xff\n")
+        why = review._findings_place(f, "impl")
+        self.assertIsNotNone(why)
+        self.assertIn("could not read task.md", why)
 
 
 class TheRecord(unittest.TestCase):
