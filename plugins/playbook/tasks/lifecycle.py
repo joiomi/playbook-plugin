@@ -565,13 +565,14 @@ def _contract_check(project_path: Path, task_file: Path, prev_task: str, force: 
 
 # Task 299 (audit 2, G6): the sections a stub writes itself (`render_stub_template`); every other section is the agent's
 _STUB_OWN = ("## Status", "## Risk", "## Intent", "## Why", "## References")
-# the base templates' placeholder lines that the stub's Intent / Why replaces
+# the templates' placeholder lines that the stub's Intent / Why / References replaces
 _TEMPLATE_PLACEHOLDERS = {
     "## Intent": ("(what we want to achieve \u2014 the outcome, not the activity)",
                   "(one line \u2014 what to do and how to verify)",
                   # F6: the `light` template's Intent placeholder (B1 twin)
                   "(one line \u2014 what to do and what proves it worked)"),
     "## Why": ("(why this matters now \u2014 urgency, context, what breaks if delayed)",),
+    "## References": ("(optional context; recent chat lands here at activation)",),      # light's (impl round 2)
 }
 
 
@@ -582,6 +583,15 @@ def _h2_sections(lines: "list[str]") -> "list[tuple[str, int, int]]":
     heads = [i for i, _s in _iter_nonfenced(lines) if _atx_h2_text(lines[i]) is not None]
     return [(_atx_h2_text(lines[h]), h, heads[k + 1] if k + 1 < len(heads) else len(lines))
             for k, h in enumerate(heads)]
+
+
+def _own_heading(heading: str) -> "str | None":
+    """The stub's own section a heading names — `## RISK` too, as the risk reader ignores case (impl round 2) — or
+    None for a section of the agent's."""
+    from tasks.core import _RISK_FIELD_RE
+    if _RISK_FIELD_RE.match(heading):
+        return "## Risk"
+    return heading if heading in _STUB_OWN else None
 
 
 def _trim(lines: "list[str]", *, lead: bool = True) -> "list[str]":
@@ -600,55 +610,86 @@ def _carry_stub_text(stub: str, full: str, stub_type: str, taken: str) -> str:
     nothing). The stub's sections are read with the readers' own heading and fence rules (impl round 1: a regex cut a
     body at a fenced `## ` line and missed `## Risk ##`).
 
-    - Intent, Why, References: their text, the stub's placeholder lines excepted, goes into the template's section of
-      that name — over its placeholder line, else at the end of its text. A template without it (light has no Why,
-      quick no References, a custom playbook any of them) gets the stub's section at the end.
+    - The title line is the stub's (an edit kept); every other line above the first section, and the lines under
+      `## Status` but its value, go under `## From the stub` — the stub's own section of that name if it has one. At
+      the end of the file without a heading they sat inside the template's `## Parked`, where `tasks parked` counted
+      a `- ` note as parked debt. A template with no `## Status` (a custom playbook) gets the stub's status value.
+    - Intent, Why, References: their text, the stub's live placeholder line excepted (a fenced copy stays), goes into
+      the template's section of that name — over its placeholder line, else at the end of its text. A template without
+      it (light has no Why, quick no References, a custom playbook any of them) gets the stub's section at the end.
     - Risk, when the stub's is not the untouched `unclassified`: over the template's `unclassified` line (above its
       first line otherwise; the stub's section at the end where the template has none), with every line under it but
-      the template's own guidance. The class is never changed on the way: the task reads what the stub read, or the
-      expansion refuses (codex's Critical: a blank line or a U+0085 before `reversible` read `unclassified` in the
-      stub and `reversible` once expanded).
-    - Every other section, whole, at the end — before the standing gates, which the caller appends after; one the
-      template writes too (`## Work Plan`, `## Parked`) goes into the template's, at the end of its text: a second
-      section of that name was read by no first-match reader. A standing gate's heading (`taken` is the template with
-      the standing gates) refuses — that standing gate would be skipped.
-    - A note above the first section (the title and the marker excepted) and the lines under `## Status` beside its
-      value go under `## From the stub`: at the end of the file without a heading they sat inside the template's
-      `## Parked`, where `tasks parked` counted a `- ` note as parked debt.
+      the template's own guidance. The class never changes on the way: what the next read of the saved file says is
+      what the stub read, or the expansion refuses (codex's Criticals: a blank line or a U+0085 before `reversible`,
+      and a CR CR LF after it, read `unclassified` in the stub and `reversible` once saved). The one exception: an
+      untouched Risk is no decision of the agent's, and a custom playbook's own default then stands.
+    - Every other section, whole, at the end — before the standing gates, which the caller appends after. One the
+      template writes too goes into the template's: over its text where that holds no gate (`## Test contract`,
+      `## Work Plan`, `## Parked` — the readers parse the first table, the first section), its pin line kept; at the
+      end of its text where it holds gates, which stay. A heading in the result that takes a standing gate's title —
+      fenced or not, the standing gates read every line — refuses: that gate would be skipped.
     - Refused too: an unclosed code fence anywhere in the stub (what follows it cannot be told apart, and expanded it
       would fence the template's gates), and a second section of the stub's own (one of the two would be lost).
     """
-    from tasks.core import DEFAULT_RISK, _has_unclosed_fence, extract_risk_from_text, stub_marker_type
+    import re
+    from tasks.core import (DEFAULT_RISK, _atx_h2_text, _has_unclosed_fence, _iter_nonfenced, _live_status_pair,
+                            extract_risk_from_text, stub_marker_type)
     from tasks.template import render_stub_template
+    h1 = re.compile(r" {0,3}#[ \t]")
+    gate = re.compile(r" {0,3}[-*+] \[[ xX]\]")
     s = stub.split("\n")
     if _has_unclosed_fence(s):
         raise ValueError("an unclosed code fence: expanded, it would fence the template's gates and hide what follows "
                          "it — close the fence")
     secs = _h2_sections(s)
-    names = [n for n, _a, _b in secs]
+    owns = [_own_heading(n) for n, _a, _b in secs]
     for n in _STUB_OWN:
-        if names.count(n) > 1:
+        if owns.count(n) > 1:
             raise ValueError(f"two `{n}` sections: one of them would be lost — keep one")
+    live = {i for i, _x in _iter_nonfenced(s)}
     ref = render_stub_template(0, "x", "", stub_type).split("\n")
     own_lines = {n: {ln.strip(" \t") for ln in ref[a + 1:b] if ln.strip(" \t")} for n, a, b in _h2_sections(ref)}
 
-    def body(n):
-        return next((s[a + 1:b] for m, a, b in secs if m == n), [])
+    def own_span(n):
+        return next(((a, b) for (_m, a, b), o in zip(secs, owns) if o == n), None)
+
+    def body(n, drop=()):                              # the first LIVE line equal to one of `drop` left out
+        sp, out, dropped = own_span(n), [], False
+        for k in (range(sp[0] + 1, sp[1]) if sp else ()):
+            if not dropped and k in live and s[k].strip(" \t") in drop:
+                dropped = True
+                continue
+            out.append(s[k])
+        return out
 
     f = full.split("\n")
 
     def span(n):
         return next(((a, b) for m, a, b in _h2_sections(f) if m == n), None)
 
-    def at_end(sp, lines):                             # at the end of a section's text, above its blank lines and `---`
+    def end_of_text(sp):                               # above a section's last blank lines and `---`
         at = sp[1]
         while at > sp[0] + 1 and f[at - 1].strip(" \t") in ("", "---"):
             at -= 1
-        f[at:at] = lines
+        return at
 
     carried: "list[list[str]]" = []
+    first = secs[0][1] if secs else len(s)
+    title = next((k for k in range(first) if k in live and h1.match(s[k])), None)
+    retitle = title is not None and bool(f) and bool(h1.match(f[0]))
+    if retitle:
+        f[0] = s[title]
+    loose = _trim([s[k] for k in range(first) if not (retitle and k == title) and stub_marker_type(s[k] + "\n") is None])
+    st, pair = own_span("## Status"), _live_status_pair(s)
+    if st is not None:
+        rest = _trim([s[k] for k in range(st[0] + 1, st[1]) if not (pair and k == pair[1])])
+        loose += [""] * bool(loose and rest) + rest
+        if span("## Status") is None:                  # a template with no `## Status` gets the stub's value
+            at = 1 if f and h1.match(f[0]) else 0
+            value = s[pair[1]] if pair else "pending"
+            f[at:at] = ["", "## Status", value] if at else ["## Status", value, ""]
     for n in ("## Intent", "## Why", "## References"):
-        mine = _trim([ln for ln in body(n) if ln.strip(" \t") not in own_lines.get(n, ())])
+        mine = _trim(body(n, own_lines.get(n, ())))
         if not mine:
             continue
         sp = span(n)
@@ -657,11 +698,12 @@ def _carry_stub_text(stub: str, full: str, stub_type: str, taken: str) -> str:
             continue
         at = next((k for k in range(sp[0] + 1, sp[1]) if f[k].strip(" \t") in _TEMPLATE_PLACEHOLDERS.get(n, ())), None)
         if at is None:
-            at_end(sp, mine)
+            at = end_of_text(sp)
+            f[at:at] = mine
         else:
             f[at:at + 1] = mine
     guidance = {ln for ln in own_lines.get("## Risk", ()) if ln.startswith(">")}
-    risk = _trim([ln for ln in body("## Risk") if ln.strip(" \t") not in guidance], lead=False)
+    risk = _trim(body("## Risk", guidance), lead=False)
     touched = [ln.strip(" \t").lower() for ln in risk] not in ([], ["unclassified"])
     if touched:
         sp = span("## Risk")
@@ -671,34 +713,51 @@ def _carry_stub_text(stub: str, full: str, stub_type: str, taken: str) -> str:
             f[sp[0] + 1:sp[0] + 2] = risk
         else:
             f[sp[0] + 1:sp[0] + 1] = risk
-    first = secs[0][1] if secs else len(s)
-    loose = _trim([ln for ln in s[1:first] if stub_marker_type(ln + "\n") is None])
-    status = _trim(body("## Status"))[1:]
-    loose += [""] * bool(loose and _trim(status)) + _trim(status)
-    if loose:
-        carried.insert(0, ["## From the stub"] + loose)
-    standing = ({m.lower() for m, _a, _b in _h2_sections(taken.split("\n"))}
-                - {m.lower() for m, _a, _b in _h2_sections(full.split("\n"))})
-    for n, a, b in secs:
-        if n in _STUB_OWN:
+    for (n, a, b), o in zip(secs, owns):
+        if o is not None:
             continue
-        if n.lower() in standing:
-            raise ValueError(f"a `{n}` section, the heading of a standing gate: that gate would be skipped — rename "
-                             "the section (`## Notes`)")
+        mine = _trim(s[a + 1:b])
+        if n == "## From the stub" and loose:          # the stub's own section of that name takes the notes
+            mine, loose = loose + [""] * bool(mine) + mine, []
         sp = span(n)
         if sp is None:
-            carried.append(_trim(s[a:b]))
-        elif _trim(s[a + 1:b]):
-            at_end(sp, _trim(s[a + 1:b]))
+            carried.append([s[a]] + mine)
+            continue
+        if not mine:
+            continue
+        fl = {i for i, _x in _iter_nonfenced(f)}
+        if any(k in fl and gate.match(f[k]) for k in range(sp[0] + 1, sp[1])):
+            at = end_of_text(sp)
+            f[at:at] = mine
+            continue
+        lo = sp[0] + 1
+        if lo < sp[1] and f[lo].strip(" \t") == "<!-- pin -->":
+            lo += 1
+            if mine[0].strip(" \t") == "<!-- pin -->":
+                mine = _trim(mine[1:])
+        hi = max(lo, end_of_text(sp))
+        f[lo:hi] = [""] * bool(lo < hi and not f[lo].strip(" \t")) + mine
+    if loose:
+        carried.insert(0, ["## From the stub"] + loose)
     out = "\n".join(f)
     if carried:
         out = out.rstrip("\n") + "\n\n" + "\n\n".join("\n".join(c) for c in carried) + "\n"
-    want, got = extract_risk_from_text(stub), extract_risk_from_text(out)
-    if got != want and (touched or want != DEFAULT_RISK):
-        raise ValueError(f"a `## Risk` that reads `{want}`; expanded, the task would read `{got}` — write the class "
-                         "on the line under the heading")
-    return out
 
+    def heads(text):                                   # every H2 line, fenced too — as `append_standing_gates` reads them
+        return {h.lower(): h for ln in text.split("\n") if (h := _atx_h2_text(ln)) is not None}
+    standing = heads(taken)
+    for k in heads(full):
+        standing.pop(k, None)
+    hit = sorted(set(standing) & set(heads(out)))
+    if hit:
+        raise ValueError(f"a `{standing[hit[0]]}` heading, a standing gate's title: that gate would be skipped — rename "
+                         "the heading in the stub")
+    want = extract_risk_from_text(stub)
+    got = extract_risk_from_text(out.replace("\r\n", "\n"))   # what the next read of the saved file sees
+    if got != want and (touched or want != DEFAULT_RISK):
+        raise ValueError(f"a `## Risk` that reads `{want}`; expanded and saved, the task would read `{got}` — check "
+                         "the Risk heading, and the class on the line under it")
+    return out
 
 def cmd_work(cmd_args):
     """The `tasks work` arm — body moved verbatim from cli.py (1.5.9 split)."""
@@ -2027,7 +2086,9 @@ def cmd_work(cmd_args):
             from tasks.core import (_status_from_lines, _physical_lines as _pl144,
                                     _live_status_pair, _splice_status_value)
             _stub_status = str(_status_from_lines(_pl144(task_content)) or "").strip()
-            if _stub_status and _stub_status != "pending":
+            # only a status the stub holds: a gate first under its `## Status` is no value, and `unknown` was spliced
+            # in as the task's status (task 299, impl round 2)
+            if _live_status_pair(_pl144(task_content)) is not None and _stub_status != "pending":
                 _lines144 = _pl144(full_content, keepends=True)
                 _pair144 = _live_status_pair(_lines144)
                 if _pair144 is not None:
