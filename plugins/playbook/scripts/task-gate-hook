@@ -99,15 +99,18 @@ PB_RAW_INPUT="$INPUT"
 # as argv and the payload on stdin, so nothing is pasted into Python source. If
 # it cannot be built: a plain allow with no updatedInput, never a broken object.
 # Task 301 (audit 3 G5): the builder also judges the raw command it prefixes. It exits 0 for a plain call of THIS
-# project's CLI and 10 for any other: one line; `.claude/bin/tasks` with the hook's cwd at the project root, or
-# `<project>/.claude/bin/tasks`; an injected subcommand as a whole word; and none of `; & | < > $ ` ( ) { } \` or NUL
-# anywhere, quoted or not.
+# project's CLI and 10 for any other: one line; `.claude/bin/tasks` with the hook's cwd and the payload's `cwd` at the
+# project root, or `<project>/.claude/bin/tasks` when the project path holds no white space and none of
+# `* ? [ ] ' " ~ # !` (bash would split or expand it); an injected subcommand as a whole word; none of
+# `; & | < > $ ` ( ) { } \` or NUL anywhere, quoted or not; and the file is the plugin's managed wrapper by
+# `create_wrapper`'s own rule (a regular file, no link on its path, its second line `# playbook-managed`; a custom
+# launcher is the project's, not the plugin's). Impl round 1: codex, opus, sonnet, grok.
 emit_session_injection() {
     local updated="" rc=0
     # below the floor the CLI refuses to run: nothing to inject, a plain allow (task 194)
     [ "$PB_PY_FLOOR" = true ] || { PB_HJ_DETAIL="session id not injected (python < 3.10)"; exit 0; }
     updated=$(printf '%s' "$PB_RAW_INPUT" | python3 -I -c '
-import json, os, sys
+import json, os, stat, sys
 d = json.loads(sys.stdin.buffer.read().decode("utf-8"))
 ti = d.get("tool_input")
 if not isinstance(ti, dict):
@@ -115,12 +118,27 @@ if not isinstance(ti, dict):
 if not isinstance(ti, dict) or not isinstance(ti.get("command"), str):
     sys.exit(1)
 cmd, project, cwd = ti["command"], sys.argv[2], sys.argv[3]
+pcwd = d.get("cwd")
 
 
 def at_root():
     try:
-        return os.path.samefile(cwd, project)
-    except OSError:
+        return os.path.samefile(cwd, project) and (not isinstance(pcwd, str) or os.path.samefile(pcwd, project))
+    except (OSError, ValueError):
+        return False
+
+
+def managed_wrapper():
+    w = os.path.join(project, ".claude", "bin", "tasks")
+    try:
+        if not stat.S_ISREG(os.lstat(w).st_mode):
+            return False
+        if os.path.realpath(w) != os.path.join(os.path.realpath(project), ".claude", "bin", "tasks"):
+            return False
+        with open(w, "rb") as fh:
+            lines = fh.read(4096).split(b"\n")
+        return len(lines) > 1 and lines[1].startswith(b"# playbook-managed")
+    except (OSError, ValueError):
         return False
 
 
@@ -128,9 +146,11 @@ def plain(c):
     if any(ch in c for ch in "\n\r;&|<>$`(){}\\\0"):
         return False
     c = c.rstrip(" \t")
-    for head in (project + "/.claude/bin/tasks ", ".claude/bin/tasks "):
-        if c.startswith(head) and (head != ".claude/bin/tasks " or at_root()):
-            return c[len(head):].split(" ", 1)[0] in ("work", "status", "bootstrap", "freehand", "retro", "new")
+    literal = not any(ch.isspace() or ch in "*?[]\x27\"~#!" for ch in project)
+    for head in ((project + "/.claude/bin/tasks ") if literal else None, ".claude/bin/tasks "):
+        if head and c.startswith(head) and (head != ".claude/bin/tasks " or at_root()):
+            return (c[len(head):].split(" ", 1)[0] in ("work", "status", "bootstrap", "freehand", "retro", "new")
+                    and managed_wrapper())
     return False
 
 
@@ -340,6 +360,7 @@ if [ -n "$PLAYBOOK_EVAL_CONFIG" ] && [ -f "$PLAYBOOK_EVAL_CONFIG" ]; then
             if [ -n "$PB_FUSED" ]; then CMD="$PB_CMD"; else
             CMD=$(echo "$INPUT" | python3 -I -c "import sys,json; print(json.load(sys.stdin).get('tool_input',{}).get('command',''))" 2>/dev/null || echo "")
             fi
+            # a loose match only picks the calls to prefix; whether one is approved is the builder's alone (task 301)
             if echo "$CMD" | grep -qE 'tasks\s+(work|status|bootstrap|freehand|retro|new)' && [ -n "$SESSION_ID" ]; then
                 emit_session_injection
             fi
@@ -786,7 +807,8 @@ MSG
     # task 197, by the owner's answer of 2026-10-13 12:27 ("O scot pentru shell"): a folder made by hand is
     # caught AFTER the call by task-dir-watch-hook, by any spelling (ledger PB-TASK-DIR-WATCH).
 
-    # Inject PLAYBOOK_SESSION_ID into tasks CLI commands via updatedInput
+    # Inject PLAYBOOK_SESSION_ID into tasks CLI commands via updatedInput. The match is loose on purpose (a prefix
+    # harms nothing); whether a call is APPROVED is the builder's alone (`emit_session_injection`, task 301).
     if [ -n "$SESSION_ID" ] && echo "$CMD" | grep -qE '(^|[;&|] *)(([^ ]*/)?)tasks (work|status|bootstrap|freehand|retro|new)'; then
         emit_session_injection
     fi

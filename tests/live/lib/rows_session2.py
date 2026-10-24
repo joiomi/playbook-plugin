@@ -524,15 +524,23 @@ def session_id_no_allow(out: Path) -> int:
     run = Run("PB-SESSION-ID-NO-ALLOW", "the session-id injection approves only the project's own CLI", out,
               ["claude"])
     p = session_project(tempdir("pb301-ask-") / "proj")
+    # the hook approves only the plugin's MANAGED wrapper (impl round 1, codex I1); the gauntlet's own launcher is a
+    # custom one, so this project gets the managed wrapper the plugin's own `create_wrapper` writes. It runs the copy
+    # installed_plugins.json names; the hook that decides is the one under test (`--plugin-dir`).
+    (p / ".claude" / "bin" / "tasks").unlink()
+    run.step("the managed wrapper, by the plugin's create_wrapper",
+             f"bash -c 'source \"$1/gate-echo-lib.sh\" && create_wrapper \"$2\" tasks' _ "
+             f"{shlex.quote(str(PLUGIN / 'scripts'))} {shlex.quote(str(p))} && sed -n 2p .claude/bin/tasks", cwd=p,
+             env=clean_env())
     _r, ev = claude_session(run, "default permission mode, no allow rule: a plain call, then a chained one", p,
                             RULES + ("1. Run exactly this shell command: .claude/bin/tasks status\n"
                                      "2. Run exactly this shell command: touch ran-chained.txt && .claude/bin/tasks status\n"
                                      "Then reply DONE.\n"), skip_permissions=False, extra=("--permission-mode", "default"))
     plain, chained = _injection(ev, "; .claude/bin/tasks status\""), _injection(ev, "touch ran-chained.txt")
     results = tool_results(ev)
-    run.clause("the plain call is approved by the hook and runs (its result is the CLI's, not a permission refusal)",
+    run.clause("the plain call is approved by the hook and runs (its result is the CLI's own `No tasks found`)",
                bool(plain) and plain.get("permissionDecision") == "allow" and bool(results)
-               and "permission" not in results[0].lower(),
+               and "No tasks found" in results[0],
                f"hook answer: {json.dumps(plain)[:300]}; first result: {[r[:200] for r in results[:1]]}")
     run.clause("the chained call gets the prefix and no decision from the hook",
                bool(chained) and "permissionDecision" not in chained

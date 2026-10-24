@@ -193,9 +193,11 @@ class TheWrapperAndWhereItRuns(_Hook):
         }
         for label, make in cases.items():
             with self.subTest(case=label):
-                if bindir.is_symlink():
+                if bindir.is_symlink():                 # undo the case before, never writing through a link
                     bindir.unlink()
-                if w.is_dir() and not w.is_symlink():
+                if w.is_symlink() or w.is_file():
+                    w.unlink()
+                elif w.is_dir():
                     w.rmdir()
                 managed_wrapper(self.d)
                 self.assertApproved(f"{W} status")                  # the control: the managed one is approved

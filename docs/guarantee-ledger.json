@@ -5416,7 +5416,7 @@
     {
       "id": "PB-SESSION-ID-NO-ALLOW",
       "category": "providers-and-hooks",
-      "statement": "The task gate's session-id injection approves only the project's own CLI: on a shell call matching `tasks work|status|bootstrap|freehand|retro|new` it returns the call's own input with `command` prefixed by `export PLAYBOOK_SESSION_ID=<id>; `, and it adds `permissionDecision: allow` only when the raw command is a single plain call of this project's wrapper — one line, `.claude/bin/tasks` with the hook's working directory at the project root or `<project>/.claude/bin/tasks`, an injected subcommand as a whole word, and none of `;` `&` `|` `<` `>` `$` a backtick `(` `)` `{` `}` `\\` or NUL anywhere, quoted or not. Every other command it prefixes — chained to another command, on a later line, running or writing anything else on its own line, another `tasks` binary, the relative wrapper from a subdirectory, a longer subcommand — gets the prefix and no decision, journaled as `session id injected, not approved`, so the host's own permission check decides; the eval-mode path decides the same way (task 301, audit 3's G5: the approval used to cover the whole command).",
+      "statement": "The task gate's session-id injection approves only the project's own CLI: on a shell call matching `tasks work|status|bootstrap|freehand|retro|new` it returns the call's own input with `command` prefixed by `export PLAYBOOK_SESSION_ID=<id>; `, and it adds `permissionDecision: allow` only when the raw command is a single plain call of this project's wrapper — one line, `.claude/bin/tasks` with the hook's working directory and the payload's `cwd` at the project root, or `<project>/.claude/bin/tasks` when the project path holds no white space and none of `*` `?` `[` `]` `'` `\"` `~` `#` `!`, an injected subcommand as a whole word, the file the plugin's managed wrapper by `create_wrapper`'s own rule (a regular file with no link on its path, its second line `# playbook-managed`; a custom launcher is the project's), and none of `;` `&` `|` `<` `>` `$` a backtick `(` `)` `{` `}` `\\` or NUL anywhere, quoted or not. Every other command it prefixes — chained to another command, on a later line, running or writing anything else on its own line, another `tasks` binary, a custom launcher or a link at the wrapper's path, the relative wrapper from a subdirectory, a longer subcommand — gets the prefix and no decision, journaled as `session id injected, not approved`, so the host's own permission check decides; the eval-mode path decides the same way (task 301, audit 3's G5: the approval used to cover the whole command; its impl round 1 added the wrapper, the literal path and the payload's cwd).",
       "owner": [
         {
           "path": "plugins/playbook/scripts/task-gate-hook",
@@ -5496,6 +5496,30 @@
           "limitations": []
         },
         {
+          "type": "executable integration",
+          "path": "tests/test_session_injection_approves_only_the_cli.py",
+          "reference": "TheWrapperAndWhereItRuns.test_an_absolute_form_under_a_project_path_with_a_glob_or_a_space_gets_no_decision",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_injection_approves_only_the_cli.py",
+          "reference": "TheWrapperAndWhereItRuns.test_a_tasks_that_is_not_the_plugins_managed_wrapper_gets_no_decision",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_injection_approves_only_the_cli.py",
+          "reference": "TheWrapperAndWhereItRuns.test_the_payload_cwd_must_be_the_project_root_too",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
           "type": "live-provider test",
           "path": "tests/live/gauntlet.sh",
           "reference": "scenario:PB-SESSION-ID-NO-ALLOW",
@@ -5516,7 +5540,10 @@
       "missing_evidence_or_limitation": [
         "Grok, codex and the other hosts are experimental (owner decision 2026-08-21): how grok treats an updatedInput that carries no decision was not measured.",
         "Claude Code evaluates permission rules against the input the hook returns, so a user's allow rule written for the original command may not match the prefixed one; the call is then asked about, never approved.",
-        "A plain call that holds one of the refused characters in its arguments (an intent with a `;` or `$`) loses the approval too: it is asked about, the cautious side."
+        "A plain call that holds one of the refused characters in its arguments (an intent with a `;` or `$`) loses the approval too: it is asked about, the cautious side.",
+        "An approved `tasks work done` runs the verify commands of `.agent/config.json`, which the task gate lets an agent edit (single list, audit 1's item 8): the approval covers what the project declared there. Without it the prompt, or the auto-mode check, would see only `tasks work done`.",
+        "A tab, two spaces or leading white space in a plain call loses the approval (asked about, the cautious side); so does the gauntlet's own custom launcher, which is why its live row writes the managed wrapper.",
+        "The wrapper is recognized by `create_wrapper`'s marker, not by its bytes: a custom script that carries the marker is the adversary case, outside the model (like a hand-written judge.md)."
       ],
       "follow_up_phases": [
         8
