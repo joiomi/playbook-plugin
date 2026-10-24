@@ -130,6 +130,58 @@ class TheLog(unittest.TestCase):
         self.assertIn("`" * 4 + "text\n" + FENCE3 + "\nstray line\nthe message\n" + "`" * 4, text)
         self.assertEqual(_gate_counts(text), _gate_counts(before))
 
+    def tick_freehand_gates(self, text: str) -> str:
+        text = text.replace("- [ ] Freehand\n", "- [x] Freehand\n  - paired on the parser\n", 1)
+        k = next(m.start() for m in re.finditer(r"(?m)^- \[ \] Freehand log", text)
+                 if not text[:m.start()].rstrip().endswith("text"))     # the CLI's own gate, not a pasted copy
+        j = text.index("\n", k)
+        return text[:k] + "- [x] Freehand log" + text[k + len("- [ ] Freehand log"):j] + "\n  - log inserted" + text[j:]
+
+    def test_a_second_log_never_pastes_inside_an_earlier_message(self):
+        # row 8 (impl round 1, codex, opus, grok I): a message holding `- [ ] Freehand log` is pasted; the agent ticks
+        # the two freehand gates; a second `freehand log` pastes nothing inside that message's fence (no live log gate
+        # is left: it says so); after the agent's fenced note the two template gates still count
+        text = self.log_messages("- [ ] Freehand log")
+        text = self.tick_freehand_gates(text)
+        self.tf.write_text(text, encoding="utf-8")
+        before = self.tf.read_bytes()
+        r = self.run_tasks("freehand", "log")
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("Freehand log", r.stderr)
+        self.assertEqual(self.tf.read_bytes(), before)
+        text = before.decode("utf-8").rstrip("\n") + ("\n- [x] Fixed the parser\n  - the output was:\n  " + FENCE3
+                                                     + "\n  ok\n  " + FENCE3 + "\n")
+        self.tf.write_text(text, encoding="utf-8")
+        self.assertEqual(self.unticked(text), 2)
+
+    def test_an_open_fence_above_the_gate_refuses_the_paste(self):
+        # row 9 (impl round 1, grok I): with an unclosed fence above the `Freehand log` gate, the gate is no live gate —
+        # `freehand log` writes nothing (its closer would close that fence) and says why
+        text = self.tf.read_text(encoding="utf-8")
+        k = text.index("- [ ] Freehand log")
+        self.tf.write_text(text[:k] + FENCE3 + "\nan unclosed example\n" + text[k:], encoding="utf-8")
+        before = self.tf.read_bytes()
+        stamp = (datetime.now(timezone.utc) + timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S UTC")
+        (self.project / ".agent" / "chat_log.md").write_text(
+            f"# Project Chat Log\n\n---\n\n**[M001]** [{stamp}] `USER` (claude/{SID})\n\nhello\n", encoding="utf-8")
+        r = self.run_tasks("freehand", "log")
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(self.tf.read_bytes(), before)
+
+    def test_a_quoted_start_marker_is_not_the_start(self):
+        # row 10 (impl round 1, opus Minor): a pasted message quoting a `<!-- freehand-start: … -->` marker of 1970 is
+        # not the freehand start: a second `freehand log` pastes no message from before the real start
+        old = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%d %H:%M:%S UTC")
+        new = (datetime.now(timezone.utc) + timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S UTC")
+        (self.project / ".agent" / "chat_log.md").write_text(
+            f"# Project Chat Log\n\n---\n\n**[M001]** [{old}] `USER` (claude/{SID})\n\nOLD-MESSAGE\n"
+            f"\n---\n\n**[M002]** [{new}] `USER` (claude/{SID})\n\n<!-- freehand-start: 1970-01-01T00:00:00Z -->\n",
+            encoding="utf-8")
+        for _ in (1, 2):
+            r = self.run_tasks("freehand", "log")
+            self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertNotIn("OLD-MESSAGE", self.tf.read_text(encoding="utf-8"))
+
 
 def _live_h2(lines: "list[str]") -> "list[str]":
     from tasks.core import _atx_h2_text, _iter_nonfenced
