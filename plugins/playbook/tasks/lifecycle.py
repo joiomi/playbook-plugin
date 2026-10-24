@@ -563,6 +563,143 @@ def _contract_check(project_path: Path, task_file: Path, prev_task: str, force: 
     return rc
 
 
+# Task 299 (audit 2, G6): the sections a stub writes itself (`render_stub_template`); every other section is the agent's
+_STUB_OWN = ("## Status", "## Risk", "## Intent", "## Why", "## References")
+# the base templates' placeholder lines that the stub's Intent / Why replaces
+_TEMPLATE_PLACEHOLDERS = {
+    "## Intent": ("(what we want to achieve \u2014 the outcome, not the activity)",
+                  "(one line \u2014 what to do and how to verify)",
+                  # F6: the `light` template's Intent placeholder (B1 twin)
+                  "(one line \u2014 what to do and what proves it worked)"),
+    "## Why": ("(why this matters now \u2014 urgency, context, what breaks if delayed)",),
+}
+
+
+def _h2_sections(lines: "list[str]") -> "list[tuple[str, int, int]]":
+    """`(heading, start, end)` of every live H2 section, in order — the heading normalized (`## Risk ##` is `## Risk`),
+    the end the next live H2."""
+    from tasks.core import _atx_h2_text, _iter_nonfenced
+    heads = [i for i, _s in _iter_nonfenced(lines) if _atx_h2_text(lines[i]) is not None]
+    return [(_atx_h2_text(lines[h]), h, heads[k + 1] if k + 1 < len(heads) else len(lines))
+            for k, h in enumerate(heads)]
+
+
+def _trim(lines: "list[str]", *, lead: bool = True) -> "list[str]":
+    """`lines` without the blank lines at its end (and at its start, with `lead`); blank = spaces and tabs only."""
+    lines = list(lines)
+    while lines and not lines[-1].strip(" \t"):
+        lines.pop()
+    while lead and lines and not lines[0].strip(" \t"):
+        lines.pop(0)
+    return lines
+
+
+def _carry_stub_text(stub: str, full: str, stub_type: str, taken: str) -> str:
+    """Task 299 (audit 2, G6): `full`, the expanded template with the stub's status already spliced in, with what an
+    agent wrote into the stub carried into it — or a ValueError that says what stops the expansion (the caller writes
+    nothing). The stub's sections are read with the readers' own heading and fence rules (impl round 1: a regex cut a
+    body at a fenced `## ` line and missed `## Risk ##`).
+
+    - Intent, Why, References: their text, the stub's placeholder lines excepted, goes into the template's section of
+      that name — over its placeholder line, else at the end of its text. A template without it (light has no Why,
+      quick no References, a custom playbook any of them) gets the stub's section at the end.
+    - Risk, when the stub's is not the untouched `unclassified`: over the template's `unclassified` line (above its
+      first line otherwise; the stub's section at the end where the template has none), with every line under it but
+      the template's own guidance. The class is never changed on the way: the task reads what the stub read, or the
+      expansion refuses (codex's Critical: a blank line or a U+0085 before `reversible` read `unclassified` in the
+      stub and `reversible` once expanded).
+    - Every other section, whole, at the end — before the standing gates, which the caller appends after; one the
+      template writes too (`## Work Plan`, `## Parked`) goes into the template's, at the end of its text: a second
+      section of that name was read by no first-match reader. A standing gate's heading (`taken` is the template with
+      the standing gates) refuses — that standing gate would be skipped.
+    - A note above the first section (the title and the marker excepted) and the lines under `## Status` beside its
+      value go under `## From the stub`: at the end of the file without a heading they sat inside the template's
+      `## Parked`, where `tasks parked` counted a `- ` note as parked debt.
+    - Refused too: an unclosed code fence anywhere in the stub (what follows it cannot be told apart, and expanded it
+      would fence the template's gates), and a second section of the stub's own (one of the two would be lost).
+    """
+    from tasks.core import DEFAULT_RISK, _has_unclosed_fence, extract_risk_from_text, stub_marker_type
+    from tasks.template import render_stub_template
+    s = stub.split("\n")
+    if _has_unclosed_fence(s):
+        raise ValueError("an unclosed code fence: expanded, it would fence the template's gates and hide what follows "
+                         "it — close the fence")
+    secs = _h2_sections(s)
+    names = [n for n, _a, _b in secs]
+    for n in _STUB_OWN:
+        if names.count(n) > 1:
+            raise ValueError(f"two `{n}` sections: one of them would be lost — keep one")
+    ref = render_stub_template(0, "x", "", stub_type).split("\n")
+    own_lines = {n: {ln.strip(" \t") for ln in ref[a + 1:b] if ln.strip(" \t")} for n, a, b in _h2_sections(ref)}
+
+    def body(n):
+        return next((s[a + 1:b] for m, a, b in secs if m == n), [])
+
+    f = full.split("\n")
+
+    def span(n):
+        return next(((a, b) for m, a, b in _h2_sections(f) if m == n), None)
+
+    def at_end(sp, lines):                             # at the end of a section's text, above its blank lines and `---`
+        at = sp[1]
+        while at > sp[0] + 1 and f[at - 1].strip(" \t") in ("", "---"):
+            at -= 1
+        f[at:at] = lines
+
+    carried: "list[list[str]]" = []
+    for n in ("## Intent", "## Why", "## References"):
+        mine = _trim([ln for ln in body(n) if ln.strip(" \t") not in own_lines.get(n, ())])
+        if not mine:
+            continue
+        sp = span(n)
+        if sp is None:
+            carried.append([n] + mine)
+            continue
+        at = next((k for k in range(sp[0] + 1, sp[1]) if f[k].strip(" \t") in _TEMPLATE_PLACEHOLDERS.get(n, ())), None)
+        if at is None:
+            at_end(sp, mine)
+        else:
+            f[at:at + 1] = mine
+    guidance = {ln for ln in own_lines.get("## Risk", ()) if ln.startswith(">")}
+    risk = _trim([ln for ln in body("## Risk") if ln.strip(" \t") not in guidance], lead=False)
+    touched = [ln.strip(" \t").lower() for ln in risk] not in ([], ["unclassified"])
+    if touched:
+        sp = span("## Risk")
+        if sp is None:
+            carried.append(["## Risk"] + risk)
+        elif sp[0] + 1 < len(f) and f[sp[0] + 1].strip(" \t").lower() == "unclassified":
+            f[sp[0] + 1:sp[0] + 2] = risk
+        else:
+            f[sp[0] + 1:sp[0] + 1] = risk
+    first = secs[0][1] if secs else len(s)
+    loose = _trim([ln for ln in s[1:first] if stub_marker_type(ln + "\n") is None])
+    status = _trim(body("## Status"))[1:]
+    loose += [""] * bool(loose and _trim(status)) + _trim(status)
+    if loose:
+        carried.insert(0, ["## From the stub"] + loose)
+    standing = ({m.lower() for m, _a, _b in _h2_sections(taken.split("\n"))}
+                - {m.lower() for m, _a, _b in _h2_sections(full.split("\n"))})
+    for n, a, b in secs:
+        if n in _STUB_OWN:
+            continue
+        if n.lower() in standing:
+            raise ValueError(f"a `{n}` section, the heading of a standing gate: that gate would be skipped — rename "
+                             "the section (`## Notes`)")
+        sp = span(n)
+        if sp is None:
+            carried.append(_trim(s[a:b]))
+        elif _trim(s[a + 1:b]):
+            at_end(sp, _trim(s[a + 1:b]))
+    out = "\n".join(f)
+    if carried:
+        out = out.rstrip("\n") + "\n\n" + "\n\n".join("\n".join(c) for c in carried) + "\n"
+    want, got = extract_risk_from_text(stub), extract_risk_from_text(out)
+    if got != want and (touched or want != DEFAULT_RISK):
+        raise ValueError(f"a `## Risk` that reads `{want}`; expanded, the task would read `{got}` — write the class "
+                         "on the line under the heading")
+    return out
+
+
 def cmd_work(cmd_args):
     """The `tasks work` arm — body moved verbatim from cli.py (1.5.9 split)."""
     if not cmd_args:
@@ -1850,7 +1987,6 @@ def cmd_work(cmd_args):
         # template's `pending` to `in_progress`.
         # Expand stubs on activation
         task_content = read_task_text(task_file)
-        import re as _stub_re
         # F7: custom playbook type names carry hyphens (`sp-eval`, the flagship
         # example in playbooks-README) — `\w+` can't match `stub:sp-eval` so the
         # marker survived `work` and the stub never expanded. Accept `-` too.
@@ -1859,48 +1995,6 @@ def cmd_work(cmd_args):
         stub_type = stub_marker_type(task_content)
         stub_match = stub_type is not None
         if stub_match:
-            # Extract user's Intent and Why sections before expanding
-            def _extract_section(content, heading):
-                pattern = rf'^## {heading}\n(.*?)(?=\n## |\Z)'
-                m = _stub_re.search(pattern, content, _stub_re.MULTILINE | _stub_re.DOTALL)
-                return m.group(1).strip() if m else ""
-
-            user_intent = _extract_section(task_content, "Intent")
-            user_why = _extract_section(task_content, "Why")
-            user_refs = _extract_section(task_content, "References")
-            # Task 299 (audit 2, G6): the stub's placeholder line goes, and what an agent wrote under it stays — the
-            # References used to be dropped whole while `(optional)` was still in them
-            user_refs = "\n".join(ln for ln in user_refs.split("\n") if ln.strip().lower() != "(optional)").strip()
-            # ... and so does every section the stub template does not write (an agent's `## Notes` and its gates),
-            # carried to the end of the expanded file, before the standing gates. An unclosed fence in that text would
-            # cover the template's gates, so the expansion refuses it and writes nothing.
-            from tasks.core import _atx_h2_text, _has_unclosed_fence, _iter_nonfenced
-            _stub_lines = task_content.split("\n")
-            _heads = [i for i, _s in _iter_nonfenced(_stub_lines) if _atx_h2_text(_stub_lines[i]) is not None]
-            _own = {"## Status", "## Risk", "## Intent", "## Why", "## References"}
-            _extra: "list[str]" = []
-            # a note between the stub's title and its first section, the title and the marker excepted
-            _extra += [ln for ln in _stub_lines[1:(_heads[0] if _heads else len(_stub_lines))]
-                       if ln.strip() and stub_marker_type(ln + "\n") is None]
-            for _k, _h in enumerate(_heads):
-                if _atx_h2_text(_stub_lines[_h]) in _own:
-                    continue
-                _end = _heads[_k + 1] if _k + 1 < len(_heads) else len(_stub_lines)
-                _extra += _stub_lines[_h:_end]
-            _extra_text = "\n".join(_extra).strip("\n")
-            if _extra_text and _has_unclosed_fence(_extra_text.split("\n")):
-                print(f"Error: task {task_num}'s stub holds an unclosed code fence in a section it added; expanded, "
-                      "it would cover the template's gates. Close the fence and run `tasks work` again; nothing was "
-                      "written.", file=sys.stderr)
-                sys.exit(1)
-            # ... and so does a `## Risk` set in the stub, with the lines written under it (a rollback plan); the
-            # template's own guidance (its `>` lines) stays the template's
-            _risk_lines = [ln for ln in _extract_section(task_content, "Risk").split("\n") if not ln.lstrip().startswith(">")]
-            while _risk_lines and not _risk_lines[0].strip():
-                _risk_lines.pop(0)
-            while _risk_lines and not _risk_lines[-1].strip():
-                _risk_lines.pop()
-
             # Render full template
             task_num_int = int(task_num)
             title = task_file.parent.name.split("-", 1)[1].replace("-", " ").title()
@@ -1925,36 +2019,6 @@ def cmd_work(cmd_args):
                 if role_template:
                     full_content += "\n" + role_template + "\n"
 
-            # Inject preserved user content
-            if user_intent:
-                # Try every base-template Intent placeholder variant.
-                for placeholder in [
-                    "(what we want to achieve \u2014 the outcome, not the activity)",
-                    "(one line \u2014 what to do and how to verify)",
-                    # F6: the `light` template's Intent placeholder (B1 twin) \u2014 was
-                    # missing here, so `tasks new --stub light <name> <intent>`
-                    # captured the intent in the stub but dropped it on activation.
-                    "(one line \u2014 what to do and what proves it worked)",
-                ]:
-                    if placeholder in full_content:
-                        full_content = full_content.replace(placeholder, user_intent)
-                        break
-            if user_why:
-                full_content = full_content.replace(
-                    "(why this matters now \u2014 urgency, context, what breaks if delayed)",
-                    user_why,
-                )
-            # F1: Inject preserved references
-            if user_refs:
-                # Replace the default References content
-                full_content = _stub_re.sub(
-                    r'(## References\n).*?(?=\n---)',
-                    f'## References\n{user_refs}',
-                    full_content,
-                    count=1,
-                    flags=_stub_re.DOTALL,
-                )
-
             # The stub's own status goes into the expanded template (post-D6 run 1): the
             # template says `pending`, and the resume / reopen that follow move only a
             # `blocked` / `done` task — a blocked or done stub then failed half-way.
@@ -1970,17 +2034,21 @@ def cmd_work(cmd_args):
                     _splice_status_value(_lines144, _pair144, _stub_status)
                     full_content = "".join(_lines144)
 
-            if _risk_lines and [ln.strip().lower() for ln in _risk_lines] != ["unclassified"]:
-                full_content = _stub_re.sub(r"(?m)^## Risk\nunclassified$",
-                                            lambda _m: "## Risk\n" + "\n".join(_risk_lines), full_content, count=1)
-            if _extra_text:
-                full_content = full_content.rstrip("\n") + "\n\n" + _extra_text + "\n"
+            # Task 299 (audit 2, G6): what an agent wrote into the stub goes into the expanded task — or the expansion
+            # refuses and writes nothing (`_carry_stub_text`). The standing gates' headings are taken too.
+            from tasks.core import append_standing_gates, load_config
+            _sg_cfg = load_config(project_path)
+            try:
+                full_content = _carry_stub_text(task_content, full_content, stub_type,
+                                                append_standing_gates(full_content, _sg_cfg, task_num_int)[0])
+            except ValueError as _e:
+                print(f"Error: task {task_num}'s stub holds {_e}. Fix the stub and run `tasks work` again; nothing "
+                      "was written.", file=sys.stderr)
+                sys.exit(1)
 
             # F8: standing gates land at expansion (a stub has no gates until
             # now) — same helper create_task uses, same LAST-gates guarantee.
-            from tasks.core import append_standing_gates, load_config
-            full_content, _sg_issues = append_standing_gates(
-                full_content, load_config(project_path), task_num_int)
+            full_content, _sg_issues = append_standing_gates(full_content, _sg_cfg, task_num_int)
             for _msg in _sg_issues:
                 print(f"[playbook] standing_gates: {_msg}", file=sys.stderr)
 
