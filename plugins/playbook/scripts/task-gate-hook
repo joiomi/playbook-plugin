@@ -40,15 +40,30 @@ pb_hop_to() {
 # Find project root
 PROJECT_DIR=$(find_project_root)
 if [ -z "$PROJECT_DIR" ]; then
-    # No project here (a session started in a parent folder): a file tool's absolute target is judged in its own
-    # project, code edits included (task 302); a target in no project passes, as before. Bash only, no python3: this
-    # hook runs at every tool call of every folder (a user-scope install; task 194's lesson). The path is read from
-    # the payload's own `"file_path"` / `"notebook_path"` text; one with an escaped quote or backslash is not read
-    # here, and the call passes as before.
+    # No project here (a session started in a parent folder): an Edit, Write, MultiEdit or NotebookEdit's absolute
+    # target is judged in its own project, code edits included (task 302); a target in no project passes, as before.
+    # In bash: this hook runs at every tool call of every folder (a user-scope install; task 194's lesson). The tool
+    # and the path are read from the payload's own text; python3 reads the path only when that text holds an escape
+    # (a `\"`, a `\\` or a `\u`), which the bash pattern cannot read. The owner is looked for from the path as
+    # written, then from its resolved form (a link outside any project to a project's file; impl round 1, codex).
     PB_RAW_INPUT=$(cat)
-    if [[ $PB_RAW_INPUT =~ \"(file_path|notebook_path)\"[[:space:]]*:[[:space:]]*\"(/[^\"\\]*)\" ]]; then
-        _pb_p=$(project_root_from "${BASH_REMATCH[2]%/*}")
-        [ -n "$_pb_p" ] && pb_hop_to "$_pb_p"
+    if [[ $PB_RAW_INPUT =~ \"tool_name\"[[:space:]]*:[[:space:]]*\"(Edit|Write|MultiEdit|NotebookEdit)\" ]]; then
+        _pb_t=""
+        if [[ $PB_RAW_INPUT =~ \"(file_path|notebook_path)\"[[:space:]]*:[[:space:]]*\"(/[^\"\\]*)\" ]]; then
+            _pb_t="${BASH_REMATCH[2]}"
+        elif [[ $PB_RAW_INPUT =~ \"(file_path|notebook_path)\"[[:space:]]*:[[:space:]]*\"/[^\"]*\\ ]]; then
+            _pb_t=$(printf '%s' "$PB_RAW_INPUT" | python3 -I -c 'import json, sys
+ti = json.load(sys.stdin).get("tool_input") or {}
+v = ti.get("file_path") or ti.get("notebook_path") if isinstance(ti, dict) else ""
+sys.stdout.write(v if isinstance(v, str) else "")' 2>/dev/null) || _pb_t=""
+        fi
+        case "$_pb_t" in /*)
+            _pb_p=$(project_root_from "${_pb_t%/*}")
+            if [ -z "$_pb_p" ] && _pb_real=$(realpath -m -- "$_pb_t" 2>/dev/null); then
+                _pb_p=$(project_root_from "${_pb_real%/*}")
+            fi
+            [ -n "$_pb_p" ] && pb_hop_to "$_pb_p" ;;
+        esac
     fi
     exit 0
 fi
@@ -306,6 +321,102 @@ case "$TOOL_NAME" in
         ;;
 esac
 
+# The hop runs before this run resolves its session or makes its session folder (impl round 1, opus: a run that hops
+# left a session folder and a walk line in a project that judged nothing); a refusal here journals what it needs.
+pb_journal_hop_refusal() {
+    local jd=""
+    [ -z "$(lanes_without_marker "$PROJECT_DIR")" ] && jd="$AGENT_DIR"
+    journal_enforcement "$jd" task-gate block "$1" "$(resolve_session_id)" "$TOOL_NAME" "$NORM_PATH"
+}
+# --- Task 302 (audit 3 G1): a task record is judged by the tree that owns it. The record guards below read only this
+# project's lanes, so the main tree's task.md seen from a Claude Code worktree (where EnterWorktree moves the cwd, and
+# so the hooks), or a worktree's seen from the main tree, was an exempt `.agent/` path here. The trees of THIS
+# repository are the main tree (the cwd's tree with its last `/.claude/worktrees/<name>` cut off) and its worktrees
+# (`.claude/worktrees/<name>`, or `<group>/<name>` under a folder that is no tree). A reading of the path — resolved,
+# normalised, as written, and the `~/` ones Guard 0.6 reads — that names `<lane>/<dir>/task.md` where `<lane>` IS a
+# lane of one of those trees (`-ef`, links followed, as pb_in_lane_tasks reads this project's: a lane or `.agent`
+# linked to a store too) is that tree's record. When every such reading is one lane and no lane of this project, the
+# gate is run once more in a tree that holds it (pb_hop_to), on the payload as sent; a path written relative (Claude
+# Code sends absolute ones) is refused rather than re-read from another directory. Readings that name records of two
+# different lanes are refused: no single tree can judge them (impl round 1: codex, agy, opus, grok). A record of an
+# unrelated project stays not this guard's (retro 107 R6, task 171: `tasks new` cannot make a task there). ---
+pb_main_tree() {
+    case "$1" in */.claude/worktrees/*) printf '%s' "${1%/.claude/worktrees/*}" ;; *) printf '%s' "$1" ;; esac
+}
+pb_has_lane() {     # pb_has_lane DIR — DIR holds `.agent/tasks` or a `.agent/<lane>/tasks`
+    local lt
+    for lt in "$1/.agent/tasks" "$1"/.agent/*/tasks; do [ -d "$lt" ] && return 0; done
+    return 1
+}
+pb_repository_trees() {     # one per line: the main tree, then each worktree that holds a lane
+    local main g w
+    main=$(pb_main_tree "$PROJECT_DIR")
+    printf '%s\n' "$main"
+    for g in "$main"/.claude/worktrees/*/; do
+        g="${g%/}"
+        [ -d "$g" ] || continue
+        if pb_has_lane "$g"; then
+            printf '%s\n' "$g"
+        elif ! [ -e "$g/.agent" ]; then
+            for w in "$g"/*/; do w="${w%/}"; [ -d "$w" ] && pb_has_lane "$w" && printf '%s\n' "$w"; done
+        fi
+    done
+}
+if [ "$TOOL_NAME" != "Bash" ]; then
+    PB_RT=""; PB_RT_TEXT=""; PB_RT_REAL=""
+    case "$FILE_PATH" in "~/"*)
+        PB_RT="$HOME/${FILE_PATH#"~/"}"
+        PB_RT_TEXT=$(realpath -m -s -- "$PB_RT" 2>/dev/null) || PB_RT_TEXT=""
+        PB_RT_REAL=$(realpath -m -- "$PB_RT" 2>/dev/null) || PB_RT_REAL="" ;;
+    esac
+    PB_REC_LANES=(); PB_REC_TREES=()
+    for _pb_r in "$REAL_PATH" "$NORM_PATH" "$FILE_PATH" "$PB_RT" "$PB_RT_TEXT" "$PB_RT_REAL"; do
+        case "$_pb_r" in */task.md) ;; *) continue ;; esac
+        _pb_d="${_pb_r%/task.md}"
+        case "${_pb_d##*/}" in ''|.|..) continue ;; esac
+        _pb_d="${_pb_d%/*}"
+        [ -n "$_pb_d" ] && [ -d "$_pb_d" ] || continue
+        while IFS= read -r _pb_t; do
+            [ -n "$_pb_t" ] || continue
+            for _pb_lt in "$_pb_t/.agent/tasks" "$_pb_t"/.agent/*/tasks; do
+                if [ -d "$_pb_lt" ] && [ "$_pb_d" -ef "$_pb_lt" ]; then
+                    PB_REC_LANES+=("$_pb_lt"); PB_REC_TREES+=("$_pb_t")
+                fi
+            done
+        done < <(pb_repository_trees)
+    done
+    if [ "${#PB_REC_LANES[@]}" -gt 0 ]; then
+        _pb_one=true; _pb_here=false; _pb_other=""
+        for _pb_k in "${!PB_REC_LANES[@]}"; do
+            [ "${PB_REC_LANES[$_pb_k]}" -ef "${PB_REC_LANES[0]}" ] || _pb_one=false
+            if [ "${PB_REC_TREES[$_pb_k]}" -ef "$PROJECT_DIR" ]; then _pb_here=true
+            elif [ -z "$_pb_other" ]; then _pb_other="${PB_REC_TREES[$_pb_k]}"; fi
+        done
+        if [ "$_pb_one" != true ]; then
+            pb_journal_hop_refusal "record of two trees"
+            cat >&2 <<MSG
+BLOCKED: this path names task records of two different trees of this repository (its readings —
+as written, normalised, resolved — lead to different lanes), so no single tree's guards can judge it.
+Edit the record by its own path, inside the tree that holds it.
+MSG
+            PB_HJ_DETAIL="record of two trees"
+            exit 2
+        fi
+        if [ "$_pb_here" != true ] && [ -n "$_pb_other" ]; then
+            case "$FILE_PATH" in
+                /*|"~/"*) pb_hop_to "$_pb_other" ;;
+                *)  pb_journal_hop_refusal "relative path to another tree's record"
+                    cat >&2 <<MSG
+BLOCKED: a path written relative to this directory names a task record of another tree of this repository
+(${_pb_other}). Name it by its absolute path, so that tree's guards judge it.
+MSG
+                    PB_HJ_DETAIL="relative path to another tree's record"
+                    exit 2 ;;
+            esac
+        fi
+    fi
+fi
+
 # Session ID: env var → ancestor-scan → pid-$PPID (see gate-echo-lib.sh::resolve_session_id)
 # Task 192 (#48): the id and what the resolver's own walk read, from ONE call (a
 # second walk would not show a transient failure of the first).
@@ -450,29 +561,6 @@ pb_is_active_record() {
     done
     return 1
 }
-
-# --- Task 302 (audit 3 G1): a task record is judged by the tree that owns it. The record guards below read only this
-# project's lanes, so the main tree's task.md seen from a Claude Code worktree (where EnterWorktree moves the cwd, and
-# so the hooks), or a worktree's seen from the main tree, was an exempt `.agent/` path here. A file tool's absolute
-# `…/.agent[/<lane>]/tasks/<dir>/task.md` whose project (found by walking up from its folder, as find_project_root
-# walks up from the cwd) is another tree of THIS repository — the main tree or one of its `.claude/worktrees/<name>`
-# — is judged there, once, on the normalised reading, then the resolved one. A record of an unrelated project stays
-# not this guard's (retro 107 R6, task 171: `tasks new` cannot make a task there). ---
-pb_main_tree() {
-    case "$1" in */.claude/worktrees/*) printf '%s' "${1%%/.claude/worktrees/*}" ;; *) printf '%s' "$1" ;; esac
-}
-if [ "$TOOL_NAME" != "Bash" ]; then
-    for _pb_r in "$NORM_PATH" "$REAL_PATH"; do
-        case "$_pb_r" in
-            /*/.agent/tasks/*/task.md|/*/.agent/*/tasks/*/task.md)
-                _pb_p=$(project_root_from "${_pb_r%/*}")
-                if [ -n "$_pb_p" ] && ! [ "$_pb_p" -ef "$PROJECT_DIR" ] \
-                   && [ "$(pb_main_tree "$_pb_p")" -ef "$(pb_main_tree "$PROJECT_DIR")" ]; then
-                    pb_hop_to "$_pb_p"
-                fi ;;
-        esac
-    done
-fi
 
 # --- Guard 0: Write — block creating new task.md files (only tasks new CLI does that) ---
 if [ "$TOOL_NAME" = "Write" ]; then

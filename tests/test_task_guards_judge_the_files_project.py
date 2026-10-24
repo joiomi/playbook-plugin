@@ -59,12 +59,12 @@ class _Tree(unittest.TestCase):
         self.home = self.root / "home"
         self.home.mkdir()
 
-    def run_hook(self, name: str, payload: dict, cwd: Path, **env) -> subprocess.CompletedProcess:
+    def run_hook(self, name: str, payload: dict, cwd: Path, ascii_json: bool = False, **env) -> subprocess.CompletedProcess:
         e = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(self.home), "LANG": "C.UTF-8",
              "PLAYBOOK_SESSION_ID": SID}
         e.update(env)
         return subprocess.run([bash_or_skip(), str(SCRIPTS / name)], cwd=cwd, env=e, text=True,
-                              input=json.dumps(payload, ensure_ascii=False), capture_output=True, timeout=60)
+                              input=json.dumps(payload, ensure_ascii=ascii_json), capture_output=True, timeout=60)
 
     def edit(self, path: Path, old: str, new: str, cwd: Path, **env) -> int:
         r = self.run_hook("task-gate-hook", {"tool_name": "Edit", "tool_input": {
@@ -223,6 +223,89 @@ class OneHop(_Tree):
         # with the hop already made (its flag set), the gate judges where it runs: no second hop
         self.assertEqual(self.status_edit(main_md, self.w, PB_GATE_HOPPED="1"), 0)
         self.assertEqual(len(self.gate_lines(self.w)) - before_w, 1)
+
+
+class RoundOne(_Tree):
+    """Impl round 1 of task 302 (opus, grok, codex, agy)."""
+
+    def setUp(self):
+        super().setUp()
+        self.main_md = self.p / ".agent" / "tasks" / "001-real" / "task.md"
+
+    def counters(self, root: Path, writes: int, tools: int):
+        d = root / ".agent" / "sessions" / SID
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "counters").write_text(f"writes={writes}\ntools={tools}\n", encoding="utf-8")
+
+    def test_a_hopped_stop_reads_the_worktrees_activity(self):
+        # opus C, grok C (reproduced), codex I: the main tree's counters are frozen when the session leaves
+        self.activate(self.p)
+        self.counters(self.p, 0, 0)
+        self.counters(self.w, 12, 40)
+        self.assertEqual(self.stop(self.w), 2)
+        self.counters(self.w, 0, 1)                                             # a chat reply, in the worktree
+        self.assertEqual(self.stop(self.w), 0)
+
+    def test_a_relative_path_to_another_trees_record_is_refused(self):
+        # agy C, opus I: the hop would re-read a relative path from another directory
+        self.activate(self.p)
+        rel = os.path.relpath(self.main_md, self.w)
+        self.assertEqual(self.edit(rel, "## Status\nin_progress", "## Status\ndone", self.w), 2)
+
+    def test_readings_that_name_two_trees_records_are_refused(self):
+        # codex I: the written reading is the worktree's record, the resolved one the main tree's
+        self.activate(self.p)
+        (self.w / "jump").symlink_to(self.p / "src")
+        old = "\n".join(f"- [ ] g{i}" for i in range(1, 7))
+        path = f"{self.w}/jump/../.agent/tasks/001-real/task.md"
+        self.assertEqual(self.edit(path, old, old.replace("- [ ]", "- [x]"), self.p), 2)
+
+    def test_a_home_relative_path_to_the_main_record_is_judged_there(self):
+        # grok I: `~/` is expanded as Guard 0.6 expands it
+        self.activate(self.p)
+        self.assertEqual(self.edit("~/proj/.agent/tasks/001-real/task.md", "## Status\nin_progress",
+                                   "## Status\ndone", self.w, HOME=str(self.root)), 2)
+
+    def test_a_record_through_a_store_the_main_agent_is_linked_to_is_judged_there(self):
+        # grok I: the record's `tasks/` folder is a lane of the main tree by identity, with no `.agent` in its text
+        store = self.root / "store"
+        (self.p / ".agent").rename(store)
+        (self.p / ".agent").symlink_to(store)
+        self.activate(self.p)
+        md = store / "tasks" / "001-real" / "task.md"
+        self.assertEqual(self.status_edit(md, self.p), 2)                       # from the main tree
+        self.assertEqual(self.status_edit(md, self.w), 2)
+
+    def test_from_no_project_an_escaped_path_or_an_outside_link_is_judged_in_its_project(self):
+        # codex I: a JSON `\u` escape, and a link outside any project to a project's record
+        q = self.root / "proiect-\u0103"
+        md = record(q)
+        r = self.run_hook("task-gate-hook", {"tool_name": "Edit", "tool_input": {
+            "file_path": str(md), "old_string": "## Status\nin_progress", "new_string": "## Status\ndone"}},
+            self.o, ascii_json=True)
+        self.assertEqual(r.returncode, 2, r.stderr)
+        link = self.o / "rec.md"
+        link.symlink_to(self.main_md)
+        self.assertEqual(self.status_edit(link, self.o), 2)
+
+    def test_from_no_project_a_shell_call_is_never_hopped(self):
+        # agy I: only a file tool's target is followed (a stray `file_path` key in a Bash payload is not)
+        before = len(self.gate_lines(self.p))
+        r = self.run_hook("task-gate-hook", {"tool_name": "Bash", "tool_input": {
+            "command": "ls", "file_path": str(self.p / "src" / "a.py")}}, self.o)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(len(self.gate_lines(self.p)), before, "the project judged a call it does not own")
+
+    def test_the_main_tree_is_the_nearest_one(self):
+        # agy m, opus m: a project inside another project's worktree has its own main tree
+        inner = self.w / "inner"
+        record(inner)
+        x = inner / ".claude" / "worktrees" / "x"
+        record(x)
+        self.activate(self.p)                                                   # a task of the OUTER main tree
+        self.assertEqual(self.stop(x), 0)
+        self.activate(inner)
+        self.assertEqual(self.stop(x), 2)
 
 
 if __name__ == "__main__":

@@ -62,7 +62,12 @@ fi
 # identity that would close the window; using it rewrites task 173's marks, so it is the owner's to schedule.
 SESSION_ID="$(resolve_session_id)"
 PB_PROMPT_GEN=none
-[ -z "$SESSION_ID" ] || PB_PROMPT_GEN=$(read_prompt_generation "$AGENT_DIR/sessions/$SESSION_ID")
+# A stop decided in the main tree for a worktree session (task 302) keeps reading the turn's activity — the counters,
+# their marks, the prompt generation and the turn-end note — in the worktree's session folder, where the session's
+# hooks keep them: the main tree's are frozen at the moment the session left (impl round 1: opus, grok — reproduced —
+# and codex: a "chat reply" release with the main task's gates open).
+PB_ACTIVITY_DIR="${PB_STOP_ACTIVITY_DIR:-$AGENT_DIR/sessions/$SESSION_ID}"
+[ -z "$SESSION_ID" ] || PB_PROMPT_GEN=$(read_prompt_generation "$PB_ACTIVITY_DIR")
 
 # Read stdin (Stop JSON) — extract stop_hook_active
 INPUT=$(cat)
@@ -137,7 +142,7 @@ fi
 pb_note_turn_end() {
     local rc=$?
     if [ "$rc" -eq 0 ] && [ -n "${SESSION_ID:-}" ] && [ "${MARKER_INVALID:-false}" != true ]; then
-        local dir="$AGENT_DIR/sessions/$SESSION_ID"
+        local dir="$PB_ACTIVITY_DIR"
         if [ -f "$dir/counters" ]; then
             local agents
             agents=$(_agent_walk all)
@@ -210,11 +215,12 @@ STATE_FILE="$SESSION_DIR/current_state"
 pb_stop_in_main_tree() {
     [ -z "${PB_STOP_HOPPED:-}" ] || return 0
     case "$PROJECT_DIR" in */.claude/worktrees/*) ;; *) return 0 ;; esac
-    local main="${PROJECT_DIR%%/.claude/worktrees/*}" root
+    local main="${PROJECT_DIR%/.claude/worktrees/*}" root
     root=$(project_root_from "$main")
     [ -n "$root" ] && [ "$root" -ef "$main" ] || return 0
+    case "$PB_ACTIVITY_DIR" in /*) ;; *) PB_ACTIVITY_DIR="$PWD/$PB_ACTIVITY_DIR" ;; esac
     cd -- "$main" 2>/dev/null || return 0
-    export PB_STOP_HOPPED=1
+    export PB_STOP_HOPPED=1 PB_STOP_ACTIVITY_DIR="$PB_ACTIVITY_DIR"
     exec bash "$HOOK_DIR/stop-hook" < <(printf '%s' "$INPUT")
 }
 
@@ -375,10 +381,10 @@ fi
 # Any `counts_unsure` entry holds them — a dangling link too, which `-e` reads as absent —
 # and so does a linked session directory: `_counters_mark` refuses to write through a link
 # (task 193), so there an uncounted call could leave no mark (impl panel r2, opus, codex).
-COUNTER_FILE="$SESSION_DIR/counters"
+COUNTER_FILE="$PB_ACTIVITY_DIR/counters"
 PB_COUNTS_SURE=true
-if [ -e "$SESSION_DIR/counts_unsure" ] || [ -L "$SESSION_DIR/counts_unsure" ] \
-   || ! _pb_session_dir_ok "$SESSION_DIR"; then    # or a linked `sessions` (task 194, impl panel r1)
+if [ -e "$PB_ACTIVITY_DIR/counts_unsure" ] || [ -L "$PB_ACTIVITY_DIR/counts_unsure" ] \
+   || ! _pb_session_dir_ok "$PB_ACTIVITY_DIR"; then    # or a linked `sessions` (task 194, impl panel r1)
     PB_COUNTS_SURE=false
 fi
 if [ -f "$COUNTER_FILE" ] && [ "${PB_GREP_RC:-0}" -le 1 ] && [ "$PB_COUNTS_SURE" = true ]; then
@@ -407,13 +413,13 @@ if [ -f "$COUNTER_FILE" ] && [ "${PB_GREP_RC:-0}" -le 1 ] && [ "$PB_COUNTS_SURE"
     # head of its nonce): one made before the user's last prompt is not this
     # turn's, whenever it reached the disk (post-D6 run 2). A `prompt_gen` that is there but
     # holds no generation (a planted directory, task 193) releases nothing.
-    PB_NOTIF_START=$(read_session_mark "$SESSION_DIR/notif_start")
-    PB_TURN_END=$(read_session_mark "$SESSION_DIR/turn_end")
+    PB_NOTIF_START=$(read_session_mark "$PB_ACTIVITY_DIR/notif_start")
+    PB_TURN_END=$(read_session_mark "$PB_ACTIVITY_DIR/turn_end")
     PB_TURN_NONCE="${PB_TURN_END#* }"
     if [ -n "$PB_NOTIF_START" ] && [ -n "$PB_TURN_END" ] \
        && [ "${PB_NOTIF_START#* }" = "$PB_TURN_NONCE" ] \
-       && ! prompt_generation_unreadable "$SESSION_DIR" \
-       && [ "${PB_TURN_NONCE%%-*}" = "$(read_prompt_generation "$SESSION_DIR")" ] \
+       && ! prompt_generation_unreadable "$PB_ACTIVITY_DIR" \
+       && [ "${PB_TURN_NONCE%%-*}" = "$(read_prompt_generation "$PB_ACTIVITY_DIR")" ] \
        && [ "$WRITES" -eq "$((10#${PB_NOTIF_START%% *}))" ]; then
         PB_HJ_DECISION=allow; PB_HJ_DETAIL="released: a notification's turn with no write"
         exit 0
