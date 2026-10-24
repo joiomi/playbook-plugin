@@ -898,9 +898,10 @@ def _findings_markers(review_mode: str) -> tuple[str, str]:
 # SHA-256 of the block's lines above it, blank lines and trailing white space left out (task 303's rule) — and a
 # re-review replaces the block only when its lines are still, byte for byte, the ones the CLI wrote
 # (`_own_findings_block`); otherwise each of them stays, after the new block, under `_KEPT_FINDINGS`.
-_KEPT_FINDINGS = ("Kept by the review writer: the previous findings block was not, byte for byte, the one it wrote (a line "
-                  "added, changed or taken out, or no digest line), so each of its lines stays below, its old findings "
-                  "among them; every single-judge review's text is also in judge-single.md.")
+_KEPT_FINDINGS = ("Kept by the review writer: the previous findings block was not the one it wrote (a line added, changed "
+                  "or taken out, or no digest line), so each of its lines stays below, its old findings among them; "
+                  "since task 304, each single-judge review's text is also recorded in judge-single.md when that append "
+                  "succeeds.")
 
 
 def _findings_digest(lines: "list[str]") -> str:
@@ -985,12 +986,13 @@ def _append_review_to_judge_md(task_dir, review_mode: str, seat: str, findings: 
             old = path.read_text(encoding="utf-8") if path.exists() else ""
             head = "" if old.strip() else "# Single-judge reviews (appended, oldest first)\n\n"
             atomic_write(path, (old.rstrip("\n") + "\n\n\n" if old.strip() else head) + block)
-    except OSError:
+    except (OSError, RuntimeError):                     # RuntimeError: the lock's LockTimeout (task 304, impl round 1)
         return None
     return path
 
 
-def _write_review_findings(task_file: Path, review_mode: str, findings: str, receipt: str = "") -> str | None:
+def _write_review_findings(task_file: Path, review_mode: str, findings: str, receipt: str = "",
+                           on_record: bool = True) -> str | None:
     """Write a single judge's findings into task.md. Returns None on success,
     else a human-readable reason it refused.
 
@@ -1018,18 +1020,18 @@ def _write_review_findings(task_file: Path, review_mode: str, findings: str, rec
     except Exception as _lock_err:      # noqa: BLE001 — never block a delivered review
         return f"could not lock {task_file.name}: {_lock_err}"
     try:
-        return _write_review_findings_locked(task_file, review_mode, findings, receipt)
+        return _write_review_findings_locked(task_file, review_mode, findings, receipt, on_record)
     finally:
         _lock_cm.__exit__(None, None, None)
 
 
 def _write_review_findings_locked(task_file: Path, review_mode: str, findings: str,
-                                  receipt: str = "") -> "str | None":
-    """The body of `_write_review_findings`, run with the task lock held."""
-    section = _REVIEW_SECTIONS.get(review_mode)
-    if section is None:
+                                  receipt: str = "", on_record: bool = True) -> "str | None":
+    """The body of `_write_review_findings`, run with the task lock held. The block gets its digest line only
+    `on_record`: when the review's text is recorded in judge-single.md (task 304, impl round 1) — a block with none is
+    kept by the next review, so a run whose record failed keeps its text in task.md."""
+    if _REVIEW_SECTIONS.get(review_mode) is None:
         return f"unknown review mode {review_mode!r}"
-    heading, placeholders = section
     open_m, close_m = _findings_markers(review_mode)
     # Task 200 (V6): quoted line by line, as judge-single.md holds them — a judge's `## Status` / `blocked`,
     # `## Owner rulings`, `## Risk`, `- [ ]` or `- [x] … impl-review` lines are none of those in task.md (on 1.6.1 a
@@ -1039,51 +1041,16 @@ def _write_review_findings_locked(task_file: Path, review_mode: str, findings: s
     # The CLI's own receipt (a degraded tamper guard) is the writer's line: unquoted, right after its marker (II-3).
     if receipt:
         body = _neutralise_markers(_one_line(receipt).strip(), review_mode) + "\n\n" + body
-    block = f"{open_m}\n{body}\n{_findings_digest_line(review_mode, body.split(chr(10)))}\n{close_m}"   # (task 304)
+    digest = f"{_findings_digest_line(review_mode, body.split(chr(10)))}\n" if on_record else ""     # (task 304)
+    block = f"{open_m}\n{body}\n{digest}{close_m}"
 
     try:
         text = read_task_text(task_file, errors="strict")     # task 214 (U5): a lone CR stays inside its line
     except OSError as e:
         return f"could not read {task_file.name}: {e}"
-
-    # Operate ONLY inside the named section. Searching the whole file would let a
-    # placeholder or marker quoted anywhere else — prose, a nested example, the
-    # other review section's text — capture the write and land findings in the
-    # wrong place, or silently target text that is not a section at all.
-    sec_start = text.find(f"\n{heading}\n")
-    if sec_start == -1:
-        sec_start = 0 if text.startswith(f"{heading}\n") else -1
-    if sec_start == -1:
-        return f"{heading} section not found"
-    body_start = text.index("\n", sec_start + 1) + 1 if sec_start else len(heading) + 1
-    next_heading = text.find("\n## ", body_start)
-    sec_end = len(text) if next_heading == -1 else next_heading + 1
-    section, before, after = text[body_start:sec_end], text[:body_start], text[sec_end:]
-
-    n_open, n_close = section.count(open_m), section.count(close_m)
-    if n_open or n_close:
-        if n_open != 1 or n_close != 1:
-            return (f"{heading} has {n_open} opening and {n_close} closing "
-                    f"findings markers — expected exactly one of each")
-        start, end = section.index(open_m), section.index(close_m)
-        if end < start:
-            return f"{heading} findings markers are out of order"
-        old = section[start + len(open_m):end].strip("\n").split("\n")
-        kept = ""                                       # the CLI's own block as it wrote it: replaced (task 304)
-        if not _own_findings_block(old, review_mode) and any(ln.strip() for ln in old):
-            kept = "\n\n" + _KEPT_FINDINGS + "\n\n" + "\n".join(old)
-        section = section[:start] + block + kept + section[end + len(close_m):]
-    else:
-        _once = [p for p in placeholders if section.count(p) == 1]
-        _multi = [p for p in placeholders if section.count(p) > 1]
-        if _once:
-            section = section.replace(_once[0], block, 1)
-        elif _multi:
-            return f"{heading} placeholder appears more than once"
-        else:
-            return (f"{heading} has neither its placeholder nor findings markers "
-                    f"(hand-edited?)")
-    new_text = before + section + after
+    new_text, why = _splice_findings(text, review_mode, block)
+    if new_text is None:
+        return why
 
     # Atomic: task.md IS the execution trace, so an interrupt must not truncate
     # it. Package primitive: same-dir temp + fsync + os.replace, cleaning up the
@@ -1094,6 +1061,67 @@ def _write_review_findings_locked(task_file: Path, review_mode: str, findings: s
     except OSError as e:
         return f"could not write {task_file.name}: {e}"
     return None
+
+
+def _findings_place(task_file: Path, review_mode: str) -> "str | None":
+    """Why task.md has no place for a review's findings, or None when it has one — read, not written (task 304: the
+    caller records the review's text first and must say where its findings go)."""
+    try:
+        text = read_task_text(task_file, errors="strict")
+    except OSError as e:
+        return f"could not read {task_file.name}: {e}"
+    return _splice_findings(text, review_mode, "")[1]
+
+
+def _splice_findings(text: str, review_mode: str, block: str) -> "tuple[str | None, str | None]":
+    """`text` with `block` in its findings place — (the new text, None) — or (None, why there is no place)."""
+    section = _REVIEW_SECTIONS.get(review_mode)
+    if section is None:
+        return None, f"unknown review mode {review_mode!r}"
+    heading, placeholders = section
+    open_m, close_m = _findings_markers(review_mode)
+
+    # Operate ONLY inside the named section. Searching the whole file would let a
+    # placeholder or marker quoted anywhere else — prose, a nested example, the
+    # other review section's text — capture the write and land findings in the
+    # wrong place, or silently target text that is not a section at all.
+    sec_start = text.find(f"\n{heading}\n")
+    if sec_start == -1:
+        sec_start = 0 if text.startswith(f"{heading}\n") else -1
+    if sec_start == -1:
+        return None, f"{heading} section not found"
+    body_start = text.index("\n", sec_start + 1) + 1 if sec_start else len(heading) + 1
+    next_heading = text.find("\n## ", body_start)
+    sec_end = len(text) if next_heading == -1 else next_heading + 1
+    section, before, after = text[body_start:sec_end], text[:body_start], text[sec_end:]
+
+    n_open, n_close = section.count(open_m), section.count(close_m)
+    if n_open or n_close:
+        if n_open != 1 or n_close != 1:
+            return None, (f"{heading} has {n_open} opening and {n_close} closing "
+                          f"findings markers — expected exactly one of each")
+        start, end = section.index(open_m), section.index(close_m)
+        if end < start:
+            return None, f"{heading} findings markers are out of order"
+        old = section[start + len(open_m):end].strip("\n").split("\n")
+        rest = section[end + len(close_m):]
+        kept = ""                                       # the CLI's own block as it wrote it: replaced (task 304)
+        if not _own_findings_block(old, review_mode) and any(ln.strip() for ln in old):
+            kept = "\n\n" + _KEPT_FINDINGS + "\n\n" + "\n".join(old)
+            if rest and not rest.startswith("\n"):     # text on the closer's own line keeps a line of its own
+                kept += "\n"
+        section = section[:start] + block + kept + rest
+    else:
+        _once = [p for p in placeholders if section.count(p) == 1]
+        _multi = [p for p in placeholders if section.count(p) > 1]
+        if _once:
+            section = section.replace(_once[0], block, 1)
+        elif _multi:
+            return None, f"{heading} placeholder appears more than once"
+        else:
+            return None, (f"{heading} has neither its placeholder nor findings markers "
+                          f"(hand-edited?)")
+    return before + section + after, None
 
 
 def _judge_log_name(backend: str) -> str:
@@ -4171,16 +4199,28 @@ def _cmd_single_review(cmd, cmd_args):
         _receipt = f"**Tamper guard: {_tamper_receipt}**" if _tamper_changes["cautions"] else ""
         if _soft_note:              # task 264: the CLI's line too, never inside the judge's quoted text
             _receipt = (_receipt + " " if _receipt else "") + _one_line(_soft_note)
-        refusal = _write_review_findings(task_file, review_mode, _findings_text, receipt=_receipt)
+        # Task 304 (impl round 1, codex and grok): the review's text goes on record FIRST — task.md's block is
+        # replaceable, and a kill or a failed append between the two writes left that run's text only there. A block
+        # whose record failed is written with no digest line, so the next review keeps it.
+        refusal = _findings_place(task_file, review_mode)
+        landed = (_append_review_to_judge_md(task_file.parent, review_mode, _spend_seat, _findings_text, "",
+                                             receipt=_receipt, in_task_md=True) if refusal is None else None)
+        if refusal is None:
+            refusal = _write_review_findings(task_file, review_mode, _findings_text, receipt=_receipt,
+                                             on_record=landed is not None)
+            if refusal is not None and landed is not None:   # the place went between the look and the write:
+                print(f"Findings written to {landed.relative_to(project_path)} "   # the record holds them
+                      f"(task.md has no place for them now: {refusal})", flush=True)
+                sys.exit(result.returncode)
         if refusal is None:
             print(f"Findings written to {task_file.relative_to(project_path)} "
                   f"(## {'Plan' if review_mode == 'plan' else 'Implementation'} Review)",
                   flush=True)
             # the CLI's record that it ran (task 290): without it the close has no evidence of this review
-            if not _append_review_to_judge_md(task_file.parent, review_mode, _spend_seat, _findings_text, "",
-                                              receipt=_receipt, in_task_md=True):
+            if landed is None:
                 print(f"  ⚠ could not record the review in {SINGLE_JUDGE_FILE} — the close will not count it "
-                      "as review evidence", file=sys.stderr, flush=True)
+                      "as review evidence; its findings in task.md have no digest line, so the next review keeps "
+                      "them", file=sys.stderr, flush=True)
         else:
             # Task 117 (gauntlet 2 item 28): task.md has no place for the findings (a
             # light/quick task, a compacted section) and we still never GUESS where to
