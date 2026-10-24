@@ -103,6 +103,21 @@ class WhatWasWrittenIsKept(_Stub):
         self.assertIn("PREAMBLE-NOTE-3: split this into two tasks if the API is late", self.text())
 
 
+    def test_the_standing_gates_stay_the_last_gates(self):
+        """Row 8 (my mutant run): with a standing gate configured, a section the stub added (and its gate) goes in
+        before it — the standing gates stay the LAST gates (PB-TASK-STANDING-GATES)."""
+        import json
+        (self.project / ".agent" / "config.json").write_text(json.dumps(
+            {"standing_gates": [{"title": "Changelog", "text": "Add the user-visible change to CHANGELOG.md"}]}),
+            encoding="utf-8")
+        self.stub(lambda t: t.rstrip("\n") + "\n\n## Notes\n- [ ] GATE-5: ask about rate limits\n")
+        r = self.expand()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        gates = [ln for ln in self.text().splitlines() if ln.startswith("- [ ]")]
+        self.assertIn("- [ ] GATE-5: ask about rate limits", gates)
+        self.assertTrue(gates[-1].startswith("- [ ] Add the user-visible change"), gates[-3:])
+
+
 class TheExpansionStaysSafe(_Stub):
     def test_an_unclosed_fence_in_the_added_text_refuses(self):
         """Row 4: an unclosed fence in what the stub added would cover the template's gates: the expansion refuses,
