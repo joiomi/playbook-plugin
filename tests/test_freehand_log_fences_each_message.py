@@ -116,6 +116,20 @@ class TheLog(unittest.TestCase):
         self.assertEqual(_gate_counts(text), _gate_counts(before))
         self.assertIn("`" * 5 + "text\n~~~\n", text)
 
+    def test_text_before_a_messages_header_is_kept_inside_its_fence(self):
+        # row 7 (found by my mutant run): a block of a hand-edited chat log with lines before its header (here an open
+        # fence and a line) keeps them, inside the message's fence, after the header; the gates count the same
+        before = self.tf.read_text(encoding="utf-8")
+        stamp = (datetime.now(timezone.utc) + timedelta(minutes=1)).strftime("%Y-%m-%d %H:%M:%S UTC")
+        (self.project / ".agent" / "chat_log.md").write_text(
+            f"# Project Chat Log\n\n---\n\n{FENCE3}\nstray line\n**[M001]** [{stamp}] `USER` (claude/{SID})\n\n"
+            "the message\n", encoding="utf-8")
+        r = self.run_tasks("freehand", "log")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        text = self.tf.read_text(encoding="utf-8")
+        self.assertIn("`" * 4 + "text\n" + FENCE3 + "\nstray line\nthe message\n" + "`" * 4, text)
+        self.assertEqual(_gate_counts(text), _gate_counts(before))
+
 
 def _live_h2(lines: "list[str]") -> "list[str]":
     from tasks.core import _atx_h2_text, _iter_nonfenced
