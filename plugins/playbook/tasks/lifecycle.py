@@ -1868,6 +1868,38 @@ def cmd_work(cmd_args):
             user_intent = _extract_section(task_content, "Intent")
             user_why = _extract_section(task_content, "Why")
             user_refs = _extract_section(task_content, "References")
+            # Task 299 (audit 2, G6): the stub's placeholder line goes, and what an agent wrote under it stays — the
+            # References used to be dropped whole while `(optional)` was still in them
+            user_refs = "\n".join(ln for ln in user_refs.split("\n") if ln.strip().lower() != "(optional)").strip()
+            # ... and so does every section the stub template does not write (an agent's `## Notes` and its gates),
+            # carried to the end of the expanded file, before the standing gates. An unclosed fence in that text would
+            # cover the template's gates, so the expansion refuses it and writes nothing.
+            from tasks.core import _atx_h2_text, _has_unclosed_fence, _iter_nonfenced
+            _stub_lines = task_content.split("\n")
+            _heads = [i for i, _s in _iter_nonfenced(_stub_lines) if _atx_h2_text(_stub_lines[i]) is not None]
+            _own = {"## Status", "## Risk", "## Intent", "## Why", "## References"}
+            _extra: "list[str]" = []
+            # a note between the stub's title and its first section, the title and the marker excepted
+            _extra += [ln for ln in _stub_lines[1:(_heads[0] if _heads else len(_stub_lines))]
+                       if ln.strip() and stub_marker_type(ln + "\n") is None]
+            for _k, _h in enumerate(_heads):
+                if _atx_h2_text(_stub_lines[_h]) in _own:
+                    continue
+                _end = _heads[_k + 1] if _k + 1 < len(_heads) else len(_stub_lines)
+                _extra += _stub_lines[_h:_end]
+            _extra_text = "\n".join(_extra).strip("\n")
+            if _extra_text and _has_unclosed_fence(_extra_text.split("\n")):
+                print(f"Error: task {task_num}'s stub holds an unclosed code fence in a section it added; expanded, "
+                      "it would cover the template's gates. Close the fence and run `tasks work` again; nothing was "
+                      "written.", file=sys.stderr)
+                sys.exit(1)
+            # ... and so does a `## Risk` set in the stub, with the lines written under it (a rollback plan); the
+            # template's own guidance (its `>` lines) stays the template's
+            _risk_lines = [ln for ln in _extract_section(task_content, "Risk").split("\n") if not ln.lstrip().startswith(">")]
+            while _risk_lines and not _risk_lines[0].strip():
+                _risk_lines.pop(0)
+            while _risk_lines and not _risk_lines[-1].strip():
+                _risk_lines.pop()
 
             # Render full template
             task_num_int = int(task_num)
@@ -1913,7 +1945,7 @@ def cmd_work(cmd_args):
                     user_why,
                 )
             # F1: Inject preserved references
-            if user_refs and "(optional)" not in user_refs.lower():
+            if user_refs:
                 # Replace the default References content
                 full_content = _stub_re.sub(
                     r'(## References\n).*?(?=\n---)',
@@ -1937,6 +1969,12 @@ def cmd_work(cmd_args):
                 if _pair144 is not None:
                     _splice_status_value(_lines144, _pair144, _stub_status)
                     full_content = "".join(_lines144)
+
+            if _risk_lines and [ln.strip().lower() for ln in _risk_lines] != ["unclassified"]:
+                full_content = _stub_re.sub(r"(?m)^## Risk\nunclassified$",
+                                            lambda _m: "## Risk\n" + "\n".join(_risk_lines), full_content, count=1)
+            if _extra_text:
+                full_content = full_content.rstrip("\n") + "\n\n" + _extra_text + "\n"
 
             # F8: standing gates land at expansion (a stub has no gates until
             # now) — same helper create_task uses, same LAST-gates guarantee.

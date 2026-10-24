@@ -14367,7 +14367,7 @@
     {
       "id": "PB-TASK-STUB-EXPANSION",
       "category": "task-lifecycle",
-      "statement": "tasks new --stub accepts the flag in any argument position, preserves the intent text, and on activation expands into the matching built-in or custom playbook with the configured standing gates applied.",
+      "statement": "tasks new --stub accepts the flag in any argument position, preserves the intent text, and on activation expands into the matching built-in or custom playbook with the configured standing gates applied. The expansion keeps what was written into the stub: References text beside the `(optional)` placeholder (the placeholder line goes), the `## Risk` with the lines under it, a note above its first section, and every section the stub template does not write, with its gates, carried before the standing gates; an unclosed fence in that carried text refuses the expansion, nothing written (task 299, audit 2 G6; they used to be dropped without a word).",
       "owner": [
         {
           "path": "plugins/playbook/tasks/lifecycle.py",
@@ -14385,6 +14385,25 @@
       "failure_consequence": "High",
       "claim_kind": "mechanical",
       "proofs": [
+        {
+          "type": "executable integration",
+          "path": "tests/test_stub_expansion_keeps_what_was_written.py",
+          "reference": "WhatWasWrittenIsKept.test_an_added_section_and_its_gate_are_kept",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_stub_expansion_keeps_what_was_written.py",
+            "reference": "TheExpansionStaysSafe.test_an_untouched_stub_expands_with_nothing_added"
+          },
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stub_expansion_keeps_what_was_written.py",
+          "reference": "TheExpansionStaysSafe.test_an_unclosed_fence_in_the_added_text_refuses",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
         {
           "type": "executable integration",
           "path": "tests/test_panel_1512_fixes.py",
