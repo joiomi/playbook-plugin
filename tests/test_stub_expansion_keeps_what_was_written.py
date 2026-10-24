@@ -219,7 +219,8 @@ class WhatWasWrittenIsKept(_Stub):
         self.assertIn("TOP-NOTE-1: before the title", t)
         self.assertEqual(t.count("# 001 - Importer\n"), 1)
         self.setUp()
-        self.stub(lambda t: t.replace("# 001 - Importer\n", "# 001 - Importer, the v2 API\n", 1).rstrip("\n")
+        self.stub(lambda t: t.replace("# 001 - Importer\n", "# 001 - Importer, the v2 API\n", 1)
+                  .replace("<!-- stub:feature -->\n", "<!-- stub:feature -->\nNOTE-8: above the sections\n", 1).rstrip("\n")
                   + "\n\n## From the stub\nMINE-1: my own section\n")
         r = self.expand()
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -227,6 +228,7 @@ class WhatWasWrittenIsKept(_Stub):
         self.assertTrue(t.startswith("# 001 - Importer, the v2 API\n"), t[:80])
         self.assertEqual(t.count("\n## From the stub\n"), 1)
         self.assertIn("MINE-1: my own section", t)
+        self.assertIn("NOTE-8: above the sections", t.split("\n## From the stub\n", 1)[1])
 
     def test_a_gate_first_under_the_status_is_kept(self):
         """Row 23 (impl round 2: codex, grok): a gate written as the first line under the stub's `## Status` is not a
