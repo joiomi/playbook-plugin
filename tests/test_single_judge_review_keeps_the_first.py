@@ -211,6 +211,26 @@ class EndToEnd(unittest.TestCase):
         self.assertNotIn("SECRET-OUTSIDE", log.read_text(encoding="utf-8"))
         self.assertEqual(outside.read_text(encoding="utf-8"), "SECRET-OUTSIDE\n")
 
+    def test_no_lock_is_taken_through_a_linked_log_or_record(self):
+        # row 20 (post-panel run 1, codex I): a judge log, or judge-single.md, that is a link to a folder outside the
+        # project makes no lock file there — the lock is the task folder's own — and a file of that name there keeps
+        # its bytes
+        for name in ("judge-agy.log", "judge-single.md"):
+            with self.subTest(link=name):
+                outside = Path(tempfile.mkdtemp(dir=self.project.parent))
+                self.addCleanup(shutil.rmtree, outside, True)
+                (outside / "task.md.lock").write_bytes(b"USER-BYTES\n")
+                link = self.tdir / name
+                if link.is_symlink() or link.exists():
+                    link.unlink()
+                link.symlink_to(outside, target_is_directory=True)
+                self.tf.write_text(_task_text(), encoding="utf-8")
+                self.impl_review(RUN1)
+                self.assertEqual((outside / "task.md.lock").read_bytes(), b"USER-BYTES\n")
+                self.assertEqual(sorted(q.name for q in outside.iterdir()), ["task.md.lock"])
+                if link.is_symlink():
+                    link.unlink()
+
 
 class TheWriter(unittest.TestCase):
     """`_write_review_findings` on a task file, a second run after the agent wrote among the CLI's lines."""
