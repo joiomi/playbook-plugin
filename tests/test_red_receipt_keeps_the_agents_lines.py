@@ -177,19 +177,23 @@ class TheAgentsLines(Project):
         m = self.span(text)
         self.task_md.write_text(text[:m.start()] + text[m.end():].rstrip("\n") + "\n\n" + m.group(0).rstrip("\n")
                                 + "\n", encoding="utf-8")
-        self.add_after("State: ", "\n".join(["```text", "my unclosed quote", "State: quoted, not its own."]))
-        old_first = next(ln for ln in self.span(self.text()).group(0).split("\n") if ln.startswith("Written by"))
+        quote = ["```text", "my unclosed quote", "", "", "State: quoted, not its own."]
+        self.add_after("State: ", "\n".join(quote))
+        old = self.span(self.text()).group(0).split("\n")
+        old_first = next(ln for ln in old if ln.startswith("Written by"))
+        old_end = next(ln for ln in old if ln.startswith("<!-- the end of tasks red"))
         r = self.cli("red")
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
         sec = self.section().split("\n")
         k = sec.index("```text")
-        self.assertEqual(sec[k + 1:k + 3], ["my unclosed quote", "State: quoted, not its own."])
+        self.assertEqual(sec[k:k + 5], quote)                  # inside the fence its blank lines are its text
         self.assertEqual(sec[0], "<!-- pin -->")
         self.assertLess(next(i for i, ln in enumerate(sec) if ln.startswith("State: ")), k)
         # its end line is inside the fence, so no line is told for the CLI's: its old lines stay, before the opener
-        # and after it
+        # and after it, the fenced end line among them
         self.assertIn(old_first, sec[:k])
         self.assertIn(TABLE_HEAD, sec[k:])
+        self.assertIn(old_end, sec[k:])
 
     def test_its_own_shapes_between_its_lines_stay(self):
         # row 12 (impl round 1, codex and opus): the agent's complete sentences of the CLI's shapes, between its
