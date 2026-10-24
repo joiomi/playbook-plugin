@@ -5450,6 +5450,14 @@
         {
           "type": "executable integration",
           "path": "tests/test_session_injection_approves_only_the_cli.py",
+          "reference": "Chained.test_each_refused_character_alone_takes_the_approval_away",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_injection_approves_only_the_cli.py",
           "reference": "NotTheProjectsCli.test_another_tasks_binary_gets_no_decision",
           "boundary": "subprocess",
           "negative_control": null,

@@ -117,6 +117,14 @@ class Chained(_Hook):
             with self.subTest(cmd=cmd):
                 self.assertNotApproved(cmd)
 
+    def test_each_refused_character_alone_takes_the_approval_away(self):
+        # One refused character in an otherwise plain call whose subcommand is a whole word, so no other rule decides
+        # (task 301's mutants: in the lists above the line-break and `$` checks were each shadowed by another rule).
+        for ch in ("\n", "\r", ";", "&", "|", "<", ">", "$", "`", "(", ")", "{", "}", "\\", "\0"):
+            with self.subTest(ch=repr(ch)):
+                self.assertNotApproved(f"{W} work 1 {ch}x")
+        self.assertApproved(f"{W} work 1 x")
+
 
 class NotTheProjectsCli(_Hook):
     def test_another_tasks_binary_gets_no_decision(self):
