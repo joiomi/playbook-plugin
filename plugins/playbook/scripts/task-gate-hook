@@ -26,10 +26,31 @@ pb_hook_begin task-gate      # one line per run in journal/hooks.jsonl (task 222
 # is_code_file_path is defined in gate-echo-lib.sh (sourced above) so the codex
 # parity test can source it in isolation — see tests/test_gate_classifier_parity.py.
 
+# pb_hop_to DIR — task 302 (audit 3 G1): judge this call where its target's project is, by running this hook once
+# more with DIR as its working directory, on the payload as the host sent it. `exec` keeps the process (the session
+# walk reads the same chain) and runs no EXIT trap, so only the run that judges writes its journal line;
+# PB_GATE_HOPPED stops a second hop. A DIR that cannot be entered is not hopped to: the call is judged here.
+pb_hop_to() {
+    [ -z "${PB_GATE_HOPPED:-}" ] || return 0
+    cd -- "$1" 2>/dev/null || return 0
+    export PB_GATE_HOPPED=1
+    exec bash "$HOOK_DIR/task-gate-hook" < <(printf '%s' "$PB_RAW_INPUT")
+}
+
 # Find project root
 PROJECT_DIR=$(find_project_root)
 if [ -z "$PROJECT_DIR" ]; then
-    cat > /dev/null
+    # No project here (a session started in a parent folder): a file tool's absolute target is judged in its own
+    # project, code edits included (task 302); a target in no project passes, as before. Bash only, no python3: this
+    # hook runs at every tool call of every folder (a user-scope install; task 194's lesson). The path is read from
+    # the payload's own `"file_path"` / `"notebook_path"` text; one with an escaped quote or backslash is not read
+    # here, and the call passes as before.
+    PB_RAW_INPUT=$(cat)
+    if [ -z "${PB_GATE_HOPPED:-}" ] \
+       && [[ $PB_RAW_INPUT =~ \"(file_path|notebook_path)\"[[:space:]]*:[[:space:]]*\"(/[^\"\\]*)\" ]]; then
+        _pb_p=$(project_root_from "${BASH_REMATCH[2]%/*}")
+        [ -n "$_pb_p" ] && pb_hop_to "$_pb_p"
+    fi
     exit 0
 fi
 
@@ -430,6 +451,29 @@ pb_is_active_record() {
     done
     return 1
 }
+
+# --- Task 302 (audit 3 G1): a task record is judged by the tree that owns it. The record guards below read only this
+# project's lanes, so the main tree's task.md seen from a Claude Code worktree (where EnterWorktree moves the cwd, and
+# so the hooks), or a worktree's seen from the main tree, was an exempt `.agent/` path here. A file tool's absolute
+# `…/.agent[/<lane>]/tasks/<dir>/task.md` whose project (found by walking up from its folder, as find_project_root
+# walks up from the cwd) is another tree of THIS repository — the main tree or one of its `.claude/worktrees/<name>`
+# — is judged there, once, on the normalised reading, then the resolved one. A record of an unrelated project stays
+# not this guard's (retro 107 R6, task 171: `tasks new` cannot make a task there). ---
+pb_main_tree() {
+    case "$1" in */.claude/worktrees/*) printf '%s' "${1%%/.claude/worktrees/*}" ;; *) printf '%s' "$1" ;; esac
+}
+if [ "$TOOL_NAME" != "Bash" ] && [ -z "${PB_GATE_HOPPED:-}" ]; then
+    for _pb_r in "$NORM_PATH" "$REAL_PATH"; do
+        case "$_pb_r" in
+            /*/.agent/tasks/*/task.md|/*/.agent/*/tasks/*/task.md)
+                _pb_p=$(project_root_from "${_pb_r%/*}")
+                if [ -n "$_pb_p" ] && ! [ "$_pb_p" -ef "$PROJECT_DIR" ] \
+                   && [ "$(pb_main_tree "$_pb_p")" -ef "$(pb_main_tree "$PROJECT_DIR")" ]; then
+                    pb_hop_to "$_pb_p"
+                fi ;;
+        esac
+    done
+fi
 
 # --- Guard 0: Write — block creating new task.md files (only tasks new CLI does that) ---
 if [ "$TOOL_NAME" = "Write" ]; then

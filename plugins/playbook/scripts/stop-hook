@@ -202,8 +202,25 @@ fi
 SESSION_DIR="$AGENT_DIR/sessions/$SESSION_ID"
 STATE_FILE="$SESSION_DIR/current_state"
 
+# Task 302 (audit 3 G1): a session in a Claude Code worktree (`<X>/.claude/worktrees/<name>/`, where EnterWorktree
+# moves the cwd and so the hooks) with no pointer of its own there still answers for its task in the main tree X:
+# the stop is decided once more, in X, on the same payload (`exec`: the same process, no EXIT trap, so only that run
+# writes its journal line; PB_STOP_HOPPED stops a second hop). A pointer in the worktree decides there (task 298: one
+# session, one task).
+pb_stop_in_main_tree() {
+    [ -z "${PB_STOP_HOPPED:-}" ] || return 0
+    case "$PROJECT_DIR" in */.claude/worktrees/*) ;; *) return 0 ;; esac
+    local main="${PROJECT_DIR%%/.claude/worktrees/*}" root
+    root=$(project_root_from "$main")
+    [ -n "$root" ] && [ "$root" -ef "$main" ] || return 0
+    cd -- "$main" 2>/dev/null || return 0
+    export PB_STOP_HOPPED=1
+    exec bash "$HOOK_DIR/stop-hook" < <(printf '%s' "$INPUT")
+}
+
 # No active task — allow
 if [ ! -f "$STATE_FILE" ]; then
+    pb_stop_in_main_tree
     PB_HJ_DECISION=allow; PB_HJ_DETAIL="released: no active task"
     exit 0
 fi
@@ -214,6 +231,7 @@ TASK=$(head -1 "$STATE_FILE" | tr -d '[:space:]')
 # a valid pointer. Blank it so it reads as "no active task".
 case "$TASK" in *[!0-9]*) TASK="" ;; esac
 if [ -z "$TASK" ]; then
+    pb_stop_in_main_tree
     PB_HJ_DECISION=allow; PB_HJ_DETAIL="released: no active task"
     exit 0
 fi

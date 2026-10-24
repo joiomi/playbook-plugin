@@ -123,16 +123,32 @@ class FromTheMainTree(_Tree):
         self.assertEqual(self.status_edit(wt_md, self.p), 2)
 
 
-class AnotherProject(_Tree):
-    def test_a_status_edit_of_another_projects_record_is_refused(self):
+class AnotherTreeOfTheRepository(_Tree):
+    def test_a_status_edit_of_a_sibling_worktrees_record_is_refused(self):
+        self.activate(self.p)
+        cases = {"single-lane": ("w2", None), "multi-user": ("w3", "alice"), "non-ASCII name": ("ramură-ăîș", None)}
+        for label, (name, lane) in cases.items():
+            with self.subTest(case=label):
+                sib = self.p / ".claude" / "worktrees" / name
+                md = record(sib, lane=lane)
+                self.assertEqual(self.status_edit(md, sib), 2)                  # as from that worktree
+                self.assertEqual(self.status_edit(md, self.w), 2)               # from w1
+                self.assertEqual(self.status_edit(md, self.p), 2)               # from the main tree
+
+
+class AnUnrelatedProject(_Tree):
+    def test_an_unrelated_projects_records_are_not_this_guards(self):
+        # Retro 107 R6 (the owner's triage, 2026-09-29), task 171: a record of a project that is not a tree of this
+        # repository is not this guard's — `tasks new` cannot make a task there (a test fixture, a scratch project).
         self.activate(self.p)
         cases = {"single-lane": (self.root / "b", None), "multi-user": (self.root / "b2", "alice"),
                  "non-ASCII folder": (self.root / "proiect-ăîș", None)}
         for label, (b, lane) in cases.items():
             with self.subTest(case=label):
                 md = record(b, lane=lane)
-                self.assertEqual(self.status_edit(md, b), 2)                    # as from that project
-                self.assertEqual(self.status_edit(md, self.p), 2)
+                self.assertEqual(self.status_edit(md, b), 2)                    # its own guard, from inside it
+                self.assertEqual(self.status_edit(md, self.p), 0)
+                self.assertEqual(self.write(md.parent.parent / "009-x" / "task.md", "# 009 - x\n", self.p), 0)
 
 
 class FromNoProject(_Tree):
