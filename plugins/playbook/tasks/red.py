@@ -62,7 +62,6 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -833,70 +832,70 @@ def _row_table_line(e: dict) -> str:
 
 
 # The section's own lines (task 303, audit 3's G3): a run rewrote the whole section, and every line the agent wrote
-# there — a note, a `###` part, an open gate — went with it. Now its last line is its end line, which lists a digest of
-# each line it wrote above (`_end_line`), and a rewrite removes only those (`_kept`): no line is told for its own by
-# its shape (impl round 1, opus and codex: an agent's `Note: … .` was), and every other line stays.
+# there — a note, a `###` part, an open gate — went with it. Now its last line is its end line, which carries the
+# SHA-256 of the lines it wrote above it (`_end_line`), and a rewrite replaces those lines only when they are still,
+# byte for byte, the ones it wrote (`_kept`). No line is told for its own by its shape (impl round 1, opus and codex:
+# an agent's `Note: … .` was) or by a digest of its own (impl round 2, codex: an 8-hex digest collided with an agent's
+# gate, and an agent's copy of an edited line took that line's digest) — when in doubt, every line stays.
 END_HEAD = "<!-- the end of tasks red's lines: a line below this one stays when it runs again"
-_END_LIST = re.compile(r" — its lines: ((?:[0-9a-f]{8} )*[0-9a-f]{8}) -->$")
-_KEPT_WHOLE = ("Kept by `tasks red`: this section had no end line it could read, so each line it held stays below, "
-               "its own old lines among them.")
+_END_DIGEST = re.compile(r" — the digest of its lines: ([0-9a-f]{64}) -->$")
+_KEPT_WHOLE = ("Kept by `tasks red`: the lines above its end line were not, byte for byte, the ones it wrote (a line "
+               "was added, changed or taken out, or it found no end line it could read), so each line the section held "
+               "there stays below, its own old lines among them.")
 _FIRST_LINE = "Written by `tasks red` — the state across its runs: "
 _TABLE_HEAD = "| # | Kind | Test | On the base | Now | State | On the base, its first error (or last line) | Run |"
 _TABLE_RULE = "|---|------|------|-------------|-----|-------|---------------------------------------------|-----|"
 
 
-def _line_digest(line: str) -> str:
-    """A line's digest, as the end line lists it — trailing white space left out (an editor may add it: impl round 1,
-    opus and sonnet)."""
-    return hashlib.sha256(line.rstrip().encode("utf-8")).hexdigest()[:8]
+def _block_digest(lines: "list[str]") -> str:
+    """The digest an end line carries: of the lines above it, the heading left out — blank lines left out, and each
+    line without its trailing white space (an editor may add it: impl round 1, opus and sonnet)."""
+    return hashlib.sha256("\n".join(ln.rstrip() for ln in lines if ln.strip()).encode("utf-8")).hexdigest()
 
 
 def _end_line(lines: "list[str]") -> str:
-    """The end line: the digest of each line above it that is not blank, the heading left out."""
-    return f"{END_HEAD} — its lines: {' '.join(_line_digest(ln) for ln in lines if ln.strip())} -->"
+    """The end line under `lines`, the CLI's lines of the section but its heading."""
+    return f"{END_HEAD} — the digest of its lines: {_block_digest(lines)} -->"
 
 
-def _end_digests(line: str) -> "Counter[str] | None":
-    """The digests an end line lists, each as many times as it is listed — or None: not an end line, or one whose list
-    cannot be read."""
+def _end_digest(line: str) -> "str | None":
+    """The digest an end line carries — or None: not an end line, or one that is not as the CLI wrote it."""
     ln = line.rstrip()
-    m = _END_LIST.search(ln)
-    if not ln.startswith(END_HEAD) or m is None or ln[:m.start()] != END_HEAD:
+    m = _END_DIGEST.search(ln)
+    if m is None or ln[:m.start()] != END_HEAD:
         return None
-    return Counter(m.group(1).split())
+    return m.group(1)
 
 
 def _kept(lines: "list[str]", a: int, b: int) -> "list[str]":
-    """What a rewrite keeps of the section at [a, b) — its heading at `a` (task 303). Its end line is the first live
-    line with a list `_end_digests` reads. Below it every line stays as it is. Above it, a live line whose digest the
-    list names is the CLI's and goes (each listed digest once); every other line stays, in order, under one blank line,
-    a run of blank lines between them kept as one — a line in a code fence (the writers' fail-closed view: after an
-    unclosed opener, every line), a line the agent wrote, a line of the CLI's the agent edited. With no such end line
-    (a section written before task 303, or one whose end line was taken out, edited or fenced) nothing is the CLI's:
-    every line stays, under `_KEPT_WHOLE`. The list ends with a blank line, as the section always did."""
+    """What a rewrite keeps of the section at [a, b) — its heading at `a` (task 303). Its end line is the first line
+    outside a code fence (the writers' fail-closed view: after an unclosed opener, every line is fenced) that begins as
+    one. Below it every line stays as it is. The lines above it go only when their digest is the one it carries: they
+    are the CLI's, as it wrote them. Otherwise — a line added, changed or taken out among them, or no end line it can
+    read (none, changed, or fenced) — nothing is the CLI's: every line above it (with an end line it cannot read, every
+    line of the section, that one among them) stays, in order, under `_KEPT_WHOLE`, a run of blank lines outside a
+    fence kept as one. The list ends with a blank line, as the section always did."""
     from tasks.core import _iter_nonfenced
     live = {i for i, _s in _iter_nonfenced(lines)}
     end = next((i for i in range(a + 1, b) if i in live and lines[i].rstrip().startswith(END_HEAD)), None)
-    listed = _end_digests(lines[end]) if end is not None else None
-    if listed is None:
-        end = b
+    digest = _end_digest(lines[end]) if end is not None else None
+    if end is None or digest is None:
+        held, after = range(a + 1, b), []
+    elif digest == _block_digest(lines[a + 1:end]):
+        held, after = range(0), lines[end + 1:b]
+    else:
+        held, after = range(a + 1, end), lines[end + 1:b]
     above: "list[str]" = []
-    gap = False                                         # a live blank line since the last line kept
-    for i in range(a + 1, end):
+    gap = False                                         # a blank line outside a fence since the last line kept
+    for i in held:
         if i in live and not lines[i].strip():
             gap = True
-            continue
-        if i in live and listed is not None and listed[_line_digest(lines[i])] > 0:
-            listed[_line_digest(lines[i])] -= 1
             continue
         if above and gap and above[-1].strip():
             above.append("")
         above.append(lines[i])
         gap = False
-    if above and listed is None:
-        above = [_KEPT_WHOLE, ""] + above
-    out = [""] + above if above else []
-    after = lines[end + 1:b]
+    out = ["", _KEPT_WHOLE, ""] + above if above else []
     if out and after and after[0].strip():
         out.append("")
     out += after
