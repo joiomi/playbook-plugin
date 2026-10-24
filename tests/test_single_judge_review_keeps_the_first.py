@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+"""A second single-judge review keeps the first one's text and the agent's triage (task 304; audit 3's G4, the
+owner's ruling of 2026-10-24 12:49: "4 grave, G2 nu (Recomandat)").
+
+A second `tasks plan-review` / `impl-review` replaced everything between the findings markers in task.md, so the first
+review's findings and any triage the agent wrote among them were deleted; judge-single.md held only the heading of a
+review whose findings went into task.md, and the judge's log keeps only the newest run — no copy of the first review
+survived. Now every single-judge review's text is appended, quoted, to judge-single.md, and the block in task.md ends
+with a digest line of the CLI's: a re-review replaces the block only when its lines are still, byte for byte, the ones
+the CLI wrote — otherwise every one of them stays, after the new block, under a line that says why (task 303's rule).
+
+Each test names the row of task 304's contract it proves. End to end through the real `cmd_single_review`, the
+judge's process mocked at `sandbox.run` (as `test_review_findings_land` does); at the writer, `_write_review_findings`.
+Pure stdlib unittest. Run: python3 -m unittest tests.test_single_judge_review_keeps_the_first
+"""
+from __future__ import annotations
+
+import contextlib
+import io
+import json
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "plugins" / "playbook"))
+sys.path.insert(0, str(ROOT))
+
+from provider import sandbox  # noqa: E402
+from tasks import review  # noqa: E402
+from tasks.core import _gate_counts  # noqa: E402
+from tests.test_review_findings_land import _chdir, _stdout_with_review  # noqa: E402
+
+RUN1 = "**Important** — FINDING-RUN-1: `x.py:1` prints instead of returning.\n\nCAP: 1/5 reported, exhausted"
+RUN2 = "**Important** — FINDING-RUN-2: `x.py:2` drops the error.\n\nCAP: 1/5 reported, exhausted"
+TRIAGE = "- ACCEPT, FINDING-RUN-1: fixed in x.py, red first (row 9)."
+GATE = "- [ ] MY-GATE: rerun the review once the fix is in"
+OPEN = "<!-- playbook:impl-review-findings -->"
+CLOSE = "<!-- /playbook:impl-review-findings -->"
+
+
+def _task_text(mode_sections: str = "impl") -> str:
+    body = "# 042 - demo\n## Status\npending\n## Risk\nreversible\n## Intent\nx\n## Work Plan\n- [x] a gate\n"
+    if "plan" in mode_sections:
+        body += "\n## Plan Review\n- [ ] plan review gate\n\n(plan review triage appears here)\n"
+    body += "\n## Implementation Review\n- [ ] review gate\n\n(implementation review triage appears here)\n"
+    return body + "\n## Debrief\n- [ ] debrief gate\n"
+
+
+class EndToEnd(unittest.TestCase):
+    """Two real `impl-review` runs of a task whose `## Implementation Review` holds its placeholder."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.project = Path(self._tmp.name)
+        self.agent = self.project / ".agent"
+        self.tdir = self.agent / "tasks" / "042-demo"
+        self.tdir.mkdir(parents=True)
+        (self.agent / "models.json").write_text(json.dumps(
+            {"panel": ["agy:gemini-3.8-flash-high"], "default_judge": "agy:gemini-3.8-flash-high"}),
+            encoding="utf-8")
+        review._PB_JOURNAL_MOD = None
+        review._PB_JOURNAL_LOADED = False
+        for redirect in (contextlib.redirect_stdout, contextlib.redirect_stderr):
+            cm = redirect(io.StringIO())
+            cm.__enter__()
+            self.addCleanup(cm.__exit__, None, None, None)
+        self.tf = self.tdir / "task.md"
+        self.tf.write_text(_task_text(), encoding="utf-8")
+
+    def impl_review(self, text: str) -> int:
+        stdout = _stdout_with_review(text)
+
+        def run(agent, args, **kw):
+            return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
+        with mock.patch.object(sandbox, "run", run), \
+                mock.patch.object(shutil, "which", lambda name: "/usr/bin/" + name), _chdir(self.project):
+            try:
+                review.cmd_single_review(
+                    "impl-review", ["042", "--backend", "agy", "--model", "gemini-3.8-flash-high"])
+            except SystemExit as e:
+                return e.code or 0
+        return 0
+
+    def judge_single(self) -> str:
+        return (self.tdir / "judge-single.md").read_text(encoding="utf-8")
+
+    def test_run_ones_text_and_the_triage_survive_run_two(self):
+        # row 1 (the bug): the agent writes its triage right under run 1's finding, inside the block; after run 2
+        # the triage is still in task.md and run 1's finding is still on record (judge-single.md), run 2's in the block
+        self.assertEqual(self.impl_review(RUN1), 0)
+        text = self.tf.read_text(encoding="utf-8")
+        i = text.index("FINDING-RUN-1")
+        j = text.index("\n", i)
+        self.tf.write_text(text[:j + 1] + TRIAGE + "\n" + text[j + 1:], encoding="utf-8")
+        self.assertEqual(self.impl_review(RUN2), 0)
+        text = self.tf.read_text(encoding="utf-8")
+        self.assertIn(TRIAGE, text.split("\n"))
+        self.assertIn("FINDING-RUN-2", text[text.index(OPEN):text.index(CLOSE)])
+        self.assertIn("FINDING-RUN-1", self.judge_single())
+
+    def test_every_reviews_text_is_on_record_quoted(self):
+        # row 2: every single-judge review's text is appended to judge-single.md, quoted, under its heading — also
+        # when its findings went into task.md; two runs, two headings, both texts in their order, no unquoted line
+        self.assertEqual(self.impl_review(RUN1), 0)
+        self.assertEqual(self.impl_review(RUN2), 0)
+        jm = self.judge_single()
+        self.assertEqual(jm.count("## Single-judge impl review — "), 2)
+        self.assertLess(jm.index("> **Important** — FINDING-RUN-1"), jm.index("> **Important** — FINDING-RUN-2"))
+        self.assertNotIn("\n**Important**", jm)
+        from tasks.core import has_review_evidence
+        self.assertTrue(has_review_evidence(self.tf, impl_only=True))
+
+
+class TheWriter(unittest.TestCase):
+    """`_write_review_findings` on a task file, a second run after the agent wrote among the CLI's lines."""
+
+    def task(self, text: str = "") -> Path:
+        d = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d, True)
+        f = d / "task.md"
+        f.write_text(text or _task_text("plan impl"), encoding="utf-8")
+        return f
+
+    def block_lines(self, text: str, mode: str = "impl") -> "list[str]":
+        o, c = review._findings_markers(mode)
+        return text[text.index(o):text.index(c) + len(c)].split("\n")
+
+    def test_the_agents_lines_among_the_findings_stay(self):
+        # row 3: a triage line, an open gate and an edited quoted line, written among the CLI's lines, stay after a
+        # re-review — every line of the old block, in order, after the new block, under the line that says why; the
+        # gates count the same; one marker pair; plan and impl alike
+        for mode in ("impl", "plan"):
+            with self.subTest(mode=mode):
+                f = self.task()
+                o, c = review._findings_markers(mode)
+                self.assertIsNone(review._write_review_findings(f, mode, RUN1))
+                text = f.read_text(encoding="utf-8")
+                text = text.replace("> **Important** — FINDING-RUN-1", "> **Important** — FINDING-RUN-1 (seen)", 1)
+                i = text.index("FINDING-RUN-1")
+                j = text.index("\n", i)
+                text = text[:j + 1] + TRIAGE + "\n" + GATE + "\n" + text[j + 1:]
+                f.write_text(text, encoding="utf-8")
+                old = [ln for ln in self.block_lines(text, mode)[1:-1] if ln.strip()]
+                before = _gate_counts(text)
+                self.assertIsNone(review._write_review_findings(f, mode, RUN2))
+                after = f.read_text(encoding="utf-8")
+                self.assertEqual((after.count(o), after.count(c)), (1, 1))
+                self.assertIn("FINDING-RUN-2", "\n".join(self.block_lines(after, mode)))
+                tail = after[after.index(c) + len(c):].split("\n")
+                kept = [ln for ln in tail if ln.strip()]
+                self.assertTrue(kept[0].startswith("Kept by the review writer"), kept[:2])
+                self.assertEqual(kept[1:1 + len(old)], old)
+                self.assertEqual(_gate_counts(after), before)
+
+    def test_a_block_with_no_digest_line_is_kept_whole(self):
+        # row 6: a findings block with no digest line (as written before this task) is no block the writer can tell
+        # for its own — a re-review keeps every line of it, after the new block
+        f = self.task()
+        text = f.read_text(encoding="utf-8").replace(
+            "(implementation review triage appears here)", f"{OPEN}\n> **Important** — OLD-FINDING.\n{CLOSE}", 1)
+        f.write_text(text, encoding="utf-8")
+        self.assertIsNone(review._write_review_findings(f, "impl", RUN2))
+        after = f.read_text(encoding="utf-8")
+        self.assertEqual(after.count(OPEN), 1)
+        self.assertIn("> **Important** — OLD-FINDING.", after[after.index(CLOSE):])
+        self.assertIn("FINDING-RUN-2", after[after.index(OPEN):after.index(CLOSE)])
+
+    def test_trailing_white_space_does_not_make_the_block_the_agents(self):
+        # row 8: an editor's trailing white space on the block's lines does not make it the agent's — a re-review
+        # replaces it, so run 1's text is not kept in task.md (it is on record in judge-single.md)
+        f = self.task()
+        self.assertIsNone(review._write_review_findings(f, "impl", RUN1))
+        text = f.read_text(encoding="utf-8")
+        a, b = text.index(OPEN), text.index(CLOSE)
+        padded = "\n".join(ln + "  " if ln.strip() else ln for ln in text[a:b].split("\n"))
+        f.write_text(text[:a] + padded + text[b:], encoding="utf-8")
+        self.assertIsNone(review._write_review_findings(f, "impl", RUN2))
+        after = f.read_text(encoding="utf-8")
+        self.assertNotIn("FINDING-RUN-1", after)
+        self.assertNotIn("Kept by the review writer", after)
+
+    def test_a_changed_digest_line_keeps_the_block_and_that_line(self):
+        # row 9: a digest line with one hex digit changed is no digest of the CLI's — every line of the old block
+        # stays, that line among them (task 303's post-panel Minor)
+        f = self.task()
+        self.assertIsNone(review._write_review_findings(f, "impl", RUN1))
+        lines = f.read_text(encoding="utf-8").split("\n")
+        k = next(i for i, ln in enumerate(lines) if ln.startswith("<!-- playbook:impl-review-findings-digest "))
+        hexpos = lines[k].rindex(" -->") - 1
+        lines[k] = lines[k][:hexpos] + ("0" if lines[k][hexpos] != "0" else "1") + lines[k][hexpos + 1:]
+        changed = lines[k]
+        f.write_text("\n".join(lines), encoding="utf-8")
+        self.assertIsNone(review._write_review_findings(f, "impl", RUN2))
+        after = f.read_text(encoding="utf-8")
+        tail = after[after.index(CLOSE) + len(CLOSE):]
+        self.assertIn("FINDING-RUN-1", tail)
+        self.assertIn(changed, tail.split("\n"))
+
+
+if __name__ == "__main__":
+    unittest.main()
