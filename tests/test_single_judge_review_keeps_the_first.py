@@ -178,6 +178,35 @@ class EndToEnd(unittest.TestCase):
         self.assertIn("task.md has no place for these findings", jm)
         self.assertIn("> **Important** — FINDING-RUN-1", jm)
 
+    def test_a_run_cut_after_its_log_keeps_its_text(self):
+        # row 16 (impl round 2, codex I): run 1 is cut after its judge log is saved and before its record (the look
+        # for the findings' place raises); run 2 then runs whole — run 1's text is still under .agent
+        with mock.patch.object(review, "_findings_place", mock.Mock(side_effect=KeyboardInterrupt)):
+            with self.assertRaises(KeyboardInterrupt):
+                self.impl_review(RUN1)
+        self.assertEqual(self.impl_review(RUN2), 0)
+        texts = [f.read_text(encoding="utf-8", errors="replace") for f in self.tdir.iterdir() if f.is_file()]
+        self.assertTrue(any("FINDING-RUN-1" in t for t in texts), [f.name for f in self.tdir.iterdir()])
+
+    def test_the_judge_log_keeps_every_run_newest_first(self):
+        # row 17 (impl round 2): the judge's log keeps every run, the newest first — its header (the tamper guard's
+        # line, which `single_review_tamper_degraded` reads from the top) is the newest run's
+        self.assertEqual(self.impl_review(RUN1), 0)
+        self.assertEqual(self.impl_review(RUN2), 0)
+        log = (self.tdir / "judge-agy.log").read_text(encoding="utf-8")
+        self.assertIn("FINDING-RUN-1", log)
+        self.assertLess(log.index("FINDING-RUN-2"), log.index("FINDING-RUN-1"))
+        self.assertLess(log.index("[tamper guard]"), log.index("FINDING-RUN-2"))
+
+    def test_a_task_md_that_is_not_utf8_still_gets_the_review_recorded(self):
+        # row 18 (impl round 2, opus Minor): a task.md with a byte that is not UTF-8 is no place for the findings —
+        # the review is recorded in judge-single.md, no crash, and task.md is not touched
+        self.tf.write_bytes(_task_text().encode("utf-8") + b"\nbad byte: \xff\n")
+        before = self.tf.read_bytes()
+        self.assertEqual(self.impl_review(RUN1), 0)
+        self.assertEqual(self.tf.read_bytes(), before)
+        self.assertIn("> **Important** — FINDING-RUN-1", self.judge_single())
+
 
 class TheWriter(unittest.TestCase):
     """`_write_review_findings` on a task file, a second run after the agent wrote among the CLI's lines."""
