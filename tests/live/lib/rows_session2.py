@@ -542,17 +542,20 @@ def session_id_no_allow(out: Path) -> int:
                not (p / "ran-chained.txt").exists(), f"ran-chained.txt exists: {(p / 'ran-chained.txt').exists()}; "
                f"results: {[r[:160] for r in results]}")
     q = session_project(tempdir("pb301-skip-") / "proj")
+    cap = _capture_hooks(q)
     _r2, ev2 = claude_session(run, "permissions skipped: the chained call", q, RULES + (
         "1. Run exactly this shell command: touch ran-skip.txt && .claude/bin/tasks status\nThen reply DONE.\n"))
     chained2 = _injection(ev2, "touch ran-skip.txt")
-    hist = q / ".agent" / "bash_history"
-    logged = hist.read_text(encoding="utf-8") if hist.exists() else ""
+    # what ran: Claude Code reports the input it ran in the PostToolUse payload (task 221 W5, measured live; the shell
+    # log leaves the prefix out by design, PB-SHELL-ATTRIBUTION)
+    ran = [str((x.get("tool_input") or {}).get("command", "")) for _f, _b, x in _payloads(cap)
+           if x.get("hook_event_name") == "PostToolUse" and "ran-skip" in json.dumps(x)]
     run.clause("with permissions skipped the chained call runs with the hook's prefix (the updatedInput with no "
-               "decision was applied: the shell log holds the prefixed command)",
+               "decision was applied: the PostToolUse payload reports the prefixed command)",
                (q / "ran-skip.txt").exists() and bool(chained2) and "permissionDecision" not in chained2
-               and any("export PLAYBOOK_SESSION_ID=" in l and "touch ran-skip.txt" in l for l in logged.splitlines()),
+               and any(c.startswith("export PLAYBOOK_SESSION_ID=") and "touch ran-skip.txt" in c for c in ran),
                f"ran-skip.txt exists: {(q / 'ran-skip.txt').exists()}; hook answer: {json.dumps(chained2)[:200]}; "
-               f"shell log: {[l[:200] for l in logged.splitlines() if 'ran-skip' in l]}")
+               f"PostToolUse commands: {[c[:200] for c in ran]}")
     return run.finish()
 
 
