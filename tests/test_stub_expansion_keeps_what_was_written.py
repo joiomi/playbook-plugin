@@ -21,7 +21,9 @@ from pathlib import Path
 _HERE = Path(__file__).resolve().parent
 PLUGIN = _HERE.parent / "plugins/playbook"
 sys.path.insert(0, str(PLUGIN))
-from tasks.core import _gate_counts, _has_unclosed_fence, extract_parked_items, extract_risk  # noqa: E402
+from tasks.core import (_extract_status, _gate_counts, _has_unclosed_fence, extract_parked_items,  # noqa: E402
+                        extract_risk)
+from tasks.red import parse_contract  # noqa: E402
 
 
 class _Stub(unittest.TestCase):
@@ -206,6 +208,99 @@ class WhatWasWrittenIsKept(_Stub):
         self.assertEqual(extract_risk(self.tf), "assertive")
 
 
+    def test_a_line_above_the_title_and_an_edited_title_are_kept(self):
+        """Row 24 (impl round 2: grok, agy, opus, sonnet): a line written above the stub's title is kept, the title is
+        not carried a second time, an edited title is the task's title, and the stub's own `## From the stub` section
+        takes the notes (one heading)."""
+        self.stub(lambda t: "TOP-NOTE-1: before the title\n" + t)
+        r = self.expand()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        t = self.text()
+        self.assertIn("TOP-NOTE-1: before the title", t)
+        self.assertEqual(t.count("# 001 - Importer\n"), 1)
+        self.setUp()
+        self.stub(lambda t: t.replace("# 001 - Importer\n", "# 001 - Importer, the v2 API\n", 1).rstrip("\n")
+                  + "\n\n## From the stub\nMINE-1: my own section\n")
+        r = self.expand()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        t = self.text()
+        self.assertTrue(t.startswith("# 001 - Importer, the v2 API\n"), t[:80])
+        self.assertEqual(t.count("\n## From the stub\n"), 1)
+        self.assertIn("MINE-1: my own section", t)
+
+    def test_a_gate_first_under_the_status_is_kept(self):
+        """Row 23 (impl round 2: codex, grok): a gate written as the first line under the stub's `## Status` is not a
+        status value: it stays, and the task's status is the template's, activated — never `unknown`."""
+        self.stub(lambda t: t.replace("## Status\npending\n", "## Status\n- [ ] GATE-9: keep me\npending\n", 1))
+        r = self.expand()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("- [ ] GATE-9: keep me", self.text())
+        self.assertEqual(_extract_status(self.tf), "in_progress")
+
+    def test_the_stubs_test_contract_is_the_tasks(self):
+        """Row 25 (impl round 2, codex): a `## Test contract` written into the stub is the contract the expanded task's
+        readers parse — not a table after the template's example, which they never read — and its pin stays."""
+        row = "| 1 | hostile | the importer refuses a bad file | `tests.test_importer.Bad.test_it` |"
+        self.stub(lambda t: t.rstrip("\n") + "\n\n## Test contract\n\n| # | Kind | Behavior | Test that proves it |\n"
+                  "|---|------|----------|---------------------|\n" + row + "\n")
+        r = self.expand()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        t = self.text()
+        rows, why = parse_contract(t)
+        self.assertEqual([x["line"] for x in rows or []], [row], why)
+        self.assertIn("## Test contract\n<!-- pin -->\n", t)
+
+    def test_a_fenced_copy_of_the_placeholder_stays(self):
+        """Row 27 (impl round 2: codex, opus): only the stub's live placeholder line goes — a fenced `(optional)` in an
+        agent's example stays — and the light template's own References placeholder gives way to the stub's text."""
+        self.stub(lambda t: t.replace("(optional)", "(optional)\n```\n(optional)\n```", 1))
+        r = self.expand()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("```\n(optional)\n```", self.text())
+        self.setUp()
+        self.stub(lambda t: t.replace("(optional)", "- REF-41: the light runbook"), kind="light")
+        r = self.expand()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        t = self.text()
+        self.assertIn("- REF-41: the light runbook", t)
+        self.assertNotIn("(optional context; recent chat lands here at activation)", t)
+
+    def test_a_custom_playbook_without_a_status_keeps_the_stubs(self):
+        """Row 28 (impl round 2, grok): a custom playbook with no `## Status` gets the stub's, so the task has a status
+        to activate — a blocked stub is resumed, not left with no status and failing."""
+        pb = self.project / ".agent" / "playbooks"
+        pb.mkdir()
+        (pb / "speval.md").write_text("# {{NNN}} - {{TITLE}}\n\n## Intent\n(custom)\n\n- [ ] ONLY_CUSTOM_GATE\n",
+                                      encoding="utf-8")
+        self.stub(lambda t: t.replace("## Status\npending\n", "## Status\nblocked\n", 1), kind="speval")
+        r = self.expand()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(_extract_status(self.tf), "in_progress")
+        self.assertEqual(self.text().count("## Status\n"), 1)
+
+    def test_an_untouched_risk_takes_a_custom_playbooks_default(self):
+        """Row 29 (impl round 2, opus — the stated exception): an untouched stub `## Risk` (`unclassified`, written by
+        the stub template, not the agent) under a custom playbook whose `## Risk` says `reversible` reads `reversible`,
+        the playbook's own default, as a task made from it directly does."""
+        pb = self.project / ".agent" / "playbooks"
+        pb.mkdir()
+        (pb / "speval.md").write_text("# {{NNN}} - {{TITLE}}\n\n## Status\npending\n\n## Risk\nreversible\n\n"
+                                      "## Intent\n(custom)\n\n- [ ] ONLY_CUSTOM_GATE\n", encoding="utf-8")
+        self.stub(kind="speval")
+        r = self.expand()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(extract_risk(self.tf), "reversible")
+
+    def test_a_risk_heading_in_capitals_is_the_risk(self):
+        """Row 30 (impl round 2, opus): `## RISK` is the Risk heading for the risk reader, so it is the stub's Risk for
+        the expansion too: one Risk section, the class kept."""
+        self.stub(lambda t: t.replace("## Risk\nunclassified", "## RISK\nirreversible", 1))
+        self.assertEqual(extract_risk(self.tf), "irreversible")
+        r = self.expand()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(extract_risk(self.tf), "irreversible")
+
+
 class TheExpansionStaysSafe(_Stub):
     def test_an_unclosed_fence_in_the_added_text_refuses(self):
         """Row 4: an unclosed fence in what the stub added would cover the template's gates: the expansion refuses,
@@ -311,6 +406,38 @@ class TheExpansionStaysSafe(_Stub):
         self.assertEqual(extract_risk(self.tf), "unclassified")
         self.assertIn("```\n## Risk\nreversible\n```", t)
         self.assertFalse(_has_unclosed_fence(t.split("\n")))       # the template's gates stay outside any fence
+
+    def test_a_risk_whose_saved_reading_would_change_refuses(self):
+        """Row 22 (impl round 2, codex's Critical): `reversible` followed by CR CR LF reads `unclassified` in the stub
+        (the strict bar); written back, the next read folds the CR LF and reads `reversible`. The expansion compares
+        the reading of what it would save, so it refuses and writes nothing."""
+        self.stub()
+        raw = self.tf.read_bytes().replace(b"## Risk\nunclassified\n", b"## Risk\nreversible\r\r\n", 1)
+        self.tf.write_bytes(raw)
+        self.assertEqual(extract_risk(self.tf), "unclassified")
+        r = self.expand()
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(self.tf.read_bytes(), raw)
+        self.assertEqual(extract_risk(self.tf), "unclassified")
+
+    def test_a_heading_that_takes_a_standing_gates_title_refuses(self):
+        """Row 26 (impl round 2: codex, grok, sonnet): a standing gate is skipped when its title is already a heading —
+        the standing-gate check reads every line, fences too — so a fenced `## Changelog` in an added section, or a
+        standing gate titled `From the stub` beside a carried note, refuses; nothing written."""
+        import json
+        for title, edit in (("Changelog", lambda t: t.rstrip("\n") + "\n\n## Notes\n```\n## Changelog\n```\n"),
+                            ("From the stub", lambda t: "\n".join(t.split("\n")[:1] + ["NOTE-7: above the sections"]
+                                                                   + t.split("\n")[1:]))):
+            with self.subTest(title):
+                self.setUp()
+                (self.project / ".agent" / "config.json").write_text(json.dumps(
+                    {"standing_gates": [{"title": title, "text": "STANDING-KEEP-ME"}]}), encoding="utf-8")
+                self.stub(edit)
+                before = self.text()
+                r = self.expand()
+                self.assertNotEqual(r.returncode, 0, r.stdout)
+                self.assertIn(f"## {title}", r.stdout + r.stderr)
+                self.assertEqual(self.text(), before)
 
 
 if __name__ == "__main__":
