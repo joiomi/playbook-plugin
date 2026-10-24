@@ -2643,7 +2643,7 @@ def cmd_freehand(cmd_args):
                 if msg_ts >= start_ts:
                     # task 305 (audit 3's G6): the header line, then the text fenced — pasted as it was, a message's
                     # open fence paired with a later one of the agent's and hid the gates between from the counters
-                    text = "\n".join(t for t in (block[m.end(1):].strip("\n"),) if t)
+                    text = "\n".join(t for t in (block[:m.start(1)].strip("\n"), block[m.end(1):].strip("\n")) if t)
                     extracted.append(m.group(1) + ("\n" + _chat_fenced(text) if text.strip() else ""))
 
         if not extracted:
