@@ -116,6 +116,54 @@ class EndToEnd(unittest.TestCase):
         from tasks.core import has_review_evidence
         self.assertTrue(has_review_evidence(self.tf, impl_only=True))
 
+    def test_a_run_cut_between_its_two_writes_keeps_its_text(self):
+        # row 12 (impl round 1, codex I): run 1 is killed between its two writes (whichever the writer does second
+        # raises); run 2 then runs whole — run 1's text is still in task.md or on record in judge-single.md
+        calls = {"n": 0}
+        real_write, real_append = review._write_review_findings, review._append_review_to_judge_md
+
+        def second_raises(fn):
+            def wrapped(*a, **kw):
+                calls["n"] += 1
+                if calls["n"] == 2:
+                    raise KeyboardInterrupt
+                return fn(*a, **kw)
+            return wrapped
+        with mock.patch.object(review, "_write_review_findings", second_raises(real_write)), \
+                mock.patch.object(review, "_append_review_to_judge_md", second_raises(real_append)):
+            with self.assertRaises(KeyboardInterrupt):
+                self.impl_review(RUN1)
+        self.assertEqual(calls["n"], 2)
+        self.assertEqual(self.impl_review(RUN2), 0)
+        js = self.tdir / "judge-single.md"
+        on_record = js.read_text(encoding="utf-8") if js.exists() else ""
+        self.assertTrue("FINDING-RUN-1" in self.tf.read_text(encoding="utf-8") or "FINDING-RUN-1" in on_record)
+
+    def test_a_run_whose_record_failed_keeps_its_block(self):
+        # row 13 (impl round 1, grok I): run 1's record in judge-single.md fails — its append returns None, or its
+        # lock times out (a LockTimeout, which escaped) — then run 2: run 1's text is still in task.md
+        from tasks import filelock
+        real_lock = filelock.task_lock
+
+        def lock_times_out(path, *a, **kw):
+            if Path(path).name == "judge-single.md":
+                raise filelock.LockTimeout("judge-single.md is held")
+            return real_lock(path, *a, **kw)
+        for how in ("returns None", "LockTimeout"):
+            with self.subTest(how=how):
+                self.tf.write_text(_task_text(), encoding="utf-8")
+                for f in ("judge-single.md",):
+                    (self.tdir / f).unlink(missing_ok=True)
+                if how == "returns None":
+                    patch = mock.patch.object(review, "_append_review_to_judge_md", lambda *a, **kw: None)
+                else:
+                    patch = mock.patch.object(filelock, "task_lock", lock_times_out)
+                with patch:
+                    self.impl_review(RUN1)
+                self.assertIn("FINDING-RUN-1", self.tf.read_text(encoding="utf-8"))
+                self.assertEqual(self.impl_review(RUN2), 0)
+                self.assertIn("FINDING-RUN-1", self.tf.read_text(encoding="utf-8"))
+
 
 class TheWriter(unittest.TestCase):
     """`_write_review_findings` on a task file, a second run after the agent wrote among the CLI's lines."""
@@ -201,6 +249,22 @@ class TheWriter(unittest.TestCase):
         tail = after[after.index(CLOSE) + len(CLOSE):]
         self.assertIn("FINDING-RUN-1", tail)
         self.assertIn(changed, tail.split("\n"))
+
+    def test_text_on_the_closers_line_stays_on_its_own_line(self):
+        # row 14 (impl round 1, opus Minor): the agent's text written on the closer's own line is not glued to the
+        # last kept line after a re-review that keeps the old block
+        f = self.task()
+        self.assertIsNone(review._write_review_findings(f, "impl", RUN1))
+        text = f.read_text(encoding="utf-8")
+        text = text.replace(CLOSE, CLOSE + " my note after the closer", 1)
+        i = text.index("FINDING-RUN-1")
+        j = text.index("\n", i)
+        text = text[:j + 1] + GATE + "\n" + text[j + 1:]
+        f.write_text(text, encoding="utf-8")
+        self.assertIsNone(review._write_review_findings(f, "impl", RUN2))
+        lines = f.read_text(encoding="utf-8").split("\n")
+        self.assertIn(GATE, lines)
+        self.assertIn(" my note after the closer", lines)
 
 
 class TheRecord(unittest.TestCase):
