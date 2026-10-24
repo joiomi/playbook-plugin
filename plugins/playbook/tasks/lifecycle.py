@@ -2594,8 +2594,12 @@ def cmd_freehand(cmd_args):
 
         # Find the freehand-start marker
         import re
-        # Use findall + take last — supports multiple freehand blocks in one task
-        all_markers = re.findall(r'<!-- freehand-start: (.+?) -->', task_text)
+        from tasks.core import _iter_nonfenced, _physical_lines
+        # Use findall + take last — supports multiple freehand blocks in one task. Only a marker outside every fence
+        # is one (task 305, impl round 1, opus): a pasted message that quotes a marker set the next log's start.
+        _lines = _physical_lines(task_text)
+        all_markers = [mk for i, _s in _iter_nonfenced(_lines)
+                       for mk in re.findall(r'<!-- freehand-start: (.+?) -->', _lines[i])]
         marker_match = all_markers[-1] if all_markers else None
         if not marker_match:
             print("Error: no freehand-start marker found in task.md", file=sys.stderr)
@@ -2650,22 +2654,38 @@ def cmd_freehand(cmd_args):
             print("No chat_log messages found in freehand span.")
             return
 
-        # Insert extracted messages into task.md below the Freehand log gate
-        log_gate_pattern = re.compile(r'^(- \[ \] Freehand log\b.*)', re.MULTILINE)
-        log_gate_match = log_gate_pattern.search(task_text)
-        if not log_gate_match:
-            print("Error: no '- [ ] Freehand log' gate found in task.md", file=sys.stderr)
+        # Insert extracted messages into task.md below the Freehand log gate — the first unticked one OUTSIDE every
+        # fence, in the fail-closed view (task 305, impl round 1, codex, opus, grok): the raw first match could be a
+        # pasted message's copy of the gate, and a paste there, or under an open fence, closed that fence early.
+        log_gate_pattern = re.compile(r'^(- \[ \] Freehand log\b.*)')
+
+        def _live_log_gate_end(text: str) -> "int | None":
+            lines = _physical_lines(text)
+            live = {i for i, _s in _iter_nonfenced(lines)}
+            pos = 0
+            for i, ln in enumerate(lines):
+                if i in live and log_gate_pattern.match(ln):
+                    return pos + len(ln)
+                pos += len(ln) + 1
+            return None
+
+        _no_gate = ("Error: no '- [ ] Freehand log' gate outside a code fence in task.md — nothing was pasted (a fence "
+                    "left open above the gate hides it: close it by hand)")
+        if _live_log_gate_end(task_text) is None:
+            print(_no_gate, file=sys.stderr)
             sys.exit(1)
 
         log_content = "\n\n" + "\n\n---\n\n".join(extracted) + "\n"
 
         def _t_log(text: str) -> "str | None":
-            m = log_gate_pattern.search(text)
-            if m is None:
+            end = _live_log_gate_end(text)
+            if end is None:
                 return None                        # the gate vanished under us
-            return text[:m.end()] + log_content + text[m.end():]
+            return text[:end] + log_content + text[end:]
 
-        _rewrite(task_file, _t_log)   # task 058: locked transaction
+        if _rewrite(task_file, _t_log) is None:   # task 058: locked transaction
+            print(_no_gate, file=sys.stderr)
+            sys.exit(1)
         print(f"Inserted {len(extracted)} chat_log messages into task.md")
         return
 
