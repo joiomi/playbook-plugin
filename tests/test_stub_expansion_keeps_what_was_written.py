@@ -82,7 +82,7 @@ class WhatWasWrittenIsKept(_Stub):
         self.stub(lambda t: t.replace("## Risk\nunclassified", "## Risk\nassertive", 1))
         r = self.expand()
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertRegex(self.text(), r"(?m)^## Risk\nassertive$")
+        self.assertRegex(self.text(), r"(?m)^## Risk\nassertive\n\n> One word")   # over the template's `unclassified`
 
 
     def test_the_lines_under_the_risk_are_kept(self):
@@ -228,6 +228,7 @@ class TheExpansionStaysSafe(_Stub):
         self.assertNotIn("## Notes", t)
         self.assertRegex(t, r"(?m)^## Risk\nunclassified$")
         self.assertEqual(t.count("## References"), 1)
+        self.assertRegex(t, r"(?m)^## Intent\nbuild the importer\n\n## Why\n")       # over the template's placeholder
 
     def test_an_unclosed_fence_anywhere_in_the_stub_refuses(self):
         """Row 12 (impl round 1: agy, opus, grok, sonnet): a fence left open under `## Why` or `## References` would
@@ -244,43 +245,59 @@ class TheExpansionStaysSafe(_Stub):
                 self.assertIn("fence", (r.stdout + r.stderr).lower())
                 self.assertEqual(self.text(), before)
 
-    def test_a_section_the_expanded_task_writes_refuses(self):
+    def test_a_section_the_expanded_task_writes_is_one_section(self):
         """Row 13 (impl round 1: agy, opus, sonnet, grok): a stub section with the heading of one the template writes
-        (`## Parked`), or a standing gate (`## Changelog`), would be a second section of that name, unread by the
-        first-match readers or skipping the standing gate: the expansion refuses, names it and writes nothing."""
+        (`## Parked`) goes into the template's, so its item is a parked item and the heading is there once; a standing
+        gate's heading (`## Changelog`) would skip that gate: the expansion refuses, names it and writes nothing."""
         import json
-        for heading in ("## Parked", "## Changelog"):
-            with self.subTest(heading=heading):
-                self.setUp()
-                (self.project / ".agent" / "config.json").write_text(json.dumps(
-                    {"standing_gates": [{"title": "Changelog", "text": "Add the user-visible change to CHANGELOG.md"}]}),
-                    encoding="utf-8")
-                self.stub(lambda t: t.rstrip("\n") + f"\n\n{heading}\n- ITEM-3: later\n")
-                before = self.text()
-                r = self.expand()
-                self.assertNotEqual(r.returncode, 0, r.stdout)
-                self.assertIn(heading, r.stdout + r.stderr)
-                self.assertEqual(self.text(), before)
+        self.stub(lambda t: t.rstrip("\n") + "\n\n## Parked\n- ITEM-3: later\n")
+        r = self.expand()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        t = self.text()
+        self.assertEqual(t.count("\n## Parked\n"), 1)
+        self.assertEqual(extract_parked_items(t), ["ITEM-3: later"])
+        self.setUp()
+        (self.project / ".agent" / "config.json").write_text(json.dumps(
+            {"standing_gates": [{"title": "Changelog", "text": "Add the user-visible change to CHANGELOG.md"}]}),
+            encoding="utf-8")
+        self.stub(lambda t: t.rstrip("\n") + "\n\n## Changelog\n- ITEM-3: later\n")
+        before = self.text()
+        r = self.expand()
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("## Changelog", r.stdout + r.stderr)
+        self.assertEqual(self.text(), before)
 
     def test_the_risk_reads_the_same_after_the_expansion(self):
         """Row 15 (impl round 1, codex's Critical): what the stub's `## Risk` reads (two Risk sections, a U+0085 before
         the class, a blank line above it: `unclassified`, the strict bar), the expanded task reads too — or the
         expansion refuses and writes nothing. It never lowers the class."""
-        cases = {"two Risk sections": lambda t: t.replace("## Risk\nunclassified", "## Risk\nreversible", 1).rstrip("\n")
-                                                + "\n\n## Risk\nirreversible\n",
-                 "U+0085": lambda t: t.replace("## Risk\nunclassified", "## Risk\n\x85reversible", 1),
-                 "a blank line first": lambda t: t.replace("## Risk\nunclassified", "## Risk\n\nreversible", 1)}
-        for name, edit in cases.items():
+        cases = {"two Risk sections": (lambda t: t.replace("## Risk\nunclassified", "## Risk\nreversible", 1).rstrip("\n")
+                                       + "\n\n## Risk\nirreversible\n", False),
+                 "U+0085": (lambda t: t.replace("## Risk\nunclassified", "## Risk\n\x85reversible", 1), True),
+                 "a blank line first": (lambda t: t.replace("## Risk\nunclassified", "## Risk\n\nreversible", 1), True)}
+        for name, (edit, expands) in cases.items():
             with self.subTest(name):
                 self.setUp()
                 self.stub(edit)
                 before, read = self.text(), extract_risk(self.tf)
                 self.assertEqual(read, "unclassified")
                 r = self.expand()
-                if r.returncode == 0:
+                if expands:                            # nothing is wrong with it: it expands, read as the stub was
+                    self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
                     self.assertEqual(extract_risk(self.tf), read)
-                else:
+                else:                                  # one of the two would be lost
+                    self.assertNotEqual(r.returncode, 0, r.stdout)
                     self.assertEqual(self.text(), before)
+
+    def test_a_second_section_of_the_stubs_own_refuses(self):
+        """Row 21 (my mutant run after impl round 1): a second `## Why` would be lost — only the first is carried —
+        so the expansion refuses, names it and writes nothing."""
+        self.stub(lambda t: t.rstrip("\n") + "\n\n## Why\nWHY-2: the second reason\n")
+        before = self.text()
+        r = self.expand()
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("two `## Why` sections", r.stdout + r.stderr)
+        self.assertEqual(self.text(), before)
 
     def test_a_fenced_risk_example_is_not_the_class(self):
         """Row 20 (impl round 1, sonnet): a `## Risk` quoted inside a closed fence in an added section is an example,
