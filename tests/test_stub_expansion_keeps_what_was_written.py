@@ -21,7 +21,7 @@ from pathlib import Path
 _HERE = Path(__file__).resolve().parent
 PLUGIN = _HERE.parent / "plugins/playbook"
 sys.path.insert(0, str(PLUGIN))
-from tasks.core import _gate_counts  # noqa: E402
+from tasks.core import _gate_counts, _has_unclosed_fence, extract_parked_items, extract_risk  # noqa: E402
 
 
 class _Stub(unittest.TestCase):
@@ -38,17 +38,16 @@ class _Stub(unittest.TestCase):
         return subprocess.run([sys.executable, "-m", "tasks.cli", *args], cwd=self.project, env=env,
                               capture_output=True, text=True, timeout=120)
 
-    def stub(self, edit=None):
-        r = self.tasks("new", "--stub", "feature", "importer", "build the importer")
+    def stub(self, edit=None, kind="feature"):
+        r = self.tasks("new", "--stub", kind, "importer", "build the importer")
         self.assertEqual(r.returncode, 0, r.stderr)
-        (self.tf,) = (self.project / ".agent" / "tasks").glob("*/task.md")
+        self.tf = sorted((self.project / ".agent" / "tasks").glob("*/task.md"))[-1]     # the newest stub
         if edit:
             self.tf.write_text(edit(self.tf.read_text(encoding="utf-8")), encoding="utf-8")
         return self.tf
 
     def expand(self):
-        r = self.tasks("work", "001")
-        return r
+        return self.tasks("work", self.tf.parent.name[:3])
 
     def text(self):
         return self.tf.read_text(encoding="utf-8")
@@ -135,6 +134,77 @@ class WhatWasWrittenIsKept(_Stub):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("STATUS-NOTE-6: waits for the API", self.text())
 
+    def test_a_carried_note_is_not_parked_debt(self):
+        """Row 11 (impl round 1: agy, opus, sonnet): a `- ` note carried from above the stub's first section or from
+        under its `## Status` sits under a heading of its own, not inside the template's `## Parked` at the end of the
+        file, so `tasks parked` does not list it; its blank line stays (grok)."""
+        self.stub(lambda t: t.replace("<!-- stub:feature -->\n", "<!-- stub:feature -->\n- PRE-9: ask the vendor\n\n"
+                                      "PRE-10: a second paragraph\n", 1)
+                  .replace("## Status\npending\n", "## Status\npending\n- STAT-2: waits for the API\n", 1))
+        r = self.expand()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        t = self.text()
+        self.assertIn("- PRE-9: ask the vendor\n\nPRE-10: a second paragraph", t)
+        self.assertIn("- STAT-2: waits for the API", t)
+        self.assertEqual(extract_parked_items(t), [])
+
+    def test_the_references_are_copied_byte_for_byte(self):
+        """Row 14 (impl round 1: agy, opus, codex, grok): a reference's backslashes are text, not a replacement
+        template's escapes — `\\n` stays two characters and `\\d` does not stop `tasks work` with a traceback."""
+        refs = r"- REF-12: split on `\n` alone; C:\Users\dev; \d+ and \1"
+        self.stub(lambda t: t.replace("(optional)", "(optional)\n" + refs))
+        r = self.expand()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(refs, self.text())
+
+    def test_a_risk_heading_with_closing_hashes_keeps_its_class(self):
+        """Row 16 (impl round 1, codex): `## Risk ##` is the Risk heading for every reader; its class and the rollback
+        under it are kept."""
+        self.stub(lambda t: t.replace("## Risk\nunclassified", "## Risk ##\nirreversible\nROLLBACK-8: restore the dump", 1))
+        r = self.expand()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(extract_risk(self.tf), "irreversible")
+        self.assertIn("ROLLBACK-8: restore the dump", self.text())
+
+    def test_a_fenced_block_under_the_risk_is_kept_whole(self):
+        """Row 17 (impl round 1, codex): a closed fence under `## Risk` that quotes `## Recovery` is kept whole, and
+        the expanded file has no fence left open."""
+        block = "```\n## Recovery\nrestore the dump\n```"
+        self.stub(lambda t: t.replace("## Risk\nunclassified", "## Risk\nirreversible\n" + block, 1))
+        r = self.expand()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        t = self.text()
+        self.assertIn(block, t)
+        self.assertFalse(_has_unclosed_fence(t.split("\n")))
+        self.assertEqual(extract_risk(self.tf), "irreversible")
+
+    def test_a_light_stubs_why_and_a_quick_stubs_references_are_kept(self):
+        """Row 18 (impl round 1: codex, grok): a template without the section — light has no `## Why`, quick no
+        `## References` — gets the stub's section, not nothing."""
+        self.stub(lambda t: t.replace("## Why\n(fill in before expanding)", "## Why\nWHY-31: the vendor's deadline", 1),
+                  kind="light")
+        r = self.expand()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("WHY-31: the vendor's deadline", self.text())
+        self.setUp()
+        self.stub(lambda t: t.replace("(optional)", "- REF-40: the runbook"), kind="quick")
+        r = self.expand()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("- REF-40: the runbook", self.text())
+
+    def test_a_custom_playbooks_task_keeps_the_stubs_risk(self):
+        """Row 19 (impl round 1: agy, opus, sonnet, grok): a custom playbook without `## Risk` / `unclassified` keeps
+        the stub's Risk, not nothing."""
+        pb = self.project / ".agent" / "playbooks"
+        pb.mkdir()
+        (pb / "speval.md").write_text("# {{NNN}} - {{TITLE}}\n\n## Status\npending\n\n## Intent\n(custom)\n\n"
+                                      "- [ ] ONLY_CUSTOM_GATE\n", encoding="utf-8")
+        self.stub(lambda t: t.replace("## Risk\nunclassified", "## Risk\nassertive", 1), kind="speval")
+        r = self.expand()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("- [ ] ONLY_CUSTOM_GATE", self.text())
+        self.assertEqual(extract_risk(self.tf), "assertive")
+
 
 class TheExpansionStaysSafe(_Stub):
     def test_an_unclosed_fence_in_the_added_text_refuses(self):
@@ -158,6 +228,72 @@ class TheExpansionStaysSafe(_Stub):
         self.assertNotIn("## Notes", t)
         self.assertRegex(t, r"(?m)^## Risk\nunclassified$")
         self.assertEqual(t.count("## References"), 1)
+
+    def test_an_unclosed_fence_anywhere_in_the_stub_refuses(self):
+        """Row 12 (impl round 1: agy, opus, grok, sonnet): a fence left open under `## Why` or `## References` would
+        fence the template's gates and hide the sections after it (`## Notes` and its gate): the expansion refuses and
+        writes nothing."""
+        for heading, old in (("## Why", "(fill in before expanding)"), ("## References", "(optional)")):
+            with self.subTest(heading=heading):
+                self.setUp()                                  # a project of its own for each case
+                self.stub(lambda t: t.replace(f"{heading}\n{old}", f"{heading}\n```\nsnippet", 1).rstrip("\n")
+                          + "\n\n## Notes\n- [ ] GATE-5: ask about rate limits\n")
+                before = self.text()
+                r = self.expand()
+                self.assertNotEqual(r.returncode, 0, r.stdout)
+                self.assertIn("fence", (r.stdout + r.stderr).lower())
+                self.assertEqual(self.text(), before)
+
+    def test_a_section_the_expanded_task_writes_refuses(self):
+        """Row 13 (impl round 1: agy, opus, sonnet, grok): a stub section with the heading of one the template writes
+        (`## Parked`), or a standing gate (`## Changelog`), would be a second section of that name, unread by the
+        first-match readers or skipping the standing gate: the expansion refuses, names it and writes nothing."""
+        import json
+        for heading in ("## Parked", "## Changelog"):
+            with self.subTest(heading=heading):
+                self.setUp()
+                (self.project / ".agent" / "config.json").write_text(json.dumps(
+                    {"standing_gates": [{"title": "Changelog", "text": "Add the user-visible change to CHANGELOG.md"}]}),
+                    encoding="utf-8")
+                self.stub(lambda t: t.rstrip("\n") + f"\n\n{heading}\n- ITEM-3: later\n")
+                before = self.text()
+                r = self.expand()
+                self.assertNotEqual(r.returncode, 0, r.stdout)
+                self.assertIn(heading, r.stdout + r.stderr)
+                self.assertEqual(self.text(), before)
+
+    def test_the_risk_reads_the_same_after_the_expansion(self):
+        """Row 15 (impl round 1, codex's Critical): what the stub's `## Risk` reads (two Risk sections, a U+0085 before
+        the class, a blank line above it: `unclassified`, the strict bar), the expanded task reads too — or the
+        expansion refuses and writes nothing. It never lowers the class."""
+        cases = {"two Risk sections": lambda t: t.replace("## Risk\nunclassified", "## Risk\nreversible", 1).rstrip("\n")
+                                                + "\n\n## Risk\nirreversible\n",
+                 "U+0085": lambda t: t.replace("## Risk\nunclassified", "## Risk\n\x85reversible", 1),
+                 "a blank line first": lambda t: t.replace("## Risk\nunclassified", "## Risk\n\nreversible", 1)}
+        for name, edit in cases.items():
+            with self.subTest(name):
+                self.setUp()
+                self.stub(edit)
+                before, read = self.text(), extract_risk(self.tf)
+                self.assertEqual(read, "unclassified")
+                r = self.expand()
+                if r.returncode == 0:
+                    self.assertEqual(extract_risk(self.tf), read)
+                else:
+                    self.assertEqual(self.text(), before)
+
+    def test_a_fenced_risk_example_is_not_the_class(self):
+        """Row 20 (impl round 1, sonnet): a `## Risk` quoted inside a closed fence in an added section is an example,
+        not the stub's class — with no live `## Risk`, the task reads `unclassified`, as the stub does."""
+        self.stub(lambda t: t.replace("## Risk\n", "## Risk notes\n", 1).rstrip("\n")
+                  + "\n\n## Notes\n```\n## Risk\nreversible\n```\n")
+        self.assertEqual(extract_risk(self.tf), "unclassified")
+        r = self.expand()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        t = self.text()
+        self.assertEqual(extract_risk(self.tf), "unclassified")
+        self.assertIn("```\n## Risk\nreversible\n```", t)
+        self.assertFalse(_has_unclosed_fence(t.split("\n")))       # the template's gates stay outside any fence
 
 
 if __name__ == "__main__":
