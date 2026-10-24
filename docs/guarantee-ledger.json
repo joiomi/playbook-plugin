@@ -5414,6 +5414,119 @@
       "violation_reproduction": null
     },
     {
+      "id": "PB-SESSION-ID-NO-ALLOW",
+      "category": "providers-and-hooks",
+      "statement": "The task gate's session-id injection approves only the project's own CLI: on a shell call matching `tasks work|status|bootstrap|freehand|retro|new` it returns the call's own input with `command` prefixed by `export PLAYBOOK_SESSION_ID=<id>; `, and it adds `permissionDecision: allow` only when the raw command is a single plain call of this project's wrapper — one line, `.claude/bin/tasks` with the hook's working directory at the project root or `<project>/.claude/bin/tasks`, an injected subcommand as a whole word, and none of `;` `&` `|` `<` `>` `$` a backtick `(` `)` `{` `}` `\\` or NUL anywhere, quoted or not. Every other command it prefixes — chained to another command, on a later line, running or writing anything else on its own line, another `tasks` binary, the relative wrapper from a subdirectory, a longer subcommand — gets the prefix and no decision, journaled as `session id injected, not approved`, so the host's own permission check decides; the eval-mode path decides the same way (task 301, audit 3's G5: the approval used to cover the whole command).",
+      "owner": [
+        {
+          "path": "plugins/playbook/scripts/task-gate-hook",
+          "reference": "function:emit_session_injection"
+        }
+      ],
+      "failure_consequence": "High",
+      "claim_kind": "mechanical",
+      "proofs": [
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_injection_approves_only_the_cli.py",
+          "reference": "Chained.test_a_chained_command_gets_the_id_and_no_decision",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_session_injection_approves_only_the_cli.py",
+            "reference": "PlainCall.test_a_plain_call_of_the_projects_cli_is_still_approved"
+          },
+          "limitations": [
+            "The real hook runs as a subprocess on a payload; hermetic, not a live provider hook invocation."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_injection_approves_only_the_cli.py",
+          "reference": "Chained.test_a_call_that_can_run_or_write_anything_else_gets_no_decision",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_injection_approves_only_the_cli.py",
+          "reference": "NotTheProjectsCli.test_another_tasks_binary_gets_no_decision",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_injection_approves_only_the_cli.py",
+          "reference": "NotTheProjectsCli.test_the_relative_wrapper_from_a_subdirectory_gets_no_decision",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_injection_approves_only_the_cli.py",
+          "reference": "NotTheProjectsCli.test_a_longer_subcommand_gets_no_decision",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_injection_approves_only_the_cli.py",
+          "reference": "EvalMode.test_eval_mode_decides_the_same_way",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_session_injection_approves_only_the_cli.py",
+          "reference": "Journal.test_the_journal_says_which",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "live-provider test",
+          "path": "tests/live/gauntlet.sh",
+          "reference": "scenario:PB-SESSION-ID-NO-ALLOW",
+          "boundary": "live-provider",
+          "negative_control": null,
+          "limitations": [
+            "Two real headless claude sessions (Claude Code 2.1.310, haiku) on the candidate. In default permission mode with no allow rule (`-p`: a call that needs a prompt is refused), a plain `.claude/bin/tasks status` ran on the hook's allow, and `touch ran-chained.txt && .claude/bin/tasks status` got the prefix with no decision and was refused by Claude Code's own check, on the prefixed input (\"The following parts require approval: export PLAYBOOK_SESSION_ID=…, touch ran-chained.txt, …\"); the file was not made. With permissions skipped, the same chained call ran with the hook's prefix (the PostToolUse payload's command starts with it)."
+          ]
+        }
+      ],
+      "applicable_platforms": [
+        "linux"
+      ],
+      "applicable_providers": [
+        "claude"
+      ],
+      "status": "verified_by_current_executable_evidence",
+      "missing_evidence_or_limitation": [
+        "Grok, codex and the other hosts are experimental (owner decision 2026-08-21): how grok treats an updatedInput that carries no decision was not measured.",
+        "Claude Code evaluates permission rules against the input the hook returns, so a user's allow rule written for the original command may not match the prefixed one; the call is then asked about, never approved.",
+        "A plain call that holds one of the refused characters in its arguments (an intent with a `;` or `$`) loses the approval too: it is asked about, the cautious side."
+      ],
+      "follow_up_phases": [
+        8
+      ],
+      "required_live_evidence": [
+        {
+          "type": "live-provider test",
+          "targets": [
+            "claude"
+          ],
+          "phase": 8,
+          "reason": "Confirm in a real Claude Code session that a command the hook does not approve meets Claude Code's own permission check, and that the prefix is still applied."
+        }
+      ],
+      "semantic_protocol": null,
+      "violation_reproduction": null
+    },
+    {
       "id": "PB-SESSION-CLEANUP",
       "category": "sessions-and-attribution",
       "statement": "Session garbage collection reclaims dead-PID session directories, keeps the current and live-PID sessions, applies a bounded mtime fallback to legacy names, and deletes nothing behind a link: a symbolic link among the session directories is skipped, and a sessions directory that does not lie physically inside the project — `.agent`, a lane or `sessions` itself a link — is not swept at all, by either sweeper (session-start's and the CLI's, which runs before every verb); session-start says so. Each removal holds the directory it checked — bash from a `cd` into it verified with `pwd -P`, on relative names; Python through descriptors opened from the project root without following a link — so a swap of the path after the check changes nothing (task 194, impl panel r2, codex: reproduced before — the delete followed a swap made between the check and it). The close (`tasks work done`, removing the closed task's sessions) and session-start's `.claude/bin` temp sweep work the same way. Until task 194 a linked `.agent/sessions` made both sweepers remove every directory of the link's target that was not a live session (measured: `photos/ projects/ notes/ pid-999999/` gone at the first session start or CLI call; a cloned repository can ship the link).",
