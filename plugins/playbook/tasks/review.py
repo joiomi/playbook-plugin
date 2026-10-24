@@ -896,8 +896,8 @@ def _findings_markers(review_mode: str) -> tuple[str, str]:
 # Task 304 (audit 3's G4): a re-review replaced everything between the markers, and the first review's findings and the
 # agent's triage among them went with it. Now the block's last line before its closer is the CLI's digest line — the
 # SHA-256 of the block's lines above it, blank lines and trailing white space left out (task 303's rule) — and a
-# re-review replaces the block only when its lines are still, byte for byte, the ones the CLI wrote
-# (`_own_findings_block`); otherwise each of them stays, after the new block, under `_KEPT_FINDINGS`.
+# re-review replaces the block only when that digest still matches its lines (`_own_findings_block`; a blank line or
+# trailing white space is no change); otherwise each of them stays, after the new block, under `_KEPT_FINDINGS`.
 _KEPT_FINDINGS = ("Kept by the review writer: the previous findings block was not the one it wrote (a line added, changed "
                   "or taken out, or no digest line), so each of its lines stays below, its old findings among them; "
                   "since task 304, each single-judge review's text is also recorded in judge-single.md when that append "
@@ -972,8 +972,9 @@ def _append_review_to_judge_md(task_dir, review_mode: str, seat: str, findings: 
         section = "Plan Review" if review_mode == "plan" else "Implementation Review"
         quoted = quote_judge_text(findings)
         block = (f"## Single-judge {review_mode} review — {stamp} (`{seat}`)\n\n"
-                 f"Recorded here by the CLI: the findings were written into task.md (`## {section}`) as well."
-                 + (f"\n\n{_one_line(receipt)}\n\n" if receipt else " ")
+                 f"Recorded here by the CLI before task.md is written: its findings go into task.md "
+                 f"(`## {section}`) when that write succeeds."
+                 + (f"\n\n{_one_line(receipt)}\n\n" if receipt else (" " if quoted else ""))
                  + (f"The review, verbatim, every line quoted:\n\n{quoted}\n" if quoted else "\n"))
     else:
         quoted = quote_judge_text(findings)
@@ -1068,7 +1069,7 @@ def _findings_place(task_file: Path, review_mode: str) -> "str | None":
     caller records the review's text first and must say where its findings go)."""
     try:
         text = read_task_text(task_file, errors="strict")
-    except OSError as e:
+    except (OSError, ValueError) as e:                  # ValueError: not UTF-8 (impl round 2, opus)
         return f"could not read {task_file.name}: {e}"
     return _splice_findings(text, review_mode, "")[1]
 
@@ -1122,6 +1123,34 @@ def _splice_findings(text: str, review_mode: str, block: str) -> "tuple[str | No
             return None, (f"{heading} has neither its placeholder nor findings markers "
                           f"(hand-edited?)")
     return before + section + after, None
+
+
+_EARLIER_RUNS = "════ the earlier runs of this judge's log, newest first (kept since task 304) ════"
+
+
+def _earlier_runs(log: Path) -> bytes:
+    """A judge log's bytes, to keep under the new run — read only from a regular file, never through a link (a link
+    in its place is replaced by the write, as before); none when there is no log."""
+    import stat as _stat
+    try:
+        fd = os.open(log, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    except FileNotFoundError:
+        return b""
+    except OSError:
+        if os.path.islink(log):
+            return b""
+        raise
+    try:
+        if not _stat.S_ISREG(os.fstat(fd).st_mode):
+            return b""
+        chunks = []
+        while True:
+            b = os.read(fd, 1 << 20)
+            if not b:
+                return b"".join(chunks)
+            chunks.append(b)
+    finally:
+        os.close(fd)
 
 
 def _judge_log_name(backend: str) -> str:
@@ -4096,10 +4125,18 @@ def _cmd_single_review(cmd, cmd_args):
         # so findings are never ingested with no chain of custody (codex:sol
         # round-6). When there IS tamper, the run exits nonzero at the banner
         # regardless, so the flag only gates the clean path.
+        # Task 304 (impl round 2, codex): this log is the review's first durable save, and each run overwrote it — a
+        # run cut before its record was lost at the next. Every run is kept, the newest first, so the header a reader
+        # takes from the top (`core.single_review_tamper_degraded`) is the newest run's.
         try:
-            atomic_write(judge_log, _ctx_header + saved_review_text)
+            from tasks.filelock import task_lock as _log_lock
+            with _log_lock(judge_log):
+                _earlier = _earlier_runs(judge_log)
+                atomic_write(judge_log, (_ctx_header + saved_review_text).encode("utf-8")
+                             + ((b"\n\n" + _EARLIER_RUNS.encode("utf-8") + b"\n\n" + _earlier)
+                                if _earlier.strip() else b""))
             print(f"\nSaved: {judge_log.relative_to(project_path)}", flush=True)
-        except OSError as _save_err:
+        except (OSError, RuntimeError) as _save_err:    # RuntimeError: the lock's LockTimeout
             _log_save_failed = True
             print(f"\nCould not save {judge_log.name} ({_save_err}); the judge "
                   f"output was printed above.", file=sys.stderr, flush=True)
