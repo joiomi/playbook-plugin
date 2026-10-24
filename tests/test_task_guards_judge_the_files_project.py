@@ -259,6 +259,13 @@ class RoundOne(_Tree):
         old = "\n".join(f"- [ ] g{i}" for i in range(1, 7))
         path = f"{self.w}/jump/../.agent/tasks/001-real/task.md"
         self.assertEqual(self.edit(path, old, old.replace("- [ ]", "- [x]"), self.p), 2)
+        # from a third tree, the resolved reading first names the worktree's record (no pointer there), the written
+        # one the main tree's: no single tree can judge it (my mutant run: hopping to the first owner let it through)
+        w2 = self.p / ".claude" / "worktrees" / "w2"
+        record(w2)
+        (self.p / "jump").symlink_to(self.w / "src")
+        path = f"{self.p}/jump/../.agent/tasks/001-real/task.md"
+        self.assertEqual(self.edit(path, old, old.replace("- [ ]", "- [x]"), w2), 2)
 
     def test_a_home_relative_path_to_the_main_record_is_judged_there(self):
         # grok I: `~/` is expanded as Guard 0.6 expands it
@@ -304,6 +311,8 @@ class RoundOne(_Tree):
         record(x)
         self.activate(self.p)                                                   # a task of the OUTER main tree
         self.assertEqual(self.stop(x), 0)
+        self.assertEqual(self.status_edit(self.main_md, x), 0)                  # the outer record: not x's repository
+        self.assertEqual(self.status_edit(inner / ".agent" / "tasks" / "001-real" / "task.md", x), 2)
         self.activate(inner)
         self.assertEqual(self.stop(x), 2)
 
