@@ -453,6 +453,23 @@ class TheExpansionStaysSafe(_Stub):
                 self.assertIn(f"## {title}", r.stdout + r.stderr)
                 self.assertEqual(self.text(), before)
 
+    def test_a_deleted_risk_does_not_take_a_custom_playbooks_default(self):
+        """Row 32 (my sibling pass during impl round 3): a stub whose `## Risk` section was deleted reads
+        `unclassified`; the exception for an untouched Risk (row 29) is not for it — under a custom playbook whose
+        `## Risk` says `reversible`, the expansion refuses, names the missing section and writes nothing."""
+        import re
+        pb = self.project / ".agent" / "playbooks"
+        pb.mkdir()
+        (pb / "speval.md").write_text("# {{NNN}} - {{TITLE}}\n\n## Status\npending\n\n## Risk\nreversible\n\n"
+                                      "## Intent\n(custom)\n\n- [ ] ONLY_CUSTOM_GATE\n", encoding="utf-8")
+        self.stub(lambda t: re.sub(r"## Risk\nunclassified\n\n> One word[^\n]*\n\n", "", t), kind="speval")
+        before = self.text()
+        self.assertNotIn("## Risk", before)
+        r = self.expand()
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("## Risk", r.stdout + r.stderr)
+        self.assertEqual(self.text(), before)
+
 
 if __name__ == "__main__":
     unittest.main()
