@@ -345,6 +345,9 @@ class RoundTwo(_Tree):
         link.symlink_to(self.main_md)
         self.assertEqual(self.status_edit(link, self.w), 2)                     # as from the worktree
         self.assertEqual(self.status_edit(link, self.o), 2)
+        # and the second hop is a judgment, not a refusal: the main tree lets its own legitimate tick through
+        self.activate(self.p)
+        self.assertEqual(self.edit(link, "- [ ] g1", "- [x] g1\n  - 12:00 — the first gate's outcome", self.o), 0)
 
     def test_the_stop_run_in_the_main_tree_keeps_the_first_runs_prompt_generation(self):
         # codex I (reproduced): the run the hop starts takes the generation the first run read before its input,
