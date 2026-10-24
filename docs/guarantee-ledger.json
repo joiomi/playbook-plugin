@@ -14367,7 +14367,7 @@
     {
       "id": "PB-TASK-STUB-EXPANSION",
       "category": "task-lifecycle",
-      "statement": "tasks new --stub accepts the flag in any argument position, preserves the intent text, and on activation expands into the matching built-in or custom playbook with the configured standing gates applied. The expansion keeps what was written into the stub, read with the readers' own heading and fence rules: the title line; Intent, Why and References (their live placeholder line excepted) in the template's section of that name, over its placeholder line or else at the end of its text, or as the stub's section where the template has none; the `## Risk` with every line under it but the template's guidance, and the saved task reads the class the stub read, or the expansion refuses (an untouched Risk, the `unclassified` the stub template writes, leaves a custom playbook's own default); a section the template also writes goes into the template's, over its text where that holds no gate and at the end of it where it does; every other section, with its gates, before the standing gates; a note outside any section and the lines under `## Status` but its value under `## From the stub`; a template with no `## Status` gets the stub's. An unclosed fence anywhere in the stub, a second section of the stub's own, or a heading that takes a standing gate's title refuses the expansion, nothing written (task 299, audit 2 G6, and its impl rounds 1-2; they used to be dropped without a word).",
+      "statement": "tasks new --stub accepts the flag in any argument position, preserves the intent text, and on activation expands into the matching built-in or custom playbook with the configured standing gates applied. The expansion keeps what was written into the stub, read with the readers' own heading and fence rules: the title line; Intent, Why and References (their live placeholder line excepted) in the template's section of that name, over its placeholder line or else at the end of its text, or as the stub's section where the template has none; the `## Risk` with every line under it but the template's guidance, and the task — read as it will read once every later save has folded its CR LF — reads the class the stub read, or the expansion refuses (an untouched Risk, the `unclassified` the stub template writes, leaves a custom playbook's own default; a deleted one does not); a section the template also writes goes into the template's, over its text where that holds no gate (by the gate reader's rule) and at the end of it where it does or where an earlier stub section of that name went; every other section, with its gates, before the standing gates; a note outside any section and the lines under `## Status` but its value under `## From the stub`; a template with no `## Status` gets the stub's. An unclosed fence anywhere in the stub, a second section of the stub's own, or a heading that takes a standing gate's title refuses the expansion, nothing written (task 299, audit 2 G6, and its impl rounds 1-2; they used to be dropped without a word).",
       "owner": [
         {
           "path": "plugins/playbook/tasks/lifecycle.py",
@@ -14427,6 +14427,14 @@
           "type": "executable integration",
           "path": "tests/test_stub_expansion_keeps_what_was_written.py",
           "reference": "TheExpansionStaysSafe.test_a_risk_whose_saved_reading_would_change_refuses",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stub_expansion_keeps_what_was_written.py",
+          "reference": "TheExpansionStaysSafe.test_a_risk_whose_reading_would_change_at_a_later_save_refuses",
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": []

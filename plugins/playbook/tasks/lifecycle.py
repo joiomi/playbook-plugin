@@ -632,11 +632,10 @@ def _carry_stub_text(stub: str, full: str, stub_type: str, taken: str) -> str:
       would fence the template's gates), and a second section of the stub's own (one of the two would be lost).
     """
     import re
-    from tasks.core import (DEFAULT_RISK, _atx_h2_text, _has_unclosed_fence, _iter_nonfenced, _live_status_pair,
-                            extract_risk_from_text, stub_marker_type)
+    from tasks.core import (DEFAULT_RISK, _atx_h2_text, _has_unclosed_fence, _iter_nonfenced, _live_gate_scan,
+                            _live_status_pair, extract_risk_from_text, stub_marker_type)
     from tasks.template import render_stub_template
     h1 = re.compile(r" {0,3}#[ \t]")
-    gate = re.compile(r" {0,3}[-*+] \[[ xX]\]")
     s = stub.split("\n")
     if _has_unclosed_fence(s):
         raise ValueError("an unclosed code fence: expanded, it would fence the template's gates and hide what follows "
@@ -679,7 +678,8 @@ def _carry_stub_text(stub: str, full: str, stub_type: str, taken: str) -> str:
     retitle = title is not None and bool(f) and bool(h1.match(f[0]))
     if retitle:
         f[0] = s[title]
-    loose = _trim([s[k] for k in range(first) if not (retitle and k == title) and stub_marker_type(s[k] + "\n") is None])
+    loose = _trim([s[k] for k in range(first) if not (retitle and k == title)
+                   and not (k in live and stub_marker_type(s[k] + "\n") is not None)])
     st, pair = own_span("## Status"), _live_status_pair(s)
     if st is not None:
         rest = _trim([s[k] for k in range(st[0] + 1, st[1]) if not (pair and k == pair[1])])
@@ -713,6 +713,7 @@ def _carry_stub_text(stub: str, full: str, stub_type: str, taken: str) -> str:
             f[sp[0] + 1:sp[0] + 2] = risk
         else:
             f[sp[0] + 1:sp[0] + 1] = risk
+    replaced: "set[str]" = set()
     for (n, a, b), o in zip(secs, owns):
         if o is not None:
             continue
@@ -725,11 +726,13 @@ def _carry_stub_text(stub: str, full: str, stub_type: str, taken: str) -> str:
             continue
         if not mine:
             continue
-        fl = {i for i, _x in _iter_nonfenced(f)}
-        if any(k in fl and gate.match(f[k]) for k in range(sp[0] + 1, sp[1])):
+        # a template section with gates — by the gate reader's own rule, an indented one too (impl round 3) — is added
+        # to; so is one this loop already gave a stub section's text (a second `## Parked`: impl round 3)
+        if n in replaced or _live_gate_scan(f[sp[0] + 1:sp[1]])[1]:
             at = end_of_text(sp)
             f[at:at] = mine
             continue
+        replaced.add(n)
         lo = sp[0] + 1
         if lo < sp[1] and f[lo].strip(" \t") == "<!-- pin -->":
             lo += 1
@@ -752,8 +755,13 @@ def _carry_stub_text(stub: str, full: str, stub_type: str, taken: str) -> str:
     if hit:
         raise ValueError(f"a `{standing[hit[0]]}` heading, a standing gate's title: that gate would be skipped — rename "
                          "the heading in the stub")
-    want = extract_risk_from_text(stub)
-    got = extract_risk_from_text(out.replace("\r\n", "\n"))   # what the next read of the saved file sees
+    want, settled = extract_risk_from_text(stub), out
+    while "\r\n" in settled:                          # every save folds one CR LF: read it as it will read in the end
+        settled = settled.replace("\r\n", "\n")
+    got = extract_risk_from_text(settled)
+    if own_span("## Risk") is None and got != want:   # no Risk section: the exception below is for an untouched one
+        raise ValueError(f"no `## Risk` section, so it reads `{want}`; expanded, the task would read `{got}` — put the "
+                         "stub's `## Risk` back, with its class")
     if got != want and (touched or want != DEFAULT_RISK):
         raise ValueError(f"a `## Risk` that reads `{want}`; expanded and saved, the task would read `{got}` — check "
                          "the Risk heading, and the class on the line under it")
