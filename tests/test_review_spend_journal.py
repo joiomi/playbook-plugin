@@ -548,7 +548,9 @@ class SingleSpendE2E(_E2EBase):
         (self.agent / "journal").write_text("not a dir", encoding="utf-8")
         sab_code, sab_log = self._run_single()
         self.assertEqual(sab_code, base_code)          # same exit
-        self.assertEqual(sab_log, base_log)            # same judge log, byte-for-byte
+        # same judge log, byte-for-byte — its newest run: since task 304 the log keeps the earlier runs below it
+        self.assertEqual(sab_log.split("\n\n" + review._EARLIER_RUNS)[0], base_log)
+        self.assertIn(review._EARLIER_RUNS, sab_log)
         # And nothing was appended (the file stayed the sabotage content).
         self.assertEqual((self.agent / "journal").read_text(encoding="utf-8"),
                          "not a dir")
