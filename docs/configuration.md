@@ -374,7 +374,9 @@ Review evidence is a record the CLI wrote: judge.md whose newest round is an imp
 round with verdict PASS, or judge-single.md's `## Single-judge impl review`
 heading. The CLI appends that heading to judge-single.md after every single-judge
 impl review, also when the findings themselves go into task.md's
-`## Implementation Review` (a plan review writes `## Single-judge plan review`,
+`## Implementation Review` — and, since task 304, the review's text under it, every
+line quoted, so a later review that replaces task.md's block leaves each run's text on
+record; only the heading counts (a plan review writes `## Single-judge plan review`,
 which is no implementation evidence; if the append fails, the CLI warns and the
 review does not count); a ticked gate is never review evidence (task 290): the
 templates carry the gate that tells you to run the impl panel, and ticking it

@@ -124,12 +124,14 @@ class FindingsLand(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("does a thing wrong", tf.read_text(encoding="utf-8"))
         # task 290 (its impl round 1): and the CLI records it in judge-single.md — the heading and where the
-        # findings went, never the review's text a second time
+        # findings went; since task 304 (audit 3's G4) the review's text too, quoted, so a re-review that replaces
+        # task.md's block leaves this run's text on record
         jm = (self.tdir / "judge-single.md").read_text(encoding="utf-8")
         self.assertIn("## Single-judge impl review — ", jm)
         self.assertIn("agy:gemini-3.8-flash-high", jm)
         self.assertIn("task.md", jm)
-        self.assertNotIn("does a thing wrong", jm)
+        self.assertIn("> **Important** — `x.py:3` does a thing wrong.", jm)
+        self.assertNotIn("\n**Important**", jm)                     # never an unquoted line
 
     def test_a_real_review_on_a_full_task_is_review_evidence(self):
         # task 290, impl round 1 (agy Critical; opus, sonnet, codex): a tick is no evidence, and the review's findings

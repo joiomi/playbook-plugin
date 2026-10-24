@@ -893,6 +893,38 @@ def _findings_markers(review_mode: str) -> tuple[str, str]:
             f"<!-- /playbook:{review_mode}-review-findings -->")
 
 
+# Task 304 (audit 3's G4): a re-review replaced everything between the markers, and the first review's findings and the
+# agent's triage among them went with it. Now the block's last line before its closer is the CLI's digest line — the
+# SHA-256 of the block's lines above it, blank lines and trailing white space left out (task 303's rule) — and a
+# re-review replaces the block only when its lines are still, byte for byte, the ones the CLI wrote
+# (`_own_findings_block`); otherwise each of them stays, after the new block, under `_KEPT_FINDINGS`.
+_KEPT_FINDINGS = ("Kept by the review writer: the previous findings block was not, byte for byte, the one it wrote (a line "
+                  "added, changed or taken out, or no digest line), so each of its lines stays below, its old findings "
+                  "among them; every single-judge review's text is also in judge-single.md.")
+
+
+def _findings_digest(lines: "list[str]") -> str:
+    import hashlib
+    return hashlib.sha256("\n".join(ln.rstrip() for ln in lines if ln.strip()).encode("utf-8")).hexdigest()
+
+
+def _findings_digest_line(review_mode: str, lines: "list[str]") -> str:
+    return f"<!-- playbook:{review_mode}-review-findings-digest {_findings_digest(lines)} -->"
+
+
+def _own_findings_block(lines: "list[str]", review_mode: str) -> bool:
+    """True when `lines`, the lines between a block's markers, are the CLI's own as it wrote them: the last one not
+    blank is its digest line, and the digest is the one of the lines above it (task 304)."""
+    k = len(lines)
+    while k and not lines[k - 1].strip():
+        k -= 1
+    if not k:
+        return False
+    m = re.fullmatch(rf"<!-- playbook:{re.escape(review_mode)}-review-findings-digest ([0-9a-f]{{64}}) -->",
+                     lines[k - 1].rstrip())
+    return m is not None and m.group(1) == _findings_digest(lines[:k - 1])
+
+
 def _neutralise_markers(findings: str, review_mode: str) -> str:
     """Defang sentinel tokens inside judge output.
 
@@ -922,8 +954,10 @@ def _append_review_to_judge_md(task_dir, review_mode: str, seat: str, findings: 
     QUOTED (`> `): a judge's own text, which may contain `- … REJECT`, must never
     look like triage (parked R9) to anything that reads the record.
 
-    `in_task_md` (task 290): the findings went into task.md, so only the heading and
-    where they are are written — the CLI's record that the review ran."""
+    `in_task_md` (task 290): the findings went into task.md too — the heading and where
+    they are (the CLI's record that the review ran), and since task 304 the review's text,
+    quoted as here: task.md's block is replaced by a later review, so this file is where
+    each run's text is kept."""
     import datetime as _dt
     from tasks.filelock import task_lock
     path = Path(task_dir) / SINGLE_JUDGE_FILE
@@ -931,12 +965,15 @@ def _append_review_to_judge_md(task_dir, review_mode: str, seat: str, findings: 
     from tasks.core import quote_judge_text
     if in_task_md:
         # Task 290 (its impl round 1, agy Critical): a tick is no review evidence, and on a full template the findings
-        # go into task.md — so the CLI records here THAT the review ran and where its findings are, never their text
-        # again: the heading is what `has_review_evidence` reads.
+        # go into task.md — so the CLI records here THAT the review ran and where its findings are: the heading is what
+        # `has_review_evidence` reads. Task 304 (audit 3's G4): and their text, quoted — a re-review replaced task.md's
+        # block and no copy of the first review was left anywhere.
         section = "Plan Review" if review_mode == "plan" else "Implementation Review"
+        quoted = quote_judge_text(findings)
         block = (f"## Single-judge {review_mode} review — {stamp} (`{seat}`)\n\n"
-                 f"Recorded here by the CLI: the findings were written into task.md (`## {section}`)."
-                 + (f"\n\n{_one_line(receipt)}\n" if receipt else "\n"))
+                 f"Recorded here by the CLI: the findings were written into task.md (`## {section}`) as well."
+                 + (f"\n\n{_one_line(receipt)}\n\n" if receipt else " ")
+                 + (f"The review, verbatim, every line quoted:\n\n{quoted}\n" if quoted else "\n"))
     else:
         quoted = quote_judge_text(findings)
         block = (f"## Single-judge {review_mode} review — {stamp} (`{seat}`)\n\n"
@@ -1002,7 +1039,7 @@ def _write_review_findings_locked(task_file: Path, review_mode: str, findings: s
     # The CLI's own receipt (a degraded tamper guard) is the writer's line: unquoted, right after its marker (II-3).
     if receipt:
         body = _neutralise_markers(_one_line(receipt).strip(), review_mode) + "\n\n" + body
-    block = f"{open_m}\n{body}\n{close_m}"
+    block = f"{open_m}\n{body}\n{_findings_digest_line(review_mode, body.split(chr(10)))}\n{close_m}"   # (task 304)
 
     try:
         text = read_task_text(task_file, errors="strict")     # task 214 (U5): a lone CR stays inside its line
@@ -1031,7 +1068,11 @@ def _write_review_findings_locked(task_file: Path, review_mode: str, findings: s
         start, end = section.index(open_m), section.index(close_m)
         if end < start:
             return f"{heading} findings markers are out of order"
-        section = section[:start] + block + section[end + len(close_m):]
+        old = section[start + len(open_m):end].strip("\n").split("\n")
+        kept = ""                                       # the CLI's own block as it wrote it: replaced (task 304)
+        if not _own_findings_block(old, review_mode) and any(ln.strip() for ln in old):
+            kept = "\n\n" + _KEPT_FINDINGS + "\n\n" + "\n".join(old)
+        section = section[:start] + block + kept + section[end + len(close_m):]
     else:
         _once = [p for p in placeholders if section.count(p) == 1]
         _multi = [p for p in placeholders if section.count(p) > 1]
@@ -4136,7 +4177,7 @@ def _cmd_single_review(cmd, cmd_args):
                   f"(## {'Plan' if review_mode == 'plan' else 'Implementation'} Review)",
                   flush=True)
             # the CLI's record that it ran (task 290): without it the close has no evidence of this review
-            if not _append_review_to_judge_md(task_file.parent, review_mode, _spend_seat, "", "",
+            if not _append_review_to_judge_md(task_file.parent, review_mode, _spend_seat, _findings_text, "",
                                               receipt=_receipt, in_task_md=True):
                 print(f"  ⚠ could not record the review in {SINGLE_JUDGE_FILE} — the close will not count it "
                       "as review evidence", file=sys.stderr, flush=True)
