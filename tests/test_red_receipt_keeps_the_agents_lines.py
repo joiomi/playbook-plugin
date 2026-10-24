@@ -26,6 +26,7 @@ NOTE_RO = "Notă: rândul 1 e deja adevărat — ă î ș ț, păstrat octet cu 
 SUB = "### Why row 1 cannot be red"
 SUB_LINE = "MY-NOTE-2: the file is older than the task."
 GATE = "- [ ] MY-GATE: replace row 1 with a test that fails first"
+TABLE_HEAD = "| # | Kind | Test | On the base | Now | State | On the base, its first error (or last line) | Run |"
 
 
 class TheAgentsLines(Project):
@@ -90,10 +91,11 @@ class TheAgentsLines(Project):
         self.assertEqual(self.gates(), before)
 
     def test_a_fenced_quote_of_its_own_shapes_stays(self):
-        # row 3: a fenced block inside the CLI's lines that quotes its shapes (a State line, a table row, a pin)
-        # stays byte for byte — a line in a code fence is never the CLI's
+        # row 3: a fenced block inside the CLI's lines that quotes its shapes (a State line, a table row, a pin, and
+        # an exact copy of its table's header, which comes after it) stays byte for byte — a line in a code fence is
+        # never the CLI's, so the copy does not take the header's place
         self.started()
-        quote = "\n".join(["```text", "State: proved: 9 (row 9).", "<!-- pin -->",
+        quote = "\n".join(["```text", "State: proved: 9 (row 9).", "<!-- pin -->", TABLE_HEAD,
                            "| 9 | normal | `x` | red | green | proved |  | `r` |", "```"])
         self.add_after("State: ", quote)
         self.assertEqual(self.cli("red").returncode, 0)
@@ -121,14 +123,15 @@ class TheAgentsLines(Project):
         self.task_md.write_text(text[:m.start()] + "\n".join(old) + text[m.end():], encoding="utf-8")
         self.add_after("State: ", "Note: row 1 predates the task.")
         self.add_at_section_end(GATE)
-        held = [ln for ln in self.span(self.text()).group(0).split("\n")[1:] if ln.strip()]
+        held = self.span(self.text()).group(0).strip("\n").split("\n")[1:]
+        held = [ln for k, ln in enumerate(held) if ln.strip() or (k and held[k - 1].strip())]   # one blank per run
         before = self.gates()
         self.assertEqual(self.cli("red").returncode, 0)
-        sec = self.section().split("\n")
+        sec = self.section().strip("\n").split("\n")
         end = next(i for i, ln in enumerate(sec) if ln.startswith("<!-- the end of tasks red"))
-        below = [ln for ln in sec[end + 1:] if ln.strip()]
-        self.assertTrue(below[0].startswith("Kept by `tasks red`"), below[:2])
-        self.assertEqual(below[1:], held)
+        self.assertEqual(sec[end + 1], "")
+        self.assertTrue(sec[end + 2].startswith("Kept by `tasks red`"), sec[end + 1:end + 4])
+        self.assertEqual(sec[end + 3:], [""] + held)
         self.assertEqual(self.gates(), before)
 
     def test_a_third_run_changes_only_its_own_values(self):
@@ -171,6 +174,7 @@ class TheAgentsLines(Project):
         self.task_md.write_text(text[:m.start()] + text[m.end():].rstrip("\n") + "\n\n" + m.group(0).rstrip("\n")
                                 + "\n", encoding="utf-8")
         self.add_after("State: ", "\n".join(["```text", "my unclosed quote", "State: quoted, not its own."]))
+        old_first = next(ln for ln in self.span(self.text()).group(0).split("\n") if ln.startswith("Written by"))
         r = self.cli("red")
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
         sec = self.section().split("\n")
@@ -178,13 +182,19 @@ class TheAgentsLines(Project):
         self.assertEqual(sec[k + 1:k + 3], ["my unclosed quote", "State: quoted, not its own."])
         self.assertEqual(sec[0], "<!-- pin -->")
         self.assertLess(next(i for i, ln in enumerate(sec) if ln.startswith("State: ")), k)
+        # its end line is inside the fence, so no line is told for the CLI's: its old lines stay, before the opener
+        # and after it
+        self.assertIn(old_first, sec[:k])
+        self.assertIn(TABLE_HEAD, sec[k:])
 
     def test_its_own_shapes_between_its_lines_stay(self):
         # row 12 (impl round 1, codex and opus): the agent's complete sentences of the CLI's shapes, between its
-        # State line and its table — a Note, a State line, an 8-cell row — stay, in order, under its table
+        # State line and its table — a Note, a State line, an 8-cell row, a copy of the CLI's State line word for
+        # word (each listed digest goes once) — stay, in order, under its table
         self.started()
+        state = next(ln for ln in self.text().split("\n") if ln.startswith("State: "))
         mine = ["Note: row 1 predates the task.", "State: checked by hand.",
-                "| 7 | normal | `mine` | — | — | mine |  | — |"]
+                "| 7 | normal | `mine` | — | — | mine |  | — |", state]
         self.add_after("State: ", "\n".join(mine))
         self.assertEqual(self.cli("red").returncode, 0)
         sec = self.section().split("\n")
