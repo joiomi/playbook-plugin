@@ -218,8 +218,7 @@ def _capture_recent_chat(project_path: Path, max_messages: int = 10,
                             f"more characters — the whole message is {msg_id} in chat_log.md]")
         else:
             display_text = text
-        fence = "`" * (max([3] + [len(run) + 1 for run in re.findall(r"`+", display_text)]))
-        captured.append(f"**[{msg_id}]** [{ts_str}]\n{fence}text\n{display_text}\n{fence}")
+        captured.append(f"**[{msg_id}]** [{ts_str}]\n{_chat_fenced(display_text)}")
 
         if len(captured) >= max_messages:
             break
@@ -227,6 +226,15 @@ def _capture_recent_chat(project_path: Path, max_messages: int = 10,
     # Reverse to chronological order
     captured.reverse()
     return captured
+
+
+def _chat_fenced(text: str) -> str:
+    """A chat message's text as task.md holds it (task 166; `tasks freehand log` too since task 305): inside a fence
+    of backticks one longer than its longest backtick run, at least three, info string `text` — so no line of it can
+    close the fence, open another, or read as a gate or a heading to the counters' fence reader."""
+    import re
+    fence = "`" * (max([3] + [len(run) + 1 for run in re.findall(r"`+", text)]))
+    return f"{fence}text\n{text}\n{fence}"
 
 
 _CHAT_HEADING = "### Recent Chat (auto-captured at activation — review and remove unrelated)"
@@ -2633,7 +2641,10 @@ def cmd_freehand(cmd_args):
                 except ValueError:
                     continue
                 if msg_ts >= start_ts:
-                    extracted.append(block.strip())
+                    # task 305 (audit 3's G6): the header line, then the text fenced — pasted as it was, a message's
+                    # open fence paired with a later one of the agent's and hid the gates between from the counters
+                    text = "\n".join(t for t in (block[:m.start(1)].strip("\n"), block[m.end(1):].strip("\n")) if t)
+                    extracted.append(m.group(1) + ("\n" + _chat_fenced(text) if text.strip() else ""))
 
         if not extracted:
             print("No chat_log messages found in freehand span.")
