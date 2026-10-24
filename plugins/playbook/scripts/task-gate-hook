@@ -98,22 +98,48 @@ PB_RAW_INPUT="$INPUT"
 # the normalized copy carries added alias keys the tool never sent); the id goes
 # as argv and the payload on stdin, so nothing is pasted into Python source. If
 # it cannot be built: a plain allow with no updatedInput, never a broken object.
+# Task 301 (audit 3 G5): the builder also judges the raw command it prefixes. It exits 0 for a plain call of THIS
+# project's CLI and 10 for any other: one line; `.claude/bin/tasks` with the hook's cwd at the project root, or
+# `<project>/.claude/bin/tasks`; an injected subcommand as a whole word; and none of `; & | < > $ ` ( ) { } \` or NUL
+# anywhere, quoted or not.
 emit_session_injection() {
-    local updated=""
+    local updated="" rc=0
     # below the floor the CLI refuses to run: nothing to inject, a plain allow (task 194)
     [ "$PB_PY_FLOOR" = true ] || { PB_HJ_DETAIL="session id not injected (python < 3.10)"; exit 0; }
     updated=$(printf '%s' "$PB_RAW_INPUT" | python3 -I -c '
-import json, sys
+import json, os, sys
 d = json.loads(sys.stdin.buffer.read().decode("utf-8"))
 ti = d.get("tool_input")
 if not isinstance(ti, dict):
     ti = d.get("toolInput")
 if not isinstance(ti, dict) or not isinstance(ti.get("command"), str):
     sys.exit(1)
+cmd, project, cwd = ti["command"], sys.argv[2], sys.argv[3]
+
+
+def at_root():
+    try:
+        return os.path.samefile(cwd, project)
+    except OSError:
+        return False
+
+
+def plain(c):
+    if any(ch in c for ch in "\n\r;&|<>$`(){}\\\0"):
+        return False
+    c = c.rstrip(" \t")
+    for head in (project + "/.claude/bin/tasks ", ".claude/bin/tasks "):
+        if c.startswith(head) and (head != ".claude/bin/tasks " or at_root()):
+            return c[len(head):].split(" ", 1)[0] in ("work", "status", "bootstrap", "freehand", "retro", "new")
+    return False
+
+
 ti = dict(ti)
-ti["command"] = "export PLAYBOOK_SESSION_ID=" + sys.argv[1] + "; " + ti["command"]
+ti["command"] = "export PLAYBOOK_SESSION_ID=" + sys.argv[1] + "; " + cmd
 sys.stdout.write(json.dumps(ti))
-' "$SESSION_ID" 2>/dev/null) || updated=""
+sys.exit(0 if plain(cmd) else 10)
+' "$SESSION_ID" "$PROJECT_DIR" "$PWD" 2>/dev/null) || rc=$?
+    [ "$rc" = 0 ] || [ "$rc" = 10 ] || updated=""
     if [ -n "$updated" ]; then
         printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","updatedInput":%s}}\n' "$updated"
         PB_HJ_DETAIL="session id injected"
