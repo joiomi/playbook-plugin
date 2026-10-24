@@ -220,7 +220,9 @@ class FindingsLand(unittest.TestCase):
         self._task(with_impl_section=False)
         with mock.patch.object(filelock, "task_lock", spy):
             self.assertEqual(self._impl_review(_stdout_with_review(REVIEW)), 0)
-        self.assertIn("judge-single.md", held)
+        # the task folder's lock — since task 304 (its post-panel run 1) named by the folder, so a judge-single.md
+        # that is a link to a folder elsewhere moves no lock there
+        self.assertIn(self.tdir.name, held)
 
     def test_if_judge_single_md_cannot_be_written_either_the_old_refusal_stands(self):
         self._task(with_impl_section=False)

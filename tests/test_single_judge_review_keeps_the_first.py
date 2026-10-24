@@ -146,7 +146,8 @@ class EndToEnd(unittest.TestCase):
         real_lock = filelock.task_lock
 
         def lock_times_out(path, *a, **kw):
-            if Path(path).name == "judge-single.md":
+            # the record's lock: judge-single.md's, or (since post-panel run 1) the task folder it locks by name
+            if Path(path).name == "judge-single.md" or Path(path) == self.tdir:
                 raise filelock.LockTimeout("judge-single.md is held")
             return real_lock(path, *a, **kw)
         for how in ("returns None", "LockTimeout"):

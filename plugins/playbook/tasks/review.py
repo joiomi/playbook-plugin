@@ -983,7 +983,7 @@ def _append_review_to_judge_md(task_dir, review_mode: str, seat: str, findings: 
                  + (f"\n\n{_one_line(receipt)}\n\n" if receipt else " ")   # the CLI's receipt: its line, unquoted (II-3)
                  + f"The review, verbatim, every line quoted:\n\n{quoted}\n")
     try:
-        with task_lock(path):
+        with task_lock(Path(task_dir)):                 # the folder's lock, never through a link (task 304)
             old = path.read_text(encoding="utf-8") if path.exists() else ""
             head = "" if old.strip() else "# Single-judge reviews (appended, oldest first)\n\n"
             atomic_write(path, (old.rstrip("\n") + "\n\n\n" if old.strip() else head) + block)
@@ -4130,7 +4130,7 @@ def _cmd_single_review(cmd, cmd_args):
         # takes from the top (`core.single_review_tamper_degraded`) is the newest run's.
         try:
             from tasks.filelock import task_lock as _log_lock
-            with _log_lock(judge_log):
+            with _log_lock(task_file):                  # the folder's lock: a linked log moves no lock (304)
                 _earlier = _earlier_runs(judge_log)
                 atomic_write(judge_log, (_ctx_header + saved_review_text).encode("utf-8")
                              + ((b"\n\n" + _EARLIER_RUNS.encode("utf-8") + b"\n\n" + _earlier)
