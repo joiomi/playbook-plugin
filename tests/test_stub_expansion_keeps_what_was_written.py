@@ -305,6 +305,38 @@ class WhatWasWrittenIsKept(_Stub):
         self.assertIn("- [ ] PRE-GATE-4: run the importer on a sample", pre)
         self.assertEqual(t.count("\n## Pre-review\n"), 1)
 
+    def test_two_sections_into_one_template_section_both_stay(self):
+        """Row 34 (impl round 3: opus, codex, grok): two stub `## Parked` sections — a heading the template writes with
+        no gate — both go into the template's: the second does not replace the first."""
+        self.stub(lambda t: t.rstrip("\n") + "\n\n## Parked\n- PARK-1: first\n\n## Notes\nbetween\n\n"
+                                             "## Parked\n- PARK-2: second\n")
+        r = self.expand()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(extract_parked_items(self.text()), ["PARK-1: first", "PARK-2: second"])
+
+    def test_an_indented_gate_of_the_template_stays(self):
+        """Row 35 (impl round 3: codex, grok): a template section whose gates are indented (four spaces, a tab) — gates
+        for the gate reader — is a section with gates: the stub's section goes at its end, its gates stay."""
+        pb = self.project / ".agent" / "playbooks"
+        pb.mkdir()
+        (pb / "speval.md").write_text("# {{NNN}} - {{TITLE}}\n\n## Status\npending\n\n## Checklist\nThe steps:\n"
+                                      "    - [ ] ORIGINAL-GATE-1\n\t- [ ] ORIGINAL-GATE-2\n", encoding="utf-8")
+        self.stub(lambda t: t.rstrip("\n") + "\n\n## Checklist\n- MINE-3: a step of mine\n", kind="speval")
+        r = self.expand()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        t = self.text()
+        for line in ("    - [ ] ORIGINAL-GATE-1", "\t- [ ] ORIGINAL-GATE-2", "- MINE-3: a step of mine"):
+            self.assertIn(line, t)
+        self.assertEqual(_gate_counts(t)[1], 2)
+
+    def test_a_fenced_marker_line_above_the_sections_stays(self):
+        """Row 36 (impl round 3: codex, sonnet): a marker-shaped line inside a closed fence above the first section is
+        an agent's example, not the stub's marker: it stays."""
+        self.stub(lambda t: t.replace("<!-- stub:feature -->\n", "<!-- stub:feature -->\n```\n<!-- stub:bugfix -->\n```\n", 1))
+        r = self.expand()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("```\n<!-- stub:bugfix -->\n```", self.text())
+
     def test_a_risk_heading_in_capitals_is_the_risk(self):
         """Row 30 (impl round 2, opus): `## RISK` is the Risk heading for the risk reader, so it is the stub's Risk for
         the expansion too: one Risk section, the class kept."""
@@ -452,6 +484,21 @@ class TheExpansionStaysSafe(_Stub):
                 self.assertNotEqual(r.returncode, 0, r.stdout)
                 self.assertIn(f"## {title}", r.stdout + r.stderr)
                 self.assertEqual(self.text(), before)
+
+    def test_a_risk_whose_reading_would_change_at_a_later_save_refuses(self):
+        """Row 33 (impl round 3: codex, grok — the Critical again): every save folds one CR LF, so `reversible` + three or
+        four CRs + LF reads `unclassified` now and `reversible` a few saves later (`tasks work` saves the task again on
+        activation). The expansion reads its result as it will read once nothing is left to fold: it refuses."""
+        for crs in (3, 4):
+            with self.subTest(crs=crs):
+                self.setUp()
+                self.stub()
+                raw = self.tf.read_bytes().replace(b"## Risk\nunclassified\n", b"## Risk\nreversible" + b"\r" * crs + b"\n", 1)
+                self.tf.write_bytes(raw)
+                self.assertEqual(extract_risk(self.tf), "unclassified")
+                r = self.expand()
+                self.assertNotEqual(r.returncode, 0, r.stdout)
+                self.assertEqual(self.tf.read_bytes(), raw)
 
     def test_a_deleted_risk_does_not_take_a_custom_playbooks_default(self):
         """Row 32 (my sibling pass during impl round 3): a stub whose `## Risk` section was deleted reads
