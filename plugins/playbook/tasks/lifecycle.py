@@ -632,8 +632,8 @@ def _carry_stub_text(stub: str, full: str, stub_type: str, taken: str) -> str:
       would fence the template's gates), and a second section of the stub's own (one of the two would be lost).
     """
     import re
-    from tasks.core import (DEFAULT_RISK, _atx_h2_text, _has_unclosed_fence, _iter_nonfenced, _live_gate_scan,
-                            _live_status_pair, extract_risk_from_text, stub_marker_type)
+    from tasks.core import (_atx_h2_text, _has_unclosed_fence, _iter_nonfenced, _live_gate_scan, _live_status_pair,
+                            extract_risk_from_text, stub_marker_type)
     from tasks.template import render_stub_template
     h1 = re.compile(r" {0,3}#[ \t]")
     s = stub.split("\n")
@@ -705,6 +705,8 @@ def _carry_stub_text(stub: str, full: str, stub_type: str, taken: str) -> str:
     guidance = {ln for ln in own_lines.get("## Risk", ()) if ln.startswith(">")}
     risk = _trim(body("## Risk", guidance), lead=False)
     touched = [ln.strip(" \t").lower() for ln in risk] not in ([], ["unclassified"])
+    # the stub template's own line and nothing else — a deleted value is not untouched (post-panel run 1, codex)
+    untouched = own_span("## Risk") is not None and [ln.strip(" \t").lower() for ln in risk] == ["unclassified"]
     if touched:
         sp = span("## Risk")
         if sp is None:
@@ -762,7 +764,7 @@ def _carry_stub_text(stub: str, full: str, stub_type: str, taken: str) -> str:
     if own_span("## Risk") is None and got != want:   # no Risk section: the exception below is for an untouched one
         raise ValueError(f"no `## Risk` section, so it reads `{want}`; expanded, the task would read `{got}` — put the "
                          "stub's `## Risk` back, with its class")
-    if got != want and (touched or want != DEFAULT_RISK):
+    if got != want and not untouched:
         raise ValueError(f"a `## Risk` that reads `{want}`; expanded and saved, the task would read `{got}` — check "
                          "the Risk heading, and the class on the line under it")
     return out
