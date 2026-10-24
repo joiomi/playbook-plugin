@@ -62,9 +62,6 @@ class TheAgentsLines(Project):
         from tasks.core import _gate_counts
         return _gate_counts(self.text())
 
-    def table_end(self, sec_lines):
-        return max(i for i, ln in enumerate(sec_lines) if ln.startswith("| "))
-
     def test_the_agents_lines_under_the_table_stay(self):
         # row 1 (the bug): a note, a `###` subsection with its line and an open gate under the table stay after a
         # second run, byte for byte and in order (a non-ASCII line too); the open gates count the same
@@ -79,14 +76,16 @@ class TheAgentsLines(Project):
         self.assertEqual(self.text().count("\n## Red receipt\n"), 1)
 
     def test_a_line_between_its_own_lines_moves_under_them(self):
-        # row 2: an open gate the agent wrote between the CLI's State line and its table stays, under the table
+        # row 2: an open gate, a Note line with no full stop and a table row of 2 cells, written by the agent between
+        # the CLI's State line and its table, stay — in their order, under the table; the gates count the same
         self.started()
-        self.add_after("State: ", GATE)
+        mine = [GATE, "Note: mine, with no full stop", "| mine | two cells |"]
+        self.add_after("State: ", "\n".join(mine))
         before = self.gates()
         self.assertEqual(self.cli("red").returncode, 0)
         sec = self.section().split("\n")
-        self.assertIn(GATE, sec)
-        self.assertGreater(sec.index(GATE), self.table_end(sec))
+        self.assertIn("\n".join(mine), "\n".join(sec))
+        self.assertGreater(sec.index(GATE), max(i for i, ln in enumerate(sec) if ln.startswith("| 1 |")))
         self.assertEqual(self.gates(), before)
 
     def test_a_fenced_quote_of_its_own_shapes_stays(self):
@@ -124,6 +123,8 @@ class TheAgentsLines(Project):
         sec = self.section()
         for ln in (NOTE, SUB, SUB_LINE, GATE):
             self.assertIn(ln, sec.split("\n"))
+        # under the CLI's lines, in order, each paragraph apart: one blank line where the agent had one
+        self.assertTrue(sec.endswith("\n".join(["", NOTE, "", SUB, SUB_LINE, "", GATE, "", ""])), sec)
         self.assertEqual(len([ln for ln in sec.split("\n") if ln.startswith("State: ")]), 1)
         self.assertEqual(sec.count("| # | Kind | Test |"), 1)
         self.assertEqual(sec.count("Written by `tasks red`"), 1)

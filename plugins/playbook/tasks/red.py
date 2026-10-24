@@ -15,7 +15,8 @@ imposibile, ca sa ma asigur ca codul pe care il voi scrie urmeaza path-ul lor". 
   copy of the current working state — each under the judges' write containment when bubblewrap is there (root
   read-only; the copy and a throwaway HOME writable), with the live project's environment scrubbed, `red_timeout`
   seconds. Each row's result is appended to `<task>/red-receipt.jsonl` as it ends, and the run is written to
-  task.md's `## Red receipt` (pinned; the newest run replaces the last) once all rows are done.
+  task.md's `## Red receipt` (pinned; the newest run replaces the last run's own lines, and every line the CLI did
+  not write stays — task 303, `_kept`) once all rows are done.
 
 A side is red when the command exited non-zero within its time — but 126/127 (no runner, not executable) is "launch
 failed" and a timeout is "timeout", never red. The verdict reads both sides (plan panel P5): "proved" (red on the base,
@@ -830,14 +831,66 @@ def _row_table_line(e: dict) -> str:
             f"{_cell(state)} | {_cell(last)} | `{_cell(str(r.get('run', '')))}` |")
 
 
+# The section's own lines (task 303, audit 3's G3): a run rewrote the whole section, and every line the agent wrote
+# there — a note, a `###` part, an open gate — went with it. Now its last line is END_LINE, and a rewrite replaces only
+# what it wrote (`_kept`): every line below END_LINE stays, and above it each line `_own_line` does not know.
+END_LINE = "<!-- the end of tasks red's lines: a line below this one stays when it runs again -->"
+_OWN_FIRST = "Written by `tasks red` — the state across its runs: "
+_OWN_WORDS = ("Runs: `", "State: ", "Note: ", "Added later (", "No skip reader matched: ",
+              "The working state changed since the run of: ", "Recorded, no longer in the contract, not dropped (",
+              "Dropped: ")                              # each line `_section` begins so ends with a full stop
+_TABLE_HEAD = "| # | Kind | Test | On the base | Now | State | On the base, its first error (or last line) | Run |"
+_TABLE_RULE = "|---|------|------|-------------|-----|-------|---------------------------------------------|-----|"
+
+
+def _own_line(line: str) -> bool:
+    """A line of a shape `_section` writes (task 303): a blank line, its pin, its first line, a line that begins with
+    one of its words and ends with a full stop, its table's header and rule, a row of its 8 cells, its end line."""
+    if not line.strip() or line in ("<!-- pin -->", _TABLE_HEAD, _TABLE_RULE, END_LINE) or line.startswith(_OWN_FIRST):
+        return True
+    if line.startswith(_OWN_WORDS) and line.endswith("."):
+        return True
+    return line.startswith("| ") and line.endswith("|") and len(_cells(line)) == 8
+
+
+def _kept(lines: "list[str]", a: int, b: int) -> "list[str]":
+    """What a rewrite keeps of the section at [a, b) — its heading at `a` (task 303): every line below its first live
+    END_LINE as it is; above it, in order, each line in a code fence (the writers' fail-closed view: after an unclosed
+    opener, every line) and each live line `_own_line` does not know, under one blank line, a run of blank lines
+    between them kept as one. A section with no END_LINE (one written before task 303) is read whole the second way.
+    The list ends with a blank line, as the section always did."""
+    from tasks.core import _iter_nonfenced
+    live = {i for i, _s in _iter_nonfenced(lines)}
+    end = next((i for i in range(a + 1, b) if i in live and lines[i] == END_LINE), b)
+    above: "list[str]" = []
+    gap = False                                         # a live blank line since the last line kept
+    for i in range(a + 1, end):
+        if i in live and _own_line(lines[i]):
+            gap = gap or not lines[i].strip()
+            continue
+        if above and gap and above[-1].strip():
+            above.append("")
+        above.append(lines[i])
+        gap = False
+    out = [""] + above if above else []
+    after = lines[end + 1:b]
+    if out and after and after[0].strip():
+        out.append("")
+    out += after
+    if not out or out[-1].strip():
+        out.append("")
+    return out
+
+
 def _section(st: dict, contained: str) -> str:
     """The state across runs, for the judges (task 281; agy): each row's newest record — the head names each run that
     is some row's newest, with its base; a count of each state with its rows; the rows added later, those no skip
-    reader matched; a table of the rows NOT proved, each with its run. Every record is in the jsonl."""
+    reader matched; a table of the rows NOT proved, each with its run; END_LINE last (task 303). Every record is in
+    the jsonl."""
     rows = st["rows"]
     newest = st.get("newest") or {}
     head = [RECEIPT_HEADING, "<!-- pin -->",
-            f"Written by `tasks red` — the state across its runs: each row's newest record in `{RECEIPT_NAME}` beside "
+            f"{_OWN_FIRST}each row's newest record in `{RECEIPT_NAME}` beside "
             f"this file. The newest run `{newest.get('run', '')}`, {newest.get('at', '')}. {contained}"]
     if st["runs"]:
         head.append("Runs: " + "; ".join(f"`{r['run']}` {r['at']} on the base {r['base']}" for r in st["runs"]) + ".")
@@ -878,9 +931,9 @@ def _section(st: dict, contained: str) -> str:
                                            for x in st["dropped"]) + ".")
     rest =[e for e in rows if e["state"] != "proved"]
     if rest:
-        head += ["", "| # | Kind | Test | On the base | Now | State | On the base, its first error (or last line) | Run |",
-                 "|---|------|------|-------------|-----|-------|---------------------------------------------|-----|"]
+        head += ["", _TABLE_HEAD, _TABLE_RULE]
         head += [_row_table_line(e) for e in rest]
+    head.append(END_LINE)
     return "\n".join(_one_line(h) for h in head)          # each value on its own line, never one more (task 287)
 
 
@@ -889,7 +942,8 @@ def _rows_word(labels: "list[str]") -> str:
 
 
 def _write_section(task_file: Path, project: Path, contained: str) -> "tuple[str, dict | None]":
-    """Replace `## Red receipt` (or put it right after `## Test contract`) under the task's lock — from the contract, the
+    """Rewrite `## Red receipt`'s own lines, keeping every other (`_kept`, task 303) — or put the section right after
+    `## Test contract` — under the task's lock, from the contract, the
     receipt and the config as they are then (impl round 1 and task 282, codex: a run that ends last wrote the rows
     and the runner it began with), with today's trees built and every git answer worked out BEFORE the lock (task
     282, opus and sonnet: under it only the cache answers). Returns ("", the state) or (why nothing was written,
@@ -935,11 +989,12 @@ def _write_section(task_file: Path, project: Path, contained: str) -> "tuple[str
                                    dropped=drops)
                 st["unchecked"] = _unchecked(view, why)
                 lines = _physical_lines(text)
-                new = _physical_lines(_section(st, contained)) + [""]
+                new = _physical_lines(_section(st, contained))
                 sp = _writer_section_span(lines, RECEIPT_HEADING)
-                if sp is not None:
-                    lines[sp[0]:sp[1]] = new
+                if sp is not None:                      # only its own lines: the agent's stay (task 303)
+                    lines[sp[0]:sp[1]] = new + _kept(lines, *sp)
                 else:
+                    new += [""]
                     cp = _writer_section_span(lines, CONTRACT_HEADING)
                     at = cp[1] if cp is not None else len(lines)
                     if at and lines[at - 1].strip():
