@@ -140,9 +140,14 @@ sys.stdout.write(json.dumps(ti))
 sys.exit(0 if plain(cmd) else 10)
 ' "$SESSION_ID" "$PROJECT_DIR" "$PWD" 2>/dev/null) || rc=$?
     [ "$rc" = 0 ] || [ "$rc" = 10 ] || updated=""
-    if [ -n "$updated" ]; then
+    if [ -n "$updated" ] && [ "$rc" = 0 ]; then
         printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","updatedInput":%s}}\n' "$updated"
         PB_HJ_DETAIL="session id injected"
+    elif [ -n "$updated" ]; then
+        # any other command: the prefix and NO decision, so the host's own permission check decides (Claude Code
+        # applies an updatedInput that carries no decision, and checks the input the hook returns)
+        printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","updatedInput":%s}}\n' "$updated"
+        PB_HJ_DETAIL="session id injected, not approved"
     else
         PB_HJ_DETAIL="session id injection failed"
     fi

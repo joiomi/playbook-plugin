@@ -353,7 +353,8 @@ def session_project(path: Path, *, lanes: "tuple[str, ...]" = (), marker: "str |
 
 
 def claude_session(run: "Run", title: str, project: Path, prompt: str, *, model: str = "haiku",
-                   extra: "tuple[str, ...]" = (), timeout: float = 900) -> "tuple[subprocess.CompletedProcess, list[dict]]":
+                   extra: "tuple[str, ...]" = (), timeout: float = 900,
+                   skip_permissions: bool = True) -> "tuple[subprocess.CompletedProcess, list[dict]]":
     """One real headless claude session in `project`, the candidate loaded with --plugin-dir. The
     stream of events (tool calls, their results, hook feedback, the final result) is kept whole in
     the artifact; the parsed events are returned for the clauses."""
@@ -363,7 +364,10 @@ def claude_session(run: "Run", title: str, project: Path, prompt: str, *, model:
     # session is a user's own, as in a terminal.
     work = tempdir("pb184-sess-")
     (work / "prompt").write_text(prompt, encoding="utf-8")
-    claude = ["claude", "-p", "--plugin-dir", str(PLUGIN), "--model", model, "--dangerously-skip-permissions",
+    # `skip_permissions=False` (task 301): Claude Code's own permission check runs, as in a user's session; with `-p`
+    # nothing can answer a prompt, so a call that needs one is refused
+    claude = ["claude", "-p", "--plugin-dir", str(PLUGIN), "--model", model,
+              *(("--dangerously-skip-permissions",) if skip_permissions else ()),
               "--output-format", "stream-json", "--verbose", "--include-hook-events",
               # the user's own settings stay out: their hooks (a Stop sound) would run in every test session
               "--setting-sources", "project,local", *extra]

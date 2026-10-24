@@ -426,7 +426,7 @@ Every line has the same eighteen keys, in this order (the last five since task 2
 | `host_session_id` | the host's own session id, from the payload |
 | `agent_id` | a subagent's id when a subagent made the call, else "" |
 | `decision` | `allow` (a PreToolUse hook let the call through, or the stop hook released the turn), `block` (exit 2: the call or the stop held), `context` (the hook showed the agent something), `ok` (it ran and showed nothing), `skip` (it did nothing by design: no session, python below 3.10), `error` (it failed — whatever its exit status says) |
-| `detail` | the hook's short why, from a fixed vocabulary: `echo full`, `echo reminder`, `quiet`, `failed call counted`, `released: no active task`, `held: 2 unchecked gate(s) in task 007`, `active task 007`, `no active task`, `gate batch refused`, `git-push-force`, `session id injected`, `logged M042`, `nudge delivered`, … |
+| `detail` | the hook's short why, from a fixed vocabulary: `echo full`, `echo reminder`, `quiet`, `failed call counted`, `released: no active task`, `held: 2 unchecked gate(s) in task 007`, `active task 007`, `no active task`, `gate batch refused`, `git-push-force`, `session id injected` (approved: a plain call of the project's CLI), `session id injected, not approved`, `logged M042`, `nudge delivered`, … |
 | `ms` | how long the hook ran, whole milliseconds from its FIRST line to its exit; `null` when bash has no `EPOCHREALTIME` |
 | `exit` | the hook's exit status |
 | `error` | on a failure, what failed: the hook's own name for it, its own failing source line (`line 214: cat "$f"`, as written in the hook — never a command of the agent's), or a python hook's exception TYPE (`RuntimeError` — its message, which can carry a path, stays on stderr) |

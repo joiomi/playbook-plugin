@@ -11,7 +11,7 @@ import shlex
 import subprocess
 from pathlib import Path
 
-from common import PLUGIN, Run, claude_session, clean_env, journal, session_project, tempdir
+from common import PLUGIN, Run, claude_session, clean_env, journal, session_project, tempdir, tool_results
 from rows_session import RULES, blocked, hook_responses, stop_rounds
 
 NORMALIZER = PLUGIN / "scripts" / "hook-payload-normalize.py"
@@ -503,7 +503,61 @@ def task_dir_watch(out: Path) -> int:
     return run.finish()
 
 
+def _injection(ev: "list[dict]", marker: str) -> "dict | None":
+    """The task gate's PreToolUse answer for the Bash call whose command holds `marker` (its updatedInput)."""
+    for x in hook_responses(ev, "PreToolUse"):
+        out = str(x.get("stdout") or x.get("output") or "")
+        if str(x.get("hook_name", "")).startswith("PreToolUse:Bash") and "updatedInput" in out and marker in out:
+            try:
+                return json.loads(out.strip().splitlines()[-1])["hookSpecificOutput"]
+            except (ValueError, KeyError, IndexError, TypeError):
+                return None
+    return None
+
+
+def session_id_no_allow(out: Path) -> int:
+    """Task 301 (audit 3's G5): the session-id injection approves only a plain call of the project's CLI. In default
+    permission mode with no allow rule — `-p` can ask no one, so a call that needs a prompt is refused — a plain
+    `.claude/bin/tasks status` runs on the hook's `allow`, and a `touch` chained to a `tasks` call is refused: the hook
+    gave it no decision, so Claude Code's own check ran. With permissions skipped, the chained call runs with the
+    prefix the hook returned (Claude Code applied an updatedInput that carried no decision)."""
+    run = Run("PB-SESSION-ID-NO-ALLOW", "the session-id injection approves only the project's own CLI", out,
+              ["claude"])
+    p = session_project(tempdir("pb301-ask-") / "proj")
+    _r, ev = claude_session(run, "default permission mode, no allow rule: a plain call, then a chained one", p,
+                            RULES + ("1. Run exactly this shell command: .claude/bin/tasks status\n"
+                                     "2. Run exactly this shell command: touch ran-chained.txt && .claude/bin/tasks status\n"
+                                     "Then reply DONE.\n"), skip_permissions=False, extra=("--permission-mode", "default"))
+    plain, chained = _injection(ev, "; .claude/bin/tasks status\""), _injection(ev, "touch ran-chained.txt")
+    results = tool_results(ev)
+    run.clause("the plain call is approved by the hook and runs (its result is the CLI's, not a permission refusal)",
+               bool(plain) and plain.get("permissionDecision") == "allow" and bool(results)
+               and "permission" not in results[0].lower(),
+               f"hook answer: {json.dumps(plain)[:300]}; first result: {[r[:200] for r in results[:1]]}")
+    run.clause("the chained call gets the prefix and no decision from the hook",
+               bool(chained) and "permissionDecision" not in chained
+               and str((chained.get("updatedInput") or {}).get("command", "")).startswith("export PLAYBOOK_SESSION_ID="),
+               f"hook answer: {json.dumps(chained)[:300]}")
+    run.clause("Claude Code's own check refuses it (nothing could approve it): the chained `touch` never ran",
+               not (p / "ran-chained.txt").exists(), f"ran-chained.txt exists: {(p / 'ran-chained.txt').exists()}; "
+               f"results: {[r[:160] for r in results]}")
+    q = session_project(tempdir("pb301-skip-") / "proj")
+    _r2, ev2 = claude_session(run, "permissions skipped: the chained call", q, RULES + (
+        "1. Run exactly this shell command: touch ran-skip.txt && .claude/bin/tasks status\nThen reply DONE.\n"))
+    chained2 = _injection(ev2, "touch ran-skip.txt")
+    hist = q / ".agent" / "bash_history"
+    logged = hist.read_text(encoding="utf-8") if hist.exists() else ""
+    run.clause("with permissions skipped the chained call runs with the hook's prefix (the updatedInput with no "
+               "decision was applied: the shell log holds the prefixed command)",
+               (q / "ran-skip.txt").exists() and bool(chained2) and "permissionDecision" not in chained2
+               and any("export PLAYBOOK_SESSION_ID=" in l and "touch ran-skip.txt" in l for l in logged.splitlines()),
+               f"ran-skip.txt exists: {(q / 'ran-skip.txt').exists()}; hook answer: {json.dumps(chained2)[:200]}; "
+               f"shell log: {[l[:200] for l in logged.splitlines() if 'ran-skip' in l]}")
+    return run.finish()
+
+
 ROWS = {
+    "PB-SESSION-ID-NO-ALLOW": session_id_no_allow,
     "PB-TASK-DIR-WATCH": task_dir_watch,
     "PB-PAYLOAD-NORMALIZE": payload_normalize,
     "PB-PROVIDER-CAPABILITY-DEGRADE": capability_degrade,

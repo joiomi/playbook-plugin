@@ -51,10 +51,15 @@ class JudgeGuardOrder(unittest.TestCase):
                          f"judge session activated a task (rc={r.returncode}): {r.stdout}")
 
     def test_normal_session_new_task_is_injected(self):
-        # Negative control: a normal session's `tasks new` is injected + allowed.
+        # Negative control: a normal session's `tasks new` is not blocked and gets its session id. Since task 301 a
+        # bare `tasks` (whatever PATH finds) is injected with no decision; the project's own wrapper is approved.
         r = self.run_gate("tasks new feature ok", "pid-normal")
         self.assertEqual(r.returncode, 0, f"normal tasks new blocked: {r.stderr}")
-        self.assertIn("permissionDecision", r.stdout)
+        self.assertIn("export PLAYBOOK_SESSION_ID=pid-normal; tasks new feature ok", r.stdout)
+        self.assertNotIn("permissionDecision", r.stdout)
+        r = self.run_gate(".claude/bin/tasks new feature ok", "pid-normal")
+        self.assertEqual(r.returncode, 0, f"normal tasks new blocked: {r.stderr}")
+        self.assertIn('"permissionDecision":"allow"', r.stdout)
 
     def test_judge_status_still_allowed(self):
         # A judge may read status — only new/work are blocked.
