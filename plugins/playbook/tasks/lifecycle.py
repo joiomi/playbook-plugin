@@ -2669,8 +2669,8 @@ def cmd_freehand(cmd_args):
                 pos += len(ln) + 1
             return None
 
-        _no_gate = ("Error: no '- [ ] Freehand log' gate outside a code fence in task.md — nothing was pasted (a fence "
-                    "left open above the gate hides it: close it by hand)")
+        _no_gate = ("Error: no '- [ ] Freehand log' gate found outside a code fence in task.md — nothing was pasted (a "
+                    "fence left open above the gate hides it: close it by hand)")
         if _live_log_gate_end(task_text) is None:
             print(_no_gate, file=sys.stderr)
             sys.exit(1)
