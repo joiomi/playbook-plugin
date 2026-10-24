@@ -198,6 +198,19 @@ class EndToEnd(unittest.TestCase):
         self.assertLess(log.index("FINDING-RUN-2"), log.index("FINDING-RUN-1"))
         self.assertLess(log.index("[tamper guard]"), log.index("FINDING-RUN-2"))
 
+    def test_a_link_in_the_judge_logs_place_is_not_read(self):
+        # row 19 (impl round 2, Paths and permissions): a link in the judge log's place is not read into the log —
+        # the file it points at is neither copied into the task folder nor written (already true before: the log was
+        # overwritten, never read)
+        outside = self.project / "outside.txt"
+        outside.write_text("SECRET-OUTSIDE\n", encoding="utf-8")
+        (self.tdir / "judge-agy.log").symlink_to(outside)
+        self.assertEqual(self.impl_review(RUN1), 0)
+        log = self.tdir / "judge-agy.log"
+        self.assertFalse(log.is_symlink())
+        self.assertNotIn("SECRET-OUTSIDE", log.read_text(encoding="utf-8"))
+        self.assertEqual(outside.read_text(encoding="utf-8"), "SECRET-OUTSIDE\n")
+
 
 class TheWriter(unittest.TestCase):
     """`_write_review_findings` on a task file, a second run after the agent wrote among the CLI's lines."""
