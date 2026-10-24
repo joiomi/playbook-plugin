@@ -26,15 +26,42 @@ pb_hook_begin task-gate      # one line per run in journal/hooks.jsonl (task 222
 # is_code_file_path is defined in gate-echo-lib.sh (sourced above) so the codex
 # parity test can source it in isolation — see tests/test_gate_classifier_parity.py.
 
-# pb_hop_to DIR — task 302 (audit 3 G1): judge this call where its target's project is, by running this hook once
+# pb_journal_hop_refusal REASON — a refusal around a hop journals what it needs itself: it runs before this run
+# resolves its session (impl round 1, opus: a run that hops left a session folder and a walk line in a project that
+# judged nothing). With no project here (no AGENT_DIR) there is no journal to write.
+pb_journal_hop_refusal() {
+    local jd=""
+    [ -n "${AGENT_DIR:-}" ] && [ -z "$(lanes_without_marker "$PROJECT_DIR")" ] && jd="$AGENT_DIR"
+    journal_enforcement "$jd" task-gate block "$1" "$(resolve_session_id)" "${TOOL_NAME:-}" "${NORM_PATH:-}"
+}
+
+# pb_hop_to DIR — task 302 (audit 3 G1): judge this call where its target's owner is, by running this hook once
 # more with DIR as its working directory, on the payload as the host sent it. `exec` keeps the process (the session
-# walk reads the same chain) and runs no EXIT trap, so only the run that judges writes its journal line;
-# PB_GATE_HOPPED stops a second hop. A DIR that cannot be entered is not hopped to: the call is judged here.
+# walk reads the same chain) and runs no EXIT trap, so only the run that judges writes its journal line. Two hops at
+# most — from no project to the target's project, then to the tree that owns the record (impl round 2: codex, grok,
+# reproduced: the first hop used the only one and the second owner was never asked); a third is refused, never
+# judged in the wrong tree. The session's activity folder (its counters) is carried across (PB_GATE_ACTIVITY_DIR), as
+# the stop hook carries it. A DIR that cannot be entered is not hopped to: the call is judged here.
 pb_hop_to() {
-    [ -z "${PB_GATE_HOPPED:-}" ] || return 0
+    local hops="${PB_GATE_HOPPED:-0}"
+    case "$hops" in ''|*[!0-9]*) hops=2 ;; esac
+    if [ "$hops" -ge 2 ]; then
+        pb_journal_hop_refusal "a hop past the second"
+        cat >&2 <<MSG
+BLOCKED: judging this call needs a third tree (${1}) after two hops, so no tree's guards can judge it here.
+Edit the file by its own path, from inside the tree that holds it.
+MSG
+        PB_HJ_DETAIL="a hop past the second"
+        exit 2
+    fi
+    if [ -z "${PB_GATE_ACTIVITY_DIR:-}" ] && [ -n "${AGENT_DIR:-}" ]; then
+        local sid
+        sid=$(resolve_session_id) || sid=""
+        [ -n "$sid" ] && export PB_GATE_ACTIVITY_DIR="$AGENT_DIR/sessions/$sid"
+    fi
     cd -- "$1" 2>/dev/null || return 0
-    export PB_GATE_HOPPED=1
-    exec bash "$HOOK_DIR/task-gate-hook" < <(printf '%s' "$PB_RAW_INPUT")
+    export PB_GATE_HOPPED=$((hops + 1))
+    exec "${BASH:-bash}" "$HOOK_DIR/task-gate-hook" < <(printf '%s' "$PB_RAW_INPUT")
 }
 
 # Find project root
@@ -48,15 +75,20 @@ if [ -z "$PROJECT_DIR" ]; then
     # written, then from its resolved form (a link outside any project to a project's file; impl round 1, codex).
     PB_RAW_INPUT=$(cat)
     if [[ $PB_RAW_INPUT =~ \"tool_name\"[[:space:]]*:[[:space:]]*\"(Edit|Write|MultiEdit|NotebookEdit)\" ]]; then
+        # the tool's own key, as the normaliser reads it (NotebookEdit: `notebook_path` alone; impl round 2, grok)
+        _pb_key=file_path
+        [ "${BASH_REMATCH[1]}" = NotebookEdit ] && _pb_key=notebook_path
         _pb_t=""
-        if [[ $PB_RAW_INPUT =~ \"(file_path|notebook_path)\"[[:space:]]*:[[:space:]]*\"(/[^\"\\]*)\" ]]; then
-            _pb_t="${BASH_REMATCH[2]}"
-        elif [[ $PB_RAW_INPUT =~ \"(file_path|notebook_path)\"[[:space:]]*:[[:space:]]*\"/[^\"]*\\ ]]; then
+        if [[ $PB_RAW_INPUT =~ \"$_pb_key\"[[:space:]]*:[[:space:]]*\"((/|~/)[^\"\\]*)\" ]]; then
+            _pb_t="${BASH_REMATCH[1]}"
+        elif [[ $PB_RAW_INPUT =~ \"$_pb_key\"[[:space:]]*:[[:space:]]*\"[^\"]*\\ ]]; then
             _pb_t=$(printf '%s' "$PB_RAW_INPUT" | python3 -I -c 'import json, sys
 ti = json.load(sys.stdin).get("tool_input") or {}
-v = ti.get("file_path") or ti.get("notebook_path") if isinstance(ti, dict) else ""
-sys.stdout.write(v if isinstance(v, str) else "")' 2>/dev/null) || _pb_t=""
+v = ti.get(sys.argv[1]) if isinstance(ti, dict) else ""
+sys.stdout.write(v if isinstance(v, str) else "")' "$_pb_key" 2>/dev/null) || _pb_t=""
         fi
+        # a leading `~/` is the user's home, as Guard 0.6 and the hop read it (impl round 2: agy, grok — reproduced)
+        case "$_pb_t" in "~/"*) _pb_t="$HOME/${_pb_t#"~/"}" ;; esac
         case "$_pb_t" in /*)
             _pb_p=$(project_root_from "${_pb_t%/*}")
             if [ -z "$_pb_p" ] && _pb_real=$(realpath -m -- "$_pb_t" 2>/dev/null); then
@@ -321,13 +353,6 @@ case "$TOOL_NAME" in
         ;;
 esac
 
-# The hop runs before this run resolves its session or makes its session folder (impl round 1, opus: a run that hops
-# left a session folder and a walk line in a project that judged nothing); a refusal here journals what it needs.
-pb_journal_hop_refusal() {
-    local jd=""
-    [ -z "$(lanes_without_marker "$PROJECT_DIR")" ] && jd="$AGENT_DIR"
-    journal_enforcement "$jd" task-gate block "$1" "$(resolve_session_id)" "$TOOL_NAME" "$NORM_PATH"
-}
 # --- Task 302 (audit 3 G1): a task record is judged by the tree that owns it. The record guards below read only this
 # project's lanes, so the main tree's task.md seen from a Claude Code worktree (where EnterWorktree moves the cwd, and
 # so the hooks), or a worktree's seen from the main tree, was an exempt `.agent/` path here. The trees of THIS
@@ -340,9 +365,6 @@ pb_journal_hop_refusal() {
 # Code sends absolute ones) is refused rather than re-read from another directory. Readings that name records of two
 # different lanes are refused: no single tree can judge them (impl round 1: codex, agy, opus, grok). A record of an
 # unrelated project stays not this guard's (retro 107 R6, task 171: `tasks new` cannot make a task there). ---
-pb_main_tree() {
-    case "$1" in */.claude/worktrees/*) printf '%s' "${1%/.claude/worktrees/*}" ;; *) printf '%s' "$1" ;; esac
-}
 pb_has_lane() {     # pb_has_lane DIR — DIR holds `.agent/tasks` or a `.agent/<lane>/tasks`
     local lt
     for lt in "$1/.agent/tasks" "$1"/.agent/*/tasks; do [ -d "$lt" ] && return 0; done
@@ -735,7 +757,7 @@ if [ "$TOOL_NAME" = "Edit" ] || [ "$TOOL_NAME" = "Write" ] || [ "$TOOL_NAME" = "
                 BATCH_RC=0
                 BATCH_MSG=$(echo "$INPUT" | python3 -E -s "$BATCH_HELPER" \
                     --tool "$TOOL_NAME" --file "$TASK_MD_PATH" \
-                    --session-dir "$SESSION_DIR" 2>/dev/null) || BATCH_RC=$?
+                    --session-dir "$SESSION_DIR" ${PB_GATE_ACTIVITY_DIR:+--activity-dir "$PB_GATE_ACTIVITY_DIR"} 2>/dev/null) || BATCH_RC=$?
                 if [ "$BATCH_RC" = "2" ]; then
                     echo "$BATCH_MSG" >&2
                     PB_HJ_DETAIL="gate batch refused"

@@ -220,8 +220,9 @@ class OneHop(_Tree):
         self.assertEqual(self.status_edit(main_md, self.w), 2)
         self.assertEqual(len(self.gate_lines(self.p)) - before_p, 1, "the judging project journals the call")
         self.assertEqual(len(self.gate_lines(self.w)) - before_w, 0, "the cwd project journals nothing")
-        # with the hop already made (its flag set), the gate judges where it runs: no second hop
-        self.assertEqual(self.status_edit(main_md, self.w, PB_GATE_HOPPED="1"), 0)
+        # with two hops already made (the flag at its limit) a hop still needed is refused, never judged here
+        # (impl round 2: codex, grok — a swallowed second hop judged the record in the wrong tree)
+        self.assertEqual(self.status_edit(main_md, self.w, PB_GATE_HOPPED="2"), 2)
         self.assertEqual(len(self.gate_lines(self.w)) - before_w, 1)
 
 
@@ -315,6 +316,86 @@ class RoundOne(_Tree):
         self.assertEqual(self.status_edit(inner / ".agent" / "tasks" / "001-real" / "task.md", x), 2)
         self.activate(inner)
         self.assertEqual(self.stop(x), 2)
+
+
+class RoundTwo(_Tree):
+    """Impl round 2 of task 302 (agy, opus, codex, grok)."""
+
+    def setUp(self):
+        super().setUp()
+        self.main_md = self.p / ".agent" / "tasks" / "001-real" / "task.md"
+
+    def session_dir(self, root: Path) -> Path:
+        d = root / ".agent" / "sessions" / SID
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def test_from_no_project_a_home_relative_target_is_judged_in_its_project(self):
+        # agy I, grok I (reproduced): a leading `~/` is the user's home here too
+        home = {"HOME": str(self.root)}
+        self.assertEqual(self.edit("~/proj/.agent/tasks/001-real/task.md", "## Status\nin_progress",
+                                   "## Status\ndone", self.o, **home), 2)
+        self.assertEqual(self.edit("~/proj/src/a.py", "x = 1", "x = 2", self.o, **home), 2)    # no active task
+        self.activate(self.p)
+        self.assertEqual(self.edit("~/proj/src/a.py", "x = 1", "x = 2", self.o, **home), 0)
+
+    def test_from_no_project_a_worktree_link_to_the_main_record_takes_two_hops(self):
+        # codex I, grok I (reproduced): no project → the worktree → the main tree that owns the record
+        link = self.w / ".agent" / "main-record.md"
+        link.symlink_to(self.main_md)
+        self.assertEqual(self.status_edit(link, self.w), 2)                     # as from the worktree
+        self.assertEqual(self.status_edit(link, self.o), 2)
+
+    def test_the_stop_run_in_the_main_tree_keeps_the_first_runs_prompt_generation(self):
+        # codex I (reproduced): the run the hop starts takes the generation the first run read before its input,
+        # not a later prompt's — its turn-end mark carries it
+        record(self.p, DONE)
+        self.activate(self.p)
+        wd = self.session_dir(self.w)
+        (wd / "counters").write_text("writes=3\ntools=9\n", encoding="utf-8")
+        (wd / "prompt_gen").write_text("0 g8\n", encoding="utf-8")            # a prompt that landed meanwhile
+        r = self.run_hook("stop-hook", {"stop_hook_active": False, "cwd": str(self.p)}, self.p,
+                          PB_STOP_HOPPED="1", PB_STOP_ACTIVITY_DIR=str(wd), PB_STOP_PROMPT_GEN="g7")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        mark = (wd / "turn_end").read_text(encoding="utf-8")
+        self.assertIn(" g7-", mark)
+        self.assertNotIn(" g8-", mark)
+
+    def test_a_project_in_a_worktrees_subfolder_is_its_own_main_tree(self):
+        # codex I (reproduced), opus m: `P/.claude/worktrees/w1/inner` is a project of its own, with its own worktree
+        inner = self.w / "inner"
+        record(inner)
+        x = inner / ".claude" / "worktrees" / "x"
+        x_md = record(x)
+        self.assertEqual(self.status_edit(x_md, x), 2)                          # as from x
+        self.assertEqual(self.status_edit(x_md, inner), 2)
+
+    def test_two_annotated_batches_from_the_worktree_with_work_between_both_pass(self):
+        # opus I, codex I (reproduced): the hopped batch guard counts the worktree's activity, not the main's frozen one
+        self.activate(self.p)
+        md = self.session_dir(self.p)
+        (md / "counters").write_text("writes=0\ntools=3\n", encoding="utf-8")   # frozen when the session left
+        wd = self.session_dir(self.w)
+        (wd / "counters").write_text("writes=4\ntools=10\n", encoding="utf-8")
+
+        def batch(ids):      # each gate with its own outcome line (a line the file already has does not count)
+            old = "\n".join(f"- [ ] g{i}" for i in ids)
+            new = "\n".join(f"- [x] g{i}\n  - 12:00 — gate {i}'s outcome, with its evidence" for i in ids)
+            rc = self.edit(self.main_md, old, new, self.w)
+            if rc == 0:                                                         # as the Edit tool would apply it
+                self.main_md.write_text(self.main_md.read_text(encoding="utf-8").replace(old, new), encoding="utf-8")
+            return rc
+        self.assertEqual(batch((1, 2, 3)), 0)
+        (wd / "counters").write_text("writes=5\ntools=14\n", encoding="utf-8")  # an Edit and two Reads since
+        self.assertEqual(batch((4, 5, 6)), 0)
+
+    def test_from_no_project_a_notebook_edit_is_judged_by_its_own_key(self):
+        # grok I (reproduced): NotebookEdit's target is `notebook_path` alone, a stray `file_path` is not read
+        nb = self.p / "src" / "nb.ipynb"
+        nb.write_text("{}", encoding="utf-8")
+        r = self.run_hook("task-gate-hook", {"tool_name": "NotebookEdit", "tool_input": {
+            "file_path": str(self.o / "decoy.txt"), "notebook_path": str(nb), "new_source": "x"}}, self.o)
+        self.assertEqual(r.returncode, 2, r.stderr)                             # no active task in the notebook's project
 
 
 if __name__ == "__main__":

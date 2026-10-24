@@ -357,6 +357,9 @@ def main() -> int:
     file_path = opt("--file") or ""
     sd_raw = opt("--session-dir")
     session_dir = Path(sd_raw or ".")
+    # task 302 (impl round 2: opus, codex — reproduced): a call judged in the main tree for a worktree session counts
+    # the session's activity where its hooks keep it, the worktree's session folder; the journal stays the judge's
+    activity_dir = Path(opt("--activity-dir") or session_dir)
 
     def _journal_block(reason: str) -> None:
         # Best-effort enforcement-journal (log-only). Only when a real
@@ -434,8 +437,8 @@ def main() -> int:
         return 2
 
     # Allowed batch — consecutive-batch guard (judge Finding 2).
-    marker = session_dir / "last_batch_close"
-    tools_now = read_tools_counter(session_dir)
+    marker = activity_dir / "last_batch_close"
+    tools_now = read_tools_counter(activity_dir)
     try:
         recorded = int(marker.read_text(encoding="utf-8").strip())
     except (OSError, ValueError):

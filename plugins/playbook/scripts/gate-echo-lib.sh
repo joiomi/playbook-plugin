@@ -22,6 +22,21 @@ find_project_root() {
     project_root_from "$PWD"
 }
 
+# pb_main_tree DIR — the main tree of the repository DIR is a tree of (task 302): DIR itself, or, when DIR is a Claude
+# Code worktree — `<main>/.claude/worktrees/<name>`, or `<group>/<name>` under a folder that is no tree — that main.
+# The nearest one (the last `/.claude/worktrees/` is cut), and a project in a worktree's SUBFOLDER is its own main tree
+# (impl rounds 1-2: agy, opus, codex — reproduced).
+pb_main_tree() {
+    case "$1" in */.claude/worktrees/*) ;; *) printf '%s' "$1"; return 0 ;; esac
+    local main="${1%/.claude/worktrees/*}" rest
+    rest="${1#"$main"/.claude/worktrees/}"
+    case "$rest" in
+        ''|*/*/*) printf '%s' "$1" ;;
+        */*) if [ -e "$main/.claude/worktrees/${rest%%/*}/.agent" ]; then printf '%s' "$1"; else printf '%s' "$main"; fi ;;
+        *) printf '%s' "$main" ;;
+    esac
+}
+
 # project_root_from DIR — find_project_root's walk, from DIR instead of $PWD (task 302, audit 3 G1: a task record is
 # judged by the project that owns it, found by walking up from the record's own folder). A folder that does not
 # exist yet is passed over like any other: its markers are simply not there.

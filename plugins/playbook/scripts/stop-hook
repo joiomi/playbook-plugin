@@ -67,7 +67,13 @@ PB_PROMPT_GEN=none
 # hooks keep them: the main tree's are frozen at the moment the session left (impl round 1: opus, grok — reproduced —
 # and codex: a "chat reply" release with the main task's gates open).
 PB_ACTIVITY_DIR="${PB_STOP_ACTIVITY_DIR:-$AGENT_DIR/sessions/$SESSION_ID}"
-[ -z "$SESSION_ID" ] || PB_PROMPT_GEN=$(read_prompt_generation "$PB_ACTIVITY_DIR")
+# and the prompt generation the FIRST run read before its input (impl round 2, codex — reproduced: a user's prompt
+# that lands while the first run reads its input must not lend its generation to the run decided in the main tree)
+if [ -n "${PB_STOP_PROMPT_GEN:-}" ]; then
+    PB_PROMPT_GEN="$PB_STOP_PROMPT_GEN"
+elif [ -n "$SESSION_ID" ]; then
+    PB_PROMPT_GEN=$(read_prompt_generation "$PB_ACTIVITY_DIR")
+fi
 
 # Read stdin (Stop JSON) — extract stop_hook_active
 INPUT=$(cat)
@@ -215,13 +221,15 @@ STATE_FILE="$SESSION_DIR/current_state"
 pb_stop_in_main_tree() {
     [ -z "${PB_STOP_HOPPED:-}" ] || return 0
     case "$PROJECT_DIR" in */.claude/worktrees/*) ;; *) return 0 ;; esac
-    local main="${PROJECT_DIR%/.claude/worktrees/*}" root
+    local main root
+    main=$(pb_main_tree "$PROJECT_DIR")
+    [ "$main" != "$PROJECT_DIR" ] || return 0
     root=$(project_root_from "$main")
     [ -n "$root" ] && [ "$root" -ef "$main" ] || return 0
     case "$PB_ACTIVITY_DIR" in /*) ;; *) PB_ACTIVITY_DIR="$PWD/$PB_ACTIVITY_DIR" ;; esac
     cd -- "$main" 2>/dev/null || return 0
-    export PB_STOP_HOPPED=1 PB_STOP_ACTIVITY_DIR="$PB_ACTIVITY_DIR"
-    exec bash "$HOOK_DIR/stop-hook" < <(printf '%s' "$INPUT")
+    export PB_STOP_HOPPED=1 PB_STOP_ACTIVITY_DIR="$PB_ACTIVITY_DIR" PB_STOP_PROMPT_GEN="${PB_PROMPT_GEN:-none}"
+    exec "${BASH:-bash}" "$HOOK_DIR/stop-hook" < <(printf '%s' "$INPUT")
 }
 
 # No active task — allow
