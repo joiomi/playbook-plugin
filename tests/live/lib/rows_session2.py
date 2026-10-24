@@ -546,8 +546,9 @@ def session_id_no_allow(out: Path) -> int:
                bool(chained) and "permissionDecision" not in chained
                and str((chained.get("updatedInput") or {}).get("command", "")).startswith("export PLAYBOOK_SESSION_ID="),
                f"hook answer: {json.dumps(chained)[:300]}")
-    run.clause("Claude Code's own check refuses it (nothing could approve it): the chained `touch` never ran",
-               not (p / "ran-chained.txt").exists(), f"ran-chained.txt exists: {(p / 'ran-chained.txt').exists()}; "
+    run.clause("Claude Code's own check refuses it (nothing could approve it): its result is the permission refusal and "
+               "the chained `touch` never ran",
+               not (p / "ran-chained.txt").exists() and len(results) > 1 and "require approval" in results[1], f"ran-chained.txt exists: {(p / 'ran-chained.txt').exists()}; "
                f"results: {[r[:160] for r in results]}")
     q = session_project(tempdir("pb301-skip-") / "proj")
     cap = _capture_hooks(q)
