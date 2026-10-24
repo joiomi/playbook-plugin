@@ -19,7 +19,14 @@ _canonical_path() {
 # projects and would cause hooks to fire where they shouldn't.
 # Outputs the project root path, or empty string if not found.
 find_project_root() {
-    local dir="$PWD"
+    project_root_from "$PWD"
+}
+
+# project_root_from DIR — find_project_root's walk, from DIR instead of $PWD (task 302, audit 3 G1: a task record is
+# judged by the project that owns it, found by walking up from the record's own folder). A folder that does not
+# exist yet is passed over like any other: its markers are simply not there.
+project_root_from() {
+    local dir="$1"
     while true; do
         # Legacy layout
         if [ -d "$dir/.agent/tasks" ]; then
