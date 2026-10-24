@@ -1,0 +1,220 @@
+#!/usr/bin/env python3
+"""`tasks red` rewrites only its own lines of `## Red receipt` (task 303; audit 3's G3, the owner's ruling of
+2026-10-24 12:49: "4 grave, G2 nu (Recomandat)").
+
+A second run replaced the whole section, its heading to the next `## `: a note, a `###` subsection, a fenced block
+or an open gate the agent wrote under it went with it, with no copy and no message — an open gate there left the
+count. Now the CLI ends its lines with an end line of its own; every line below it stays, and above it a line stays
+unless it has one of the shapes the CLI writes (moved under the new end line). A line in a code fence is never the
+CLI's. Each test names the row of task 303's contract it proves. Part 1's `Project` (test_red_receipt.py): a
+temporary outer repository with a `code_roots` one, a throwaway HOME, the CLI as `python3 -m tasks.cli`.
+Pure stdlib unittest. Run: python3 tests/test_red_receipt_keeps_the_agents_lines.py
+"""
+import re
+import sys
+import unittest
+from pathlib import Path
+
+_HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(_HERE.parent))
+from tests.test_red_receipt import Project  # noqa: E402
+
+ROW = ("1", "normal", "one", "`exit 1`")
+NOTE = "MY-NOTE: row 1 is already true; a.py predates the task."
+NOTE_RO = "Notă: rândul 1 e deja adevărat — ă î ș ț, păstrat octet cu octet."
+SUB = "### Why row 1 cannot be red"
+SUB_LINE = "MY-NOTE-2: the file is older than the task."
+GATE = "- [ ] MY-GATE: replace row 1 with a test that fails first"
+
+
+class TheAgentsLines(Project):
+    def started(self, rows=(ROW,)):
+        self.new_task()
+        self.set_contract(list(rows))
+        r = self.cli("red")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+
+    def text(self):
+        return self.task_md.read_text(encoding="utf-8")
+
+    def span(self, text):
+        m = re.search(r"(?ms)^## Red receipt\n.*?(?=^## |\Z)", text)
+        if m is None:
+            self.fail(text)
+        return m
+
+    def add_at_section_end(self, block):
+        """The agent's lines where it writes them: under everything in the section, before the next heading."""
+        text = self.text()
+        m = self.span(text)
+        body = m.group(0).rstrip("\n") + "\n\n" + block.rstrip("\n") + "\n\n"
+        self.task_md.write_text(text[:m.start()] + body + text[m.end():], encoding="utf-8")
+
+    def add_after(self, prefix, block):
+        """The agent's lines right after the section's first line that starts with `prefix`."""
+        lines = self.text().split("\n")
+        a = lines.index("## Red receipt")
+        k = next(i for i in range(a, len(lines)) if lines[i].startswith(prefix))
+        lines[k + 1:k + 1] = block.rstrip("\n").split("\n")
+        self.task_md.write_text("\n".join(lines), encoding="utf-8")
+
+    def gates(self):
+        from tasks.core import _gate_counts
+        return _gate_counts(self.text())
+
+    def table_end(self, sec_lines):
+        return max(i for i, ln in enumerate(sec_lines) if ln.startswith("| "))
+
+    def test_the_agents_lines_under_the_table_stay(self):
+        # row 1 (the bug): a note, a `###` subsection with its line and an open gate under the table stay after a
+        # second run, byte for byte and in order (a non-ASCII line too); the open gates count the same
+        self.started()
+        block = "\n".join([NOTE, NOTE_RO, "", SUB, SUB_LINE, "", GATE])
+        self.add_at_section_end(block)
+        before = self.gates()
+        r = self.cli("red")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertIn(block, self.section())
+        self.assertEqual(self.gates(), before)
+        self.assertEqual(self.text().count("\n## Red receipt\n"), 1)
+
+    def test_a_line_between_its_own_lines_moves_under_them(self):
+        # row 2: an open gate the agent wrote between the CLI's State line and its table stays, under the table
+        self.started()
+        self.add_after("State: ", GATE)
+        before = self.gates()
+        self.assertEqual(self.cli("red").returncode, 0)
+        sec = self.section().split("\n")
+        self.assertIn(GATE, sec)
+        self.assertGreater(sec.index(GATE), self.table_end(sec))
+        self.assertEqual(self.gates(), before)
+
+    def test_a_fenced_quote_of_its_own_shapes_stays(self):
+        # row 3: a fenced block inside the CLI's lines that quotes its shapes (a State line, a table row, a pin)
+        # stays byte for byte — a line in a code fence is never the CLI's
+        self.started()
+        quote = "\n".join(["```text", "State: proved: 9 (row 9).", "<!-- pin -->",
+                           "| 9 | normal | `x` | red | green | proved |  | `r` |", "```"])
+        self.add_after("State: ", quote)
+        self.assertEqual(self.cli("red").returncode, 0)
+        self.assertIn(quote, self.section())
+
+    def test_its_own_shapes_below_its_lines_stay(self):
+        # row 4: lines under the CLI's lines that have its shapes (a Note, a State line, a table row) stay — below
+        # its end line nothing is read as its own
+        self.started()
+        block = "\n".join(["Note: row 1 predates the task.", "State: proved: 1 (row 1).",
+                           "| 7 | normal | `mine` | — | — | mine |  | — |"])
+        self.add_at_section_end(block)
+        self.assertEqual(self.cli("red").returncode, 0)
+        self.assertIn(block, self.section())
+        self.assertEqual(len([ln for ln in self.section().split("\n") if ln.startswith("State: ")]), 2)
+
+    def test_a_section_without_its_end_line_keeps_the_agents_lines(self):
+        # row 5: a section with no end line (as written before this task): the agent's lines that are not the
+        # CLI's shapes stay, the CLI's old lines go — one State line, one table header after the run
+        self.started()
+        text = self.text()
+        m = self.span(text)
+        own = [ln for ln in m.group(0).split("\n") if not (re.fullmatch(r"<!-- .* -->", ln) and ln != "<!-- pin -->")]
+        self.task_md.write_text(text[:m.start()] + "\n".join(own) + text[m.end():], encoding="utf-8")
+        self.add_after("State: ", NOTE)
+        self.add_at_section_end("\n".join([SUB, SUB_LINE, "", GATE]))
+        self.assertEqual(self.cli("red").returncode, 0)
+        sec = self.section()
+        for ln in (NOTE, SUB, SUB_LINE, GATE):
+            self.assertIn(ln, sec.split("\n"))
+        self.assertEqual(len([ln for ln in sec.split("\n") if ln.startswith("State: ")]), 1)
+        self.assertEqual(sec.count("| # | Kind | Test |"), 1)
+        self.assertEqual(sec.count("Written by `tasks red`"), 1)
+
+    def test_a_third_run_changes_only_its_own_values(self):
+        # row 6 (repeat): a third run's section is the second's but for the run's own values (its id, its time,
+        # each side's seconds) — one end line, no blank line added, the agent's lines still there
+        self.started()
+        self.add_at_section_end("\n".join([NOTE, "", GATE]))
+        self.assertEqual(self.cli("red").returncode, 0)
+        second = self.section()
+        self.assertEqual(self.cli("red").returncode, 0)
+        third = self.section()
+
+        def values_out(sec):
+            return [("<values>" if ln.startswith(("Written by `tasks red`", "Runs: ", "| 1 |")) else ln)
+                    for ln in sec.split("\n")]
+        self.assertEqual(values_out(third), values_out(second))
+        self.assertIn(NOTE, third.split("\n"))
+        self.assertIn(GATE, third.split("\n"))
+        self.assertEqual(len([ln for ln in third.split("\n") if re.fullmatch(r"<!-- .* -->", ln)
+                              and ln != "<!-- pin -->"]), 1)
+
+    def test_a_drop_keeps_the_agents_lines(self):
+        # row 7: `tasks red --drop` writes the section the same way — the agent's lines stay
+        self.started(rows=(ROW, ("2", "normal", "two", "`exit 2`")))
+        self.set_contract([ROW])
+        block = "\n".join([NOTE, "", GATE])
+        self.add_at_section_end(block)
+        r = self.cli("red", "--drop", "2", "--reason", "row 2 is gone")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        self.assertIn("Dropped: row 2", self.section())
+        self.assertIn(block, self.section())
+
+    def test_an_unclosed_fence_in_the_last_section_keeps_what_follows(self):
+        # row 9: the section is the file's last and the agent opened a fence in the CLI's lines that it never
+        # closed — the opener and every line after it stay (fail closed: they read as fenced, never as the CLI's)
+        self.started()
+        text = self.text()
+        m = self.span(text)
+        self.task_md.write_text(text[:m.start()] + text[m.end():].rstrip("\n") + "\n\n" + m.group(0).rstrip("\n")
+                                + "\n", encoding="utf-8")
+        self.add_after("State: ", "\n".join(["```text", "my unclosed quote", "State: quoted, not its own."]))
+        r = self.cli("red")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        sec = self.section().split("\n")
+        k = sec.index("```text")
+        self.assertEqual(sec[k + 1:k + 3], ["my unclosed quote", "State: quoted, not its own."])
+        self.assertEqual(sec[0], "<!-- pin -->")
+        self.assertLess(next(i for i, ln in enumerate(sec) if ln.startswith("State: ")), k)
+
+
+class TheShapes(unittest.TestCase):
+    def test_every_line_it_writes_is_its_own(self):
+        # row 8: every line `_section` renders, for a state with every part (each table row shape too), reads as
+        # the CLI's own — or it would stay as the agent's and grow on each run; its last line is its end line
+        from tasks import red
+        rec = {"run": "r1", "status": "red", "exit": 1, "seconds": 0.1, "now": {"status": "green", "exit": 0,
+                                                                                "seconds": 0.1}, "last": "x | y"}
+        tests2 = [{"base": {"status": "red"}, "now": {"status": "green"}, "verdict": "proved"},
+                  {"base": {"status": "green", "last": "ok"}, "now": {"status": "green"}, "verdict": "already true"}]
+        rows = [
+            {"row": "1", "kind": "normal", "test": "`a | b`", "state": "broken", "verdict": "broken", "rec": rec,
+             "late": True, "noreader": True, "moved": True, "why": ""},
+            {"row": "2", "kind": "edge", "test": "`t.x`", "state": "no record", "verdict": "", "rec": None,
+             "late": True, "why": ""},
+            {"row": "3", "kind": "hostile", "test": "`t.y`", "state": "stale", "verdict": "proved", "why": "its text",
+             "rec": {"run": "r2", "status": "unrunnable", "why": "no runner"}, "late": False},
+            {"row": "4", "kind": "must-not", "test": "`t.z`, `t.w`", "state": "partly proved", "verdict": "x",
+             "rec": {"run": "r3", "tests": tests2}, "late": False, "why": ""},
+            {"row": "5", "kind": "hostile", "test": "`git x`", "state": "refused", "verdict": "refused",
+             "rec": {"run": "r4", "why": "the command guard", "tests": [{"base": {}, "now": {}, "verdict": "refused"}]},
+             "late": False, "why": ""},
+            {"row": "6", "kind": "normal", "test": "`ok`", "state": "proved", "verdict": "proved", "rec": rec,
+             "late": False, "why": ""},
+        ]
+        for anchor_after in (False, True):
+            st = {"rows": rows, "newest": {"run": "r4", "at": "2026-10-24T19:00:00+03:00"},
+                  "runs": [{"run": "r1", "at": "t1", "base": "(project) abc"}, {"run": "r2", "at": "t2", "base": "b"}],
+                  "notes": ["a note", "another | note"], "unchecked": "the time budget ran out",
+                  "anchor_after": anchor_after,
+                  "missing": [{"row": "8", "kind": "edge", "test": "`gone`"}],
+                  "dropped": [{"row": "9", "kind": "normal", "test": "`old`", "reason": "it went"}]}
+            for contained in ("Each row ran under the judges' write containment (root read-only).",
+                              "Uncontained (no bwrap): each row ran as `tasks verify` runs the project's command."):
+                lines = red._section(st, contained).split("\n")
+                self.assertEqual(lines[0], red.RECEIPT_HEADING)
+                for ln in lines[1:]:
+                    self.assertTrue(red._own_line(ln), ln)
+                self.assertEqual(lines[-1], red.END_LINE)
+
+
+if __name__ == "__main__":
+    unittest.main()
