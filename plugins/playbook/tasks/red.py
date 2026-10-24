@@ -62,6 +62,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -832,46 +833,68 @@ def _row_table_line(e: dict) -> str:
 
 
 # The section's own lines (task 303, audit 3's G3): a run rewrote the whole section, and every line the agent wrote
-# there — a note, a `###` part, an open gate — went with it. Now its last line is END_LINE, and a rewrite replaces only
-# what it wrote (`_kept`): every line below END_LINE stays, and above it each line `_own_line` does not know.
-END_LINE = "<!-- the end of tasks red's lines: a line below this one stays when it runs again -->"
-_OWN_FIRST = "Written by `tasks red` — the state across its runs: "
-_OWN_WORDS = ("Runs: `", "State: ", "Note: ", "Added later (", "No skip reader matched: ",
-              "The working state changed since the run of: ", "Recorded, no longer in the contract, not dropped (",
-              "Dropped: ")                              # each line `_section` begins so ends with a full stop
+# there — a note, a `###` part, an open gate — went with it. Now its last line is its end line, which lists a digest of
+# each line it wrote above (`_end_line`), and a rewrite removes only those (`_kept`): no line is told for its own by
+# its shape (impl round 1, opus and codex: an agent's `Note: … .` was), and every other line stays.
+END_HEAD = "<!-- the end of tasks red's lines: a line below this one stays when it runs again"
+_END_LIST = re.compile(r" — its lines: ((?:[0-9a-f]{8} )*[0-9a-f]{8}) -->$")
+_KEPT_WHOLE = ("Kept by `tasks red`: this section had no end line it could read, so each line it held stays below, "
+               "its own old lines among them.")
+_FIRST_LINE = "Written by `tasks red` — the state across its runs: "
 _TABLE_HEAD = "| # | Kind | Test | On the base | Now | State | On the base, its first error (or last line) | Run |"
 _TABLE_RULE = "|---|------|------|-------------|-----|-------|---------------------------------------------|-----|"
 
 
-def _own_line(line: str) -> bool:
-    """A line of a shape `_section` writes (task 303): a blank line, its pin, its first line, a line that begins with
-    one of its words and ends with a full stop, its table's header and rule, a row of its 8 cells, its end line."""
-    if not line.strip() or line in ("<!-- pin -->", _TABLE_HEAD, _TABLE_RULE, END_LINE) or line.startswith(_OWN_FIRST):
-        return True
-    if line.startswith(_OWN_WORDS) and line.endswith("."):
-        return True
-    return line.startswith("| ") and line.endswith("|") and len(_cells(line)) == 8
+def _line_digest(line: str) -> str:
+    """A line's digest, as the end line lists it — trailing white space left out (an editor may add it: impl round 1,
+    opus and sonnet)."""
+    return hashlib.sha256(line.rstrip().encode("utf-8")).hexdigest()[:8]
+
+
+def _end_line(lines: "list[str]") -> str:
+    """The end line: the digest of each line above it that is not blank, the heading left out."""
+    return f"{END_HEAD} — its lines: {' '.join(_line_digest(ln) for ln in lines if ln.strip())} -->"
+
+
+def _end_digests(line: str) -> "Counter[str] | None":
+    """The digests an end line lists, each as many times as it is listed — or None: not an end line, or one whose list
+    cannot be read."""
+    ln = line.rstrip()
+    m = _END_LIST.search(ln)
+    if not ln.startswith(END_HEAD) or m is None or ln[:m.start()] != END_HEAD:
+        return None
+    return Counter(m.group(1).split())
 
 
 def _kept(lines: "list[str]", a: int, b: int) -> "list[str]":
-    """What a rewrite keeps of the section at [a, b) — its heading at `a` (task 303): every line below its first live
-    END_LINE as it is; above it, in order, each line in a code fence (the writers' fail-closed view: after an unclosed
-    opener, every line) and each live line `_own_line` does not know, under one blank line, a run of blank lines
-    between them kept as one. A section with no END_LINE (one written before task 303) is read whole the second way.
-    The list ends with a blank line, as the section always did."""
+    """What a rewrite keeps of the section at [a, b) — its heading at `a` (task 303). Its end line is the first live
+    line with a list `_end_digests` reads. Below it every line stays as it is. Above it, a live line whose digest the
+    list names is the CLI's and goes (each listed digest once); every other line stays, in order, under one blank line,
+    a run of blank lines between them kept as one — a line in a code fence (the writers' fail-closed view: after an
+    unclosed opener, every line), a line the agent wrote, a line of the CLI's the agent edited. With no such end line
+    (a section written before task 303, or one whose end line was taken out, edited or fenced) nothing is the CLI's:
+    every line stays, under `_KEPT_WHOLE`. The list ends with a blank line, as the section always did."""
     from tasks.core import _iter_nonfenced
     live = {i for i, _s in _iter_nonfenced(lines)}
-    end = next((i for i in range(a + 1, b) if i in live and lines[i] == END_LINE), b)
+    end = next((i for i in range(a + 1, b) if i in live and lines[i].rstrip().startswith(END_HEAD)), None)
+    listed = _end_digests(lines[end]) if end is not None else None
+    if listed is None:
+        end = b
     above: "list[str]" = []
     gap = False                                         # a live blank line since the last line kept
     for i in range(a + 1, end):
-        if i in live and _own_line(lines[i]):
-            gap = gap or not lines[i].strip()
+        if i in live and not lines[i].strip():
+            gap = True
+            continue
+        if i in live and listed is not None and listed[_line_digest(lines[i])] > 0:
+            listed[_line_digest(lines[i])] -= 1
             continue
         if above and gap and above[-1].strip():
             above.append("")
         above.append(lines[i])
         gap = False
+    if above and listed is None:
+        above = [_KEPT_WHOLE, ""] + above
     out = [""] + above if above else []
     after = lines[end + 1:b]
     if out and after and after[0].strip():
@@ -885,12 +908,12 @@ def _kept(lines: "list[str]", a: int, b: int) -> "list[str]":
 def _section(st: dict, contained: str) -> str:
     """The state across runs, for the judges (task 281; agy): each row's newest record — the head names each run that
     is some row's newest, with its base; a count of each state with its rows; the rows added later, those no skip
-    reader matched; a table of the rows NOT proved, each with its run; END_LINE last (task 303). Every record is in
-    the jsonl."""
+    reader matched; a table of the rows NOT proved, each with its run; its end line last (task 303). Every record is
+    in the jsonl."""
     rows = st["rows"]
     newest = st.get("newest") or {}
     head = [RECEIPT_HEADING, "<!-- pin -->",
-            f"{_OWN_FIRST}each row's newest record in `{RECEIPT_NAME}` beside "
+            f"{_FIRST_LINE}each row's newest record in `{RECEIPT_NAME}` beside "
             f"this file. The newest run `{newest.get('run', '')}`, {newest.get('at', '')}. {contained}"]
     if st["runs"]:
         head.append("Runs: " + "; ".join(f"`{r['run']}` {r['at']} on the base {r['base']}" for r in st["runs"]) + ".")
@@ -933,8 +956,8 @@ def _section(st: dict, contained: str) -> str:
     if rest:
         head += ["", _TABLE_HEAD, _TABLE_RULE]
         head += [_row_table_line(e) for e in rest]
-    head.append(END_LINE)
-    return "\n".join(_one_line(h) for h in head)          # each value on its own line, never one more (task 287)
+    out = [_one_line(h) for h in head]                    # each value on its own line, never one more (task 287)
+    return "\n".join(out + [_end_line(out[1:])])
 
 
 def _rows_word(labels: "list[str]") -> str:
