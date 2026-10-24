@@ -401,5 +401,50 @@ class RoundTwo(_Tree):
         self.assertEqual(r.returncode, 2, r.stderr)                             # no active task in the notebook's project
 
 
+class AfterTheLastRound(_Tree):
+    """The post-panel judge's run 1 (codex), both reproduced: grave, fixed red first."""
+
+    def setUp(self):
+        super().setUp()
+        self.main_md = self.p / ".agent" / "tasks" / "001-real" / "task.md"
+
+    def batch(self, cwd: Path, ids) -> int:
+        old = "\n".join(f"- [ ] g{i}" for i in ids)
+        new = "\n".join(f"- [x] g{i}\n  - 12:00 — gate {i}'s outcome, with its evidence" for i in ids)
+        return self.edit(self.main_md, old, new, cwd)
+
+    def test_the_carried_activity_folder_is_never_written_through_a_link(self):
+        # a worktree's `.agent/sessions` linked outside, and a `last_batch_close` linked to a file of the user's:
+        # an allowed batch must not write the tool count into that file (task 194's class: a clone can ship links)
+        self.activate(self.p)
+        precious = self.root / "precious.txt"
+        precious.write_text("the user's own words\n", encoding="utf-8")
+        outside = self.root / "outside-sessions"
+        (outside / SID).mkdir(parents=True)
+        (outside / SID / "counters").write_text("writes=4\ntools=10\n", encoding="utf-8")
+        (outside / SID / "last_batch_close").symlink_to(precious)
+        (self.w / ".agent" / "sessions").symlink_to(outside)
+        self.assertEqual(self.batch(self.w, (1, 2, 3)), 0)
+        self.assertEqual(precious.read_text(encoding="utf-8"), "the user's own words\n")
+        # and a link at the mark inside a session folder that is no link
+        (self.w / ".agent" / "sessions").unlink()
+        wd = self.w / ".agent" / "sessions" / SID
+        wd.mkdir(parents=True)
+        (wd / "counters").write_text("writes=4\ntools=20\n", encoding="utf-8")
+        (wd / "last_batch_close").symlink_to(precious)
+        self.assertEqual(self.batch(self.w, (4, 5, 6)), 0)
+        self.assertEqual(precious.read_text(encoding="utf-8"), "the user's own words\n")
+
+    def test_a_group_folder_with_an_empty_agent_is_still_a_group(self):
+        # only a task lane makes a project: an empty `group/.agent/` must not make `group/w1` its own main tree
+        g = self.p / ".claude" / "worktrees" / "group"
+        (g / ".agent").mkdir(parents=True)
+        w1 = g / "w1"
+        record(w1)
+        self.activate(self.p)
+        self.assertEqual(self.status_edit(self.main_md, w1), 2)
+        self.assertEqual(self.stop(w1), 2)
+
+
 if __name__ == "__main__":
     unittest.main()
