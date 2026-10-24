@@ -291,6 +291,18 @@ class WhatWasWrittenIsKept(_Stub):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(extract_risk(self.tf), "reversible")
 
+    def test_a_section_into_a_template_section_with_gates_keeps_them(self):
+        """Row 31 (my mutant run after impl round 2): a stub section named like a template section that holds gates
+        (`## Pre-review`) is added at the end of it — the template's gates stay, and the stub's gate is there too."""
+        self.stub(lambda t: t.rstrip("\n") + "\n\n## Pre-review\n- [ ] PRE-GATE-4: run the importer on a sample\n")
+        r = self.expand()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        t = self.text()
+        pre = t.split("\n## Pre-review\n", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("- [ ] All tests pass", pre)
+        self.assertIn("- [ ] PRE-GATE-4: run the importer on a sample", pre)
+        self.assertEqual(t.count("\n## Pre-review\n"), 1)
+
     def test_a_risk_heading_in_capitals_is_the_risk(self):
         """Row 30 (impl round 2, opus): `## RISK` is the Risk heading for the risk reader, so it is the stub's Risk for
         the expansion too: one Risk section, the class kept."""
