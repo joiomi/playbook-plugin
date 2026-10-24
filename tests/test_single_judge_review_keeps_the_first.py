@@ -164,6 +164,20 @@ class EndToEnd(unittest.TestCase):
                 self.assertEqual(self.impl_review(RUN2), 0)
                 self.assertIn("FINDING-RUN-1", self.tf.read_text(encoding="utf-8"))
 
+    def test_a_review_with_no_place_is_recorded_once_as_such(self):
+        # row 15 (impl round 1, found by my mutant run): with no place for the findings in task.md (no placeholder,
+        # no markers), the review is recorded once in judge-single.md, saying task.md had no place for it, and task.md
+        # is not touched (already true before: task 117's path)
+        self.tf.write_text(_task_text().replace("(implementation review triage appears here)", "my triage"),
+                           encoding="utf-8")
+        before = self.tf.read_bytes()
+        self.assertEqual(self.impl_review(RUN1), 0)
+        self.assertEqual(self.tf.read_bytes(), before)
+        jm = self.judge_single()
+        self.assertEqual(jm.count("## Single-judge impl review — "), 1)
+        self.assertIn("task.md has no place for these findings", jm)
+        self.assertIn("> **Important** — FINDING-RUN-1", jm)
+
 
 class TheWriter(unittest.TestCase):
     """`_write_review_findings` on a task file, a second run after the agent wrote among the CLI's lines."""
