@@ -118,6 +118,24 @@ class WhatWasWrittenIsKept(_Stub):
         self.assertTrue(gates[-1].startswith("- [ ] Add the user-visible change"), gates[-3:])
 
 
+    def test_an_agents_quote_under_the_risk_stays(self):
+        """Row 9 (my sibling pass, 296's lesson): only the stub template's own guidance line under `## Risk` is the
+        template's; a `>` quote an agent wrote there stays with the class."""
+        self.stub(lambda t: t.replace("## Risk\nunclassified", "## Risk\nassertive\n> QUOTE-4: he said the claim is the docs", 1))
+        r = self.expand()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        t = self.text()
+        self.assertRegex(t, r"(?m)^## Risk\nassertive\n> QUOTE-4: he said the claim is the docs$")
+        self.assertEqual(t.count("> One word: `reversible`"), 1)   # the template's guidance, not carried twice
+
+    def test_a_note_under_the_status_stays(self):
+        """Row 10 (my sibling pass): a note an agent wrote under the stub's `## Status`, beside its value, stays."""
+        self.stub(lambda t: t.replace("## Status\npending\n", "## Status\npending\nSTATUS-NOTE-6: waits for the API\n", 1))
+        r = self.expand()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("STATUS-NOTE-6: waits for the API", self.text())
+
+
 class TheExpansionStaysSafe(_Stub):
     def test_an_unclosed_fence_in_the_added_text_refuses(self):
         """Row 4: an unclosed fence in what the stub added would cover the template's gates: the expansion refuses,
