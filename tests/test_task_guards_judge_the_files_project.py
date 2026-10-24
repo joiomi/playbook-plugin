@@ -115,6 +115,13 @@ class FromTheWorktree(_Tree):
         self.assertEqual(self.write(fake, "# 099 - fake\n\n## Status\ndone\n", self.w), 2)
 
 
+    def test_a_link_in_the_worktree_to_the_main_record_is_judged_by_the_main_tree(self):
+        # the written path is an exempt `.agent/` file of the worktree; its resolved reading is the main record
+        link = self.w / ".agent" / "main-record.md"
+        link.symlink_to(self.main_md)
+        self.assertEqual(self.status_edit(link, self.w), 2)
+
+
 class FromTheMainTree(_Tree):
     def test_a_status_edit_of_the_worktree_record_is_refused(self):
         self.activate(self.p)
@@ -182,6 +189,18 @@ class TheStop(_Tree):
         self.assertEqual(self.edit(self.w / "src" / "a.py", "x = 1", "x = 2", self.w), 0)
         (self.w / ".agent" / "sessions" / SID / "current_state").unlink()
         self.assertEqual(self.edit(self.w / "src" / "a.py", "x = 1", "x = 2", self.w), 2)   # 298: main's does not open it
+
+
+    def test_a_worktree_whose_main_tree_is_no_project_is_not_held_by_a_parent(self):
+        # the stop goes to the main tree only when that tree is itself a project: a project AROUND the repository is
+        # not its main tree (my mutant run: dropping that check let the parent's task hold the stop)
+        outer = self.root / "outer"
+        record(outer)
+        self.activate(outer)                           # the session's task in the project around the repository
+        wt = outer / "repo" / ".claude" / "worktrees" / "w9"
+        record(wt)
+        self.assertEqual(self.stop(outer), 2)
+        self.assertEqual(self.stop(wt), 0)
 
 
 class InItsOwnProject(_Tree):

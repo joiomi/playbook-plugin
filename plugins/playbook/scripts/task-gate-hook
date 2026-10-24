@@ -46,8 +46,7 @@ if [ -z "$PROJECT_DIR" ]; then
     # the payload's own `"file_path"` / `"notebook_path"` text; one with an escaped quote or backslash is not read
     # here, and the call passes as before.
     PB_RAW_INPUT=$(cat)
-    if [ -z "${PB_GATE_HOPPED:-}" ] \
-       && [[ $PB_RAW_INPUT =~ \"(file_path|notebook_path)\"[[:space:]]*:[[:space:]]*\"(/[^\"\\]*)\" ]]; then
+    if [[ $PB_RAW_INPUT =~ \"(file_path|notebook_path)\"[[:space:]]*:[[:space:]]*\"(/[^\"\\]*)\" ]]; then
         _pb_p=$(project_root_from "${BASH_REMATCH[2]%/*}")
         [ -n "$_pb_p" ] && pb_hop_to "$_pb_p"
     fi
@@ -462,7 +461,7 @@ pb_is_active_record() {
 pb_main_tree() {
     case "$1" in */.claude/worktrees/*) printf '%s' "${1%%/.claude/worktrees/*}" ;; *) printf '%s' "$1" ;; esac
 }
-if [ "$TOOL_NAME" != "Bash" ] && [ -z "${PB_GATE_HOPPED:-}" ]; then
+if [ "$TOOL_NAME" != "Bash" ]; then
     for _pb_r in "$NORM_PATH" "$REAL_PATH"; do
         case "$_pb_r" in
             /*/.agent/tasks/*/task.md|/*/.agent/*/tasks/*/task.md)
