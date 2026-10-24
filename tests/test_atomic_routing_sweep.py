@@ -93,9 +93,10 @@ APPROVED = {
         "an enforcement archive's .tasks index (task 257): a NEW file opened O_CREAT|O_EXCL|O_NOFOLLOW inside the "
         "rotation's exclusive hold, before the archive is linked; one torn or missing makes a reader read that "
         "archive whole (an index that cannot be read names every task) — never a live file",
-    ("scripts/gate-batch-check.py", "marker.write_text(str(tools_now)"):
-        "hook-time advisory counter (the consecutive-batch marker); a torn value only "
-        "loses one advisory, never a decision (documented exception: hook-time writers)",
+    ("scripts/gate-batch-check.py", 'with os.fdopen(fd, "w", encoding="utf-8") as fh:'):
+        "hook-time advisory counter (the consecutive-batch marker): a NEW temporary beside it, O_CREAT|O_EXCL|"
+        "O_NOFOLLOW, then renamed over the mark, so a link at the mark is replaced and never written through (task 302); "
+        "a torn value only loses one advisory, never a decision (documented exception: hook-time writers)",
     ("scripts/monitor-lib/sensor.py", 'tmp.write_text(f"{jsonl_path}\\n{offset}")'):
         "monitor sensor poll offset: temp + os.replace (no fsync) — advisory state rewritten "
         "on every poll; a lost offset re-reads events, never loses a decision",

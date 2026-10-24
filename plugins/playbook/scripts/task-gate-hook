@@ -55,9 +55,15 @@ MSG
         exit 2
     fi
     if [ -z "${PB_GATE_ACTIVITY_DIR:-}" ] && [ -n "${AGENT_DIR:-}" ]; then
-        local sid
+        local sid act
         sid=$(resolve_session_id) || sid=""
-        [ -n "$sid" ] && export PB_GATE_ACTIVITY_DIR="$AGENT_DIR/sessions/$sid"
+        act="$AGENT_DIR/sessions/$sid"
+        # only a session folder that is a real folder, not a link, under a `sessions` that is not one (task 194's
+        # rule; the post-panel judge, codex — reproduced: through a linked `sessions` the batch mark was written
+        # into a file of the user's). Otherwise the judging tree counts in its own session folder.
+        if [ -n "$sid" ] && [ -d "$act" ] && _pb_session_dir_ok "$act"; then
+            export PB_GATE_ACTIVITY_DIR="$act"
+        fi
     fi
     cd -- "$1" 2>/dev/null || return 0
     export PB_GATE_HOPPED=$((hops + 1))
@@ -365,11 +371,6 @@ esac
 # Code sends absolute ones) is refused rather than re-read from another directory. Readings that name records of two
 # different lanes are refused: no single tree can judge them (impl round 1: codex, agy, opus, grok). A record of an
 # unrelated project stays not this guard's (retro 107 R6, task 171: `tasks new` cannot make a task there). ---
-pb_has_lane() {     # pb_has_lane DIR — DIR holds `.agent/tasks` or a `.agent/<lane>/tasks`
-    local lt
-    for lt in "$1/.agent/tasks" "$1"/.agent/*/tasks; do [ -d "$lt" ] && return 0; done
-    return 1
-}
 pb_repository_trees() {     # one per line: the main tree, then each worktree that holds a lane
     local main g w
     main=$(pb_main_tree "$PROJECT_DIR")
@@ -379,7 +380,7 @@ pb_repository_trees() {     # one per line: the main tree, then each worktree th
         [ -d "$g" ] || continue
         if pb_has_lane "$g"; then
             printf '%s\n' "$g"
-        elif ! [ -e "$g/.agent" ]; then
+        else                            # a group folder: by the lane predicate, as pb_main_tree reads it
             for w in "$g"/*/; do w="${w%/}"; [ -d "$w" ] && pb_has_lane "$w" && printf '%s\n' "$w"; done
         fi
     done

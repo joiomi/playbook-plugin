@@ -43,7 +43,9 @@ The rules (design-1.5.5.md, F1 — including the judge's corrections):
 from __future__ import annotations
 
 import json
+import os
 import re
+import stat
 import sys
 from collections import Counter
 from pathlib import Path
@@ -322,6 +324,31 @@ def _load_journal():
         return None
 
 
+def _write_mark(marker: Path, value: str) -> None:
+    """Write the batch mark as a plain file of its folder: a temporary made beside it (O_EXCL, O_NOFOLLOW), then
+    renamed over it — the rename replaces a link at the mark and never writes through it; a folder in its place, a
+    linked folder or any error writes nothing (task 302's post-panel judge)."""
+    d = marker.parent
+    try:
+        if os.path.islink(d) or not d.is_dir():
+            return
+        if os.path.lexists(marker) and not (stat.S_ISREG(os.lstat(marker).st_mode) or os.path.islink(marker)):
+            return
+        tmp = d / f".{marker.name}.{os.getpid()}.tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(value)
+            os.replace(tmp, marker)
+        except OSError:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
 def read_tools_counter(session_dir: Path) -> int:
     try:
         for line in (session_dir / "counters").read_text(encoding="utf-8").splitlines():
@@ -439,8 +466,11 @@ def main() -> int:
     # Allowed batch — consecutive-batch guard (judge Finding 2).
     marker = activity_dir / "last_batch_close"
     tools_now = read_tools_counter(activity_dir)
+    # The mark is a plain file of the session folder, never followed through a link (the post-panel judge of task
+    # 302, codex — reproduced: a linked mark had the tool count written into the file it named).
     try:
-        recorded = int(marker.read_text(encoding="utf-8").strip())
+        recorded = (int(marker.read_text(encoding="utf-8").strip())
+                    if stat.S_ISREG(os.lstat(marker).st_mode) else None)
     except (OSError, ValueError):
         recorded = None
     if recorded is not None and 0 <= tools_now - recorded <= 1:
@@ -450,10 +480,7 @@ def main() -> int:
         print(CONSECUTIVE_MSG)
         _journal_block("consecutive-batch")
         return 2
-    try:
-        marker.write_text(str(tools_now), encoding="utf-8")
-    except OSError:
-        pass  # advisory persistence; never block on it
+    _write_mark(marker, str(tools_now))     # advisory persistence; never blocks
     return 0
 
 

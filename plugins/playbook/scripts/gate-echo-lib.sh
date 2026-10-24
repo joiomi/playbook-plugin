@@ -32,9 +32,18 @@ pb_main_tree() {
     rest="${1#"$main"/.claude/worktrees/}"
     case "$rest" in
         ''|*/*/*) printf '%s' "$1" ;;
-        */*) if [ -e "$main/.claude/worktrees/${rest%%/*}/.agent" ]; then printf '%s' "$1"; else printf '%s' "$main"; fi ;;
+        # a group folder is a tree only when it holds a task lane, as a project is found (the post-panel judge,
+        # codex — reproduced: an empty `group/.agent/` made `group/w1` its own main tree)
+        */*) if pb_has_lane "$main/.claude/worktrees/${rest%%/*}"; then printf '%s' "$1"; else printf '%s' "$main"; fi ;;
         *) printf '%s' "$main" ;;
     esac
+}
+
+# pb_has_lane DIR — DIR holds `.agent/tasks` or a `.agent/<lane>/tasks`: the markers find_project_root looks for
+pb_has_lane() {
+    local lt
+    for lt in "$1/.agent/tasks" "$1"/.agent/*/tasks; do [ -d "$lt" ] && return 0; done
+    return 1
 }
 
 # project_root_from DIR — find_project_root's walk, from DIR instead of $PWD (task 302, audit 3 G1: a task record is
