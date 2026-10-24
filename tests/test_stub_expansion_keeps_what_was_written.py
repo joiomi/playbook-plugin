@@ -86,6 +86,23 @@ class WhatWasWrittenIsKept(_Stub):
         self.assertRegex(self.text(), r"(?m)^## Risk\nassertive$")
 
 
+    def test_the_lines_under_the_risk_are_kept(self):
+        """Row 6 (my sibling pass): what an agent wrote under the stub's `## Risk` beside the class — an irreversible
+        task's rollback plan — is kept with it."""
+        self.stub(lambda t: t.replace("## Risk\nunclassified", "## Risk\nirreversible\nROLLBACK-8: restore the dump", 1))
+        r = self.expand()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertRegex(self.text(), r"(?m)^## Risk\nirreversible\nROLLBACK-8: restore the dump$")
+
+    def test_a_note_above_the_first_section_is_kept(self):
+        """Row 7 (my sibling pass): a note an agent wrote between the stub's title and its first section is kept."""
+        self.stub(lambda t: t.replace("<!-- stub:feature -->\n", "<!-- stub:feature -->\n\nPREAMBLE-NOTE-3: split this "
+                                                                   "into two tasks if the API is late\n", 1))
+        r = self.expand()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("PREAMBLE-NOTE-3: split this into two tasks if the API is late", self.text())
+
+
 class TheExpansionStaysSafe(_Stub):
     def test_an_unclosed_fence_in_the_added_text_refuses(self):
         """Row 4: an unclosed fence in what the stub added would cover the template's gates: the expansion refuses,
