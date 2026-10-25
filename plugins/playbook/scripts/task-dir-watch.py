@@ -667,7 +667,7 @@ def _pre(watched: bool, p: dict, project: Path, lane: Path, sfd: int, inside: bo
         notes = [note] if note and state == "gone" else []
         if left:
             first = f"{_lane_rel(project, lane)}/tasks/{left[0]}"
-            if tool == "Bash" and _is_way_out(cmd, cwd, project, lane, left):
+            if tool in ("Bash", "Monitor") and _is_way_out(cmd, cwd, project, lane, left):
                 _journal(lane, "allow", "unknown task folder: the way out", sid, tool, first, cmd)
             else:
                 _journal(lane, "block", "unknown task folder", sid, tool, first, cmd)
