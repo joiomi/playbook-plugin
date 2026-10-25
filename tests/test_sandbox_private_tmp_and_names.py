@@ -294,6 +294,12 @@ class InsideTheSandbox(t308._Home):
         self._made_and_held("grok", {".grok/AGENTS.md": "", ".grok/lsp.json": "{}\n", ".grok/settings.json": "{}\n",
                                      ".grok/disabled-hooks": ""}, [".grok/bundles"])
 
+    def test_grok_s_requirements_pager_and_hooks_registry_are_made_and_held(self):
+        # the post-panel judge, run 2 (opus), and grok's own docs: an unsigned `~/.grok/requirements.toml` "loads as
+        # your own" hooks (10-hooks.md), `pager.toml` carries `[[ui.notifications.hooks]]` commands, and `hooks-paths`
+        # names hook files (18-sandbox.md) — each a hook source a grok run could make where none is
+        self._made_and_held("grok", {".grok/requirements.toml": "", ".grok/pager.toml": "", ".grok/hooks-paths": ""}, [])
+
 
 def _codex_ok():
     spec = importlib.util.spec_from_file_location("_t315_judge_usage", _HERE / "test_judge_usage.py")
