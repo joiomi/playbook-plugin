@@ -37,7 +37,8 @@ class TheMerge(unittest.TestCase):
         self.addCleanup(lambda: __import__("shutil").rmtree(home, ignore_errors=True))
         self.env = {**{k: v for k, v in os.environ.items() if not k.startswith(("GIT_", "PLAYBOOK_"))},
                     "HOME": str(home), "GIT_CONFIG_NOSYSTEM": "1"}
-        for cmd in (["git", "init", "-q"], ["git", "config", "core.quotePath", "false"]):
+        for cmd in (["git", "init", "-q"], ["git", "config", "core.quotePath", "false"],
+                    ["git", "config", "core.excludesFile", "/dev/null"]):   # impl round 2 (opus): no global excludes
             subprocess.run(cmd, cwd=self.p, check=True, env=self.env)
         self.gi = self.p / ".gitignore"
 
@@ -115,6 +116,29 @@ class TheMerge(unittest.TestCase):
         self.assertTrue(after.startswith(before + b"\n"), after[:60])
         self.assertIn(MARKER, after.split(b"\n"))
         self.assertTrue(self.ignored(b"x.pyc"))
+
+    def test_a_last_line_ending_in_a_bare_carriage_return_keeps_what_git_read(self):
+        # impl round 2 (codex): git adds a newline at the end before it reads, so it read `secret.env`; round 1's
+        # `\r\n` after the bare CR made `secret.env\r\r\n`, which git reads as `secret.env\r` — the secret exposed
+        before = b"build/\r\nsecret.env\r"
+        self.gi.write_bytes(before)
+        self.assertTrue(self.ignored(b"secret.env"), "the control: git ignores it before init")
+        self.merge()
+        after = self.gi.read_bytes()
+        self.assertTrue(after.startswith(before), after[:60])
+        self.assertTrue(self.ignored(b"secret.env"), "init stopped ignoring the secret")
+
+    def test_a_comment_holding_the_marker_after_a_carriage_return_is_not_the_marker(self):
+        # impl round 2 (opus, sonnet) [PRE-EXISTING]: `splitlines` split at the CR, took `<marker>` for the marker and put
+        # a newline after the CR, so `foo` became a pattern; git sees one comment line there
+        before = b"build/\n" + MARKER + b"\rfoo\n"
+        self.gi.write_bytes(before)
+        self.assertFalse(self.ignored(b"foo"), "the control: one comment line, nothing ignored")
+        self.merge()
+        after = self.gi.read_bytes()
+        self.assertTrue(after.startswith(before), after[:80])
+        self.assertFalse(self.ignored(b"foo"), "a comment became a pattern")
+        self.assertIn(MARKER, after.split(b"\n"))
 
     def test_control_a_plain_file_gets_the_block_as_before(self):
         before = b"build/\n*.pyc\n"
