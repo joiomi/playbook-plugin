@@ -2299,6 +2299,7 @@ def _index_bits_cleared(repo_path: Path, env: dict) -> bool:
                                 capture_output=True, text=True).stdout.strip() == "true"
         cone: "list[str] | None" = None             # the cone's folders, toplevel-relative; None: not cone mode
         prefix = ""
+        fold = False                                # core.ignoreCase: the cone matched case-folded, as git does
         if sparse:
             if subprocess.run(["git", "config", "--bool", "core.sparseCheckoutCone"], cwd=repo_path, env=env,
                               capture_output=True, text=True).stdout.strip() == "true":
@@ -2325,11 +2326,17 @@ def _index_bits_cleared(repo_path: Path, env: dict) -> bool:
                     return False
                 # only the newline: a folder name may start with a space (post-panel run 2, codex)
                 prefix = at.stdout.removesuffix("\n")
+                fold = subprocess.run(["git", "config", "--bool", "core.ignoreCase"], cwd=repo_path, env=env,
+                                      capture_output=True, text=True).stdout.strip() == "true"
+                if fold:                            # post-panel run 3, codex: `Inside/` is in the cone `inside`
+                    cone = [d.casefold() for d in cone]
 
         def in_the_cone(rel: bytes) -> bool:
             """Cone mode holds every file under a listed folder, and the files directly in the root or in a parent
             of a listed folder (git-sparse-checkout(1))."""
             full = prefix + os.fsdecode(rel)
+            if fold:
+                full = full.casefold()
             parent = full.rsplit("/", 1)[0] if "/" in full else ""
             return (parent == "" or any(full.startswith(d + "/") or d == parent or d.startswith(parent + "/")
                                         for d in cone or ()))
