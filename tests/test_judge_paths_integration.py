@@ -36,7 +36,7 @@ if str(_HERE.parent) not in sys.path:
     sys.path.insert(0, str(_HERE.parent))
 
 from tests._bwrap_standin import bwrap_usable  # noqa: E402
-from tests._judge_stub import PLUGIN, TASKS, clean_env, results, stub_bin  # noqa: E402
+from tests._judge_stub import PLUGIN, TASKS, clean_env, results, stub_bin, stub_home  # noqa: E402
 
 SANDBOX = PLUGIN / "scripts" / "sandbox"
 
@@ -50,7 +50,8 @@ class _Project(unittest.TestCase):
         self.base = Path(tmp.name).resolve()
         self.p = self.base / "proj"
         self.p.mkdir()
-        env = clean_env()
+        home, self.stub_out = stub_home(self.base)      # never the real HOME; the records where a judge may write
+        env = clean_env(HOME=str(home))
         for cmd in (["git", "init", "-q"], ["git", "config", "user.email", "t@t"], ["git", "config", "user.name", "t"]):
             subprocess.run(cmd, cwd=self.p, check=True, env=env)
         (self.p / "README.md").write_text("x\n", encoding="utf-8")
@@ -59,9 +60,7 @@ class _Project(unittest.TestCase):
         (self.p / ".agent" / "tasks").mkdir(parents=True)
         (self.p / ".agent" / "models.json").write_text(
             json.dumps({"panel": self.PANEL, "default_judge": "sonnet"}), encoding="utf-8")
-        self.stub_out = self.base / "stub-out"
-        self.stub_out.mkdir()
-        self.env = clean_env(PATH=f"{stub_bin(self.base / 'bin')}{os.pathsep}{env['PATH']}",
+        self.env = clean_env(HOME=str(home), PATH=f"{stub_bin(self.base / 'bin')}{os.pathsep}{env['PATH']}",
                              PB_STUB_DIR=str(self.stub_out))
         r = self.tasks("new", "light", "probe", "a probe task for the judges")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)

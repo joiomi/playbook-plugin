@@ -62,8 +62,8 @@ class _Scratch(unittest.TestCase):
         (self.p / ".agent" / "tasks").mkdir(parents=True)
         (self.p / ".agent" / "models.json").write_text(
             json.dumps({"panel": ["opus", "sonnet", "haiku"], "default_judge": "sonnet"}), encoding="utf-8")
-        out = base / "stub-out"
-        out.mkdir()
+        out = home / ".local" / "share" / "playbook" / "stub-out"   # where a judge may write (task 315)
+        out.mkdir(parents=True)
         # only the stand-ins and the system's own tools: no real provider CLI is reachable
         self.env = clean_env(HOME=str(home), PB_STUB_DIR=str(out),
                              PATH=f"{stub_bin(base / 'bin', agy=self.agy)}{os.pathsep}/usr/bin{os.pathsep}/bin")

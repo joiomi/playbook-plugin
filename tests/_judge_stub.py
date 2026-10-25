@@ -77,6 +77,20 @@ def stub_bin(directory: Path, *, agy: bool = False) -> Path:
     return directory
 
 
+def stub_home(base: Path) -> "tuple[Path, Path]":
+    """A scratch HOME under `base`, and the folder in it where the stand-in saves its records. Every sandboxed run has
+    /tmp as its own since task 315, so a record left there never reaches the test: it goes where every run may write
+    and the host reads, playbook's write log folder of this HOME. git's two settings files are made, empty: the sandbox
+    refuses a HOME under /tmp without them (they could be made from inside)."""
+    home = base / "home"
+    (home / ".config" / "git").mkdir(parents=True, exist_ok=True)
+    for f in (home / ".gitconfig", home / ".config" / "git" / "config"):
+        f.touch()
+    out = home / ".local" / "share" / "playbook" / "stub-out"
+    out.mkdir(parents=True, exist_ok=True)
+    return home, out
+
+
 def clean_env(**extra: str) -> "dict[str, str]":
     """The test process's environment without this session's identity, logger or interpreter
     settings — a review started by a test must not act as the session that runs the suite."""

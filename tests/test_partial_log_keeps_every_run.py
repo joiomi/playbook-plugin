@@ -56,7 +56,8 @@ class TwoCutRuns(unittest.TestCase):
         bindir.mkdir()
         (bindir / "claude").write_text(_STUB, encoding="utf-8")
         (bindir / "claude").chmod(0o755)
-        self.mark = self.base / "run-mark"
+        self.mark = home / ".local" / "share" / "playbook" / "run-mark"   # where a judge may write (task 315)
+        self.mark.parent.mkdir(parents=True)
         self.p = self.base / "proj"
         self.p.mkdir()
         env = clean_env(HOME=str(home))
