@@ -76,7 +76,7 @@ _AGENT_HOME: dict[str, tuple[str, ...]] = {
 # run of each agent through this launcher, with the folders' full listings; the rest of
 # each name is what its own name says it is (a session, a log, a cache, a sign-in). A
 # mixed folder (a key with a `/`) is pinned and gets the same rule one level down. A
-# folder with no entry here (pi's, omlx's: on no panel, not measured) stays writable.
+# folder with no list (pi's, omlx's: on no panel, not measured) has only new names writable.
 # Read-only, for example: the plugins and their install records, settings, remote
 # settings, instructions, the agent's own install, a status line, Chrome's native host,
 # Claude Code's daemon and jobs, grok's trusted folders and sandbox profile.
@@ -85,18 +85,22 @@ _HOME_WRITES: dict[str, tuple[str, ...]] = {
                 "paste-cache", "plans", "uploads", "feedback", "ide", "state", ".credentials.json", "history.jsonl",
                 "stats-cache.json", ".last-cleanup", ".last-update-result.json", "mcp-needs-auth-cache.json",
                 "*.lock"),
-    ".codex": ("sessions", "session_index.jsonl", "history.jsonl", "auth.json", "cache", "log", "tmp", ".tmp",
+    ".codex": ("sessions", "session_index.jsonl", "history.jsonl", "auth.json", "cache", "log",
                "*.sqlite", "*.sqlite-shm", "*.sqlite-wal", "*.lock", "models_cache.json", "installation_id",
-               "version.json", "thread-writer-locks", "app-server-control", "app-server-daemon",
+               "version.json", "thread-writer-locks", "app-server-control",
                "tui-thread-reference-capabilities", ".personality_migration", ".sandbox_migration"),
+    ".codex/.tmp": ("git-*", "*.lock", "plugins.sha"),
+    ".codex/app-server-daemon": ("daemon*", "*.lock", "*.pid", "*.log", "*.log.*", "*.sock"),
     ".gemini": ("google_accounts.json", "history", "installation_id", "oauth_creds.json", "projects.json",
                 "state.json", "tmp"),
     ".gemini/antigravity-cli": ("annotations", "brain", "cache", "cli.log", "conversations",
                                 "conversation_summaries.db*", "crashes", "history.jsonl", "implicit", "installation_id",
                                 "jetbox_summaries_proto.pb", "jetski_state.pbtxt", "last_check.timestamp", "log",
                                 "presence"),
-    ".grok": ("active_sessions.json", "*.lock", "agent_id", "auth.json", "campaigns_state.json", "completions",
-              "config.toml", "config.toml.tmp.*", "last-copy.txt", "logs", "long-running-background-tasks", "memory",
+    ".pi": (),
+    ".omlx": (),
+    ".grok": ("active_sessions.json", "*.lock", "agent_id", "auth.json", "campaigns_state.json", "last-copy.txt",
+              "logs", "long-running-background-tasks", "memory",
               "memory-v2", "memtrace", ".metadata_version", "models_cache.json", "relocations", "sandbox-blocked.*",
               "sandbox-bwrap-sentinel", "sessions", "settings_cache.json", "slash-mru.json", "tip_cursor.json",
               "version.json", "worktrees.db"),
@@ -118,7 +122,15 @@ _HOME_RO_DIRS_MADE: tuple[str, ...] = (
 # impl round 2, opus and grok). Each is a private, empty tmpfs in the sandbox: the run
 # writes its own there, and the host's — a session's started during the run too — are
 # neither seen nor written (impl round 1, opus).
-_HOME_PRIVATE: tuple[str, ...] = (".claude/shell-snapshots", ".claude/session-env", ".codex/shell_snapshots")
+_HOME_PRIVATE: tuple[str, ...] = (".claude/shell-snapshots", ".claude/session-env", ".codex/shell_snapshots",
+                                  ".codex/tmp")
+# A hook source a run could otherwise create where none is (impl round 3, grok): made with its empty content when
+# missing, read-only from there on — `{}` for JSON, nothing for TOML. Grok also loads Claude Code's two settings files.
+_HOME_FILES_MADE: dict[str, str] = {
+    ".claude/settings.json": "{}\n",
+    ".claude/settings.local.json": "{}\n",
+    ".grok/managed_config.toml": "",
+}
 
 
 def _home_refusal(path: Path, why: str) -> RuntimeError:
@@ -129,7 +141,8 @@ _LINK_WHY = ("is a link inside a folder a sandboxed run may write: the run could
              "session on this machine would follow it. Replace the link with the file or folder it names")
 
 
-def _home_layer(home: Path, folders: "Iterable[str]") -> "tuple[list[str], list[str], list[str]]":
+def _home_layer(home: Path, folders: "Iterable[str]",
+                also_writable: "Iterable[str]" = ()) -> "tuple[list[str], list[str], list[str]]":
     """What a run with `folders` (its agent's state folders) writable must not change there: (pins, read-only paths,
     private folders), each an absolute path. Read-only: every entry of a state folder that exists at launch and is not
     one `_HOME_WRITES` lets its agent write; a mixed folder there is pinned (bound onto itself first, so it cannot be
@@ -137,8 +150,10 @@ def _home_layer(home: Path, folders: "Iterable[str]") -> "tuple[list[str], list[
     one level down. Private: `_HOME_PRIVATE`. The launch is refused (RuntimeError) for a state folder, a read-only
     entry, a pin or a private folder that is a link (bubblewrap cannot bind onto it, and the link itself could be
     replaced), a private path that is not a folder, a read-only file with another hard link, a link inside a
-    read-only folder that leads into a writable place of the run (`/tmp`, a state folder), and a folder that cannot
-    be read (impl round 2: codex)."""
+    read-only folder whose chain passes through or ends in a writable place of the run (`/tmp`, a state folder,
+    `also_writable`: the write log, the extra writable paths, a writable project — impl round 3: agy, codex, grok,
+    opus), and a folder that cannot be read (impl round 2: codex). Places are compared resolved (impl round 3, agy:
+    a `/home` that is itself a link)."""
     import fnmatch
     tops = [home / f for f in folders]
     for t in tops:
@@ -171,7 +186,7 @@ def _home_layer(home: Path, folders: "Iterable[str]") -> "tuple[list[str], list[
                 if p.is_dir():
                     pins.append(str(p))
                     judge(sub)
-                continue
+                    continue                            # not a folder (impl round 3, agy): held as it is
             if any(fnmatch.fnmatchcase(p.name, pat) for pat in allow):
                 continue
             if p.is_symlink():
@@ -185,12 +200,34 @@ def _home_layer(home: Path, folders: "Iterable[str]") -> "tuple[list[str], list[
             raise _home_refusal(d, _LINK_WHY)
         if os.path.lexists(d) and not d.is_dir():
             raise _home_refusal(d, "is not a folder, where a sandboxed run keeps a private one")
-    writable = ["/tmp", *(str(t) for t in mine)]
+    real = os.path.realpath
+    writable = [real(w) for w in ("/tmp", *(str(t) for t in mine), *also_writable)]
+    kept = [real(r) for r in ro]
 
-    def leads_out(target: str) -> bool:
-        if any(target == r or target.startswith(r + "/") for r in ro):
-            return False
-        return any(target == w or target.startswith(w + "/") for w in writable)
+    def inside(path: str, places: "list[str]") -> bool:
+        return any(path == w or path.startswith(w.rstrip("/") + "/") for w in places)
+
+    def in_writable(path: str) -> bool:
+        return inside(path, writable) and not inside(path, kept)
+
+    def leads_out(link: str) -> bool:
+        """Does the chain of links from `link` pass through, or end in, a place the run may write? Each hop's own
+        place is judged, not only the end (impl round 3, opus: a link in a writable place on the way can be
+        replaced)."""
+        cur = link
+        for _ in range(40):
+            try:
+                t = os.readlink(cur)
+            except OSError:
+                return False                            # not a link (any more): the chain ends here
+            nxt = t if os.path.isabs(t) else os.path.join(os.path.dirname(cur), t)
+            nxt = os.path.join(real(os.path.dirname(nxt)), os.path.basename(nxt))
+            if in_writable(nxt):
+                return True
+            if not os.path.islink(nxt):
+                return False
+            cur = nxt
+        return True                                     # a chain this long is not followed: refused
 
     # A read-only file with another hard link is writable through that other name: refused for each read-only
     # entry itself. Inside a read-only folder it is not looked for — a run cannot make such a link (link(2) across
@@ -214,7 +251,7 @@ def _home_layer(home: Path, folders: "Iterable[str]") -> "tuple[list[str], list[
                 with os.scandir(stack.pop()) as it:
                     for e in it:
                         if e.is_symlink():
-                            if leads_out(os.path.realpath(e.path)):
+                            if leads_out(e.path):
                                 raise _home_refusal(Path(e.path), "is a link from a read-only place into one a "
                                                     "sandboxed run may write: what the run writes there, a later "
                                                     "session on this machine would read through it. Replace the "
@@ -925,6 +962,10 @@ def build_bwrap_argv(
     folders = _AGENT_HOME.get(agent or "", ())
     for sub in folders:
         target = home / sub
+        if target.is_symlink():
+            raise _home_refusal(target, _LINK_WHY)
+        if os.path.lexists(target) and not target.is_dir():
+            raise _home_refusal(target, "is not a folder, where the agent keeps its state")
         target.mkdir(parents=True, exist_ok=True)
         argv += ["--bind", str(target), str(target)]
         layers.append((str(target), True))
@@ -935,7 +976,11 @@ def build_bwrap_argv(
     for sub in _HOME_RO_DIRS_MADE:
         if sub.split("/")[0] in folders and not os.path.lexists(home / sub):
             (home / sub).mkdir(parents=True, exist_ok=True)       # a link or a file there: `_home_layer` judges it
-    pins, kept, snaps = _home_layer(home, folders)
+    for sub, empty in _HOME_FILES_MADE.items():
+        if sub.split("/")[0] in folders and not os.path.lexists(home / sub):
+            (home / sub).write_text(empty, encoding="utf-8")
+    pins, kept, snaps = _home_layer(home, folders, [str(write_log_dir), *rw_paths,
+                                                     *([project] if project_writable else [])])
     for path in pins:
         argv += ["--bind", path, path]
         layers.append((path, True))
