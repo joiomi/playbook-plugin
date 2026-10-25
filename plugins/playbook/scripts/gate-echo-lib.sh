@@ -1270,9 +1270,12 @@ PROJECT_ROOT="$(cd "$WRAPPER_DIR/../.." 2>/dev/null && pwd -P)"
 # not resolved (impl round 1, opus and codex), and a link to this file elsewhere is a command of its own that runs
 # where it is called (impl round 2, codex). It must hold `.agent` and this very file. `CDPATH=`, `-L` and `--`: an
 # exported CDPATH, an inherited `SHELLOPTS=physical` or a leading `-` would change what `cd` does (impl round 2).
-case "${0%/*}" in
-    .claude/bin | */.claude/bin)
-        CALLED_IN="$(CDPATH= cd -L -- "${0%/*}/../.." 2>/dev/null && pwd -P)"
+# The folder of that path is spelled plainly first — a doubled `/` or a `.` in it (`bin//tasks`), links left as they
+# are — so an odd spelling cannot skip the check (post-panel run 1, codex).
+CALLED_BY="$(CDPATH= cd -L -- "${0%/*}" 2>/dev/null && pwd -L)"
+case "$CALLED_BY" in
+    */.claude/bin)
+        CALLED_IN="$(CDPATH= cd -L -- "$CALLED_BY/../.." 2>/dev/null && pwd -P)"
         if [ -z "$CALLED_IN" ]; then
             echo "Error: cannot tell which project $0 belongs to." >&2
             exit 1
