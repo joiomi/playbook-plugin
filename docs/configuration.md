@@ -191,10 +191,11 @@ Each entry is a **project-relative path** to a nested git repository. When set,
 the fingerprint additionally folds in each root's `HEAD`, porcelain status, and
 working diff (including untracked-file content; since task 314 these git reads go
 through a copy of the index with the assume-unchanged and skip-worktree bits cleared
-— in a sparse checkout, skip-worktree only where the file is there — so a change (or
-a deletion) under either bit is seen, as are the dirty map tail certification is
-built from and the post-panel tree) — the same material the outer tree already
-hashes — plus, since task 060, the root's **resolved identity**
+— skip-worktree too, except on a file a sparse checkout leaves out (in cone mode,
+one the cone does not hold; in the deprecated non-cone mode, any absent one) — so a
+change (or a deletion) under either bit is seen, as are the dirty map tail
+certification is built from and the post-panel tree) — the same material the outer
+tree already hashes — plus, since task 060, the root's **resolved identity**
 (its real path relative to the project), so repointing a symlinked root at a
 different checkout with the same `HEAD` also moves the fingerprint and is
 refused by tail certification. A code-only edit inside a listed root moves the

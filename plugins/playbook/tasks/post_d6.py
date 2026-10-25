@@ -516,7 +516,11 @@ def worktree_tree_why(repo: Path, exclude: "list[str]") -> "tuple[str | None, st
         from tasks.core import _index_bits_cleared
         if not _index_bits_cleared(repo, env):
             return None, "git could not clear the index bits in the temporary index"
-        a = _git(repo, ["add", "-A", "--", ".", *exclude], env=env)
+        # in a sparse checkout `git add` refuses paths outside the cone, a file put back there included (task 314,
+        # impl round 2, codex); `--sparse` stages it, and an absent one keeps its skip-worktree bit, so its committed
+        # content stays in the tree
+        sparse = _git(repo, ["config", "--bool", "core.sparseCheckout"]).stdout.strip() == "true"
+        a = _git(repo, ["add", "-A", *(["--sparse"] if sparse else []), "--", ".", *exclude], env=env)
         if a.returncode != 0:
             return None, "git add failed: " + ((a.stderr or "").strip().splitlines() or ["?"])[0][:200]
         w = _git(repo, ["write-tree"], env=env)

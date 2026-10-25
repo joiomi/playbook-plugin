@@ -2284,10 +2284,12 @@ def _owner_exclude_specs(cfg: dict) -> "list[str]":
 
 def _index_bits_cleared(repo_path: Path, env: dict) -> bool:
     """In the index `env["GIT_INDEX_FILE"]` names, clear the bits that make git skip a working file (task 314, audit
-    4's G5): assume-unchanged on every entry; skip-worktree on every entry too, except in a sparse checkout, where a
-    file outside the cone is absent by design and keeps its bit (a `git diff` would print each one whole) — there
-    only an entry whose file is there is cleared. Outside a sparse checkout an absent file is a deletion. Paths are
-    listed and cleared from `repo_path`, as `-- .` scopes the readers. False when git cannot list or clear them."""
+    4's G5): assume-unchanged on every entry; skip-worktree on every entry too, except a file a sparse checkout leaves
+    out, which is absent by design and keeps its bit (a `git diff` would print each one whole). In cone mode that is
+    a file the cone does not hold (impl round 2, codex: a deleted file inside the cone was kept too); in the
+    deprecated non-cone mode, any absent one — a stated bound. Outside a sparse checkout an absent file is a
+    deletion. Paths are listed and cleared from `repo_path`, as `-- .` scopes the readers. False when git cannot list
+    or clear them."""
     try:
         listed = subprocess.run(["git", "ls-files", "-v", "-z", "--", "."], cwd=repo_path, env=env,
                                 capture_output=True)
@@ -2295,6 +2297,29 @@ def _index_bits_cleared(repo_path: Path, env: dict) -> bool:
             return False
         sparse = subprocess.run(["git", "config", "--bool", "core.sparseCheckout"], cwd=repo_path, env=env,
                                 capture_output=True, text=True).stdout.strip() == "true"
+        cone: "list[str] | None" = None             # the cone's folders, toplevel-relative; None: not cone mode
+        prefix = ""
+        if sparse:
+            if subprocess.run(["git", "config", "--bool", "core.sparseCheckoutCone"], cwd=repo_path, env=env,
+                              capture_output=True, text=True).stdout.strip() == "true":
+                got = subprocess.run(["git", "sparse-checkout", "list"], cwd=repo_path, env=env,
+                                     capture_output=True, text=True, errors="surrogateescape")
+                if got.returncode != 0:
+                    return False
+                cone = [d.strip("/") for d in got.stdout.splitlines() if d.strip("/")]
+                at = subprocess.run(["git", "rev-parse", "--show-prefix"], cwd=repo_path, env=env,
+                                    capture_output=True, text=True, errors="surrogateescape")
+                if at.returncode != 0:
+                    return False
+                prefix = at.stdout.strip()
+
+        def in_the_cone(rel: bytes) -> bool:
+            """Cone mode holds every file under a listed folder, and the files directly in the root or in a parent
+            of a listed folder (git-sparse-checkout(1))."""
+            full = prefix + os.fsdecode(rel)
+            parent = full.rsplit("/", 1)[0] if "/" in full else ""
+            return (parent == "" or any(full.startswith(d + "/") or d == parent or d.startswith(parent + "/")
+                                        for d in cone or ()))
         assume: "list[bytes]" = []
         skip: "list[bytes]" = []
         base = os.fsencode(str(repo_path))
@@ -2304,7 +2329,8 @@ def _index_bits_cleared(repo_path: Path, env: dict) -> bool:
             tag, rel = entry[:1], entry[2:]
             if tag.islower():
                 assume.append(rel)
-            if tag.upper() == b"S" and (not sparse or os.path.lexists(os.path.join(base, rel))):
+            if tag.upper() == b"S" and (not sparse or os.path.lexists(os.path.join(base, rel))
+                                        or (cone is not None and in_the_cone(rel))):
                 skip.append(rel)
         for flag, rels in (("--no-assume-unchanged", assume), ("--no-skip-worktree", skip)):
             if rels:
@@ -2345,14 +2371,19 @@ class _SeeingIndexBits:
         if not real.is_absolute():
             real = self.repo / real
         self.tmpd = tempfile.mkdtemp(prefix="pb-index-")
-        idx = Path(self.tmpd) / "index"
-        # copy2: the stat cache and the index's own mtime kept (git's racy-clean rule, post_d6.worktree_tree)
-        shutil.copy2(real, idx)
-        env = dict(os.environ, GIT_INDEX_FILE=str(idx))
-        env.pop("GIT_WORK_TREE", None)
-        if not _index_bits_cleared(self.repo, env):
-            raise OSError("git cannot clear the index bits")
-        return env
+        try:
+            idx = Path(self.tmpd) / "index"
+            # copy2: the stat cache and the index's own mtime kept (git's racy-clean rule, post_d6.worktree_tree)
+            shutil.copy2(real, idx)
+            env = dict(os.environ, GIT_INDEX_FILE=str(idx))
+            env.pop("GIT_WORK_TREE", None)
+            if not _index_bits_cleared(self.repo, env):
+                raise OSError("git cannot clear the index bits")
+            return env
+        except BaseException:                       # `__exit__` does not run when `__enter__` raises (impl round 2)
+            shutil.rmtree(self.tmpd, ignore_errors=True)
+            self.tmpd = None
+            raise
 
     def __exit__(self, *exc) -> bool:
         if self.tmpd:
