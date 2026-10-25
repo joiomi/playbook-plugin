@@ -458,7 +458,9 @@ def merge_gitignore(existing: "str | None") -> "str | None":
     # the marker counts only as a whole LINE — an inline mention (a comment quoting
     # it) is not the block (task 054 r2 sol-med#5); the file's own line ending is kept
     nl = "\r\n" if existing is not None and "\r\n" in existing else "\n"
-    lines = existing.splitlines(keepends=True) if existing else []
+    # lines as git reads them: split at `\n` only (task 313, impl round 2: `splitlines` also split at a bare CR, a
+    # form feed or U+2028, and a comment `<marker>\rfoo` was taken for the marker)
+    lines = [ln for ln in re.split(r"(?<=\n)", existing) if ln] if existing else []
     at = next((i for i, line in enumerate(lines) if line.strip() == GITIGNORE_MARKER), None)
     if at is not None:
         present = {line.strip() for line in lines}
@@ -474,7 +476,10 @@ def merge_gitignore(existing: "str | None") -> "str | None":
         return block
     # kept whole, the result's exact prefix (task 313, impl round 1, codex): `rstrip("\r\n")` took a carriage
     # return a pattern means (git strips only the one before LF) and the blank lines after it
-    return existing + ("" if existing.endswith("\n") else nl) + nl + block
+    # a bare CR at the end gets `\n` alone: git adds a newline there before it reads, so `x\r` was read as `x`, and
+    # `\r\n` after it would make `x\r\r\n`, read as `x\r` (impl round 2, codex; measured with git)
+    end = "" if existing.endswith("\n") else ("\n" if existing.endswith("\r") else nl)
+    return existing + end + nl + block
 
 
 def main(argv: "list[str]") -> int:
