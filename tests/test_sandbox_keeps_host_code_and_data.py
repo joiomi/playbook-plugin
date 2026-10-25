@@ -1,16 +1,20 @@
-"""The judges' sandbox leaves writable each agent's own state, never what runs or configures the host later, nor a
-person's data (task 308, audit 4's G3).
+"""The judges' sandbox leaves writable only the running agent's own state, never what runs or configures the host
+later, nor a person's data (task 308, audit 4's G3).
 
 `build_bwrap_argv` bound `~/.claude` and `.codex .gemini .omlx .pi .grok .cache .local` writable over the read-only
 root. Inside, a stand-in agent rewrote the installed plugin's task-gate-hook (the gate then let an Edit through with no
 task), and wrote `~/.claude/settings.json` and `~/.local/bin` (his blind session, 2026-10-25; reproduced in task 306,
 `evidence/m2-mine/g3_sandbox_home.sh`). `~/.local/share` holds a person's data — keyrings, the Trash, mail — and
-`~/.local/bin` the commands on PATH. The tests build the argv with HOME set to a temporary home OUTSIDE /tmp (a home
-under /tmp would be writable through the sandbox's own /tmp bind) and, where bubblewrap can start, try each write.
+`~/.local/bin` the commands on PATH. Impl round 1 (codex, grok, agy, opus, sonnet) found the holes a list of read-only
+paths left: a folder above one renamed and replaced, a missing one created, a link or a hard link beside one, a host
+shell snapshot made during the run. The tests build the argv with HOME set to a temporary home OUTSIDE /tmp for the
+live rows (a home under /tmp would be writable through the sandbox's own /tmp bind) and, where bubblewrap can start,
+try each write inside it, as the agent that owns the folder: the hardest case, its folder writable.
 """
 
 from __future__ import annotations
 
+import inspect
 import os
 import shutil
 import subprocess
@@ -26,7 +30,10 @@ sys.path.insert(0, str(_HERE.parent))
 from tests._bwrap_standin import bwrap_usable  # noqa: E402
 from provider.sandbox import build_bwrap_argv  # noqa: E402
 
-# what runs or configures a later session on the host, inside the agents' writable state folders
+# the agent whose run has each state folder writable
+OWNER = {".claude": "claude", ".codex": "codex", ".gemini": "agy", ".grok": "grok"}
+
+# what runs or configures a later session on the host, inside the agents' state folders
 CODE_AND_CONFIG = (
     ".claude/plugins/cache/mk/playbook/1.0.0/scripts/task-gate-hook",
     ".claude/plugins/installed_plugins.json",
@@ -38,8 +45,8 @@ CODE_AND_CONFIG = (
     ".claude/agents/a.md",
     ".claude/skills/s/SKILL.md",
     ".claude/output-styles/o.md",
+    ".claude/local/claude",
     ".claude/statusline.sh",
-    ".claude/shell-snapshots/snapshot-bash-1-x.sh",
     ".codex/config.toml",
     ".codex/AGENTS.md",
     ".codex/packages/standalone/current/bin/codex",
@@ -47,26 +54,40 @@ CODE_AND_CONFIG = (
     ".codex/skills/s/SKILL.md",
     ".codex/plugins/p.json",
     ".codex/hooks.json",
-    ".codex/shell_snapshots/s.sh",
     ".gemini/settings.json",
     ".gemini/GEMINI.md",
     ".gemini/config/plugins/p/hooks.json",
     ".gemini/trustedFolders.json",
     ".gemini/antigravity-cli/bin/agentapi",
     ".gemini/antigravity-cli/builtin/skills/s.md",
+    ".gemini/extensions/e/gemini-extension.json",
     ".grok/hooks/playbook-enforcement.json",
     ".grok/bin/agent",
     ".grok/downloads/grok-1.0.0",
     ".grok/installed-plugins/p.json",
     ".grok/bundled/skills/s.md",
 )
-# a person's data and the commands on PATH: not an agent's state
+# a host session's shell snapshot, which it sources before every shell call
+SNAPSHOTS = (".claude/shell-snapshots/snapshot-bash-1-x.sh", ".codex/shell_snapshots/s.sh")
+# a person's data and the commands on PATH: no agent's state
 NOT_AN_AGENTS = (".local/bin/tool", ".local/share/keyrings/login.keyring", ".local/share/Trash/files/old.txt",
                  ".local/lib/python3.10/site-packages/m.py", ".cache/ms-playwright/chromium/chrome")
-# what an agent writes as it runs: its transcript, its sign-in's refresh, a new shell snapshot, the write log
-STATE = (".claude/projects/-p/s.jsonl", ".claude/.credentials.json", ".claude/shell-snapshots/snapshot-new.sh",
-         ".codex/sessions/s.jsonl", ".codex/auth.json", ".gemini/oauth_creds.json", ".grok/config.toml",
-         ".local/share/playbook/log")
+# what an agent writes as it runs: its transcript, its sign-in's refresh, the write log
+STATE = (".claude/projects/-p/s.jsonl", ".claude/.credentials.json", ".codex/sessions/s.jsonl", ".codex/auth.json",
+         ".gemini/oauth_creds.json", ".grok/config.toml")
+WRITE_LOG = ".local/share/playbook/log"
+
+
+def owner(rel: str) -> str:
+    return OWNER[rel.split("/")[0]]
+
+
+def _build(proj, cmd, agent):
+    # The `agent` the launcher passes since impl round 1. A `tasks red` row runs these tests on older code, which
+    # takes none and binds every agent's folder: called without it there, so each row fails for its own reason.
+    if "agent" in inspect.signature(build_bwrap_argv).parameters:
+        return build_bwrap_argv(str(proj), None, cmd, None, project_writable=False, agent=agent)
+    return build_bwrap_argv(str(proj), None, cmd, None, project_writable=False)
 
 
 class _Home(unittest.TestCase):
@@ -90,21 +111,62 @@ class _Home(unittest.TestCase):
             self.skipTest(f"no temporary folder in {bases}")
         self.addCleanup(shutil.rmtree, home, True)
         self.home = home
-        for rel in CODE_AND_CONFIG + NOT_AN_AGENTS + STATE:
+        for rel in CODE_AND_CONFIG + SNAPSHOTS + NOT_AN_AGENTS + STATE:
             p = home / rel
             p.parent.mkdir(parents=True, exist_ok=True)
-            if not rel.endswith("snapshot-new.sh") and rel != ".local/share/playbook/log":
-                p.write_text("original\n", encoding="utf-8")
+            p.write_text("original\n", encoding="utf-8")
+        (home / WRITE_LOG).parent.mkdir(parents=True, exist_ok=True)
         self.proj = Path(tempfile.mkdtemp(prefix="pb308-proj-", dir=str(home))).resolve()
         patcher = mock.patch.dict(os.environ, {"HOME": str(home)})
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def argv(self, cmd):
-        return build_bwrap_argv(str(self.proj), None, cmd, None, project_writable=False)
+    def argv(self, cmd, agent="claude"):
+        return _build(self.proj, cmd, agent)
+
+    def run_in(self, script, agent="claude"):
+        r = subprocess.run(self.argv(["bash", "-c", script], agent), cwd=str(self.proj), capture_output=True,
+                           text=True, timeout=60, env=dict(os.environ, HOME=str(self.home)))
+        return r.stdout.strip()
+
+    def attempt(self, rel, agent):
+        return self.run_in(f'printf "changed\\n" > "$HOME/{rel}" 2>/dev/null && echo WROTE || echo REFUSED', agent)
+
+    def remove(self, rel):
+        p = self.home / rel
+        shutil.rmtree(p) if p.is_dir() else p.unlink()
 
 
 class TheArgv(_Home):
+
+    def binds(self, argv, kind):
+        return [argv[i + 1] for i, a in enumerate(argv[:-2]) if a == kind]
+
+    def test_local_and_cache_are_not_bound_writable(self):
+        for agent in ("claude", "codex", "agy", "grok", "pi"):
+            rw = self.binds(self.argv(["true"], agent), "--bind")
+            for top in (".local", ".cache"):
+                self.assertNotIn(str(self.home / top), rw, agent)
+            self.assertIn(str(self.home / ".local" / "share" / "playbook"), rw, agent)       # the write log stays
+
+    def test_a_run_has_only_its_own_agents_folder_writable(self):
+        mine = {"claude": {".claude"}, "codex": {".codex"}, "agy": {".gemini"}, "grok": {".grok"},
+                "pi": {".pi", ".omlx"}}
+        for agent, folders in mine.items():
+            tops = {b[len(str(self.home)) + 1:].split("/")[0] for b in self.binds(self.argv(["true"], agent), "--bind")
+                    if b.startswith(str(self.home) + "/")}
+            self.assertEqual(tops - {".local"}, folders, agent)
+
+    def test_code_and_config_are_bound_read_only_after_their_folder(self):
+        # what a path IS in the sandbox is what the LAST bind covering it says: here a read-only one of its own, laid
+        # over its folder's writable bind (never only the read-only root under it)
+        for rel in CODE_AND_CONFIG:
+            argv = self.argv(["true"], owner(rel))
+            binds = [(a, argv[i + 1]) for i, a in enumerate(argv[:-2]) if a in ("--bind", "--ro-bind")]
+            path = str(self.home / rel)
+            governing = [(a, p) for a, p in binds if (path + "/").startswith(p.rstrip("/") + "/")][-1]
+            self.assertEqual(governing[0], "--ro-bind", (rel, governing))
+            self.assertNotEqual(governing[1], "/", rel)
 
     def test_a_protected_path_that_is_a_link_refuses_the_launch(self):
         # bubblewrap cannot bind onto a link (measured: the launch fails), and the link sits in a writable folder
@@ -119,65 +181,95 @@ class TheArgv(_Home):
         self.assertIn(str(settings), str(cm.exception))
         self.assertIn("Nothing was launched", str(cm.exception))
 
-    def binds(self, argv, kind):
-        return [argv[i + 1] for i, a in enumerate(argv[:-2]) if a == kind]
+    def test_a_script_or_a_snapshot_folder_that_is_a_link_refuses_the_launch(self):
+        real = self.home / "dotfiles"
+        real.mkdir()
+        (real / "status.sh").write_text("echo hi\n", encoding="utf-8")
+        self.remove(".claude/statusline.sh")
+        (self.home / ".claude" / "statusline.sh").symlink_to(real / "status.sh")
+        with self.assertRaises(RuntimeError) as cm:
+            self.argv(["true"])
+        self.assertIn("statusline.sh", str(cm.exception))
+        (self.home / ".claude" / "statusline.sh").unlink()
+        self.remove(".claude/shell-snapshots")
+        (real / "snaps").mkdir()
+        (self.home / ".claude" / "shell-snapshots").symlink_to(real / "snaps")
+        with self.assertRaises(RuntimeError) as cm:
+            self.argv(["true"])
+        self.assertIn("shell-snapshots", str(cm.exception))
 
-    def test_local_and_cache_are_not_bound_writable(self):
-        rw = self.binds(self.argv(["true"]), "--bind")
-        for top in (".local", ".cache"):
-            self.assertNotIn(str(self.home / top), rw)
-        self.assertIn(str(self.home / ".local" / "share" / "playbook"), rw)       # the write log stays
-
-    def test_code_and_config_are_bound_read_only_after_their_folder(self):
-        # what a path IS in the sandbox is what the LAST bind covering it says: here a read-only one of its own, laid
-        # over its folder's writable bind (never only the read-only root under it)
-        argv = self.argv(["true"])
-        binds = [(a, argv[i + 1]) for i, a in enumerate(argv[:-2]) if a in ("--bind", "--ro-bind")]
-        for rel in CODE_AND_CONFIG:
-            path = str(self.home / rel)
-            governing = [(a, p) for a, p in binds if (path + "/").startswith(p.rstrip("/") + "/")][-1]
-            self.assertEqual(governing[0], "--ro-bind", (rel, governing))
-            self.assertNotEqual(governing[1], "/", rel)
+    def test_a_protected_file_with_another_hard_link_refuses_the_launch(self):
+        settings = self.home / ".claude" / "settings.json"
+        os.link(settings, self.home / ".claude" / "projects" / "settings.backup")
+        with self.assertRaises(RuntimeError) as cm:
+            self.argv(["true"])
+        self.assertIn(str(settings), str(cm.exception))
+        self.assertIn("Nothing was launched", str(cm.exception))
 
 
 @unittest.skipUnless(bwrap_usable(), "no bubblewrap that can start a sandbox here")
 class InsideTheSandbox(_Home):
     HOME_BASE = "/var/tmp"
 
-    def attempt(self, rel):
-        script = f'printf "changed\\n" > "$HOME/{rel}" 2>/dev/null && echo WROTE || echo REFUSED'
-        r = subprocess.run(self.argv(["bash", "-c", script]), cwd=str(self.proj), capture_output=True, text=True,
-                           timeout=60, env=dict(os.environ, HOME=str(self.home)))
-        return r.stdout.strip()
-
     def test_code_config_and_data_cannot_be_written(self):
-        for rel in CODE_AND_CONFIG + NOT_AN_AGENTS:
-            self.assertEqual(self.attempt(rel), "REFUSED", rel)
+        for rel in CODE_AND_CONFIG:
+            self.assertEqual(self.attempt(rel, owner(rel)), "REFUSED", rel)
+            self.assertEqual((self.home / rel).read_text(encoding="utf-8"), "original\n", rel)
+        for rel in NOT_AN_AGENTS:
+            for agent in ("claude", "codex"):
+                self.assertEqual(self.attempt(rel, agent), "REFUSED", (rel, agent))
+                self.assertEqual((self.home / rel).read_text(encoding="utf-8"), "original\n", rel)
+
+    def test_another_agents_state_cannot_be_written(self):
+        for rel, agent in ((".claude/projects/-p/s.jsonl", "codex"), (".codex/auth.json", "claude"),
+                           (".gemini/oauth_creds.json", "grok"), (".grok/config.toml", "agy")):
+            self.assertEqual(self.attempt(rel, agent), "REFUSED", (rel, agent))
             self.assertEqual((self.home / rel).read_text(encoding="utf-8"), "original\n", rel)
 
     def test_control_an_agents_state_is_written(self):
         for rel in STATE:
-            self.assertEqual(self.attempt(rel), "WROTE", rel)
+            self.assertEqual(self.attempt(rel, owner(rel)), "WROTE", rel)
+        self.assertEqual(self.attempt(WRITE_LOG, "codex"), "WROTE")
 
-    def test_a_missing_claude_folder_is_made_empty_and_held(self):
-        # with no skills or agents folder at launch, a run could make one with a skill or an agent the host then loads
-        for name in ("skills", "agents"):
-            shutil.rmtree(self.home / ".claude" / name)
-        for rel in (".claude/skills/s/SKILL.md", ".claude/agents/a.md"):
-            script = f'mkdir -p "$(dirname "$HOME/{rel}")" 2>/dev/null; printf x > "$HOME/{rel}" 2>/dev/null ' \
-                     f'&& echo WROTE || echo REFUSED'
-            r = subprocess.run(self.argv(["bash", "-c", script]), cwd=str(self.proj), capture_output=True, text=True,
-                               timeout=60, env=dict(os.environ, HOME=str(self.home)))
-            self.assertEqual(r.stdout.strip(), "REFUSED", rel)
-        for name in ("skills", "agents"):
-            self.assertEqual(list((self.home / ".claude" / name).iterdir()), [], name)
+    def test_a_folder_above_a_read_only_path_cannot_be_moved_aside(self):
+        for rel, agent in ((".gemini/antigravity-cli/bin/agentapi", "agy"), (SNAPSHOTS[0], "claude")):
+            folder = str(Path(rel).parent.parent) if rel.startswith(".gemini") else str(Path(rel).parent)
+            self.run_in(f'mv "$HOME/{folder}" "$HOME/{folder}.aside" 2>/dev/null; mkdir -p "$(dirname "$HOME/{rel}")"'
+                        f' 2>/dev/null; printf pwned > "$HOME/{rel}" 2>/dev/null; true', agent)
+            self.assertEqual((self.home / rel).read_text(encoding="utf-8"), "original\n", rel)
+            self.assertFalse((self.home / (folder + ".aside")).exists(), folder)
+
+    def test_a_host_shell_snapshot_is_neither_seen_nor_written(self):
+        for rel, agent in zip(SNAPSHOTS, ("claude", "codex")):
+            folder = str(Path(rel).parent)
+            seen = self.run_in(f'ls -A "$HOME/{folder}"; printf mine > "$HOME/{folder}/new.sh" && echo MADE; '
+                               f'printf pwned > "$HOME/{rel}" 2>/dev/null; true', agent)
+            self.assertEqual(seen, "MADE", rel)                        # an empty, private folder of its own
+            self.assertEqual((self.home / rel).read_text(encoding="utf-8"), "original\n", rel)
+            self.assertEqual(sorted(p.name for p in (self.home / folder).iterdir()), [Path(rel).name], rel)
+
+    def test_a_missing_folder_of_the_list_is_made_empty_and_held(self):
+        # with no such folder at launch, a run could make one with a skill, an agent, a rule or a hook in it
+        for rel, agent in ((".claude/skills/s/SKILL.md", "claude"), (".claude/agents/a.md", "claude"),
+                           (".codex/rules/default.rules", "codex"), (".gemini/config/plugins/p/hooks.json", "agy"),
+                           (".grok/hooks/playbook-enforcement.json", "grok")):
+            top = Path(rel).parts[0] + "/" + Path(rel).parts[1]
+            self.remove(top)
+            out = self.run_in(f'mkdir -p "$(dirname "$HOME/{rel}")" 2>/dev/null; printf x > "$HOME/{rel}" 2>/dev/null'
+                              f' && echo WROTE || echo REFUSED', agent)
+            self.assertEqual(out, "REFUSED", rel)
+            self.assertEqual(list((self.home / top).iterdir()), [], top)
+
+    def test_a_missing_instructions_file_is_made_empty_and_held(self):
+        for rel, agent in ((".claude/CLAUDE.md", "claude"), (".codex/AGENTS.md", "codex"), (".gemini/GEMINI.md", "agy")):
+            self.remove(rel)
+            self.assertEqual(self.attempt(rel, agent), "REFUSED", rel)
+            self.assertEqual((self.home / rel).read_text(encoding="utf-8"), "", rel)
 
     def test_a_read_only_file_cannot_be_replaced_or_removed(self):
         for verb in ('mv "$HOME/.claude/x" "$HOME/.claude/settings.json"', 'rm -f "$HOME/.claude/settings.json"',
                      'rm -rf "$HOME/.claude/plugins"'):
-            script = f'printf x > "$HOME/.claude/x"; {verb} 2>/dev/null; true'
-            subprocess.run(self.argv(["bash", "-c", script]), cwd=str(self.proj), capture_output=True, timeout=60,
-                           env=dict(os.environ, HOME=str(self.home)))
+            self.run_in(f'printf x > "$HOME/.claude/x"; {verb} 2>/dev/null; true')
             self.assertEqual((self.home / ".claude" / "settings.json").read_text(encoding="utf-8"), "original\n")
             self.assertTrue((self.home / CODE_AND_CONFIG[0]).exists(), verb)
 
