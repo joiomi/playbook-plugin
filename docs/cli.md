@@ -1,6 +1,6 @@
 # Tasks CLI reference
 
-Everything the `tasks` CLI does. In a playbook-managed project the agent calls it as `.claude/bin/tasks` — you normally never type these yourself; this page is for understanding what the agent is doing (and for maintainers).
+Everything the `tasks` CLI does. In a playbook-managed project the agent calls it as `.claude/bin/tasks`, which acts on its own project wherever it is run from: from outside that project (its parent folder, say) it first enters the project, and from inside it stays where it is (task 310) — you normally never type these yourself; this page is for understanding what the agent is doing (and for maintainers).
 
 ## Workflow
 
