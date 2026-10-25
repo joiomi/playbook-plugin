@@ -222,6 +222,31 @@ class TheWrapperRunsInItsProject(unittest.TestCase):
         self.assertRegex(md.read_text(encoding="utf-8"), r"## Status\n(done|closed)")
         self.assertFalse((self.root / ".agent").exists())
 
+    def test_a_linked_claude_folder_s_project_gets_its_pinned_install(self):
+        # impl round 2 (agy; opus, grok): the resolver got the shared folder's parent, so an install pinned to the
+        # project (`projectPath`) was never matched and another copy ran
+        installs = []
+        for name in ("pinned", "user"):
+            stand = self.home / name
+            (stand / "scripts").mkdir(parents=True)
+            (stand / "scripts" / "tasks").write_text(f"#!/bin/bash\necho {name}\n", encoding="utf-8")
+            (stand / "scripts" / "tasks").chmod(0o755)
+            installs.append(stand)
+        (self.home / ".claude" / "plugins" / "installed_plugins.json").write_text(json.dumps(
+            {"version": 2, "plugins": {"playbook@mk": [
+                {"scope": "project", "projectPath": str(self.proj), "installPath": str(installs[0]), "version": "1.0.0"},
+                {"scope": "user", "installPath": str(installs[1]), "version": "9.9.9"}]}}), encoding="utf-8")
+        shared = self.base / "shared"
+        (shared / ".claude").mkdir(parents=True)
+        shutil.rmtree(self.proj / ".claude")
+        (self.proj / ".claude").symlink_to(shared / ".claude")
+        r = subprocess.run([bash_or_skip(), "-c", 'source "$1"; create_wrapper "$2" tasks', "-", str(LIB),
+                            str(self.proj)], env=self.env(), capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        for argv0, cwd in ((str(self.wrapper), self.proj / "src"), (".claude/bin/tasks", self.proj)):   # the usual call
+            r = subprocess.run([argv0], cwd=str(cwd), env=self.env(), capture_output=True, text=True, timeout=60)
+            self.assertEqual((r.returncode, r.stdout.strip()), (0, "pinned"), (argv0, r.stderr))
+
     def test_control_a_subfolder_of_the_project_still_works(self):
         r = self.tasks("new", "quick", "fix", "fix f", cwd=self.proj / "src")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
