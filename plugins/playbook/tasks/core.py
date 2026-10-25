@@ -2323,7 +2323,8 @@ def _index_bits_cleared(repo_path: Path, env: dict) -> bool:
                                     capture_output=True, text=True, errors="surrogateescape")
                 if at.returncode != 0:
                     return False
-                prefix = at.stdout.strip()
+                # only the newline: a folder name may start with a space (post-panel run 2, codex)
+                prefix = at.stdout.removesuffix("\n")
 
         def in_the_cone(rel: bytes) -> bool:
             """Cone mode holds every file under a listed folder, and the files directly in the root or in a parent
@@ -2377,9 +2378,10 @@ class _SeeingIndexBits:
             return None
         where = subprocess.run(["git", "rev-parse", "--git-path", "index"], cwd=self.repo, capture_output=True,
                                text=True, errors="surrogateescape")
-        if where.returncode != 0 or not where.stdout.strip():
+        named = where.stdout.removesuffix("\n")
+        if where.returncode != 0 or not named:
             raise OSError("git cannot name its index")
-        real = Path(where.stdout.strip())
+        real = Path(named)
         if not real.is_absolute():
             real = self.repo / real
         self.tmpd = tempfile.mkdtemp(prefix="pb-index-")
