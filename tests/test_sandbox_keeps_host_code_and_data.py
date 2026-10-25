@@ -334,6 +334,13 @@ class TheArgv(_Home):
             self.assertEqual(p.read_text(encoding="utf-8") if p.exists() else None, empty, rel)
             self.assertIn(("--ro-bind-try", str(p)), [(a, argv[i + 1]) for i, a in enumerate(argv[:-2])], rel)
 
+    def test_no_agy_folder_makes_no_agy_settings_and_launches(self):
+        # my mutant run on post-panel run 4's fix: with no `antigravity-cli` (agy not installed) none is made, and the
+        # launch does not fail on the missing folder
+        self.remove(".gemini/antigravity-cli")
+        self.argv(["true"], "agy")
+        self.assertFalse(os.path.lexists(self.home / ".gemini" / "antigravity-cli"))
+
     def test_a_state_folder_that_is_a_link_refuses_the_launch(self):
         # bubblewrap cannot bind onto it either (measured); refused first, with what to do
         real = self.home / "dotfiles" / "claude"
@@ -441,6 +448,14 @@ class TheArgvOutsideTmp(_Home):
         with self.assertRaises(RuntimeError) as cm:
             self.argv(["true"])
         self.assertIn(str(hook), str(cm.exception))
+
+    def test_a_kept_link_leaving_a_writable_root_by_dot_dot_launches(self):
+        # my mutant run on post-panel run 4's fix: a writable place's own root is a mount point, which a run cannot turn
+        # into a link — `~/.claude/../.claude/settings.json` ends in a kept file and launches
+        hook = self.home / CODE_AND_CONFIG[0]
+        hook.unlink()
+        hook.symlink_to(str(self.home / ".claude") + "/../.claude/settings.json")
+        self.argv(["true"])
 
     def test_a_link_into_the_write_log_refuses_the_launch(self):
         # impl round 3 (agy, codex, grok): the write log is bound writable too
