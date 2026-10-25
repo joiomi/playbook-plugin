@@ -1153,20 +1153,28 @@ def _earlier_runs(log: Path) -> bytes:
         os.close(fd)
 
 
-def _save_partial_log(task_file: Path, partial_log: Path, this_run: str) -> None:
+_EARLIER_CUT_RUNS = "════ the earlier cut runs of this judge, newest first (kept since task 312) ════"
+
+
+def _save_partial_log(task_file: Path, partial_log: Path, this_run: str) -> Path:
     """A cut run's text saved first in its partial log, then every earlier run (task 312, audit 4's G8: each cut run
     replaced the file, and a second one lost the first's paid text) — under the task folder's lock, as the main log
-    since 304, so two saves at once cannot both read the old file (impl round 1, codex). Earlier runs that cannot be
-    read leave the new run saved on its own, as before 312 (impl round 1, opus: it was lost with them). Raises what
-    the lock or the write raise; the caller says the save failed."""
+    since 304, so two saves at once cannot both read the old file (impl round 1, codex). A partial log whose earlier
+    runs cannot be read (EACCES, EIO) is left as it is, and the new run goes to a sibling of its own (impl rounds 1-2:
+    opus, codex, grok — it was lost with them, then it replaced them with the old file's mode). Returns the file
+    written; raises what the lock or the write raise, and the caller says the save failed."""
     from tasks.filelock import task_lock
     with task_lock(task_file):                          # the folder's lock: a linked log moves no lock (304)
         try:
             earlier = _earlier_runs(partial_log)
         except OSError:
-            earlier = b""
+            aside = partial_log.with_name(f"{partial_log.stem}.{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
+                                          f"-{os.getpid()}{partial_log.suffix}")
+            atomic_write(aside, this_run.encode("utf-8"))
+            return aside
         atomic_write(partial_log, this_run.encode("utf-8")
-                     + ((b"\n\n" + _EARLIER_RUNS.encode("utf-8") + b"\n\n" + earlier) if earlier.strip() else b""))
+                     + ((b"\n\n" + _EARLIER_CUT_RUNS.encode("utf-8") + b"\n\n" + earlier) if earlier.strip() else b""))
+        return partial_log
 
 
 def _judge_log_name(backend: str) -> str:
@@ -3570,11 +3578,13 @@ def _cmd_single_review(cmd, cmd_args):
                          f"# The previous complete review, if any, is untouched in "
                          f"{_judge_log_name(backend)}.\n{_trail}\n{partial}\n")
             try:
-                _save_partial_log(task_file, partial_log, _this_run)
+                _written = _save_partial_log(task_file, partial_log, _this_run)
                 saved_note = ((f" Partial output ({len(partial)} chars) saved to " if partial else
                                f" The judge produced no output before {'it stopped' if _soft_stop else 'the kill'}; "
                                "its conversation is named in ")
-                              + f"{partial_log.relative_to(project_path)}.")
+                              + f"{_written.relative_to(project_path)}."
+                              + (f" {partial_log.name} holds earlier runs that could not be read; it is left as it is."
+                                 if _written != partial_log else ""))
             except (OSError, RuntimeError) as _save_err:    # RuntimeError: the lock's LockTimeout
                 saved_note = (f" Partial output ({len(partial)} chars) could NOT be "
                               f"saved ({_save_err}).")
