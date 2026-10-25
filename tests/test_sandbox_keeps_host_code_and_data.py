@@ -214,6 +214,17 @@ class TheArgv(_Home):
             self.argv(["true"])
         self.assertIn("shell-snapshots", str(cm.exception))
 
+    def test_a_state_folder_that_is_a_link_refuses_the_launch(self):
+        # bubblewrap cannot bind onto it either (measured); refused first, with what to do
+        real = self.home / "dotfiles" / "claude"
+        real.parent.mkdir()
+        (self.home / ".claude").rename(real)
+        (self.home / ".claude").symlink_to(real)
+        with self.assertRaises(RuntimeError) as cm:
+            self.argv(["true"])
+        self.assertIn(str(self.home / ".claude"), str(cm.exception))
+        self.assertIn("Nothing was launched", str(cm.exception))
+
     def test_a_link_from_a_read_only_folder_into_a_writable_one_refuses_the_launch(self):
         # a plugin's hook that is a link into the run's own state: the run writes there, the host runs it
         hook = self.home / CODE_AND_CONFIG[0]
