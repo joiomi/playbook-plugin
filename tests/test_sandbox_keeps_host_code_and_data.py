@@ -297,6 +297,18 @@ class TheArgv(_Home):
         with self.assertRaises(RuntimeError):           # a third name, of anyone's, still refuses
             self.argv(["true"])
 
+    def test_a_temporary_name_that_came_after_the_look_is_not_taken_off_the_count(self):
+        # my mutant run on post-panel run 3's fix: only a temporary name held read-only is taken off the link count; one
+        # the look did not see is writable in this run, so the launch refuses (it fails closed)
+        p = self.home / ".claude" / "settings.local.json"
+        tmp = p.with_name(".settings.local.json.playbook-123-abcdef012345")
+        os.link(p, tmp)
+        real_iterdir = Path.iterdir
+        with mock.patch.object(Path, "iterdir", lambda d: (q for q in real_iterdir(d) if q != tmp)):
+            with self.assertRaises(RuntimeError) as cm:
+                self.argv(["true"])
+        self.assertIn("another hard link", str(cm.exception))
+
     def test_a_missing_hook_source_is_made_empty_and_held(self):
         # impl round 3 (grok): grok loads Claude Code's settings files and its own managed config as hooks
         for rel, agent, empty in ((".claude/settings.local.json", "claude", "{}\n"),
@@ -389,6 +401,18 @@ class TheArgvOutsideTmp(_Home):
         hook = self.home / CODE_AND_CONFIG[0]
         hook.unlink()
         hook.symlink_to(self.home / "somewhere" / "a" / "hook.sh")
+        with self.assertRaises(RuntimeError) as cm:
+            self.argv(["true"])
+        self.assertIn(str(hook), str(cm.exception))
+
+    def test_a_kept_link_through_linked_folders_that_loop_refuses_the_launch(self):
+        # my mutant run on post-panel run 3's fix: each linked folder's chain is followed, so folders that point into
+        # each other share one budget of hops — the launch refuses with its message, never a crash
+        (self.home / "a").symlink_to(self.home / "b" / "x")
+        (self.home / "b").symlink_to(self.home / "a" / "y")
+        hook = self.home / CODE_AND_CONFIG[0]
+        hook.unlink()
+        hook.symlink_to(self.home / "a" / "hook.sh")
         with self.assertRaises(RuntimeError) as cm:
             self.argv(["true"])
         self.assertIn(str(hook), str(cm.exception))
