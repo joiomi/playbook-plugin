@@ -258,6 +258,17 @@ class InASparseCheckout(_Repo):
         blob = self.git("rev-parse", f"{after}:outside/b.py").strip()
         self.assertEqual(self.git("cat-file", "-p", blob), "b = 2  # put back and changed\n")
 
+    def test_root_files_and_a_listed_folder_s_parents_are_in_the_cone(self):
+        # my mutant run on impl round 2's fix: cone mode holds the root's files and the files directly in a parent of a
+        # listed folder; a deletion under skip-worktree there is a deletion
+        self.git("sparse-checkout", "set", "inside/deep")
+        for rel in ("app.py", "inside/a.py"):
+            self.assertTrue((self.d / rel).exists(), f"the control: {rel} is checked out")
+            self.git("update-index", "--skip-worktree", rel)
+            reviewed = self.fp()
+            (self.d / rel).unlink()
+            self.assertNotEqual(self.fp(), reviewed, f"a deletion of {rel}, inside the cone, read FRESH")
+
     def test_the_post_panel_tree_keeps_an_absent_file_outside_the_cone(self):
         from tasks.core import _fingerprint_exclude_pathspecs
         from tasks.post_d6 import worktree_tree
