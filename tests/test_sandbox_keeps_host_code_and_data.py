@@ -320,6 +320,20 @@ class TheArgv(_Home):
             self.assertEqual(p.read_text(encoding="utf-8"), empty, rel)
             self.assertIn(("--ro-bind-try", str(p)), [(a, argv[i + 1]) for i, a in enumerate(argv[:-2])], rel)
 
+    def test_a_missing_codex_or_agy_hook_source_is_made_empty_and_held(self):
+        # post-panel run 4 (opus): only Claude Code's and grok's were made, and his codex has `hooks = true` with no
+        # `~/.codex/hooks.json` — a codex run could make the hooks his later codex sessions run
+        for rel, agent, empty in ((".codex/config.toml", "codex", ""), (".codex/hooks.json", "codex", '{"hooks": {}}\n'),
+                                  (".codex/app-server-daemon/settings.json", "codex", "{}\n"),
+                                  (".gemini/settings.json", "agy", "{}\n"),
+                                  (".gemini/antigravity-cli/settings.json", "agy", "{}\n")):
+            p = self.home / rel
+            if p.exists():
+                p.unlink()
+            argv = self.argv(["true"], agent)
+            self.assertEqual(p.read_text(encoding="utf-8") if p.exists() else None, empty, rel)
+            self.assertIn(("--ro-bind-try", str(p)), [(a, argv[i + 1]) for i, a in enumerate(argv[:-2])], rel)
+
     def test_a_state_folder_that_is_a_link_refuses_the_launch(self):
         # bubblewrap cannot bind onto it either (measured); refused first, with what to do
         real = self.home / "dotfiles" / "claude"
@@ -413,6 +427,17 @@ class TheArgvOutsideTmp(_Home):
         hook = self.home / CODE_AND_CONFIG[0]
         hook.unlink()
         hook.symlink_to(self.home / "a" / "hook.sh")
+        with self.assertRaises(RuntimeError) as cm:
+            self.argv(["true"])
+        self.assertIn(str(hook), str(cm.exception))
+
+    def test_a_kept_link_leaving_a_writable_folder_by_dot_dot_refuses_the_launch(self):
+        # post-panel run 4 (opus): `cache` is a real folder in the writable state; the kept link goes in and leaves it
+        # by `..`, so it ends in a kept place, but the run can turn `cache` into a link and redirect the chain
+        hook = self.home / CODE_AND_CONFIG[0]
+        hook.unlink()
+        hook.symlink_to(str(self.home / ".claude" / "cache") + "/../plugins/p.json")
+        (self.home / ".claude" / "cache").mkdir(exist_ok=True)
         with self.assertRaises(RuntimeError) as cm:
             self.argv(["true"])
         self.assertIn(str(hook), str(cm.exception))
@@ -519,6 +544,17 @@ class InsideTheSandbox(_Home):
                               f' && echo WROTE || echo REFUSED', agent)
             self.assertEqual(out, "REFUSED", rel)
             self.assertEqual(list((self.home / top).iterdir()), [], top)
+
+    def test_codex_s_missing_mixed_folders_are_made_and_held(self):
+        # post-panel run 4 (opus): `.codex/.tmp` and `.codex/app-server-daemon` were pinned only when they existed
+        for top, rel in ((".codex/.tmp", ".codex/.tmp/plugins/p/hooks.json"),
+                         (".codex/app-server-daemon", ".codex/app-server-daemon/settings.json")):
+            self.remove(top)
+            out = self.run_in(f'mkdir -p "$(dirname "$HOME/{rel}")" 2>/dev/null; printf x > "$HOME/{rel}" 2>/dev/null'
+                              f' && echo WROTE || echo REFUSED', "codex")
+            self.assertEqual(out, "REFUSED", rel)
+            self.assertNotEqual((self.home / rel).read_text(encoding="utf-8") if (self.home / rel).exists() else "",
+                                "x", rel)
 
     def test_a_leftover_temporary_name_cannot_be_written_through(self):
         # post-panel run 3 (opus): a launch killed between its link and its unlink leaves its temporary name, a second
