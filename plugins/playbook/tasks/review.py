@@ -3544,22 +3544,27 @@ def _cmd_single_review(cmd, cmd_args):
             # task 261: an agy seat's trail stays in its conversation — the log names it, text or none
             _trail = (f"# agy conversation `{_to_cid}`, resumable by hand with "
                       f"`agy --conversation {_to_cid}`.\n" if _to_cid else "")
+            # task 312 (audit 4, G8): each cut run replaced this file, so a second one lost the first's paid text —
+            # every run is kept, the newest first, as the main log's are since 304
+            _this_run = ((f"# INCOMPLETE {review_label} — the judge {_stopped}.\n" if _soft_stop else
+                          f"# INCOMPLETE {review_label} — the judge was killed at the hard "
+                          f"timeout ({review_timeout_label}) mid-response.\n")
+                         + f"# This is what it had written by then. It is NOT a finished "
+                         f"review: findings may be cut off and it reached no conclusion.\n"
+                         f"# The previous complete review, if any, is untouched in "
+                         f"{_judge_log_name(backend)}.\n{_trail}\n{partial}\n")
             try:
-                atomic_write(
-                    partial_log,
-                    (f"# INCOMPLETE {review_label} — the judge {_stopped}.\n" if _soft_stop else
-                     f"# INCOMPLETE {review_label} — the judge was killed at the hard "
-                     f"timeout ({review_timeout_label}) mid-response.\n")
-                    + f"# This is what it had written by then. It is NOT a finished "
-                    f"review: findings may be cut off and it reached no conclusion.\n"
-                    f"# The previous complete review, if any, is untouched in "
-                    f"{_judge_log_name(backend)}.\n{_trail}\n{partial}\n",
-                )
+                from tasks.filelock import task_lock as _log_lock
+                with _log_lock(task_file):              # the folder's lock: a linked log moves no lock (304)
+                    _earlier = _earlier_runs(partial_log)
+                    atomic_write(partial_log, _this_run.encode("utf-8")
+                                 + ((b"\n\n" + _EARLIER_RUNS.encode("utf-8") + b"\n\n" + _earlier)
+                                    if _earlier.strip() else b""))
                 saved_note = ((f" Partial output ({len(partial)} chars) saved to " if partial else
                                f" The judge produced no output before {'it stopped' if _soft_stop else 'the kill'}; "
                                "its conversation is named in ")
                               + f"{partial_log.relative_to(project_path)}.")
-            except OSError as _save_err:
+            except (OSError, RuntimeError) as _save_err:    # RuntimeError: the lock's LockTimeout
                 saved_note = (f" Partial output ({len(partial)} chars) could NOT be "
                               f"saved ({_save_err}).")
         if not partial and not saved_note:

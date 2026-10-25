@@ -7472,7 +7472,7 @@
     {
       "id": "PB-JUDGE-TIMEOUT-SALVAGE",
       "category": "judges-and-reviews",
-      "statement": "A judge that exceeds its hard timeout has its whole process tree killed promptly, its partial stdout/stderr preserved for salvage, and a salvage prefixed with the timeout marker reads as a FAILED seat (`judge_failed`), never as a pass on partial text.",
+      "statement": "A judge that exceeds its hard timeout has its whole process tree killed promptly, its partial stdout/stderr preserved for salvage (every cut run kept in the partial log, the newest first: task 312), and a salvage prefixed with the timeout marker reads as a FAILED seat (`judge_failed`), never as a pass on partial text.",
       "owner": [
         {
           "path": "plugins/playbook/provider/sandbox.py",
