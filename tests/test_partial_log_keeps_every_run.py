@@ -128,13 +128,19 @@ def _save_in_a_process(task_file, log, text, a_read, b_go, slow):
         def held(path):
             got = real(path)
             a_read.set()
-            b_go.wait(5)
-            time.sleep(0.5)                              # the other save would read the same old text now
+            b_go.wait(5)                                 # the other save is at its lock (impl round 2: codex, sonnet)
+            time.sleep(0.2)
             return got
         review._earlier_runs = held
     else:
         a_read.wait(5)
-        b_go.set()
+        from tasks import filelock
+        real_lock = filelock.task_lock
+
+        def signalling(*a, **k):
+            b_go.set()                                   # from inside the save, at its lock attempt
+            return real_lock(*a, **k)
+        filelock.task_lock = signalling
     review._save_partial_log(Path(task_file), Path(log), text)
 
 
@@ -167,16 +173,24 @@ class TheSave(unittest.TestCase):
         for mark in ("RUN-A", "RUN-B", "RUN-ZERO"):
             self.assertIn(mark, text, "a run was lost between two saves at once")
 
-    def test_an_earlier_log_that_cannot_be_read_still_saves_the_new_run(self):
-        # opus: an unreadable old partial log raised inside the lock, and the new run's text was not saved at all
+    def test_an_earlier_log_that_cannot_be_read_is_kept_and_the_new_run_saved_beside_it(self):
+        # impl round 1 (opus): an unreadable old partial log raised inside the lock, and the new run was not saved;
+        # impl round 2 (codex, grok): then it replaced that file — its earlier runs gone, its mode 000 on the new run
         if os.geteuid() == 0:
             self.skipTest("root reads a file of mode 000")
+        import stat
         from tasks import review
         self.log.chmod(0)
         self.addCleanup(lambda: self.log.chmod(0o644) if self.log.exists() else None)
-        review._save_partial_log(self.task_file, self.log, "RUN-NEW the newest cut\n")
+        written = review._save_partial_log(self.task_file, self.log, "RUN-NEW the newest cut\n")
+        self.assertIsInstance(written, Path)
+        self.assertNotEqual(written, self.log)
+        self.assertEqual(written.parent, self.log.parent)
+        self.assertRegex(written.name, r"^judge\.partial\.\d{8}T\d{6}Z-\d+\.log$")
+        self.assertTrue(written.read_text(encoding="utf-8").startswith("RUN-NEW the newest cut"))   # no chmod first
+        self.assertEqual(stat.S_IMODE(self.log.stat().st_mode), 0)                  # the unreadable one as it was
         self.log.chmod(0o644)
-        self.assertTrue(self.log.read_text(encoding="utf-8").startswith("RUN-NEW the newest cut"))
+        self.assertEqual(self.log.read_text(encoding="utf-8"), "RUN-ZERO the first cut\n")
 
 
 if __name__ == "__main__":
