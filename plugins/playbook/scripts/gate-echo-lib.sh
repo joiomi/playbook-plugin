@@ -1264,6 +1264,8 @@ create_wrapper() {
 # cache dirs over marketplace clone tips, then to a plain deterministic find.
 WRAPPER_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 PROJECT_ROOT="$(cd "$WRAPPER_DIR/../.." 2>/dev/null && pwd -P)"
+# Run from outside its project (its parent folder, say), the CLI would take that folder for the project — its tasks,
+# its missing verify (task 310, audit 4's G2). Inside the project, a subfolder included, nothing changes.
 SCRIPT="$(python3 -I - "$PROJECT_ROOT" 2>/dev/null <<'PYRESOLVE'
 @@PLAYBOOK_WRAPPER_RESOLVER@@
 PYRESOLVE
