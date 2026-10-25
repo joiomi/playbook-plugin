@@ -269,6 +269,24 @@ class InASparseCheckout(_Repo):
             (self.d / rel).unlink()
             self.assertNotEqual(self.fp(), reviewed, f"a deletion of {rel}, inside the cone, read FRESH")
 
+    def test_a_cone_folder_git_prints_quoted_is_read_as_its_name(self):
+        # post-panel run 1 (codex, reproduced twice): `sparse-checkout list` C-quotes a folder with a byte outside ASCII
+        # (`"caf\303\251"`) or a quote, and the cone check took the quoted text for the name
+        self.git("sparse-checkout", "disable")           # to add the folders; set again below
+        for name in ("café", 'q"d'):
+            (self.d / name).mkdir()
+            (self.d / name / "app.py").write_text("x = 1\n", encoding="utf-8")
+        self.git("add", "café", 'q"d')
+        self.git("commit", "-qm", "odd folders")
+        self.git("sparse-checkout", "set", "café", 'q"d')
+        for name in ("café", 'q"d'):
+            rel = f"{name}/app.py"
+            self.assertTrue((self.d / rel).exists(), f"the control: {rel} is in the cone")
+            self.git("update-index", "--skip-worktree", rel)
+            reviewed = self.fp()
+            (self.d / rel).unlink()
+            self.assertNotEqual(self.fp(), reviewed, f"a deletion of {rel}, inside the cone, read FRESH")
+
     def test_the_post_panel_tree_keeps_an_absent_file_outside_the_cone(self):
         from tasks.core import _fingerprint_exclude_pathspecs
         from tasks.post_d6 import worktree_tree
