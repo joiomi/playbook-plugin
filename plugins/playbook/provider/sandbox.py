@@ -165,6 +165,11 @@ _HOME_FILES_MADE: dict[str, str] = {
     ".grok/lsp.json": "{}\n",
     ".grok/settings.json": "{}\n",
     ".grok/disabled-hooks": "",
+    # the post-panel judge, run 2 (opus), and grok's docs: an unsigned requirements.toml "loads as your own" hooks,
+    # pager.toml carries notification hook commands, hooks-paths names hook files; an empty TOML parses
+    ".grok/requirements.toml": "",
+    ".grok/pager.toml": "",
+    ".grok/hooks-paths": "",
     ".gemini/hooks.json": "{}\n",
     ".gemini/antigravity-cli/hooks.json": "{}\n",
 }

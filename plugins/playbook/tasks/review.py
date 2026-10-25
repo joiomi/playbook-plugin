@@ -841,6 +841,8 @@ class _TempPath:
         if own_folder:
             # under /tmp itself where it can: a TMPDIR inside the project would put the folder in a review's read-only
             # copy, which refuses a writable path there (impl round 2, codex)
+            # (a host with no writable /tmp falls back to TMPDIR, and a TMPDIR inside the project then fails as before:
+            # a stated bound — such a host has no private /tmp to give a run either)
             usable = os.path.isdir("/tmp") and os.access("/tmp", os.W_OK | os.X_OK)
             self.folder = Path(_tempfile.mkdtemp(prefix="pb-judge-", dir="/tmp" if usable else None))
             self.path = self.folder / f"out{suffix}"
