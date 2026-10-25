@@ -233,6 +233,36 @@ class TheArgv(_Home):
             self.argv(["true"])
         self.assertIn(str(hook), str(cm.exception))
 
+    def test_a_link_into_an_extra_writable_path_inside_a_kept_folder_refuses_the_launch(self):
+        # post-panel run 1 (codex): an `--rw` path laid over a kept folder is writable, whatever the kept bind says
+        ws = self.home / ".claude" / "plugins" / "ws"
+        ws.mkdir()
+        hook = self.home / CODE_AND_CONFIG[0]
+        hook.unlink()
+        hook.symlink_to(ws / "hook.sh")
+        args = {"agent": "claude"} if "agent" in inspect.signature(build_bwrap_argv).parameters else {}
+        with self.assertRaises(RuntimeError) as cm:
+            build_bwrap_argv(str(self.proj), None, ["true"], [str(ws)], project_writable=False, **args)
+        self.assertIn(str(hook), str(cm.exception))
+
+    def test_a_hook_source_is_published_whole_or_not_at_all(self):
+        # post-panel run 1 (codex): made empty and written after, a crash between left an empty settings.json for
+        # good (later launches see a file and make none)
+        p = self.home / ".claude" / "settings.local.json"
+        p.unlink()
+        real_write = os.write
+
+        def dies(fd, data):
+            raise OSError(5, "simulated crash")
+        with mock.patch.object(os, "write", dies):
+            with self.assertRaises(OSError):
+                self.argv(["true"])
+        self.assertFalse(os.path.lexists(p))
+        self.assertEqual([q.name for q in p.parent.iterdir() if q.name.startswith(".settings.local.json")], [])
+        del real_write
+        self.argv(["true"])
+        self.assertEqual(p.read_text(encoding="utf-8"), "{}\n")
+
     def test_a_missing_hook_source_is_made_empty_and_held(self):
         # impl round 3 (grok): grok loads Claude Code's settings files and its own managed config as hooks
         for rel, agent, empty in ((".claude/settings.local.json", "claude", "{}\n"),
@@ -277,6 +307,23 @@ class TheArgv(_Home):
 class TheArgvOutsideTmp(_Home):
     # a home outside /tmp, so a place is writable only by its own bind, not by /tmp's
     HOME_BASE = "/var/tmp"
+
+    def test_a_link_through_a_linked_folder_in_writable_state_refuses_the_launch(self):
+        # post-panel run 1 (codex): `cache` is state the run may write; when it is itself a link, the run can point it
+        # elsewhere, and a kept link through it then leads where the run chose
+        real = self.home / "dotfiles"
+        real.mkdir()
+        (real / "hook.sh").write_text("echo hi\n", encoding="utf-8")
+        cache = self.home / ".claude" / "cache"
+        if cache.exists():
+            shutil.rmtree(cache)
+        cache.symlink_to(real)
+        hook = self.home / CODE_AND_CONFIG[0]
+        hook.unlink()
+        hook.symlink_to(cache / "hook.sh")
+        with self.assertRaises(RuntimeError) as cm:
+            self.argv(["true"])
+        self.assertIn(str(hook), str(cm.exception))
 
     def test_a_link_into_the_write_log_refuses_the_launch(self):
         # impl round 3 (agy, codex, grok): the write log is bound writable too
