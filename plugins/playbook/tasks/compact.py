@@ -121,9 +121,9 @@ def _blocks(lines: "list[str]") -> "tuple[list[tuple[int, int]], str | None]":
 def _validate(block_lines: "list[str]") -> "str | None":
     """None when a block is safe to move, else why it is not."""
     for ln in block_lines:
-        # every task.md reader takes a gate or a receipt entry after leading byte-order marks (`core._gate_counts`);
-        # so does this check, or a block holding such a gate moved and the gate left task.md (task 311, audit 4's G9)
-        ln = ln.lstrip("\ufeff")
+        # the gate counters take a gate after leading byte-order marks (`core._gate_counts`); so does this check, or a
+        # block holding such a gate moved and the gate left task.md (task 311, audit 4's G9). The receipt readers do not
+        # read a BOM-led entry, so the strip only makes the receipt-entry check refuse more (impl round 1, opus)
         if _GATE_RE.match(ln):
             return f"contains a gate checkbox ({ln.strip()[:60]!r})"
         if "<!-- pin -->" in ln:
