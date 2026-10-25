@@ -63,13 +63,18 @@ class Masks(unittest.TestCase):
         return [argv[i + 1] for i, a in enumerate(argv) if a == flag]
 
     @staticmethod
+    def _masks(argv):
+        """The tmpfs layers but the run's own /tmp (task 315: every launch has one)."""
+        return [d for i, (a, d) in enumerate(zip(argv, argv[1:])) if a == "--tmpfs" and d != "/tmp"]
+
+    @staticmethod
     def _two(argv, flag):
         return [(argv[i + 1], argv[i + 2]) for i, a in enumerate(argv) if a == flag]
 
     def test_bwrap_judge_mode_layers_the_records_away_after_the_project_bind(self):
         argv = sandbox.build_bwrap_argv(self.p, None, ["true"], None, project_writable=False)
         proj_at = argv.index(str(self.p))
-        tmpfs = self._one(argv, "--tmpfs")
+        tmpfs = self._masks(argv)
         self.assertEqual(tmpfs[:1], [str(self.a)])                      # the .agent layer first
         self.assertIn(str(self.a / "alice"), tmpfs)                     # every lane is its own layer
         self.assertGreater(argv.index(str(self.a)), proj_at)
@@ -83,14 +88,14 @@ class Masks(unittest.TestCase):
     def test_a_writable_worker_sandbox_masks_nothing(self):
         argv = sandbox.build_bwrap_argv(self.p, None, ["true"], None, project_writable=True)
         self.assertNotIn("/dev/null", argv)
-        self.assertNotIn("--tmpfs", argv)
+        self.assertEqual(self._masks(argv), [])
 
     def test_a_read_only_sandbox_that_keeps_the_records_masks_nothing(self):
         # Task 138 G3-1: the monitor runs read-only too and reads .agent/sessions/<id>/transcript_path
         argv = sandbox.build_bwrap_argv(self.p, None, ["true"], None, project_writable=False,
                                         mask_records=False)
         self.assertNotIn("/dev/null", argv)
-        self.assertNotIn("--tmpfs", argv)
+        self.assertEqual(self._masks(argv), [])
         self.assertIn("--ro-bind", argv)
 
 
