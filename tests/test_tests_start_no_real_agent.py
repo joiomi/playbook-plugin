@@ -17,6 +17,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -68,7 +70,7 @@ class TheVerifyEnvironment(unittest.TestCase):
         home = e["HOME"]
         self.assertNotEqual(home, self.caller)
         self.assertTrue(os.path.isdir(home), home)
-        self.assertEqual(os.listdir(home), [])
+        self.assertEqual(sorted(os.listdir(home)), [".config", ".gitconfig"])     # git's two files, row 8
         if _var_tmp_usable():
             self.assertTrue(home.startswith("/var/tmp/"), home)   # a HOME under /tmp is refused by the sandbox
         for key, sub in XDG:
@@ -92,6 +94,52 @@ class TheVerifyEnvironment(unittest.TestCase):
         self.assertEqual(homes[0], homes[1])
         self.assertNotEqual(homes[0], self.caller)
         self.assertFalse(os.path.lexists(homes[0]), homes[0])
+
+    def test_one_home_serves_children_started_at_once(self):
+        # impl round 1 (agy, opus; codex reproduced twice): the first calls come from verify's pool of module threads,
+        # and an unlocked check-then-make gave two of them two HOMEs — one never removed
+        real = self.v.tempfile.mkdtemp
+
+        def slow_mkdtemp(*a, **k):
+            d = real(*a, **k)
+            self.addCleanup(shutil.rmtree, d, True)
+            time.sleep(0.05)
+            return d
+        start, homes = threading.Barrier(8), []
+
+        def call():
+            start.wait()
+            homes.append(self.v.env()["HOME"])
+        with mock.patch.object(self.v.tempfile, "mkdtemp", slow_mkdtemp), \
+                mock.patch.dict(os.environ, {"HOME": self.caller}):
+            threads = [threading.Thread(target=call) for _ in range(8)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(30)
+        self.assertEqual(len(homes), 8)
+        self.assertEqual(len(set(homes)), 1, homes)
+
+    def test_a_sign_in_the_list_was_not_written_for_is_cut_too(self):
+        # impl round 1 (all four judges): a fixed list missed OPENROUTER_API_KEY (read by the plugin's own pi adapter),
+        # CODEX_API_KEY, AWS credentials with Bedrock or Vertex, and the runtime folder where the session bus lives
+        planted = ("OPENROUTER_API_KEY", "CODEX_API_KEY", "GROK_API_KEY", "SOMEVENDOR_API_KEY", "X_AUTH_TOKEN",
+                   "SOME_OAUTH_TOKEN", "SOME_ACCESS_TOKEN", "AWS_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
+                   "AWS_SESSION_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX")
+        e = self.env(XDG_RUNTIME_DIR="/run/user/1000", **{k: "planted" for k in planted})
+        self.assertEqual([k for k in planted if k in e], [])
+        self.assertTrue(e.get("XDG_RUNTIME_DIR", "").startswith(e["HOME"] + "/"), e.get("XDG_RUNTIME_DIR"))
+
+    def test_the_run_s_home_has_git_s_two_files_wherever_it_is_made(self):
+        # impl round 1 (agy): with no usable /var/tmp the HOME is made under /tmp, and a sandboxed launch refuses a HOME
+        # under /tmp that lacks git's two settings files
+        real_access = os.access
+        with mock.patch.object(self.v.os, "access",
+                               lambda path, mode, *a, **k: False if str(path) == "/var/tmp" else real_access(path, mode)):
+            e = self.env()
+        home = Path(e["HOME"])
+        for rel in (".gitconfig", ".config/git/config"):
+            self.assertEqual((home / rel).read_text(encoding="utf-8") if (home / rel).is_file() else None, "", rel)
 
     def test_a_child_still_finds_the_agents_on_path(self):
         path = os.pathsep.join(["/opt/agents/bin", os.environ.get("PATH", "")])
