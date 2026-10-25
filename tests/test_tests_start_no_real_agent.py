@@ -70,7 +70,7 @@ class TheVerifyEnvironment(unittest.TestCase):
         home = e["HOME"]
         self.assertNotEqual(home, self.caller)
         self.assertTrue(os.path.isdir(home), home)
-        self.assertEqual(sorted(os.listdir(home)), [".config", ".gitconfig"])     # git's two files, row 8
+        self.assertEqual(sorted(os.listdir(home)), [".config", ".gitconfig", ".run"])   # git's files, its run folder
         if _var_tmp_usable():
             self.assertTrue(home.startswith("/var/tmp/"), home)   # a HOME under /tmp is refused by the sandbox
         for key, sub in XDG:

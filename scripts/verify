@@ -59,11 +59,24 @@ CHECKS: list[tuple] = []
 
 
 # Task 316: what an agent signs in with when HOME is not its own — its own home override, a provider's key or token
-# (the session bus, where agy's keyring sign-in lives, is disabled in `env()`).
+# (the session bus, where agy's keyring sign-in lives, is disabled in `env()`). By name, and by the shapes a key,
+# a token or a cloud sign-in takes (impl round 1, all four judges: a fixed list missed OPENROUTER_API_KEY, which the
+# plugin's own pi adapter reads, CODEX_API_KEY, and AWS credentials with Claude Code's Bedrock or Vertex switches).
 SIGN_IN_VARS = ("CODEX_HOME", "CLAUDE_CONFIG_DIR", "GROK_HOME", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
                 "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "XAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
                 "GOOGLE_APPLICATION_CREDENTIALS")
+SIGN_IN_SUFFIXES = ("_API_KEY", "_API_TOKEN", "_AUTH_TOKEN", "_OAUTH_TOKEN", "_ACCESS_TOKEN", "_SESSION_TOKEN",
+                    "_ACCESS_KEY_ID", "_SECRET_ACCESS_KEY")
+SIGN_IN_PREFIXES = ("AWS_", "CLAUDE_CODE_USE_")
+
+
+def is_sign_in(name: str) -> bool:
+    """Is `name` a variable an agent could sign in with? (task 316)"""
+    return name in SIGN_IN_VARS or name.endswith(SIGN_IN_SUFFIXES) or name.startswith(SIGN_IN_PREFIXES)
+
+
 _CHILD_HOME: "str | None" = None
+_CHILD_HOME_LOCK = threading.Lock()
 
 
 def child_home() -> str:
@@ -72,12 +85,20 @@ def child_home() -> str:
     at every run, files in their agents' folders). Under /var/tmp where it can be: a sandboxed launch refuses a HOME
     under /tmp that lacks git's two settings files."""
     global _CHILD_HOME
-    if _CHILD_HOME is None:
-        vt = "/var/tmp"
-        base = vt if os.path.isdir(vt) and os.access(vt, os.W_OK | os.X_OK) else None
-        _CHILD_HOME = tempfile.mkdtemp(prefix="pb-verify-home-", dir=base)
-        atexit.register(shutil.rmtree, _CHILD_HOME, True)
-    return _CHILD_HOME
+    with _CHILD_HOME_LOCK:              # the first calls come from the pool of module threads (impl round 1)
+        if _CHILD_HOME is None:
+            vt = "/var/tmp"
+            base = vt if os.path.isdir(vt) and os.access(vt, os.W_OK | os.X_OK) else None
+            home = tempfile.mkdtemp(prefix="pb-verify-home-", dir=base)
+            atexit.register(shutil.rmtree, home, True)
+            # git's two settings files, empty, wherever it is: a sandboxed launch refuses a HOME under /tmp without
+            # them, as they could be made from inside (impl round 1, agy)
+            os.makedirs(os.path.join(home, ".config", "git"))
+            for rel in (".gitconfig", os.path.join(".config", "git", "config")):
+                open(os.path.join(home, rel), "w", encoding="utf-8").close()
+            os.mkdir(os.path.join(home, ".run"), 0o700)      # its own runtime folder (`env()`)
+            _CHILD_HOME = home
+        return _CHILD_HOME
 
 
 def env() -> dict:
@@ -110,9 +131,12 @@ def env() -> dict:
     for key, sub in (("XDG_CONFIG_HOME", ".config"), ("XDG_DATA_HOME", ".local/share"), ("XDG_CACHE_HOME", ".cache"),
                      ("XDG_STATE_HOME", ".local/state")):
         e[key] = os.path.join(home, sub)
-    for key in SIGN_IN_VARS:
-        e.pop(key, None)
+    for key in [k for k in e if is_sign_in(k)]:
+        e.pop(key)
     e["DBUS_SESSION_BUS_ADDRESS"] = "disabled:"
+    # …and the runtime folder is the run's own too: with the bus's address unset a client falls back to
+    # `$XDG_RUNTIME_DIR/bus` (impl round 1, opus)
+    e["XDG_RUNTIME_DIR"] = os.path.join(home, ".run")
     return e
 
 
@@ -609,7 +633,7 @@ def _run_module(mod: str, verbosity: str, root: Path, deadline: float, budget: f
     tmp = None
     try:
         # a private temp dir: a test that looks at the shared one must not see its
-        # neighbours' files (tests/test_tamper_scope.py does). HOME stays the user's.
+        # neighbours' files (tests/test_tamper_scope.py does). HOME is the run's own (`child_home()`, task 316).
         tmp = tempfile.mkdtemp(prefix="pb-verify-")
         # … and git is told not to look above it: what lies in the shared temp
         # directory must not change what a test's own project is (task 179)
