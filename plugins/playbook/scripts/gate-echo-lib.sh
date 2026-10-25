@@ -1265,8 +1265,18 @@ create_wrapper() {
 WRAPPER_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 PROJECT_ROOT="$(cd "$WRAPPER_DIR/../.." 2>/dev/null && pwd -P)"
 # Run from outside its project (its parent folder, say), the CLI would take that folder for the project — its tasks,
-# its missing verify (task 310, audit 4's G2). Inside the project, a subfolder included, nothing changes.
-case "$(pwd -P)/" in "$PROJECT_ROOT"/*) ;; *) cd "$PROJECT_ROOT" || exit 1 ;; esac
+# its missing verify (task 310, audit 4's G2). Inside the project, a subfolder included, nothing changes. The project
+# is the one the wrapper was called in: two folders above the path it was called by, a linked (shared) `.claude` not
+# resolved, and only when that folder holds `.agent` and this very file (impl round 1, opus and codex: PROJECT_ROOT
+# above names the shared folder's parent; a link to this file elsewhere names nothing).
+CALLED_IN="$(cd "$(dirname "$0")/../.." 2>/dev/null && pwd -P)"
+if [ -z "$CALLED_IN" ]; then
+    echo "Error: cannot tell which project $0 belongs to." >&2
+    exit 1
+fi
+if [ -d "$CALLED_IN/.agent" ] && [ "$CALLED_IN/.claude/bin/${0##*/}" -ef "$0" ]; then
+    case "$(pwd -P)/" in "${CALLED_IN%/}"/*) ;; *) cd "$CALLED_IN" || exit 1 ;; esac
+fi
 SCRIPT="$(python3 -I - "$PROJECT_ROOT" 2>/dev/null <<'PYRESOLVE'
 @@PLAYBOOK_WRAPPER_RESOLVER@@
 PYRESOLVE
