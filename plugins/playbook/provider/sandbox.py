@@ -192,25 +192,39 @@ def _home_layer(home: Path, folders: "Iterable[str]") -> "tuple[list[str], list[
             return False
         return any(target == w or target.startswith(w + "/") for w in writable)
 
+    # A read-only file with another hard link is writable through that other name: refused for each read-only
+    # entry itself. Inside a read-only folder it is not looked for — a run cannot make such a link (link(2) across
+    # the bind fails with EXDEV, measured), and package stores fill folders with them (pnpm: 102,743 under
+    # ~/.claude/jobs here). Links there are: one that leads into a writable place of the run would let it write
+    # what the host then reads (impl round 2, codex).
     import stat as _stat
     for path in ro:
-        items = [path]
-        if os.path.isdir(path):
-            for root, dirs, files in os.walk(path):     # links to folders are listed, never followed
-                items += [os.path.join(root, n) for n in dirs + files]
-        for f in items:
+        try:
+            st = os.lstat(path)
+        except FileNotFoundError:
+            continue                                    # gone between the listing and the look
+        if _stat.S_ISREG(st.st_mode) and st.st_nlink > 1:
+            raise _home_refusal(Path(path), "has another hard link: what a sandboxed run writes through that other "
+                                            "name changes this file. Make it a copy of its own")
+        if not _stat.S_ISDIR(st.st_mode):
+            continue
+        stack = [path]                                  # the entries' own types (scandir): no look per entry
+        while stack:
             try:
-                st = os.lstat(f)
+                with os.scandir(stack.pop()) as it:
+                    for e in it:
+                        if e.is_symlink():
+                            if leads_out(os.path.realpath(e.path)):
+                                raise _home_refusal(Path(e.path), "is a link from a read-only place into one a "
+                                                    "sandboxed run may write: what the run writes there, a later "
+                                                    "session on this machine would read through it. Replace the "
+                                                    "link with a copy")
+                        elif e.is_dir(follow_symlinks=False):
+                            stack.append(e.path)
             except FileNotFoundError:
                 continue                                # gone between the listing and the look
-            if _stat.S_ISLNK(st.st_mode):
-                if leads_out(os.path.realpath(f)):
-                    raise _home_refusal(Path(f), "is a link from a read-only place into one a sandboxed run may "
-                                                 "write: what the run writes there, a later session on this machine "
-                                                 "would read through it. Replace the link with a copy")
-            elif _stat.S_ISREG(st.st_mode) and st.st_nlink > 1:
-                raise _home_refusal(Path(f), "has another hard link: what a sandboxed run writes through that other "
-                                             "name changes this file. Make it a copy of its own")
+            except OSError as exc:
+                raise _home_refusal(Path(path), f"cannot be read ({exc.strerror or exc})") from None
     return pins, ro, [str(d) for d in private]
 
 
