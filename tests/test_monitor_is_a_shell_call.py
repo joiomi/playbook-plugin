@@ -102,8 +102,9 @@ class AMonitorIsAShellCall(unittest.TestCase):
                 out.append((h["command"].split("/scripts/")[1].split('"')[0], r.returncode, r.stdout, r.stderr))
         return out
 
-    def prompt(self):
-        self.fire("UserPromptSubmit", {"prompt": "go on"})
+    def prompt(self, text="go on"):
+        # a prompt equal to the log's last one in the same second is a duplicate and resets nothing (chat-log-hook)
+        self.fire("UserPromptSubmit", {"prompt": text})
 
     def pre(self, tool, tool_input, tuid="toolu_M1", sid=SID):
         return self.fire("PreToolUse", {"tool_name": tool, "tool_input": tool_input, "tool_use_id": tuid}, sid)
@@ -167,7 +168,7 @@ class AMonitorIsAShellCall(unittest.TestCase):
         stop = self.stop()
         self.assertTrue(self.held(stop), stop)
         # a failed Monitor (its command exited at once) is a write too, as a failed shell call is (task 196)
-        self.prompt()
+        self.prompt("and once more")
         self.call("Monitor", _monitor("sed -i s/2/3/ src/a.py && false"),
                   lambda: (self.proj / "src" / "a.py").write_text("x = 3\n", encoding="utf-8"), failed=True,
                   tuid="toolu_M2")
