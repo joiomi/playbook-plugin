@@ -124,10 +124,11 @@ def _dict(d: dict, key: str) -> dict:
 
 
 def _watched(p: dict) -> bool:
-    """A call that can make a folder: a shell call, a Write, an Edit/MultiEdit with an empty `old_string` (it creates
-    the file and its folders — impl panel r1 I12, measured), a NotebookEdit. An edit of an existing file cannot."""
+    """A call that can make a folder: a shell call (Bash, or Claude Code's Monitor, which runs its command in the same
+    shell — task 307), a Write, an Edit/MultiEdit with an empty `old_string` (it creates the file and its folders — impl
+    panel r1 I12, measured), a NotebookEdit. An edit of an existing file cannot."""
     tool, ti = _str(p, "tool_name"), _dict(p, "tool_input")
-    if tool in ("Bash", "Write", "NotebookEdit"):
+    if tool in ("Bash", "Monitor", "Write", "NotebookEdit"):
         return True
     if tool == "Edit":
         return ti.get("old_string") == ""
@@ -666,7 +667,7 @@ def _pre(watched: bool, p: dict, project: Path, lane: Path, sfd: int, inside: bo
         notes = [note] if note and state == "gone" else []
         if left:
             first = f"{_lane_rel(project, lane)}/tasks/{left[0]}"
-            if tool == "Bash" and _is_way_out(cmd, cwd, project, lane, left):
+            if tool in ("Bash", "Monitor") and _is_way_out(cmd, cwd, project, lane, left):
                 _journal(lane, "allow", "unknown task folder: the way out", sid, tool, first, cmd)
             else:
                 _journal(lane, "block", "unknown task folder", sid, tool, first, cmd)

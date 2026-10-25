@@ -1747,7 +1747,9 @@ hook_journal_append() {
     local frame="${PB_HJ_FRAME:-}"
     if [ "$frame" = 1 ] || [ -n "${PB_HJ_EVENT:-}" ]; then v="${PB_HJ_EVENT:-}"; else _pb_hj_first 'hook_event_name|hookEventName'; fi
     _pb_hj_id "$v" 32; event="$v"
-    if [ "$frame" = 1 ] || [ -n "${TOOL_NAME:-}" ]; then v="${TOOL_NAME:-}"; else _pb_hj_first 'tool_name|toolName'; fi
+    # PB_HJ_TOOL: the name a hook was sent before it read the call as another tool's (task 307: a Monitor as Bash)
+    if [ -n "${PB_HJ_TOOL:-}" ]; then v="$PB_HJ_TOOL"
+    elif [ "$frame" = 1 ] || [ -n "${TOOL_NAME:-}" ]; then v="${TOOL_NAME:-}"; else _pb_hj_first 'tool_name|toolName'; fi
     _pb_hj_id "$v" 64; tool="$v"
     if [ "$frame" = 1 ] || [ -n "${PB_HJ_TOOL_USE_ID:-}" ]; then
         v="${PB_HJ_TOOL_USE_ID:-}"

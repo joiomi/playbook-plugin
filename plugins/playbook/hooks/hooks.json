@@ -13,7 +13,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Edit|Write|MultiEdit|NotebookEdit|search_replace|write|Bash|Shell|StrReplace|run_terminal_command",
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|search_replace|write|Bash|Shell|StrReplace|run_terminal_command|Monitor",
         "hooks": [
           {
             "type": "command",
@@ -23,7 +23,7 @@
         ]
       },
       {
-        "matcher": "Bash|Shell|run_terminal_command",
+        "matcher": "Bash|Shell|run_terminal_command|Monitor",
         "hooks": [
           {
             "type": "command",
@@ -33,7 +33,7 @@
         ]
       },
       {
-        "matcher": "Edit|Write|MultiEdit|NotebookEdit|search_replace|write|Bash|Shell|StrReplace|run_terminal_command",
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|search_replace|write|Bash|Shell|StrReplace|run_terminal_command|Monitor",
         "hooks": [
           {
             "type": "command",
@@ -76,7 +76,7 @@
         ]
       },
       {
-        "matcher": "Edit|Write|MultiEdit|NotebookEdit|search_replace|write|Bash|Shell|StrReplace|run_terminal_command",
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|search_replace|write|Bash|Shell|StrReplace|run_terminal_command|Monitor",
         "hooks": [
           {
             "type": "command",
@@ -108,7 +108,7 @@
         ]
       },
       {
-        "matcher": "Edit|Write|MultiEdit|NotebookEdit|search_replace|write|Bash|Shell|StrReplace|run_terminal_command",
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit|search_replace|write|Bash|Shell|StrReplace|run_terminal_command|Monitor",
         "hooks": [
           {
             "type": "command",

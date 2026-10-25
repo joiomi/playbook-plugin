@@ -2970,8 +2970,10 @@ def main() -> int:
     payload = _normalize_payload(payload)
     _RUN.payload = payload
     # Bash/Shell/run_terminal_command = Claude + grok (post-normalize);
-    # exec_command = Codex's shell tool.
-    if payload.get("tool_name") not in ("Bash", "Shell", "run_terminal_command", "exec_command"):
+    # exec_command = Codex's shell tool; Monitor = Claude Code's, which runs its
+    # `command` in the same shell as Bash (task 307, audit 4 G1; a `ws` Monitor
+    # has no command and reads as an empty one).
+    if payload.get("tool_name") not in ("Bash", "Shell", "run_terminal_command", "exec_command", "Monitor"):
         _RUN.note(detail="not a shell call")
         return 0
     ti = payload.get("tool_input") or {}

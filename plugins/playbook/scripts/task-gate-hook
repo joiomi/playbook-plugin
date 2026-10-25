@@ -350,6 +350,23 @@ fi
 if [[ ! "$TOOL_NAME" =~ [^[:space:]] ]]; then
     block_unreadable_payload
 fi
+# Task 307 (audit 4 G1): Claude Code's Monitor runs its `command` in the same shell as Bash, so from here on a Monitor
+# is judged as the Bash call of that command — Guard 3, the session id's injection, every check below that singles out
+# a shell call. The hook journal keeps the name it was sent with (PB_HJ_TOOL). A Monitor with `ws` and no `command`
+# opens a WebSocket and runs no shell (Claude Code's schema: "No shell"): it passes, journaled. Any other Monitor with
+# no command to read is a shell call with none, refused below as an unreadable payload.
+PB_HJ_TOOL=""
+if [ "$TOOL_NAME" = Monitor ]; then
+    PB_HJ_TOOL=Monitor
+    if [ -z "$PB_CMD" ] && printf '%s' "$INPUT" | python3 -I -c '
+import json, sys
+ti = json.load(sys.stdin).get("tool_input")
+sys.exit(0 if isinstance(ti, dict) and "ws" in ti and "command" not in ti else 1)' 2>/dev/null; then
+        PB_HJ_DETAIL="a ws Monitor: no shell command"
+        exit 0
+    fi
+    TOOL_NAME=Bash
+fi
 case "$TOOL_NAME" in
     Edit|Write|MultiEdit|NotebookEdit)
         [[ "$FILE_PATH" =~ [^[:space:]] ]] || block_unreadable_payload
@@ -483,7 +500,7 @@ PB_JOURNAL_DIR=""
 [ -z "$PB_FRESH_CLONE_LANES" ] && PB_JOURNAL_DIR="$AGENT_DIR"
 # Task 192 (#48): what the session walk read, on an unresolved id (and on every
 # call under PLAYBOOK_WALK_TRACE=1). Log-only; returns 0.
-journal_session_walk "$PB_JOURNAL_DIR" task-gate "$SESSION_ID" "$TOOL_NAME" "$PB_WALK_READ"
+journal_session_walk "$PB_JOURNAL_DIR" task-gate "$SESSION_ID" "${PB_HJ_TOOL:-$TOOL_NAME}" "$PB_WALK_READ"
 
 # --- Guard F: below the Python floor (task 194, #46) — fail closed. What authorizes an
 # edit runs on python3 (the active task's status, Guard 0's target, the batch check) and

@@ -329,9 +329,11 @@ if [ "$AGENT_WRITABLE" = true ]; then
     # turn whose only act was one of them read to the stop hook as a chat reply
     # — and its rule for a turn a notification started is "no write".
     # A FAILED call (task 196) is a write only when it was a shell call — what it did before failing is unknown; a
-    # failed Edit/Write changed nothing (impl panel r1 I5, fable).
-    PB_WRITE_TOOLS="Edit|Write|MultiEdit|NotebookEdit|Bash"
-    [ "$PB_HOOK_EVENT" = PostToolUseFailure ] && PB_WRITE_TOOLS="Bash"
+    # failed Edit/Write changed nothing (impl panel r1 I5, fable). Claude Code's Monitor is a shell call: it runs its
+    # command in the same shell as Bash (task 307, audit 4 G1 — a turn of Monitors only was released as a chat reply).
+    # A `ws` Monitor runs no shell and is counted too: one rule for every Monitor, on the side that holds.
+    PB_WRITE_TOOLS="Edit|Write|MultiEdit|NotebookEdit|Bash|Monitor"
+    [ "$PB_HOOK_EVENT" = PostToolUseFailure ] && PB_WRITE_TOOLS="Bash|Monitor"
     case "|$PB_WRITE_TOOLS|" in
         *"|$TOOL_NAME|"*)
             WRITES_VAL=$(read_counter_int "$COUNTER_FILE" writes)
