@@ -167,6 +167,61 @@ class TheWrapperRunsInItsProject(unittest.TestCase):
         r = subprocess.run([str(self.wrapper)], cwd=str(self.root), env={**self.env(), "PWD": str(self.root)},
                            capture_output=True, text=True, timeout=60)
         self.assertEqual((r.returncode, r.stdout.strip()), (0, str(self.root)), r.stderr)
+        self.assertIn("holds no .agent", r.stderr)          # impl round 2 (sonnet): it says so
+
+    def test_a_link_to_homes_own_wrapper_runs_where_it_is_called(self):
+        # impl round 2 (codex, reproduced twice): HOME a project with its own wrapper, linked onto PATH — the `-ef` guard
+        # held, and callers from another project were sent into HOME
+        (self.home / ".agent" / "tasks").mkdir(parents=True)
+        r = subprocess.run([bash_or_skip(), "-c", 'source "$1"; create_wrapper "$2" tasks', "-", str(LIB),
+                            str(self.home)], env=self.env(), capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        link = self.home / ".local" / "bin" / "tasks"
+        link.parent.mkdir(parents=True)
+        link.symlink_to(self.home / ".claude" / "bin" / "tasks")
+        r = subprocess.run([str(link), "new", "quick", "fix", "fix f"], cwd=str(self.proj / "src"), env=self.env(),
+                           capture_output=True, text=True, timeout=300)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual([p.name for p in (self.proj / ".agent" / "tasks").iterdir()], ["001-fix"])
+        self.assertEqual(list((self.home / ".agent" / "tasks").iterdir()), [])
+
+    def test_an_exported_cdpath_does_not_change_the_project(self):
+        # impl round 2 (codex, opus): a relative call looked `cd` up through CDPATH, which printed the folder too
+        r = subprocess.run(["proj/.claude/bin/tasks", "new", "quick", "fix", "fix f"], cwd=str(self.root),
+                           env={**self.env(), "CDPATH": str(self.root)}, capture_output=True, text=True, timeout=300)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual([p.name for p in (self.proj / ".agent" / "tasks").iterdir()], ["001-fix"])
+        self.assertFalse((self.root / ".agent").exists())
+
+    def test_an_inherited_physical_option_keeps_a_linked_claude_folder_s_project(self):
+        # impl round 2 (codex, reproduced twice): `SHELLOPTS=physical` in the environment made the `cd` physical
+        shared = self.base / "shared"
+        (shared / ".claude").mkdir(parents=True)
+        shutil.rmtree(self.proj / ".claude")
+        (self.proj / ".claude").symlink_to(shared / ".claude")
+        r = subprocess.run([bash_or_skip(), "-c", 'source "$1"; create_wrapper "$2" tasks', "-", str(LIB),
+                            str(self.proj)], env=self.env(), capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        r = subprocess.run([str(self.wrapper), "new", "quick", "fix", "fix f"], cwd=str(self.root),
+                           env={**self.env(), "SHELLOPTS": "physical"}, capture_output=True, text=True, timeout=300)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual([p.name for p in (self.proj / ".agent" / "tasks").iterdir()], ["001-fix"])
+        self.assertFalse((shared / ".agent").exists())
+        self.assertFalse((self.root / ".agent").exists())
+
+    def test_control_a_close_from_the_parent_folder_with_a_passing_verify_closes_in_the_project(self):
+        # impl round 2 (opus): the close itself, not only its refusal, happens in the project
+        (self.proj / ".agent" / "config.json").write_text(json.dumps({"verify": "true"}), encoding="utf-8")
+        for args in (("new", "quick", "fix", "fix f"), ("work", "1")):
+            r = self.tasks(*args, cwd=self.root)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        md = next((self.proj / ".agent" / "tasks").glob("001-*/task.md"))
+        text = md.read_text(encoding="utf-8").replace("## Risk\nunclassified", "## Risk\nreversible")
+        md.write_text(text.replace("- [ ] ", "- [x] "), encoding="utf-8")
+        r = self.tasks("work", "done", cwd=self.root)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertRegex(md.read_text(encoding="utf-8"), r"## Status\n(done|closed)")
+        self.assertFalse((self.root / ".agent").exists())
 
     def test_control_a_subfolder_of_the_project_still_works(self):
         r = self.tasks("new", "quick", "fix", "fix f", cwd=self.proj / "src")
