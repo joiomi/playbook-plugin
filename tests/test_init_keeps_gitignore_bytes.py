@@ -61,7 +61,7 @@ class TheMerge(unittest.TestCase):
         self.assertTrue(after.startswith(before), after[:80])
         self.assertNotIn("\ufffd".encode("utf-8"), after)
         self.assertIn(MARKER, after)
-        self.assertTrue(self.ignored(SECRET), "after init the secret is no longer ignored")
+        self.assertTrue(self.ignored(SECRET), "init stopped ignoring the secret")
 
     def test_a_crlf_file_stays_crlf(self):
         before = b"build/\r\n*.pyc\r\n"          # ASCII only: the line ending alone
@@ -72,6 +72,39 @@ class TheMerge(unittest.TestCase):
         self.assertIn(MARKER + b"\r\n", after)
         self.assertNotIn(b"\n", after.replace(b"\r\n", b""), "a bare LF in a CRLF file")
         self.assertTrue(self.ignored(b"x.pyc"))
+
+    def test_a_pattern_ending_in_a_carriage_return_and_the_blank_lines_after_it_are_kept(self):
+        # impl round 1 (codex, reproduced by reading git's dir.c; opus, grok): the append did `rstrip("\r\n")`, which
+        # took the CR this pattern means (git strips only the CR before LF) and the blank lines after it
+        before = b"build/\n" + SECRET + b"\r\r\n\n\n"
+        self.gi.write_bytes(before)
+        target = SECRET + b"\r"                      # a name ending in CR: ignored by that pattern only
+        self.assertTrue(self.ignored(target), "the control: git ignores it before init")
+        self.merge()
+        after = self.gi.read_bytes()
+        self.assertTrue(after.startswith(before), after[:80])
+        self.assertTrue(self.ignored(target), "init stopped ignoring the file the pattern names")
+
+    def test_the_upgrade_path_keeps_the_bytes_too(self):
+        # impl round 1 (opus): with the marker already there, missing entries go under it — the same decode and encode
+        before = b"build/\r\n" + SECRET + b"\r\n\r\n" + MARKER + b"\r\n.agent/sessions/\r\n"
+        self.gi.write_bytes(before)
+        self.merge()
+        after = self.gi.read_bytes()
+        self.assertTrue(after.startswith(b"build/\r\n" + SECRET + b"\r\n\r\n" + MARKER + b"\r\n"), after[:120])
+        self.assertIn(b".agent/sessions/\r\n", after)
+        self.assertGreater(after.count(b"\r\n"), before.count(b"\r\n"), "no entry was added")
+        self.assertNotIn(b"\n", after.replace(b"\r\n", b""))
+        self.assertTrue(self.ignored(SECRET))
+
+    def test_a_marker_on_the_last_line_without_a_newline_keeps_its_line(self):
+        # impl round 1 (opus, sonnet) [PRE-EXISTING]: the first missing entry was glued onto the marker
+        before = b"build/\n\n" + MARKER
+        self.gi.write_bytes(before)
+        self.merge()
+        lines = self.gi.read_bytes().split(b"\n")
+        self.assertIn(MARKER, lines, "the marker is no longer a line of its own")
+        self.assertIn(b".agent/sessions/", lines)
 
     def test_control_a_plain_file_gets_the_block_as_before(self):
         before = b"build/\n*.pyc\n"
