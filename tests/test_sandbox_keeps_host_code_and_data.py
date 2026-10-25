@@ -70,17 +70,16 @@ STATE = (".claude/projects/-p/s.jsonl", ".claude/.credentials.json", ".claude/sh
 
 
 class _Home(unittest.TestCase):
+    # where the temporary home is made: the argv rows read only the argv, so the default temporary folder serves (as
+    # under `tasks red`, whose rows see a private /tmp and a read-only /var/tmp); the live rows need one OUTSIDE /tmp,
+    # which would be writable through the sandbox's own /tmp bind. Never the real HOME.
+    HOME_BASE: "str | None" = None
 
     def setUp(self):
-        home = None
-        for base in ("/var/tmp",):     # a home under /tmp is writable through /tmp's own bind; never the real HOME
-            try:
-                home = Path(tempfile.mkdtemp(prefix="pb308-home-", dir=base)).resolve()
-                break
-            except OSError:
-                continue
-        if home is None:
-            self.skipTest("no temporary folder outside /tmp")
+        try:
+            home = Path(tempfile.mkdtemp(prefix="pb308-home-", dir=self.HOME_BASE)).resolve()
+        except OSError:
+            self.skipTest(f"no temporary folder in {self.HOME_BASE}")
         self.addCleanup(shutil.rmtree, home, True)
         self.home = home
         for rel in CODE_AND_CONFIG + NOT_AN_AGENTS + STATE:
@@ -137,6 +136,7 @@ class TheArgv(_Home):
 
 @unittest.skipUnless(bwrap_usable(), "no bubblewrap that can start a sandbox here")
 class InsideTheSandbox(_Home):
+    HOME_BASE = "/var/tmp"
 
     def attempt(self, rel):
         script = f'printf "changed\\n" > "$HOME/{rel}" 2>/dev/null && echo WROTE || echo REFUSED'
