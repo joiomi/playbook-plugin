@@ -130,14 +130,29 @@ class TheVerifyEnvironment(unittest.TestCase):
         self.assertEqual([k for k in planted if k in e], [])
         self.assertTrue(e.get("XDG_RUNTIME_DIR", "").startswith(e["HOME"] + "/"), e.get("XDG_RUNTIME_DIR"))
 
+    def test_an_agent_s_own_settings_any_token_and_the_ssh_agent_are_cut(self):
+        # impl round 2 (codex): grok takes a credential helper and its config from GROK_AUTH_PROVIDER_COMMAND,
+        # GROK_CONFIG and GROK_CONFIG_PATH (its bundled docs), and a test still starts the real `grok models`; so are
+        # every agent's own variables, any token, the ssh agent and git's global settings (opus, agy: hardening)
+        planted = ("GROK_AUTH_PROVIDER_COMMAND", "GROK_CONFIG", "GROK_CONFIG_PATH", "CODEX_SOMETHING",
+                   "XAI_BASE_URL", "ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "GEMINI_SOMETHING", "OPENROUTER_SOMETHING",
+                   "GOOGLE_CLOUD_PROJECT", "CLOUDSDK_CONFIG", "CLAUDE_CODE_MESSAGING_TOKEN", "GH_TOKEN", "GITHUB_TOKEN",
+                   "API_KEY", "AUTH_TOKEN", "ACCESS_TOKEN", "SSH_AUTH_SOCK", "GIT_CONFIG_GLOBAL")
+        e = self.env(**{k: "planted" for k in planted})
+        self.assertEqual([k for k in planted if k in e], [])
+        self.assertIn("PATH", e)
+
     def test_the_run_s_home_has_git_s_two_files_wherever_it_is_made(self):
         # impl round 1 (agy): with no usable /var/tmp the HOME is made under /tmp, and a sandboxed launch refuses a HOME
         # under /tmp that lacks git's two settings files
         real_access = os.access
-        with mock.patch.object(self.v.os, "access",
-                               lambda path, mode, *a, **k: False if str(path) == "/var/tmp" else real_access(path, mode)):
+
+        def access(path, mode, *a, **k):
+            return False if str(path) == "/var/tmp" else real_access(path, mode)
+        with mock.patch.object(self.v.os, "access", access):
             e = self.env()
         home = Path(e["HOME"])
+        self.assertFalse(str(home).startswith("/var/tmp/"), home)   # the branch with no usable /var/tmp (sonnet)
         for rel in (".gitconfig", ".config/git/config"):
             self.assertEqual((home / rel).read_text(encoding="utf-8") if (home / rel).is_file() else None, "", rel)
 
