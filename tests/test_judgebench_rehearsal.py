@@ -92,7 +92,8 @@ class RehearsalTests(unittest.TestCase):
 
     def test_contamination_scan_on_the_rehearsal_flags_nothing(self):
         ws_plugin = _ROOT.parent
-        ws_hf = Path.home() / "Documents" / "Workspace" / "HowFarAI-v2"
+        # beside this workspace, not under HOME: verify gives its children a HOME of the run's own (task 316)
+        ws_hf = ws_plugin.parent / "HowFarAI-v2"
         args = ["contamination", "rehearsal", "--runs-dir", str(self.runs)]
         for name, root in (("playbook-plugin-dev", ws_plugin), ("HowFarAI-v2", ws_hf)):
             if (root / ".agent" / "tasks").is_dir():

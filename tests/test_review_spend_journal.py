@@ -632,6 +632,18 @@ class StructuredUsageE2E(_E2EBase):
     CODEX_USAGE = {"status": "known", "in": 13080, "out": 5}
     GROK_USAGE = {"status": "known", "in": 13443, "out": 26}
 
+    def setUp(self):
+        super().setUp()
+        # A failed judge sends the review to probe its pin live (`confirm_dead_specs`). These tests check the journal
+        # and the stream, not the probe — which started the real codex and grok, signed in as whoever ran verify
+        # (task 316: 977 codex sessions in his ~/.codex/sessions since 2026-10-06). Each probe answers "alive" here.
+        import unittest.mock as mock
+        from tasks import models_check
+        for name in ("probe_claude_model", "probe_codex_model", "probe_grok_model", "probe_agy_model"):
+            patcher = mock.patch.object(models_check, name, lambda *a, **k: (models_check.OK, "stand-in probe"))
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
     def _fixture(self, name):
         import importlib.util
         spec = importlib.util.spec_from_file_location(

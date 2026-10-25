@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import atexit
 import concurrent.futures
 import fnmatch
 import importlib.util
@@ -57,8 +58,30 @@ results: list[dict] = []
 CHECKS: list[tuple] = []
 
 
+# Task 316: what an agent signs in with when HOME is not its own — its own home override, a provider's key or token
+# (the session bus, where agy's keyring sign-in lives, is disabled in `env()`).
+SIGN_IN_VARS = ("CODEX_HOME", "CLAUDE_CONFIG_DIR", "GROK_HOME", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+                "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "XAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
+                "GOOGLE_APPLICATION_CREDENTIALS")
+_CHILD_HOME: "str | None" = None
+
+
+def child_home() -> str:
+    """The HOME every child of this run gets (task 316): a folder of the run's own, made at its first use and removed
+    when the run exits — never the caller's, where a test acted as the person running verify (a signed-in codex probe
+    at every run, files in their agents' folders). Under /var/tmp where it can be: a sandboxed launch refuses a HOME
+    under /tmp that lacks git's two settings files."""
+    global _CHILD_HOME
+    if _CHILD_HOME is None:
+        vt = "/var/tmp"
+        base = vt if os.path.isdir(vt) and os.access(vt, os.W_OK | os.X_OK) else None
+        _CHILD_HOME = tempfile.mkdtemp(prefix="pb-verify-home-", dir=base)
+        atexit.register(shutil.rmtree, _CHILD_HOME, True)
+    return _CHILD_HOME
+
+
 def env() -> dict:
-    """Child env with dogfooding state stripped (see tests/test_shell_fixtures.py)."""
+    """Child env with dogfooding state stripped (see tests/test_shell_fixtures.py), acting as no one (task 316)."""
     e = dict(os.environ)
     # PLAYBOOK_SANDBOXED is the sole signal provider/sandbox.is_sandboxed() reads;
     # a dogfooding host that runs verify from inside a sandboxed session exports
@@ -79,6 +102,17 @@ def env() -> dict:
         n += 1
     e["GIT_CONFIG_COUNT"] = str(n)
     e["GIT_CEILING_DIRECTORIES"] = git_ceilings()
+    # Task 316: the run's own HOME, its XDG folders under it, and no sign-in an agent could reach without one: the
+    # agents stay on PATH (a test that asks whether one is installed is unchanged), but one that starts is no one —
+    # measured: with a throwaway HOME alone `agy models` still listed his models, through the keyring on the bus
+    home = child_home()
+    e["HOME"] = home
+    for key, sub in (("XDG_CONFIG_HOME", ".config"), ("XDG_DATA_HOME", ".local/share"), ("XDG_CACHE_HOME", ".cache"),
+                     ("XDG_STATE_HOME", ".local/state")):
+        e[key] = os.path.join(home, sub)
+    for key in SIGN_IN_VARS:
+        e.pop(key, None)
+    e["DBUS_SESSION_BUS_ADDRESS"] = "disabled:"
     return e
 
 
