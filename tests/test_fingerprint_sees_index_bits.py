@@ -195,5 +195,31 @@ class TheStaleCloseReadersToo(_Repo):
         self.assertEqual(self.fp(), clean, "the bit alone made a spurious STALE")
 
 
+class TheSkipWorktreeRule(_Repo):
+    """My mutant run on impl round 1's fix: a skip-worktree file that is absent is a deletion, unless the repository is
+    a sparse checkout, where files outside the cone are absent by design (and a `git diff` of each would print it)."""
+
+    def test_a_skip_worktree_file_deleted_outside_a_sparse_checkout_moves_the_fingerprint(self):
+        self.git("update-index", "--skip-worktree", "app.py")
+        reviewed = self.fp()
+        self.app.unlink()
+        self.assertNotEqual(self.fp(), reviewed, "a deletion under skip-worktree read FRESH")
+
+    def test_a_sparse_checkout_s_absent_files_are_not_read_as_deleted(self):
+        from tasks.core import _fingerprint_exclude_pathspecs, _repo_fingerprint_material
+        (self.d / "inside").mkdir()
+        (self.d / "inside" / "a.py").write_text("a = 1\n", encoding="utf-8")
+        (self.d / "outside").mkdir()
+        (self.d / "outside" / "b.py").write_text("b = 1\n", encoding="utf-8")
+        self.git("add", "inside", "outside")
+        self.git("commit", "-qm", "two folders")
+        self.git("sparse-checkout", "set", "inside")
+        self.assertFalse((self.d / "outside" / "b.py").exists(), "the control: outside the cone, not checked out")
+        material = _repo_fingerprint_material(self.d, _fingerprint_exclude_pathspecs({}))
+        self.assertIsNotNone(material)
+        self.assertNotIn("outside/b.py", material, "a file outside the cone was read as deleted")
+        self.assertEqual(self.fp(), self.fp())
+
+
 if __name__ == "__main__":
     unittest.main()
