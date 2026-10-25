@@ -69,100 +69,150 @@ _AGENT_HOME: dict[str, tuple[str, ...]] = {
     "pi": (".pi", ".omlx"),
 }
 
-# Task 308: inside those state folders, what a later session on the HOST runs or obeys
-# stays read-only — the plugins and their install records, the settings files (hooks, a
-# status line, MCP servers, trusted folders), the user's instructions, the agents' own
-# binaries, bundled skills and extensions. A sandboxed agent rewrote the installed
-# plugin's task gate (his blind session, 2026-10-25). Measured 2026-10-25: claude, codex,
-# agy and grok each answer with these read-only and no writable ~/.local or ~/.cache.
-# Grok's `config.toml` is not here: grok rewrites it as it runs.
-_HOME_RO_FILES: tuple[str, ...] = (
-    ".claude/settings.json", ".claude/settings.local.json", ".claude/CLAUDE.md",
-    ".codex/config.toml", ".codex/AGENTS.md", ".codex/hooks.json",
-    ".gemini/settings.json", ".gemini/GEMINI.md", ".gemini/trustedFolders.json",
-)
-# Folders of the list made, empty, when missing, so a run cannot make one with a skill,
-# an agent, a rule, a hook or a plugin in it (impl round 1: agy, codex, grok).
+# Task 308 (impl round 2): inside the running agent's state folder, every entry that
+# exists at launch is read-only but those the agent writes as it runs — a list of what
+# NOT to write had a new hole each review round (grok's trusted folders and skills,
+# agy's own settings). The entries below were measured 2026-10-25 05:27 EET, one judge
+# run of each agent through this launcher, with the folders' full listings; the rest of
+# each name is what its own name says it is (a session, a log, a cache, a sign-in). A
+# mixed folder (a key with a `/`) is pinned and gets the same rule one level down. A
+# folder with no entry here (pi's, omlx's: on no panel, not measured) stays writable.
+# Read-only, for example: the plugins and their install records, settings, remote
+# settings, instructions, the agent's own install, a status line, Chrome's native host,
+# Claude Code's daemon and jobs, grok's trusted folders and sandbox profile.
+_HOME_WRITES: dict[str, tuple[str, ...]] = {
+    ".claude": ("projects", "sessions", "todos", "statsig", "telemetry", "debug", "cache", "backups", "file-history",
+                "paste-cache", "plans", "uploads", "feedback", "ide", "state", ".credentials.json", "history.jsonl",
+                "stats-cache.json", ".last-cleanup", ".last-update-result.json", "mcp-needs-auth-cache.json",
+                "*.lock"),
+    ".codex": ("sessions", "session_index.jsonl", "history.jsonl", "auth.json", "cache", "log", "tmp", ".tmp",
+               "*.sqlite", "*.sqlite-shm", "*.sqlite-wal", "*.lock", "models_cache.json", "installation_id",
+               "version.json", "thread-writer-locks", "app-server-control", "app-server-daemon",
+               "tui-thread-reference-capabilities", ".personality_migration", ".sandbox_migration"),
+    ".gemini": ("google_accounts.json", "history", "installation_id", "oauth_creds.json", "projects.json",
+                "state.json", "tmp"),
+    ".gemini/antigravity-cli": ("annotations", "brain", "cache", "cli.log", "conversations",
+                                "conversation_summaries.db*", "crashes", "history.jsonl", "implicit", "installation_id",
+                                "jetbox_summaries_proto.pb", "jetski_state.pbtxt", "last_check.timestamp", "log",
+                                "presence"),
+    ".grok": ("active_sessions.json", "*.lock", "agent_id", "auth.json", "campaigns_state.json", "completions",
+              "config.toml", "config.toml.tmp.*", "last-copy.txt", "logs", "long-running-background-tasks", "memory",
+              "memory-v2", "memtrace", ".metadata_version", "models_cache.json", "relocations", "sandbox-blocked.*",
+              "sandbox-bwrap-sentinel", "sessions", "settings_cache.json", "slash-mru.json", "tip_cursor.json",
+              "version.json", "worktrees.db"),
+}
+# Config folders made, empty, when missing, so a run cannot make one with a skill, an
+# agent, a rule, a hook or a plugin in it (impl rounds 1-2: agy, codex, grok). An
+# agent's own install (`~/.claude/local`, `~/.codex/packages`, …) is not made: an empty
+# one could make its updater take it for an install, and nothing runs a missing one.
 _HOME_RO_DIRS_MADE: tuple[str, ...] = (
     ".claude/plugins", ".claude/hooks", ".claude/commands", ".claude/agents", ".claude/skills",
     ".claude/output-styles",
     ".codex/rules", ".codex/skills", ".codex/plugins",
     ".gemini/config", ".gemini/extensions",
-    ".grok/hooks", ".grok/installed-plugins", ".grok/bundled",
+    ".grok/hooks", ".grok/installed-plugins", ".grok/bundled", ".grok/skills", ".grok/plugins", ".grok/commands",
+    ".grok/agents",
 )
-# An agent's own install, held only where it is: an empty one made in its place could
-# make the agent's own updater or launcher take it for an install.
-_HOME_RO_DIRS_KEPT: tuple[str, ...] = (
-    ".claude/local", ".codex/packages", ".gemini/antigravity-cli/bin", ".gemini/antigravity-cli/builtin",
-    ".grok/bin", ".grok/downloads",
-)
-# A host session sources its own shell snapshot before every shell call. Each snapshot
-# folder is a private, empty tmpfs in the sandbox: the run writes its own snapshots
-# there, and the host's — those of a session started during the run too — are neither
-# seen nor written (impl round 1, opus).
-_HOME_SNAPSHOT_DIRS: tuple[str, ...] = (".claude/shell-snapshots", ".codex/shell_snapshots")
-_SCRIPT_SUFFIXES = (".sh", ".bash", ".zsh", ".py", ".js", ".mjs", ".cjs", ".ts", ".rb", ".pl")
+# What a host session sources before its shell calls: the shell snapshots, and Claude
+# Code's per-session environment scripts (`session-env/<id>/sessionstart-hook-*.sh` —
+# impl round 2, opus and grok). Each is a private, empty tmpfs in the sandbox: the run
+# writes its own there, and the host's — a session's started during the run too — are
+# neither seen nor written (impl round 1, opus).
+_HOME_PRIVATE: tuple[str, ...] = (".claude/shell-snapshots", ".claude/session-env", ".codex/shell_snapshots")
 
 
 def _home_refusal(path: Path, why: str) -> RuntimeError:
     return RuntimeError(f"{path} {why}. Nothing was launched.")
 
 
+_LINK_WHY = ("is a link inside a folder a sandboxed run may write: the run could replace the link, and a later "
+             "session on this machine would follow it. Replace the link with the file or folder it names")
+
+
 def _home_layer(home: Path, folders: "Iterable[str]") -> "tuple[list[str], list[str], list[str]]":
     """What a run with `folders` (its agent's state folders) writable must not change there: (pins, read-only paths,
-    private snapshot folders), each an absolute path. Read-only: the listed files and folders that exist, and every
-    regular file at a state folder's top level that is executable or a script (a status line a settings file names).
-    Pins: each folder between a state folder and a read-only path or a snapshot folder, bound onto itself first so it
-    cannot be moved aside and replaced (impl round 1: codex, grok, sonnet — as task 181 pins git's places). The launch
-    is refused (RuntimeError) for a listed path or a top-level script that is a link (bubblewrap cannot bind onto it,
-    and the link itself could be replaced), a snapshot folder that is a link, a read-only file with another hard link
-    (writable through that name), and a state folder that cannot be read."""
+    private folders), each an absolute path. Read-only: every entry of a state folder that exists at launch and is not
+    one `_HOME_WRITES` lets its agent write; a mixed folder there is pinned (bound onto itself first, so it cannot be
+    moved aside and replaced — impl round 1: codex, grok, sonnet, as task 181 pins git's places) and judged the same way
+    one level down. Private: `_HOME_PRIVATE`. The launch is refused (RuntimeError) for a state folder, a read-only
+    entry, a pin or a private folder that is a link (bubblewrap cannot bind onto it, and the link itself could be
+    replaced), a private path that is not a folder, a read-only file with another hard link, a link inside a
+    read-only folder that leads into a writable place of the run (`/tmp`, a state folder), and a folder that cannot
+    be read (impl round 2: codex)."""
+    import fnmatch
     tops = [home / f for f in folders]
-    mine = [t for t in tops if t.is_dir() and not t.is_symlink()]
-
-    def under(rel: str) -> bool:
-        return any(rel == t.name or rel.startswith(t.name + "/") for t in mine)
-
-    cands = [home / rel for rel in (*_HOME_RO_FILES, *_HOME_RO_DIRS_MADE, *_HOME_RO_DIRS_KEPT) if under(rel)]
-    for top in mine:
-        try:
-            entries = sorted(top.iterdir())
-        except OSError as exc:
-            raise _home_refusal(top, f"cannot be read ({exc.strerror or exc})") from None
-        for p in entries:
-            if p.suffix in _SCRIPT_SUFFIXES or (p.is_file() and os.access(p, os.X_OK)):
-                if p.is_symlink() or p.is_file():
-                    cands.append(p)
-    snaps = []
-    for rel in _HOME_SNAPSHOT_DIRS:
-        if under(rel):
-            d = home / rel
-            if d.is_symlink():
-                raise _home_refusal(d, "is a link inside a folder a sandboxed run may write: the run could replace "
-                                       "it, and a session on this machine would source what it names. Replace the "
-                                       "link with a folder")
-            snaps.append(str(d))
-    ro: "list[str]" = []
-    for p in cands:
-        if p.is_symlink():
-            raise _home_refusal(p, "is a link inside a folder a sandboxed run may write: the run could replace the "
-                                   "link, and a later session on this machine would follow it. Replace the link with "
-                                   "the file or folder it names")
-        if not p.exists() or str(p) in ro:
-            continue
-        if p.is_file() and os.lstat(p).st_nlink > 1:
-            raise _home_refusal(p, "has another hard link: what a sandboxed run writes through that other name "
-                                   "changes this file. Make it a copy of its own")
-        ro.append(str(p))
+    for t in tops:
+        if t.is_symlink():
+            raise _home_refusal(t, _LINK_WHY)
+    mine = [t for t in tops if t.is_dir()]
+    names = {t.name for t in mine}
+    private = [home / rel for rel in _HOME_PRIVATE if rel.split("/")[0] in names]
     pins: "list[str]" = []
-    for path in [*ro, *snaps]:
-        top = next(t for t in mine if path.startswith(str(t) + "/"))
-        rel = Path(path).relative_to(top).parts[:-1]
-        for i in range(1, len(rel) + 1):
-            d = str(top.joinpath(*rel[:i]))
-            if d not in pins:
-                pins.append(d)
-    return pins, ro, snaps
+    ro: "list[str]" = []
+
+    def entries(d: Path) -> "list[Path]":
+        try:
+            return sorted(d.iterdir())
+        except OSError as exc:
+            raise _home_refusal(d, f"cannot be read ({exc.strerror or exc})") from None
+
+    def judge(rel: str) -> None:
+        d = home / rel
+        allow = _HOME_WRITES.get(rel)
+        if allow is None:
+            return                                      # not measured: stays writable (pi, omlx)
+        for p in entries(d):
+            sub = f"{rel}/{p.name}"
+            if p in private:
+                continue
+            if sub in _HOME_WRITES:                     # a mixed folder: pinned, then judged inside
+                if p.is_symlink():
+                    raise _home_refusal(p, _LINK_WHY)
+                if p.is_dir():
+                    pins.append(str(p))
+                    judge(sub)
+                continue
+            if any(fnmatch.fnmatchcase(p.name, pat) for pat in allow):
+                continue
+            if p.is_symlink():
+                raise _home_refusal(p, _LINK_WHY)
+            ro.append(str(p))
+
+    for t in mine:
+        judge(t.name)
+    for d in private:
+        if d.is_symlink():
+            raise _home_refusal(d, _LINK_WHY)
+        if os.path.lexists(d) and not d.is_dir():
+            raise _home_refusal(d, "is not a folder, where a sandboxed run keeps a private one")
+    writable = ["/tmp", *(str(t) for t in mine)]
+
+    def leads_out(target: str) -> bool:
+        if any(target == r or target.startswith(r + "/") for r in ro):
+            return False
+        return any(target == w or target.startswith(w + "/") for w in writable)
+
+    import stat as _stat
+    for path in ro:
+        items = [path]
+        if os.path.isdir(path):
+            for root, dirs, files in os.walk(path):     # links to folders are listed, never followed
+                items += [os.path.join(root, n) for n in dirs + files]
+        for f in items:
+            try:
+                st = os.lstat(f)
+            except FileNotFoundError:
+                continue                                # gone between the listing and the look
+            if _stat.S_ISLNK(st.st_mode):
+                if leads_out(os.path.realpath(f)):
+                    raise _home_refusal(Path(f), "is a link from a read-only place into one a sandboxed run may "
+                                                 "write: what the run writes there, a later session on this machine "
+                                                 "would read through it. Replace the link with a copy")
+            elif _stat.S_ISREG(st.st_mode) and st.st_nlink > 1:
+                raise _home_refusal(Path(f), "has another hard link: what a sandboxed run writes through that other "
+                                             "name changes this file. Make it a copy of its own")
+    return pins, ro, [str(d) for d in private]
+
 
 # Friendly model aliases — collapse "agent + canonical model" into one knob.
 # Loaded from JSON so agents can edit the table without a code release. Model
