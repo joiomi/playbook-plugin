@@ -125,6 +125,8 @@ _HOME_RO_DIRS_MADE: tuple[str, ...] = (
     ".claude/rules", ".claude/workflows", ".claude/dev-mods",
     ".codex/AGENTS.override.md", ".codex/.codex-plugin", ".codex/.claude-plugin", ".codex/.cursor-plugin",
     ".grok/personas", ".grok/roles",
+    # impl round 2, from grok's own docs: its home rules ("always scanned; applies to all projects") and user workflows
+    ".grok/rules", ".grok/workflows",
 )
 # What a host session sources before its shell calls: the shell snapshots, and Claude
 # Code's per-session environment scripts (`session-env/<id>/sessionstart-hook-*.sh` —
@@ -155,6 +157,7 @@ _HOME_FILES_MADE: dict[str, str] = {
     ".codex/AGENTS.md": "",
     ".codex/environments.toml": "",
     ".gemini/AGENTS.md": "",
+    ".gemini/GEMINI.md": "",            # impl round 2 (opus): agy loads it as instructions too (measured)
     ".gemini/hooks.json": "{}\n",
     ".gemini/antigravity-cli/hooks.json": "{}\n",
 }

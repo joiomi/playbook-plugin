@@ -839,7 +839,10 @@ class _TempPath:
         import tempfile as _tempfile
         self.folder: "Path | None" = None
         if own_folder:
-            self.folder = Path(_tempfile.mkdtemp(prefix="pb-judge-"))
+            # under /tmp itself where it can: a TMPDIR inside the project would put the folder in a review's read-only
+            # copy, which refuses a writable path there (impl round 2, codex)
+            usable = os.path.isdir("/tmp") and os.access("/tmp", os.W_OK | os.X_OK)
+            self.folder = Path(_tempfile.mkdtemp(prefix="pb-judge-", dir="/tmp" if usable else None))
             self.path = self.folder / f"out{suffix}"
             self.path.touch()
             return
